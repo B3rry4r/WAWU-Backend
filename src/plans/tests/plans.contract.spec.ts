@@ -507,6 +507,8 @@ describe('GET /plans and GET /me/tier (TIER-01) over HTTP', () => {
         activeFrom: null,
         activeUntil: null,
         productsAllowed: 0,
+        // TIER-02: products published now; a new person has published none.
+        productsUsed: 0,
         extraProducts: 0,
         pointsIncluded: 0,
         firstVoiceIntroIncluded: false,
@@ -561,6 +563,7 @@ describe('GET /plans and GET /me/tier (TIER-01) over HTTP', () => {
         activeFrom: row.activeFrom.toISOString(),
         activeUntil: row.activeUntil.toISOString(),
         productsAllowed: t.products + config.extraProducts.count,
+        productsUsed: 0,
         extraProducts: config.extraProducts.count,
         pointsIncluded: t.bonusPoints,
         firstVoiceIntroIncluded: t.firstVoiceIntro,

@@ -85,7 +85,7 @@ export const BRIEF_INSTRUCTION = [
   '- Do not give legal advice and do not predict outcomes. You are briefing the lawyer, not advising the client.',
   '- Where the transcript is silent on something important, put it in questionsToClarify rather than guessing.',
   "- keyIssues are the legal questions this matter turns on, in the lawyer's vocabulary. Be specific to these facts, not generic.",
-  '- risks are anything time-critical or costly that the client may not have noticed — a limitation period, a signed exclusivity, a deadline. Return an empty list if there are none. Do not manufacture one.',
+  '- risks are anything time-critical or costly that the client may not have noticed, such as a limitation period, a signed exclusivity, a deadline. Return an empty list if there are none. Do not manufacture one.',
   '- Nigerian law is the default unless the transcript says another jurisdiction.',
   '- summary is two or three plain sentences. No preamble, no restating these instructions.',
   '- Never address the client. Never use "you" to mean the client.',

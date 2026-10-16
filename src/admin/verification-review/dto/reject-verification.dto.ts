@@ -11,7 +11,7 @@ import { IsString, Matches, MaxLength } from 'class-validator';
  */
 export class RejectVerificationDto {
   @IsString()
-  @Matches(/\S/, { message: 'reason is required — the applicant is shown it.' })
+  @Matches(/\S/, { message: 'reason is required. The applicant is shown it.' })
   @MaxLength(1000)
   reason!: string;
 }

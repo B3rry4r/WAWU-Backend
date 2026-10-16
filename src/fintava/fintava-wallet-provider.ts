@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import {
   type OtpResetCode,
   type OtpSender,
@@ -40,7 +41,18 @@ import {
   type WalletProviderCapabilities,
   type WalletProviderTimings,
 } from '../wallet-provider/wallet-provider.interface';
+import {
+  readWalletProviderName,
+  WALLET_PROVIDER_CONFIG_KEY,
+} from '../wallet-provider/wallet-provider-config';
 import { WalletProviderError } from '../wallet-provider/wallet-provider-error';
+import {
+  accountLimitsOf,
+  FINTAVA_TIER_LIMITS_KEY,
+  policyTierLimits,
+  readTierLimits,
+  type TierDailyLimits,
+} from './fintava-account-limits';
 import { FintavaClient } from './fintava-client';
 import { FINTAVA_DEFAULTS, FINTAVA_WALLET_BANK_CODE } from './fintava-config';
 import { FintavaError } from './fintava-error';
@@ -208,7 +220,22 @@ export class FintavaWalletProvider implements WalletProvider {
       readLedgerWebhook(event, payload, eventReference),
   };
 
-  constructor(private readonly client: FintavaClient) {}
+  /** Each tier's daily limit, read once at boot (WALLET-23). */
+  private readonly tierLimits: TierDailyLimits;
+
+  constructor(
+    private readonly client: FintavaClient,
+    @Optional() config?: ConfigService,
+  ) {
+    // Read (and a bad value refused) only when Fintava is the provider this
+    // server runs: under nuvion the Fintava settings are not checked (NUV-01).
+    this.tierLimits =
+      config &&
+      readWalletProviderName(config.get<string>(WALLET_PROVIDER_CONFIG_KEY)) ===
+        'fintava'
+        ? readTierLimits(config.get<string>(FINTAVA_TIER_LIMITS_KEY))
+        : policyTierLimits();
+  }
 
   get configured(): boolean {
     return this.client.environment !== 'unconfigured';
@@ -343,6 +370,12 @@ export class FintavaWalletProvider implements WalletProvider {
       return {
         availableKobo: BigInt(b.availableKobo),
         bookedKobo: BigInt(b.bookedKobo),
+        // The tier Fintava reported with the balance, and its daily limit
+        // (WALLET-23): the limit is the tier's, from the setting. An answer
+        // with no tier says nothing about the limit, so it carries none.
+        ...(b.tier === null
+          ? {}
+          : { accountLimits: accountLimitsOf(b.tier, this.tierLimits) }),
       };
     });
   }

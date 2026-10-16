@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -7,7 +8,7 @@ import {
 import { NotificationService } from '../../notification/notification.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { objectKeyFrom, StorageService } from '../../storage/storage.service';
-import { holdsTick, uploadAllowanceFor } from '../../common/creator-allowance';
+import { PublishingAllowanceService } from '../../plans/publishing-allowance.service';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { ContentPieceModel } from '../../../generated/prisma/models';
 import type { AdminUserView } from '../auth/admin-user-view.type';
@@ -27,6 +28,14 @@ import type { TakeDownContentDto } from './dto/take-down-content.dto';
 const SIGNED_URL_TTL_SECONDS = 900;
 
 const MS_PER_HOUR = 3_600_000;
+
+/**
+ * How many times a decision reads the piece again when its status moved
+ * between its read and its write (TIER-02 round 3, D5). Each pass is one
+ * competing writer that got there first, so more than three in a row is not
+ * a race but a fight over one piece, and the admin is asked to look again.
+ */
+const STATUS_ATTEMPTS = 3;
 
 /**
  * The first writer of ContentPiece.status in this backend's history.
@@ -57,6 +66,7 @@ export class AdminContentReviewService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
     private readonly storage: StorageService,
+    private readonly publishing: PublishingAllowanceService,
   ) {}
 
   /**
@@ -181,57 +191,73 @@ export class AdminContentReviewService {
     dto: TakeDownContentDto,
     admin: AdminUserView,
   ): Promise<AdminContentDecisionView> {
-    const existing = await this.prisma.contentPiece.findUnique({
-      where: { id },
-    });
-    if (!existing) {
-      throw new NotFoundException('Content not found.');
-    }
-    if (existing.status === 'removed') {
-      throw new BadRequestException('This piece has already been removed.');
-    }
-
     const { content, review } = await this.prisma.$transaction(async (tx) => {
-      // Conditional on NOT already removed, not merely on the read above: a
-      // second admin (or ContentPieceService.delete, if the creator is
-      // somehow still around) acting on the same piece at the same instant
-      // must not both return the slot and both write an audit row.
-      const claimed = await tx.contentPiece.updateMany({
-        where: { id, status: { not: 'removed' } },
-        data: { status: 'removed' },
-      });
-      if (claimed.count === 0) {
-        throw new BadRequestException('This piece has already been removed.');
-      }
+      for (let attempt = 0; attempt < STATUS_ATTEMPTS; attempt += 1) {
+        // The status is read HERE, inside the transaction, and the flip below
+        // is conditional on exactly the status read (TIER-02 round 3, D5).
+        // This used to read before the transaction and flip on "not removed",
+        // so the place was returned for a status that could have moved in
+        // between: a piece an admin rejected a moment earlier (its place
+        // already back) returned it a second time, and a piece the creator
+        // sent again a moment earlier (a place taken) was removed without
+        // giving it back. Now a request whose write changes no row reads the
+        // piece again and acts on what is true, which is how
+        // ContentPieceService.delete() settles the same race.
+        const existing = await tx.contentPiece.findUnique({ where: { id } });
+        if (!existing) {
+          throw new NotFoundException('Content not found.');
+        }
+        if (existing.status === 'removed') {
+          throw new BadRequestException('This piece has already been removed.');
+        }
 
-      let slotReturned = false;
-      if (existing.status !== 'rejected') {
-        const returned = await tx.creatorState.updateMany({
-          where: { wawuUserId: existing.creatorWawuId, slotsUsed: { gt: 0 } },
-          data: { slotsUsed: { decrement: 1 } },
+        // Only a row still in the status just read is changed, and that
+        // status is not `removed`, so a piece another request has already
+        // removed never matches: one piece gives its place back once and
+        // writes one audit row, however many requests remove it.
+        const claimed = await tx.contentPiece.updateMany({
+          where: { id, status: existing.status },
+          data: { status: 'removed' },
         });
-        slotReturned = returned.count > 0;
+        if (claimed.count === 0) continue;
+
+        // A rejected piece's place went back at the rejection. Any other
+        // piece holds one. The status here is the one this write changed.
+        let slotReturned = false;
+        if (existing.status !== 'rejected') {
+          const returned = await tx.creatorState.updateMany({
+            where: {
+              wawuUserId: existing.creatorWawuId,
+              slotsUsed: { gt: 0 },
+            },
+            data: { slotsUsed: { decrement: 1 } },
+          });
+          slotReturned = returned.count > 0;
+        }
+
+        const reviewRow = await tx.adminContentReview.create({
+          data: {
+            contentId: id,
+            creatorWawuId: existing.creatorWawuId,
+            decision: 'removed',
+            previousStatus: existing.status,
+            newStatus: 'removed',
+            reason: dto.reason.trim(),
+            slotReturned,
+            reviewedByAdminId: admin.id,
+            reviewedByAdminEmail: admin.email,
+            reviewedByAdminRole: admin.role,
+          },
+        });
+
+        const updated = await tx.contentPiece.findUniqueOrThrow({
+          where: { id },
+        });
+        return { content: updated, review: reviewRow };
       }
-
-      const reviewRow = await tx.adminContentReview.create({
-        data: {
-          contentId: id,
-          creatorWawuId: existing.creatorWawuId,
-          decision: 'removed',
-          previousStatus: existing.status,
-          newStatus: 'removed',
-          reason: dto.reason.trim(),
-          slotReturned,
-          reviewedByAdminId: admin.id,
-          reviewedByAdminEmail: admin.email,
-          reviewedByAdminRole: admin.role,
-        },
-      });
-
-      const updated = await tx.contentPiece.findUniqueOrThrow({
-        where: { id },
-      });
-      return { content: updated, review: reviewRow };
+      throw new ConflictException(
+        'This piece changed while you were taking it down. Try again.',
+      );
     });
 
     return {
@@ -246,26 +272,28 @@ export class AdminContentReviewService {
     decision: 'approved' | 'rejected',
     reason: string | null,
   ): Promise<AdminContentDecisionView> {
-    const existing = await this.prisma.contentPiece.findUnique({
-      where: { id },
-    });
-    if (!existing) {
-      throw new NotFoundException('Content not found.');
-    }
-    if (existing.status !== 'pending') {
-      throw new BadRequestException(
-        `Only a pending piece can be reviewed — this one is already ${existing.status}.`,
-      );
-    }
-
     const newStatus =
       decision === 'approved' ? ('live' as const) : ('rejected' as const);
 
     const { content, review } = await this.prisma.$transaction(async (tx) => {
-      // Conditional on status, not an unconditional update: two reviewers
-      // acting on the same piece at the same instant both read 'pending'
-      // above, and an unconditional write would let both through — writing
-      // two audit rows and, on reject, returning the slot twice.
+      // The status is read inside the transaction, like take-down's
+      // (TIER-02 round 3, D5), so what the audit row calls the previous
+      // status is the status the flip below really changed. The flip is
+      // conditional on `pending`, the one status a review can start from, so
+      // a piece another request moved on (a second reviewer, a take-down, the
+      // creator's own delete) never matches: of any number of requests, only
+      // the one whose write changed the row moves the place and writes an
+      // audit row.
+      const existing = await tx.contentPiece.findUnique({ where: { id } });
+      if (!existing) {
+        throw new NotFoundException('Content not found.');
+      }
+      if (existing.status !== 'pending') {
+        throw new BadRequestException(
+          `Only a pending piece can be reviewed. This one is already ${existing.status}.`,
+        );
+      }
+
       const claimed = await tx.contentPiece.updateMany({
         where: { id, status: 'pending' },
         data: { status: newStatus },
@@ -418,8 +446,8 @@ export class AdminContentReviewService {
    * per-row lookups.
    *
    * Every value is read from the row the app itself reads. `slotsTotal` is
-   * derived with the shared `uploadAllowanceFor()` helper, exactly as
-   * CreatorStateService does, and `kycStatus` reproduces that service's
+   * what the publishing gate allows (TIER-02), read from the same
+   * PublishingAllowanceService as CreatorStateService, and `kycStatus` reproduces that service's
    * `not_started` synthesis (protected-surface hazard H-5) — the reviewer must
    * see the same word the creator sees on their own screen, not a second
    * definition of it. Nothing here is written back.
@@ -430,7 +458,7 @@ export class AdminContentReviewService {
     const ids = [...new Set(wawuUserIds)];
     if (ids.length === 0) return new Map();
 
-    const [profiles, states, submitted] = await Promise.all([
+    const [profiles, states, submitted, allowances] = await Promise.all([
       this.prisma.userProfile.findMany({ where: { wawuUserId: { in: ids } } }),
       this.prisma.creatorState.findMany({ where: { wawuUserId: { in: ids } } }),
       this.prisma.kycSubmission.findMany({
@@ -438,6 +466,7 @@ export class AdminContentReviewService {
         select: { wawuUserId: true },
         distinct: ['wawuUserId'],
       }),
+      this.publishing.ofMany(ids),
     ]);
 
     const profileById = new Map(profiles.map((p) => [p.wawuUserId, p]));
@@ -461,7 +490,7 @@ export class AdminContentReviewService {
               : null,
             slotsUsed: state?.slotsUsed ?? null,
             slotsTotal: state
-              ? uploadAllowanceFor(holdsTick(profile)).total
+              ? (allowances.get(wawuUserId)?.productsAllowed ?? null)
               : null,
           },
         ];

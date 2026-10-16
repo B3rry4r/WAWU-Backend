@@ -105,6 +105,7 @@ null), and every number in both answers is `integer`
 With `tier` (`id`, and `name` and `badge` from the config; both null if the
 config no longer names that tier), `activeFrom`, `activeUntil`,
 `productsAllowed` (the tier's products when bought plus `extraProducts`),
+`productsUsed` (products published now, the count the publishing gate checks),
 `pointsIncluded`, `firstVoiceIntroIncluded` and `eventPass` (the highest pass
 the person holds, in the order of the config's `event_passes`).
 
@@ -124,7 +125,125 @@ takes away what a person paid for. `MakerTierService` is the one reader: GET
 it. All four tables are in the account purge (OWNED) and the data export
 (without payment references).
 
-## 6. Granting a tier (JOIN-03)
+## 6. Publishing needs a tier (TIER-02)
+
+Task TIER-02, R-43: "Anyone can sign up, build a profile and draft products
+free. Publishing, or uploading any file, needs an active tier, and published
+products never exceed the tier's products plus any extra products bought."
+
+**What a person may publish** (`PublishingAllowanceService.of`, the one place
+that answers it; the gate, `GET /me/tier` `productsUsed`, `GET /creator/state`
+`slotsTotal`, `GET /uploads/allowance` and the admin creator, KYC and content
+screens all read it):
+
+| they hold | products allowed | storage for content |
+|---|---|---|
+| a running tier (`active` or `ending`) | the tier's products plus `extraProducts` | 10 GB |
+| a verification tick that has not ended | 25 (the tick-era cap, kept for people who paid before tiers) | 10 GB |
+| both | the larger of the two, not the sum | 10 GB |
+| neither (never had a tier, the tier ended, the tick lapsed) | 0: `tier_required` | 1 GB (nothing can be uploaded) |
+
+An ended tier or a lapsed tick only stops the next publish or file. Nothing
+published is unpublished or hidden, and it still counts in `productsUsed`.
+Storage for a person on a tier is R-7's with-a-tick figure: tiers replace
+the tick and nothing in the plan sizes storage (Default (agent), owner may
+override).
+
+**What counts.** A product is a content piece waiting for review or live
+(`CreatorState.slotsUsed`, the counter every publish claims against with a
+conditional update, so two publishes at once cannot pass the limit). A draft
+does not count. A piece that is removed (`DELETE /content/:id`), turned down
+or taken down gives its place back; sending a turned-down piece again takes
+one. Removal is the unpublish: there is no route that turns a live piece back
+into a draft, because a draft holds no file. A piece gives its place back
+once, however many requests remove it at the same moment: the removal changes
+the row conditionally on the status it read, only the request that changed it
+frees the place, and the others answer `404`, as a repeat removal does. The
+admin decisions keep the same rule (round 3): a take-down reads the piece's
+status inside its transaction and changes the row only if it is still in that
+status, a reject or an approve only if it is still waiting, and a request that
+finds the status moved reads again and acts on what is true. So a turned-down
+piece that is then taken down returns no second place, and a turned-down piece
+the creator sent again, then taken down, returns the place it took. A
+person's counter row is made insert-or-nothing before the first claim, so two
+first publishes sent together both succeed.
+
+**The refusal.** `402`, the contract's one error shape (CONVENTIONS section
+3), `reason.code`:
+
+- `tier_required`: no running tier and no tick that has not ended.
+  `tierState` is `none` or `ended`. A person who still has products up (the
+  tick or the tier ended) and for whom no tier would leave a place is not told
+  to pick one: "You have 12 products up and no plan has room for another.
+  Remove some to publish." (with "Your tier has ended." in front when it
+  has), and `tiers` is empty (round 4, D7). A person whose tier has ended is
+  told to renew it ("Your tier has ended. Renew it to publish or upload
+  files. Everything you published stays up.") only when that tier is among
+  the `tiers` offered; otherwise the sentence says what would work, with the
+  tier's name and the products up from the data: "Your Verify plan has ended.
+  You have 5 products up, and a bigger plan has room for them." (round 5,
+  D8; renewing a tier that holds no more than the products already up would
+  have been refused). The tier that ended is not in the body.
+- `product_limit_reached`: every product they may have is published. The
+  `message` names only the ways on that the answer carries: both ("Add more
+  products or move up a tier") while a higher tier and extra products are
+  offered, one of them when only that one is, and the limit alone ("You've
+  used all 25 of your product places.") for a tick holder at the tick-era cap,
+  where nothing can be bought. The number is the allowance. A person with MORE
+  products published than they are now allowed (a tick ended with 25 up, then
+  Verify was bought) is told both numbers: "You have 25 products and your plan
+  allows 3. To publish another, remove some." with ", or add more places"
+  only while an offer in the answer would really let another go up (round 3).
+
+`reason` is flat: `code`, `message`, `tierState`, `productsUsed`,
+`productsAllowed`, and the offers `currency`, `tiers`, `extraProducts` (absent
+only when the Hub could not read the plan at that moment; the app then shows
+`message` alone). The
+offers are the figures `GET /plans` answers, in the person's billing currency
+only, and only what would let another product go up: the tiers that, once
+bought, leave more places than the person has products published (extras
+bought carried over). For `tier_required` that is every tier for someone with
+nothing published, and only the tiers big enough for everything they have for
+someone who still has products up, often none (round 4, D7; round 3 offered
+every tier). For `product_limit_reached`, at the limit, it is the tiers above
+the one they hold, and none when they hold the top one or only a tick; above
+their allowance, only the tiers big enough for everything they have, often
+none. `extraProducts` (`count`, `priceMinor`) while they hold
+a running tier and the pack lifts it above what is published, else `null`. The routes' interceptor
+(`PublishingOffersInterceptor`) adds them, because only the route knows whose
+token, and so whose currency, asked.
+
+**The routes** (`publishing-gate-coverage.spec.ts` holds this list to the
+code):
+
+| Route | Asks |
+|---|---|
+| `POST /content` | a way to publish, then a free place |
+| `POST /content/:id/resubmit` | the same (it takes a place) |
+| `PATCH /content/:id` | a way to publish, when the body carries `previewAsset` or `fullAsset` (the piece has its place already) |
+| `POST /uploads/presign` | the same as `POST /content`, when `folder` is `content/preview` or `content/full`. Every other folder (an avatar, a cover, an identity or professional document, a banner, a chat or community picture, a featured work) is not a product and is never asked |
+| `POST /product-drafts/:id/publish` | the same as `POST /content` |
+
+Not gated, and why: `PUT /content/:id/media` and `/preview` take links to
+files `POST /uploads/presign` already accepted; events (E21's tier is its own
+task); featured works and the professional listing are profile content, not
+products; the shop has no creator route (R-2); learn guides are written by
+admins.
+
+**Drafts** (`src/content-piece/product-draft.*`, creator accounts, free, no
+tier asked): `POST /product-drafts` (a title; everything else optional),
+`GET /product-drafts`, `GET`, `PATCH` and `DELETE /product-drafts/:id`, and
+`POST /product-drafts/:id/publish` (the two file links). A draft has no
+file, holds no place and is shown to nobody else. `missing` lists what
+publishing still needs (`contentType`, `description`, `category`,
+`accessType`, and `price` for a paid product). Publishing asks the gate first
+(so Publish opens the offers), then finishes the draft check
+(`400 draft_incomplete`), then creates the piece and deletes the draft in one
+transaction. A person keeps at most `PRODUCT_DRAFTS_MAX` drafts
+(`PROVISIONAL(PRODUCT-DRAFTS-MAX)`; `409 draft_limit_reached`), counted under
+a per-person lock, so drafts sent together cannot pass it.
+
+## 7. Granting a tier (JOIN-03)
 
 `TierGrantService.grant(tx, { wawuUserId, tierId, sourceRef, days?, now? })`
 (`src/plans/tier-grant.service.ts`, exported by `PlansModule`) is the one place
