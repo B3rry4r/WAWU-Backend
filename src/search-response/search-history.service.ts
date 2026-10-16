@@ -1,17 +1,15 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import {
-  POPULAR_CANDIDATES_PER_PAGE,
-  POPULAR_MAX_PAGES,
-  POPULAR_MAX_PROBES,
+  POPULAR_CACHE_SECONDS,
   POPULAR_MIN_PEOPLE,
   POPULAR_SEARCHES_SHOWN,
   POPULAR_WINDOW_DAYS,
   RECENT_SEARCHES_KEPT,
   RECENT_SEARCHES_SHOWN,
 } from './search-history.config';
-import { whyNotPopular } from './popular-search-text';
-import { communityMatch, contentMatch, creatorMatch } from './search-matchers';
+import { foldSql, isShowableName, showableNameSql } from './popular-name';
 import {
   refuseUnsearchableQuery,
   UNSEARCHABLE_QUERY_MESSAGE,
@@ -43,16 +41,6 @@ export function normaliseSearch(raw: string): NormalisedSearch {
   const query = raw.normalize('NFKC').trim().replace(/\s+/g, ' ');
   if (query === '') throw new BadRequestException(UNSEARCHABLE_QUERY_MESSAGE);
   return { query, queryKey: query.toLowerCase() };
-}
-
-/**
- * Text that is never offered to everyone as a popular search, however many
- * accounts typed it: a phone number, an email address in any spelling, a link
- * or domain, or text with an invisible character in it. The rules and the
- * forms they catch are in popular-search-text.ts.
- */
-export function looksPersonal(queryKey: string): boolean {
-  return whyNotPopular(queryKey) !== null;
 }
 
 /**
@@ -116,119 +104,118 @@ export class SearchHistoryService {
   }
 
   /**
-   * Searches that at least POPULAR_MIN_PEOPLE different people made in the
-   * last POPULAR_WINDOW_DAYS, most people first, then the most recent. Each is
-   * shown as its newest spelling. Empty until enough people have searched:
-   * nothing stands in for a search nobody made.
+   * "People are searching": the names of public things that at least
+   * POPULAR_MIN_PEOPLE different people searched in the last
+   * POPULAR_WINDOW_DAYS, most people first, then the most recent. Empty until
+   * enough people have searched: nothing stands in for a search nobody made.
    *
-   * A search made only by accounts whose deletion is scheduled does not count
-   * (and a deleted account's search is not counted toward the people), so a
-   * text leaves the list the moment enough of its people ask to leave. Then a
-   * text is offered only if it may be (popular-search-text.ts) and only if
-   * GET /search would show a signed-out visitor at least one result for it,
-   * so a sentence, a private person's name or spam typed by three accounts
-   * never reaches the landing.
+   * An entry is the NAME of something a signed-out visitor can find today (a
+   * content title, a creator's handle with a creator state, a community name,
+   * a category name) that the searched text equals once both are folded
+   * (popular-name.ts), and the name has to pass the character rule there. The
+   * text shown is that name, never a searcher's spelling. One query ranks
+   * them, and only texts that pass the equality count, so texts typed only to
+   * crowd the list cannot push a real entry off it. A search made by an
+   * account whose deletion is scheduled does not count (a deleted account's
+   * search is not counted toward the people).
+   *
+   * The answer is kept in this process for POPULAR_CACHE_SECONDS: the route is
+   * public, every call would otherwise scan the names, and a deletion can show
+   * for up to that long. Calls that arrive together share one query.
    */
-  async popular(now: Date = new Date()): Promise<SearchTextList> {
+  popular(now: Date = new Date()): Promise<SearchTextList> {
+    const at = now.getTime();
+    const held = this.popularCache;
+    const fresh =
+      held !== null &&
+      at - held.at >= 0 &&
+      at - held.at < POPULAR_CACHE_SECONDS * 1000;
+    if (held !== null && fresh) return held.answer.then(copyOf);
+    const entry = { at, answer: this.rankPopular(now) };
+    this.popularCache = entry;
+    // A failed query is not kept: the next call asks again.
+    entry.answer.catch(() => {
+      if (this.popularCache === entry) this.popularCache = null;
+    });
+    return entry.answer.then(copyOf);
+  }
+
+  /** Forget the kept answer; the next call to popular() asks the database. */
+  resetPopularCache(): void {
+    this.popularCache = null;
+  }
+
+  private popularCache: { at: number; answer: Promise<SearchTextList> } | null =
+    null;
+
+  /**
+   * The one query. `keys` are the distinct texts searched in the window, each
+   * with its folded form; `names` are the shown-able names of public things,
+   * folded, one per folded text (a category before a community before a
+   * creator handle before a title, then the lower name); the join is equality
+   * of the folded forms. People are counted over every spelling that folds to
+   * the same name, one count per person. `PushStoppedAccount` is the mark
+   * `DELETE /account` leaves on an account whose deletion is scheduled (a
+   * cancel removes it, the purge deletes it with the account's data).
+   */
+  private async rankPopular(now: Date): Promise<SearchTextList> {
     const since = new Date(now.getTime() - POPULAR_WINDOW_DAYS * 86_400_000);
-    const keys: string[] = [];
-    let probes = 0;
-    for (
-      let page = 0;
-      page < POPULAR_MAX_PAGES && keys.length < POPULAR_SEARCHES_SHOWN;
-      page++
-    ) {
-      const candidates = await this.popularCandidates(
-        since,
-        page * POPULAR_CANDIDATES_PER_PAGE,
-        POPULAR_CANDIDATES_PER_PAGE,
-      );
-      for (const key of candidates) {
-        if (keys.length >= POPULAR_SEARCHES_SHOWN) break;
-        if (whyNotPopular(key) !== null) continue;
-        if (probes >= POPULAR_MAX_PROBES) break;
-        probes += 1;
-        if (await this.hasPublicResult(key)) keys.push(key);
-      }
-      if (
-        candidates.length < POPULAR_CANDIDATES_PER_PAGE ||
-        probes >= POPULAR_MAX_PROBES
+    const col = (ref: string) => Prisma.raw(ref);
+    const rows = await this.prisma.$queryRaw<{ shown: string }[]>(Prisma.sql`
+      WITH keys AS (
+        SELECT h."queryKey" AS qk, ${foldSql(col('h."queryKey"'))} AS fk
+        FROM "SearchHistory" h
+        WHERE h."searchedAt" >= ${since}
+          AND NOT EXISTS (
+            SELECT 1 FROM "PushStoppedAccount" p WHERE p."userWawuId" = h."userWawuId")
+        GROUP BY h."queryKey"
+      ),
+      names AS (
+        SELECT DISTINCT ON (u.fk) u.fk AS fk, u.shown AS shown
+        FROM (
+          SELECT ${foldSql(col('c.category'))} AS fk, c.category AS shown, 1 AS pri
+          FROM "ContentPiece" c
+          WHERE c.status = 'live' AND ${showableNameSql(col('c.category'))}
+          UNION ALL
+          SELECT ${foldSql(col('m.name'))}, m.name, 2
+          FROM "Community" m
+          WHERE ${showableNameSql(col('m.name'))}
+          UNION ALL
+          SELECT ${foldSql(col('p.handle'))}, p.handle, 3
+          FROM "UserProfile" p
+          WHERE p."accountType" = 'creator'
+            AND p.handle IS NOT NULL
+            AND ${showableNameSql(col('p.handle'))}
+            AND EXISTS (SELECT 1 FROM "CreatorState" s WHERE s."wawuUserId" = p."wawuUserId")
+          UNION ALL
+          SELECT ${foldSql(col('t.title'))}, t.title, 4
+          FROM "ContentPiece" t
+          WHERE t.status = 'live' AND ${showableNameSql(col('t.title'))}
+        ) u
+        ORDER BY u.fk, u.pri, u.shown
+      ),
+      ranked AS (
+        SELECT n.shown AS shown,
+               COUNT(DISTINCT h."userWawuId") AS people,
+               MAX(h."searchedAt") AS latest
+        FROM keys k
+        JOIN names n ON n.fk = k.fk
+        JOIN "SearchHistory" h ON h."queryKey" = k.qk
+        WHERE h."searchedAt" >= ${since}
+          AND NOT EXISTS (
+            SELECT 1 FROM "PushStoppedAccount" p WHERE p."userWawuId" = h."userWawuId")
+        GROUP BY n.fk, n.shown
+        HAVING COUNT(DISTINCT h."userWawuId") >= ${POPULAR_MIN_PEOPLE}
       )
-        break;
-    }
-    if (keys.length === 0) return { items: [] };
-
-    const spellings = await this.prisma.$queryRaw<
-      { queryKey: string; query: string }[]
-    >`
-      SELECT DISTINCT ON (h."queryKey") h."queryKey" AS "queryKey", h."query" AS "query"
-      FROM "SearchHistory" h
-      WHERE h."queryKey" = ANY(${keys}::text[])
-        AND h."searchedAt" >= ${since}
-        AND NOT EXISTS (
-          SELECT 1 FROM "PushStoppedAccount" p WHERE p."userWawuId" = h."userWawuId")
-      ORDER BY h."queryKey", h."searchedAt" DESC`;
-    const newest = new Map(spellings.map((s) => [s.queryKey, s.query]));
-    return { items: keys.map((k) => newest.get(k) ?? k) };
+      SELECT btrim(regexp_replace(shown, ' +', ' ', 'g')) AS shown
+      FROM ranked
+      ORDER BY people DESC, latest DESC, shown ASC
+      LIMIT ${POPULAR_SEARCHES_SHOWN}`);
+    // The database applied the character rule; the same rule here, as a belt.
+    return { items: rows.map((r) => r.shown).filter(isShowableName) };
   }
+}
 
-  /**
-   * The next page of search texts that enough people made lately, most people
-   * first. Rows are one per person and text, so a count of rows is a count of
-   * people. `PushStoppedAccount` is the mark `DELETE /account` leaves on an
-   * account whose deletion is scheduled (on main, and on SETTINGS-06 once the
-   * deletion is in force; a cancel removes it, the purge deletes it with the
-   * account's data), so those accounts are left out of the count.
-   */
-  private async popularCandidates(
-    since: Date,
-    offset: number,
-    size: number,
-  ): Promise<string[]> {
-    const rows = await this.prisma.$queryRaw<{ queryKey: string }[]>`
-      SELECT h."queryKey" AS "queryKey"
-      FROM "SearchHistory" h
-      WHERE h."searchedAt" >= ${since}
-        AND NOT EXISTS (
-          SELECT 1 FROM "PushStoppedAccount" p WHERE p."userWawuId" = h."userWawuId")
-      GROUP BY h."queryKey"
-      HAVING COUNT(*) >= ${POPULAR_MIN_PEOPLE}
-      ORDER BY COUNT(*) DESC, MAX(h."searchedAt") DESC, h."queryKey" ASC
-      LIMIT ${size} OFFSET ${offset}`;
-    return rows.map((r) => r.queryKey);
-  }
-
-  /**
-   * Whether GET /search, called with no token, answers this text with at least
-   * one content piece, creator or community. It reads the same three clauses
-   * GET /search reads (search-matchers.ts) and stops at the first hit; a
-   * creator counts only with a `CreatorState` row, as the list does.
-   */
-  async hasPublicResult(q: string): Promise<boolean> {
-    const hidden: string[] = [];
-    const content = await this.prisma.contentPiece.findFirst({
-      where: contentMatch(q, hidden),
-      select: { id: true },
-    });
-    if (content) return true;
-    const community = await this.prisma.community.findFirst({
-      where: communityMatch(q, hidden),
-      select: { id: true },
-    });
-    if (community) return true;
-    // GET /search lists a matching creator only with a CreatorState row, so
-    // at least one matching profile must have one. The first 200 matching
-    // profiles are looked at, far more than any text that finds creators has.
-    const profiles = await this.prisma.userProfile.findMany({
-      where: creatorMatch(q, hidden),
-      select: { wawuUserId: true },
-      take: 200,
-    });
-    if (profiles.length === 0) return false;
-    const state = await this.prisma.creatorState.findFirst({
-      where: { wawuUserId: { in: profiles.map((p) => p.wawuUserId) } },
-      select: { wawuUserId: true },
-    });
-    return state !== null;
-  }
+function copyOf(list: SearchTextList): SearchTextList {
+  return { items: [...list.items] };
 }

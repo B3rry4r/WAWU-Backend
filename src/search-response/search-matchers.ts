@@ -6,10 +6,9 @@ import type {
 } from '../../generated/prisma/models';
 
 /**
- * What a search text matches, in one place. GET /search reads these three
- * clauses to answer, and GET /search/popular reads the same three to ask
- * whether a text finds anything a signed-out visitor could see (EXPLORE-05
- * round 2), so the two cannot drift apart.
+ * What a search text matches, in one place: the three clauses GET /search
+ * reads to answer (EXPLORE-05 round 2). GET /search/popular no longer reads
+ * them (round 3): it matches by equal name, in popular-name.ts.
  *
  * `hidden` is the people the caller blocked or who blocked the caller
  * (SETTINGS-04); a signed-out caller has none.

@@ -15,7 +15,6 @@ import {
   normaliseSearch,
   SearchHistoryService,
 } from '../search-history.service';
-import { asciiDigits, whyNotPopular } from '../popular-search-text';
 
 /**
  * EXPLORE-05 round 2.
@@ -25,10 +24,11 @@ import { asciiDigits, whyNotPopular } from '../popular-search-text';
  *    carries `include`, so the web (which sends none) gets what it always got.
  * 2. GET /search/popular leaves out the searches of an account whose deletion
  *    is scheduled.
- * 3. GET /search/popular never offers a phone number, an email address, a link
- *    or invisible text, in any spelling, and only offers a text that finds
- *    something a signed-out visitor can see.
- * 4. POST /search/recent says what is wrong with a `q` that is not text.
+ * 3. POST /search/recent says what is wrong with a `q` that is not text.
+ *
+ * Round 3 replaced the old rule 3 (a list of forbidden spellings) with an
+ * allow-list of public names; its specs are search-popular-allowlist and
+ * popular-name.
  *
  * Rows made here carry MARK in their text or their ids, so the spec holds on a
  * database other suites have used.
@@ -51,114 +51,6 @@ async function login(identifier: string): Promise<string> {
   return ((await res.json()) as { accessToken: string }).accessToken;
 }
 
-// Every spelling the verifier reached the public list with, and the ones that
-// were already held back, as the searches themselves.
-const PHONES = [
-  '0801.234.5678',
-  '(0801) 234 5678',
-  '0801/234/5678',
-  '0801_234_5678',
-  '٠٨٠١٢٣٤٥٦٧٨', // Arabic-Indic digits
-  '٠٨٠١ ٢٣٤ ٥٦٧٨',
-  '०८०१२३४५६७८', // Devanagari digits
-  '0801​2345678', // a zero-width space inside the digits
-  '0801‍2345678',
-  '０８０１２３４５６７８', // full-width digits
-  '+234 801 234 5678',
-  '+2348012345678',
-  '08012345678',
-  '0801-234-5678',
-  '+234 (0) 801 234 5678',
-  '234 801 234 5678',
-  '0801 234 56 78',
-  '801 234 5678',
-  '12345678901',
-  '1234567890123',
-  '1234567',
-];
-const EMAILS = [
-  'chidinma@gmail.com',
-  'chidinma @ gmail . com',
-  'chidinma＠gmail.com', // full-width @
-  'chidinma(at)gmail.com',
-  'chidinma at gmail dot com',
-  'chidinma[at]gmail[dot]com',
-  'Chidinma (AT) Gmail (DOT) com',
-  'chidinma_at_gmail_dot_com',
-  'chidinma{at}gmail',
-  'chidinma<at>gmail',
-];
-const LINKS = [
-  'https://evil.example/claim-your-prize',
-  'http://x',
-  'www.example',
-  'evil.example',
-  'bit.ly/abc',
-  'claim at evil.example',
-];
-const INVISIBLE = [
-  'afro​beats',
-  'afrobeats‍',
-  '⁠afrobeats',
-  '﻿afrobeats',
-  'af­robeats',
-  'afro‮beats',
-  'afro\u0007beats',
-];
-const KEPT = [
-  'afrobeats',
-  'Afrobeats 2026',
-  'top 10 2026 trends',
-  'iphone 15 pro max',
-  'tax filing',
-  'lagos photographers',
-  'ex05r_okafor',
-  'mr. okafor',
-  'dr okafor',
-  'c++ tutorial',
-  'at home',
-  'make-up artists in lagos',
-  'Naija’s best chefs',
-];
-
-describe('whyNotPopular (every form)', () => {
-  it.each(PHONES)('refuses the number %j', (text) => {
-    expect(whyNotPopular(text)).not.toBeNull();
-  });
-  it.each(EMAILS)('refuses the email address %j', (text) => {
-    expect(whyNotPopular(text)).toBe('email');
-  });
-  it.each(LINKS)('refuses the link or domain %j', (text) => {
-    expect(whyNotPopular(text)).not.toBeNull();
-  });
-  it.each(INVISIBLE)('refuses the invisible character in %j', (text) => {
-    expect(whyNotPopular(text)).toBe('invisible');
-  });
-  it.each(KEPT)('keeps the ordinary search %j', (text) => {
-    expect(whyNotPopular(text)).toBeNull();
-  });
-
-  it('reads another script as digits and keeps the others as they were', () => {
-    expect(asciiDigits('٠١٢٣٤٥٦٧٨٩')).toBe('0123456789');
-    expect(asciiDigits('०१९')).toBe('019');
-    expect(asciiDigits('abc 12')).toBe('abc 12');
-  });
-
-  it('names the reason', () => {
-    expect(whyNotPopular('0801.234.5678')).toBe('number');
-    expect(whyNotPopular('a@b.co')).toBe('email');
-    expect(whyNotPopular('evil.example')).toBe('link');
-    expect(whyNotPopular('a​b')).toBe('invisible');
-  });
-
-  // A decision, written down: the word "at" or "dot" between two words is
-  // taken as an email spelled out, so a plain search that happens to hold it
-  // stays out of the public list (it is still in the person's own Recent).
-  it('also keeps out a plain search with "at" between two words', () => {
-    expect(whyNotPopular('afrobeats at home')).toBe('email');
-  });
-});
-
 describe('Search, round 2 (EXPLORE-05)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
@@ -176,9 +68,12 @@ describe('Search, round 2 (EXPLORE-05)', () => {
     request(app.getHttpServer() as Parameters<typeof request>[0]);
   const data = <T>(res: { body: unknown }): T => (res.body as { data: T }).data;
   const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
-  const popular = async () =>
-    data<{ items: string[] }>(await http().get('/api/hub/search/popular'))
-      .items;
+  const popular = async () => {
+    history.resetPopularCache(); // the answer is kept for 60 s otherwise
+    return data<{ items: string[] }>(
+      await http().get('/api/hub/search/popular'),
+    ).items;
+  };
   const room = async (name: string) => {
     const r = await prisma.community.create({
       data: { name, hostWawuId: USER_BASIC, kind: 'open', description: 'x' },
@@ -198,7 +93,6 @@ describe('Search, round 2 (EXPLORE-05)', () => {
       })),
     });
   };
-  const key = (text: string) => normaliseSearch(text).queryKey;
 
   async function cleanUp() {
     await prisma.searchHistory.deleteMany({
@@ -416,8 +310,9 @@ describe('Search, round 2 (EXPLORE-05)', () => {
     const SECOND = `${MARK} epsilon lantern`;
 
     beforeAll(async () => {
-      await room(`${MARK} Delta Lantern Club`);
-      await room(`${MARK} Epsilon Lantern Club`);
+      // popular shows the name of a public thing, so each text is a room's name
+      await room(TEXT);
+      await room(SECOND);
     });
 
     it('drops a text at once when one of its three people schedules the deletion', async () => {
@@ -442,7 +337,7 @@ describe('Search, round 2 (EXPLORE-05)', () => {
     });
 
     it('keeps a text that three other people still have', async () => {
-      // plain (deleted) typed it too, with a newer spelling that must not show.
+      // plain (deleted) typed it too, in capitals; the room's own name shows.
       await seed(SECOND, 3, 'epsilon');
       await prisma.searchHistory.create({
         data: {
@@ -467,133 +362,6 @@ describe('Search, round 2 (EXPLORE-05)', () => {
         data: { userWawuId: USER_PLAIN },
       });
       expect(await popular()).not.toContain(TEXT);
-    });
-  });
-
-  describe('what may be popular', () => {
-    const normal = {
-      afro: `${MARK} Afrobeats`,
-      creator: `${MARK}_okafor`,
-      room: `${MARK} Lagos Photographers`,
-    };
-    // A byte order mark at the edge is trimmed by normaliseSearch (JS counts it
-    // as white space), which leaves the ordinary "afrobeats", so that one
-    // spelling is covered by the unit test above and not here.
-    const refusedByRule = [
-      ...PHONES,
-      ...EMAILS,
-      ...LINKS,
-      ...INVISIBLE.filter((t) => !t.startsWith('\ufeff')),
-    ];
-    const noResult = [
-      `${MARK} send money to my account`, // a sentence
-      `${MARK} Chidinma Okafor`, // a private person's name
-      `${MARK} Chidinmá Okafor`, // the same name with an accent
-      `${MARK} pending thing`, // content nobody can see yet
-      `${MARK}_nostate`, // a creator profile with no creator state
-    ];
-
-    beforeAll(async () => {
-      // Public results for the ordinary searches.
-      const piece = (slug: string, title: string, status: 'live' | 'pending') =>
-        prisma.contentPiece.create({
-          data: {
-            slug: `${MARK}-${slug}`,
-            creatorWawuId: USER_BASIC,
-            contentType: 'video',
-            title,
-            description: 'About',
-            category: 'Music',
-            accessType: 'paid',
-            price: 500,
-            previewAssetUrl: 'https://img.example.com/p.png',
-            status,
-          },
-        });
-      await piece('afro', `${normal.afro} Mix`, 'live');
-      await piece('pending', `${MARK} pending thing`, 'pending');
-      await prisma.userProfile.createMany({
-        data: [
-          {
-            wawuUserId: `${MARK}-c1`,
-            accountType: 'creator',
-            handle: normal.creator,
-            bio: 'bio',
-          },
-          {
-            wawuUserId: `${MARK}-c2`,
-            accountType: 'creator',
-            handle: `${MARK}_nostate`,
-            bio: 'bio',
-          },
-        ],
-      });
-      await prisma.creatorState.create({
-        data: { wawuUserId: `${MARK}-c1` },
-      });
-      await room(`${normal.room} Club`);
-
-      // A room named as each spelling is searched (its key), so each has a
-      // public result and only the rules can refuse it.
-      for (const text of refusedByRule) await room(key(text));
-
-      let n = 0;
-      for (const text of Object.values(normal)) await seed(text, 5, `n${n++}`);
-      for (const text of refusedByRule) await seed(text, 3, `r${n++}`);
-      for (const text of noResult) await seed(text, 3, `x${n++}`);
-    });
-
-    it('lists an ordinary search, a creator name and a community name', async () => {
-      const list = await popular();
-      expect(list).toEqual(expect.arrayContaining(Object.values(normal)));
-    });
-
-    it('does not list any number, email, link or invisible-character spelling, even with a public result', async () => {
-      const list = await popular();
-      const leaked = list.filter((t) =>
-        refusedByRule.map(key).includes(key(t)),
-      );
-      expect(leaked).toEqual([]);
-      // each of them does have a public result, so the rules did the refusing
-      for (const text of refusedByRule)
-        expect(await history.hasPublicResult(key(text))).toBe(true);
-    });
-
-    it('does not list a sentence, a private name, an accented name, hidden content or a creator with no state', async () => {
-      const list = await popular();
-      for (const text of noResult) expect(list).not.toContain(text);
-    });
-
-    it('asks the same thing GET /search answers for a signed-out visitor', async () => {
-      const all = [...Object.values(normal), ...noResult];
-      for (const text of all) {
-        const res = data<{
-          content: unknown[];
-          creators: unknown[];
-          communities: unknown[];
-        }>(
-          await http()
-            .get('/api/hub/search')
-            .query({ q: key(text), include: 'communities' }),
-        );
-        const found =
-          res.content.length + res.creators.length + res.communities.length > 0;
-        expect(await history.hasPublicResult(key(text))).toBe(found);
-      }
-    });
-
-    it('reaches a good search that sits behind a page of refused ones', async () => {
-      const spam = Array.from(
-        { length: 40 },
-        (_, i) => `0801234567${String(i).padStart(2, '0')}`,
-      );
-      for (const [i, text] of spam.entries()) await seed(text, 6, `s${i}`);
-      // Forty texts of six people each come before the ordinary ones (five
-      // people), so those sit on a later page than the first 32.
-      const list = await popular();
-      expect(list).toEqual(expect.arrayContaining(Object.values(normal)));
-      expect(list.length).toBeLessThanOrEqual(8);
-      expect(list.filter((t) => /^0801/.test(t))).toEqual([]);
     });
   });
 });

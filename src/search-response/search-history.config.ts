@@ -16,13 +16,9 @@ export const POPULAR_WINDOW_DAYS = 30;
 export const POPULAR_SEARCHES_SHOWN = 8;
 
 /**
- * Work limits for GET /search/popular, which is public. The list reads the
- * searches in pages of POPULAR_CANDIDATES_PER_PAGE (most people first), skips
- * the texts the rules refuse, and asks the database whether the rest find
- * anything; it stops after POPULAR_MAX_PAGES pages or POPULAR_MAX_PROBES such
- * questions, so text typed only to fill the list cannot make one call do
- * unbounded work.
+ * GET /search/popular is public, and its ranking reads every public name, so
+ * the answer is kept in the process for this long (lead ruling, 16 Oct 2026).
+ * A search made by an account that has just asked for its deletion can show in
+ * the list for up to this long.
  */
-export const POPULAR_CANDIDATES_PER_PAGE = 32;
-export const POPULAR_MAX_PAGES = 4;
-export const POPULAR_MAX_PROBES = 40;
+export const POPULAR_CACHE_SECONDS = 60;

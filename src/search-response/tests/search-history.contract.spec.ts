@@ -14,7 +14,10 @@ import {
   RECENT_SEARCHES_KEPT,
   RECENT_SEARCHES_SHOWN,
 } from '../search-history.config';
-import { looksPersonal, normaliseSearch } from '../search-history.service';
+import {
+  normaliseSearch,
+  SearchHistoryService,
+} from '../search-history.service';
 
 /**
  * EXPLORE-05: Recent (and Clear), People are searching, communities by name,
@@ -64,9 +67,12 @@ describe('Search: recent, popular, communities, ticks (EXPLORE-05)', () => {
   const recents = async (t: string) =>
     data<{ recentSearches: string[] }>(await suggestions(t, 'recent'))
       .recentSearches;
-  const popular = async () =>
-    data<{ items: string[] }>(await http().get('/api/hub/search/popular'))
-      .items;
+  const popular = async () => {
+    app.get(SearchHistoryService).resetPopularCache(); // kept 60 s otherwise
+    return data<{ items: string[] }>(
+      await http().get('/api/hub/search/popular'),
+    ).items;
+  };
 
   async function startApp(): Promise<INestApplication> {
     const moduleRef = await Test.createTestingModule({
@@ -247,24 +253,19 @@ describe('Search: recent, popular, communities, ticks (EXPLORE-05)', () => {
       expect(arr.status).toBe(400);
     });
 
-    it('normalises text and spots personal details', () => {
+    it('normalises text', () => {
       expect(normaliseSearch('  Tax \t Filing ')).toEqual({
         query: 'Tax Filing',
         queryKey: 'tax filing',
       });
-      expect(looksPersonal('ada@example.com')).toBe(true);
-      expect(looksPersonal('0803 123 4567')).toBe(true);
-      expect(looksPersonal('08031234567')).toBe(true);
-      expect(looksPersonal('top 10 2026 trends')).toBe(false);
-      expect(looksPersonal('tax filing')).toBe(false);
     });
   });
 
   describe('People are searching', () => {
-    // Round 2: a popular search must find something a visitor can see, so the
-    // texts below each name a public room.
+    // Round 3: a popular search is the name of a public thing, so the texts
+    // below are each the exact name of a public room.
     beforeAll(async () => {
-      for (const name of [`${MARK} Alpha room`, `${MARK} Gamma room`])
+      for (const name of [`${MARK} Alpha`, `${MARK} Gamma`])
         await prisma.community.create({
           data: {
             name,
@@ -305,7 +306,7 @@ describe('Search: recent, popular, communities, ticks (EXPLORE-05)', () => {
       expect(res.status).toBe(200);
     });
 
-    it('counts people, not searches, and shows the newest spelling', async () => {
+    it("counts people, not searches, and shows the thing's own name", async () => {
       await prisma.searchHistory.deleteMany({
         where: { queryKey: `${MARK} gamma` },
       });
@@ -315,13 +316,16 @@ describe('Search: recent, popular, communities, ticks (EXPLORE-05)', () => {
       await record(basic, `${MARK} gamma`);
       expect(await popular()).not.toContain(`${MARK} gamma`);
       await record(pro, `${MARK} GAMMA`);
-      expect(await popular()).toContain(`${MARK} GAMMA`);
+      const list = await popular();
+      expect(list).toContain(`${MARK} Gamma`); // the room's name
+      expect(list).not.toContain(`${MARK} GAMMA`); // not the newest spelling
+      expect(list).not.toContain(`${MARK} gamma`);
     });
 
     it('drops a search when one of the people clears theirs', async () => {
-      expect(await popular()).toContain(`${MARK} GAMMA`);
+      expect(await popular()).toContain(`${MARK} Gamma`);
       await http().delete('/api/hub/search/recent').set(auth(pro));
-      expect(await popular()).not.toContain(`${MARK} GAMMA`);
+      expect(await popular()).not.toContain(`${MARK} Gamma`);
       expect(await popular()).not.toContain(`${MARK} gamma`);
     });
 
