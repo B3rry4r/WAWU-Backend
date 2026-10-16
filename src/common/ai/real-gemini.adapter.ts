@@ -24,12 +24,95 @@ const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 export const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-3.7-flash';
 const TIMEOUT_MS = 20_000;
 
+/**
+ * FIX-43: THINKING TOKENS COUNT AGAINST maxOutputTokens.
+ *
+ * gemini-3.7-flash is a thinking model. Its thoughts are spent from the same
+ * `maxOutputTokens` budget as the answer, so with the old limit of 700 a
+ * profiling turn used 669 on thinking and had 17 left for the answer: it came
+ * back `MAX_TOKENS` with a 58 character fragment and every turn failed. The
+ * limit is therefore two named parts, a room for thinking and a room for the
+ * answer, added together; and thinking is asked to stay small.
+ *
+ * `generationConfig.thinkingConfig.thinkingLevel` is the Gemini 3 control
+ * (Google's generateContent reference, ThinkingConfig and ThinkingLevel:
+ * MINIMAL, LOW, MEDIUM, HIGH). LOW is the default here because every Gemini 3
+ * model accepts it; MINIMAL is listed for some Flash models only, and a model
+ * that does not support the level answers HTTP 400. GEMINI_THINKING_LEVEL
+ * moves it without a deploy of this file, like GEMINI_MODEL.
+ */
+const THINKING_LEVELS = ['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'] as const;
+type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+const requestedLevel = (process.env.GEMINI_THINKING_LEVEL ?? '').toUpperCase();
+export const GEMINI_THINKING_LEVEL: ThinkingLevel =
+  THINKING_LEVELS.find((level) => level === requestedLevel) ?? 'LOW';
+
+/** Tokens kept for thinking, on top of the answer. Even LOW thinking took several hundred on a short turn. */
+export const THINKING_TOKEN_ROOM = 2048;
+/**
+ * Tokens kept for the answer, by call. The structured chat turn is sized from
+ * its schema (ASSISTANT_LIMITS): a reply of 1200 characters, 4 quick replies,
+ * a headline, 8 facts of up to 200 characters and the intake answers come to
+ * about 1400 tokens at most. A prose chat reply and a brief (3 lists of up to
+ * 12 lines) are smaller or the same.
+ */
+export const ANSWER_TOKEN_ROOM = {
+  chatJson: 2048,
+  chatProse: 1024,
+  brief: 2048,
+} as const;
+export const MAX_OUTPUT_TOKENS = {
+  chatJson: THINKING_TOKEN_ROOM + ANSWER_TOKEN_ROOM.chatJson,
+  chatProse: THINKING_TOKEN_ROOM + ANSWER_TOKEN_ROOM.chatProse,
+  brief: THINKING_TOKEN_ROOM + ANSWER_TOKEN_ROOM.brief,
+} as const;
+const THINKING_CONFIG = { thinkingLevel: GEMINI_THINKING_LEVEL } as const;
+
 interface GeminiApiResponse {
   candidates?: Array<{
-    content?: { parts?: Array<{ text?: string }> };
+    content?: {
+      parts?: Array<{ text?: string; thought?: boolean }>;
+    };
     finishReason?: string;
   }>;
   promptFeedback?: { blockReason?: string };
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    thoughtsTokenCount?: number;
+    totalTokenCount?: number;
+  };
+}
+
+/**
+ * The text of the answer: every part that is not a thought part, joined. A
+ * thinking model may send a thought part first, so `parts[0]` is not the
+ * answer. A candidate that did not finish with STOP (MAX_TOKENS above all) is
+ * a failed call: its text is cut off. The reason and the token counts are
+ * logged once; the text never is, because it is somebody's legal problem.
+ */
+function readAnswerText(
+  payload: GeminiApiResponse,
+  logger: Logger,
+  label: string,
+): string {
+  const candidate = payload.candidates?.[0];
+  const reason = candidate?.finishReason;
+  if (reason && reason !== 'STOP') {
+    const usage = payload.usageMetadata ?? {};
+    logger.error(
+      `Gemini ${label} ended with finishReason ${reason} ` +
+        `(prompt ${usage.promptTokenCount ?? '?'}, ` +
+        `thoughts ${usage.thoughtsTokenCount ?? '?'}, ` +
+        `answer ${usage.candidatesTokenCount ?? '?'}, ` +
+        `total ${usage.totalTokenCount ?? '?'})`,
+    );
+    throw new Error(`Gemini ${label} ended early: ${reason}`);
+  }
+  return (candidate?.content?.parts ?? [])
+    .filter((part) => !part.thought && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('');
 }
 
 /**
@@ -69,7 +152,8 @@ export class RealGeminiAdapter implements GeminiClient {
       contents: [{ role: 'user', parts: [{ text: request.content }] }],
       generationConfig: {
         temperature: 0.2,
-        maxOutputTokens: 1200,
+        maxOutputTokens: MAX_OUTPUT_TOKENS.brief,
+        thinkingConfig: THINKING_CONFIG,
         responseMimeType: 'application/json',
         responseSchema: {
           type: 'OBJECT',
@@ -124,7 +208,7 @@ export class RealGeminiAdapter implements GeminiClient {
       );
     }
 
-    const text = payload.candidates?.[0]?.content?.parts?.[0]?.text;
+    const text = readAnswerText(payload, this.logger, 'brief');
     if (!text) throw new Error('Gemini returned no content');
 
     let parsed: unknown;
@@ -190,17 +274,17 @@ export class RealGeminiAdapter implements GeminiClient {
         `Gemini blocked the request: ${payload.promptFeedback.blockReason}`,
       );
     }
-    const text = payload.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    const text = readAnswerText(payload, this.logger, 'chat').trim();
     if (!text) throw new Error('Gemini chat returned no content');
     return text;
   }
 }
 
 /**
- * The request body of one chat turn. Without a `responseSchema` it is the body
- * this adapter has always sent, key for key; with one, the same body plus
- * `responseMimeType` and the schema in `generationConfig`, in the order
- * `generateBrief()` writes them.
+ * The request body of one chat turn. With a `responseSchema` it adds
+ * `responseMimeType` and the schema to `generationConfig`, in the order
+ * `generateBrief()` writes them. Every turn carries the thinking level and a
+ * limit with room for thinking (FIX-43).
  */
 export function buildChatBody(request: GeminiChatRequest): object {
   return {
@@ -211,7 +295,10 @@ export function buildChatBody(request: GeminiChatRequest): object {
     })),
     generationConfig: {
       temperature: 0.3,
-      maxOutputTokens: 700,
+      maxOutputTokens: request.responseSchema
+        ? MAX_OUTPUT_TOKENS.chatJson
+        : MAX_OUTPUT_TOKENS.chatProse,
+      thinkingConfig: THINKING_CONFIG,
       ...(request.responseSchema
         ? {
             responseMimeType: 'application/json',
