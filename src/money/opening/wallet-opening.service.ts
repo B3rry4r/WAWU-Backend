@@ -28,6 +28,7 @@ import {
   WalletIdentityService,
 } from '../identity/wallet-identity.service';
 import { walletStateOf } from '../gate/wallet-gate';
+import { AccountLimits } from '../limits/account-limits.service';
 import { MoneyError } from '../money-error';
 import type { WalletState, WalletView } from '../money-view.type';
 import { TransactionPinService } from '../pin/transaction-pin.service';
@@ -206,6 +207,8 @@ export class WalletOpeningService {
     // NUV-02 round 3: tells a person whose opening expired (kind
     // `identity_review`). Absent in a module without notifications.
     @Optional() private readonly notifications?: NotificationService,
+    // WALLET-23: W35's limits row. Absent: no row.
+    @Optional() private readonly accountLimits?: AccountLimits,
   ) {
     this.reviewed = new ReviewedOpening({
       prisma,
@@ -310,8 +313,13 @@ export class WalletOpeningService {
             openedAt: wallet.createdAt.toISOString(),
           }
         : null,
-      // No limit figure is known yet (BACKEND_GAPS G-7): null hides the row.
-      limits: null,
+      // The provider's limit on the account, as its last balance read said it
+      // (WALLET-23); null hides the row (nothing read yet, or the provider
+      // names none). Read from what is on file: this never calls the provider.
+      limits:
+        wallet && isRowOf(this.provider.name, wallet.provider)
+          ? ((await this.accountLimits?.view(wawuUserId)) ?? null)
+          : null,
       pin,
       // W18 is not built (R-28): a wallet only exists after the BVN and
       // selfie checks, so nothing blocks a bank send for its owner.

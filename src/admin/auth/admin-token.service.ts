@@ -132,7 +132,7 @@ export class AdminTokenService {
     const secret = this.config.get<string>(name);
     if (!secret || secret.length < MIN_SECRET_LENGTH) {
       this.logger.error(
-        `${name} is unset or shorter than ${MIN_SECRET_LENGTH} characters — the admin surface is unreachable until it is configured.`,
+        `${name} is unset or shorter than ${MIN_SECRET_LENGTH} characters. The admin surface is unreachable until it is configured.`,
       );
       throw new UnauthorizedException('Admin access is not configured on this server.');
     }
