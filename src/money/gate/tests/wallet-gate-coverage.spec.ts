@@ -236,6 +236,8 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET money/transactions/:id/receipt/pdf',
       'GET money/transactions/summary',
       'GET money/wallet/balance',
+      // TIER-03: the pay sheet of a tier.
+      'GET plans/purchases/quote',
       'POST money/approval/verify',
       'POST money/beneficiaries',
       'POST money/device/challenge',
@@ -245,6 +247,8 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST money/pin/reset/confirm',
       'POST money/pin/verify',
       'POST money/transactions/:id/receipt',
+      // TIER-03: the purchase of a tier pays from the wallet.
+      'POST plans/purchases',
       'PUT money/device',
       'PUT money/payout-account',
       'PUT money/pin',
@@ -259,6 +263,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST money/approval/verify',
       'POST money/payments',
       'POST money/pin/verify',
+      'POST plans/purchases',
       'PUT money/device',
       'PUT money/pin',
     ]);

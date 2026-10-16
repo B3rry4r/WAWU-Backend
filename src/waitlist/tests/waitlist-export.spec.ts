@@ -56,6 +56,9 @@ const registration = (
   email: 'ada@example.test',
   state: 'Lagos',
   makes: 'Beads, bags',
+  craft: 'Fashion',
+  city: 'Enugu',
+  updatesOptIn: true,
   consentAt: new Date('2026-10-01T10:00:00.000Z'),
   reference: 'wawu-join-5f6c15e4aaaaaaaaaaaaaaaaaaaaaaaaaaaa',
   accessCode: '5F6C15E4',
@@ -68,6 +71,8 @@ const registration = (
   claimedByWawuId: null,
   claimedAt: null,
   claimResult: null,
+  referralCode: null,
+  referralCommunity: null,
   createdAt: new Date('2026-10-01T10:05:00.000Z'),
   updatedAt: new Date('2026-10-02T11:30:00.000Z'),
   ...over,
@@ -140,7 +145,57 @@ describe('the waitlist CSV reads back by header (round 2, N4)', () => {
       'Transaction id': 'tx-100',
       Claimed: 'yes',
       'Claimed at': '2026-10-17T09:30:00.000Z',
+      Craft: 'Fashion',
+      City: 'Enugu',
+      'Updates opt-in': 'yes',
+      // REF-01: appended after the existing columns; this row used no code.
+      'Referral code': '',
+      Community: '',
     });
+  });
+
+  it('writes the craft, the city and the updates answer (JOIN-V2): yes, no, and empty when not asked', () => {
+    expect(recordOf(registration({}))).toMatchObject({
+      Craft: 'Fashion',
+      City: 'Enugu',
+      'Updates opt-in': 'yes',
+    });
+    expect(
+      recordOf(registration({ city: 'Online', updatesOptIn: false })),
+    ).toMatchObject({ City: 'Online', 'Updates opt-in': 'no' });
+    expect(
+      recordOf(registration({ craft: null, city: null, updatesOptIn: null })),
+    ).toMatchObject({ Craft: '', City: '', 'Updates opt-in': '' });
+  });
+
+  it('keeps the columns the team already reads where they were: the new ones come last', () => {
+    const headers = [...WAITLIST_EXPORT_COLUMNS];
+    expect(headers.slice(0, 17)).toEqual([
+      'Registered at',
+      'Offer',
+      'Status',
+      'Full name',
+      'Phone',
+      'Email',
+      'State',
+      'What they make',
+      'Fee (₦)',
+      'Paid (₦)',
+      'Refund due (₦)',
+      'Paid at',
+      'Access code',
+      'Reference',
+      'Transaction id',
+      'Claimed',
+      'Claimed at',
+    ]);
+    expect(headers.slice(17)).toEqual([
+      'Craft',
+      'City',
+      'Updates opt-in',
+      'Referral code',
+      'Community',
+    ]);
   });
 
   it('puts a refund under Refund due and not under Paid, a pending row under neither, an unclaimed row under Claimed: no', () => {
