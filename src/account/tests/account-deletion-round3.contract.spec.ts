@@ -396,7 +396,7 @@ describe('Delete account, round 3 (SETTINGS-06)', () => {
   });
 
   describe('a request that fails late (verifier R2-2, attack V3)', () => {
-    it('does not unfreeze the wallet of the request that got in after it', async () => {
+    it('a request that comes while the first is still setting up is told to wait, and the first one fails alone (round 4, R3-1)', async () => {
       const { id, walletId } = await person();
       faults.freezeFirstN = 1;
       faults.freezeFailDelayMs = 500;
@@ -405,7 +405,13 @@ describe('Delete account, round 3 (SETTINGS-06)', () => {
       const b = attempt(id);
       const [ra, rb] = await Promise.all([a, b]);
       expect(ra.ok).toBe(false);
-      expect(rb.ok).toBe(true);
+      // Before round 4 the second request took the first one's row, which let
+      // the first one's unfreeze land on the second one's wallet.
+      expect(rb).toMatchObject({ ok: false, status: 503 });
+      expect(frozen(walletId)).toBe(false);
+      expect(await row(id)).toBeNull();
+      // Asked again once the first is done: scheduled, frozen.
+      expect((await attempt(id)).ok).toBe(true);
       const r = await row(id);
       expect(r).toMatchObject({ status: 'scheduled' });
       expect(r!.walletFrozenAt).not.toBeNull();

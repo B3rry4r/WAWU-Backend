@@ -212,6 +212,50 @@ export class AccountDeletionMoneyService {
     return isRowOf(this.provider.name, rowProviderName);
   }
 
+  /**
+   * After a wallet was let go (SETTINGS-06 round 4, verifier R3-2): look at
+   * the person's deletion row once more. If a deletion is in force by now
+   * (`scheduled`, `purging`), or another request is mid-way (`freezing`: it
+   * wants the wallet frozen, and lets it go itself if it fails), the unfreeze
+   * must not stand, so the wallet is frozen again. `includeFreezing` false:
+   * a `freezing` row is the caller's own (kept because its unfreeze failed)
+   * and says nothing. `ownRowUpdatedAt`: a row with this `updatedAt` is the
+   * caller's own whatever its status. Freezing is idempotent. Never throws:
+   * a freeze the provider does not answer is logged, and the repeat request,
+   * the purge-time check and the hourly sweep are the net under it.
+   * Returns true when it froze.
+   */
+  async holdIfDeleting(
+    wawuUserId: string,
+    walletId: string,
+    o: { includeFreezing: boolean; ownRowUpdatedAt?: Date },
+  ): Promise<boolean> {
+    try {
+      const row = await this.prisma.accountDeletion.findUnique({
+        where: { wawuUserId },
+        select: { status: true, updatedAt: true },
+      });
+      if (!row) return false;
+      if (
+        o.ownRowUpdatedAt &&
+        row.updatedAt.getTime() === o.ownRowUpdatedAt.getTime()
+      ) {
+        return false;
+      }
+      const wants =
+        row.status === 'scheduled' ||
+        row.status === 'purging' ||
+        (o.includeFreezing && row.status === 'freezing');
+      if (!wants) return false;
+      return (await this.freeze(walletId)).done;
+    } catch (error) {
+      this.logger.error(
+        `The wallet of ${wawuUserId} may be unfrozen while its deletion is in force, and could not be frozen again: ${(error as Error).message}`,
+      );
+      return false;
+    }
+  }
+
   /** Freezes the wallet: it can neither send nor receive. Idempotent. */
   async freeze(walletId: string): Promise<FreezeOutcome> {
     if (!this.provider.freezeWallet) return { done: false };

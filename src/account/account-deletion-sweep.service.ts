@@ -200,18 +200,38 @@ export class AccountDeletionSweepService {
       data: { updatedAt: now },
     });
     if (taken.count !== 1) return false;
-    if (row.walletId) await this.money.unfreeze(row.walletId);
+    let failure: Error | null = null;
+    try {
+      if (row.walletId) await this.money.unfreeze(row.walletId);
+    } catch (e) {
+      failure = e instanceof Error ? e : new Error(String(e));
+    }
     // Only the row we took: a request that took it over meanwhile has touched
-    // it, and its row is its own.
-    const gone = await this.prisma.accountDeletion.deleteMany({
-      where: { wawuUserId: id, status: 'freezing', updatedAt: now },
-    });
-    if (gone.count === 1) {
+    // it, and its row is its own. Not removed while the unfreeze is unanswered.
+    let removed = false;
+    if (!failure) {
+      const gone = await this.prisma.accountDeletion.deleteMany({
+        where: { wawuUserId: id, status: 'freezing', updatedAt: now },
+      });
+      removed = gone.count === 1;
+    }
+    // Round 4 (verifier R3-2): the unfreeze may have landed after a request
+    // froze the wallet for its own deletion; if one is in force now (or is
+    // mid-way), freeze again. A row still ours (unanswered unfreeze, marked
+    // with `now`) says nothing.
+    if (row.walletId) {
+      await this.money.holdIfDeleting(id, row.walletId, {
+        includeFreezing: !failure,
+        ownRowUpdatedAt: failure ? now : undefined,
+      });
+    }
+    if (failure) throw failure;
+    if (removed) {
       this.logger.log(
         `A deletion request of ${id} never finished; its wallet was let go and the request dropped`,
       );
     }
-    return gone.count === 1;
+    return removed;
   }
 
   private async purgeOne(

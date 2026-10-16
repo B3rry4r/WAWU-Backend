@@ -534,7 +534,7 @@ describe('Delete account (SETTINGS-06)', () => {
       expect(scheduleCalls()).toContainEqual([id]);
     });
 
-    it('asked again, keeps its date, freezes once and tells WAWU ID again', async () => {
+    it('asked again, keeps its date, freezes the wallet again (round 4) and tells WAWU ID again', async () => {
       const { id } = await person();
       const first = await accounts.deleteAccount(id);
       const later = await piece(id, 'live');
@@ -542,7 +542,9 @@ describe('Delete account (SETTINGS-06)', () => {
       gateway.scheduleAccountDeletion.mockClear();
       const second = await accounts.deleteAccount(id);
       expect(second.deletionScheduledAt).toBe(first.deletionScheduledAt);
-      expect(frozenCalls()).toBe(0);
+      // Round 4 (R3-1): a repeat request asserts the freeze again, once.
+      expect(frozenCalls()).toBe(1);
+      expect(unfrozenCalls()).toBe(0);
       expect(scheduleCalls()).toHaveLength(1);
       expect(
         (

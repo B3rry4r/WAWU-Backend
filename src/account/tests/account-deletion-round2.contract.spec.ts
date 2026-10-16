@@ -332,6 +332,15 @@ describe('Delete account, round 2 (SETTINGS-06)', () => {
       faults.failUnfreeze = false;
       expect(wallets.get(walletId)!.frozen).toBe(true);
 
+      // Asked again straight away: told to wait, nothing undone.
+      expect(await attempt(id)).toMatchObject({ ok: false, status: 503 });
+      expect(wallets.get(walletId)!.frozen).toBe(true);
+      // Round 4 (R3-1): a young `freezing` row is a request that may still be
+      // running, so it is left alone; only an old one is let go by a new request.
+      await prisma.$executeRawUnsafe(
+        `UPDATE "AccountDeletion" SET "updatedAt" = now() - interval '11 minutes' WHERE "wawuUserId" = '${id}'`,
+      );
+
       wallets.get(walletId)!.balanceKobo = 12_000;
       const retry = await attempt(id);
       expect(retry).toMatchObject({
@@ -350,6 +359,11 @@ describe('Delete account, round 2 (SETTINGS-06)', () => {
       await attempt(id);
       faults.lostFreezeAnswer = false;
       faults.failUnfreeze = false;
+      // Round 4 (R3-1): a young `freezing` row is a request that may still be
+      // running, so it is left alone; only an old one is let go by a new request.
+      await prisma.$executeRawUnsafe(
+        `UPDATE "AccountDeletion" SET "updatedAt" = now() - interval '11 minutes' WHERE "wawuUserId" = '${id}'`,
+      );
       const retry = await attempt(id);
       expect(retry.ok).toBe(true);
       expect(wallets.get(walletId)!.frozen).toBe(true);
