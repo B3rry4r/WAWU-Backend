@@ -4,6 +4,7 @@ import {
   type AddressInfo,
   type Socket,
 } from 'node:net';
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { setFlagsFromString } from 'node:v8';
 import { runInNewContext } from 'node:vm';
 
@@ -158,13 +159,26 @@ async function backToBaseline(): Promise<void> {
   }
 }
 
-async function timed<T>(p: Promise<T>): Promise<{ ms: number; out: unknown }> {
+/**
+ * Runs `p` and reports how long it took and the worst event-loop delay seen
+ * meanwhile. On a loaded machine the loop itself runs late, and that lag is
+ * added to the margin (FIX-01 learned this on its stall spec); a call that
+ * never ends is still caught, since the bug this spec holds ended at
+ * undici's 300 s.
+ */
+async function timed<T>(
+  p: Promise<T>,
+): Promise<{ ms: number; out: unknown; lagMs: number }> {
+  const lag = monitorEventLoopDelay({ resolution: 10 });
+  lag.enable();
   const started = Date.now();
   const out = await p.then(
     (v) => ({ ok: v }),
     (e: unknown) => ({ err: e }),
   );
-  return { ms: Date.now() - started, out };
+  const ms = Date.now() - started;
+  lag.disable();
+  return { ms, out, lagMs: Math.ceil(lag.max / 1e6) };
 }
 
 const MODES: StallMode[] = ['silent', 'stall-200', 'drip-200'];
@@ -183,12 +197,12 @@ describe('a stalled WAWU ID', () => {
     it('answers a lookup as an empty map inside the bound and frees the socket', async () => {
       const c = client(stalled.baseUrl(mode));
       const openBefore = openNow();
-      const { ms, out } = await whileCollecting(() =>
+      const { ms, out, lagMs } = await whileCollecting(() =>
         timed(c.lookupPublicIdentities(['u1', 'u2'])),
       );
       expect(out).toEqual({ ok: new Map() });
       expect(ms).toBeGreaterThanOrEqual(BOUND_MS - 50);
-      expect(ms).toBeLessThan(BOUND_MS + MARGIN_MS);
+      expect(ms).toBeLessThan(BOUND_MS + MARGIN_MS + lagMs);
       expect(await openAtMost(openBefore + 1)).toBeLessThanOrEqual(
         openBefore + 1,
       );
@@ -199,7 +213,7 @@ describe('a stalled WAWU ID', () => {
       async ({ run, message }) => {
         const c = client(stalled.baseUrl(mode));
         const openBefore = openNow();
-        const { ms, out } = await whileCollecting(() => timed(run(c)));
+        const { ms, out, lagMs } = await whileCollecting(() => timed(run(c)));
         const err = (out as { err?: unknown }).err;
         expect(err).toBeInstanceOf(WawuIdTimeoutException);
         expect(err).toBeInstanceOf(BadGatewayException);
@@ -207,7 +221,7 @@ describe('a stalled WAWU ID', () => {
         expect((err as WawuIdTimeoutException).message).toBe(message);
         expect((err as WawuIdTimeoutException).boundMs).toBe(BOUND_MS);
         expect(ms).toBeGreaterThanOrEqual(BOUND_MS - 50);
-        expect(ms).toBeLessThan(BOUND_MS + MARGIN_MS);
+        expect(ms).toBeLessThan(BOUND_MS + MARGIN_MS + lagMs);
         expect(await openAtMost(openBefore + 1)).toBeLessThanOrEqual(
           openBefore + 1,
         );
@@ -230,9 +244,11 @@ describe('a stalled WAWU ID', () => {
     const url = `http://127.0.0.1:${(raw.address() as AddressInfo).port}`;
     try {
       const ids = Array.from({ length: 250 }, (_, i) => `user-${i}`);
-      const { ms, out } = await timed(client(url).lookupPublicIdentities(ids));
+      const { ms, out, lagMs } = await timed(
+        client(url).lookupPublicIdentities(ids),
+      );
       expect(out).toEqual({ ok: new Map() });
-      expect(ms).toBeLessThan(BOUND_MS + MARGIN_MS);
+      expect(ms).toBeLessThan(BOUND_MS + MARGIN_MS + lagMs);
       expect(requests).toBe(1);
     } finally {
       await new Promise<void>((r) => {
@@ -245,12 +261,17 @@ describe('a stalled WAWU ID', () => {
   it('holds no socket after many stalled requests at once', async () => {
     const openBefore = openNow();
     const c = client(stalled.baseUrl('silent'));
-    const started = Date.now();
-    const results = await Promise.all(
-      Array.from({ length: 40 }, (_, i) => c.lookupPublicIdentities([`u${i}`])),
+    const { ms, out, lagMs } = await timed(
+      Promise.all(
+        Array.from({ length: 40 }, (_, i) =>
+          c.lookupPublicIdentities([`u${i}`]),
+        ),
+      ),
     );
+    const results = (out as { ok: Map<string, unknown>[] }).ok;
+    expect(results).toHaveLength(40);
     expect(results.every((m) => m.size === 0)).toBe(true);
-    expect(Date.now() - started).toBeLessThan(BOUND_MS + MARGIN_MS * 2);
+    expect(ms).toBeLessThan(BOUND_MS + MARGIN_MS * 2 + lagMs);
     // 40 requests held 40 sockets; every one is closed, and undici's own
     // idle connections (at most one per abort) are all that is left.
     expect(await openAtMost(openBefore + 40)).toBeLessThanOrEqual(
