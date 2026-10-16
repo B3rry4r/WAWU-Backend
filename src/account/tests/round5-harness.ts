@@ -131,13 +131,17 @@ export function useHarness() {
         `UPDATE "AccountDeletion" SET "purgeAfter" = now() - interval '1 second', "scheduledAt" = now() - interval '31 days' WHERE "wawuUserId" = '${id}' AND status = 'scheduled'`,
       ),
     /**
-     * The hourly pass also looks at every row changed in the last 24 hours, so
-     * rows earlier tests left are moved out of that window: a pass then works
-     * on the rows of the test that runs it (and a long run does not slow down
-     * with every round).
+     * The hourly pass (since round 6) looks at every row in force and every
+     * cancelled row not yet confirmed, whatever its age. Rows earlier tests
+     * (or earlier rounds of a random set) left are cancelled and marked as
+     * matched, so a pass works on the rows of the test that runs it and a long
+     * run does not slow down with every round, or with a wallet an earlier
+     * test left with a slow plan.
      */
     isolate: () =>
-      prisma.$executeRaw`UPDATE "AccountDeletion" SET "updatedAt" = now() - interval '2 days' WHERE "updatedAt" > now() - interval '2 days'`,
+      prisma.$executeRaw`UPDATE "AccountDeletion"
+        SET "status" = 'cancelled', "walletSyncedAt" = now(), "updatedAt" = now() - interval '2 days'
+        WHERE "status" IN ('scheduled', 'freezing') OR ("status" = 'cancelled' AND "walletSyncedAt" IS NULL)`,
     /** a stale freezing row of a request that died after the freeze */
     async strand(minutes = 11, provider: string | null = 'fintava', withWallet = true) {
       const p = await h.person(0);

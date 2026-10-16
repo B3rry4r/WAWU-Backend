@@ -22,12 +22,10 @@ export interface DeletionSweepResult {
   identityPending: number;
   /** A stranded `freezing` row: the wallet was let go and the row removed. */
   unfrozen: number;
-  /** Rows changed in the last 24 hours whose wallet was driven to match them. */
+  /** Rows in force, or cancelled and not yet confirmed, whose wallet the provider confirmed. */
   reconciled: number;
 }
 
-/** How far back the hourly pass looks for rows whose wallet may be out of step. */
-const RECONCILE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const RECONCILE_PAGE = 100;
 const RECONCILE_MAX = 5000;
 
@@ -76,12 +74,17 @@ type DueDeletion = {
  *
  * Round 5 (R-1 wallet safety): the wallet always follows the row. Every
  * account the pass looks at ends with `reconcileWallet` (frozen while a
- * deletion is in force or done, unfrozen when cancelled or dropped), the
+ * deletion is in force or done, unfrozen when cancelled or dropped), and the
  * purge freezes the wallet BEFORE it reads the balance for the last time (a
- * wallet it cannot freeze keeps the account, `provider_unreachable`), and
- * after the due ones the pass reconciles every row changed in the last 24
- * hours, so an answer lost to a cancel, a repeat request or a provider fault
- * is put right within the hour.
+ * wallet it cannot freeze keeps the account, `provider_unreachable`).
+ *
+ * Round 6: after the due ones the pass reconciles EVERY row in `freezing`,
+ * `scheduled` or `purging` whatever its age, and every `cancelled` row until
+ * one reconcile was confirmed for it (`walletSyncedAt`), so an answer lost to
+ * a cancel, a repeat request or a provider fault is put right within the hour
+ * however long the outage was, and a cancelled row that is confirmed costs no
+ * provider call per hour. Nothing is held while the provider answers: no
+ * transaction, no pooled connection, no lock.
  *
  * Every write to the row names the status it expects. Every step is safe to
  * repeat, so two servers running the pass at once, or a pass that stopped
@@ -165,40 +168,54 @@ export class AccountDeletionSweepService {
         );
       }
     }
-    // Every row changed in the last 24 hours: the wallet follows the row.
+    // Every row that can owe its wallet a change: the wallet follows the row.
     try {
-      result.reconciled = await this.reconcileRecent(now, done);
+      result.reconciled = await this.reconcileOwed(done);
     } catch (e) {
       this.logger.error(
-        `Reconciling recent deletions stopped: ${(e as Error).message}`,
+        `Reconciling deletions stopped: ${(e as Error).message}`,
       );
     }
     return result;
   }
 
   /**
-   * Round 5 (verifier R4-1, R4-5): the net under every other step. A row
-   * changed within RECONCILE_WINDOW_MS (a request, a cancel, a pass) has its
+   * Round 5 (verifier R4-1, R4-5), widened in round 6 (verifier R5-2): the net
+   * under every other step. Every row that can owe its wallet a change has the
    * wallet driven to match it, so a freeze or unfreeze that was lost, landed
-   * late or was refused is put right by the next hourly pass at the latest.
-   * Returns how many wallets the provider confirmed.
+   * late or was refused is put right by the next hourly pass at the latest,
+   * however old the row is:
+   *
+   *  - a row in force (`freezing`, `scheduled`, `purging`) is always looked
+   *    at: a late unfreeze can land at any time in the 30 days;
+   *  - a `cancelled` row is looked at until a reconcile was confirmed for it
+   *    (`walletSyncedAt`). A cancel that confirmed sets the mark at once, so a
+   *    cancelled row costs no provider call per hour; a reconcile that could
+   *    not be confirmed leaves it (or puts it back) unset.
+   *
+   * Returns how many wallets the provider confirmed. Pages go by id (greater
+   * than the last one seen), so rows that change while the pass runs are
+   * neither skipped nor repeated; the cap is a guard, not a limit anyone
+   * should meet.
    */
-  private async reconcileRecent(now: Date, done: Set<string>): Promise<number> {
-    const since = new Date(now.getTime() - RECONCILE_WINDOW_MS);
+  private async reconcileOwed(done: Set<string>): Promise<number> {
     let confirmed = 0;
-    let cursor: string | undefined;
-    // Every row in the window, a page at a time (by id, so rows touched while
-    // the pass runs are neither skipped nor repeated); the cap is a guard, not
-    // a limit anyone should meet.
-    for (let seen = 0; seen < RECONCILE_MAX;) {
+    let last = '';
+    let seen = 0;
+    while (seen < RECONCILE_MAX) {
       const rows = await this.prisma.accountDeletion.findMany({
-        where: { updatedAt: { gte: since }, walletId: { not: null } },
+        where: {
+          wawuUserId: { gt: last },
+          OR: [
+            { status: { in: ['freezing', 'scheduled', 'purging'] } },
+            { status: 'cancelled', walletSyncedAt: null },
+          ],
+        },
         orderBy: { wawuUserId: 'asc' },
         take: RECONCILE_PAGE,
-        ...(cursor ? { cursor: { wawuUserId: cursor }, skip: 1 } : {}),
         select: { wawuUserId: true },
       });
-      if (rows.length === 0) break;
+      if (rows.length === 0) return confirmed;
       for (const { wawuUserId } of rows) {
         if (done.has(wawuUserId)) continue;
         done.add(wawuUserId);
@@ -206,8 +223,11 @@ export class AccountDeletionSweepService {
         if (r.done) confirmed += 1;
       }
       seen += rows.length;
-      cursor = rows[rows.length - 1].wawuUserId;
+      last = rows[rows.length - 1].wawuUserId;
     }
+    this.logger.warn(
+      `Reconciling deletions stopped at ${RECONCILE_MAX} rows; the rest wait for the next pass`,
+    );
     return confirmed;
   }
 

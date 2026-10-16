@@ -2633,11 +2633,17 @@ days; signing in during them cancels it (WAWU ID, SETTINGS-08).
   force (`freezing`, `scheduled`, `purging`, `purged`) always has a frozen
   wallet, and a cancelled or absent one never does. One function
   (`reconcileWallet`) enforces it: it reads the row and freezes or unfreezes
-  to match, idempotently and one request at a time per person, acts only on a
-  wallet of the provider the server runs, and never throws. Every request that
-  can change the row or the wallet ends with it, and the hourly sweep runs it
-  for every row changed in the last 24 hours, so a freeze or unfreeze whose
-  answer was lost, or that the provider refused, is put right within the hour.
+  to match, idempotently, acts only on a wallet of the provider the server
+  runs (the person's current wallet, so one opened during the 30 days is
+  frozen too), and never throws. It holds no transaction, no pooled connection
+  and no lock while the provider answers (round 6): it reads the row, asks the
+  provider, reads the row again, and acts again if the row changed (3 rounds at
+  most). Every request that can change the row or the wallet ends with it (a
+  repeat cancel and a refused `DELETE` included), and the hourly sweep runs it
+  for every row in force whatever its age and for every cancelled row until one
+  reconcile was confirmed for it (`AccountDeletion.walletSyncedAt`), so a
+  freeze or unfreeze whose answer was lost, or that the provider refused, is
+  put right within the hour.
   A repeat `DELETE /account` on a row the purge has finished answers the date
   it was due and schedules nothing.
 - **`POST /account/cancel-deletion`** (the person's own token; WAWU ID sends

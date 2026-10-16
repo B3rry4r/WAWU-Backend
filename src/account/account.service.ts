@@ -104,7 +104,9 @@ const CONTENT_STATUSES: ReadonlySet<string> = new Set(
  * and it reads the row as it is by then and drives the provider to match. So
  * a freeze or unfreeze whose answer was lost, or that landed late, is put
  * right by the call that follows it, and one the provider would not take is
- * put right by the hourly sweep (every row changed in the last 24 hours).
+ * put right by the hourly sweep (every row in force, and every cancelled row
+ * until a reconcile was confirmed for it, whatever its age: round 6). None of
+ * this holds a transaction, a connection or a lock while the provider answers.
  *
  * One request at a time owns a `freezing` row (round 4). A young one makes a
  * second request answer 503 "already being processed" and undo nothing; only
@@ -210,9 +212,12 @@ export class AccountService {
       return this.finishScheduled(wawuUserId, existing);
     }
 
-    // Money first, with nothing frozen yet: a refusal changes nothing.
+    // Money first, with nothing frozen yet: a refusal changes nothing. It still
+    // ends in the reconcile (round 6): a cancelled deletion whose wallet a late
+    // freeze left frozen is let go by any request, a refused one included.
     const check = await this.money.check(wawuUserId);
     if (check.blockers.length > 0) {
+      ctx.touched = true;
       throw new AccountDeletionBlockedError(check);
     }
     const wallet = check.wallet;
@@ -315,6 +320,13 @@ export class AccountService {
     });
     if (row?.status === 'purging') return { ...IN_PROGRESS };
     if (!row || (row.status !== 'scheduled' && row.status !== 'freezing')) {
+      // A repeat cancel on a cancelled deletion still ends in the reconcile
+      // (round 6): a late freeze that landed after the cancel is let go here
+      // instead of waiting for the hourly pass. Nothing was cancelled by this
+      // call, so that is what it says.
+      if (row?.status === 'cancelled') {
+        await this.money.reconcileWallet(wawuUserId);
+      }
       return { cancelled: false, walletUnfrozen: false, contentRestored: 0 };
     }
 
@@ -332,7 +344,8 @@ export class AccountService {
     if (!answer.cancelled) return answer;
     // The truth (round 5, R4-5): unfrozen is said only when the last look at
     // the provider confirmed it. If it could not, the cancel stands and the
-    // hourly pass lets the wallet go (the row was changed in the last 24 hours).
+    // hourly pass lets the wallet go (a cancelled row is looked at until a
+    // reconcile was confirmed for it).
     const walletUnfrozen = reconciled.want === 'unfrozen' && reconciled.done;
     if (reconciled.failed) {
       this.logger.warn(
@@ -390,6 +403,8 @@ export class AccountService {
           status: 'cancelled',
           cancelledAt: new Date(),
           walletFrozenAt: null,
+          // The reconcile that ends this cancel confirms the wallet (round 6).
+          walletSyncedAt: null,
         },
       });
       cancelled = done.count === 1;
@@ -431,6 +446,7 @@ export class AccountService {
       walletId: wallet?.walletId ?? null,
       walletProvider: wallet?.provider ?? null,
       walletFrozenAt: null,
+      walletSyncedAt: null,
     };
     const created = await this.prisma.accountDeletion.createMany({
       data: { wawuUserId, status: 'freezing', ...fields },

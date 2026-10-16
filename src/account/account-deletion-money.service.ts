@@ -1,6 +1,9 @@
 import { HttpException, Inject, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { DELETION_GRACE_MS } from './account-deletion-config';
+import {
+  DELETION_GRACE_MS,
+  FREEZING_STALE_MS,
+} from './account-deletion-config';
 import { MoneyError } from '../money/money-error';
 import { isRowOf } from '../wallet-provider/provider-rows';
 import {
@@ -85,13 +88,50 @@ export class AccountDeletionBlockedError extends HttpException {
  * What `reconcileWallet` did. `want`: the state the deletion row asks of the
  * wallet (null: no wallet this server may act on, so nothing was asked).
  * `done`: the provider confirmed that state in this call. `failed`: the
- * provider (or the database) did not answer; the row is as it was.
+ * provider (or the database) did not answer, or the row kept changing while
+ * it was being matched (round 6); the row is as it was.
  */
 export interface ReconcileOutcome {
   want: 'frozen' | 'unfrozen' | null;
   done: boolean;
   failed: boolean;
 }
+
+/** How many times one reconcile acts when the row changes under it (round 6). */
+const RECONCILE_ROUNDS = 3;
+
+/** What the deletion row asks of which wallets, at one moment. */
+interface ReconcilePlan {
+  /** null: nothing to ask of any wallet this server may act on. */
+  want: 'frozen' | 'unfrozen' | null;
+  wallets: { walletId: string; provider: string | null }[];
+  /** The row's status; null: no row. */
+  status: string | null;
+  cancelledAt: Date | null;
+  /** A wallet is known but belongs to another provider: nothing was asked. */
+  foreign: boolean;
+}
+
+/**
+ * A cancelled row is settled when its cancel is older than a request is
+ * allowed to run (FREEZING_STALE_MS: past that a request is presumed dead), so
+ * none of its provider calls can still land.
+ */
+const isSettled = (plan: ReconcilePlan): boolean =>
+  !plan.cancelledAt ||
+  Date.now() - plan.cancelledAt.getTime() >= FREEZING_STALE_MS;
+
+/** True when two plans ask the same of the same wallets (the row did not change in a way that matters). */
+const sameWork = (a: ReconcilePlan, b: ReconcilePlan): boolean =>
+  a.want === b.want &&
+  a.wallets
+    .map((w) => w.walletId)
+    .sort()
+    .join('|') ===
+    b.wallets
+      .map((w) => w.walletId)
+      .sort()
+      .join('|');
 
 /** What a freeze or an unfreeze did. */
 export interface FreezeOutcome {
@@ -244,22 +284,34 @@ export class AccountDeletionMoneyService {
    *                                          row and no name nothing is
    *                                          asked (a wallet WAWU did not
    *                                          freeze is not WAWU's to free).
-   * The wallet is the row's (`walletId`), else the named one, and only a
-   * wallet of the provider this server runs is asked (R-39, `holdsWalletOf`).
+   * The wallets are the row's (`walletId`), the one named, and the person's
+   * CURRENT wallet, looked up now (round 6: one opened after the request is
+   * frozen too), and only a wallet of the provider this server runs is asked
+   * (R-39, `holdsWalletOf`).
    *
-   * Freeze and unfreeze are idempotent, so it can be called any number of
-   * times. Calls for one person are taken one after the other (an advisory
-   * lock, held while the provider is asked), and the row is read after the
-   * lock is won: a call that waited acts on the row as it is by then, and a
-   * request that changes the row calls this after its change, so the last
-   * call always sees the last change. It never throws. A provider that does
-   * not answer is `failed: true` and the row stays as it is, so the hourly
-   * sweep (every row changed in the last 24 hours) or the next request asks
-   * again. The one write: with no row, a wallet that could not be confirmed
-   * unfrozen gets a `freezing` row, so there is something to find and retry.
+   * Nothing is held while the provider answers (round 6; lead's rule: never a
+   * transaction, a pooled connection or a lock across a network call). It
+   * reads the row (a short read), calls the provider, and reads the row
+   * again. If the state it acted on changed meanwhile it acts again, at most
+   * RECONCILE_ROUNDS times; a row that is still changing after that is left
+   * for the hourly pass (`failed: true`, so nobody is told it is settled).
+   * Freeze and unfreeze are idempotent, so calls for one person may overlap:
+   * each call ends only after a read of the row that agrees with what it
+   * last did, and a request that changes the row calls this after its change,
+   * so the last call always sees the last change.
+   *
+   * It never throws. A provider that does not answer is `failed: true` and
+   * the row stays as it is, so the hourly sweep (every row in force, and
+   * every cancelled row until one reconcile was confirmed) or the next
+   * request asks again. The one write besides the sync mark: with no row, a
+   * wallet that could not be confirmed unfrozen gets a `freezing` row, so
+   * there is something to find and retry.
    *
    * `done` is true only when the provider confirmed the wanted state in this
-   * call (false: it could not freeze or unfreeze at all, or it failed).
+   * call (false: it could not freeze or unfreeze at all, or it failed). On a
+   * cancelled row a confirmation sets `walletSyncedAt` (once the cancel is
+   * older than FREEZING_STALE_MS), which keeps the hourly pass from asking the
+   * provider about it again; anything that could not be confirmed clears it.
    */
   async reconcileWallet(
     wawuUserId: string,
@@ -267,67 +319,202 @@ export class AccountDeletionMoneyService {
   ): Promise<ReconcileOutcome> {
     let want: ReconcileOutcome['want'] = null;
     try {
-      return await this.prisma.$transaction(
-        async (tx) => {
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`account-deletion-wallet:${wawuUserId}`}, 0))`;
-          const row = await tx.accountDeletion.findUnique({
-            where: { wawuUserId },
-            select: { status: true, walletId: true, walletProvider: true },
-          });
-          const wallet = row?.walletId
-            ? { walletId: row.walletId, provider: row.walletProvider }
-            : (named ?? null);
-          if (!wallet) return { want, done: false, failed: false };
-          if (!this.holdsWalletOf(wallet.provider)) {
-            this.logger.warn(
-              `deletion: the wallet of ${wawuUserId} is held by another provider than ${this.provider.label}; not asked`,
-            );
-            return { want, done: false, failed: false };
+      for (let round = 1; round <= RECONCILE_ROUNDS; round++) {
+        const plan = await this.planFor(wawuUserId, named ?? null);
+        want = plan.want;
+        if (plan.wallets.length === 0) {
+          // Nothing this server may act on. A cancelled row with no wallet to
+          // free is as settled as it will ever be; one whose wallet belongs to
+          // another provider is left for the server that runs it.
+          if (plan.status === 'cancelled' && !plan.foreign) {
+            await this.markSynced(wawuUserId, plan);
           }
-          if (row) {
-            want = row.status === 'cancelled' ? 'unfrozen' : 'frozen';
-          } else if (named) {
-            want = 'unfrozen';
-          } else {
-            return { want, done: false, failed: false };
-          }
+          return { want, done: false, failed: false };
+        }
+        let done = true;
+        let failure: Error | null = null;
+        for (const wallet of plan.wallets) {
           try {
             const o =
-              want === 'frozen'
+              plan.want === 'frozen'
                 ? await this.freeze(wallet.walletId)
                 : await this.unfreeze(wallet.walletId);
-            return { want, done: o.done, failed: false };
+            if (!o.done) done = false;
           } catch (error) {
-            this.logger.error(
-              `The wallet of ${wawuUserId} could not be ${want === 'frozen' ? 'frozen' : 'unfrozen'} to match its deletion (${(error as Error).message}); the hourly pass asks again`,
-            );
-            // No row means nothing for the hourly pass to find. A wallet that
-            // may still be frozen with no row to say so gets a `freezing` row
-            // (the one thing this function writes): frozen is what that row
-            // asks of it, and the sweep lets it go once the row is stale.
-            if (!row) {
-              await tx.accountDeletion.createMany({
-                data: {
-                  wawuUserId,
-                  status: 'freezing',
-                  scheduledAt: new Date(),
-                  purgeAfter: new Date(Date.now() + DELETION_GRACE_MS),
-                  walletId: wallet.walletId,
-                  walletProvider: wallet.provider,
-                },
-                skipDuplicates: true,
-              });
-            }
-            return { want, done: false, failed: true };
+            failure = error instanceof Error ? error : new Error(String(error));
+            done = false;
+            break;
           }
-        },
-        { maxWait: 60_000, timeout: 120_000 },
+        }
+        const after = await this.planFor(wawuUserId, named ?? null);
+        if (!sameWork(plan, after)) continue; // the row changed meanwhile: act on it as it is now
+        if (failure) {
+          this.logger.error(
+            `The wallet of ${wawuUserId} could not be ${plan.want === 'frozen' ? 'frozen' : 'unfrozen'} to match its deletion (${failure.message}); the hourly pass asks again`,
+          );
+          await this.keepOwed(wawuUserId, plan, named ?? null);
+          return { want, done: false, failed: true };
+        }
+        if (done && plan.status === 'cancelled') {
+          // Marked only once the cancel is old enough that a call of the
+          // deletion it cancelled cannot still be on its way (a freeze that
+          // lands after this unfreeze would otherwise stay for good). A
+          // younger cancel is confirmed again by the first hourly pass after
+          // FREEZING_STALE_MS, which is one provider call more, once.
+          if (isSettled(plan)) await this.markSynced(wawuUserId, plan);
+        } else if (plan.status === 'cancelled') {
+          await this.clearSynced(wawuUserId);
+        }
+        return { want, done, failed: false };
+      }
+      this.logger.warn(
+        `The deletion of ${wawuUserId} kept changing while its wallet was being matched to it; the hourly pass asks again`,
       );
+      await this.clearSynced(wawuUserId);
+      return { want, done: false, failed: true };
     } catch (error) {
       this.logger.error(
         `Could not reconcile the wallet of ${wawuUserId} with its deletion: ${(error as Error).message}`,
       );
       return { want, done: false, failed: true };
+    }
+  }
+
+  /**
+   * What the person's deletion row asks of which wallets, read now (two short
+   * reads, nothing held afterwards).
+   */
+  private async planFor(
+    wawuUserId: string,
+    named: { walletId: string; provider: string | null } | null,
+  ): Promise<ReconcilePlan> {
+    const [row, current] = await Promise.all([
+      this.prisma.accountDeletion.findUnique({
+        where: { wawuUserId },
+        select: {
+          status: true,
+          walletId: true,
+          walletProvider: true,
+          cancelledAt: true,
+        },
+      }),
+      this.prisma.fintavaWallet.findUnique({
+        where: { wawuUserId },
+        select: { walletId: true, provider: true },
+      }),
+    ]);
+    const known = new Map<
+      string,
+      { walletId: string; provider: string | null }
+    >();
+    const add = (w: { walletId: string; provider: string | null } | null) => {
+      if (w && !known.has(w.walletId)) known.set(w.walletId, w);
+    };
+    if (row) {
+      if (row.walletId) {
+        add({ walletId: row.walletId, provider: row.walletProvider });
+      }
+      add(named);
+      add(current);
+    } else {
+      // No row: only the wallet the caller froze is let go, never the person's
+      // own wallet that nobody here froze.
+      add(named);
+    }
+    const all = [...known.values()];
+    const wallets = all.filter((w) => this.holdsWalletOf(w.provider));
+    const foreign = all.length > 0 && wallets.length === 0;
+    if (foreign) {
+      this.logger.warn(
+        `deletion: the wallet of ${wawuUserId} is held by another provider than ${this.provider.label}; not asked`,
+      );
+    }
+    let want: ReconcilePlan['want'] = null;
+    if (wallets.length > 0) {
+      if (row) want = row.status === 'cancelled' ? 'unfrozen' : 'frozen';
+      else if (named) want = 'unfrozen';
+    }
+    return {
+      want,
+      wallets: want ? wallets : [],
+      status: row?.status ?? null,
+      cancelledAt: row?.cancelledAt ?? null,
+      foreign,
+    };
+  }
+
+  /** A reconcile of this cancelled row was confirmed: the hourly pass leaves it alone. */
+  private async markSynced(
+    wawuUserId: string,
+    plan: ReconcilePlan,
+  ): Promise<void> {
+    try {
+      await this.prisma.accountDeletion.updateMany({
+        where: {
+          wawuUserId,
+          status: 'cancelled',
+          cancelledAt: plan.cancelledAt,
+          walletSyncedAt: null,
+        },
+        data: { walletSyncedAt: new Date() },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Could not mark the wallet of ${wawuUserId} as matched: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /** A reconcile of a cancelled row was not confirmed: the hourly pass looks at it again. */
+  private async clearSynced(wawuUserId: string): Promise<void> {
+    try {
+      await this.prisma.accountDeletion.updateMany({
+        where: {
+          wawuUserId,
+          status: 'cancelled',
+          walletSyncedAt: { not: null },
+        },
+        data: { walletSyncedAt: null },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Could not mark the wallet of ${wawuUserId} as owed a check: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  /**
+   * The provider did not take the change, so something must find it again:
+   * a cancelled row is marked as owing a check, and with no row at all a
+   * wallet that may still be frozen gets a `freezing` row (frozen is what
+   * that row asks of it, and the sweep lets it go once the row is stale).
+   */
+  private async keepOwed(
+    wawuUserId: string,
+    plan: ReconcilePlan,
+    named: { walletId: string; provider: string | null } | null,
+  ): Promise<void> {
+    if (plan.status === 'cancelled') {
+      await this.clearSynced(wawuUserId);
+      return;
+    }
+    if (plan.status !== null || !named) return;
+    try {
+      await this.prisma.accountDeletion.createMany({
+        data: {
+          wawuUserId,
+          status: 'freezing',
+          scheduledAt: new Date(),
+          purgeAfter: new Date(Date.now() + DELETION_GRACE_MS),
+          walletId: named.walletId,
+          walletProvider: named.provider,
+        },
+        skipDuplicates: true,
+      });
+    } catch (error) {
+      this.logger.error(
+        `Could not record the stranded wallet of ${wawuUserId}: ${(error as Error).message}`,
+      );
     }
   }
 

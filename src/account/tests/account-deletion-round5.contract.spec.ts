@@ -326,6 +326,10 @@ describe('SETTINGS-06 round 5: one reconcile keeps the wallet and the deletion r
       const p = await h.person(0);
       const foreign = 'nuv-' + p.id;
       await row0(p.id, foreign, 'scheduled', 'nuvion');
+      // Round 6 (ruling 4): the person's CURRENT wallet of the running provider
+      // is frozen too, so for "only the other provider's wallet exists" the
+      // person's own wallet row is the other provider's as well (a rollback).
+      await h.prisma.fintavaWallet.update({ where: { wawuUserId: p.id }, data: { provider: 'nuvion' } });
       expect(await h.money.reconcileWallet(p.id)).toEqual({ want: null, done: false, failed: false });
       expect(h.calls(foreign, 'freeze') + h.calls(foreign, 'unfreeze')).toBe(0);
     });

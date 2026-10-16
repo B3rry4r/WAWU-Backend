@@ -224,10 +224,13 @@ describe('Delete account, round 3 (SETTINGS-06)', () => {
   });
 
   beforeEach(async () => {
-    // Round 5: a pass also looks at every row changed in the last 24 hours,
-    // so the rows earlier tests left are moved out of that window; the
-    // counters below then count what this test's rows cause.
-    await prisma.$executeRaw`UPDATE "AccountDeletion" SET "updatedAt" = now() - interval '2 days'`;
+    // Round 5: a pass also looks at the rows earlier tests left. Round 6: it
+    // looks at every row in force and every cancelled row not yet confirmed,
+    // whatever its age, so those rows are cancelled and marked as matched;
+    // the counters below then count what this test's rows cause.
+    await prisma.$executeRaw`UPDATE "AccountDeletion"
+      SET "status" = 'cancelled', "walletSyncedAt" = now(), "updatedAt" = now() - interval '2 days'
+      WHERE "status" IN ('scheduled', 'freezing') OR ("status" = 'cancelled' AND "walletSyncedAt" IS NULL)`;
     double.seen.length = 0;
     freezeCalls = 0;
     unfreezeCalls = 0;

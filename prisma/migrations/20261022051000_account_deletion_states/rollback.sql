@@ -8,6 +8,7 @@ BEGIN
     RAISE EXCEPTION 'SETTINGS-06 rollback: a deletion is freezing or purging. Cancel or finish it first. Nothing was changed.';
   END IF;
 END $$;
+ALTER TABLE "AccountDeletion" DROP COLUMN "walletSyncedAt";
 ALTER TABLE "AccountDeletion" DROP COLUMN "purgeNote";
 ALTER TABLE "AccountDeletion" DROP CONSTRAINT "AccountDeletion_status_check";
 ALTER TABLE "AccountDeletion" ADD CONSTRAINT "AccountDeletion_status_check"

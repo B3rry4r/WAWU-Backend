@@ -613,7 +613,13 @@ describe('Delete account (SETTINGS-06)', () => {
         walletUnfrozen: false,
         contentRestored: 0,
       });
-      expect(double.seen).toEqual([]);
+      // Round 6 (ruling 3): a repeat cancel on a cancelled row ends in the
+      // reconcile, so the provider hears one idempotent unfreeze of this
+      // wallet (it was no word at all before) and nothing else.
+      expect(double.seen.map((r) => `${r.method} ${r.path}`)).toEqual([
+        `PATCH /customer/wallet/${walletId}/unfreeze`,
+      ]);
+      expect(wallets.get(walletId!)!.frozen).toBe(false);
       expect(await accounts.cancelDeletion(randomUUID())).toMatchObject({
         cancelled: false,
       });

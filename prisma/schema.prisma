@@ -5593,6 +5593,13 @@ model AccountDeletion {
   /// buyers paid for, hidden and stripped of the person's words. No personal
   /// detail. Null: nothing was kept.
   purgeNote       String?
+  /// SETTINGS-06 round 6. Set on a cancelled row when a reconcile confirmed the
+  /// person's wallet is unfrozen, so the hourly pass does not ask the provider
+  /// about it again. Null: a confirmation is still owed (a cancelled row is
+  /// checked every hour until it is set; a row in force is checked every hour
+  /// whatever this says). Cleared when a request takes the row over or a
+  /// reconcile of a cancelled row could not be confirmed.
+  walletSyncedAt  DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
