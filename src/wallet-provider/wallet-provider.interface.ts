@@ -433,7 +433,25 @@ export interface ProviderTransaction {
    * the quote (MONEY-17 round 7, lead ruling R6-1; SHARED-CHANGES MONEY-17 #6).
    */
   feeKobo?: bigint | null;
+  /**
+   * What kind of movement the provider's record says this is (MONEY-16, the
+   * nightly check): `transfer` is money sent to a wallet or a bank, `charge`
+   * is the provider's own charge to WAWU (a compliance check, say), `other`
+   * is a type this adapter does not know. Absent or null: the record does
+   * not say.
+   */
+  kind?: ProviderTransactionKind | null;
+  /**
+   * What the provider's own record shows as paid to WAWU's account as
+   * WAWU's charge on this transaction (Fintava's `merchantComm`, set in its
+   * dashboard as "Merchant charges", OPS-09). Only a provider's full record
+   * carries it (Fintava: the by-id lookup); absent or null: the record does
+   * not say, which is not the same as zero.
+   */
+  merchantChargeKobo?: bigint | null;
 }
+
+export type ProviderTransactionKind = 'transfer' | 'charge' | 'other';
 
 export interface ProviderPage<T> {
   items: T[];
