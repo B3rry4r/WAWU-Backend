@@ -12,6 +12,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { StorageService, type UploadAllowanceView } from './storage.service';
 import { PresignUploadDto } from './dto/presign-upload.dto';
+import { uploadFormatsView, type UploadFormatsView } from './upload-formats';
 
 /**
  * POST /uploads/presign — hands the authenticated caller a short-lived PUT
@@ -36,7 +37,20 @@ export class StorageController {
       dto.contentType,
       dto.extension,
       dto.contentLength,
+      dto.format,
     );
+  }
+
+  /**
+   * GET /uploads/formats: what each content format may upload (M20 to M22):
+   * the file types and the most bytes for the full file, and the same for the
+   * separate public preview, with how that preview is shown and, for a clip,
+   * how long it is asked to be. Any signed-in account. The same table
+   * `POST /uploads/presign` applies when it is given a `format`.
+   */
+  @Get('formats')
+  formats(): UploadFormatsView {
+    return uploadFormatsView();
   }
 
   /**

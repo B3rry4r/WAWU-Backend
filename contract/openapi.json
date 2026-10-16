@@ -1088,6 +1088,28 @@
         ]
       }
     },
+    "/api/hub/uploads/formats": {
+      "get": {
+        "operationId": "StorageController_formats",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadFormatsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "GET /uploads/formats: what each content format may upload (M20 to M22):\nthe file types and the most bytes for the full file, and the same for the\nseparate public preview, with how that preview is shown and, for a clip,\nhow long it is asked to be. Any signed-in account. The same table\n`POST /uploads/presign` applies when it is given a `format`.",
+        "tags": [
+          "Storage"
+        ]
+      }
+    },
     "/api/hub/uploads/usage": {
       "get": {
         "operationId": "StorageController_usage",
@@ -30265,6 +30287,18 @@
             "description": "Exact byte length of the file. The presigned URL is signed FOR this\nlength, so storage rejects an upload of any other size — previously the\nonly cap was client-side and trivially bypassed by calling the presigned\nURL directly.",
             "minimum": 1,
             "maximum": 536870912
+          },
+          "format": {
+            "type": "string",
+            "description": "Optional, ME-04: the content format the file is for (`video`, `pdf`...).\nOnly for `content/full` and `content/preview`. Naming one adds that\nformat's rules (GET /uploads/formats) to the checks below: the types it\ntakes in that folder and its own size cap. Left out, the call is checked\nexactly as before.",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
           }
         },
         "required": [
@@ -36675,6 +36709,118 @@
         "required": [
           "unreadCount",
           "items"
+        ]
+      },
+      "UploadFormatView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "full": {
+            "type": "object",
+            "properties": {
+              "contentTypes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "extensions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxBytes": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "contentTypes",
+              "extensions",
+              "maxBytes"
+            ]
+          },
+          "preview": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "clip",
+                  "lesson",
+                  "extract",
+                  "cover"
+                ]
+              },
+              "contentTypes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "extensions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxBytes": {
+                "type": "number"
+              },
+              "seconds": {
+                "type": "object",
+                "properties": {
+                  "min": {
+                    "type": "number"
+                  },
+                  "max": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "min",
+                  "max"
+                ],
+                "nullable": true
+              }
+            },
+            "required": [
+              "kind",
+              "contentTypes",
+              "extensions",
+              "maxBytes",
+              "seconds"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "full",
+          "preview"
+        ]
+      },
+      "UploadFormatsView": {
+        "type": "object",
+        "properties": {
+          "formats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UploadFormatView"
+            }
+          }
+        },
+        "required": [
+          "formats"
         ]
       },
       "StorageUsage": {
@@ -46543,10 +46689,10 @@
             "items": {
               "type": "string",
               "enum": [
+                "cover",
                 "handle",
                 "bio",
                 "avatar",
-                "cover",
                 "links"
               ]
             }

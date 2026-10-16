@@ -12,7 +12,9 @@ import {
   UPLOAD_FOLDERS,
   serveAs,
   type UploadFolder,
+  type UploadFormatId,
 } from './dto/presign-upload.dto';
+import { formatFolderRule } from './upload-formats';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import {
@@ -410,6 +412,7 @@ export class StorageService {
     contentType: string,
     extension: string,
     contentLength: number,
+    format?: UploadFormatId,
   ): Promise<{ uploadUrl: string; key: string; fileUrl: string }> {
     if (!this.client) {
       throw new ServiceUnavailableException(
@@ -417,10 +420,17 @@ export class StorageService {
       );
     }
 
+    // ME-04: a call that names a content format is checked against that
+    // format's own rules (GET /uploads/formats) instead of the folder's wider
+    // list and the one global cap. A call without one is untouched.
+    const formatRule = format ? this.formatRuleFor(format, folder) : null;
+
     // Per-destination allowlist. Without it any signed-in user could store
     // text/html or image/svg+xml and get a URL that serves it executable
     // from the storage origin.
-    const allowed = FOLDER_CONTENT_TYPES[folder] ?? [];
+    const allowed = formatRule
+      ? formatRule.contentTypes
+      : (FOLDER_CONTENT_TYPES[folder] ?? []);
     if (!allowed.includes(contentType)) {
       throw new BadRequestException(
         `${contentType} is not allowed in ${folder}. Allowed: ${allowed.join(', ')}.`,
@@ -431,6 +441,11 @@ export class StorageService {
     if (folderCap !== undefined && contentLength > folderCap) {
       throw new PayloadTooLargeException(
         `A file in ${folder} can be at most ${formatBytes(folderCap)}.`,
+      );
+    }
+    if (format && formatRule && contentLength > formatRule.maxBytes) {
+      throw new PayloadTooLargeException(
+        `A ${format} file can be at most ${formatBytes(formatRule.maxBytes)}.`,
       );
     }
 
@@ -711,6 +726,23 @@ export class StorageService {
       free: { uploads: FREE_UPLOADS, storageBytes: FREE_STORAGE_BYTES },
       withTick: { uploads: TICK_UPLOADS, storageBytes: TICK_STORAGE_BYTES },
     };
+  }
+
+  /**
+   * The rule a named format sets for a folder (ME-04). Only the two content
+   * folders have one: anything else is refused, so a format cannot be used to
+   * reach a folder it has no say over.
+   */
+  private formatRuleFor(
+    format: UploadFormatId,
+    folder: UploadFolder,
+  ): { contentTypes: readonly string[]; maxBytes: number } {
+    if (folder !== 'content/full' && folder !== 'content/preview') {
+      throw new BadRequestException(
+        `A format only applies to content/full and content/preview, not ${folder}.`,
+      );
+    }
+    return formatFolderRule(format, folder);
   }
 
   /**
