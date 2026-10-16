@@ -24,14 +24,11 @@ import {
 import { PrismaService } from '../common/prisma/prisma.service';
 import {
   FREE_STORAGE_BYTES,
-  FREE_UPLOADS,
-  TICK_COLUMNS,
   TICK_STORAGE_BYTES,
   TICK_UPLOADS,
-  holdsTick,
-  storageAllowanceFor,
-  uploadAllowanceFor,
 } from '../common/creator-allowance';
+import { PublishingAllowanceService } from '../plans/publishing-allowance.service';
+import { PublishingGate } from '../plans/publishing-gate.service';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 /**
@@ -91,17 +88,21 @@ export interface UploadAllowanceView {
   /** True when the account holds either tick now. */
   tickHeld: boolean;
   uploads: {
-    /** Pieces counted against the cap (CreatorState.slotsUsed; 0 with no row). */
+    /** Products published now (CreatorState.slotsUsed; 0 with no row). */
     used: number;
-    /** The cap that applies now: `free.uploads` or `withTick.uploads`. */
+    /**
+     * What the publishing gate allows now (TIER-02): a running tier's products
+     * plus extra products bought, or `withTick.uploads` for a tick that has
+     * not ended, whichever is more; 0 with neither.
+     */
     allowed: number;
     /** `allowed - used`, never below 0. */
     remaining: number;
   };
   storage: StorageUsage;
-  /** R-7's allowance without a tick. */
+  /** With no tier and no tick: no uploads (R-43); storage is R-7's free figure. */
   free: AllowanceLevelView;
-  /** R-7's allowance with a tick. */
+  /** R-7's allowance with a tick, kept for people who paid for one before tiers. */
   withTick: AllowanceLevelView;
 }
 
@@ -319,6 +320,8 @@ export class StorageService {
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly allowance: PublishingAllowanceService,
+    private readonly gate: PublishingGate,
   ) {
     const endpoint = this.config.get<string>('STORAGE_ENDPOINT');
     const accessKeyId = this.config.get<string>('STORAGE_ACCESS_KEY_ID');
@@ -455,21 +458,28 @@ export class StorageService {
     // neither counted against it nor refused by it: R-7 sets the limit on
     // uploads, and a person over it must still be able to prove who they are.
     // Those folders keep their own per-file limit and type allowlist.
+    //
+    // TIER-02 (R-43): a file for a product needs a tier that is running (or a
+    // tick that has not ended), and a place free for one more product. Nothing
+    // is signed or recorded for a person who may not publish. The other
+    // folders are not products and are never asked: an identity document,
+    // an avatar or a chat picture must work without a tier, or nobody could
+    // open a wallet to buy one.
+    if (CONTENT_FOLDERS.includes(folder))
+      await this.gate.assertRoomForProduct(wawuId);
     const { usage, tickHeld } = await this.usageAndTick(wawuId);
     if (
       CONTENT_FOLDERS.includes(folder) &&
       usage.usedBytes + contentLength > usage.limitBytes
     ) {
-      // Says only what is true: deleting a piece frees its upload slot, never
-      // storage, so no line here promises that deleting makes room.
+      // Says only what is true: deleting a piece frees its place, never
+      // storage, so no line here promises that deleting makes room. It does
+      // not advise buying a tick either: by here the person holds a running
+      // tier or a tick, and both give the larger limit (TIER-02).
       throw new PayloadTooLargeException({
         message: `This file needs ${formatBytes(contentLength)}, but only ${formatBytes(
           Math.max(0, usage.remainingBytes),
-        )} of your ${formatBytes(usage.limitBytes)} storage is free.${
-          tickHeld
-            ? ''
-            : ` A verification tick raises the limit to ${formatBytes(TICK_STORAGE_BYTES)}.`
-        }`,
+        )} of your ${formatBytes(usage.limitBytes)} storage is free.`,
         reason: {
           code: 'storage_limit_reached',
           neededBytes: contentLength,
@@ -660,7 +670,7 @@ export class StorageService {
   ): Promise<{ usage: StorageUsage; tickHeld: boolean }> {
     await this.reconcileStale(wawuId);
 
-    const [agg, profile] = await Promise.all([
+    const [agg, allowance] = await Promise.all([
       this.prisma.storageObject.aggregate({
         _sum: { bytes: true },
         where: {
@@ -669,15 +679,12 @@ export class StorageService {
           folder: { in: [...CONTENT_FOLDERS] },
         },
       }),
-      this.prisma.userProfile.findUnique({
-        where: { wawuUserId: wawuId },
-        select: TICK_COLUMNS,
-      }),
+      this.allowance.of(wawuId),
     ]);
 
     const usedBytes = agg._sum.bytes ?? 0;
-    const tickHeld = holdsTick(profile);
-    const limitBytes = storageAllowanceFor(tickHeld);
+    const tickHeld = allowance.tickHeld;
+    const limitBytes = allowance.storageBytes;
     return {
       usage: {
         usedBytes,
@@ -695,20 +702,19 @@ export class StorageService {
    * from usageFor, the tick from holdsTick.
    */
   async allowanceFor(wawuId: string): Promise<UploadAllowanceView> {
-    const [{ usage, tickHeld }, state] = await Promise.all([
+    const [{ usage, tickHeld }, allowance] = await Promise.all([
       this.usageAndTick(wawuId),
-      this.prisma.creatorState.findUnique({
-        where: { wawuUserId: wawuId },
-        select: { slotsUsed: true },
-      }),
+      this.allowance.of(wawuId),
     ]);
-    const used = state?.slotsUsed ?? 0;
-    const allowed = uploadAllowanceFor(tickHeld).total;
+    const used = allowance.productsUsed;
+    const allowed = allowance.productsAllowed;
     return {
       tickHeld,
       uploads: { used, allowed, remaining: Math.max(0, allowed - used) },
       storage: usage,
-      free: { uploads: FREE_UPLOADS, storageBytes: FREE_STORAGE_BYTES },
+      // TIER-02 (R-43): with no tier and no tick, nothing may be published.
+      // Drafts with no file are free and are not uploads.
+      free: { uploads: 0, storageBytes: FREE_STORAGE_BYTES },
       withTick: { uploads: TICK_UPLOADS, storageBytes: TICK_STORAGE_BYTES },
     };
   }

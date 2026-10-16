@@ -2577,3 +2577,20 @@ provider the server runs (their `provider` column).
   decimal text.
 - **Rows.** `MoneyCheckRun.report` holds the first 500 mismatches and the first 500 looks
   and counts the rest; finished runs are kept `MONEY_CHECK_KEEP_DAYS` (120).
+
+## 23. Publishing needs a tier (TIER-02)
+
+Publishing a piece, or taking a file for one, answers `402` in this one error
+shape when the person has no way to publish or has used every product they
+may have:
+
+| `reason.code` | HTTP | When | Extra fields |
+|---|---|---|---|
+| `tier_required` | 402 | no running tier and no verification tick that has not ended | `tierState` (`none` or `ended`), `productsUsed`, `productsAllowed`, `currency`, `tiers`, `extraProducts` |
+| `product_limit_reached` | 402 | every product the person may have is published | the same fields |
+| `draft_limit_reached` | 409 | a person already keeps `PRODUCT_DRAFTS_MAX` drafts (`POST /product-drafts`) | `draftsKept`, `draftsAllowed` |
+| `draft_incomplete` | 400 | a draft being published still lacks details | `missing` |
+
+The offers inside `reason` are `GET /plans`' figures in the person's billing
+currency only (`priceMinor` in the minor unit of `currency`). The rules, the
+routes that ask and the drafts are in [`PLANS.md`](PLANS.md) section 6.
