@@ -1,6 +1,13 @@
 import { BadGatewayException, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import {
+  WawuIdDeadline,
+  WawuIdTimeoutException,
+  wawuIdExchange,
+  wawuIdTimeoutMs,
+} from './wawu-id-exchange';
+
 /**
  * Outbound client for WAWU ID's internal service-to-service API
  * (conventions.md § Auth model, declared/wawu-id-integration.json).
@@ -10,6 +17,12 @@ import { ConfigService } from '@nestjs/config';
  * cannot be rendered without them. Behind an interface-shaped class so
  * it's trivially mockable in tests (no real WAWU_ID_INTERNAL_SERVICE_KEY
  * is available in this sandbox — see conventions.md's documented gap).
+ *
+ * Every call is bounded (FIX-10, wawu-id-exchange.ts): headers and body must
+ * both arrive inside the bound or the call is aborted and its socket freed.
+ * A lookup that runs out of time is the same empty answer as one WAWU ID
+ * failed; a write that does is a `WawuIdTimeoutException`, a 502 carrying the
+ * words that write already answers when WAWU ID fails.
  */
 /**
  * The dev fallback below is a PUBLICLY KNOWN string. Silently using it in
@@ -26,11 +39,19 @@ function resolveServiceKey(configured: string | undefined): string {
   return 'dev-internal-service-key-not-secret';
 }
 
+/** What a write that did not save answers, whether WAWU ID refused it or did not answer. */
+const SET_VERIFICATION_FAILED =
+  'Your verification could not be saved. Your payment is safe, try again in a moment.';
+const UPDATE_NAME_FAILED =
+  'Your name could not be saved. Try again in a moment.';
+
 @Injectable()
 export class WawuIdClient {
   private readonly logger = new Logger(WawuIdClient.name);
   private readonly baseUrl: string;
   private readonly serviceKey: string;
+  private readonly readMs: number;
+  private readonly writeMs: number;
 
   constructor(private readonly config: ConfigService) {
     this.baseUrl =
@@ -38,6 +59,8 @@ export class WawuIdClient {
     this.serviceKey = resolveServiceKey(
       this.config.get<string>('WAWU_ID_INTERNAL_SERVICE_KEY'),
     );
+    this.readMs = wawuIdTimeoutMs(this.config, 'read');
+    this.writeMs = wawuIdTimeoutMs(this.config, 'write');
   }
 
   /**
@@ -76,47 +99,68 @@ export class WawuIdClient {
     if (unique.length === 0) return out;
 
     // WAWU ID caps a lookup at 100 ids; chunk rather than silently truncate.
+    // One deadline covers every chunk: a stalled WAWU ID costs the bound once,
+    // not once per chunk, and the chunks after the stall are not tried.
     const CHUNK = 100;
-    for (let i = 0; i < unique.length; i += CHUNK) {
-      const chunk = unique.slice(i, i + CHUNK);
-      try {
-        const res = await fetch(`${this.baseUrl}/internal/users/lookup`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Service-Key': this.serviceKey,
-          },
-          body: JSON.stringify({ ids: chunk }),
-        });
-        if (!res.ok) {
-          this.logger.warn(
-            `WAWU ID identity lookup failed (HTTP ${res.status}); creator names will fall back to handles`,
+    const deadline = new WawuIdDeadline(
+      'identity lookup',
+      this.readMs,
+      'WAWU ID did not answer the identity lookup in time.',
+    );
+    try {
+      for (let i = 0; i < unique.length; i += CHUNK) {
+        const chunk = unique.slice(i, i + CHUNK);
+        try {
+          const res = await wawuIdExchange(
+            `${this.baseUrl}/internal/users/lookup`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'X-Service-Key': this.serviceKey,
+              },
+              body: JSON.stringify({ ids: chunk }),
+            },
+            deadline,
           );
-          continue;
+          if (!res.ok) {
+            this.logger.warn(
+              `WAWU ID identity lookup failed (HTTP ${res.status}); creator names will fall back to handles`,
+            );
+            continue;
+          }
+          const body = JSON.parse(res.text) as {
+            data?: Array<{
+              id?: string;
+              firstName?: string | null;
+              lastName?: string | null;
+              verificationTier?: string;
+            }>;
+          };
+          for (const row of body.data ?? []) {
+            if (!row.id) continue;
+            out.set(row.id, {
+              firstName: row.firstName ?? null,
+              lastName: row.lastName ?? null,
+              verificationTier: row.verificationTier ?? 'basic',
+            });
+          }
+        } catch (error) {
+          if (error instanceof WawuIdTimeoutException) {
+            this.logger.warn(
+              `WAWU ID identity lookup timed out after ${error.boundMs} ms; creator names will fall back to handles`,
+            );
+            break;
+          }
+          this.logger.warn(
+            `WAWU ID identity lookup threw; creator names will fall back to handles: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         }
-        const body = (await res.json()) as {
-          data?: Array<{
-            id?: string;
-            firstName?: string | null;
-            lastName?: string | null;
-            verificationTier?: string;
-          }>;
-        };
-        for (const row of body.data ?? []) {
-          if (!row.id) continue;
-          out.set(row.id, {
-            firstName: row.firstName ?? null,
-            lastName: row.lastName ?? null,
-            verificationTier: row.verificationTier ?? 'basic',
-          });
-        }
-      } catch (error) {
-        this.logger.warn(
-          `WAWU ID identity lookup threw; creator names will fall back to handles: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
       }
+    } finally {
+      deadline.end();
     }
     return out;
   }
@@ -143,7 +187,13 @@ export class WawuIdClient {
     kind: 'creator' | 'professional',
     dates: { verifiedAt: Date | null; verifiedUntil: Date | null },
   ): Promise<void> {
-    const res = await fetch(
+    const deadline = new WawuIdDeadline(
+      'set verification',
+      this.writeMs,
+      SET_VERIFICATION_FAILED,
+    );
+    const res = await this.timed(
+      deadline,
       `${this.baseUrl}/internal/users/${userId}/verification`,
       {
         method: 'PATCH',
@@ -175,11 +225,9 @@ export class WawuIdClient {
     );
     if (!res.ok) {
       this.logger.error(
-        `Failed to set ${kind} verification for ${userId}: ${res.status} ${await res.text()}`,
+        `Failed to set ${kind} verification for ${userId}: ${res.status} ${res.text}`,
       );
-      throw new BadGatewayException(
-        'Your verification could not be saved. Your payment is safe, try again in a moment.',
-      );
+      throw new BadGatewayException(SET_VERIFICATION_FAILED);
     }
   }
 
@@ -193,7 +241,12 @@ export class WawuIdClient {
    * worse than one write path too many.
    */
   async elevateVerificationTier(userId: string, tier: string): Promise<void> {
-    const res = await fetch(
+    const res = await this.timed(
+      new WawuIdDeadline(
+        'elevate verification tier',
+        this.writeMs,
+        'WAWU ID did not answer in time. Try again in a moment.',
+      ),
       `${this.baseUrl}/internal/users/${userId}/verification-tier`,
       {
         method: 'PATCH',
@@ -206,7 +259,7 @@ export class WawuIdClient {
     );
     if (!res.ok) {
       this.logger.error(
-        `Failed to elevate verification tier for ${userId}: ${res.status} ${await res.text()}`,
+        `Failed to elevate verification tier for ${userId}: ${res.status} ${res.text}`,
       );
       throw new Error('WAWU ID verification-tier update failed');
     }
@@ -225,19 +278,46 @@ export class WawuIdClient {
     userId: string,
     parts: { firstName: string; middleName?: string; lastName: string },
   ): Promise<void> {
-    const res = await fetch(`${this.baseUrl}/internal/users/${userId}/name`, {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Service-Key': this.serviceKey,
+    const res = await this.timed(
+      new WawuIdDeadline('update name', this.writeMs, UPDATE_NAME_FAILED),
+      `${this.baseUrl}/internal/users/${userId}/name`,
+      {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Service-Key': this.serviceKey,
+        },
+        body: JSON.stringify(parts),
       },
-      body: JSON.stringify(parts),
-    });
+    );
     if (!res.ok) {
       this.logger.error(
-        `Failed to update name for ${userId}: ${res.status} ${await res.text()}`,
+        `Failed to update name for ${userId}: ${res.status} ${res.text}`,
       );
-      throw new BadGatewayException('Your name could not be saved. Try again in a moment.');
+      throw new BadGatewayException(UPDATE_NAME_FAILED);
+    }
+  }
+
+  /**
+   * One bounded write. The deadline ends here whatever happens, and a timeout
+   * is logged once with the call and the bound before it goes to the caller.
+   */
+  private async timed(
+    deadline: WawuIdDeadline,
+    url: string,
+    init: { method: string; headers: Record<string, string>; body?: string },
+  ) {
+    try {
+      return await wawuIdExchange(url, init, deadline);
+    } catch (error) {
+      if (error instanceof WawuIdTimeoutException) {
+        this.logger.error(
+          `WAWU ID ${error.call} timed out after ${error.boundMs} ms`,
+        );
+      }
+      throw error;
+    } finally {
+      deadline.end();
     }
   }
 }

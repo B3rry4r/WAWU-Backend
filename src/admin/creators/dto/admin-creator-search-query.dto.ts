@@ -50,7 +50,7 @@ export class CreatorSearchIsSupportedConstraint implements ValidatorConstraintIn
   defaultMessage(args: ValidationArguments): string {
     const kind = unsupportedLookupKind(String(args.value));
     const what = kind === 'email' ? 'an email address' : 'a phone number';
-    return `Creator lookup cannot search by ${what}. This backend stores no email or phone for a creator account — both live in WAWU ID, which exposes no lookup-by-contact API. Search by handle (partial, case-insensitive) or by WAWU ID instead.`;
+    return `Creator lookup cannot search by ${what}. This backend stores no email or phone for a creator account. Both live in WAWU ID, which exposes no lookup-by-contact API. Search by handle (partial, case-insensitive) or by WAWU ID instead.`;
   }
 }
 

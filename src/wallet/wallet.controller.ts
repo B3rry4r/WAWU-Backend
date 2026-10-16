@@ -4,6 +4,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { WalletService } from './wallet.service';
 import { ResolveAccountDto, WithdrawDto } from './dto/wallet.dto';
+import { readHistoryTake } from './wallet-history-take';
 
 /**
  * `/api/hub/wallet/*` — a creator's own wallet, and nobody else's.
@@ -28,7 +29,7 @@ export class WalletController {
   /** What has moved, newest first. */
   @Get('history')
   history(@CurrentUser() user: WawuJwtClaims, @Query('take') take?: string) {
-    return this.wallet.history(user.sub, take ? Number(take) : undefined);
+    return this.wallet.history(user.sub, readHistoryTake(take));
   }
 
   /** The banks that can be withdrawn to. */
