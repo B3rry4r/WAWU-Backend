@@ -176,6 +176,9 @@ export const MONEY_ERROR_CODES = [
   'statement_too_large',
   'statement_rate_limited',
   'statement_busy',
+  // Emailing a statement (WALLET-35).
+  'email_not_verified',
+  'statement_email_failed',
   // Finding a recipient (WALLET-08).
   'recipient_search_rate_limited',
   // Fees and limits as settings (NUV-07): the running provider's fees are

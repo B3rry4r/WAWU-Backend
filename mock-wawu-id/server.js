@@ -15,6 +15,9 @@ const path = require("path");
 const crypto = require("crypto");
 
 const app = express();
+// The mail relay takes a file along with the mail (WALLET-35), so its body may
+// be large; every other route keeps the default limit. Must come first.
+app.use("/internal/mail/send", express.json({ limit: "16mb" }));
 app.use(express.json());
 
 // CORS -- the real WAWU ID enables this (main.ts: enableCors, credentials
@@ -112,6 +115,10 @@ const USERS = {
   "user@test.wawu.dev": {
     sub: "00000000-0000-4000-8000-000000000001",
     email: "user@test.wawu.dev",
+    // The one seeded person whose email WAWU ID has confirmed, as a web or a
+    // proven mobile sign-up's token says (WALLET-35: a statement is only
+    // mailed to a confirmed address). Everyone else's token carries no flag.
+    emailVerified: true,
     phone: "+2348000000001",
     firstName: "Adaeze",
     lastName: "Okonkwo",
@@ -413,6 +420,51 @@ app.post("/internal/users/:userId/pin-reset-code", requireServiceKey, (req, res)
     sentAt: new Date().toISOString(),
   });
   res.json({ data: { sent: true } });
+});
+// WAWU ID's mail relay (EMAIL-02, WALLET-35 adds `attachments`):
+// POST /internal/mail/send { to, subject, html, text, headers?, tag?,
+// attachments?: [{ filename, content (base64), contentType? }] } with an
+// optional Idempotency-Key (the same key answers with the first mail). The
+// mock sends nothing: it records the mail, each attachment decoded, in the
+// outbox the contract suite reads. A bad body is a 400, as on the real one.
+const RELAYED_BY_KEY = new Map();
+app.post("/internal/mail/send", requireServiceKey, (req, res) => {
+  const body = req.body ?? {};
+  const bad = (message) => res.status(400).json({ statusCode: 400, message });
+  if (typeof body.to !== "string" || !/^[^\s@<>,;"]+@[^\s@<>,;"]+$/.test(body.to)) return bad("to must be an email address");
+  if (typeof body.subject !== "string" || !body.subject || /[\r\n]/.test(body.subject)) return bad("subject must be one line");
+  if (typeof body.html !== "string" || !body.html) return bad("html is required");
+  if (typeof body.text !== "string" || !body.text) return bad("text is required");
+  const attachments = [];
+  if (body.attachments !== undefined) {
+    if (!Array.isArray(body.attachments) || body.attachments.length > 2) return bad("attachments must be a list of at most 2");
+    for (const a of body.attachments) {
+      if (!a || typeof a.filename !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(a.filename)) return bad("attachment filename is not a safe name");
+      if (typeof a.content !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(a.content)) return bad("attachment content must be base64");
+      const bytes = Buffer.from(a.content, "base64");
+      attachments.push({
+        filename: a.filename,
+        contentType: typeof a.contentType === "string" ? a.contentType : "application/octet-stream",
+        bytes: bytes.length,
+        text: bytes.toString("utf8"),
+      });
+    }
+  }
+  const key = req.header("Idempotency-Key");
+  if (key && RELAYED_BY_KEY.has(key)) return res.json({ id: RELAYED_BY_KEY.get(key) });
+  const id = `mock-mail-${MAIL_OUTBOX.length + 1}`;
+  if (key) RELAYED_BY_KEY.set(key, id);
+  MAIL_OUTBOX.push({
+    kind: "mail",
+    id,
+    to: body.to,
+    subject: body.subject,
+    text: body.text,
+    html: body.html,
+    attachments,
+    sentAt: new Date().toISOString(),
+  });
+  res.json({ id });
 });
 app.get("/internal/mail-outbox", requireServiceKey, (_req, res) => {
   res.json({ data: MAIL_OUTBOX });

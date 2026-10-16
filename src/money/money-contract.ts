@@ -79,6 +79,12 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // The per-person statement limit and the two-at-once cap (WALLET-27 round 3).
   statement_rate_limited: 429,
   statement_busy: 503,
+  // WALLET-35. Default (agent), owner may override: 409, as wallet_opening:
+  // the request is understood, the person's email is not confirmed yet.
+  email_not_verified: 409,
+  // WALLET-35. Default (agent), owner may override: 503, as statement_busy:
+  // nothing was sent, trying again is right.
+  statement_email_failed: 503,
   recipient_search_rate_limited: 429,
   // NUV-07 (R-42): the running provider's fees are settings not filled in
   // yet; nothing is quoted or moved until they are. Not a provider failure.
