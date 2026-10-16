@@ -25285,6 +25285,18 @@
                 "schools"
               ]
             }
+          },
+          {
+            "name": "include",
+            "required": false,
+            "in": "query",
+            "description": "Send `communities` to have `communities` filled with the rooms whose name\nmatches `q` (tab `all` or `communities`). Left out, `communities` is an\nempty array on every tab, as it always was for the web. The app sends it.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "communities"
+              ]
+            }
           }
         ],
         "responses": {
@@ -25307,7 +25319,20 @@
     "/api/hub/search/suggestions": {
       "get": {
         "operationId": "SearchResponseController_suggestions",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "include",
+            "required": false,
+            "in": "query",
+            "description": "Send `recent` to have `recentSearches` filled with the signed-in caller's own recent searches. Left out, `recentSearches` is empty, as it always was for the web.",
+            "schema": {
+              "enum": [
+                "recent"
+              ],
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -25320,6 +25345,7 @@
             }
           }
         },
+        "summary": "The caller's `recentSearches` are filled only when the request carries\n`include=recent` (the app sends it); without it the answer is what the\nweb has always had, with `recentSearches` empty.",
         "tags": [
           "SearchResponse"
         ]

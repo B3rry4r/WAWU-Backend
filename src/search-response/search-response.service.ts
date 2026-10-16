@@ -3,7 +3,6 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { deriveVerificationState } from '../common/verification/verification-state';
 import {
-  AccountType,
   ContentStatus,
   PurchaseType,
   TransactionStatus,
@@ -22,6 +21,7 @@ import type {
 } from '../common/types';
 import { SchoolsPublicService } from '../schools/schools-public.service';
 import { SearchHistoryService } from './search-history.service';
+import { communityMatch, contentMatch, creatorMatch } from './search-matchers';
 import type { PublicSchoolCard } from '../schools/schools-public.views';
 import type { SearchTab } from './dto/search-query.dto';
 
@@ -34,6 +34,17 @@ const CLOSEST_LIMIT = 10;
  * joined first), ranked, and the best RESULT_LIMIT are answered.
  */
 const COMMUNITY_SCAN = 100;
+
+/**
+ * EXPLORE-05. What a caller opts in to with `include` on GET /search
+ * (`communities`) and GET /search/suggestions (`recent`). Left out, both
+ * routes answer exactly as they did before the task, which is what the web
+ * (protected routes) gets.
+ */
+export interface SearchInclude {
+  communities?: boolean;
+  recent?: boolean;
+}
 
 /**
  * SearchResponse (registry.json) has NO Prisma model of its own (fields: []
@@ -75,10 +86,15 @@ export class SearchResponseService {
     q: string,
     tab: SearchTab,
     requesterWawuId: string | undefined,
+    include: SearchInclude = {},
   ): Promise<SearchResults> {
     const wantContent = tab === 'all' || tab === 'content';
     const wantCreators = tab === 'all' || tab === 'creators';
-    const wantCommunities = tab === 'all' || tab === 'communities';
+    // EXPLORE-05: only for a caller that asks (`include=communities`, which
+    // the app sends). The web does not, so for the web `communities` is
+    // `[]` on every tab, exactly as before.
+    const wantCommunities =
+      include.communities === true && (tab === 'all' || tab === 'communities');
     // SETTINGS-04: nobody the caller blocked, or who blocked the caller,
     // is a result, whichever tab asked.
     const hidden = await this.blockedAccounts.hiddenFrom(requesterWawuId);
@@ -102,7 +118,8 @@ export class SearchResponseService {
       ...schools,
       content,
       creators,
-      // EXPLORE-05: rooms whose name matches, on tab=all and tab=communities.
+      // EXPLORE-05: rooms whose name matches, on tab=all and tab=communities,
+      // when asked for with `include=communities`; `[]` otherwise.
       communities,
     };
   }
@@ -113,15 +130,7 @@ export class SearchResponseService {
     hidden: string[],
   ): Promise<ContentPieceResponse[]> {
     const items = await this.prisma.contentPiece.findMany({
-      where: {
-        status: ContentStatus.live,
-        creatorWawuId: { notIn: hidden },
-        OR: [
-          { title: { contains: q, mode: 'insensitive' } },
-          { description: { contains: q, mode: 'insensitive' } },
-          { category: { contains: q, mode: 'insensitive' } },
-        ],
-      },
+      where: contentMatch(q, hidden),
       orderBy: { views: 'desc' },
       take: RESULT_LIMIT,
     });
@@ -133,14 +142,7 @@ export class SearchResponseService {
     hidden: string[],
   ): Promise<CreatorProfile[]> {
     const profiles = await this.prisma.userProfile.findMany({
-      where: {
-        accountType: AccountType.creator,
-        wawuUserId: { notIn: hidden },
-        OR: [
-          { handle: { contains: q, mode: 'insensitive' } },
-          { bio: { contains: q, mode: 'insensitive' } },
-        ],
-      },
+      where: creatorMatch(q, hidden),
       select: { wawuUserId: true },
     });
     // Relevance heuristic: rank matches by EvgScore (task brief's own
@@ -166,10 +168,7 @@ export class SearchResponseService {
     hidden: string[],
   ): Promise<CommunityResponse[]> {
     const matches = await this.prisma.community.findMany({
-      where: {
-        name: { contains: q, mode: 'insensitive' },
-        hostWawuId: { notIn: hidden },
-      },
+      where: communityMatch(q, hidden),
       orderBy: [{ memberships: { _count: 'desc' } }, { name: 'asc' }],
       take: COMMUNITY_SCAN,
     });
@@ -222,16 +221,20 @@ export class SearchResponseService {
 
   /**
    * `recentSearches` is the caller's own recent searches (EXPLORE-05), newest
-   * first, and `[]` for a caller who is not signed in or has none.
+   * first, only when the caller asks (`include=recent`, which the app sends)
+   * and is signed in; `[]` otherwise, as it always was for the web.
    * `popularSearches` stays what it was for the web, which reads it: the titles
    * of the most viewed live content. The app reads real popular searches from
    * GET /search/popular instead, never from here.
    */
-  async suggestions(requesterWawuId?: string): Promise<SearchSuggestions> {
+  async suggestions(
+    requesterWawuId?: string,
+    include: SearchInclude = {},
+  ): Promise<SearchSuggestions> {
     const hidden = await this.blockedAccounts.hiddenFrom(requesterWawuId);
     const [recentSearches, popularSearches, suggestedCreatorIds] =
       await Promise.all([
-        requesterWawuId
+        requesterWawuId && include.recent === true
           ? this.history.recent(requesterWawuId)
           : Promise.resolve([] as string[]),
         this.popularSearches(hidden),

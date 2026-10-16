@@ -54,12 +54,16 @@ describe('Search: recent, popular, communities, ticks (EXPLORE-05)', () => {
   const auth = (t: string) => ({ Authorization: `Bearer ${t}` });
   const record = (t: string, q: unknown) =>
     http().post('/api/hub/search/recent').set(auth(t)).send({ q });
-  const suggestions = (t?: string) => {
-    const r = http().get('/api/hub/search/suggestions');
+  const suggestions = (t?: string, include?: string) => {
+    const r = http()
+      .get('/api/hub/search/suggestions')
+      .query(include ? { include } : {});
     return t ? r.set(auth(t)) : r;
   };
+  // EXPLORE-05 round 2: the app asks for its recent searches with include=recent.
   const recents = async (t: string) =>
-    data<{ recentSearches: string[] }>(await suggestions(t)).recentSearches;
+    data<{ recentSearches: string[] }>(await suggestions(t, 'recent'))
+      .recentSearches;
   const popular = async () =>
     data<{ items: string[] }>(await http().get('/api/hub/search/popular'))
       .items;
@@ -140,7 +144,9 @@ describe('Search: recent, popular, communities, ticks (EXPLORE-05)', () => {
       expect((await http().delete('/api/hub/search/recent')).status).toBe(401);
       expect(await recents(plain)).not.toContain('nothing');
       expect(
-        data<{ recentSearches: string[] }>(await suggestions()).recentSearches,
+        data<{ recentSearches: string[] }>(
+          await suggestions(undefined, 'recent'),
+        ).recentSearches,
       ).toEqual([]);
     });
 
@@ -255,6 +261,20 @@ describe('Search: recent, popular, communities, ticks (EXPLORE-05)', () => {
   });
 
   describe('People are searching', () => {
+    // Round 2: a popular search must find something a visitor can see, so the
+    // texts below each name a public room.
+    beforeAll(async () => {
+      for (const name of [`${MARK} Alpha room`, `${MARK} Gamma room`])
+        await prisma.community.create({
+          data: {
+            name,
+            hostWawuId: USER_BASIC,
+            kind: 'open',
+            description: 'x',
+          },
+        });
+    });
+
     const seed = (key: string, query: string, people: number, ageDays = 0) =>
       prisma.searchHistory.createMany({
         data: Array.from({ length: people }, (_, i) => ({
@@ -395,9 +415,10 @@ describe('Search: recent, popular, communities, ticks (EXPLORE-05)', () => {
       hostWawuId: string;
     };
     const search = async (q: string, tab?: string, token?: string) => {
+      // The app asks for rooms with include=communities (round 2).
       const r = http()
         .get('/api/hub/search')
-        .query({ q, ...(tab ? { tab } : {}) });
+        .query({ q, include: 'communities', ...(tab ? { tab } : {}) });
       return data<{
         communities: Room[];
         content: unknown[];
@@ -491,12 +512,14 @@ describe('Search: recent, popular, communities, ticks (EXPLORE-05)', () => {
 
     it('answers odd inputs with 400, never 500', async () => {
       for (const q of ['%00', 'a%00b']) {
-        const res = await http().get(`/api/hub/search?tab=communities&q=${q}`);
+        const res = await http().get(
+          `/api/hub/search?tab=communities&include=communities&q=${q}`,
+        );
         expect(res.status).toBe(400);
       }
       const wild = await http()
         .get('/api/hub/search')
-        .query({ q: '%_\\', tab: 'communities' });
+        .query({ q: '%_\\', tab: 'communities', include: 'communities' });
       expect(wild.status).toBe(200);
     });
   });

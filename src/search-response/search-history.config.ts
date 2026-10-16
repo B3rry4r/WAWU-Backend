@@ -14,3 +14,15 @@ export const RECENT_SEARCHES_SHOWN = 10;
 export const POPULAR_MIN_PEOPLE = 3;
 export const POPULAR_WINDOW_DAYS = 30;
 export const POPULAR_SEARCHES_SHOWN = 8;
+
+/**
+ * Work limits for GET /search/popular, which is public. The list reads the
+ * searches in pages of POPULAR_CANDIDATES_PER_PAGE (most people first), skips
+ * the texts the rules refuse, and asks the database whether the rest find
+ * anything; it stops after POPULAR_MAX_PAGES pages or POPULAR_MAX_PROBES such
+ * questions, so text typed only to fill the list cannot make one call do
+ * unbounded work.
+ */
+export const POPULAR_CANDIDATES_PER_PAGE = 32;
+export const POPULAR_MAX_PAGES = 4;
+export const POPULAR_MAX_PROBES = 40;
