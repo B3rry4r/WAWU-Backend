@@ -1088,6 +1088,54 @@
         ]
       }
     },
+    "/api/hub/uploads/confirm": {
+      "post": {
+        "operationId": "StorageController_confirm",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "confirmed",
+                        "abandoned"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "status"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "POST /uploads/confirm: the app has finished sending the file it got a URL\nfor, taken or turned away by the storage host. The server asks the bucket\nand answers `confirmed` (the file is there and counts against the person's\nstorage) or `abandoned` (it is not, and the space it held goes back at\nonce instead of when the sweep settles it). The app's word decides\nnothing; only the person's own upload can be settled. A bucket that cannot\nbe asked answers 503 and changes nothing.",
+        "tags": [
+          "Storage"
+        ]
+      }
+    },
     "/api/hub/uploads/usage": {
       "get": {
         "operationId": "StorageController_usage",
@@ -30272,6 +30320,19 @@
           "contentType",
           "extension",
           "contentLength"
+        ]
+      },
+      "ConfirmUploadDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The `key` or the `fileUrl` POST /uploads/presign returned for this file.",
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "key"
         ]
       },
       "ValidateCustomerDto": {

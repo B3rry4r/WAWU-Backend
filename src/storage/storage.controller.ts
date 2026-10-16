@@ -12,6 +12,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { StorageService, type UploadAllowanceView } from './storage.service';
 import { PresignUploadDto } from './dto/presign-upload.dto';
+import { ConfirmUploadDto } from './dto/confirm-upload.dto';
 
 /**
  * POST /uploads/presign — hands the authenticated caller a short-lived PUT
@@ -37,6 +38,21 @@ export class StorageController {
       dto.extension,
       dto.contentLength,
     );
+  }
+
+  /**
+   * POST /uploads/confirm: the app has finished sending the file it got a URL
+   * for, taken or turned away by the storage host. The server asks the bucket
+   * and answers `confirmed` (the file is there and counts against the person's
+   * storage) or `abandoned` (it is not, and the space it held goes back at
+   * once instead of when the sweep settles it). The app's word decides
+   * nothing; only the person's own upload can be settled. A bucket that cannot
+   * be asked answers 503 and changes nothing.
+   */
+  @Post('confirm')
+  @HttpCode(HttpStatus.OK)
+  confirm(@CurrentUser() user: WawuJwtClaims, @Body() dto: ConfirmUploadDto) {
+    return this.storage.settleUpload(user.sub, dto.key);
   }
 
   /**

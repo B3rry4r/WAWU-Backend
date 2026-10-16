@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   Logger,
+  NotFoundException,
   PayloadTooLargeException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -53,6 +54,15 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
  * reconcileStale for why this is much longer than the 300s URL expiry.
  */
 const RECONCILE_GRACE_MS = 15 * 60 * 1000;
+
+const CHECK_LATER =
+  'Could not check that upload right now. Try again in a moment.';
+
+/** Stale reservations the sweep settles in one pass over the bucket. */
+const RECONCILE_BATCH = 50;
+
+/** Passes one usage read makes at most, so a read never runs unbounded. */
+const RECONCILE_MAX_BATCHES = 10;
 
 /**
  * The folders that hold creator content, the only ones R-7's storage
@@ -615,26 +625,88 @@ export class StorageService {
   }): Promise<boolean> {
     if (row.status === 'confirmed') return true;
     if (row.status !== 'pending' || !this.client) return false;
-    try {
-      await this.client.send(
-        new HeadObjectCommand({ Bucket: this.bucket, Key: row.key }),
-      );
-    } catch (err) {
-      const status = (err as { $metadata?: { httpStatusCode?: number } })
-        .$metadata?.httpStatusCode;
-      if (status === 404 || status === 403) return false;
-      this.logger.warn(
-        `Could not confirm storage object ${row.key}: ${String(err)}`,
-      );
-      throw new ServiceUnavailableException(
-        'Could not check that upload right now. Try again in a moment.',
-      );
-    }
+    const held = await this.bucketHolds(row.key, 'confirm');
+    if (held === 'absent') return false;
+    if (held === 'unknown') throw new ServiceUnavailableException(CHECK_LATER);
     await this.prisma.storageObject.updateMany({
       where: { id: row.id, status: 'pending' },
       data: { status: 'confirmed', confirmedAt: new Date() },
     });
     return true;
+  }
+
+  /**
+   * POST /uploads/confirm: the app has finished sending one file to the URL
+   * presign gave it, and says so whether the storage host took it or turned
+   * it away. The bucket, not the app, decides what the reservation becomes:
+   *
+   * - the object is there: the row is `confirmed`, and counts as it always
+   *   did. A row the sweep had already given up on comes back too, because
+   *   the file arrived after all (a slow upload outliving the sweep).
+   * - the object is not there: the row is `abandoned` now, and the space it
+   *   held goes back to the person. Without this call that happens only when
+   *   the sweep (reconcileStale) settles it, a quarter of an hour on.
+   * - the bucket cannot be asked: a 503, and the row is left as it was.
+   *
+   * Only the person's own upload can be settled; another account's key answers
+   * the same as a key that never existed.
+   */
+  async settleUpload(
+    wawuId: string,
+    stored: string,
+  ): Promise<{ key: string; status: 'confirmed' | 'abandoned' }> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const key = objectKeyFrom(stored);
+    const row = await this.prisma.storageObject.findUnique({ where: { key } });
+    if (!row || row.wawuUserId !== wawuId) {
+      throw new NotFoundException('We could not find that upload.');
+    }
+    if (row.status === 'confirmed') return { key, status: 'confirmed' };
+
+    const held = await this.bucketHolds(key, 'settle');
+    if (held === 'unknown') throw new ServiceUnavailableException(CHECK_LATER);
+    if (held === 'present') {
+      await this.prisma.storageObject.updateMany({
+        where: { id: row.id, status: { in: ['pending', 'abandoned'] } },
+        data: { status: 'confirmed', confirmedAt: new Date() },
+      });
+      return { key, status: 'confirmed' };
+    }
+    await this.prisma.storageObject.updateMany({
+      where: { id: row.id, status: 'pending' },
+      data: { status: 'abandoned' },
+    });
+    return { key, status: 'abandoned' };
+  }
+
+  /**
+   * Whether the bucket holds `key`. Only a definite 404 or 403 means
+   * `absent`; any other failure is the bucket being unreachable, which is
+   * `unknown`: nobody may conclude "not there" from an outage, because that
+   * would hand back space for files that still exist.
+   */
+  private async bucketHolds(
+    key: string,
+    doing: string,
+  ): Promise<'present' | 'absent' | 'unknown'> {
+    try {
+      await this.client!.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+      return 'present';
+    } catch (err) {
+      const status = (err as { $metadata?: { httpStatusCode?: number } })
+        .$metadata?.httpStatusCode;
+      if (status === 404 || status === 403) return 'absent';
+      this.logger.warn(
+        `Could not ${doing} storage object ${key}: ${String(err)}`,
+      );
+      return 'unknown';
+    }
   }
 
   /**
@@ -730,47 +802,39 @@ export class StorageService {
     if (!this.client) return;
 
     const cutoff = new Date(Date.now() - RECONCILE_GRACE_MS);
-    const stale = await this.prisma.storageObject.findMany({
-      where: {
-        wawuUserId: wawuId,
-        status: 'pending',
-        createdAt: { lt: cutoff },
-      },
-      select: { id: true, key: true },
-      take: 50,
-    });
-    if (stale.length === 0) return;
+    // Rows the bucket could not answer for stay pending and are not asked
+    // again in this read, so the loop ends even during an outage.
+    const asked: string[] = [];
+    for (let pass = 0; pass < RECONCILE_MAX_BATCHES; pass++) {
+      const stale = await this.prisma.storageObject.findMany({
+        where: {
+          wawuUserId: wawuId,
+          status: 'pending',
+          createdAt: { lt: cutoff },
+          ...(asked.length > 0 ? { id: { notIn: asked } } : {}),
+        },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, key: true },
+        take: RECONCILE_BATCH,
+      });
+      if (stale.length === 0) return;
+      asked.push(...stale.map((row) => row.id));
 
-    await Promise.all(
-      stale.map(async (row) => {
-        let landed: boolean;
-        try {
-          await this.client!.send(
-            new HeadObjectCommand({ Bucket: this.bucket, Key: row.key }),
-          );
-          landed = true;
-        } catch (err) {
-          const status = (err as { $metadata?: { httpStatusCode?: number } })
-            .$metadata?.httpStatusCode;
-          // Only a definite 404/403 means "not there". Anything else is the
-          // bucket being unreachable, and guessing "abandoned" from an outage
-          // would silently hand back quota for files that still exist.
-          if (status !== 404 && status !== 403) {
-            this.logger.warn(
-              `Could not reconcile storage object ${row.key}: ${String(err)}`,
-            );
-            return;
-          }
-          landed = false;
-        }
-
-        await this.prisma.storageObject.update({
-          where: { id: row.id },
-          data: landed
-            ? { status: 'confirmed', confirmedAt: new Date() }
-            : { status: 'abandoned' },
-        });
-      }),
-    );
+      await Promise.all(
+        stale.map(async (row) => {
+          const held = await this.bucketHolds(row.key, 'reconcile');
+          if (held === 'unknown') return;
+          // Guarded on `pending`: a confirm that landed since the read wins.
+          await this.prisma.storageObject.updateMany({
+            where: { id: row.id, status: 'pending' },
+            data:
+              held === 'present'
+                ? { status: 'confirmed', confirmedAt: new Date() }
+                : { status: 'abandoned' },
+          });
+        }),
+      );
+      if (stale.length < RECONCILE_BATCH) return;
+    }
   }
 }
