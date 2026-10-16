@@ -64,6 +64,8 @@ const SERVED_MONEY_ROUTES: Record<string, string> = {
   'GET /api/hub/money/payments/quote': 'MONEY-17',
   'POST /api/hub/money/payments': 'MONEY-17',
   'GET /api/hub/money/payments/{id}': 'MONEY-19',
+  'POST /api/hub/money/transfers/wawu': 'WALLET-07',
+  'GET /api/hub/money/transfers/{id}': 'WALLET-07',
   'GET /api/hub/money/holds': 'MONEY-18',
   'GET /api/hub/money/holds/{id}': 'MONEY-18',
   'POST /api/hub/money/transactions/{id}/receipt': 'WALLET-18',
@@ -275,7 +277,10 @@ describe('money contract (MONEY-04)', () => {
       // CONVENTIONS.md section 5: a task that serves a debit swaps
       // @RequireTransactionPin() for @RequireApproval(), and this test then
       // expects the pair, each optional, beside the required key.
-      const approved = ['POST /api/hub/money/payments'];
+      const approved = [
+        'POST /api/hub/money/payments',
+        'POST /api/hub/money/transfers/wawu',
+      ];
       for (const { route, op } of moving) {
         const params = (op.parameters ?? []) as Array<{
           in: string;
