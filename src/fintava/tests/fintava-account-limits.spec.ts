@@ -128,6 +128,15 @@ describe('WALLET-23: the Fintava adapter carries the account limit on the balanc
     ).toThrow(FintavaConfigError);
   });
 
+  it('under nuvion the setting is not read, so a bad value does not stop that server', () => {
+    expect(() =>
+      provider('TIER_2', {
+        WALLET_PROVIDER: 'nuvion',
+        [FINTAVA_TIER_LIMITS_KEY]: 'x',
+      }),
+    ).not.toThrow();
+  });
+
   it('built without config (a spec that wires the adapter by hand), it uses the policy table', async () => {
     const stub = {
       getWalletBalance: () => Promise.resolve(balance('TIER_1')),

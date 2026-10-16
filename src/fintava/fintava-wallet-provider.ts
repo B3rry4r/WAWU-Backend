@@ -40,6 +40,10 @@ import {
   type WalletProviderCapabilities,
   type WalletProviderTimings,
 } from '../wallet-provider/wallet-provider.interface';
+import {
+  readWalletProviderName,
+  WALLET_PROVIDER_CONFIG_KEY,
+} from '../wallet-provider/wallet-provider-config';
 import { WalletProviderError } from '../wallet-provider/wallet-provider-error';
 import {
   accountLimitsOf,
@@ -206,9 +210,14 @@ export class FintavaWalletProvider implements WalletProvider {
     private readonly client: FintavaClient,
     @Optional() config?: ConfigService,
   ) {
-    this.tierLimits = config
-      ? readTierLimits(config.get<string>(FINTAVA_TIER_LIMITS_KEY))
-      : policyTierLimits();
+    // Read (and a bad value refused) only when Fintava is the provider this
+    // server runs: under nuvion the Fintava settings are not checked (NUV-01).
+    this.tierLimits =
+      config &&
+      readWalletProviderName(config.get<string>(WALLET_PROVIDER_CONFIG_KEY)) ===
+        'fintava'
+        ? readTierLimits(config.get<string>(FINTAVA_TIER_LIMITS_KEY))
+        : policyTierLimits();
   }
 
   get configured(): boolean {
