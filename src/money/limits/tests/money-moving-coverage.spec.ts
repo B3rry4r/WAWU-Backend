@@ -423,13 +423,19 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
     );
     // MONEY-17 serves the payment and its quote (src/money/payments/), and
     // WALLET-07 the send to a WAWU user (src/money/transfers/): they left the
-    // declared controller and are mounted, money-moving, here.
+    // declared controller and are mounted, money-moving, here. So does
+    // TIER-03's purchase of a tier, which pays through the same service
+    // (src/plans/purchases/).
     expect(
       mounted
         .filter(movesMoney)
         .map((r) => r.key)
         .sort(),
-    ).toEqual(['POST money/payments', 'POST money/transfers/wawu']);
+    ).toEqual([
+      'POST money/payments',
+      'POST money/transfers/wawu',
+      'POST plans/purchases',
+    ]);
     expect(mounted.map((r) => r.key)).toContain('GET money/payments/quote');
     expect(
       declared

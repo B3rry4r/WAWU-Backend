@@ -533,9 +533,14 @@ export interface PaymentQuoteView {
 
 export type HoldStatus = 'held' | 'released' | 'refunded';
 
-/** What releases a hold to the payee; the opposite outcome refunds the payer. */
+/**
+ * What releases a hold to the payee; the opposite outcome refunds the payer.
+ * `plan_granted` (TIER-03) is not a held kind's: a tier payment is WAWU's own
+ * sale and is never held, a hold is written for it only when the plan cannot
+ * be granted after the payment confirmed, and it is refunded at once.
+ */
 export type HoldReleaseCondition =
-  'dm_answered' | 'event_took_place' | 'bill_delivered';
+  'dm_answered' | 'event_took_place' | 'bill_delivered' | 'plan_granted';
 
 /**
  * Money held between payer and payee in WAWU's merchant wallet (R-19). The

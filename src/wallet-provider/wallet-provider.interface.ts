@@ -365,12 +365,32 @@ export interface ProviderAccountNameInput {
   bankCode: string;
 }
 
+/**
+ * Why a name check did or did not confirm an account (NUV-06, ruling 2):
+ * `matched`; `not_found` (the bank has no such account); `bank_not_supported`
+ * (the bank is not one the check can ask); `bad_format` (the number or the
+ * bank code is not one a bank has: nothing was asked); `multiple_matches`
+ * (the bank found more than one); `timeout` (no answer in time, or the
+ * lookup service was down: nothing is known, try again). Each is its own
+ * plain answer and none of them sends anything. A provider whose check says
+ * only yes or no (Fintava's) leaves it out.
+ */
+export type ProviderAccountNameOutcome =
+  | 'matched'
+  | 'not_found'
+  | 'bank_not_supported'
+  | 'bad_format'
+  | 'multiple_matches'
+  | 'timeout';
+
 export interface ProviderAccountName {
   /** True only when the bank confirmed the account. */
   matched: boolean;
   accountName: string | null;
   accountNumber: string;
   bankCode: string;
+  /** Why not, when the provider says (Nuvion); absent from Fintava's answer. */
+  outcome?: ProviderAccountNameOutcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -413,7 +433,25 @@ export interface ProviderTransaction {
    * the quote (MONEY-17 round 7, lead ruling R6-1; SHARED-CHANGES MONEY-17 #6).
    */
   feeKobo?: bigint | null;
+  /**
+   * What kind of movement the provider's record says this is (MONEY-16, the
+   * nightly check): `transfer` is money sent to a wallet or a bank, `charge`
+   * is the provider's own charge to WAWU (a compliance check, say), `other`
+   * is a type this adapter does not know. Absent or null: the record does
+   * not say.
+   */
+  kind?: ProviderTransactionKind | null;
+  /**
+   * What the provider's own record shows as paid to WAWU's account as
+   * WAWU's charge on this transaction (Fintava's `merchantComm`, set in its
+   * dashboard as "Merchant charges", OPS-09). Only a provider's full record
+   * carries it (Fintava: the by-id lookup); absent or null: the record does
+   * not say, which is not the same as zero.
+   */
+  merchantChargeKobo?: bigint | null;
 }
+
+export type ProviderTransactionKind = 'transfer' | 'charge' | 'other';
 
 export interface ProviderPage<T> {
   items: T[];
@@ -497,6 +535,18 @@ export interface ProviderConfirmLimits {
 // Moving money
 // ---------------------------------------------------------------------------
 
+/**
+ * Where a provider keeps one payee (NUV-06): Nuvion's counterparty and the
+ * payment detail attached to it. The caller keeps them on the saved account
+ * it sent to and hands them back on the next send, so a second send to the
+ * same account reuses them. A provider that keeps no payee (Fintava) leaves
+ * both out of its receipt and ignores them on a send.
+ */
+export interface ProviderPayee {
+  counterpartyId: string | null;
+  paymentDetailId: string | null;
+}
+
 export interface ProviderBankTransferInput {
   /** Whose money: a person's (their customerId) or WAWU's own account. */
   from: ProviderHolder;
@@ -507,6 +557,8 @@ export interface ProviderBankTransferInput {
   /** Ours, always: the idempotency key at the provider. */
   reference: string;
   narration?: string;
+  /** The payee ids an earlier send to this account used (NUV-06); reused when present. */
+  payee?: ProviderPayee | null;
 }
 
 export interface ProviderWalletTransferInput {
@@ -529,6 +581,8 @@ export interface ProviderTransferReceipt {
   feeKobo: bigint;
   /** The sender's balance after, when the answer carries it. */
   sourceAvailableKobo: bigint | null;
+  /** The payee ids this send used or made, for the caller to keep (NUV-06). */
+  payee?: ProviderPayee | null;
 }
 
 // ---------------------------------------------------------------------------

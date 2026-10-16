@@ -6,6 +6,8 @@ import { WaitlistAdminController } from './waitlist-admin.controller';
 import { WaitlistClaimController } from './waitlist-claim.controller';
 import { WaitlistClaimService } from './waitlist-claim.service';
 import { WaitlistCoreModule } from './waitlist-core.module';
+import { ReferralAdminController } from './referral/referral-admin.controller';
+import { ReferralAdminService } from './referral/referral-admin.service';
 import { WaitlistPublicController } from './waitlist-public.controller';
 import { WaitlistSweepService } from './waitlist-sweep.service';
 
@@ -37,7 +39,8 @@ import { WaitlistSweepService } from './waitlist-sweep.service';
     WaitlistPublicController,
     WaitlistClaimController,
     WaitlistAdminController,
+    ReferralAdminController,
   ],
-  providers: [WaitlistSweepService, WaitlistClaimService],
+  providers: [WaitlistSweepService, WaitlistClaimService, ReferralAdminService],
 })
 export class WaitlistModule {}
