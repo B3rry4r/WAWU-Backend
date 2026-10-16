@@ -28,6 +28,7 @@ import {
   createAdmins,
   ensureMockWawuId,
   fillPath,
+  grantVerifyTier,
   loginSeeded,
   pick,
   registerIdentity,
@@ -155,6 +156,12 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
       ctx.set(`${who}.sub`, id.sub);
     }
     await createAdmins(DATABASE_URL, nonce);
+    // Publishing needs a tier (TIER-02): the two creators hold a running
+    // Verify tier, as a paying creator does. Removed by the snapshot restore.
+    await grantVerifyTier(DATABASE_URL, [
+      ctx.get('creator.sub')!,
+      ctx.get('creator2.sub')!,
+    ]);
     ctx.set('absentUuid', ABSENT_UUID);
     ctx.set('nonce', nonce);
     // Events and consultations refuse a date in the past.

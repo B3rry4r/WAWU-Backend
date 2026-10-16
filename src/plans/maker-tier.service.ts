@@ -32,6 +32,14 @@ export interface HeldTier {
   eventPass: PlanEventPass | null;
 }
 
+/** A stored tier row as the publishing gate reads it. */
+export interface HeldTierRow {
+  state: Exclude<MyTierState, 'none'>;
+  tierId: string;
+  productsIncluded: number;
+  extraProducts: number;
+}
+
 /**
  * A tier's state at `now`: `ended` once `activeUntil` has passed, `ending`
  * when it ends within `endingDays` days, else `active`.
@@ -99,6 +107,40 @@ export class MakerTierService {
       voiceIntroIncluded: row.voiceIntroIncluded,
       eventPass,
     };
+  }
+
+  /**
+   * The stored tier of each person asked about, with its state at `now`, for
+   * the publishing gate and the places that show what a person may publish
+   * (TIER-02). One query for any number of people; a person with no tier is
+   * not in the map. Reads the same row `tierOf` reads, so the two cannot
+   * disagree about a state or a product count.
+   */
+  async heldRowsOf(
+    wawuUserIds: readonly string[],
+    now: Date = new Date(),
+  ): Promise<Map<string, HeldTierRow>> {
+    const out = new Map<string, HeldTierRow>();
+    if (wawuUserIds.length === 0) return out;
+    const rows = await this.prisma.makerTier.findMany({
+      where: { wawuUserId: { in: [...wawuUserIds] } },
+      select: {
+        wawuUserId: true,
+        tierId: true,
+        activeUntil: true,
+        productsIncluded: true,
+        extraProducts: true,
+      },
+    });
+    for (const r of rows) {
+      out.set(r.wawuUserId, {
+        state: tierStateAt(r.activeUntil, now, this.config.tierEndingDays),
+        tierId: r.tierId,
+        productsIncluded: r.productsIncluded,
+        extraProducts: r.extraProducts,
+      });
+    }
+    return out;
   }
 
   /** True while the person's tier lets them publish (`active` or `ending`). */

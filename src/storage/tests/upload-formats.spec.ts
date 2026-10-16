@@ -13,6 +13,10 @@ import {
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
 import type { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  publishingOver,
+  publishingTables,
+} from '../../plans/tests/publishing-fakes';
 
 /**
  * ME-04: what each content format may upload (M20 to M22). The table is served
@@ -37,10 +41,15 @@ function serviceWith(): StorageService {
       findMany: () => Promise.resolve([]),
       update: () => Promise.resolve({}),
     },
-    creatorState: { findUnique: () => Promise.resolve(null) },
-    userProfile: { findUnique: () => Promise.resolve(null) },
+    // `user-1` holds a running tier with room, so a content file may be
+    // signed for it (TIER-02): these tests are about the format caps.
+    ...publishingTables(
+      { tier: { endsInDays: 30, productsIncluded: 3 }, slotsUsed: 0 },
+      'user-1',
+    ),
   } as unknown as PrismaService;
-  return new StorageService(config, prisma);
+  const { allowance, gate } = publishingOver(prisma);
+  return new StorageService(config, prisma, allowance, gate);
 }
 
 describe('the format table', () => {

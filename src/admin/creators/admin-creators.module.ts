@@ -3,6 +3,7 @@ import { AdminAuthModule } from '../auth/admin-auth.module';
 import { CreatorEarningsModule } from '../../creator-earnings/creator-earnings.module';
 import { AdminCreatorsController } from './admin-creators.controller';
 import { AdminCreatorsService } from './admin-creators.service';
+import { PlansModule } from '../../plans/plans.module';
 
 /**
  * Admin creator lookup — the support screen for "I paid and I cannot upload".
@@ -25,7 +26,7 @@ import { AdminCreatorsService } from './admin-creators.service';
  * surface is read-only — there is no write endpoint on it.
  */
 @Module({
-  imports: [AdminAuthModule, CreatorEarningsModule],
+  imports: [AdminAuthModule, CreatorEarningsModule, PlansModule],
   controllers: [AdminCreatorsController],
   providers: [AdminCreatorsService],
 })

@@ -1081,6 +1081,16 @@
                 }
               }
             }
+          },
+          "402": {
+            "description": "reason.code: tier_required, product_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "tags": [
@@ -1240,6 +1250,72 @@
         "summary": "POST /uploads/release: takes back an upload the caller reserved and no\nlisting has claimed yet (a file removed or replaced in an unfinished\ndraft). Deletes the object and frees its space in one step. Only the\ncaller's own upload in content/preview or content/full; another person's\nkey, an unknown key and a key in any other folder all get the same 404,\nand a key a listing already uses gets a 409. Calling it again for a key\nalready released answers the same 200.",
         "tags": [
           "Storage"
+        ]
+      }
+    },
+    "/api/hub/plans": {
+      "get": {
+        "operationId": "PlansController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlansView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The plan as the caller pays for it. Every amount is whole minor units of\n`currency` (kobo for NGN, cents for USD); one currency per answer.\n`no-store`: the answer is the caller's own (their currency).",
+        "tags": [
+          "Plans"
+        ]
+      }
+    },
+    "/api/hub/me/tier": {
+      "get": {
+        "operationId": "MeTierController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyTierView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "`none`, `active`, `ending` or `ended`, with what the tier gives.\n`no-store`: the answer is the caller's own.",
+        "tags": [
+          "MeTier"
+        ]
+      }
+    },
+    "/api/hub/me/points": {
+      "get": {
+        "operationId": "PointsController_mine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPointsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Balance, live lots with their end dates, the next end, the last 20 movements.",
+        "tags": [
+          "Points"
         ]
       }
     },
@@ -7833,8 +7909,19 @@
                 }
               }
             }
+          },
+          "402": {
+            "description": "reason.code: tier_required, product_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
           }
         },
+        "summary": "Publishes a piece. Needs a running tier or a tick that has not ended, and\na free place for one more product: otherwise 402 `tier_required` or\n`product_limit_reached` with the offers (TIER-02).",
         "tags": [
           "ContentPiece"
         ]
@@ -8131,9 +8218,19 @@
                 }
               }
             }
+          },
+          "402": {
+            "description": "reason.code: tier_required, product_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
           }
         },
-        "summary": "Edit the details or the file of a piece that is pending or rejected.",
+        "summary": "Edit the details or the file of a piece that is pending or rejected.\nSending a file needs a way to publish (402 `tier_required`, TIER-02).",
         "tags": [
           "ContentPiece"
         ]
@@ -8162,9 +8259,19 @@
                 }
               }
             }
+          },
+          "402": {
+            "description": "reason.code: tier_required, product_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
           }
         },
-        "summary": "Send a rejected piece for review again.",
+        "summary": "Send a rejected piece for review again. It takes a place like a new\npublish, so it answers the same 402s (TIER-02).",
         "tags": [
           "ContentPiece"
         ]
@@ -9030,6 +9137,201 @@
         },
         "tags": [
           "ContentMedia"
+        ]
+      }
+    },
+    "/api/hub/product-drafts": {
+      "post": {
+        "operationId": "ProductDraftController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProductDraftDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductDraftView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Save a draft. Free: no tier is asked and no file is taken.",
+        "tags": [
+          "ProductDraft"
+        ]
+      },
+      "get": {
+        "operationId": "ProductDraftController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProductDraftView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "My drafts, newest first.",
+        "tags": [
+          "ProductDraft"
+        ]
+      }
+    },
+    "/api/hub/product-drafts/{id}": {
+      "get": {
+        "operationId": "ProductDraftController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductDraftView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProductDraft"
+        ]
+      },
+      "patch": {
+        "operationId": "ProductDraftController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProductDraftDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductDraftView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProductDraft"
+        ]
+      },
+      "delete": {
+        "operationId": "ProductDraftController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ProductDraft"
+        ]
+      }
+    },
+    "/api/hub/product-drafts/{id}/publish": {
+      "post": {
+        "operationId": "ProductDraftController_publish",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishProductDraftDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentPieceResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: tier_required, product_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Publish a draft with its two files. Needs a running tier or a tick that\nhas not ended, and a free place: otherwise 402 `tier_required` or\n`product_limit_reached` with the offers. The piece is created waiting\nfor review, exactly as POST /content creates it, and the draft is gone.",
+        "tags": [
+          "ProductDraft"
         ]
       }
     },
@@ -28672,72 +28974,6 @@
         ]
       }
     },
-    "/api/hub/me/points": {
-      "get": {
-        "operationId": "PointsController_mine",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MyPointsView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Balance, live lots with their end dates, the next end, the last 20 movements.",
-        "tags": [
-          "Points"
-        ]
-      }
-    },
-    "/api/hub/plans": {
-      "get": {
-        "operationId": "PlansController_get",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PlansView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "The plan as the caller pays for it. Every amount is whole minor units of\n`currency` (kobo for NGN, cents for USD); one currency per answer.\n`no-store`: the answer is the caller's own (their currency).",
-        "tags": [
-          "Plans"
-        ]
-      }
-    },
-    "/api/hub/me/tier": {
-      "get": {
-        "operationId": "MeTierController_get",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MyTierView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "`none`, `active`, `ending` or `ended`, with what the tier gives.\n`no-store`: the answer is the caller's own.",
-        "tags": [
-          "MeTier"
-        ]
-      }
-    },
     "/api/hub/plans/purchases/quote": {
       "get": {
         "operationId": "PlanPurchasesController_quote",
@@ -30806,6 +31042,100 @@
           "contentLength"
         ]
       },
+      "TierGateReasonDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "enum": [
+              "tier_required",
+              "product_limit_reached"
+            ],
+            "type": "string"
+          },
+          "tierState": {
+            "description": "The person's tier: `none` (never had one), `active`, `ending` or `ended`.\n`tier_required` answers `none` or `ended`.",
+            "enum": [
+              "none",
+              "active",
+              "ending",
+              "ended"
+            ],
+            "type": "string"
+          },
+          "productsUsed": {
+            "type": "integer",
+            "description": "Products published now."
+          },
+          "productsAllowed": {
+            "type": "integer",
+            "description": "Products they may have published at once (0 when nothing allows publishing)."
+          },
+          "currency": {
+            "description": "The currency of every amount in `tiers` and `extraProducts`. The offers\n(`currency`, `tiers`, `extraProducts`) are always there; they are absent\nonly when the Hub could not read the plan at that moment, and the app\nthen shows `message` alone.",
+            "enum": [
+              "NGN",
+              "USD"
+            ],
+            "type": "string"
+          },
+          "tiers": {
+            "type": "array",
+            "description": "The tiers that would let the person publish another, in both refusals:\nonce bought they leave more places than the person has products\npublished now (the extras they hold carry over). For `tier_required`\nthat is every tier for someone with nothing published, and only the big\nenough ones for someone who still has products up after a tick or tier\nended. For `product_limit_reached` it is the tiers above the one they\nhold. The list is empty when no tier does (they hold the top one, or they\nhave more published than any tier allows); `message` then says products\nmust come down first.",
+            "items": {
+              "$ref": "#/components/schemas/PlanTierView"
+            }
+          },
+          "extraProducts": {
+            "description": "The extra products they can buy now, or null when they cannot: no running\ntier, or buying them would still leave fewer places than products\npublished.",
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanExtraProductsView"
+              }
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence the app may show as it is. No em-dash."
+          }
+        },
+        "required": [
+          "code",
+          "tierState",
+          "productsUsed",
+          "productsAllowed",
+          "message"
+        ]
+      },
+      "TierGateErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "integer",
+            "description": "402.",
+            "example": 402
+          },
+          "data": {
+            "description": "Always null on an error.",
+            "type": "object",
+            "nullable": true,
+            "example": null
+          },
+          "reason": {
+            "$ref": "#/components/schemas/TierGateReasonDto"
+          },
+          "message": {
+            "type": "string",
+            "description": "Same as reason.message."
+          }
+        },
+        "required": [
+          "statusCode",
+          "data",
+          "reason",
+          "message"
+        ]
+      },
       "ConfirmUploadDto": {
         "type": "object",
         "properties": {
@@ -31711,6 +32041,190 @@
             "maximum": 5000
           }
         }
+      },
+      "CreateProductDraftDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "\\S"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "agriculture_food",
+              "trade_commerce",
+              "business_entrepreneurship",
+              "finance",
+              "technology",
+              "education",
+              "healthcare",
+              "employment",
+              "entertainment_creative",
+              "beauty",
+              "family_lifestyle",
+              "culture_heritage",
+              "religion_faith",
+              "travel_tourism",
+              "real_estate",
+              "transport_logistics",
+              "manufacturing",
+              "energy_utilities",
+              "media_communications",
+              "professional_services",
+              "legal_services",
+              "insurance_pensions",
+              "sports_fitness",
+              "government_public",
+              "social_impact"
+            ]
+          },
+          "specializations": {
+            "description": "At most three, as on POST /content.",
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "description": "At most twenty, as on POST /content.",
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "price": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000000
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "UpdateProductDraftDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "\\S"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "agriculture_food",
+              "trade_commerce",
+              "business_entrepreneurship",
+              "finance",
+              "technology",
+              "education",
+              "healthcare",
+              "employment",
+              "entertainment_creative",
+              "beauty",
+              "family_lifestyle",
+              "culture_heritage",
+              "religion_faith",
+              "travel_tourism",
+              "real_estate",
+              "transport_logistics",
+              "manufacturing",
+              "energy_utilities",
+              "media_communications",
+              "professional_services",
+              "legal_services",
+              "insurance_pensions",
+              "sports_fitness",
+              "government_public",
+              "social_impact"
+            ]
+          },
+          "specializations": {
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "price": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000000
+          }
+        }
+      },
+      "PublishProductDraftDto": {
+        "type": "object",
+        "properties": {
+          "previewAsset": {
+            "type": "string",
+            "format": "uri"
+          },
+          "fullAsset": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "previewAsset",
+          "fullAsset"
+        ]
       },
       "CreateCreditPurchaseDto": {
         "type": "object",
@@ -37523,6 +38037,456 @@
           "expiresIn"
         ]
       },
+      "PointNextExpiryView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "number"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "points",
+          "expiresAt"
+        ]
+      },
+      "PointLotView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "granted": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "tier_bonus",
+              "pack",
+              "bump",
+              "referral",
+              "shortfall",
+              "returned"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "granted",
+          "source",
+          "label",
+          "expiresAt"
+        ]
+      },
+      "PointMovementView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "hold",
+              "grant",
+              "release",
+              "expire"
+            ]
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "label",
+          "reason",
+          "pending",
+          "createdAt"
+        ]
+      },
+      "MyPointsView": {
+        "type": "object",
+        "properties": {
+          "balance": {
+            "type": "number"
+          },
+          "nextExpiry": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PointNextExpiryView"
+              }
+            ],
+            "nullable": true
+          },
+          "lots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointLotView"
+            }
+          },
+          "lotCount": {
+            "type": "number"
+          },
+          "movements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointMovementView"
+            }
+          }
+        },
+        "required": [
+          "balance",
+          "nextExpiry",
+          "lots",
+          "lotCount",
+          "movements"
+        ]
+      },
+      "PlanBadgeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "numbered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "numbered"
+        ]
+      },
+      "MyTierSummaryView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanBadgeView"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "badge"
+        ]
+      },
+      "PlanEventPassView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "MyTierView": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "none",
+              "active",
+              "ending",
+              "ended"
+            ]
+          },
+          "tier": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MyTierSummaryView"
+              }
+            ],
+            "nullable": true
+          },
+          "activeFrom": {
+            "type": "string",
+            "nullable": true
+          },
+          "activeUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "productsAllowed": {
+            "type": "integer"
+          },
+          "productsUsed": {
+            "type": "integer"
+          },
+          "extraProducts": {
+            "type": "integer"
+          },
+          "pointsIncluded": {
+            "type": "integer"
+          },
+          "firstVoiceIntroIncluded": {
+            "type": "boolean"
+          },
+          "eventPass": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanEventPassView"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "state",
+          "tier",
+          "activeFrom",
+          "activeUntil",
+          "productsAllowed",
+          "productsUsed",
+          "extraProducts",
+          "pointsIncluded",
+          "firstVoiceIntroIncluded",
+          "eventPass"
+        ]
+      },
+      "PlanTierView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "days": {
+            "type": "integer"
+          },
+          "products": {
+            "type": "integer"
+          },
+          "bonusPoints": {
+            "type": "integer"
+          },
+          "bonusPointsExpireDays": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          },
+          "eventPass": {
+            "$ref": "#/components/schemas/PlanEventPassView"
+          },
+          "badge": {
+            "$ref": "#/components/schemas/PlanBadgeView"
+          },
+          "packBonusPercent": {
+            "type": "integer"
+          },
+          "firstVoiceIntroIncluded": {
+            "type": "boolean"
+          },
+          "preselected": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "days",
+          "products",
+          "bonusPoints",
+          "bonusPointsExpireDays",
+          "priceMinor",
+          "eventPass",
+          "badge",
+          "packBonusPercent",
+          "firstVoiceIntroIncluded",
+          "preselected"
+        ]
+      },
+      "PlanExtraProductsView": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "priceMinor"
+        ]
+      },
+      "PlanPackView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "priceMinor"
+        ]
+      },
+      "PlanCheckoutBumpView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "points",
+          "priceMinor"
+        ]
+      },
+      "PlanActionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "integer"
+          },
+          "per": {
+            "type": "string",
+            "enum": [
+              "use",
+              "minute",
+              "track",
+              "message",
+              "minute_per_language"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "per"
+        ]
+      },
+      "PlanCapsView": {
+        "type": "object",
+        "properties": {
+          "dailyPoints": {
+            "type": "integer"
+          },
+          "maxCharactersPerJob": {
+            "type": "integer"
+          },
+          "maxAudioMinutesPerJob": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dailyPoints",
+          "maxCharactersPerJob",
+          "maxAudioMinutesPerJob"
+        ]
+      },
+      "PlansView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN",
+              "USD"
+            ]
+          },
+          "currencyFixed": {
+            "type": "boolean"
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanTierView"
+            }
+          },
+          "extraProducts": {
+            "$ref": "#/components/schemas/PlanExtraProductsView"
+          },
+          "packs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanPackView"
+            }
+          },
+          "checkoutBump": {
+            "$ref": "#/components/schemas/PlanCheckoutBumpView"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanActionView"
+            }
+          },
+          "caps": {
+            "$ref": "#/components/schemas/PlanCapsView"
+          }
+        },
+        "required": [
+          "currency",
+          "currencyFixed",
+          "tiers",
+          "extraProducts",
+          "packs",
+          "checkoutBump",
+          "actions",
+          "caps"
+        ]
+      },
       "UploadFormatView": {
         "type": "object",
         "properties": {
@@ -40310,6 +41274,87 @@
           "freePreview",
           "lessons",
           "rating"
+        ]
+      },
+      "ProductDraftView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ],
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "category": {
+            "type": "string",
+            "nullable": true
+          },
+          "specializations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ],
+            "nullable": true
+          },
+          "price": {
+            "type": "number",
+            "nullable": true
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "contentType",
+          "description",
+          "category",
+          "specializations",
+          "tags",
+          "accessType",
+          "price",
+          "missing",
+          "createdAt",
+          "updatedAt"
         ]
       },
       "DmSendInitResponse": {
@@ -50028,135 +51073,6 @@
           "communities"
         ]
       },
-      "PointNextExpiryView": {
-        "type": "object",
-        "properties": {
-          "points": {
-            "type": "number"
-          },
-          "expiresAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "points",
-          "expiresAt"
-        ]
-      },
-      "PointLotView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "points": {
-            "type": "number"
-          },
-          "granted": {
-            "type": "number"
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "tier_bonus",
-              "pack",
-              "bump",
-              "referral",
-              "shortfall",
-              "returned"
-            ]
-          },
-          "label": {
-            "type": "string"
-          },
-          "expiresAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "points",
-          "granted",
-          "source",
-          "label",
-          "expiresAt"
-        ]
-      },
-      "PointMovementView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "points": {
-            "type": "number"
-          },
-          "label": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string",
-            "enum": [
-              "hold",
-              "grant",
-              "release",
-              "expire"
-            ]
-          },
-          "pending": {
-            "type": "boolean"
-          },
-          "createdAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "points",
-          "label",
-          "reason",
-          "pending",
-          "createdAt"
-        ]
-      },
-      "MyPointsView": {
-        "type": "object",
-        "properties": {
-          "balance": {
-            "type": "number"
-          },
-          "nextExpiry": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PointNextExpiryView"
-              }
-            ],
-            "nullable": true
-          },
-          "lots": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PointLotView"
-            }
-          },
-          "lotCount": {
-            "type": "number"
-          },
-          "movements": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PointMovementView"
-            }
-          }
-        },
-        "required": [
-          "balance",
-          "nextExpiry",
-          "lots",
-          "lotCount",
-          "movements"
-        ]
-      },
       "MeCountsView": {
         "type": "object",
         "properties": {
@@ -50732,323 +51648,6 @@
           "month",
           "items",
           "nextCursor"
-        ]
-      },
-      "PlanBadgeView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "numbered": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "id",
-          "numbered"
-        ]
-      },
-      "MyTierSummaryView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string",
-            "nullable": true
-          },
-          "badge": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PlanBadgeView"
-              }
-            ],
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "badge"
-        ]
-      },
-      "PlanEventPassView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "name"
-        ]
-      },
-      "MyTierView": {
-        "type": "object",
-        "properties": {
-          "state": {
-            "type": "string",
-            "enum": [
-              "none",
-              "active",
-              "ending",
-              "ended"
-            ]
-          },
-          "tier": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MyTierSummaryView"
-              }
-            ],
-            "nullable": true
-          },
-          "activeFrom": {
-            "type": "string",
-            "nullable": true
-          },
-          "activeUntil": {
-            "type": "string",
-            "nullable": true
-          },
-          "productsAllowed": {
-            "type": "integer"
-          },
-          "extraProducts": {
-            "type": "integer"
-          },
-          "pointsIncluded": {
-            "type": "integer"
-          },
-          "firstVoiceIntroIncluded": {
-            "type": "boolean"
-          },
-          "eventPass": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PlanEventPassView"
-              }
-            ],
-            "nullable": true
-          }
-        },
-        "required": [
-          "state",
-          "tier",
-          "activeFrom",
-          "activeUntil",
-          "productsAllowed",
-          "extraProducts",
-          "pointsIncluded",
-          "firstVoiceIntroIncluded",
-          "eventPass"
-        ]
-      },
-      "PlanTierView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "days": {
-            "type": "integer"
-          },
-          "products": {
-            "type": "integer"
-          },
-          "bonusPoints": {
-            "type": "integer"
-          },
-          "bonusPointsExpireDays": {
-            "type": "integer"
-          },
-          "priceMinor": {
-            "type": "integer"
-          },
-          "eventPass": {
-            "$ref": "#/components/schemas/PlanEventPassView"
-          },
-          "badge": {
-            "$ref": "#/components/schemas/PlanBadgeView"
-          },
-          "packBonusPercent": {
-            "type": "integer"
-          },
-          "firstVoiceIntroIncluded": {
-            "type": "boolean"
-          },
-          "preselected": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "days",
-          "products",
-          "bonusPoints",
-          "bonusPointsExpireDays",
-          "priceMinor",
-          "eventPass",
-          "badge",
-          "packBonusPercent",
-          "firstVoiceIntroIncluded",
-          "preselected"
-        ]
-      },
-      "PlanExtraProductsView": {
-        "type": "object",
-        "properties": {
-          "count": {
-            "type": "integer"
-          },
-          "priceMinor": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "count",
-          "priceMinor"
-        ]
-      },
-      "PlanPackView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "points": {
-            "type": "integer"
-          },
-          "priceMinor": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "id",
-          "points",
-          "priceMinor"
-        ]
-      },
-      "PlanCheckoutBumpView": {
-        "type": "object",
-        "properties": {
-          "points": {
-            "type": "integer"
-          },
-          "priceMinor": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "points",
-          "priceMinor"
-        ]
-      },
-      "PlanActionView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "points": {
-            "type": "integer"
-          },
-          "per": {
-            "type": "string",
-            "enum": [
-              "use",
-              "minute",
-              "track",
-              "message",
-              "minute_per_language"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "points",
-          "per"
-        ]
-      },
-      "PlanCapsView": {
-        "type": "object",
-        "properties": {
-          "dailyPoints": {
-            "type": "integer"
-          },
-          "maxCharactersPerJob": {
-            "type": "integer"
-          },
-          "maxAudioMinutesPerJob": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "dailyPoints",
-          "maxCharactersPerJob",
-          "maxAudioMinutesPerJob"
-        ]
-      },
-      "PlansView": {
-        "type": "object",
-        "properties": {
-          "currency": {
-            "type": "string",
-            "enum": [
-              "NGN",
-              "USD"
-            ]
-          },
-          "currencyFixed": {
-            "type": "boolean"
-          },
-          "tiers": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PlanTierView"
-            }
-          },
-          "extraProducts": {
-            "$ref": "#/components/schemas/PlanExtraProductsView"
-          },
-          "packs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PlanPackView"
-            }
-          },
-          "checkoutBump": {
-            "$ref": "#/components/schemas/PlanCheckoutBumpView"
-          },
-          "actions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PlanActionView"
-            }
-          },
-          "caps": {
-            "$ref": "#/components/schemas/PlanCapsView"
-          }
-        },
-        "required": [
-          "currency",
-          "currencyFixed",
-          "tiers",
-          "extraProducts",
-          "packs",
-          "checkoutBump",
-          "actions",
-          "caps"
         ]
       },
       "PlanPurchaseQuoteView": {
@@ -52043,10 +52642,10 @@
           "status": {
             "type": "string",
             "enum": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ]
           },
@@ -52130,10 +52729,10 @@
               "status": {
                 "type": "string",
                 "enum": [
+                  "ended",
                   "live",
                   "paused",
                   "draft",
-                  "ended",
                   "scheduled"
                 ],
                 "nullable": true
@@ -52175,17 +52774,17 @@
           "deliveryByStatus": {
             "type": "object",
             "properties": {
+              "ended": {},
               "live": {},
               "paused": {},
               "draft": {},
-              "ended": {},
               "scheduled": {}
             },
             "required": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ]
           },
@@ -52203,17 +52802,17 @@
           "byStatus": {
             "type": "object",
             "properties": {
+              "ended": {},
               "live": {},
               "paused": {},
               "draft": {},
-              "ended": {},
               "scheduled": {}
             },
             "required": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ]
           },
@@ -52278,10 +52877,10 @@
           "status": {
             "type": "string",
             "enum": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ]
           },
@@ -52315,9 +52914,9 @@
           "action": {
             "type": "string",
             "enum": [
+              "ended",
               "paused",
               "updated",
-              "ended",
               "scheduled",
               "created",
               "resumed",
@@ -52327,10 +52926,10 @@
           "previousStatus": {
             "type": "string",
             "enum": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ],
             "nullable": true
@@ -52338,10 +52937,10 @@
           "newStatus": {
             "type": "string",
             "enum": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ],
             "nullable": true
@@ -52424,10 +53023,10 @@
           "status": {
             "type": "string",
             "enum": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ]
           },
