@@ -24,7 +24,14 @@ function serviceWith(extra: Record<string, string> = {}): StorageService {
     ...extra,
   };
   const config = { get: (k: string) => values[k] } as unknown as ConfigService;
-  return new StorageService(config, {} as PrismaService);
+  // Nothing here signs an upload, so the publishing gate and the allowance
+  // (TIER-02) are never asked.
+  return new StorageService(
+    config,
+    {} as PrismaService,
+    {} as never,
+    {} as never,
+  );
 }
 
 const AT: BucketLocation = {
