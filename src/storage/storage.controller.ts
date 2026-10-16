@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Post,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -16,6 +17,7 @@ import { ReleaseUploadDto } from './dto/release-upload.dto';
 import { uploadFormatsView, type UploadFormatsView } from './upload-formats';
 import { ConfirmUploadDto } from './dto/confirm-upload.dto';
 import { GatesPublishing } from '../plans/publishing-offers.interceptor';
+import { StorageBusyInterceptor } from './storage-busy.interceptor';
 
 /**
  * POST /uploads/presign — hands the authenticated caller a short-lived PUT
@@ -32,6 +34,7 @@ import { GatesPublishing } from '../plans/publishing-offers.interceptor';
  * with the offers. Every other folder is open to any signed-in account.
  */
 @UseGuards(WawuAuthGuard)
+@UseInterceptors(StorageBusyInterceptor)
 @Controller('uploads')
 export class StorageController {
   constructor(private readonly storage: StorageService) {}

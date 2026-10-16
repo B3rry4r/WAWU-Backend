@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import type { Prisma } from '../../generated/prisma/client';
 import {
   PLANS_CONFIG,
   tierById,
@@ -115,14 +116,19 @@ export class MakerTierService {
    * (TIER-02). One query for any number of people; a person with no tier is
    * not in the map. Reads the same row `tierOf` reads, so the two cannot
    * disagree about a state or a product count.
+   *
+   * `db` is the client to read with: a caller inside a transaction passes
+   * its own, so the read does not need a second pooled connection while the
+   * transaction holds the first (ME-04 round 6).
    */
   async heldRowsOf(
     wawuUserIds: readonly string[],
     now: Date = new Date(),
+    db: Pick<Prisma.TransactionClient, 'makerTier'> = this.prisma,
   ): Promise<Map<string, HeldTierRow>> {
     const out = new Map<string, HeldTierRow>();
     if (wawuUserIds.length === 0) return out;
-    const rows = await this.prisma.makerTier.findMany({
+    const rows = await db.makerTier.findMany({
       where: { wawuUserId: { in: [...wawuUserIds] } },
       select: {
         wawuUserId: true,

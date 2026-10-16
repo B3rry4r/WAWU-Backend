@@ -26,7 +26,11 @@ import { netOfCommission } from '../common/money';
 import { NotificationService } from '../notification/notification.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { StorageService, objectKeyFrom } from '../storage/storage.service';
-import { LOCKED_TX, lockStorageQuota } from '../storage/storage-lock';
+import {
+  LOCKED_TX,
+  inPersonsTurn,
+  lockStorageQuota,
+} from '../storage/storage-lock';
 import type { VerifyUnlockDto } from './dto/verify-unlock.dto';
 import type { UpdateContentDto } from './dto/update-content.dto';
 import type { MyContentFilter } from './dto/my-content-query.dto';
@@ -91,6 +95,13 @@ interface ContentRow {
   commentCount: number;
   likes: number;
   createdAt: Date;
+}
+
+/** Thrown inside a transaction when the conditional claim of a place found none free. */
+class PlaceNotClaimed extends Error {
+  constructor() {
+    super('No place was free to claim.');
+  }
 }
 
 /**
@@ -624,6 +635,29 @@ export class ContentPieceService {
   }
 
   /**
+   * Runs a transaction that claims a place (create, resubmit) and, when the
+   * claim loses, answers with the gate's refusal. The transaction only throws
+   * `PlaceNotClaimed` (which rolls it back, so a draft it deleted comes back);
+   * the refusal is read here, after the transaction has ended and released its
+   * connection. Reading it inside, through the Hub's client, took a second
+   * pooled connection while the first held the person's lock, and a burst of
+   * one person's requests could then use up the whole pool (ME-04 round 6).
+   */
+  private async refusedWhenPlaceNotClaimed<T>(
+    creatorWawuId: string,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await run();
+    } catch (err) {
+      if (err instanceof PlaceNotClaimed) {
+        throw await this.gate.limitReachedFor(creatorWawuId);
+      }
+      throw err;
+    }
+  }
+
+  /**
    * `inTransaction`, when given, runs inside the publish transaction before
    * the place is claimed: a draft being published deletes itself there, so a
    * second tap finds it gone and publishes nothing twice.
@@ -666,77 +700,90 @@ export class ContentPieceService {
     // The allowance is claimed inside one transaction. Counting outside it
     // would let two uploads sent at the same moment both read "2 used" and
     // both be written.
-    const created = await this.prisma.$transaction(async (tx) => {
-      if (inTransaction) await inTransaction(tx);
-      // A REJECTED or REMOVED piece occupies no slot.
-      //
-      // POST /admin/content/:id/reject and DELETE /content/:id both give the
-      // slot back by decrementing CreatorState.slotsUsed. `isFirstUpload`
-      // derives from the count below, so without this filter a creator whose
-      // only upload was rejected would get the slot back and still not count
-      // as a first-time uploader.
-      //
-      // Two definitions of "used" that disagree are worse than either alone.
-      const occupiesASlot = {
-        status: {
-          notIn: ['rejected', 'removed'] as ('rejected' | 'removed')[],
-        },
-      };
-      const used = await tx.contentPiece.count({
-        where: { creatorWawuId, ...occupiesASlot },
-      });
-      // Recorded, never enforced. R-8 removed the first-upload-must-be-free
-      // rule: a first upload may be free or paid. The flag stays because the
-      // creator dashboard labels "Your first upload" from it; the column
-      // keeps its old name to avoid a migration.
-      const isFirstUpload = used === 0;
+    //
+    // The transaction takes the person's storage lock, so it starts in the
+    // person's turn (storage-lock.ts `inPersonsTurn`): a burst of requests
+    // waits in memory, not on pooled connections (ME-04 round 6).
+    const created = await this.refusedWhenPlaceNotClaimed(creatorWawuId, () =>
+      inPersonsTurn(creatorWawuId, () =>
+        this.prisma.$transaction(async (tx) => {
+          if (inTransaction) await inTransaction(tx);
+          // A REJECTED or REMOVED piece occupies no slot.
+          //
+          // POST /admin/content/:id/reject and DELETE /content/:id both give the
+          // slot back by decrementing CreatorState.slotsUsed. `isFirstUpload`
+          // derives from the count below, so without this filter a creator whose
+          // only upload was rejected would get the slot back and still not count
+          // as a first-time uploader.
+          //
+          // Two definitions of "used" that disagree are worse than either alone.
+          const occupiesASlot = {
+            status: {
+              notIn: ['rejected', 'removed'] as ('rejected' | 'removed')[],
+            },
+          };
+          const used = await tx.contentPiece.count({
+            where: { creatorWawuId, ...occupiesASlot },
+          });
+          // Recorded, never enforced. R-8 removed the first-upload-must-be-free
+          // rule: a first upload may be free or paid. The flag stays because the
+          // creator dashboard labels "Your first upload" from it; the column
+          // keeps its old name to avoid a migration.
+          const isFirstUpload = used === 0;
 
-      // The cap counts products, content AND services together, so it is held
-      // on CreatorState.slotsUsed rather than on a count of ContentPiece rows.
-      //
-      // The row is created on demand: it used to exist only once a creator had
-      // paid for a subscription, so requiring one here would be the payment
-      // gate under another name.
-      await this.ensureCreatorState(tx, creatorWawuId);
+          // The cap counts products, content AND services together, so it is held
+          // on CreatorState.slotsUsed rather than on a count of ContentPiece rows.
+          //
+          // The row is created on demand: it used to exist only once a creator had
+          // paid for a subscription, so requiring one here would be the payment
+          // gate under another name.
+          await this.ensureCreatorState(tx, creatorWawuId);
 
-      // Claimed conditionally, so the cap holds even against a concurrent
-      // upload that read the same count.
-      const claimed = await tx.creatorState.updateMany({
-        where: {
-          wawuUserId: creatorWawuId,
-          slotsUsed: { lt: allowance.productsAllowed },
-        },
-        data: { slotsUsed: { increment: 1 } },
-      });
-      if (claimed.count === 0) {
-        // Only this NEW upload is refused. Pieces already published stay as
-        // they are, even when the account is above its allowance (a tier or
-        // a tick that ended with more pieces live). Throwing rolls the
-        // transaction back, so a draft deleted above comes back with it.
-        throw await this.gate.limitReachedFor(creatorWawuId);
-      }
+          // Claimed conditionally, so the cap holds even against a concurrent
+          // upload that read the same count.
+          const claimed = await tx.creatorState.updateMany({
+            where: {
+              wawuUserId: creatorWawuId,
+              slotsUsed: { lt: allowance.productsAllowed },
+            },
+            data: { slotsUsed: { increment: 1 } },
+          });
+          if (claimed.count === 0) {
+            // Only this NEW upload is refused. Pieces already published stay as
+            // they are, even when the account is above its allowance (a tier or
+            // a tick that ended with more pieces live). Throwing rolls the
+            // transaction back, so a draft deleted above comes back with it. The
+            // refusal itself is built after the transaction has ended
+            // (`refusedWhenPlaceNotClaimed`): reading the allowance here would
+            // take a second pooled connection while this one holds the person's
+            // lock, which is how a burst once froze the whole pool (ME-04 round
+            // 6).
+            throw new PlaceNotClaimed();
+          }
 
-      return tx.contentPiece.create({
-        data: {
-          slug,
-          creatorWawuId,
-          contentType: dto.contentType as never,
-          title: dto.title,
-          description: dto.description,
-          category: dto.category,
-          specializations: dto.specializations ?? [],
-          tags: dto.tags ?? [],
-          accessType: dto.accessType as never,
-          price: dto.price,
-          previewAssetUrl: dto.previewAsset,
-          fullAssetUrl: dto.fullAsset,
-          creatorFirstUploadFree: isFirstUpload,
-          status: 'pending',
-        },
-      });
-      // May wait for the person's storage lock while a release or the sweep
-      // finishes a call to the bucket: longer than Prisma's 5 s default.
-    }, LOCKED_TX);
+          return tx.contentPiece.create({
+            data: {
+              slug,
+              creatorWawuId,
+              contentType: dto.contentType as never,
+              title: dto.title,
+              description: dto.description,
+              category: dto.category,
+              specializations: dto.specializations ?? [],
+              tags: dto.tags ?? [],
+              accessType: dto.accessType as never,
+              price: dto.price,
+              previewAssetUrl: dto.previewAsset,
+              fullAssetUrl: dto.fullAsset,
+              creatorFirstUploadFree: isFirstUpload,
+              status: 'pending',
+            },
+          });
+          // May wait for the person's storage lock while a release or the sweep
+          // finishes a call to the bucket: longer than Prisma's 5 s default.
+        }, LOCKED_TX),
+      ),
+    );
 
     return this.toResponse(created, true);
   }
@@ -933,17 +980,23 @@ export class ContentPieceService {
 
     // Conditional on the status read above: a reviewer approving the piece
     // at this instant must win, and the edit must not land on a live piece.
-    const written = await this.prisma.$transaction(async (tx) => {
-      // A file this edit names must still be the person's (ME-04 round 4).
-      await this.assertFilesNotGivenUp(tx, creatorWawuId, [
-        dto.previewAsset,
-        dto.fullAsset,
-      ]);
-      return tx.contentPiece.updateMany({
-        where: { id, creatorWawuId, status: { in: ['pending', 'rejected'] } },
-        data: changes,
-      });
-    }, LOCKED_TX);
+    const written = await inPersonsTurn(creatorWawuId, () =>
+      this.prisma.$transaction(async (tx) => {
+        // A file this edit names must still be the person's (ME-04 round 4).
+        await this.assertFilesNotGivenUp(tx, creatorWawuId, [
+          dto.previewAsset,
+          dto.fullAsset,
+        ]);
+        return tx.contentPiece.updateMany({
+          where: {
+            id,
+            creatorWawuId,
+            status: { in: ['pending', 'rejected'] },
+          },
+          data: changes,
+        });
+      }, LOCKED_TX),
+    );
     if (written.count === 0) {
       throw new ConflictException(
         'This piece was reviewed a moment ago. Open it again to see where it stands.',
@@ -988,28 +1041,31 @@ export class ContentPieceService {
 
     const allowance = await this.gate.assertRoomForProduct(creatorWawuId);
 
-    await this.prisma.$transaction(async (tx) => {
-      const flipped = await tx.contentPiece.updateMany({
-        where: { id, creatorWawuId, status: 'rejected' },
-        data: { status: 'pending' },
-      });
-      // Lost a race with a second tap: the winner already claimed the slot.
-      if (flipped.count === 0) return;
-      await this.stampUpdated(tx, id);
+    await this.refusedWhenPlaceNotClaimed(creatorWawuId, () =>
+      this.prisma.$transaction(async (tx) => {
+        const flipped = await tx.contentPiece.updateMany({
+          where: { id, creatorWawuId, status: 'rejected' },
+          data: { status: 'pending' },
+        });
+        // Lost a race with a second tap: the winner already claimed the slot.
+        if (flipped.count === 0) return;
+        await this.stampUpdated(tx, id);
 
-      await this.ensureCreatorState(tx, creatorWawuId);
-      const claimed = await tx.creatorState.updateMany({
-        where: {
-          wawuUserId: creatorWawuId,
-          slotsUsed: { lt: allowance.productsAllowed },
-        },
-        data: { slotsUsed: { increment: 1 } },
-      });
-      if (claimed.count === 0) {
-        // Throwing rolls the status flip back with it.
-        throw await this.gate.limitReachedFor(creatorWawuId);
-      }
-    });
+        await this.ensureCreatorState(tx, creatorWawuId);
+        const claimed = await tx.creatorState.updateMany({
+          where: {
+            wawuUserId: creatorWawuId,
+            slotsUsed: { lt: allowance.productsAllowed },
+          },
+          data: { slotsUsed: { increment: 1 } },
+        });
+        if (claimed.count === 0) {
+          // Throwing rolls the status flip back with it. The refusal is built
+          // after the transaction has ended (ME-04 round 6).
+          throw new PlaceNotClaimed();
+        }
+      }),
+    );
     return this.getMyPiece(id, creatorWawuId);
   }
 

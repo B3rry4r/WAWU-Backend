@@ -17,7 +17,7 @@ import {
 } from './dto/presign-upload.dto';
 import { formatFolderRule } from './upload-formats';
 import { releaseOwnUpload } from './upload-release';
-import { LOCKED_TX, lockStorageQuota } from './storage-lock';
+import { LOCKED_TX, inPersonsTurn, lockStorageQuota } from './storage-lock';
 import { sweepLateFiles, type LateSweepResult } from './late-file-sweep';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
@@ -35,7 +35,10 @@ import {
   TICK_STORAGE_BYTES,
   TICK_UPLOADS,
 } from '../common/creator-allowance';
-import { PublishingAllowanceService } from '../plans/publishing-allowance.service';
+import {
+  PublishingAllowanceService,
+  type AllowanceDb,
+} from '../plans/publishing-allowance.service';
 import { PublishingGate } from '../plans/publishing-gate.service';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -785,30 +788,37 @@ export class StorageService {
     key: string,
   ): Promise<boolean> {
     await this.reconcileStale(wawuId);
-    const refusal = await this.prisma.$transaction(async (tx) => {
-      // The same lock a release takes (storage-lock.ts), so a release that is
-      // under way finishes first and this confirm then reads its mark.
-      await lockStorageQuota(tx, wawuId);
-      const row = await tx.storageObject.findUnique({ where: { id: rowId } });
-      if (!row || row.status === 'confirmed') return null;
-      // Released while this confirm was under way, or being removed: it
-      // stays released.
-      if (row.releasedAt || row.removingAt) return 'released' as const;
-      if (row.status === 'abandoned' && CONTENT_FOLDERS.includes(row.folder)) {
-        const { usage, tickHeld } = await this.readUsage(wawuId, tx);
-        if (usage.usedBytes + row.bytes > usage.limitBytes) {
-          return this.storageFullRefusal(row.bytes, usage, tickHeld);
+    // In the person's turn (storage-lock.ts), so a burst of confirms waits in
+    // memory and not on pooled connections (ME-04 round 6).
+    const refusal = await inPersonsTurn(wawuId, () =>
+      this.prisma.$transaction(async (tx) => {
+        // The same lock a release takes (storage-lock.ts), so a release that is
+        // under way finishes first and this confirm then reads its mark.
+        await lockStorageQuota(tx, wawuId);
+        const row = await tx.storageObject.findUnique({ where: { id: rowId } });
+        if (!row || row.status === 'confirmed') return null;
+        // Released while this confirm was under way, or being removed: it
+        // stays released.
+        if (row.releasedAt || row.removingAt) return 'released' as const;
+        if (
+          row.status === 'abandoned' &&
+          CONTENT_FOLDERS.includes(row.folder)
+        ) {
+          const { usage, tickHeld } = await this.readUsage(wawuId, tx, tx);
+          if (usage.usedBytes + row.bytes > usage.limitBytes) {
+            return this.storageFullRefusal(row.bytes, usage, tickHeld);
+          }
         }
-      }
-      // Guarded on the row not being released, whatever the lock says: a
-      // confirmed row that is also released, with no file, could not be
-      // cleared by the person.
-      await tx.storageObject.updateMany({
-        where: { id: rowId, releasedAt: null, removingAt: null },
-        data: { status: 'confirmed', confirmedAt: new Date() },
-      });
-      return null;
-    }, LOCKED_TX);
+        // Guarded on the row not being released, whatever the lock says: a
+        // confirmed row that is also released, with no file, could not be
+        // cleared by the person.
+        await tx.storageObject.updateMany({
+          where: { id: rowId, releasedAt: null, removingAt: null },
+          data: { status: 'confirmed', confirmedAt: new Date() },
+        });
+        return null;
+      }, LOCKED_TX),
+    );
     if (refusal === 'released') return false;
     if (!refusal) return true;
     try {
@@ -904,6 +914,9 @@ export class StorageService {
   private async readUsage(
     wawuId: string,
     db: Pick<Prisma.TransactionClient, 'storageObject'>,
+    // Given by a caller inside a transaction, so the allowance is read on the
+    // transaction's own connection and not on a second one from the pool.
+    allowanceDb?: AllowanceDb,
   ): Promise<{ usage: StorageUsage; tickHeld: boolean }> {
     const [agg, allowance] = await Promise.all([
       db.storageObject.aggregate({
@@ -914,7 +927,7 @@ export class StorageService {
           folder: { in: [...CONTENT_FOLDERS] },
         },
       }),
-      this.allowance.of(wawuId),
+      this.allowance.of(wawuId, new Date(), allowanceDb),
     ]);
 
     const usedBytes = agg._sum.bytes ?? 0;

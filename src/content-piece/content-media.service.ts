@@ -6,7 +6,11 @@ import {
 } from '@nestjs/common';
 import type { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { LOCKED_TX, lockStorageQuota } from '../storage/storage-lock';
+import {
+  LOCKED_TX,
+  inPersonsTurn,
+  lockStorageQuota,
+} from '../storage/storage-lock';
 import { StorageService, objectKeyFrom } from '../storage/storage.service';
 import { ContentPieceService } from './content-piece.service';
 import type { SetMediaDto } from './dto/set-media.dto';
@@ -259,34 +263,38 @@ export class ContentMediaService {
     const frames = dto.frames
       ? this.frameKeys(dto.frames, ownerWawuId)
       : undefined;
-    await this.prisma.$transaction(async (tx) => {
-      if (frames !== undefined) {
-        await this.assertFramesUsable(tx, frames, ownerWawuId);
-      }
-      if (dto.durationLabel !== undefined || dto.pageCount !== undefined) {
-        await tx.contentPiece.update({
-          where: { id: contentId },
-          data: {
-            ...(dto.durationLabel !== undefined
-              ? { durationLabel: dto.durationLabel }
-              : {}),
-            ...(dto.pageCount !== undefined
-              ? { pageCount: dto.pageCount }
-              : {}),
-          },
-        });
-      }
-      if (frames !== undefined) {
-        await tx.contentFrame.deleteMany({ where: { contentId } });
-        await tx.contentFrame.createMany({
-          data: frames.map((url, i) => ({
-            contentId,
-            position: i + 1,
-            url,
-          })),
-        });
-      }
-    }, LOCKED_TX);
+    // In the person's turn (storage-lock.ts), so a burst of requests waits in
+    // memory and not on pooled connections (ME-04 round 6).
+    await inPersonsTurn(ownerWawuId, () =>
+      this.prisma.$transaction(async (tx) => {
+        if (frames !== undefined) {
+          await this.assertFramesUsable(tx, frames, ownerWawuId);
+        }
+        if (dto.durationLabel !== undefined || dto.pageCount !== undefined) {
+          await tx.contentPiece.update({
+            where: { id: contentId },
+            data: {
+              ...(dto.durationLabel !== undefined
+                ? { durationLabel: dto.durationLabel }
+                : {}),
+              ...(dto.pageCount !== undefined
+                ? { pageCount: dto.pageCount }
+                : {}),
+            },
+          });
+        }
+        if (frames !== undefined) {
+          await tx.contentFrame.deleteMany({ where: { contentId } });
+          await tx.contentFrame.createMany({
+            data: frames.map((url, i) => ({
+              contentId,
+              position: i + 1,
+              url,
+            })),
+          });
+        }
+      }, LOCKED_TX),
+    );
     return this.get(contentId, ownerWawuId);
   }
 }

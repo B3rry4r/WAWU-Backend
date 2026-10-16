@@ -11,6 +11,7 @@ import {
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -25,6 +26,7 @@ import { RateContentDto } from './dto/rate-content.dto';
 import { UpdateContentDto } from './dto/update-content.dto';
 import { MyContentQueryDto } from './dto/my-content-query.dto';
 import { GatesPublishing } from '../plans/publishing-offers.interceptor';
+import { StorageBusyInterceptor } from '../storage/storage-busy.interceptor';
 
 /**
  * registry.json "ContentPiece". Route order deliberately puts literal
@@ -35,6 +37,7 @@ import { GatesPublishing } from '../plans/publishing-offers.interceptor';
  * no route collision, just adjacent path prefixes.
  */
 @UseGuards(WawuAuthGuard)
+@UseInterceptors(StorageBusyInterceptor)
 @Controller('content')
 export class ContentPieceController {
   constructor(private readonly contentPieceService: ContentPieceService) {}

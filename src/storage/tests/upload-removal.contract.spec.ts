@@ -478,13 +478,26 @@ describe('Removing a file never holds the lock or a connection across the bucket
         await sleep(150);
       }
       const results = await burst;
-      expect(results.map((r) => r.status)).toEqual(keys.map(() => 200));
+      // Round 6: a person's requests take their turn in memory, two may wait
+      // and the rest are refused 429 with a Retry-After at once, so what a
+      // burst answers is 200 (done) or 429 (not started), never a 500.
+      const statuses = results.map((r) => r.status);
+      for (const status of statuses) expect([200, 429]).toContain(status);
+      expect(statuses).toContain(200);
       expect(Math.max(...probes)).toBeLessThan(1000);
-      for (const key of keys) {
+      for (const [i, key] of keys.entries()) {
         const row = await rowFor(key);
         expect(row.removingAt).toBeNull();
-        expect(row.releasedAt).not.toBeNull();
-        expect(stored.has(key)).toBe(false);
+        if (statuses[i] === 200) {
+          expect(row.releasedAt).not.toBeNull();
+          expect(stored.has(key)).toBe(false);
+        } else {
+          // Refused before anything was touched: still reserved and in the bucket.
+          expect(results[i].headers['retry-after']).toBe('1');
+          expect(row.status).toBe('pending');
+          expect(row.releasedAt).toBeNull();
+          expect(stored.has(key)).toBe(true);
+        }
       }
     });
 

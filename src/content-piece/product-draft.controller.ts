@@ -10,12 +10,14 @@ import {
   Patch,
   Post,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import type { ContentPieceResponse } from '../common/types/content-piece.type';
 import { GatesPublishing } from '../plans/publishing-offers.interceptor';
+import { StorageBusyInterceptor } from '../storage/storage-busy.interceptor';
 import { CreatorAccountGuard } from './guards/creator-account-guard';
 import {
   CreateProductDraftDto,
@@ -33,6 +35,7 @@ import { ProductDraftService } from './product-draft.service';
  * controller declares, so `content/:id` cannot swallow it.
  */
 @UseGuards(WawuAuthGuard, CreatorAccountGuard)
+@UseInterceptors(StorageBusyInterceptor)
 @Controller('product-drafts')
 export class ProductDraftController {
   constructor(private readonly drafts: ProductDraftService) {}

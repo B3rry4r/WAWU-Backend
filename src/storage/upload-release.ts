@@ -8,7 +8,12 @@ import type { S3Client } from '@aws-sdk/client-s3';
 import type { Prisma } from '../../generated/prisma/client';
 import type { PrismaService } from '../common/prisma/prisma.service';
 import { deleteFromBucket } from './bucket-delete';
-import { LOCKED_TX, lockStorageQuota, removalInFlight } from './storage-lock';
+import {
+  LOCKED_TX,
+  inPersonsTurn,
+  lockStorageQuota,
+  removalInFlight,
+} from './storage-lock';
 
 /**
  * ME-04 round 2: a person who takes a file out of an unfinished draft gives
@@ -97,48 +102,55 @@ export async function releaseOwnUpload(
     );
   }
 
-  const claim = await prisma.$transaction(async (tx) => {
-    await lockStorageQuota(tx, wawuId);
-    const row = await tx.storageObject.findUnique({ where: { key } });
-    if (!row || row.wawuUserId !== wawuId || !folders.includes(row.folder)) {
-      throw new NotFoundException(UPLOAD_NOT_FOUND);
-    }
-    if (await isClaimed(tx, key)) {
-      throw new ConflictException({
-        message: 'That file is already part of a listing.',
-        reason: { code: 'upload_claimed' },
-      });
-    }
-    // Another removal of this file is in flight (a second tap, the sweep): it
-    // owns the row until it ends.
-    if (removalInFlight(row)) throw new ServiceUnavailableException(TRY_AGAIN);
+  // Each part runs in the person's turn (storage-lock.ts), so a burst of
+  // releases waits in memory and not on pooled connections (ME-04 round 6).
+  // The first part may be refused with 429 (nothing is changed yet); the
+  // second is never refused, because the delete it records has been asked for.
+  const claim = await inPersonsTurn(wawuId, () =>
+    prisma.$transaction(async (tx) => {
+      await lockStorageQuota(tx, wawuId);
+      const row = await tx.storageObject.findUnique({ where: { key } });
+      if (!row || row.wawuUserId !== wawuId || !folders.includes(row.folder)) {
+        throw new NotFoundException(UPLOAD_NOT_FOUND);
+      }
+      if (await isClaimed(tx, key)) {
+        throw new ConflictException({
+          message: 'That file is already part of a listing.',
+          reason: { code: 'upload_claimed' },
+        });
+      }
+      // Another removal of this file is in flight (a second tap, the sweep): it
+      // owns the row until it ends.
+      if (removalInFlight(row))
+        throw new ServiceUnavailableException(TRY_AGAIN);
 
-    // `releasedAt` is what keeps the row released: POST /uploads/confirm never
-    // counts it again if a late file lands (the PUT link stays valid for its
-    // whole life after this call), and the sweep removes that file once the
-    // link has expired (late-file-sweep.ts). A row already given up some other
-    // way (a settled, missing upload) is marked too: the person has released
-    // it now. A row confirmed a moment ago is released too, because the lock
-    // made that confirm finish first.
-    const at = new Date();
-    await tx.storageObject.update({
-      where: { id: row.id },
-      data: {
-        status: 'abandoned',
-        releasedAt: row.releasedAt ?? at,
-        removingAt: at,
-      },
-    });
-    return {
-      id: row.id,
-      at,
-      before: {
-        status: row.status,
-        confirmedAt: row.confirmedAt,
-        releasedAt: row.releasedAt,
-      },
-    };
-  }, LOCKED_TX);
+      // `releasedAt` is what keeps the row released: POST /uploads/confirm never
+      // counts it again if a late file lands (the PUT link stays valid for its
+      // whole life after this call), and the sweep removes that file once the
+      // link has expired (late-file-sweep.ts). A row already given up some other
+      // way (a settled, missing upload) is marked too: the person has released
+      // it now. A row confirmed a moment ago is released too, because the lock
+      // made that confirm finish first.
+      const at = new Date();
+      await tx.storageObject.update({
+        where: { id: row.id },
+        data: {
+          status: 'abandoned',
+          releasedAt: row.releasedAt ?? at,
+          removingAt: at,
+        },
+      });
+      return {
+        id: row.id,
+        at,
+        before: {
+          status: row.status,
+          confirmedAt: row.confirmedAt,
+          releasedAt: row.releasedAt,
+        },
+      };
+    }, LOCKED_TX),
+  );
 
   const outcome = await deleteFromBucket(client, bucket, key);
   if (outcome.result !== 'gone') {
@@ -147,18 +159,23 @@ export async function releaseOwnUpload(
     );
   }
 
-  await prisma.$transaction(async (tx) => {
-    await lockStorageQuota(tx, wawuId);
-    // Guarded on our own mark: a row somebody else has since taken over (the
-    // sweep, after this mark went stale) is not ours to change.
-    await tx.storageObject.updateMany({
-      where: { id: claim.id, removingAt: claim.at },
-      data:
-        outcome.result === 'failed'
-          ? { ...claim.before, removingAt: null }
-          : { removingAt: null },
-    });
-  }, LOCKED_TX);
+  await inPersonsTurn(
+    wawuId,
+    () =>
+      prisma.$transaction(async (tx) => {
+        await lockStorageQuota(tx, wawuId);
+        // Guarded on our own mark: a row somebody else has since taken over (the
+        // sweep, after this mark went stale) is not ours to change.
+        await tx.storageObject.updateMany({
+          where: { id: claim.id, removingAt: claim.at },
+          data:
+            outcome.result === 'failed'
+              ? { ...claim.before, removingAt: null }
+              : { removingAt: null },
+        });
+      }, LOCKED_TX),
+    { finishing: true },
+  );
 
   if (outcome.result !== 'gone')
     throw new ServiceUnavailableException(TRY_AGAIN);
