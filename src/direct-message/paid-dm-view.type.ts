@@ -128,14 +128,20 @@ export interface PaidDmAvailability {
   pausedUntil: string | null;
 }
 
+/** One quick price the screen offers. */
+export interface PaidDmPricePreset {
+  /** The price per message in kobo. */
+  priceKobo: number;
+}
+
 /** What a creator may choose on the paid messages settings (I21), from config. */
 export interface PaidDmSettingsOptions {
   /** Lowest price a paid message may have, in kobo. */
   minPriceKobo: number;
   /** Highest price a paid message may have, in kobo. */
   maxPriceKobo: number;
-  /** The quick prices to offer, in kobo, ascending. */
-  pricePresetsKobo: number[];
+  /** The quick prices to offer, ascending. */
+  pricePresets: PaidDmPricePreset[];
   /** The reply windows to offer, in hours, ascending. */
   responseWindowHours: number[];
 }

@@ -253,7 +253,12 @@ describe('Paid message settings (contract, INBOX-12)', () => {
         options: {
           minPriceKobo: 5_000,
           maxPriceKobo: 1_000_000_000,
-          pricePresetsKobo: [10_000, 50_000, 100_000, 250_000],
+          pricePresets: [
+            { priceKobo: 10_000 },
+            { priceKobo: 50_000 },
+            { priceKobo: 100_000 },
+            { priceKobo: 250_000 },
+          ],
           responseWindowHours: [24, 48, 72, 168],
         },
         standing: {

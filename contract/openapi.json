@@ -30225,21 +30225,21 @@
       "UpdatePaidDmSettingsDto": {
         "type": "object",
         "properties": {
-          "enabled": {
-            "type": "boolean",
-            "description": "Whether fans may send paid messages."
-          },
           "priceKobo": {
-            "type": "number",
+            "type": "integer",
             "description": "Price per message in kobo. Required when `enabled` is true and none is saved yet.",
             "minimum": 5000,
             "maximum": 1000000000
           },
           "responseHours": {
-            "type": "number",
+            "type": "integer",
             "description": "Hours the creator has to reply. Left out means unchanged.",
             "minimum": 1,
             "maximum": 336
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether fans may send paid messages."
           }
         },
         "required": [
@@ -39707,6 +39707,17 @@
           "pausedUntil"
         ]
       },
+      "PaidDmPricePreset": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceKobo"
+        ]
+      },
       "PaidDmSettingsOptions": {
         "type": "object",
         "properties": {
@@ -39716,10 +39727,10 @@
           "maxPriceKobo": {
             "type": "integer"
           },
-          "pricePresetsKobo": {
+          "pricePresets": {
             "type": "array",
             "items": {
-              "type": "number"
+              "$ref": "#/components/schemas/PaidDmPricePreset"
             }
           },
           "responseWindowHours": {
@@ -39732,7 +39743,7 @@
         "required": [
           "minPriceKobo",
           "maxPriceKobo",
-          "pricePresetsKobo",
+          "pricePresets",
           "responseWindowHours"
         ]
       },

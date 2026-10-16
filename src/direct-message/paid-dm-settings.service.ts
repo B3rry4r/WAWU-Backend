@@ -155,7 +155,7 @@ export class PaidDmSettingsService {
       options: {
         minPriceKobo: cfg.minPriceKobo,
         maxPriceKobo: cfg.maxPriceKobo,
-        pricePresetsKobo: cfg.pricePresetsKobo,
+        pricePresets: cfg.pricePresetsKobo.map((priceKobo) => ({ priceKobo })),
         responseWindowHours: cfg.responseWindowHours,
       },
       standing: await this.pause.standing(creatorWawuId, now),

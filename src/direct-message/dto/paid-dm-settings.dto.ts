@@ -1,3 +1,4 @@
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { IsBoolean, IsInt, IsOptional, Max, Min } from 'class-validator';
 import {
   DM_PRICE_MAX_NAIRA,
@@ -17,6 +18,7 @@ export class UpdatePaidDmSettingsDto {
   enabled!: boolean;
 
   /** Price per message in kobo. Required when `enabled` is true and none is saved yet. */
+  @ApiPropertyOptional({ type: 'integer' })
   @IsOptional()
   @IsInt()
   @Min(DM_PRICE_MIN_NAIRA * 100)
@@ -24,6 +26,7 @@ export class UpdatePaidDmSettingsDto {
   priceKobo?: number;
 
   /** Hours the creator has to reply. Left out means unchanged. */
+  @ApiPropertyOptional({ type: 'integer' })
   @IsOptional()
   @IsInt()
   @Min(DM_RESPONSE_HOURS_MIN)
