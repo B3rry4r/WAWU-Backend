@@ -697,6 +697,12 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           email: true,
           state: true,
           makes: true,
+          craft: true,
+          city: true,
+          updatesOptIn: true,
+          // REF-01: the code they registered with and its community.
+          referralCode: true,
+          referralCommunity: true,
           consentAt: true,
           status: true,
           amountKobo: true,
@@ -902,6 +908,30 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         },
         orderBy: NEWEST,
       }),
+  },
+  {
+    // POINTS-04: each time the person turned points into cash, in kobo: how
+    // many points, how much cash, how it ended. No account number and no
+    // provider reference.
+    key: 'pointConversions',
+    models: ['PointConversion'],
+    load: async (prisma, me) => {
+      const rows = await prisma.pointConversion.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          points: true,
+          cashKobo: true,
+          status: true,
+          failureReason: true,
+          createdAt: true,
+          settledAt: true,
+        },
+        orderBy: NEWEST,
+      });
+      // A file carries numbers, not BigInt: kobo as a whole number.
+      return rows.map((r) => ({ ...r, cashKobo: Number(r.cashKobo) }));
+    },
   },
   {
     key: 'pointMovements',

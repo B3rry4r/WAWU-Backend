@@ -421,23 +421,31 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
         'PUT money/pin',
       ]),
     );
-    // MONEY-17 serves the payment and its quote (src/money/payments/): they
-    // left the declared controller and are mounted, money-moving, here. So
-    // does TIER-03's purchase of a tier, which pays through the same service
-    // (src/plans/purchases/).
+    // MONEY-17 serves the payment and its quote (src/money/payments/), and
+    // WALLET-07 the send to a WAWU user (src/money/transfers/): they left the
+    // declared controller and are mounted, money-moving, here. So does
+    // TIER-03's purchase of a tier, which pays through the same service
+    // (src/plans/purchases/), and POINTS-04's conversion of points to cash
+    // (src/points/convert/), which moves cash from WAWU's account into the
+    // person's wallet.
     expect(
       mounted
         .filter(movesMoney)
         .map((r) => r.key)
         .sort(),
-    ).toEqual(['POST money/payments', 'POST plans/purchases']);
+    ).toEqual([
+      'POST money/payments',
+      'POST money/transfers/wawu',
+      'POST plans/purchases',
+      'POST points/convert',
+    ]);
     expect(mounted.map((r) => r.key)).toContain('GET money/payments/quote');
     expect(
       declared
         .filter(movesMoney)
         .map((r) => r.key)
         .sort(),
-    ).toEqual(['POST money/transfers/bank', 'POST money/transfers/wawu']);
+    ).toEqual(['POST money/transfers/bank']);
   });
 
   it('a debit can answer fees_not_set and limit_reached before any money moves (DEBIT_GATE_ERRORS)', () => {

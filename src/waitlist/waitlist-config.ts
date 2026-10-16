@@ -49,6 +49,40 @@ export const NAME_MIN = 2;
 export const SHORT_TEXT_MAX = 60;
 export const EMAIL_MAX = 254;
 
+/**
+ * What the person makes or does: the choices of the registration form's
+ * "What do you make or do?" (the owner's list, 12 Oct 2026). The words are
+ * stored exactly as written here, so the team reads the same words the person
+ * chose. Optional on the route: a client that does not send one keeps working.
+ */
+export const WAITLIST_CRAFTS = [
+  'Music',
+  'Fashion',
+  'Film and video',
+  'Photography',
+  'Art',
+  'Design',
+  'Food',
+  'Digital art',
+  'Tech and software',
+  'Writing and media',
+  'Professional services',
+  'Founder or business',
+  'Other',
+] as const;
+
+/**
+ * The conference cities of "Which city will you attend?" (owner, 12 Oct 2026):
+ * exactly four Nigerian cities and Online. Optional on the route.
+ */
+export const WAITLIST_CITIES = [
+  'Lagos',
+  'Abuja',
+  'Port Harcourt',
+  'Enugu',
+  'Online',
+] as const;
+
 /** The prefix of every reference (it is the Flutterwave tx_ref). */
 export const REFERENCE_PREFIX = 'wawu-join-';
 /** Random bytes in a reference: 18 bytes is 144 bits, above the 128 asked. */
@@ -64,3 +98,19 @@ export const REFERENCE_BYTES = 18;
 export const REFERENCE_ATTEMPTS = 5;
 /** Characters of the access code (hex digits after REFERENCE_PREFIX), shown as two groups of four. */
 export const ACCESS_CODE_LENGTH = 8;
+
+/**
+ * Referral codes on the registration page (REF-01, owner, 14 Oct 2026).
+ *
+ * A code is 3 to 20 letters and digits, stored in upper case and matched in
+ * any case. A registration started with a code holds a place under the code's
+ * limit for `REFERRAL_HOLD_MS` while it is unpaid; a place that is paid later
+ * is always honoured, even after the hold ended.
+ */
+export const REFERRAL_CODE_MIN = 3;
+export const REFERRAL_CODE_MAX = 20;
+export const REFERRAL_COMMUNITY_MAX = 80;
+export const REFERRAL_HOLD_MS = 30 * 60_000;
+/** The words a code we do not have is refused with, on the check and on register. */
+export const REFERRAL_UNKNOWN_WORDS =
+  'We do not recognise that referral code. Check it, or leave it empty to pay the standard price.';
