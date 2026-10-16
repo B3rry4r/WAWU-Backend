@@ -3657,6 +3657,15 @@ model StorageObject {
   createdAt   DateTime            @default(now())
   /// When the object was proven to exist in the bucket. Null while pending.
   confirmedAt DateTime?
+  /// When the person gave the file up (POST /uploads/release). Null otherwise.
+  /// A released row stays released: a late file never counts it again.
+  releasedAt  DateTime?
+  /// When the Hub's sweep settled a given-up file after its upload link had
+  /// expired (ME-04 round 3): it looked at the bucket and removed the file if
+  /// it was there. Null until then.
+  sweptAt     DateTime?
+  /// When that sweep deleted a file it found. Null when it found none.
+  sweptRemovedAt DateTime?
 
   @@index([wawuUserId, status])
   @@index([status, createdAt])

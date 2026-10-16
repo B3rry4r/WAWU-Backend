@@ -17,6 +17,7 @@ import {
 } from './dto/presign-upload.dto';
 import { formatFolderRule } from './upload-formats';
 import { releaseOwnUpload } from './upload-release';
+import { sweepLateFiles, type LateSweepResult } from './late-file-sweep';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import {
@@ -62,6 +63,14 @@ const RECONCILE_GRACE_MS = 15 * 60 * 1000;
 
 /** How long a presigned PUT URL can still start an upload. */
 const UPLOAD_URL_SECONDS = 300;
+
+/**
+ * Extra time after a given-up upload's link has expired before the sweep looks
+ * at its file (ME-04 round 3), unless UPLOAD_SWEEP_MARGIN_SECONDS says
+ * otherwise. With the link's 300 s it makes 15 minutes, the same time
+ * reconcileStale gives a slow upload before it settles one.
+ */
+const DEFAULT_SWEEP_MARGIN_SECONDS = 600;
 
 /**
  * How long after presign `POST /uploads/confirm` leaves a missing file alone:
@@ -342,11 +351,20 @@ export class StorageService {
   private readonly logger = new Logger(StorageService.name);
   private readonly client: S3Client | null;
   private readonly bucket: string;
+  /** Seconds past a link's life before the sweep removes a late file. */
+  private readonly sweepMarginSeconds: number;
 
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
   ) {
+    const margin = Number(
+      this.config.get<string>('UPLOAD_SWEEP_MARGIN_SECONDS'),
+    );
+    this.sweepMarginSeconds =
+      Number.isFinite(margin) && margin >= 0
+        ? margin
+        : DEFAULT_SWEEP_MARGIN_SECONDS;
     const endpoint = this.config.get<string>('STORAGE_ENDPOINT');
     const accessKeyId = this.config.get<string>('STORAGE_ACCESS_KEY_ID');
     const secretAccessKey = this.config.get<string>(
@@ -691,12 +709,17 @@ export class StorageService {
       throw new NotFoundException('We could not find that upload.');
     }
     if (row.status === 'confirmed') return { key, status: 'confirmed' };
+    // The person gave this file up (POST /uploads/release). A file that lands
+    // afterwards, through the link that was still valid, is not counted again:
+    // the row stays released, and the sweep removes the file once the link has
+    // expired. Nothing to ask of the bucket.
+    if (row.releasedAt) return { key, status: 'abandoned' };
 
     const held = await this.bucketHolds(key, 'settle');
     if (held === 'unknown') throw new ServiceUnavailableException(CHECK_LATER);
     if (held === 'present') {
-      await this.adoptArrived(wawuId, row.id, key);
-      return { key, status: 'confirmed' };
+      const adopted = await this.adoptArrived(wawuId, row.id, key);
+      return { key, status: adopted ? 'confirmed' : 'abandoned' };
     }
     if (row.status !== 'pending') return { key, status: 'abandoned' };
     if (Date.now() - row.createdAt.getTime() < CONFIRM_HOLD_MS) {
@@ -723,12 +746,14 @@ export class StorageService {
     wawuId: string,
     rowId: string,
     key: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     await this.reconcileStale(wawuId);
     const refusal = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`storage-quota:${wawuId}`}, 0))`;
       const row = await tx.storageObject.findUnique({ where: { id: rowId } });
       if (!row || row.status === 'confirmed') return null;
+      // Released while this confirm was under way: it stays released.
+      if (row.releasedAt) return 'released' as const;
       if (row.status === 'abandoned' && CONTENT_FOLDERS.includes(row.folder)) {
         const { usage, tickHeld } = await this.readUsage(wawuId, tx);
         if (usage.usedBytes + row.bytes > usage.limitBytes) {
@@ -741,7 +766,8 @@ export class StorageService {
       });
       return null;
     });
-    if (!refusal) return;
+    if (refusal === 'released') return false;
+    if (!refusal) return true;
     try {
       await this.client!.send(
         new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
@@ -959,6 +985,29 @@ export class StorageService {
       );
       if (stale.length < RECONCILE_BATCH) return;
     }
+  }
+
+  /**
+   * ME-04 round 3: removes the files that landed after their upload was given
+   * up on (released, or never arrived), once the PUT link they came through has
+   * expired. See late-file-sweep.ts. Run on a timer by StorageSweepService;
+   * safe to run at any time and from several Hubs at once.
+   */
+  sweepLateFiles(wawuId?: string): Promise<LateSweepResult> {
+    return sweepLateFiles(
+      {
+        client: this.client,
+        bucket: this.bucket,
+        folders: CONTENT_FOLDERS,
+        prisma: this.prisma,
+        logger: this.logger,
+      },
+      {
+        linkSeconds: UPLOAD_URL_SECONDS,
+        marginSeconds: this.sweepMarginSeconds,
+        wawuId,
+      },
+    );
   }
 
   /**

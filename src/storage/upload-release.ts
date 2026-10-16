@@ -40,7 +40,10 @@ export interface ReleaseDeps {
  * the key finds both forms. Every piece counts, whoever made it and whatever
  * its status: a removed piece still holds its row.
  */
-async function isClaimed(prisma: PrismaService, key: string): Promise<boolean> {
+export async function isClaimed(
+  prisma: PrismaService,
+  key: string,
+): Promise<boolean> {
   const [piece, frame] = await Promise.all([
     prisma.contentPiece.findFirst({
       where: {
@@ -97,9 +100,14 @@ export async function releaseOwnUpload(
       );
     }
   }
+  // `releasedAt` is what keeps the row released: POST /uploads/confirm never
+  // counts it again if a late file lands (the PUT link stays valid for its
+  // whole life after this call), and the sweep removes that file once the link
+  // has expired (late-file-sweep.ts). A row already given up some other way
+  // (a settled, missing upload) is marked too: the person has released it now.
   await prisma.storageObject.updateMany({
-    where: { id: row.id, status: { in: ['pending', 'confirmed'] } },
-    data: { status: 'abandoned' },
+    where: { id: row.id, releasedAt: null },
+    data: { status: 'abandoned', releasedAt: new Date() },
   });
   return { released: true };
 }

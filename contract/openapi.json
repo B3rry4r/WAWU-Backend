@@ -1088,6 +1088,28 @@
         ]
       }
     },
+    "/api/hub/uploads/formats": {
+      "get": {
+        "operationId": "StorageController_formats",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadFormatsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "GET /uploads/formats: what each content format may upload (M20 to M22):\nthe file types and the most bytes for the full file, and the same for the\nseparate public preview, with how that preview is shown and, for a clip,\nhow long it is asked to be. Any signed-in account. The same table\n`POST /uploads/presign` applies when it is given a `format`.",
+        "tags": [
+          "Storage"
+        ]
+      }
+    },
     "/api/hub/uploads/confirm": {
       "post": {
         "operationId": "StorageController_confirm",
@@ -1176,6 +1198,46 @@
           }
         },
         "summary": "GET /uploads/allowance: the upload count and the storage this account\nmay use, what it has used, and both of R-7's levels (free and with a\ntick). Any signed-in account: an account with no CreatorState row has\nused 0 uploads.",
+        "tags": [
+          "Storage"
+        ]
+      }
+    },
+    "/api/hub/uploads/release": {
+      "post": {
+        "operationId": "StorageController_release",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "released": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "released"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "POST /uploads/release: takes back an upload the caller reserved and no\nlisting has claimed yet (a file removed or replaced in an unfinished\ndraft). Deletes the object and frees its space in one step. Only the\ncaller's own upload in content/preview or content/full; another person's\nkey, an unknown key and a key in any other folder all get the same 404,\nand a key a listing already uses gets a 409. Calling it again for a key\nalready released answers the same 200.",
         "tags": [
           "Storage"
         ]
@@ -30723,6 +30785,18 @@
             "description": "Exact byte length of the file. The presigned URL is signed FOR this\nlength, so storage rejects an upload of any other size — previously the\nonly cap was client-side and trivially bypassed by calling the presigned\nURL directly.",
             "minimum": 1,
             "maximum": 536870912
+          },
+          "format": {
+            "type": "string",
+            "description": "Optional, ME-04: the content format the file is for (`video`, `pdf`...).\nOnly for `content/full` and `content/preview`. Naming one adds that\nformat's rules (GET /uploads/formats) to the checks below: the types it\ntakes in that folder and its own size cap. Left out, the call is checked\nexactly as before.",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
           }
         },
         "required": [
@@ -30739,6 +30813,19 @@
             "type": "string",
             "description": "The `key` or the `fileUrl` POST /uploads/presign returned for this file.",
             "maxLength": 2048
+          }
+        },
+        "required": [
+          "key"
+        ]
+      },
+      "ReleaseUploadDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
           }
         },
         "required": [
@@ -37434,6 +37521,118 @@
           "accessToken",
           "refreshToken",
           "expiresIn"
+        ]
+      },
+      "UploadFormatView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "full": {
+            "type": "object",
+            "properties": {
+              "contentTypes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "extensions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxBytes": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "contentTypes",
+              "extensions",
+              "maxBytes"
+            ]
+          },
+          "preview": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "clip",
+                  "lesson",
+                  "extract",
+                  "cover"
+                ]
+              },
+              "contentTypes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "extensions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxBytes": {
+                "type": "number"
+              },
+              "seconds": {
+                "type": "object",
+                "properties": {
+                  "min": {
+                    "type": "number"
+                  },
+                  "max": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "min",
+                  "max"
+                ],
+                "nullable": true
+              }
+            },
+            "required": [
+              "kind",
+              "contentTypes",
+              "extensions",
+              "maxBytes",
+              "seconds"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "full",
+          "preview"
+        ]
+      },
+      "UploadFormatsView": {
+        "type": "object",
+        "properties": {
+          "formats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UploadFormatView"
+            }
+          }
+        },
+        "required": [
+          "formats"
         ]
       },
       "StorageUsage": {
@@ -47302,10 +47501,10 @@
             "items": {
               "type": "string",
               "enum": [
+                "cover",
                 "handle",
                 "bio",
                 "avatar",
-                "cover",
                 "links"
               ]
             }
