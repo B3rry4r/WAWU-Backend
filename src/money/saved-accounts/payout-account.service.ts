@@ -61,10 +61,32 @@ export class PayoutAccountService {
     dto: PayoutAccountDto,
   ): Promise<PayoutAccountView> {
     const account = await this.banks.check(dto.bankCode, dto.accountNumber);
+    const stamp = this.banks.checkedStamp(account.bankCode);
+    const held = await this.prisma.moneyPayoutAccount.findUnique({
+      where: { wawuUserId },
+      select: { bankCode: true, accountNumber: true },
+    });
+    // Nuvion's counterparty and payment detail name the account they were
+    // made for: a different account never keeps them (NUV-06).
+    const sameAccount =
+      held !== null &&
+      held.bankCode === account.bankCode &&
+      held.accountNumber === account.accountNumber;
     const row = await this.prisma.moneyPayoutAccount.upsert({
       where: { wawuUserId },
-      create: { wawuUserId, ...account },
-      update: account,
+      create: { wawuUserId, ...account, ...stamp },
+      update: {
+        ...account,
+        ...stamp,
+        ...(sameAccount
+          ? {}
+          : {
+              nuvionCounterpartyId: null,
+              nuvionPaymentDetailId: null,
+              nuvionOperationalCounterpartyId: null,
+              nuvionOperationalPaymentDetailId: null,
+            }),
+      },
       select: PAYOUT_SELECT,
     });
     return this.toView(wawuUserId, row);

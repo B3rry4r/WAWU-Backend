@@ -9032,9 +9032,6 @@
                       "id": {
                         "type": "string"
                       },
-                      "status": {
-                        "type": "string"
-                      },
                       "kind": {
                         "type": "string",
                         "enum": [
@@ -9049,6 +9046,9 @@
                         ]
                       },
                       "title": {
+                        "type": "string"
+                      },
+                      "status": {
                         "type": "string"
                       },
                       "applicantWawuId": {
@@ -9225,9 +9225,9 @@
                     },
                     "required": [
                       "id",
-                      "status",
                       "kind",
                       "title",
+                      "status",
                       "applicantWawuId",
                       "reference",
                       "appliedDate",
@@ -9273,9 +9273,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -9290,6 +9287,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -9466,9 +9466,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -9573,9 +9573,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -9590,6 +9587,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -9766,9 +9766,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -9814,9 +9814,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -9831,6 +9828,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10007,9 +10007,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10056,9 +10056,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10073,6 +10070,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10249,9 +10249,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10297,9 +10297,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10314,6 +10311,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10490,9 +10490,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10669,9 +10669,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10686,6 +10683,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10862,9 +10862,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10920,9 +10920,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10937,6 +10934,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -11113,9 +11113,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -11170,9 +11170,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -11187,6 +11184,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -11363,9 +11363,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -12079,6 +12079,10 @@
                           "id": {
                             "type": "string"
                           },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
@@ -12088,10 +12092,6 @@
                               "paid",
                               "cancelled"
                             ]
-                          },
-                          "createdAt": {
-                            "type": "string",
-                            "format": "date-time"
                           },
                           "flutterwaveTxRef": {
                             "type": "string"
@@ -12163,8 +12163,8 @@
                         "required": [
                           "items",
                           "id",
-                          "status",
                           "createdAt",
+                          "status",
                           "flutterwaveTxRef",
                           "flutterwaveTxId",
                           "refundError",
@@ -12246,6 +12246,10 @@
                     "id": {
                       "type": "string"
                     },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
@@ -12255,10 +12259,6 @@
                         "paid",
                         "cancelled"
                       ]
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
                     },
                     "flutterwaveTxRef": {
                       "type": "string"
@@ -12329,8 +12329,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "createdAt",
+                    "status",
                     "flutterwaveTxRef",
                     "flutterwaveTxId",
                     "refundError",
@@ -15768,6 +15768,152 @@
         "x-wawu-built-by": "WALLET-27"
       }
     },
+    "/api/hub/money/statements/delivery": {
+      "get": {
+        "operationId": "MoneyStatementController_delivery",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementDeliveryView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Where a statement can be sent and in which formats (W38's \"Send to\" and\nits format choice). Reads the token only: the address is the person's\nown confirmed email, masked, or null when there is none to use\n(`canEmail` false).",
+        "tags": [
+          "MoneyStatement"
+        ],
+        "x-wawu-built-by": "WALLET-35"
+      }
+    },
+    "/api/hub/money/statements/email": {
+      "post": {
+        "operationId": "MoneyStatementController_emailStatement",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of A-Z a-z 0-9 _ -. The same key for the same person answers the first mail again.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatementEmailDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementEmailView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: statement_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, email_not_verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: statement_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: statement_email_failed, statement_busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Email a statement (W38 \"Send statement\"). The same period rules and the\nsame file as `GET /money/statements`, attached to a mail sent to the\nperson's own confirmed address: the request carries none, so a statement\ncannot be sent to anyone else. No confirmed email is `409\nemail_not_verified`; a mail that could not be handed to WAWU ID's sender\nis `503 statement_email_failed`. The limits of `GET /money/statements`\napply and are shared with it: an emailed statement is one statement.\nAn optional `Idempotency-Key` makes a repeat answer the first mail\ninstead of sending a second.",
+        "tags": [
+          "MoneyStatement"
+        ],
+        "x-wawu-built-by": "WALLET-35"
+      }
+    },
     "/api/hub/money/fees/quote": {
       "get": {
         "operationId": "MoneyFeesController_feeQuote",
@@ -16203,6 +16349,212 @@
           "MoneyPayments"
         ],
         "x-wawu-built-by": "MONEY-19"
+      }
+    },
+    "/api/hub/money/transfers/wawu": {
+      "post": {
+        "operationId": "MoneyTransfersController_sendToWawuUser",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WawuTransferDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range, self_transfer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded, recipient_blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: recipient_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, recipient_has_no_wallet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Send to a WAWU user (W10 to W12): one wallet-to-wallet transfer from the\nsender's wallet to the receiver's. The sender's balance falls by the\nquoted total (the amount, the provider's charge and WAWU's fee on top,\nR-10); the receiver's rises by exactly the amount. Answers 201 with the\nsend: completed, pending when the provider has not confirmed it yet (it\nis never sent again blindly; poll `GET /money/transfers/{id}`), or failed\nwhen the provider refused it and nothing moved. The same Idempotency-Key\nand body answer the first result again (`Idempotent-Replayed: true`)\nwithout checking the PIN. Who the money goes to (yourself, a closed\naccount, a block, no wallet) is answered before the PIN is looked at.\nfees_not_set comes before the wallet gate, the key and the PIN;\nlimit_reached (WAWU's limit or the provider's) before anything is sent.",
+        "tags": [
+          "MoneyTransfers"
+        ],
+        "x-wawu-built-by": "WALLET-07"
+      }
+    },
+    "/api/hub/money/transfers/{id}": {
+      "get": {
+        "operationId": "MoneyTransfersController_transfer",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One send as it stands now (W12 receipt, W14 failed): what the app polls\nafter `pending`. Only the sender reads it: another person's send is the\nsame `404 not_found` as one nobody holds. It reads our record only,\nnever the provider, and moves nothing, so it is not behind the fee\nsettings, the key or the PIN.",
+        "tags": [
+          "MoneyTransfers"
+        ],
+        "x-wawu-built-by": "WALLET-07"
       }
     },
     "/api/hub/money/holds": {
@@ -17854,6 +18206,574 @@
         ]
       }
     },
+    "/api/hub/admin/notifications/email/templates": {
+      "get": {
+        "operationId": "AdminEmailController_templates",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EmailTemplateView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      },
+      "post": {
+        "operationId": "AdminEmailController_createTemplate",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailTemplateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailTemplateView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/templates/{id}": {
+      "get": {
+        "operationId": "AdminEmailController_template",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailTemplateView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      },
+      "patch": {
+        "operationId": "AdminEmailController_updateTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailTemplateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailTemplateView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      },
+      "delete": {
+        "operationId": "AdminEmailController_deleteTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "deleted"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/preview": {
+      "post": {
+        "operationId": "AdminEmailController_preview",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailPreviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailPreviewView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The final HTML and text for a draft, exactly as a recipient gets them.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/test-send": {
+      "post": {
+        "operationId": "AdminEmailController_testSend",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmailTestSendDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sent": {
+                      "type": "boolean"
+                    },
+                    "providerId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "sent",
+                    "providerId"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "One real email to one address. Superadmin only.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/audiences/registrants": {
+      "get": {
+        "operationId": "AdminEmailController_registrantCount",
+        "parameters": [
+          {
+            "name": "filter",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "default": "all",
+              "type": "string",
+              "enum": [
+                "all",
+                "paid",
+                "not_paid",
+                "opted_in"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 20000,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailAudienceCountView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "How many /join registrants a filter and a limit would email.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns": {
+      "get": {
+        "operationId": "AdminEmailController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EmailCampaignView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns/registrants": {
+      "post": {
+        "operationId": "AdminEmailController_fromRegistrants",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRegistrantCampaignDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Build a campaign from the /join registrants. Sends nothing.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns/csv": {
+      "post": {
+        "operationId": "AdminEmailController_fromCsv",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCsvCampaignDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Build a campaign from an uploaded CSV (multipart: file, templateId, limit). Sends nothing.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns/{id}": {
+      "get": {
+        "operationId": "AdminEmailController_detail",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns/{id}/recipients": {
+      "get": {
+        "operationId": "AdminEmailController_recipients",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "failed",
+                "sent",
+                "queued",
+                "skipped"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/EmailRecipientView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/admin/notifications/email/campaigns/{id}/start": {
+      "post": {
+        "operationId": "AdminEmailController_start",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailCampaignView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Start sending in the background. Superadmin only; answers 409 when RESEND_API_KEY is unset.",
+        "tags": [
+          "AdminEmail"
+        ]
+      }
+    },
+    "/api/hub/email/unsubscribe": {
+      "get": {
+        "operationId": "PublicEmailUnsubscribeController_get",
+        "parameters": [
+          {
+            "name": "t",
+            "required": false,
+            "in": "query",
+            "schema": {}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An HTML page asking to confirm. Nothing is changed."
+          },
+          "400": {
+            "description": "An HTML page saying the link is not valid."
+          }
+        },
+        "tags": [
+          "PublicEmailUnsubscribe"
+        ]
+      },
+      "post": {
+        "operationId": "PublicEmailUnsubscribeController_post",
+        "parameters": [
+          {
+            "name": "t",
+            "required": false,
+            "in": "query",
+            "schema": {}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "An HTML page confirming the address is unsubscribed."
+          },
+          "400": {
+            "description": "An HTML page saying the link is not valid."
+          }
+        },
+        "tags": [
+          "PublicEmailUnsubscribe"
+        ]
+      }
+    },
     "/api/hub/account": {
       "delete": {
         "operationId": "AccountController_deleteAccount",
@@ -18777,11 +19697,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "nullable": true
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -18792,6 +19707,11 @@
                     },
                     "title": {
                       "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
                     },
                     "updated": {
                       "type": "string",
@@ -18961,9 +19881,9 @@
                   },
                   "required": [
                     "id",
-                    "updatedAt",
                     "kind",
                     "title",
+                    "updatedAt",
                     "updated",
                     "country",
                     "subtitle",
@@ -19018,11 +19938,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "nullable": true
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -19033,6 +19948,11 @@
                     },
                     "title": {
                       "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
                     },
                     "updated": {
                       "type": "string",
@@ -19202,9 +20122,9 @@
                   },
                   "required": [
                     "id",
-                    "updatedAt",
                     "kind",
                     "title",
+                    "updatedAt",
                     "updated",
                     "country",
                     "subtitle",
@@ -19691,16 +20611,16 @@
                           "id": {
                             "type": "string"
                           },
+                          "imageUrl": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
                               "live",
                               "coming"
                             ]
-                          },
-                          "imageUrl": {
-                            "type": "string",
-                            "nullable": true
                           },
                           "slug": {
                             "type": "string"
@@ -19881,8 +20801,8 @@
                         "required": [
                           "name",
                           "id",
-                          "status",
                           "imageUrl",
+                          "status",
                           "slug",
                           "category",
                           "featured",
@@ -19916,16 +20836,16 @@
                               "id": {
                                 "type": "string"
                               },
+                              "imageUrl": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "status": {
                                 "type": "string",
                                 "enum": [
                                   "live",
                                   "coming"
                                 ]
-                              },
-                              "imageUrl": {
-                                "type": "string",
-                                "nullable": true
                               },
                               "slug": {
                                 "type": "string"
@@ -20093,8 +21013,8 @@
                             "required": [
                               "name",
                               "id",
-                              "status",
                               "imageUrl",
+                              "status",
                               "slug",
                               "category",
                               "featured",
@@ -20170,16 +21090,16 @@
                     "id": {
                       "type": "string"
                     },
+                    "imageUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "live",
                         "coming"
                       ]
-                    },
-                    "imageUrl": {
-                      "type": "string",
-                      "nullable": true
                     },
                     "slug": {
                       "type": "string"
@@ -20383,8 +21303,8 @@
                   "required": [
                     "name",
                     "id",
-                    "status",
                     "imageUrl",
+                    "status",
                     "slug",
                     "category",
                     "featured",
@@ -20494,13 +21414,13 @@
                     "id": {
                       "type": "string"
                     },
+                    "title": {
+                      "type": "string"
+                    },
                     "updatedAt": {
                       "type": "string",
                       "format": "date-time",
                       "nullable": true
-                    },
-                    "title": {
-                      "type": "string"
                     },
                     "description": {
                       "type": "string"
@@ -20804,8 +21724,8 @@
                   },
                   "required": [
                     "id",
-                    "updatedAt",
                     "title",
+                    "updatedAt",
                     "description",
                     "format",
                     "fileUrl",
@@ -23128,12 +24048,12 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "createdAt": {
                       "type": "string",
                       "format": "date-time"
+                    },
+                    "status": {
+                      "type": "string"
                     },
                     "topics": {
                       "type": "array",
@@ -23156,8 +24076,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "createdAt",
+                    "status",
                     "topics",
                     "mentorId",
                     "requesterWawuId",
@@ -28283,6 +29203,40 @@
         ]
       }
     },
+    "/api/hub/waitlist/referral-codes/{code}": {
+      "get": {
+        "operationId": "WaitlistPublicController_referralCheck",
+        "parameters": [
+          {
+            "name": "code",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WaitlistReferralCheckView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "`reason.code` `referral_unknown` (no such code) or `no_open_offer`."
+          }
+        },
+        "summary": "Before paying: does this referral code apply, and what would the person\npay. Never the limit, the count or the community. A code we do not have\nis a 404 `referral_unknown`. Advice only: the registration decides again.",
+        "tags": [
+          "WaitlistPublic"
+        ]
+      }
+    },
     "/api/hub/waitlist/registrations": {
       "post": {
         "operationId": "WaitlistPublicController_register",
@@ -28312,7 +29266,7 @@
             "description": "`reason.code` `phone_invalid`, `email_invalid`, `name_invalid` or `consent_required`; a malformed body has no `reason`."
           },
           "404": {
-            "description": "`reason.code` `no_open_offer`: no offer has this id."
+            "description": "`reason.code` `no_open_offer` (no offer has this id) or `referral_unknown` (no such referral code)."
           },
           "409": {
             "description": "`reason.code` `offer_closed` (closed or not open yet) or `already_registered` (this phone or email already paid; nothing is charged)."
@@ -28321,7 +29275,7 @@
             "description": "`reason.code` `payments_unavailable`: payments are not set up."
           }
         },
-        "summary": "Register and get the checkout settings. Every call that passes the checks\nadds a new registration with a new reference, even for the same offer,\nphone and email, so each checkout has its own reference.\nNothing is charged here: the payment happens in the Flutterwave checkout\nwith the answer's `flutterwaveConfig`, and counts only after\nPOST /waitlist/registrations/verify (or Flutterwave's own notice).",
+        "summary": "Register and get the checkout settings. Every call that passes the checks\nadds a new registration with a new reference, even for the same offer,\nphone and email, so each checkout has its own reference.\nNothing is charged here: the payment happens in the Flutterwave checkout\nwith the answer's `flutterwaveConfig`, and counts only after\nPOST /waitlist/registrations/verify (or Flutterwave's own notice).\n\nWith a `referralCode` (REF-01) the answer also carries `referral`. A code\nat price 0 needs no checkout: the answer has `completed` and no\n`flutterwaveConfig`, and the registration is already paid.",
         "tags": [
           "WaitlistPublic"
         ]
@@ -28495,6 +29449,25 @@
                 "failed"
               ]
             }
+          },
+          {
+            "name": "referralCode",
+            "required": false,
+            "in": "query",
+            "description": "Only registrations counted under this referral code (any case).",
+            "schema": {
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "noReferral",
+            "required": false,
+            "in": "query",
+            "description": "`true`: only registrations with no referral code (including every one made before codes existed). Not with `referralCode`.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -28512,7 +29485,40 @@
             }
           }
         },
-        "summary": "Registrations, newest first, every status unless `status` is given\n(`pending`, `paid` or `failed`; a `failed` row is a second payment kept\nfor a refund). `offerId` narrows to one offer.",
+        "summary": "Registrations, newest first, every status unless `status` is given\n(`pending`, `paid` or `failed`; a `failed` row is a second payment kept\nfor a refund). `offerId` narrows to one offer; `referralCode` to one code,\nor `noReferral=true` to the registrations with no code.",
+        "tags": [
+          "WaitlistAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/waitlist/registrations/summary": {
+      "get": {
+        "operationId": "WaitlistAdminController_summary",
+        "parameters": [
+          {
+            "name": "offerId",
+            "required": false,
+            "in": "query",
+            "description": "Only this offer. Omitted means every offer.",
+            "schema": {
+              "maxLength": 60,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWaitlistSummaryView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The whole offer in numbers (REF-01): people paid, money paid (kobo),\nsecond payments kept for a refund, and the split by referral code with a\nlast \"No code\" row. Every paid registration since the offer opened counts,\nthose made before referral codes included. Counted by the server.",
         "tags": [
           "WaitlistAdmin"
         ]
@@ -28543,6 +29549,25 @@
                 "failed"
               ]
             }
+          },
+          {
+            "name": "referralCode",
+            "required": false,
+            "in": "query",
+            "description": "Only registrations counted under this referral code (any case).",
+            "schema": {
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "noReferral",
+            "required": false,
+            "in": "query",
+            "description": "`true`: only registrations with no referral code. Not with `referralCode`.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -28560,6 +29585,102 @@
         "summary": "The same rows as a CSV file, oldest first, inside the usual envelope\n(`content` is the file; save it as `fileName`). A byte-order mark first,\nso a spreadsheet opens it as UTF-8 and shows the naira sign.",
         "tags": [
           "WaitlistAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/waitlist/referral-codes": {
+      "get": {
+        "operationId": "ReferralAdminController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminReferralCodeView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every code with its paid count, held count, money paid and limit.",
+        "tags": [
+          "ReferralAdmin"
+        ]
+      },
+      "post": {
+        "operationId": "ReferralAdminController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReferralCodeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminReferralCodeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Make a code. The price is from 0 (free) to the offer's standard price.",
+        "tags": [
+          "ReferralAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/waitlist/referral-codes/{id}": {
+      "patch": {
+        "operationId": "ReferralAdminController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateReferralCodeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminReferralCodeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Change a code's community, price, limit (null for none) or on/off.",
+        "tags": [
+          "ReferralAdmin"
         ]
       }
     },
@@ -29257,137 +30378,6 @@
         "x-wawu-served": false
       }
     },
-    "/api/hub/money/transfers/wawu": {
-      "post": {
-        "operationId": "MoneyTransferController_sendToWawuUser",
-        "parameters": [
-          {
-            "name": "X-Transaction-Pin",
-            "in": "header",
-            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}$"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]{8,128}$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WawuTransferDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransferView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: idempotency_key_required, amount_out_of_range, self_transfer",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "402": {
-            "description": "reason.code: insufficient_funds",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: pin_required, pin_incorrect, limit_reached, daily_limit_exceeded, recipient_blocked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: recipient_not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, recipient_has_no_wallet",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, pin_locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable, fees_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Send to a WAWU user (W10 to W12). Completes at once or is refused; never pending.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-07",
-        "description": "Declared by MONEY-04, not served yet: WALLET-07 serves it.",
-        "x-wawu-served": false
-      }
-    },
     "/api/hub/money/transfers/bank": {
       "post": {
         "operationId": "MoneyTransferController_sendToBank",
@@ -29516,75 +30506,6 @@
         ],
         "x-wawu-built-by": "WALLET-09",
         "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/transfers/{id}": {
-      "get": {
-        "operationId": "MoneyTransferController_transfer",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransferView"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "One send, as it stands now (W12 receipt, W14 failed, W19 timeline). Only the sender can read it.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-07",
-        "description": "Declared by MONEY-04, not served yet: WALLET-07 serves it.",
         "x-wawu-served": false
       }
     }
@@ -31279,6 +32200,8 @@
               "statement_too_large",
               "statement_rate_limited",
               "statement_busy",
+              "email_not_verified",
+              "statement_email_failed",
               "recipient_search_rate_limited",
               "fees_not_set",
               "limit_reached",
@@ -31720,6 +32643,35 @@
           "accountNumber"
         ]
       },
+      "StatementEmailDto": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "The first day of the statement, YYYY-MM-DD in Africa/Lagos time, included.",
+            "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+            "example": "2026-09-01"
+          },
+          "to": {
+            "type": "string",
+            "description": "The last day of the statement, YYYY-MM-DD in Africa/Lagos time,\nincluded. On or after `from`, not after today in Lagos, and at most\n366 days from `from`, both days counted (STATEMENT_MAX_DAYS).",
+            "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+            "example": "2026-09-30"
+          },
+          "format": {
+            "type": "string",
+            "description": "The file. Only `csv` today: Fintava issues no stamped statement\n(WALLET-27, BACKEND_GAPS G-68), so there is no `pdf`.",
+            "enum": [
+              "csv"
+            ]
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "format"
+        ]
+      },
       "PaymentDto": {
         "type": "object",
         "properties": {
@@ -31772,6 +32724,43 @@
           "kind",
           "targetId",
           "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
+      "WawuTransferDto": {
+        "type": "object",
+        "properties": {
+          "amountKobo": {
+            "type": "integer",
+            "description": "What the recipient gets, in kobo.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`totalKobo` from the fee quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1
+          },
+          "recipientWawuUserId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from that fee quote (`GET /money/fees/quote?kind=\nwawu_transfer`; BACKEND_GAPS G-64): the server checks it is its own, for\nthis person and this amount, and not past `expiresAt`; otherwise `409\nquote_changed` with the new quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "note": {
+            "type": "string",
+            "description": "W9's optional note, 100 characters at most.",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "amountKobo",
+          "expectedTotalKobo",
+          "recipientWawuUserId",
           "quoteToken"
         ]
       },
@@ -31892,6 +32881,141 @@
           "body",
           "tone",
           "audience"
+        ]
+      },
+      "EmailTemplateDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "previewText": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "version": {
+            "type": "number",
+            "description": "The version the editor loaded. A save over a newer one is refused.",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "name",
+          "subject",
+          "body"
+        ]
+      },
+      "EmailPreviewDto": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "previewText": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "firstName": {
+            "type": "string",
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "subject",
+          "body"
+        ]
+      },
+      "EmailTestSendDto": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "previewText": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "firstName": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "to": {
+            "type": "string",
+            "maxLength": 254,
+            "format": "email"
+          }
+        },
+        "required": [
+          "subject",
+          "body",
+          "to"
+        ]
+      },
+      "CreateRegistrantCampaignDto": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "default": "all",
+            "enum": [
+              "all",
+              "paid",
+              "not_paid",
+              "opted_in"
+            ],
+            "type": "string"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 20000
+          },
+          "templateId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "filter",
+          "templateId"
+        ]
+      },
+      "CreateCsvCampaignDto": {
+        "type": "object",
+        "properties": {
+          "templateId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 20000
+          }
+        },
+        "required": [
+          "templateId"
         ]
       },
       "DeleteAccountDto": {
@@ -33806,9 +34930,48 @@
             "description": "What they make (optional, up to 60 characters).",
             "maxLength": 60
           },
+          "craft": {
+            "type": "string",
+            "description": "What they make or do (optional): one of `WAITLIST_CRAFTS`, written as in\nthe list (Music, Fashion, Film and video, Photography, Art, Design, Food,\nDigital art, Tech and software, Writing and media, Professional services,\nFounder or business, Other).",
+            "enum": [
+              "Music",
+              "Fashion",
+              "Film and video",
+              "Photography",
+              "Art",
+              "Design",
+              "Food",
+              "Digital art",
+              "Tech and software",
+              "Writing and media",
+              "Professional services",
+              "Founder or business",
+              "Other"
+            ]
+          },
+          "city": {
+            "type": "string",
+            "description": "The conference city they will attend (optional): Lagos, Abuja, Port\nHarcourt, Enugu or Online.",
+            "enum": [
+              "Lagos",
+              "Abuja",
+              "Port Harcourt",
+              "Enugu",
+              "Online"
+            ]
+          },
+          "updatesOptIn": {
+            "type": "boolean",
+            "description": "They asked for launch and conference updates on WhatsApp and email\n(optional). Sending nothing means the question was not asked."
+          },
           "consent": {
             "type": "boolean",
             "description": "The consent line (with the privacy link) was accepted. Must be true."
+          },
+          "referralCode": {
+            "type": "string",
+            "description": "A referral code (optional): 3 to 20 letters and numbers, in any case.\nLeave it out, or empty, to pay the standard price. A code we do not have\nis refused (`referral_unknown`); one that is switched off or full is not\nrefused: the person registers at the standard price and the answer's\n`referral` says the code was not applied.",
+            "maxLength": 60
           }
         },
         "required": [
@@ -33852,6 +35015,69 @@
         "required": [
           "code"
         ]
+      },
+      "CreateReferralCodeDto": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer",
+            "description": "What a person using the code pays, in whole kobo: 0 (free) up to the offer's price.",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "limit": {
+            "type": "integer",
+            "nullable": true,
+            "description": "How many people may use the code. Leave out, or null, for no limit.",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "code": {
+            "type": "string",
+            "description": "3 to 20 letters and digits. Stored in upper case; matched in any case.",
+            "maxLength": 60
+          },
+          "community": {
+            "type": "string",
+            "description": "The community the code is for: the label the owner tracks by.",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Whether the code works. Defaults to true."
+          }
+        },
+        "required": [
+          "priceKobo",
+          "code",
+          "community"
+        ]
+      },
+      "UpdateReferralCodeDto": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 2147483647
+          },
+          "limit": {
+            "type": "integer",
+            "nullable": true,
+            "description": "A number, or null to remove the limit.",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "community": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "active": {
+            "type": "boolean"
+          }
+        }
       },
       "CreateAdCreativeDto": {
         "type": "object",
@@ -34018,36 +35244,6 @@
         "required": [
           "bankCode",
           "accountNumber"
-        ]
-      },
-      "WawuTransferDto": {
-        "type": "object",
-        "properties": {
-          "amountKobo": {
-            "type": "integer",
-            "description": "What the recipient gets, in kobo.",
-            "minimum": 1,
-            "maximum": 9007199254740991
-          },
-          "expectedTotalKobo": {
-            "type": "integer",
-            "description": "`totalKobo` from the fee quote the person saw. A different server total is `quote_changed`.",
-            "minimum": 1
-          },
-          "recipientWawuUserId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "note": {
-            "type": "string",
-            "description": "W9's optional note.",
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "amountKobo",
-          "expectedTotalKobo",
-          "recipientWawuUserId"
         ]
       },
       "BankTransferDto": {
@@ -34426,6 +35622,202 @@
           "rowCount",
           "content",
           "generatedAt"
+        ]
+      },
+      "StatementDeliveryView": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "canEmail": {
+            "type": "boolean"
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "csv"
+              ]
+            }
+          }
+        },
+        "required": [
+          "email",
+          "canEmail",
+          "formats"
+        ]
+      },
+      "StatementEmailView": {
+        "type": "object",
+        "properties": {
+          "sentTo": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv"
+            ]
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "rowCount": {
+            "type": "number"
+          },
+          "sentAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sentTo",
+          "from",
+          "to",
+          "format",
+          "fileName",
+          "rowCount",
+          "sentAt"
+        ]
+      },
+      "PaginationMeta": {
+        "type": "object",
+        "properties": {
+          "currentPage": {
+            "type": "number"
+          },
+          "nextPage": {
+            "type": "number",
+            "nullable": true
+          },
+          "perPage": {
+            "type": "number"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "currentPage",
+          "nextPage",
+          "perPage",
+          "total"
+        ]
+      },
+      "NotificationsResponse": {
+        "type": "object",
+        "properties": {
+          "unreadCount": {
+            "type": "number"
+          },
+          "items": {
+            "type": "object",
+            "properties": {
+              "statusCode": {
+                "type": "number",
+                "enum": [
+                  200
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "data": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "userWawuId": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "tone": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "creditsCount": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "actionLabel": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "read": {
+                      "type": "boolean"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "imageUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "actionHref": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "campaignId": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "userWawuId",
+                    "kind",
+                    "title",
+                    "body",
+                    "tone",
+                    "amount",
+                    "creditsCount",
+                    "actionLabel",
+                    "read",
+                    "createdAt",
+                    "imageUrl",
+                    "actionHref",
+                    "campaignId"
+                  ]
+                }
+              },
+              "pagination": {
+                "$ref": "#/components/schemas/PaginationMeta"
+              }
+            },
+            "required": [
+              "statusCode",
+              "message",
+              "data",
+              "pagination"
+            ]
+          }
+        },
+        "required": [
+          "unreadCount",
+          "items"
         ]
       },
       "FeeQuotePartView": {
@@ -35474,6 +36866,151 @@
           "completedAt"
         ]
       },
+      "TransferTimelineEntry": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "failed",
+              "reversed",
+              "requested",
+              "sent_to_bank"
+            ]
+          }
+        },
+        "required": [
+          "step"
+        ]
+      },
+      "TransferReversalView": {
+        "type": "object",
+        "properties": {
+          "returnedKobo": {
+            "type": "integer"
+          },
+          "keptKobo": {
+            "type": "integer"
+          },
+          "reversedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "returnedKobo",
+          "keptKobo",
+          "reversedAt"
+        ]
+      },
+      "TransferView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "wawu_user",
+              "bank_account"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed",
+              "reversed"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "fee": {
+            "$ref": "#/components/schemas/FeeBreakdown"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "reference": {
+            "type": "string"
+          },
+          "toWawuUser": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoneyPartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "toBankAccount": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BankAccountView"
+              }
+            ],
+            "nullable": true
+          },
+          "timeline": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransferTimelineEntry"
+            }
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "reversal": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransferReversalView"
+              }
+            ],
+            "nullable": true
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "transactionId": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "amountKobo",
+          "fee",
+          "totalKobo",
+          "note",
+          "reference",
+          "toWawuUser",
+          "toBankAccount",
+          "timeline",
+          "failureReason",
+          "reversal",
+          "statusMessage",
+          "transactionId",
+          "createdAt",
+          "completedAt"
+        ]
+      },
       "RecipientView": {
         "type": "object",
         "properties": {
@@ -35831,138 +37368,6 @@
           "accessToken",
           "refreshToken",
           "expiresIn"
-        ]
-      },
-      "PaginationMeta": {
-        "type": "object",
-        "properties": {
-          "currentPage": {
-            "type": "number"
-          },
-          "nextPage": {
-            "type": "number",
-            "nullable": true
-          },
-          "perPage": {
-            "type": "number"
-          },
-          "total": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "currentPage",
-          "nextPage",
-          "perPage",
-          "total"
-        ]
-      },
-      "NotificationsResponse": {
-        "type": "object",
-        "properties": {
-          "unreadCount": {
-            "type": "number"
-          },
-          "items": {
-            "type": "object",
-            "properties": {
-              "statusCode": {
-                "type": "number",
-                "enum": [
-                  200
-                ]
-              },
-              "message": {
-                "type": "string"
-              },
-              "data": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string"
-                    },
-                    "userWawuId": {
-                      "type": "string"
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
-                    },
-                    "kind": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "body": {
-                      "type": "string"
-                    },
-                    "tone": {
-                      "type": "string"
-                    },
-                    "amount": {
-                      "type": "number",
-                      "nullable": true
-                    },
-                    "creditsCount": {
-                      "type": "number",
-                      "nullable": true
-                    },
-                    "actionLabel": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "read": {
-                      "type": "boolean"
-                    },
-                    "imageUrl": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "actionHref": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "campaignId": {
-                      "type": "string",
-                      "nullable": true
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "userWawuId",
-                    "createdAt",
-                    "kind",
-                    "title",
-                    "body",
-                    "tone",
-                    "amount",
-                    "creditsCount",
-                    "actionLabel",
-                    "read",
-                    "imageUrl",
-                    "actionHref",
-                    "campaignId"
-                  ]
-                }
-              },
-              "pagination": {
-                "$ref": "#/components/schemas/PaginationMeta"
-              }
-            },
-            "required": [
-              "statusCode",
-              "message",
-              "data",
-              "pagination"
-            ]
-          }
-        },
-        "required": [
-          "unreadCount",
-          "items"
         ]
       },
       "StorageUsage": {
@@ -37648,6 +39053,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -37656,13 +39068,6 @@
               "live",
               "removed"
             ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "title": {
-            "type": "string"
           },
           "creatorWawuId": {
             "type": "string"
@@ -37746,9 +39151,9 @@
         },
         "required": [
           "id",
-          "status",
-          "createdAt",
           "title",
+          "createdAt",
+          "status",
           "creatorWawuId",
           "slug",
           "contentType",
@@ -37776,6 +39181,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -37784,13 +39196,6 @@
               "live",
               "removed"
             ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "title": {
-            "type": "string"
           },
           "creatorWawuId": {
             "type": "string"
@@ -37886,9 +39291,9 @@
         },
         "required": [
           "id",
-          "status",
-          "createdAt",
           "title",
+          "createdAt",
+          "status",
           "creatorWawuId",
           "slug",
           "contentType",
@@ -38124,6 +39529,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -38132,13 +39544,6 @@
               "live",
               "removed"
             ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "title": {
-            "type": "string"
           },
           "creatorWawuId": {
             "type": "string"
@@ -38240,9 +39645,9 @@
         },
         "required": [
           "id",
-          "status",
-          "createdAt",
           "title",
+          "createdAt",
+          "status",
           "creatorWawuId",
           "slug",
           "contentType",
@@ -38715,6 +40120,9 @@
           "id": {
             "type": "string"
           },
+          "amount": {
+            "type": "number"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -38722,9 +40130,6 @@
               "awaiting_response",
               "responded"
             ]
-          },
-          "amount": {
-            "type": "number"
           },
           "creatorWawuId": {
             "type": "string"
@@ -38784,8 +40189,8 @@
         },
         "required": [
           "id",
-          "status",
           "amount",
+          "status",
           "creatorWawuId",
           "senderWawuId",
           "text",
@@ -43771,6 +45176,206 @@
           "suppressedByPreference"
         ]
       },
+      "EmailTemplateView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "previewText": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "version": {
+            "type": "number"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "subject",
+          "previewText",
+          "body",
+          "version",
+          "updatedAt"
+        ]
+      },
+      "EmailPreviewView": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string"
+          },
+          "html": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subject",
+          "html",
+          "text"
+        ]
+      },
+      "EmailAudienceCountView": {
+        "type": "object",
+        "properties": {
+          "matching": {
+            "type": "number"
+          },
+          "willSend": {
+            "type": "number"
+          },
+          "unsubscribed": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "matching",
+          "willSend",
+          "unsubscribed"
+        ]
+      },
+      "EmailCampaignView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "templateName": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "audienceKind": {
+            "type": "string"
+          },
+          "audienceNote": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "sending",
+              "ready"
+            ]
+          },
+          "totalCount": {
+            "type": "number"
+          },
+          "queuedCount": {
+            "type": "number"
+          },
+          "sentCount": {
+            "type": "number"
+          },
+          "failedCount": {
+            "type": "number"
+          },
+          "skippedCount": {
+            "type": "number"
+          },
+          "unsubscribedCount": {
+            "type": "number"
+          },
+          "invalidCount": {
+            "type": "number"
+          },
+          "duplicateCount": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "finishedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "templateName",
+          "subject",
+          "audienceKind",
+          "audienceNote",
+          "status",
+          "totalCount",
+          "queuedCount",
+          "sentCount",
+          "failedCount",
+          "skippedCount",
+          "unsubscribedCount",
+          "invalidCount",
+          "duplicateCount",
+          "createdAt",
+          "startedAt",
+          "finishedAt"
+        ]
+      },
+      "EmailRecipientView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "firstName": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "sent",
+              "queued",
+              "skipped"
+            ]
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          },
+          "sentAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "firstName",
+          "status",
+          "error",
+          "sentAt"
+        ]
+      },
       "ExploreCreatorCard": {
         "type": "object",
         "properties": {
@@ -44395,11 +46000,6 @@
           "id": {
             "type": "string"
           },
-          "updatedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
           "kind": {
             "type": "string",
             "enum": [
@@ -44410,6 +46010,11 @@
           },
           "title": {
             "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
           },
           "updated": {
             "type": "string",
@@ -44447,9 +46052,9 @@
         },
         "required": [
           "id",
-          "updatedAt",
           "kind",
           "title",
+          "updatedAt",
           "updated",
           "country",
           "subtitle",
@@ -44496,13 +46101,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
           "updatedAt": {
             "type": "string",
             "format": "date-time",
             "nullable": true
-          },
-          "title": {
-            "type": "string"
           },
           "description": {
             "type": "string"
@@ -44540,8 +46145,8 @@
         },
         "required": [
           "id",
-          "updatedAt",
           "title",
+          "updatedAt",
           "description",
           "format",
           "fileUrl",
@@ -49543,6 +51148,18 @@
             "type": "string",
             "nullable": true
           },
+          "craft": {
+            "type": "string",
+            "nullable": true
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "updatesOptIn": {
+            "type": "boolean",
+            "nullable": true
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -49585,6 +51202,14 @@
           },
           "createdAt": {
             "type": "string"
+          },
+          "referralCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "referralCommunity": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -49595,6 +51220,9 @@
           "email",
           "state",
           "makes",
+          "craft",
+          "city",
+          "updatesOptIn",
           "status",
           "amountKobo",
           "paidKobo",
@@ -49605,7 +51233,93 @@
           "claimed",
           "claimedByWawuId",
           "claimedAt",
-          "createdAt"
+          "createdAt",
+          "referralCode",
+          "referralCommunity"
+        ]
+      },
+      "AdminWaitlistSplitRowView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "nullable": true
+          },
+          "community": {
+            "type": "string",
+            "nullable": true
+          },
+          "people": {
+            "type": "number"
+          },
+          "kobo": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "code",
+          "community",
+          "people",
+          "kobo"
+        ]
+      },
+      "AdminWaitlistSummaryView": {
+        "type": "object",
+        "properties": {
+          "offerId": {
+            "type": "string",
+            "nullable": true
+          },
+          "paid": {
+            "type": "object",
+            "properties": {
+              "people": {
+                "type": "number"
+              },
+              "kobo": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "people",
+              "kobo"
+            ]
+          },
+          "failed": {
+            "type": "object",
+            "properties": {
+              "people": {
+                "type": "number"
+              },
+              "kobo": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "people",
+              "kobo"
+            ]
+          },
+          "unpaid": {
+            "type": "number"
+          },
+          "split": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminWaitlistSplitRowView"
+            }
+          },
+          "generatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "offerId",
+          "paid",
+          "failed",
+          "unpaid",
+          "split",
+          "generatedAt"
         ]
       },
       "AdminWaitlistExportView": {
@@ -49671,6 +51385,58 @@
           "tier"
         ]
       },
+      "AdminReferralCodeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "community": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "number",
+            "nullable": true
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "paidCount": {
+            "type": "number"
+          },
+          "heldCount": {
+            "type": "number"
+          },
+          "paidKobo": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "community",
+          "priceKobo",
+          "limit",
+          "active",
+          "paidCount",
+          "heldCount",
+          "paidKobo",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
       "WaitlistOfferView": {
         "type": "object",
         "properties": {
@@ -49705,6 +51471,33 @@
           "products",
           "days",
           "closesAt"
+        ]
+      },
+      "WaitlistReferralCheckView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "applies": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "full",
+              "inactive"
+            ],
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "code",
+          "applies",
+          "priceKobo"
         ]
       },
       "WaitlistCheckoutView": {
@@ -49745,6 +51538,51 @@
           "customerPhone"
         ]
       },
+      "WaitlistRegistrationCompletedView": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "paid"
+            ]
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "accessCode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "firstName",
+          "accessCode"
+        ]
+      },
+      "WaitlistReferralOutcomeView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "applied": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "full",
+              "inactive"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "code",
+          "applied"
+        ]
+      },
       "WaitlistRegistrationStartView": {
         "type": "object",
         "properties": {
@@ -49758,14 +51596,22 @@
             "type": "integer"
           },
           "flutterwaveConfig": {
-            "$ref": "#/components/schemas/WaitlistCheckoutView"
+            "$ref": "#/components/schemas/WaitlistCheckoutView",
+            "nullable": true
+          },
+          "completed": {
+            "$ref": "#/components/schemas/WaitlistRegistrationCompletedView",
+            "nullable": true
+          },
+          "referral": {
+            "$ref": "#/components/schemas/WaitlistReferralOutcomeView",
+            "nullable": true
           }
         },
         "required": [
           "reference",
           "offerId",
-          "amountKobo",
-          "flutterwaveConfig"
+          "amountKobo"
         ]
       },
       "WaitlistRegistrationStatusView": {
@@ -50564,141 +52410,6 @@
           "bankName",
           "accountNumber",
           "accountName"
-        ]
-      },
-      "TransferTimelineEntry": {
-        "type": "object",
-        "properties": {
-          "step": {
-            "type": "string",
-            "enum": [
-              "completed",
-              "failed",
-              "reversed",
-              "requested",
-              "sent_to_bank"
-            ]
-          }
-        },
-        "required": [
-          "step"
-        ]
-      },
-      "TransferReversalView": {
-        "type": "object",
-        "properties": {
-          "returnedKobo": {
-            "type": "integer"
-          },
-          "keptKobo": {
-            "type": "integer"
-          },
-          "reversedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "returnedKobo",
-          "keptKobo",
-          "reversedAt"
-        ]
-      },
-      "TransferView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "wawu_user",
-              "bank_account"
-            ]
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "completed",
-              "failed",
-              "reversed"
-            ]
-          },
-          "amountKobo": {
-            "type": "integer"
-          },
-          "fee": {
-            "$ref": "#/components/schemas/FeeBreakdown"
-          },
-          "totalKobo": {
-            "type": "integer"
-          },
-          "note": {
-            "type": "string",
-            "nullable": true
-          },
-          "reference": {
-            "type": "string"
-          },
-          "toWawuUser": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MoneyPartyView"
-              }
-            ],
-            "nullable": true
-          },
-          "toBankAccount": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/BankAccountView"
-              }
-            ],
-            "nullable": true
-          },
-          "timeline": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TransferTimelineEntry"
-            }
-          },
-          "failureReason": {
-            "type": "string",
-            "nullable": true
-          },
-          "reversal": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/TransferReversalView"
-              }
-            ],
-            "nullable": true
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "completedAt": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "kind",
-          "status",
-          "amountKobo",
-          "fee",
-          "totalKobo",
-          "note",
-          "reference",
-          "toWawuUser",
-          "toBankAccount",
-          "timeline",
-          "failureReason",
-          "reversal",
-          "createdAt",
-          "completedAt"
         ]
       }
     }

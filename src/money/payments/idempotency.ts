@@ -439,10 +439,14 @@ export const CurrentIdempotencyScope = createParamDecorator(
  */
 export function RequireIdempotentApproval(
   route: string,
-  ...beforeApproval: Array<Type<CanActivate>>
+  ...beforeApproval: Type<CanActivate>[]
 ): MethodDecorator {
   return applyDecorators(
     SetMetadata(ROUTE_KEY, route),
+    // `beforeApproval`: guards of the route's own that must answer BEFORE the
+    // PIN is looked at, and after a repeat has been answered (WALLET-07: who
+    // the money is going to). A refusal from one gives the key back
+    // (IdempotencyFilter), and uses no PIN try.
     UseGuards(WalletGateGuard, IdempotencyGuard, ...beforeApproval),
     RequireApproval(),
     UseFilters(IdempotencyFilter),
