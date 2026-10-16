@@ -8,7 +8,9 @@ import {
   StatementRateLimiter,
   StatementSlots,
 } from './statements/statement-config';
+import { StatementEmailService } from './statements/statement-email.service';
 import { StatementService } from './statements/statement.service';
+import { WawuIdMailRelay } from '../admin/notifications/email/email-provider';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { FeeSettings } from './fees/fee-config';
@@ -32,6 +34,7 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
 import { BeneficiaryService } from './saved-accounts/beneficiary.service';
 import { MoneySavedAccountsController } from './saved-accounts/money-saved-accounts.controller';
 import { PayoutAccountService } from './saved-accounts/payout-account.service';
+import { SavedAccountTargetService } from './saved-accounts/saved-account-target.service';
 import { PinRequestKeyFilter, PinRequestKeyGuard } from './pin/pin-request-key';
 import {
   PinRequestFingerprints,
@@ -43,6 +46,12 @@ import { HoldViewService } from './holds/hold-view.service';
 import { MoneyHoldsController } from './holds/money-holds.controller';
 import { WalletHoldService } from './holds/wallet-hold.service';
 import { MoneyPaymentsController } from './payments/money-payments.controller';
+import { MoneyTransfersController } from './transfers/money-transfers.controller';
+import {
+  TransferRecipientGuard,
+  TransferRecipients,
+} from './transfers/transfer-recipient';
+import { WalletTransferService } from './transfers/wallet-transfer.service';
 import { PayableRegistry } from './payments/payable-registry';
 import { PaymentSettings } from './payments/payment-config';
 import { WalletPaymentService } from './payments/wallet-payment.service';
@@ -57,6 +66,10 @@ import { MoneyReceiptController } from './receipts/money-receipt.controller';
 import { PublicReceiptController } from './receipts/public-receipt.controller';
 import { ReceiptSettings } from './receipts/receipt-config';
 import { ReceiptService } from './receipts/receipt.service';
+import { MoneyCheckSettings } from './check/money-check-config';
+import { MoneyCheckMailer } from './check/money-check-mailer';
+import { MoneyCheckScope } from './check/money-check-scope';
+import { MoneyCheckService } from './check/money-check.service';
 import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
 import { MoneyLimitsModule } from './limits/money-limits.module';
 import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
@@ -148,11 +161,28 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
  * the history's detail; the public check (`/r/{code}`, no sign-in,
  * throttled) shows only what proves the movement. Neither calls Fintava.
  *
+ * MONEY-16: the nightly check against the wallet provider
+ * (`src/money/check/`). Once a night, at the hour in MONEY_CHECK_TIME (Lagos),
+ * it compares every wallet's debits and balance, WAWU's own account, the money
+ * held for payers and payees, and WAWU's charge on each send with the ledger,
+ * lists what a person has to look at, and has the report emailed through WAWU
+ * ID. It adds no route and only reads: a difference is reported, never fixed.
+ * It runs where ScheduleModule.forRoot() is loaded; a run is claimed in the
+ * database, so two Hub processes make one run. `npm run money:check` makes
+ * it by hand.
+ *
  * WALLET-08: finding a person to send money to (`/money/recipients`,
  * `/money/recipients/recent`), behind the wallet gate: only people with an
  * open wallet, never the caller, never anyone blocked either way
  * (BlockedAccountService), the recent ones from the ledger. It never calls
  * Fintava.
+ *
+ * WALLET-07: sending money to another WAWU user (`POST /money/transfers/wawu`,
+ * `GET /money/transfers/{id}`): one wallet-to-wallet transfer from the
+ * sender's wallet to the receiver's, the Idempotency-Key enforced, who the
+ * money goes to checked before the PIN, and a sweep that settles a send whose
+ * answer was lost from the provider's own record (it runs where
+ * ScheduleModule.forRoot() is loaded). It never sends twice.
  *
  * WALLET-27: statements (`/money/statements`), the caller's completed
  * movements over a period of Lagos days as a CSV file, behind the wallet
@@ -184,6 +214,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyStatementController,
     MoneyFeesController,
     MoneyPaymentsController,
+    MoneyTransfersController,
     MoneyHoldsController,
     MoneyReceiptController,
     PublicReceiptController,
@@ -210,8 +241,11 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     BankAccountCheckService,
     BeneficiaryService,
     PayoutAccountService,
+    SavedAccountTargetService,
     TransactionHistoryService,
     StatementService,
+    StatementEmailService,
+    WawuIdMailRelay,
     StatementRateLimiter,
     StatementSlots,
     FeeSettings,
@@ -222,12 +256,19 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MerchantWallet,
     PayableRegistry,
     WalletPaymentService,
+    TransferRecipients,
+    TransferRecipientGuard,
+    WalletTransferService,
     HoldViewService,
     WalletHoldService,
     ReceiptSettings,
     ReceiptService,
     RecipientService,
     RecipientSearchLimiter,
+    MoneyCheckSettings,
+    MoneyCheckMailer,
+    MoneyCheckScope,
+    MoneyCheckService,
   ],
   exports: [
     WalletGate,
@@ -247,6 +288,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletPaymentService,
     WalletHoldService,
     HoldViewService,
+    MoneyCheckService,
   ],
 })
 export class MoneyModule {}

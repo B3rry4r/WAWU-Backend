@@ -1,5 +1,18 @@
-import { Controller, Get, Header, Query, UseGuards } from '@nestjs/common';
-import { ApiBearerAuth } from '@nestjs/swagger';
+import {
+  Body,
+  Controller,
+  Get,
+  Header,
+  HttpCode,
+  Post,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import { ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
+import type { Request } from 'express';
+import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import {
   CurrentWallet,
@@ -8,6 +21,12 @@ import {
 } from '../gate/wallet-gate';
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import { StatementRateLimiter } from './statement-config';
+import { StatementEmailDto } from './statement-email.dto';
+import { StatementEmailService } from './statement-email.service';
+import type {
+  StatementDeliveryView,
+  StatementEmailView,
+} from './statement-email-view.type';
 import { StatementQueryDto } from './statement-query.dto';
 import type { StatementView } from './statement-view.type';
 import { checkedPeriod, StatementService } from './statement.service';
@@ -24,8 +43,9 @@ import { MoneyError } from '../money-error';
  * Fintava, so it never answers `provider_unreachable`. `no-store`, as the
  * history: a statement for today changes as money moves.
  *
- * Emailing the statement (W38 "Send to") is not served: the backend has no
- * email sender (BACKEND_GAPS G-69). A stamped PDF is not served: Fintava
+ * Emailing a statement (W38 "Send to", task WALLET-35) is `POST
+ * /money/statements/email`: it goes through WAWU ID's mail relay to the
+ * person's own confirmed address. A stamped PDF is not served: Fintava
  * issues no statement (G-68).
  */
 @ApiBearerAuth('wawu-id')
@@ -35,6 +55,7 @@ export class MoneyStatementController {
   constructor(
     private readonly statements: StatementService,
     private readonly limiter: StatementRateLimiter,
+    private readonly emails: StatementEmailService,
   ) {}
 
   /**
@@ -75,6 +96,77 @@ export class MoneyStatementController {
       // Too many rows is the person's to fix by a shorter range, like the
       // other 400s: it does not count (lead ruling, round 4). A busy answer
       // (503) does count.
+      if (e instanceof MoneyError && e.code === 'statement_too_large')
+        giveBack();
+      throw e;
+    }
+  }
+  /**
+   * Where a statement can be sent and in which formats (W38's "Send to" and
+   * its format choice). Reads the token only: the address is the person's
+   * own confirmed email, masked, or null when there is none to use
+   * (`canEmail` false).
+   */
+  @Get('statements/delivery')
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('WALLET-35')
+  @RequireOpenWallet()
+  @MoneyErrors(...WALLET_GATE_ERRORS)
+  delivery(@CurrentUser() user: WawuJwtClaims): StatementDeliveryView {
+    return this.emails.delivery(user);
+  }
+
+  /**
+   * Email a statement (W38 "Send statement"). The same period rules and the
+   * same file as `GET /money/statements`, attached to a mail sent to the
+   * person's own confirmed address: the request carries none, so a statement
+   * cannot be sent to anyone else. No confirmed email is `409
+   * email_not_verified`; a mail that could not be handed to WAWU ID's sender
+   * is `503 statement_email_failed`. The limits of `GET /money/statements`
+   * apply and are shared with it: an emailed statement is one statement.
+   * An optional `Idempotency-Key` makes a repeat answer the first mail
+   * instead of sending a second.
+   */
+  @Post('statements/email')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      '8 to 128 of A-Z a-z 0-9 _ -. The same key for the same person answers the first mail again.',
+  })
+  @BuiltBy('WALLET-35')
+  @RequireOpenWallet()
+  @MoneyErrors(
+    ...WALLET_GATE_ERRORS,
+    'email_not_verified',
+    'statement_email_failed',
+    'statement_too_large',
+    'statement_rate_limited',
+    'statement_busy',
+  )
+  async emailStatement(
+    @CurrentWallet() wallet: OpenWallet,
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: StatementEmailDto,
+    // Read from the request, not declared as a parameter: the header is
+    // optional, and a declared one would be required in the contract.
+    @Req() req: Request,
+  ): Promise<StatementEmailView> {
+    // The route's own 400s and the 409 come before the person is counted.
+    checkedPeriod(dto.from, dto.to, new Date());
+    const to = this.emails.addressFor(user);
+    const giveBack = this.limiter.take(wallet.wawuUserId);
+    try {
+      const key = req.headers['idempotency-key'];
+      return await this.emails.send(
+        wallet,
+        to,
+        dto,
+        typeof key === 'string' ? key : undefined,
+      );
+    } catch (e) {
       if (e instanceof MoneyError && e.code === 'statement_too_large')
         giveBack();
       throw e;
