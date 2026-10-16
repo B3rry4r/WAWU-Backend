@@ -112,6 +112,15 @@ export const FINISHING_MESSAGE =
 /** What the provider sees on the transfer. Names nobody and nothing personal. */
 export const PAYMENT_NARRATION = 'WAWU purchase';
 
+/**
+ * The limit a payment is counted against (WALLET-23, NUV-07): a bill has its
+ * own limits (`WAWU_LIMIT_BILL_*`, and the ledger counts it as a bill), every
+ * other payment is a purchase. BILLS-04.
+ */
+export function limitKindOf(kind: string): 'bill' | 'purchase' {
+  return kind === 'bill' ? 'bill' : 'purchase';
+}
+
 /** Rows per page of the sweep, and pages per pass. */
 const SWEEP_PAGE = 50;
 const SWEEP_PAGES = 20;
@@ -357,7 +366,7 @@ export class WalletPaymentService implements OnModuleInit {
       q.kind,
       q.targetId,
       target,
-      await this.withStanding(wallet.wawuUserId, fee, target.priceKobo),
+      await this.withStanding(wallet.wawuUserId, fee, target.priceKobo, q.kind),
       balanceKobo,
     );
   }
@@ -371,10 +380,11 @@ export class WalletPaymentService implements OnModuleInit {
     payer: string,
     fee: FeeQuoteView,
     priceKobo: number,
+    kind: PaymentKind,
   ): Promise<FeeQuoteView> {
     const standing = await this.limits.dailyStanding({
       wawuUserId: payer,
-      kind: 'purchase',
+      kind: limitKindOf(kind),
       amountKobo: priceKobo,
     });
     return { ...fee, ...standing };
@@ -524,7 +534,7 @@ export class WalletPaymentService implements OnModuleInit {
           await this.limits.assertMayMove(
             {
               wawuUserId: data.payerWawuUserId!,
-              kind: 'purchase',
+              kind: limitKindOf(data.kind),
               amountKobo: koboNumber(BigInt(data.priceKobo)),
             },
             { tx },
@@ -622,7 +632,12 @@ export class WalletPaymentService implements OnModuleInit {
         dto.kind,
         dto.targetId,
         target,
-        await this.withStanding(wallet.wawuUserId, fresh, target.priceKobo),
+        await this.withStanding(
+          wallet.wawuUserId,
+          fresh,
+          target.priceKobo,
+          dto.kind,
+        ),
         await this.balanceOrNull(wallet),
       ),
     });

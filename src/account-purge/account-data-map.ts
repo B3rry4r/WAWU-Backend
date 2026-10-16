@@ -383,6 +383,16 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'ANONYMISED',
     clear: ['destinationAccountNumber'],
   },
+  // A bill paid from the wallet (BILLS-04) is the record of money that moved
+  // and of what the biller delivered, so the row stays when the account goes;
+  // their side is anonymised, and so are the meter, phone or smartcard number
+  // and the name Fintava held for it (the token is for the meter, not a person).
+  {
+    model: 'WalletBill',
+    column: 'wawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['accountNumber', 'accountName'],
+  },
   // The codes this person made to share their receipts (WALLET-18). They go
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },

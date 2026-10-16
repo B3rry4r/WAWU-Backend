@@ -133,7 +133,7 @@ payment onto the wallet.
 | `school_fee` | SCHOOLS-07 | the enrolment order id | no | no |
 | `paid_dm` | INBOX-17 | the message id `POST /dm/:creatorWawuId/send` returns | no | until the creator answers |
 | `event_ticket` | EVENTS-07 | the order id `POST /events/:id/orders` returns | no | until the event takes place |
-| `bill` | BILLS-04 | the bill id `POST /bills/init` returns | no | until the biller delivers |
+| `bill` | BILLS-04 | the bill id `POST /bills/wallet` returns (`POST /bills/init` is the web's Flutterwave route and stays as it is); the price moved is the bill, Fintava's bill charge and WAWU's bill fee, in one transfer (R-31) | no | until the biller delivers |
 | `tier`, `tier_bump` | TIER-03 | the terms: `tier-<tierId>`, `renew-<tierId>` or `upgrade-<fromTierId>-<tierId>` (`GET /plans/purchases/quote` builds it; `tier_bump` adds the checkout bump) | no | no (WAWU's own sale, no seller split; a payment whose plan cannot be granted when it confirms is refunded in full, docs/contract/PLANS.md section 8) |
 | `points_cash_out` | POINTS-04 | the conversion id `POST /points/convert` returns | no | no (never paid by a person: it is the ledger link of WAWU's cash paid into the wallet for points, docs/contract/CONVENTIONS.md section 20; a payment for it is `target_not_payable`) |
 

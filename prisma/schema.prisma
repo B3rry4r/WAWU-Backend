@@ -6456,3 +6456,71 @@ model SearchHistory {
   @@index([userWawuId, searchedAt])
   @@index([searchedAt, queryKey])
 }
+
+/// BILLS-04. A bill paid from the wallet: electricity, airtime, data or cable
+/// TV. One row per bill, made before it is paid (`draft`, the target the pay
+/// sheet quotes), paid with a `bill` WalletPayment into WAWU's own account
+/// (R-19), and then bought from the biller at Fintava out of that account.
+/// The row is the feature's own record of the bill; the money is the payment's
+/// and the hold's, and the provider's balance stays the only balance.
+///
+/// `status`: draft (made, not paid), buying (paid; the purchase is not made yet
+/// or its outcome is not known), delivered (the biller delivered; the hold is
+/// released) or failed (the biller did not; the hold is refunded to the payer).
+/// `purchaseSentAt` set means a record may exist at the biller: the purchase is
+/// asked about and never sent again until Fintava's own record says. Fintava's
+/// bill calls take no reference of ours, so this column is the only guard
+/// against buying twice.
+///
+/// Every figure is integer kobo. `amountKobo` is the bill's own amount (what the
+/// biller gets); the payment's price is `amountKobo + billChargeKobo +
+/// serviceFeeKobo`, all moved into WAWU's account in one transfer (R-31).
+model WalletBill {
+  id                   String    @id @default(uuid())
+  /// The buyer. Null once their account is deleted: the money record stays,
+  /// the meter or number and the name on it go with the account.
+  wawuUserId           String?
+  /// electricity, airtime, data or cable.
+  category             String
+  /// The disco code, the mobile network or the cable provider, as Fintava names it.
+  billerCode           String
+  /// What a person reads for the biller ("Ikeja Electric", "MTN", "DStv").
+  title                String
+  /// prepaid or postpaid (electricity only).
+  planType             String?
+  /// A data bundle's or a cable plan's code at Fintava.
+  productCode          String?
+  /// What that code is called ("1.5GB", "Compact").
+  productLabel         String?
+  /// The meter, phone or smartcard number.
+  accountNumber        String?
+  /// The name Fintava holds for the meter, when the buyer had it checked.
+  accountName          String?
+  amountKobo           BigInt
+  billChargeKobo       BigInt
+  serviceFeeKobo       BigInt
+  status               String    @default("draft")
+  /// The reference a person quotes: WAW-BIL- and eight characters.
+  reference            String    @unique
+  /// The wallet payment that paid it (WalletPayment.id) and its hold.
+  paymentId            String?   @unique
+  holdId               String?
+  /// When the purchase was handed to Fintava (see above).
+  purchaseSentAt       DateTime?
+  /// How many times Fintava has been asked what became of an unknown purchase.
+  checks               Int       @default(0)
+  fintavaTransactionId String?
+  fintavaReference     String?
+  /// The electricity token and the units bought, as Fintava answered them.
+  token                String?
+  units                String?
+  failureReason        String?
+  paidAt               DateTime?
+  deliveredAt          DateTime?
+  failedAt             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([wawuUserId, createdAt])
+  @@index([status, purchaseSentAt])
+}
