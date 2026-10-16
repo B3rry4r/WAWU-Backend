@@ -36,4 +36,13 @@ export class SearchQueryDto {
   @IsOptional()
   @IsIn(SEARCH_TABS)
   tab?: SearchTab;
+
+  /**
+   * Send `communities` to have `communities` filled with the rooms whose name
+   * matches `q` (tab `all` or `communities`). Left out, `communities` is an
+   * empty array on every tab, as it always was for the web. The app sends it.
+   */
+  @IsOptional()
+  @IsIn(['communities'])
+  include?: 'communities';
 }

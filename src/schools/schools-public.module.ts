@@ -1,14 +1,17 @@
 import { Module } from '@nestjs/common';
+import { SchoolLinkController } from './school-link.controller';
+import { SchoolLinkService } from './school-link.service';
 import { SchoolsPublicController } from './schools-public.controller';
 import { SchoolsPublicService } from './schools-public.service';
 
 /**
  * Mounted by SearchResponseModule (which also needs the service for the
- * `schools` search tab), so `src/app.module.ts` is untouched.
+ * `schools` search tab), so `src/app.module.ts` is untouched. The apply link
+ * (SCHOOLS-10) rides in the same module for the same reason.
  */
 @Module({
-  controllers: [SchoolsPublicController],
-  providers: [SchoolsPublicService],
+  controllers: [SchoolsPublicController, SchoolLinkController],
+  providers: [SchoolsPublicService, SchoolLinkService],
   exports: [SchoolsPublicService],
 })
 export class SchoolsPublicModule {}

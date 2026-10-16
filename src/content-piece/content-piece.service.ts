@@ -583,7 +583,7 @@ export class ContentPieceService {
     // than silently shipping unlocked content.
     if (dto.accessType === 'paid' && dto.previewAsset === dto.fullAsset) {
       throw new BadRequestException(
-        'Paid content needs a separate free preview — previewAsset must not be the same file as fullAsset.',
+        'Paid content needs a separate free preview: previewAsset must not be the same file as fullAsset.',
       );
     }
     if (dto.accessType === 'free' && dto.price !== 0) {
@@ -982,7 +982,7 @@ export class ContentPieceService {
     );
     if (content.accessType === 'free') {
       throw new BadRequestException(
-        'This content is free — no unlock required.',
+        'This content is free, so no unlock is required.',
       );
     }
     if (content.creatorWawuId === buyerWawuId) {

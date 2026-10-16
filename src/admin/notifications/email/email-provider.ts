@@ -194,7 +194,30 @@ export class WawuIdMailRelay implements EmailTransport {
       typeof (body as { id?: unknown }).id === 'string'
         ? (body as { id: string }).id
         : null;
-    if (response.ok && id) return { ok: true, id };
+    if (response.ok && id) {
+      // A relay from before WALLET-35 drops `attachments` (its body whitelist)
+      // and still answers 200 { id }: the mail goes out with no file. So a mail
+      // that carries files is sent only when the relay says how many it took,
+      // and the number is the one sent. A mail with no files has nothing to
+      // confirm and is judged exactly as before.
+      const sentFiles = message.attachments?.length ?? 0;
+      if (sentFiles > 0) {
+        const took =
+          body &&
+          typeof body === 'object' &&
+          typeof (body as { attachments?: unknown }).attachments === 'number'
+            ? (body as { attachments: number }).attachments
+            : null;
+        if (took !== sentFiles) {
+          return {
+            ok: false,
+            transient: false,
+            error: `WAWU ID did not confirm the file (sent ${sentFiles}, it took ${took ?? 'none'}).`,
+          };
+        }
+      }
+      return { ok: true, id };
+    }
     const said =
       body &&
       typeof body === 'object' &&

@@ -107,6 +107,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'CartItem', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventGoing', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventSave', column: 'userWawuId', disposition: 'OWNED' },
+  // A tap on a school's "Continue to their site" (SCHOOLS-10): who, which
+  // course, when. The person's own record of what they opened, so it goes
+  // with them. The school's code needs no person and stays.
+  { model: 'SchoolLinkClick', column: 'userWawuId', disposition: 'OWNED' },
   // This person's saved creators and finished course lessons (ME-10): their
   // own bookmarks and their own progress. Both go with them.
   { model: 'SavedCreator', column: 'userWawuId', disposition: 'OWNED' },
@@ -141,6 +145,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PrivacySettings', column: 'userWawuId', disposition: 'OWNED' },
   // Whether this person wants TGIF on Today (HOME-11): theirs alone.
   { model: 'TgifPreference', column: 'userWawuId', disposition: 'OWNED' },
+  // What this person searched, kept for Recent on the Search landing (EXPLORE-05): theirs alone.
+  { model: 'SearchHistory', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'DataExportRequest', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'BlockedAccount', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person had read in each chat: theirs alone.

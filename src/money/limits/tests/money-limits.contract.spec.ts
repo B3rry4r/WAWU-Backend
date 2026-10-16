@@ -251,9 +251,11 @@ describe('NUV-07: daily and monthly limits', () => {
     ]);
     const l = limits({ [key('bank_transfer', 'daily')]: '1000000' });
     const move = (amountKobo: number) =>
-      l.assertMayMove(
-        { wawuUserId: a, kind: 'bank_transfer', amountKobo },
-        { now: NOW },
+      prisma.$transaction((tx) =>
+        l.assertMayMove(
+          { wawuUserId: a, kind: 'bank_transfer', amountKobo },
+          { tx, now: NOW },
+        ),
       );
     await expect(move(700_000)).resolves.toBeUndefined();
     expect(await refusal(move(700_001))).toMatchObject({
@@ -278,9 +280,11 @@ describe('NUV-07: daily and monthly limits', () => {
       [key('purchase', 'monthly')]: '5000000',
     });
     const move = (amountKobo: number) =>
-      l.assertMayMove(
-        { wawuUserId: a, kind: 'purchase', amountKobo },
-        { now: NOW },
+      prisma.$transaction((tx) =>
+        l.assertMayMove(
+          { wawuUserId: a, kind: 'purchase', amountKobo },
+          { tx, now: NOW },
+        ),
       );
     await expect(move(1_000_000)).resolves.toBeUndefined();
     expect((await refusal(move(1_000_001))).limit).toBe('monthly');

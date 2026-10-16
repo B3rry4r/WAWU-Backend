@@ -111,6 +111,78 @@ export function questionsForModel(matter: string): IntakeQuestion[] {
   );
 }
 
+/**
+ * The shape a profiling turn must come back in, as a Gemini response schema
+ * (FIX-22, LEGAL-01 #3). The same keys the instruction names, so the provider
+ * constrains the answer itself instead of the server chasing prose. `answers`
+ * lists this matter's own questions, each with its own option values, so a
+ * value the matter does not accept cannot be produced. `parseTurn` and
+ * `validAnswers` still read the result defensively: the schema makes the
+ * right shape likely, not certain.
+ */
+export function buildTurnSchema(matter: string): object {
+  const answerProperties: Record<string, object> = {};
+  for (const q of questionsForModel(matter)) {
+    const values = q.options?.map((o) => o.value) ?? [];
+    if (q.kind === 'single' && values.length > 0) {
+      answerProperties[q.id] = { type: 'STRING', enum: values };
+    } else if (q.kind === 'multi' && values.length > 0) {
+      answerProperties[q.id] = {
+        type: 'ARRAY',
+        items: { type: 'STRING', enum: values },
+      };
+    } else if (q.kind === 'date' || q.kind === 'text') {
+      answerProperties[q.id] = { type: 'STRING' };
+    }
+  }
+  const hasAnswers = Object.keys(answerProperties).length > 0;
+  return {
+    type: 'OBJECT',
+    properties: {
+      reply: { type: 'STRING' },
+      quickReplies: {
+        type: 'ARRAY',
+        items: { type: 'STRING' },
+        maxItems: ASSISTANT_LIMITS.quickReplies,
+      },
+      matter: {
+        type: 'STRING',
+        enum: [...LEGAL_MATTER_VALUES],
+        nullable: true,
+      },
+      headline: { type: 'STRING', nullable: true },
+      facts: {
+        type: 'ARRAY',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            label: { type: 'STRING' },
+            value: { type: 'STRING' },
+          },
+          required: ['label', 'value'],
+        },
+        maxItems: ASSISTANT_LIMITS.briefRows,
+      },
+      // A schema object with no properties is refused by the provider, so a
+      // matter with nothing to record leaves the key out (parseTurn reads a
+      // missing `answers` as {}).
+      ...(hasAnswers
+        ? { answers: { type: 'OBJECT', properties: answerProperties } }
+        : {}),
+      briefReady: { type: 'BOOLEAN' },
+    },
+    required: [
+      'reply',
+      'quickReplies',
+      'matter',
+      'headline',
+      'facts',
+      ...(hasAnswers ? ['answers'] : []),
+      'briefReady',
+    ],
+  };
+}
+
 export function buildInstruction(input: {
   matter: string;
   draft: AssistantDraft | null;

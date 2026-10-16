@@ -532,7 +532,7 @@ describe('Admin content review contract', () => {
         .post(`/api/hub/admin/content/${PIECE_LIVE}/approve`)
         .set(auth(reviewerToken))
         .expect(400);
-      expect(res.body.message).toBe('Only a pending piece can be reviewed — this one is already live.');
+      expect(res.body.message).toBe('Only a pending piece can be reviewed. This one is already live.');
       expect(await prisma.adminContentReview.count({ where: { contentId: PIECE_LIVE } })).toBe(0);
     });
 
@@ -557,7 +557,7 @@ describe('Admin content review contract', () => {
         .set(auth(reviewerToken))
         .send({ reason: '   ' })
         .expect(400);
-      expect(res.body.message).toBe('reason is required — the creator is shown it.');
+      expect(res.body.message).toBe('reason is required. The creator is shown it.');
 
       // Nothing was written on either refusal.
       const row = await prisma.contentPiece.findUniqueOrThrow({ where: { id: PIECE_PENDING_OLD } });

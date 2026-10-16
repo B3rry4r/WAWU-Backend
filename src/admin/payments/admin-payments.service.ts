@@ -168,7 +168,7 @@ export class AdminPaymentsService {
     });
     if (claimed.count === 0) {
       throw new ConflictException(
-        'This receipt is already being settled — a redelivery or another operator got there first.',
+        'This receipt is already being settled. A redelivery or another operator got there first.',
       );
     }
 
@@ -362,7 +362,7 @@ export class AdminPaymentsService {
     if (!dm) throw new NotFoundException('Direct message not found');
     if (dm.refundStatus !== 'failed') {
       throw new ConflictException(
-        `This refund is ${dm.refundStatus}, not failed — there is nothing to retry.`,
+        `This refund is ${dm.refundStatus}, not failed. There is nothing to retry.`,
       );
     }
     if (!dm.flutterwaveTxId) {
@@ -402,7 +402,7 @@ export class AdminPaymentsService {
  */
 export function reverifyBlockedReasonFor(status: ReceiptStatus): string | null {
   if (status === 'settled') {
-    return 'This charge has already been settled. Re-verifying cannot grant it a second time, and this endpoint will not pretend otherwise — open the creator or the purchase to see what was granted.';
+    return 'This charge has already been settled. Re-verifying cannot grant it a second time, and this endpoint will not pretend otherwise. Open the creator or the purchase to see what was granted.';
   }
   if (status === 'received') {
     return 'A delivery of this charge is being settled right now. Wait for it to finish; the receipt will show the outcome.';

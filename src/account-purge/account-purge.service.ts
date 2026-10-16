@@ -95,7 +95,7 @@ export class AccountPurgeService {
         // The drift test makes this unreachable in a healthy build; if it
         // ever fires, a table is being skipped and that must be loud.
         this.logger.error(
-          `No Prisma delegate for ${rule.model} — data may be left behind for ${wawuUserId}`,
+          `No Prisma delegate for ${rule.model}: data may be left behind for ${wawuUserId}`,
         );
         failed.push(`${rule.model}.${rule.column}`);
         continue;
