@@ -27,6 +27,12 @@ export const WALLET_PROVIDER_ERROR_KINDS = [
   'below_minimum',
   /** An identity check said no. */
   'identity_refused',
+  /**
+   * An identity check is with the provider's compliance review: not a
+   * refusal of the person and nothing to correct. Wait for the provider's
+   * decision; never send the details again meanwhile (NUV-01, lead ruling 4).
+   */
+  'under_review',
   /** The provider will not pay out right now. */
   'payouts_blocked',
   /** A 2xx on a write without the expected data in it: not proof either way. */
@@ -53,6 +59,10 @@ export type WalletProviderErrorKind =
 export const WALLET_PROVIDER_UNKNOWN_OUTCOMES: readonly WalletProviderErrorKind[] =
   ['outcome_unknown', 'not_confirmed', 'duplicate_reference'];
 
+/** What a person under the provider's compliance review is told (NUV-01, NUV-02). */
+export const UNDER_REVIEW_MESSAGE =
+  'Your details are being reviewed. We will let you know when the review is done.';
+
 /** The default wait a refusal tells the app, when the provider gives none. */
 export const DEFAULT_PROVIDER_RETRY_AFTER_SECONDS = 30;
 
@@ -75,6 +85,16 @@ export class WalletProviderError extends Error {
    * failed. A caller never refunds or charges again while this is true.
    */
   readonly recordMayExist: boolean;
+  /**
+   * True only when the request PROVABLY never reached the provider: the
+   * connection was refused or the host name did not resolve while the
+   * connection was being made (`connectionNeverOpened`: the error code AND
+   * the syscall that raised it, round 3). The provider has no record of it, so a caller
+   * that moves held money (MONEY-18 round 2, O1) may send it again under the
+   * same reference. `recordMayExist` is unchanged by it: a caller that does
+   * not read this flag keeps treating a lost write as an unknown outcome.
+   */
+  readonly requestNotSent: boolean;
   /** What a refusal built from this error tells the app to wait. */
   readonly retryAfterSeconds: number;
 
@@ -86,6 +106,7 @@ export class WalletProviderError extends Error {
     messages?: string[];
     reference?: string | null;
     recordMayExist?: boolean;
+    requestNotSent?: boolean;
     retryAfterSeconds?: number;
   }) {
     const status = args.httpStatus ?? null;
@@ -103,6 +124,7 @@ export class WalletProviderError extends Error {
     this.recordMayExist =
       args.recordMayExist ??
       WALLET_PROVIDER_UNKNOWN_OUTCOMES.includes(args.kind);
+    this.requestNotSent = args.requestNotSent ?? false;
     this.retryAfterSeconds =
       args.retryAfterSeconds ?? DEFAULT_PROVIDER_RETRY_AFTER_SECONDS;
   }
@@ -151,6 +173,11 @@ export function walletProviderErrorToHttp(
       return new UnprocessableEntityException(
         'We could not confirm those identity details.',
       );
+    case 'under_review':
+      // NUV-02 (the NUV-01 verifier's rule: a money route always fills
+      // `reason`, so "under review" has its code before any route answers
+      // it): 409 identity_under_review, the same sentence as before.
+      return new MoneyError('identity_under_review', UNDER_REVIEW_MESSAGE);
     case 'outcome_unknown':
     case 'not_confirmed':
     case 'duplicate_reference':

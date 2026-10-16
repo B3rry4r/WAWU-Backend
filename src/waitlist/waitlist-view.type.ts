@@ -1,0 +1,155 @@
+import type { MyTierView } from '../plans/plans-view.type';
+import type { WaitlistReferralOutcomeView } from './referral/referral-view.type';
+
+/**
+ * What the event registration routes answer (JOIN-01, R-48). Naira only:
+ * `...Kobo` fields are whole kobo; the checkout's `amount` is naira, the unit
+ * Flutterwave's checkout takes.
+ */
+
+/** GET /waitlist/offers/current: the offer open for registration. */
+export interface WaitlistOfferView {
+  id: string;
+  name: string;
+  /** The fee, in whole kobo. */
+  priceKobo: number;
+  /** The plan the fee turns into once the person signs up in the app. */
+  tierName: string;
+  /** How many products that plan lets them publish. */
+  products: number;
+  /** How many days the plan lasts. */
+  days: number;
+  /** When registration closes (ISO 8601, UTC); null when the offer has no closing date. */
+  closesAt: string | null;
+}
+
+/** The Flutterwave checkout settings the page opens the payment with. */
+export interface WaitlistCheckoutView {
+  publicKey: string;
+  /** The registration's reference: Flutterwave's tx_ref. */
+  txRef: string;
+  /** The fee in naira (kobo divided by 100). */
+  amount: number;
+  currency: 'NGN';
+  customerName: string;
+  customerEmail: string;
+  /** E.164. */
+  customerPhone: string;
+}
+
+/**
+ * POST /waitlist/registrations, when the registration is already complete:
+ * a referral code at price 0 needs no payment. What the page shows next, the
+ * same as a paid registration (the launch access code).
+ */
+export interface WaitlistRegistrationCompletedView {
+  status: 'paid';
+  /** The first name only. */
+  firstName: string;
+  /** The launch access code, "XXXX XXXX". */
+  accessCode: string;
+}
+
+/** POST /waitlist/registrations: the reference and what to pay with. */
+export interface WaitlistRegistrationStartView {
+  /** Keep this: the status and verify routes take it. */
+  reference: string;
+  offerId: string;
+  /** The fee for this registration, in whole kobo; 0 for a free referral code. */
+  amountKobo: number;
+  /** What to pay with. Absent when `completed` is present (a free registration needs no payment). */
+  flutterwaveConfig?: WaitlistCheckoutView;
+  /** Present only when the registration is already paid (a free referral code): there is no payment window. */
+  completed?: WaitlistRegistrationCompletedView;
+  /** Present only when a referral code was sent: what became of it. */
+  referral?: WaitlistReferralOutcomeView;
+}
+
+export type WaitlistRegistrationStatus = 'pending' | 'paid' | 'failed';
+
+/**
+ * GET /waitlist/registrations/{reference} and POST /waitlist/registrations/verify:
+ * where the registration stands. The first name only: never a phone or email.
+ */
+export interface WaitlistRegistrationStatusView {
+  reference: string;
+  status: WaitlistRegistrationStatus;
+  firstName: string;
+}
+
+/**
+ * POST /waitlist/claims (JOIN-03): what the code gave and what the person now
+ * holds. Never another person's details.
+ */
+export interface WaitlistClaimView {
+  /** The offer's name, as the registration page showed it. */
+  offerName: string;
+  /** The days this claim gave, counted from now. */
+  days: number;
+  /** True when the person already held a tier that had not ended and the days were added to its end. */
+  extended: boolean;
+  /** Bonus points added as one lot; 0 when the plan carries none. */
+  pointsGranted: number;
+  /** When the bonus points end (ISO 8601); null when none were added. */
+  pointsExpireAt: string | null;
+  /**
+   * When the code was claimed (ISO 8601): the moment of the first claim, the
+   * same on a repeat. A screen that is shown the answer again, after the plan
+   * began or ended, tells the person what is true from this and `tier`
+   * (JOIN-03 round 3, D4). Never the time of the repeat.
+   */
+  claimedAt: string;
+  /** The person's tier now, exactly as `GET /me/tier` answers it. */
+  tier: MyTierView;
+}
+
+/** One row of the team's list (admin). */
+export interface AdminWaitlistRegistrationView {
+  id: string;
+  offerId: string;
+  fullName: string;
+  /** E.164. */
+  phone: string;
+  email: string;
+  state: string | null;
+  makes: string | null;
+  /** What they make or do, one of the form's list; null when the client did not send it. */
+  craft: string | null;
+  /** The conference city they chose (Lagos, Abuja, Port Harcourt, Enugu or Online); null when not sent. */
+  city: string | null;
+  /** True when they asked for launch and conference updates, false when they declined, null when not asked. */
+  updatesOptIn: boolean | null;
+  status: WaitlistRegistrationStatus;
+  /** The fee asked for, in whole kobo. */
+  amountKobo: number;
+  /** What Flutterwave confirmed was paid, in whole kobo; null until paid. */
+  paidKobo: number | null;
+  paidAt: string | null;
+  reference: string;
+  /** The launch access code the payer sees, "XXXX XXXX": the first 8 characters of the reference after `wawu-join-`, upper-case, unique across all registrations. */
+  accessCode: string;
+  flutterwaveTransactionId: string | null;
+  /** True once an account has claimed the payment in the app. */
+  claimed: boolean;
+  /** The WAWU ID account that claimed the payment in the app; null until claimed. */
+  claimedByWawuId: string | null;
+  claimedAt: string | null;
+  createdAt: string;
+  /** The referral code the registration is counted under; null for no code (and for every row made before codes existed). */
+  referralCode: string | null;
+  /** The code's community when the person registered; null with `referralCode`. */
+  referralCommunity: string | null;
+}
+
+/** The CSV file the team downloads. */
+export interface AdminWaitlistExportView {
+  fileName: string;
+  /** `text/csv; charset=utf-8`. */
+  contentType: string;
+  /** How many registrations the file lists (its lines, less the header). */
+  rowCount: number;
+  /** The file itself: a byte-order mark, a header line, one line per registration, lines ending CRLF. */
+  content: string;
+  /** When the server wrote the file (ISO 8601, UTC). */
+  generatedAt: string;
+}

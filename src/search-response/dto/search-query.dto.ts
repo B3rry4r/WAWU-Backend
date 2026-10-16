@@ -7,9 +7,16 @@ import {
 } from 'class-validator';
 
 /** Narrows GET /search's aggregate response per registry.json "SearchResponse". */
-export type SearchTab = 'all' | 'content' | 'creators' | 'communities';
+export type SearchTab =
+  'all' | 'content' | 'creators' | 'communities' | 'schools';
 
-const SEARCH_TABS: SearchTab[] = ['all', 'content', 'creators', 'communities'];
+const SEARCH_TABS: SearchTab[] = [
+  'all',
+  'content',
+  'creators',
+  'communities',
+  'schools',
+];
 
 /**
  * Upper bound on the search term. `q` feeds an unindexed ILIKE '%...%' scan

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { SearchResponseController } from './search-response.controller';
 import { SearchResponseService } from './search-response.service';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
+import { SchoolsPublicModule } from '../schools/schools-public.module';
 import { OptionalWawuAuthGuard } from './guards/optional-wawu-auth.guard';
 
 /**
@@ -10,7 +11,7 @@ import { OptionalWawuAuthGuard } from './guards/optional-wawu-auth.guard';
  * not re-imported here, mirroring every other Phase 5 resource module.
  */
 @Module({
-  imports: [BlockedAccountModule],
+  imports: [BlockedAccountModule, SchoolsPublicModule],
   controllers: [SearchResponseController],
   providers: [SearchResponseService, OptionalWawuAuthGuard],
 })

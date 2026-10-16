@@ -1,9 +1,19 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  DEFAULT_ROW_PROVIDER,
+  isRowOf,
+  rowsOf,
+} from '../../wallet-provider/provider-rows';
+import {
+  WALLET_PROVIDER,
+  type WalletProvider,
+} from '../../wallet-provider/wallet-provider.interface';
 import type { TransferStatus } from '../money-view.type';
 import type {
+  LedgerDebitSighting,
   LedgerDirection,
   LedgerMovementInput,
   LedgerRecordResult,
@@ -183,6 +193,21 @@ class LedgerRaceError extends Error {
   }
 }
 
+/**
+ * A sighting names a reference that another provider's row holds on the
+ * same wallet side (NUV-01, SHARED-CHANGES NUV-01 #2). A stop, never a
+ * fold: one provider's movement is never merged into another's row.
+ * Nothing is written; never run again on its own.
+ */
+export class LedgerProviderConflictError extends Error {
+  constructor(entryIds: readonly string[]) {
+    super(
+      `ledger: these references are held by another provider's row (${entryIds.join(', ')}); nothing was recorded (review)`,
+    );
+    this.name = 'LedgerProviderConflictError';
+  }
+}
+
 /** A deadlock, a write conflict, or LedgerRaceError: safe to run again. */
 function retryable(e: unknown): boolean {
   if (e instanceof LedgerRaceError) return true;
@@ -299,21 +324,214 @@ function sightingOfRow(row: EntryRow): Sighting {
  * transaction. Two writers racing on the same movement queue on that key;
  * the second sees the first's row once it commits and folds into it.
  */
+/**
+ * A ledger row that carries a feature's payment (`paymentId`) left `pending`
+ * (MONEY-17 round 2): the paying feature hears of it at once, from whatever
+ * settled it (a webhook, the status check, a reversal), so a paid payment
+ * never waits on its own sweep.
+ */
+export interface LedgerPaymentSettled {
+  entryId: string;
+  paymentId: string;
+  status: TransferStatus;
+}
+
+/**
+ * The same for a ledger row that carries a send between two people
+ * (`transferId`, task WALLET-07): the sending feature hears of it at once,
+ * from whatever settled it, so a send never waits on its own sweep.
+ */
+export interface LedgerTransferSettled {
+  entryId: string;
+  transferId: string;
+  status: TransferStatus;
+}
+
 @Injectable()
 export class LedgerService {
   private readonly logger = new Logger(LedgerService.name);
+  private readonly settledListeners: Array<
+    (e: LedgerPaymentSettled) => Promise<unknown>
+  > = [];
+  private readonly transferSettledListeners: Array<
+    (e: LedgerTransferSettled) => Promise<unknown>
+  > = [];
+  private readonly debitListeners: Array<
+    (e: LedgerDebitSighting) => Promise<unknown>
+  > = [];
+  private readonly debitTransactionListeners: Array<
+    (tx: Prisma.TransactionClient, e: LedgerDebitSighting) => Promise<unknown>
+  > = [];
 
-  constructor(private readonly prisma: PrismaService) {}
+  /**
+   * NUV-01 (SHARED-CHANGES NUV-01 #2, lead ruling 8): every row this
+   * service creates is stamped with the running provider's name, and every
+   * lookup and fold here reads only that provider's rows (null is Fintava's,
+   * src/wallet-provider/provider-rows.ts). After a rollback, the other
+   * provider's rows are left alone: no lookup, fold, absent check or
+   * reversal here touches them.
+   */
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
+  ) {}
 
-  /** Records one side of one movement, or merges it into the row that has it. */
+  /**
+   * Called (not awaited) after a write committed that left a row with a
+   * `paymentId` completed, failed or reversed. Errors are logged, never
+   * thrown into the ledger's own work.
+   */
+  onPaymentSettled(
+    listener: (e: LedgerPaymentSettled) => Promise<unknown>,
+  ): void {
+    this.settledListeners.push(listener);
+  }
+
+  /**
+   * Called (not awaited) after a write committed that left a row with a
+   * `transferId` completed, failed or reversed (WALLET-07). Errors are
+   * logged, never thrown into the ledger's own work.
+   */
+  onTransferSettled(
+    listener: (e: LedgerTransferSettled) => Promise<unknown>,
+  ): void {
+    this.transferSettledListeners.push(listener);
+  }
+
+  /**
+   * Called (not awaited) after a write committed in which a signed provider
+   * report (a webhook) said a payment's debit was COMPLETED at another charge
+   * than the buyer's row holds (MONEY-17 round 8, R7-1). The row keeps its
+   * figures, so without this the payment would never hear what the provider
+   * reported. Errors are logged, never thrown into the ledger's own work.
+   */
+  onPaymentDebitSighted(
+    listener: (e: LedgerDebitSighting) => Promise<unknown>,
+  ): void {
+    this.debitListeners.push(listener);
+  }
+
+  /**
+   * Called INSIDE the ledger's own transaction, awaited, at the moment a
+   * signed report of a payment's debit (a webhook) is found to carry another
+   * charge than the buyer's row holds (MONEY-18 round 2, F1). The report and
+   * what the paying feature does about it commit together or not at all, so
+   * there is no instant at which the ledger knows the report and the payment
+   * does not: a payment completing on any other path (the sweep's lookup
+   * carries no charge) meets the feature's mark, never a report in flight.
+   * The listener does the feature's own conditional writes on `tx` and
+   * nothing else; an error here rolls the report's ledger write back, and
+   * the delivery is applied again.
+   */
+  onPaymentDebitSightedInTransaction(
+    listener: (
+      tx: Prisma.TransactionClient,
+      e: LedgerDebitSighting,
+    ) => Promise<unknown>,
+  ): void {
+    this.debitTransactionListeners.push(listener);
+  }
+
+  /**
+   * For a caller that wrote rows inside ITS OWN transaction (the webhook
+   * consumer): call it once that transaction has committed, with the ids of
+   * the rows it wrote and the debit reports (`LedgerRecordResult.debitSighting`)
+   * its writes carried. Rows with a payment that left `pending` are told to
+   * the payment listeners, as for a write the ledger commits itself; a debit
+   * report is told to the debit listeners after them.
+   */
+  async notifyCommitted(
+    entryIds: readonly string[],
+    sightings: readonly LedgerDebitSighting[] = [],
+  ): Promise<void> {
+    for (const id of new Set(entryIds)) await this.notifySettled(id);
+    for (const sighting of sightings) this.notifyDebitSighted(sighting);
+  }
+
+  private notifyDebitSighted(sighting: LedgerDebitSighting): void {
+    for (const listener of this.debitListeners) {
+      void listener(sighting).catch((e: unknown) =>
+        this.logger.error(
+          `ledger: a payment debit listener failed (${e instanceof Error ? e.name : 'error'})`,
+        ),
+      );
+    }
+  }
+
+  private async notifySettled(entryId: string): Promise<void> {
+    if (
+      this.settledListeners.length === 0 &&
+      this.transferSettledListeners.length === 0
+    ) {
+      return;
+    }
+    let row: {
+      paymentId: string | null;
+      transferId: string | null;
+      status: TransferStatus;
+    } | null;
+    try {
+      row = await this.prisma.fintavaLedgerEntry.findUnique({
+        where: { id: entryId },
+        select: { paymentId: true, transferId: true, status: true },
+      });
+    } catch {
+      // The payment (or send) sweep settles it later; the ledger write stands.
+      return;
+    }
+    if (!row || row.status === 'pending') return;
+    if (row.paymentId) {
+      const event = {
+        entryId,
+        paymentId: row.paymentId,
+        status: row.status,
+      };
+      for (const listener of this.settledListeners) {
+        void listener(event).catch((e: unknown) =>
+          this.logger.error(
+            `ledger: a payment settle listener failed (${e instanceof Error ? e.name : 'error'})`,
+          ),
+        );
+      }
+    }
+    if (row.transferId) {
+      const event = {
+        entryId,
+        transferId: row.transferId,
+        status: row.status,
+      };
+      for (const listener of this.transferSettledListeners) {
+        void listener(event).catch((e: unknown) =>
+          this.logger.error(
+            `ledger: a send settle listener failed (${e instanceof Error ? e.name : 'error'})`,
+          ),
+        );
+      }
+    }
+  }
+
+  /**
+   * Records one side of one movement, or merges it into the row that has it.
+   * `quiet`: the caller settles the payment itself (MONEY-17's own writes),
+   * so the payment listeners are not told.
+   */
   async record(
     input: LedgerMovementInput,
     db?: Prisma.TransactionClient,
+    options: { quiet?: boolean } = {},
   ): Promise<LedgerRecordResult> {
     if (db) return this.recordIn(db, input);
     for (let attempt = 1; ; attempt += 1) {
       try {
-        return await this.prisma.$transaction((tx) => this.recordIn(tx, input));
+        const result = await this.prisma.$transaction((tx) =>
+          this.recordIn(tx, input),
+        );
+        if (!options.quiet) {
+          await this.notifySettled(result.entryId);
+          if (result.debitSighting)
+            this.notifyDebitSighted(result.debitSighting);
+        }
+        return result;
       } catch (e) {
         // Writers racing on one movement can deadlock on its keys or see a
         // row folded away under them; Postgres rolls one back, and running
@@ -323,7 +541,7 @@ export class LedgerService {
     }
   }
 
-  /** The row ids on one side that hold any of these references. */
+  /** The running provider's row ids on one side that hold any of these references. */
   async entriesFor(
     accountNumber: string,
     direction: LedgerDirection,
@@ -332,24 +550,52 @@ export class LedgerService {
   ): Promise<string[]> {
     if (references.length === 0) return [];
     const rows = await db.fintavaLedgerReference.findMany({
-      where: { accountNumber, direction, value: { in: [...references] } },
+      where: {
+        accountNumber,
+        direction,
+        value: { in: [...references] },
+        entry: rowsOf(this.provider.name),
+      },
       select: { entryId: true },
     });
     return [...new Set(rows.map((r) => r.entryId))];
   }
 
-  /** The `out` rows, on any wallet, that hold any of these references. */
+  /** The running provider's `out` rows, on any wallet, that hold any of these references. */
   async debitsFor(
     references: readonly string[],
     db: Db = this.prisma,
+  ): Promise<string[]> {
+    return this.debitsHolding(references, db, true);
+  }
+
+  /**
+   * The `out` rows another provider recorded that hold any of these
+   * references: for a caller that must stop rather than act (a reversal
+   * naming another provider's debit is left for review).
+   */
+  async foreignDebitsFor(
+    references: readonly string[],
+    db: Db = this.prisma,
+  ): Promise<string[]> {
+    return this.debitsHolding(references, db, false);
+  }
+
+  private async debitsHolding(
+    references: readonly string[],
+    db: Db,
+    own: boolean,
   ): Promise<string[]> {
     const refs = [...new Set(references.map((r) => r.trim()).filter(Boolean))];
     if (refs.length === 0) return [];
     const hits = await db.fintavaLedgerReference.findMany({
       where: { direction: 'out', value: { in: refs } },
-      select: { entryId: true },
+      select: { entryId: true, entry: { select: { provider: true } } },
     });
-    return [...new Set(hits.map((h) => h.entryId))].sort();
+    const ids = hits
+      .filter((h) => isRowOf(this.provider.name, h.entry.provider) === own)
+      .map((h) => h.entryId);
+    return [...new Set(ids)].sort();
   }
 
   /**
@@ -362,7 +608,9 @@ export class LedgerService {
    * - it is still `pending` with no disagreement recorded;
    * - nothing from Fintava was ever merged into it (no Fintava reference,
    *   transaction id or tagapay reference, no delivery that made it);
-   * - no stored delivery, consumed or not, names any of its references.
+   * - no stored delivery, consumed or not, names any of its references;
+   * - it is the running provider's row (NUV-01): one provider's silence is
+   *   never read as the other's.
    * Otherwise it is left alone (false) and the check asks again later.
    */
   async markAbsentFailed(entryId: string, version: string): Promise<boolean> {
@@ -370,6 +618,7 @@ export class LedgerService {
       const held = await tx.$queryRaw<Array<{ id: string }>>`
         SELECT "id" FROM "FintavaLedgerEntry"
          WHERE "id" = ${entryId} AND "status" = 'pending'
+           AND COALESCE("provider", ${DEFAULT_ROW_PROVIDER}) = ${this.provider.name}
            AND "discrepancy" IS NULL
            AND xmin::text = ${version}
            AND "fintavaReference" IS NULL
@@ -438,6 +687,80 @@ export class LedgerService {
     return this.prisma.$transaction(run);
   }
 
+  /**
+   * MONEY-17 (round 7, lead ruling R6-1): a payment writes the buyer's `out`
+   * row with the charge the buyer was QUOTED, before the provider answers.
+   * When the provider's own record of the debit differs, LOWER or (lead
+   * ruling, 10 Oct 2026) HIGHER, the row must say what really left the
+   * wallet: this takes the provider's figures and completes the row, so a
+   * delivered purchase is never left `pending`. Only the payment's own `out`
+   * row on the buyer's
+   * wallet, only the running provider's, only while it is still at the
+   * quoted figures and `pending` (or failed only because the provider had no
+   * record yet, which the record now overturns: a revival), and never a row
+   * that holds a disagreement about the AMOUNT (that is a stop). A note the
+   * row already holds about the charge (a status check or a webhook saw the
+   * other charge first) stays as the trail. A debit above the quote is
+   * flagged on the payment for NUV-08, not held on the row. Returns whether
+   * the row changed.
+   */
+  async completeDebitAt(
+    // A payment's id, or (WALLET-07) a send between two people.
+    movement: string | { transferId: string },
+    quoted: { feeKobo: bigint; totalKobo: bigint },
+    taken: { feeKobo: bigint; totalKobo: bigint },
+    source: 'send' | 'lookup' | 'history' | 'webhook',
+  ): Promise<boolean> {
+    const now = new Date();
+    const owner =
+      typeof movement === 'string'
+        ? { paymentId: movement }
+        : { transferId: movement.transferId };
+    const where = {
+      ...owner,
+      walletKind: 'user' as const,
+      direction: 'out' as const,
+      feeKobo: quoted.feeKobo,
+      totalKobo: quoted.totalKobo,
+      AND: [
+        rowsOf(this.provider.name),
+        {
+          OR: [
+            { discrepancy: null },
+            { NOT: { discrepancy: { contains: 'amountKobo' } } },
+          ],
+        },
+      ],
+    };
+    const figures = {
+      feeKobo: taken.feeKobo,
+      providerFeeKobo: taken.feeKobo,
+      totalKobo: taken.totalKobo,
+      status: 'completed' as const,
+      completedAt: now,
+    };
+    const pending = await this.prisma.fintavaLedgerEntry.updateMany({
+      where: { ...where, status: 'pending' },
+      data: figures,
+    });
+    const revived = await this.prisma.fintavaLedgerEntry.updateMany({
+      where: {
+        ...where,
+        status: 'failed',
+        failureReason: LEDGER_ABSENT_FAILURE,
+      },
+      data: {
+        ...figures,
+        failureReason: null,
+        revivedAt: now,
+        revivedBy: source,
+        nextCheckAt: null,
+        statusChecks: 0,
+      },
+    });
+    return pending.count + revived.count > 0;
+  }
+
   private async recordIn(
     tx: Prisma.TransactionClient,
     input: LedgerMovementInput,
@@ -462,6 +785,7 @@ export class LedgerService {
         direction,
         ...s,
         completedAt: s.status === 'completed' ? now : null,
+        provider: this.provider.name,
       },
     });
 
@@ -513,6 +837,16 @@ export class LedgerService {
         ownerIds = now;
       }
     }
+    // Another provider's row holds one of these references on this side: a
+    // stop, never a fold (the transaction rolls back, nothing is written).
+    const foreign = holders.filter(
+      (h) => !isRowOf(this.provider.name, h.provider),
+    );
+    if (foreign.length > 0) {
+      const error = new LedgerProviderConflictError(foreign.map((h) => h.id));
+      this.logger.error(error.message);
+      throw error;
+    }
     const [keeper, ...extra] = holders;
     if (!keeper) throw new LedgerRaceError();
 
@@ -525,8 +859,11 @@ export class LedgerService {
     const heldNotes = () =>
       notes.length + carried.length === 0
         ? keeper.discrepancy
-        : [keeper.discrepancy, ...carried, ...notes]
-            .filter(Boolean)
+        : [
+            ...new Set(
+              [keeper.discrepancy, ...carried, ...notes].filter(Boolean),
+            ),
+          ]
             .join('; ')
             .slice(0, 1000);
     for (const other of extra) {
@@ -541,7 +878,16 @@ export class LedgerService {
       if (merged.discrepancy) notes.push(merged.discrepancy);
       row = { ...row, ...merged.data, discrepancy: heldNotes() };
     }
-    const merged = this.merge(row, s, now);
+    // A sighting that carries no charge of its own (`figuresStand`) says
+    // nothing about the row's fee and total: whatever the row holds NOW, read
+    // under its lock above, stands.
+    const merged = this.merge(
+      row,
+      input.figuresStand
+        ? { ...s, feeKobo: row.feeKobo, totalKobo: row.totalKobo }
+        : s,
+      now,
+    );
     if (merged.discrepancy) notes.push(merged.discrepancy);
     row = { ...row, ...merged.data };
 
@@ -601,10 +947,37 @@ export class LedgerService {
         `ledger: a sighting disagreed with row ${keeper.id}; the stored figures are kept (${notes.join('; ')})`,
       );
     }
+    // A signed report that the payment's debit COMPLETED at another charge
+    // than the row holds (the row keeps its figures, above): the paying
+    // feature is told what the provider reported, so it can complete the
+    // payment at it (MONEY-17 round 8, R7-1). Only a webhook: a lookup is the
+    // payment's own sweep to read, and the sender's own answer is its own.
+    const debitSighting: LedgerDebitSighting | null =
+      s.source === 'webhook' &&
+      s.status === 'completed' &&
+      direction === 'out' &&
+      row.walletKind === 'user' &&
+      row.paymentId !== null &&
+      merged.chargeDiffers
+        ? {
+            entryId: keeper.id,
+            paymentId: row.paymentId,
+            amountKobo: s.amountKobo,
+            feeKobo: s.feeKobo,
+            totalKobo: s.totalKobo,
+          }
+        : null;
+    if (debitSighting) {
+      // In the same transaction as the report (F1): see the listener.
+      for (const listener of this.debitTransactionListeners) {
+        await listener(tx, debitSighting);
+      }
+    }
     return {
       entryId: keeper.id,
       created: false,
       discrepancy: notes.length ? notes.join('; ') : null,
+      ...(debitSighting ? { debitSighting } : {}),
     };
   }
 
@@ -622,7 +995,12 @@ export class LedgerService {
     row: EntryRow,
     s: Sighting,
     now: Date,
-  ): { data: Partial<EntryRow>; discrepancy: string | null } {
+  ): {
+    data: Partial<EntryRow>;
+    discrepancy: string | null;
+    /** The same amount moved, at another fee or total than the row holds. */
+    chargeDiffers: boolean;
+  } {
     const data: Partial<EntryRow> = {};
     const fill = <K extends keyof Sighting & keyof EntryRow>(k: K) => {
       if ((row[k] === null || row[k] === undefined) && s[k] !== null) {
@@ -774,6 +1152,9 @@ export class LedgerService {
       discrepancy: differs.length
         ? `${s.source} sighting: ${differs.join(', ')}`
         : null,
+      chargeDiffers:
+        s.amountKobo === row.amountKobo &&
+        (s.feeKobo !== row.feeKobo || s.totalKobo !== row.totalKobo),
     };
   }
 
@@ -844,6 +1225,10 @@ export class LedgerService {
       return { state: 'applied', entryId, changed: true } as const;
     };
     if (db) return run(db);
-    return this.prisma.$transaction(run);
+    const result = await this.prisma.$transaction(run);
+    if (result.state === 'applied' && result.changed) {
+      await this.notifySettled(result.entryId);
+    }
+    return result;
   }
 }

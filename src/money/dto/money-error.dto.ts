@@ -4,6 +4,10 @@ import {
   getSchemaPath,
 } from '@nestjs/swagger';
 import { MONEY_ERROR_CODES, type MoneyErrorCode } from './money-enums';
+import {
+  MONEY_LIMIT_NAMES,
+  type MoneyLimitName,
+} from '../limits/money-limit-names';
 import type {
   BankTransferBlock,
   FeeQuoteView,
@@ -37,7 +41,7 @@ export class MoneyErrorReason {
   /** pin_locked: when the lock ends, ISO 8601 UTC. */
   lockedUntil?: string;
 
-  /** insufficient_funds: Fintava's available balance when the payment was refused. */
+  /** insufficient_funds: the wallet provider's available balance when the movement was refused. */
   @ApiPropertyOptional({ type: 'integer' })
   balanceKobo?: number;
 
@@ -69,17 +73,24 @@ export class MoneyErrorReason {
   @ApiPropertyOptional({ allOf: [{ $ref: getSchemaPath('PaymentQuoteView') }] })
   paymentQuote?: PaymentQuoteView;
 
+  /** payment_in_progress: the payment for this item still being confirmed (MONEY-17). */
+  paymentId?: string;
+
   /** bank_transfers_blocked: why (W18). */
   @ApiPropertyOptional({
     enum: ['kyc_pending', 'kyc_rejected', 'kyc_not_submitted'],
   })
   blockedBy?: BankTransferBlock;
 
-  /** provider_unreachable, idempotency_in_progress, identity_checks_exhausted, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited: seconds to wait before trying again. */
+  /** provider_unreachable, idempotency_in_progress, identity_checks_exhausted, open_address_limited, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited: seconds to wait before trying again. */
   retryAfterSeconds?: number;
 
   /** bvn_not_confirmed, bvn_phone_mismatch: BVN checks left in the current 24 hours. selfie_not_matched: selfie matches left in the current 24 hours. */
   checksLeft?: number;
+
+  /** limit_reached: which limit the movement passes (NUV-07), WAWU's own or the provider's. */
+  @ApiPropertyOptional({ enum: MONEY_LIMIT_NAMES })
+  limit?: MoneyLimitName;
 }
 
 /** The body of every refused money request. */

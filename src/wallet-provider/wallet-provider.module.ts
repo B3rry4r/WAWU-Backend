@@ -5,6 +5,7 @@ import {
   FintavaOtpSender,
   FintavaWalletProvider,
 } from '../fintava/fintava-wallet-provider';
+import { NuvionAdapterFactory, NuvionModule } from '../nuvion/nuvion.module';
 import {
   readWalletProviderName,
   selectWalletAdapter,
@@ -24,45 +25,51 @@ import {
  * module or client.
  *
  * WALLET_PROVIDER picks the adapter at boot: `fintava` (the default) wraps
- * the MONEY-06 client exactly as the services used it; `nuvion` is reserved
- * and stops the app with a clear message until the Nuvion adapter task adds
- * it here. Rolling back is changing the setting and restarting.
+ * the MONEY-06 client exactly as the services used it; `nuvion` builds the
+ * Nuvion adapter (NUV-01, src/nuvion/), reading and checking every Nuvion
+ * setting then and only then, and its PIN reset codes go by email (R-39).
+ * Rolling back is changing the setting and restarting.
  *
  * FintavaModule stays imported whichever is picked: its client is what the
  * Fintava webhook receiver and the Fintava adapter share, and building it
- * sends nothing.
+ * sends nothing. Under nuvion a wrong FINTAVA_* value no longer stops the
+ * server (the client starts unconfigured instead, NUV-01).
  */
 @Module({
-  imports: [ConfigModule, FintavaModule],
+  imports: [ConfigModule, FintavaModule, NuvionModule],
   providers: [
     FintavaWalletProvider,
     FintavaOtpSender,
     {
       provide: WALLET_PROVIDER,
-      inject: [ConfigService, FintavaWalletProvider],
+      inject: [ConfigService, FintavaWalletProvider, NuvionAdapterFactory],
       useFactory: (
         config: ConfigService,
         fintava: FintavaWalletProvider,
+        nuvion: NuvionAdapterFactory,
       ): WalletProvider =>
         selectWalletAdapter<WalletProvider>(
           readWalletProviderName(
             config.get<string>(WALLET_PROVIDER_CONFIG_KEY),
           ),
-          { fintava: () => fintava },
+          { fintava: () => fintava, nuvion: () => nuvion.walletProvider() },
         ),
     },
     {
-      // Codes for the PIN reset. Fintava texts them; the Nuvion task gives
-      // this token an email sender (Nuvion has no SMS; the owner rules codes
-      // go by email).
+      // Codes for the PIN reset. Fintava texts them; under nuvion they go
+      // by email through WAWU ID (Nuvion has no SMS; R-39).
       provide: OTP_SENDER,
-      inject: [ConfigService, FintavaOtpSender],
-      useFactory: (config: ConfigService, sms: FintavaOtpSender): OtpSender =>
+      inject: [ConfigService, FintavaOtpSender, NuvionAdapterFactory],
+      useFactory: (
+        config: ConfigService,
+        sms: FintavaOtpSender,
+        nuvion: NuvionAdapterFactory,
+      ): OtpSender =>
         selectWalletAdapter<OtpSender>(
           readWalletProviderName(
             config.get<string>(WALLET_PROVIDER_CONFIG_KEY),
           ),
-          { fintava: () => sms },
+          { fintava: () => sms, nuvion: () => nuvion.otpSender() },
         ),
     },
   ],

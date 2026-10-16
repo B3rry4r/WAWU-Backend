@@ -21,15 +21,15 @@ caller from the token.
 
 | Method and path | Response (`data`) | Request | Served by |
 |---|---|---|---|
-| `GET /money/wallet` | `WalletView` | | MONEY-12 (served; `pin` from MONEY-09, `beneficiaryCount` from WALLET-14) |
+| `GET /money/wallet` | `WalletView` | | MONEY-12 (served; `pin` from MONEY-09, `beneficiaryCount` from WALLET-14, `accountNumberStatus` and each Nuvion wallet's own issuing bank from NUV-04) |
 | `POST /money/wallet/open` | `WalletView` | `OpenNairaWalletDto` | MONEY-12 (served; CONVENTIONS.md section 9) |
 | `GET /money/wallet/balance` | `WalletBalanceView` | | MONEY-11 (served) |
 | `GET /money/pin` | `PinStateView` | | MONEY-09 |
 | `POST /money/pin` | `PinStateView` | `SetPinDto` | MONEY-09 |
-| `PUT /money/pin` | `PinStateView` | `ChangePinDto`, `X-Transaction-Pin` (current) | MONEY-09 |
+| `PUT /money/pin` | `PinStateView` | `ChangePinDto`, `X-Transaction-Pin` (current), optional `Idempotency-Key` | MONEY-09 (the key: WALLET-06 round 2, CONVENTIONS.md section 4) |
 | `POST /money/pin/verify` | `PinStateView` | `X-Transaction-Pin` | MONEY-09 |
 | `POST /money/pin/reset` | `PinResetView` | | MONEY-14 (served; CONVENTIONS.md section 5) |
-| `POST /money/pin/reset/confirm` | `PinStateView` | `ConfirmPinResetDto` | MONEY-14 (served) |
+| `POST /money/pin/reset/confirm` | `PinStateView` | `ConfirmPinResetDto`, optional `Idempotency-Key` | MONEY-14 (served; the key: WALLET-06 round 2, CONVENTIONS.md section 4) |
 | `GET /money/device` | `ApprovalDeviceView` | | MONEY-14 (served) |
 | `PUT /money/device` | `ApprovalDeviceView` | `RegisterApprovalDeviceDto`, `X-Transaction-Pin` | MONEY-14 (served) |
 | `DELETE /money/device` | `ApprovalDeviceView` | | MONEY-14 (served) |
@@ -45,14 +45,14 @@ caller from the token.
 | `GET /money/payout-account` | `PayoutAccountView` or `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `GET /money/fees/quote?kind=&amountKobo=&billCategory=` | `FeeQuoteView` | | WALLET-15 (served; CONVENTIONS.md section 11) |
-| `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-07 |
+| `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-07 (served; CONVENTIONS.md section 19) |
 | `POST /money/transfers/bank` | `TransferView` | `BankTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-09 |
-| `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 |
-| `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 |
-| `POST /money/payments` | `PaymentView` | `PaymentDto`, `Idempotency-Key`, `X-Transaction-Pin` | MONEY-17 |
-| `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 |
-| `GET /money/holds?role=&cursor=&limit=` | `HoldPage` | | MONEY-18 |
-| `GET /money/holds/{id}` | `HoldView` | | MONEY-18 |
+| `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 (served; CONVENTIONS.md section 19) |
+| `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 (served; CONVENTIONS.md section 14) |
+| `POST /money/payments` | `PaymentView` | `PaymentDto`, `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | MONEY-17 (served; CONVENTIONS.md section 14) |
+| `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 (served; CONVENTIONS.md section 14a) |
+| `GET /money/holds?role=&cursor=&limit=` | `HoldPage` | | MONEY-18 (served; CONVENTIONS.md section 18) |
+| `GET /money/holds/{id}` | `HoldView` | | MONEY-18 (served; CONVENTIONS.md section 18) |
 | `GET /money/transactions?filter=&q=&month=&group=&cursor=&limit=` | `TransactionPage` | | MONEY-15 (served; CONVENTIONS.md section 6) |
 | `GET /money/transactions/summary?month=` | `MonthlySummaryView` | | MONEY-15 (served) |
 | `GET /money/transactions/{id}` | `TransactionView` | | MONEY-15 (served) |
@@ -60,6 +60,8 @@ caller from the token.
 | `GET /money/transactions/{id}/receipt/image` | PNG (`image/png`) | | WALLET-18 (served; throttled 10 a minute, 60 an hour) |
 | `GET /money/transactions/{id}/receipt/pdf` | one-page A4 PDF (`application/pdf`) | | WALLET-18 (served; throttled as the image) |
 | `GET /money/statements?from=&to=&format=` | `StatementView` (the CSV file as text) | | WALLET-27 (served; CONVENTIONS.md section 12) |
+| `GET /money/statements/delivery` | `StatementDeliveryView` (the masked address, `canEmail`, the formats) | | WALLET-35 (served; CONVENTIONS.md section 12) |
+| `POST /money/statements/email` | `StatementEmailView` (`{ from, to, format }` in; the CSV mailed to the person's own confirmed address) | | WALLET-35 (served; CONVENTIONS.md section 12) |
 
 The public check of a receipt, `GET /r/{code}` (wawu/r/<code>), is not a
 money route: no sign-in, HTML only, throttled 10 a minute and 60 an hour per
@@ -132,6 +134,7 @@ payment onto the wallet.
 | `paid_dm` | INBOX-17 | the message id `POST /dm/:creatorWawuId/send` returns | no | until the creator answers |
 | `event_ticket` | EVENTS-07 | the order id `POST /events/:id/orders` returns | no | until the event takes place |
 | `bill` | BILLS-04 | the bill id `POST /bills/init` returns | no | until the biller delivers |
+| `tier`, `tier_bump` | TIER-03 | the terms: `tier-<tierId>`, `renew-<tierId>` or `upgrade-<fromTierId>-<tierId>` (`GET /plans/purchases/quote` builds it; `tier_bump` adds the checkout bump) | no | no (WAWU's own sale, no seller split; a payment whose plan cannot be granted when it confirms is refunded in full, docs/contract/PLANS.md section 8) |
 
 ## 2. The named schemas (G-1)
 
@@ -191,15 +194,15 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | W10 Review | fee breakdown per transfer type; total; "They get" | `GET /money/fees/quote` → `fee` (`providerFeeKobo` + `wawuFeeKobo` = `totalFeeKobo`), one row per charge in `parts`, `totalKobo`, `amountKobo` |
 | W11 PIN | PIN checked on the debit itself; tries left; lock | `X-Transaction-Pin` on the transfer; `403 pin_incorrect.triesLeft`, `423 pin_locked.lockedUntil`; `GET /money/pin` |
 | | fingerprint or face instead of the PIN (R-26) | `X-Device-Approval` on the debit (`@RequireApproval()`): `POST /money/device/challenge`, then the registered phone's signature; a refusal is `403 device_approval_refused` and uses no PIN try (MONEY-14, CONVENTIONS.md section 5) |
-| W12 Receipt | status, fee, total paid, reference, time | the transfer response, then `GET /money/transfers/{id}` → `TransferView` |
+| W12 Receipt | status, fee, total paid, reference, time | the transfer response, then `GET /money/transfers/{id}` → `TransferView`; a send whose outcome is not known yet is `pending` with `statusMessage` (CONVENTIONS.md section 19) |
 | | Save as beneficiary | `POST /money/beneficiaries` |
-| | Share receipt | at launch the phone's share sheet (R-33); the image and the PDF after launch (WALLET-12) on WALLET-18's routes, keyed by the ledger row's id: `TransferView` names no row yet (mobile repo BACKEND_GAPS G-66) |
+| | Share receipt | at launch the phone's share sheet (R-33); the image and the PDF after launch (WALLET-12) on WALLET-18's routes, keyed by the ledger row's id: `TransferView.transactionId` is that id (WALLET-07; mobile repo BACKEND_GAPS G-66) |
 | W13 Not enough | balance and the total, server-checked | `GET /money/wallet/balance` with `FeeQuoteView.totalKobo`; on send `402 insufficient_funds` → `balanceKobo`, `totalKobo`, `shortfallKobo` |
 | W14 Send failed | final status and reason | `TransferView.status` (`failed`, `reversed`), `failureReason` |
 | | what came back, a kept charge as its own row | `TransferView.reversal` → `returnedKobo`, `keptKobo`, `reversedAt` |
 | | reference, amount | `reference`, `totalKobo` |
 | | Try again | a new `POST /money/transfers/bank` with a new `Idempotency-Key` |
-| W15 Add money | account name, number, bank name; licence line | `GET /money/wallet` → `account` (`licenceLine`, `depositInsuranceLine` from config, null hides) |
+| W15 Add money | account name, number, bank name; licence line | `GET /money/wallet` → `account` (`licenceLine`, `depositInsuranceLine` from config, null hides); `accountNumberStatus: on_its_way` while the number is not active yet (NUV-04: under Nuvion `account` is filled only once Nuvion makes the number `active`) |
 | | card, USSD, from Dollar | after launch (WALLET-25, WALLET-26, WALLET-21): not in this contract |
 | W17 Withdraw | balance | `GET /money/wallet/balance` |
 | | default destination with bank code | `GET /money/payout-account` |
@@ -226,6 +229,9 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | | Cards; Statements | after launch (WALLET-22; statements WALLET-27 serves, WALLET-35 builds the row); W38 is hidden at launch |
 | W38 Statements (after launch) | period: presets or a custom range | `GET /money/statements?from=&to=` (Lagos days, both included; at most 366 days and 50,000 movements, `400 statement_too_large`; 5 a minute, 30 an hour) |
 | | format: CSV | `format=csv` → `StatementView.content`, `fileName`, `contentType` |
+| | formats offered | `StatementDeliveryView.formats` (`csv` today) |
+| | Send to | `StatementDeliveryView.email` (masked, the account's own confirmed address, read only) and `canEmail`; never typed |
+| | Send statement | `POST /money/statements/email` → `StatementEmailView` (`409 email_not_verified`, `503 statement_email_failed`) |
 | | format: Stamped PDF | not served: Fintava issues no statement (BACKEND_GAPS G-68) |
 | | Send to (email) | not served: the backend has no email sender (G-69); the app saves or shares the file |
 | W36 PIN create | set; confirm | `POST /money/pin` (`pin`, `pinConfirmation`); change is `PUT /money/pin` |
@@ -246,9 +252,9 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | A9 Create PIN, A10 Confirm PIN | set; a mismatch | `POST /money/pin`; `400 pin_mismatch` (no state drawn; the app shows the message) |
 | H14 Unlock sheet (MONEY-03), W10 "Pay from wallet" | price, Fintava's charge, total, balance | `GET /money/payments/quote` → `priceKobo`, `fee`, `totalKobo`, `balanceKobo` |
 | | over today's limit, stopped before the PIN | `PaymentQuoteView.withinDailyLimit`, `remainingTodayKobo`; on pay `403 daily_limit_exceeded` (Lead ruling 2) |
-| H17 Not enough in wallet | the shortfall including the charge | `PaymentQuoteView.shortfallKobo`; on pay `402 insufficient_funds.shortfallKobo` |
+| H17, I6, S11, W13 Not enough in wallet | the shortfall including the charge, and the balance | `PaymentQuoteView.balanceKobo`, `shortfallKobo`; on pay `402 insufficient_funds` with `balanceKobo`, `totalKobo`, `shortfallKobo` (CONVENTIONS.md section 14a) |
 | H15 PIN (MONEY-02) | PIN on the payment; tries; lock | `X-Transaction-Pin` on `POST /money/payments`; `pin_incorrect`, `pin_locked` |
-| H18 Couldn't confirm, E10 | still confirming, then paid or reversed | `PaymentView.status: pending`; poll `GET /money/payments/{id}` |
+| H18 Couldn't confirm, E10 | still confirming, then paid or reversed; paid and still opening | `PaymentView.status: pending` and `statusMessage`; poll `GET /money/payments/{id}` until `status` is not `pending` and, when `completed`, `delivered` is true |
 | M13 PIN in Me settings (MONEY-02) | PIN set and check | `GET /money/pin`, `POST /money/pin`, `POST /money/pin/verify` |
 
 ### After launch (not in this contract)
@@ -369,9 +375,9 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
 - **Biometric approval routes** are served by MONEY-14 (`/money/device`,
   `/money/approval/verify`, the `X-Device-Approval` format: a device key's
   signature, CONVENTIONS.md section 5). The declared debits still document
-  `X-Transaction-Pin` alone; the tasks that serve them (WALLET-07,
-  WALLET-09, MONEY-17) put `@RequireApproval()` on the route, which documents
-  both headers.
+  `X-Transaction-Pin` alone; the tasks that serve them (WALLET-07, served;
+  WALLET-09, MONEY-17, served) put `@RequireApproval()` on the route, which
+  documents both headers.
 - **The request that opens a wallet** is served by MONEY-12: `POST
   /money/wallet/open` (CONVENTIONS.md section 9). It carries the BVN, NIN,
   address and A5's name and date of birth from the app again, reads the

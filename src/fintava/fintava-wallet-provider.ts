@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import {
+  type OtpResetCode,
   type OtpSender,
   type ProviderAccountName,
   type ProviderAccountNameInput,
@@ -31,6 +32,7 @@ import {
   type ProviderSelfieResult,
   type ProviderSendKind,
   type ProviderTransaction,
+  type ProviderTransactionKind,
   type ProviderTransferReceipt,
   type ProviderWalletTransferInput,
   safeKoboNumber,
@@ -70,6 +72,7 @@ export function toWalletProviderError(e: unknown): unknown {
     messages: e.messages,
     reference: e.reference,
     recordMayExist: e.recordMayExist,
+    requestNotSent: e.requestNotSent,
     retryAfterSeconds: FINTAVA_DEFAULTS.retryAfterSeconds,
   });
 }
@@ -106,7 +109,23 @@ export function fromFintavaTransaction(
     providerReference: t.fintavaReference,
     secondaryReference: t.tagapayTransRef,
     sessionId: t.sessionId,
+    kind: fintavaKindOf(t.transType),
+    merchantChargeKobo:
+      t.merchantCommKobo === null ? null : BigInt(t.merchantCommKobo),
   };
+}
+
+/**
+ * Fintava's `transType` as the seam's kind (MONEY-16): `AATRANSFER` is a
+ * send, a type ending in `CHARGE` (`BVNCHARGE` in the sandbox,
+ * `sandbox/10-`, `25-`) is Fintava charging WAWU, anything else is a type
+ * this adapter has not seen.
+ */
+export function fintavaKindOf(transType: string): ProviderTransactionKind {
+  const t = transType.trim().toUpperCase();
+  if (t === 'AATRANSFER') return 'transfer';
+  if (t.endsWith('CHARGE')) return 'charge';
+  return 'other';
 }
 
 function fromFintavaCustomer(c: FintavaCustomer): ProviderCustomer {
@@ -629,6 +648,9 @@ export class FintavaWalletProvider implements WalletProvider {
  */
 @Injectable()
 export class FintavaOtpSender implements OtpSender {
+  /** Fintava texts the code to the proved phone. */
+  readonly channel = 'sms' as const;
+
   constructor(private readonly client: FintavaClient) {}
 
   get configured(): boolean {
@@ -637,5 +659,10 @@ export class FintavaOtpSender implements OtpSender {
 
   sendText(phone: string, text: string): Promise<void> {
     return translated(() => this.client.sendSms(phone, text));
+  }
+
+  /** The same text to the same phone as before NUV-01: one SMS. */
+  sendResetCode(code: OtpResetCode): Promise<void> {
+    return this.sendText(code.phone ?? '', code.text);
   }
 }

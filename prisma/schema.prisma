@@ -313,6 +313,118 @@ model ProfileDetails {
   updatedAt     DateTime @updatedAt
 }
 
+// -----------------------------------------------------------------------------
+// The maker plan (TIER-01, R-43): billing currency, tiers and event passes.
+// Prices, product counts and points live in src/plans/plans.config.json, never
+// here: these tables hold what a person HAS, the config what things COST.
+// -----------------------------------------------------------------------------
+
+/// The currency a person is billed in. NGN amounts are kobo, USD amounts are
+/// cents, both integers.
+enum BillingCurrency {
+  NGN
+  USD
+}
+
+/// A person's billing currency, fixed at their first purchase (TIER-01; the
+/// purchase task, TIER-03, fixes it). No row means it is not fixed yet: the
+/// person's currency is then resolved on each read (BillingCurrencyService).
+///
+/// ITS OWN TABLE, NOT A COLUMN ON UserProfile: GET and PATCH /users/me return
+/// the whole UserProfile row, so a column there would widen two live
+/// responses the web reads.
+///
+/// NEVER UPDATED. The only writer inserts a row when there is none
+/// (`ON CONFLICT DO NOTHING`); no route changes it, not even after the person
+/// opens a naira wallet or changes their phone (owner brief v2.0 section 3:
+/// "Do not switch without support"). The account purge deletes it.
+model PersonBilling {
+  wawuUserId String          @id
+  currency   BillingCurrency
+  /// What fixed it: `first_purchase` (the only value the code writes) or
+  /// `support` (a person at WAWU, by hand). Held to that list by a CHECK.
+  fixedBy    String
+  /// The purchase that fixed it (its payment reference), when one did.
+  purchaseRef String?
+  fixedAt    DateTime        @default(now())
+}
+
+/// The tier a person holds (TIER-01; written by TIER-03 when a purchase is
+/// paid, and by TIER-04 for extra products). One row per person: renewing
+/// moves `activeUntil`, upgrading changes `tierId` and the period. A row whose
+/// `activeUntil` has passed is an ENDED tier, kept so VF14 can say which tier
+/// ended.
+///
+/// `tierId` names a tier in src/plans/plans.config.json. What the tier gave
+/// is copied onto the row when it is bought (`productsIncluded`,
+/// `pointsIncluded`), so a later change to the config never takes away what a
+/// person paid for (Default (agent), owner may override).
+model MakerTier {
+  wawuUserId         String   @id
+  tierId             String
+  activeFrom         DateTime
+  activeUntil        DateTime
+  /// The tier's own product count when it was bought.
+  productsIncluded   Int
+  /// Products bought on top (TIER-04), counted with the tier's own.
+  extraProducts      Int      @default(0)
+  /// The bonus points the tier came with (the lot itself is POINTS-01's).
+  pointsIncluded     Int
+  /// The tier includes the first Voice Intro, not yet used.
+  voiceIntroIncluded Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+/// A tier bought, renewed or upgraded from the wallet (TIER-03), written once
+/// the payment is confirmed, in the same transaction that grants what it
+/// bought (the tier and its dates, the event pass, the bonus points, the
+/// first Voice Intro, the checkout offer's points). `paymentRef` is the id of
+/// the wallet payment that paid for it (WalletPayment.id), the primary key
+/// and so unique: a payment confirmed twice, on two servers or from the
+/// request and the sweep, finds its row and grants nothing a second time. It
+/// is also the purchase's id in GET /plans/purchases/{id}.
+///
+/// Only a PAID purchase has a row; a payment still confirming, failed or
+/// reversed is read from the payment itself, so no row ever says "paid" for
+/// money that did not move. `status` has the one value `paid` today; a later
+/// task that takes a purchase before its money arrives (TIER-05) adds its own.
+///
+/// `amountMinor` is the plan's price in the minor unit of `currency` (the
+/// tier's, or the difference on an upgrade, plus the checkout offer's when
+/// `bump`), never the provider's charge. `kind` is `tier` (a first purchase,
+/// or after the last one ended), `renew` (the same tier again) or `upgrade`
+/// (from `fromTierId` to `tierId`). The account purge deletes it.
+model MakerPurchase {
+  paymentRef  String          @id
+  wawuUserId  String
+  kind        String
+  tierId      String
+  fromTierId  String?
+  bump        Boolean         @default(false)
+  currency    BillingCurrency
+  amountMinor Int
+  method      String          @default("wallet")
+  status      String          @default("paid")
+  createdAt   DateTime        @default(now())
+
+  @@index([wawuUserId, createdAt])
+}
+
+/// A pass to the Christmas event, issued with a tier (W44). One row per
+/// purchase that issued one: `purchaseRef` is unique, so a repeated payment
+/// confirmation issues it once. `type` names an event pass in
+/// src/plans/plans.config.json; the reader shows a person's best one.
+model EventPass {
+  id          String   @id @default(uuid())
+  wawuUserId  String
+  type        String
+  purchaseRef String   @unique
+  createdAt   DateTime @default(now())
+
+  @@index([wawuUserId])
+}
+
 /// One featured work on somebody's profile (ME-16): what M33 shows under
 /// "Featured works", M34 lists and M35 opens.
 ///
@@ -773,12 +885,12 @@ model ContentFrame {
 /// number of rows; no counter column on ContentPiece, because a new column
 /// there would widen every live content response (protected route registry, entry H-1).
 model ContentShare {
-  id            String       @id @default(uuid())
-  contentId     String
-  content       ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
-  sharerWawuId  String
-  sharedOn      DateTime     @db.Date
-  sharedAt      DateTime     @default(now())
+  id           String       @id @default(uuid())
+  contentId    String
+  content      ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  sharerWawuId String
+  sharedOn     DateTime     @db.Date
+  sharedAt     DateTime     @default(now())
 
   @@unique([contentId, sharerWawuId, sharedOn])
   @@index([sharerWawuId])
@@ -1059,6 +1171,9 @@ model CommunityMessage {
   imageUrl      String?
   costInCredits Int       @default(1)
   sentAt        DateTime  @default(now())
+  /// INBOX-05 round 5. The row of `CommunityMessageKey` for the key this message was sent with, when the sender gave one.
+  /// Nothing reads it from a message; it is only the other side of that table's relation.
+  idempotencyKey CommunityMessageKey?
 
   @@index([communityId])
   @@index([senderWawuId])
@@ -1066,6 +1181,22 @@ model CommunityMessage {
   /// message and counts the messages after a read mark: both walk one room's
   /// messages in time order, and this index serves them without a sort.
   @@index([communityId, sentAt])
+}
+
+/// INBOX-05 round 5 (verifier defect 21). The `Idempotency-Key` a sender gave when they posted a community message:
+/// one row per (sender, key), pointing at the message that key stored. The primary key is the unique index that makes
+/// a message stored and charged ONCE per sender and key, even when two requests with the same key arrive at the same
+/// moment on two servers: the database refuses the second row, so the second request answers with the first message
+/// (see CommunityMessageService.store). A separate table, not a column on CommunityMessage, so no read of a message
+/// (the list, a live event, a catch-up, the data export) can carry a key; a message sent without a key has no row here.
+model CommunityMessageKey {
+  senderWawuId String
+  key          String
+  messageId    String           @unique
+  message      CommunityMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  createdAt    DateTime         @default(now())
+
+  @@id([senderWawuId, key])
 }
 
 model CreditsState {
@@ -1858,8 +1989,12 @@ enum LegalPath {
 
 enum ConsultationMedium {
   chat
+  /// A video call. The value keeps the name the web already writes; the app
+  /// calls it a video call (LegalConsultationOption, LEGAL-03).
   zoom
   physical
+  /// A phone call (LEGAL-03). Only the app's booking route writes it.
+  phone
 }
 
 /// The full lifecycle of a legal request. A `simple` request skips straight
@@ -1894,12 +2029,17 @@ model LegalRequest {
   details   Json?
   documents String[] @default([])
 
-  consultationMedium ConsultationMedium?
-  consultationFee    Int?
-  consultationTxRef  String?             @unique
-  consultationPaidAt DateTime?
-  scheduledFor       DateTime?
-  consultationNotes  String?
+  consultationMedium  ConsultationMedium?
+  consultationFee     Int?
+  /// How long the booked consultation runs, copied from the medium's setting
+  /// when the hour is held (LEGAL-03), so a later change in admin never moves
+  /// an appointment that is already booked. Null on a booking made before
+  /// then, which the calendar reads as the one-hour slot it always was.
+  consultationMinutes Int?
+  consultationTxRef   String?             @unique
+  consultationPaidAt  DateTime?
+  scheduledFor        DateTime?
+  consultationNotes   String?
 
   /// What WAWU quotes after the consultation.
   quoteAmount Int?
@@ -2203,9 +2343,13 @@ model PaymentWebhookReceipt {
 /// Which operator surface an AdminOpsAudit row belongs to.
 enum AdminOpsResource {
   legal_request
+  /// A legal price WAWU sets in admin (LEGAL-03, R-14).
+  legal_price
   service_application
   bill_payment
   health_subscription
+  /// A person's hold on a BVN during a Nuvion wallet opening (NUV-02 round 3).
+  wallet_identity_hold
 }
 
 /// Every consequential ops action that used to be anonymous behind
@@ -2215,6 +2359,9 @@ enum AdminOpsAction {
   legal_consultation_completed
   legal_delivered
   legal_cancelled
+  /// A consultation price or length, or a fixed-price service's price, was set
+  /// or cleared (LEGAL-03, R-14). `detail` carries the old and new values.
+  legal_price_set
   application_progressed
   application_rejected
   application_approved
@@ -2231,6 +2378,9 @@ enum AdminOpsAction {
   bill_refund_recorded
   care_enrolment_retried
   care_refund_recorded
+  /// Support released one person's BVN hold at once (NUV-02 round 3). `detail`
+  /// carries the opening's state before and after, never a BVN or its hash.
+  wallet_identity_hold_released
 }
 
 /// Attribution for the operator surfaces that moved from AdminKeyGuard onto
@@ -2451,6 +2601,7 @@ model Event {
   referrals   EventReferral[]
   /// People the host lets scan tickets in at the door (EVENTS-05).
   doorStaff   EventDoorStaff[]
+  doorScans   EventDoorScan[]
 
   /// Banner image. Object-storage URL from POST /uploads/presign.
   bannerUrl    String?
@@ -2660,6 +2811,8 @@ model ProfessionalProfile {
   /// Hidden from the directory without deleting the record — a professional
   /// who is too busy to take work, or one an admin has pulled. Distinct from
   /// `status`: this is availability, that is whether they were ever approved.
+  /// Which of the two hid it is ProfessionalTakedown (FIX-06): while an
+  /// admin's takedown stands this is false and the person cannot set it.
   listed Boolean @default(true)
 
   reviews ProfessionalReview[]
@@ -2691,6 +2844,52 @@ model ProfessionalLocation {
   city       String
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+}
+
+/// An admin's takedown of one professional listing, kept apart from the
+/// person's own Hide (FIX-06).
+///
+/// Before this table, POST /admin/professionals/:id/unlist and the person's
+/// Hide (PATCH /professionals/applications/:id/listing) wrote the same
+/// `ProfessionalProfile.listed = false`, so the person's Show put back a
+/// listing an admin had pulled. A row here whose `liftedAt` is null is a
+/// takedown that stands: `listed` stays false, the person's Show is refused
+/// (409, reason.code `listing_taken_down`), and only an admin lifts it
+/// (POST /admin/professionals/:id/relist).
+///
+/// A SIDE TABLE, NOT A COLUMN, for ProfessionalLocation's reason:
+/// ProfessionalProfile rows go out whole on routes the web calls today, so a
+/// column there would add a key to each of those answers (the protected
+/// route list, hazard H-1).
+///
+/// One row per listing: the latest takedown, and who lifted it and when. A
+/// takedown after a lift replaces the row. Admin email and role are
+/// SNAPSHOTS, as in AdminOpsAudit: "who took this down" has to stay
+/// answerable after that admin is renamed, suspended or deleted. No FK,
+/// matching ProfessionalLocation.
+model ProfessionalTakedown {
+  /// The listing: a ProfessionalProfile id.
+  professionalId String  @id
+  /// Whose listing (ProfessionalProfile.wawuUserId when it was taken down),
+  /// so the account purge and the data export find the row by its owner.
+  wawuUserId     String
+  /// What the person themselves last chose: the listing's `listed` when the
+  /// admin took it down, then false if they press Hide while it is down.
+  /// Lifting the takedown puts the listing back to this.
+  ownerListed    Boolean
+
+  takenDownAt           DateTime  @default(now())
+  takenDownByAdminId    String
+  takenDownByAdminEmail String
+  takenDownByAdminRole  AdminRole
+
+  /// All null while the takedown stands.
+  liftedAt           DateTime?
+  liftedByAdminId    String?
+  liftedByAdminEmail String?
+  liftedByAdminRole  AdminRole?
+
+  @@index([wawuUserId])
 }
 
 /// One client's rating of one professional listing.
@@ -2801,14 +3000,14 @@ model LegalIntake {
   /// (a retry of the assistant's reply, or preparing the brief on Send), so
   /// a second one cannot start. Expires on its own if the process dies.
   assistantBusyUntil DateTime?
-
-  @@index([wawuUserId, status])
-  @@index([status, completedAt])
   // Also in the database, and NOT expressible here (Prisma has no partial
   // index): UNIQUE ("wawuUserId") WHERE "channel" = 'assistant' AND "status" =
   // 'in_progress', so a person has at most one open assistant conversation.
   // See migration 20261007200000_legal_assistant. `prisma migrate diff` does
   // not list it, so the schema and the migrations still agree.
+
+  @@index([wawuUserId, status])
+  @@index([status, completedAt])
 }
 
 /// Who wrote a message in the assistant conversation on an intake.
@@ -2898,6 +3097,101 @@ model LegalChatMessage {
   createdAt      DateTime        @default(now())
 
   @@index([legalRequestId, createdAt])
+}
+
+/// What one kind of legal consultation costs and how long it runs, set by WAWU
+/// in admin (R-14, LEGAL-03). One row per medium. A medium with no row, or a
+/// row with no price or no length, is not offered for booking: nothing here
+/// has a built-in price, so nothing can be sold at a figure nobody set.
+///
+/// `priceKobo` is whole naira (a multiple of 100): the web still pays a
+/// consultation through Flutterwave in whole naira until it is moved, and both
+/// read this row. An in-person consultation carries neither price nor length:
+/// it is arranged directly and priced per matter.
+model LegalConsultationOption {
+  id               String             @id @default(uuid())
+  medium           ConsultationMedium @unique
+  priceKobo        Int?
+  minutes          Int?
+  /// Staff can switch a medium off without losing its price.
+  enabled          Boolean            @default(true)
+  updatedAt        DateTime           @updatedAt
+  updatedByAdminId String?
+}
+
+/// The price WAWU sets in admin for a fixed-price legal service (R-14,
+/// LEGAL-03), for example business name registration. No row means the service
+/// has no fixed price and is quoted by a consultant, as before. Whole naira, as
+/// LegalConsultationOption.
+model LegalServicePrice {
+  serviceCode      String   @id
+  priceKobo        Int
+  updatedAt        DateTime @updatedAt
+  updatedByAdminId String?
+}
+
+/// One file WAWU delivers on a legal request (LEGAL-03). A request can have
+/// several; each is also posted into the matter's chat as its own message
+/// (`chatMessageId`), so the client finds every document in the conversation
+/// and the consultant's name stays on it. `LegalRequest.deliverableUrl` still
+/// holds the first one for everything that reads a single file.
+/// `wawuUserId` is the client, so an account purge finds the rows directly.
+model LegalDeliverable {
+  id              String   @id @default(uuid())
+  legalRequestId  String
+  wawuUserId      String
+  fileName        String
+  url             String
+  /// Page count, when the consultant gave one.
+  pages           Int?
+  /// The chat message this file was posted as.
+  chatMessageId   String?  @unique
+  postedByAdminId String?
+  createdAt       DateTime @default(now())
+
+  /// The same file is never delivered twice on one request, so a repeated
+  /// submit is a no-op rather than a second copy in the chat.
+  @@unique([legalRequestId, url])
+  @@index([legalRequestId, createdAt])
+  @@index([wawuUserId])
+}
+
+/// One paid AI call that writes the assistant's opener on a matter's thread
+/// (FIX-11). The opener is written on the first read of an empty, open thread
+/// (`LegalChatService.getThread`), and reading a thread must never multiply
+/// paid calls, so this row is two things at once:
+///
+/// - the CLAIM: it is written under the person's lock, only while the thread
+///   is empty, no other opener call is running for it and none ended since
+///   the read arrived, so parallel reads make one call between them and wait
+///   for its answer;
+/// - the METER: it is written in the same step that checks the person's
+///   hourly limits and counts toward them, like a `LegalAssistantCall`.
+///
+/// One row per attempt (a failed call is still a paid call). Carries no
+/// words of the conversation.
+model LegalChatOpenerCall {
+  id             String    @id @default(uuid())
+  legalRequestId String
+  wawuUserId     String
+  /// When the claim stops holding. While the call runs: when it lapses, so
+  /// a process that died mid-call does not hold the thread for good. Once
+  /// the call has ended: when it ended. A read that arrived before this time
+  /// never claims again for the thread.
+  busyUntil      DateTime?
+  /// How the call ended: `written` (the opener is in the thread), `failed`
+  /// (the provider failed or answered nothing) or `superseded` (the thread
+  /// was no longer empty when the answer came back, so it was not written).
+  /// Null while it runs.
+  outcome        String?
+  createdAt      DateTime  @default(now())
+  // Also in the database, and NOT expressible here (Prisma has no partial
+  // index): UNIQUE ("legalRequestId") WHERE "outcome" = 'written', so a
+  // thread has at most one opener on record whatever reaches the table. See
+  // migration 20261015200000_legal_chat_opener.
+
+  @@index([legalRequestId, createdAt])
+  @@index([wawuUserId, createdAt])
 }
 
 // -----------------------------------------------------------------------------
@@ -3100,6 +3394,34 @@ model EventDoorStaff {
 
   @@unique([eventId, staffWawuId])
   @@index([staffWawuId])
+}
+
+/// The first answer to one scan at the door (EVENTS-09 round 2, D1).
+///
+/// A phone sends `Idempotency-Key` with a scan; the key is made once per scan
+/// and sent again unchanged when the phone asks again after an answer was lost.
+/// One row per (scanner, key). The row is written in the same transaction as
+/// the check-in it answers, so either both exist or neither does: a repeat
+/// finds the row and gets the first verdict ("let them in", with the holder's
+/// name) instead of "already used" by the scanner's own door. The primary key
+/// is the lock: two requests with one key, on one Hub process or two, leave
+/// one row. `fingerprint` is the event and the text sent, so a key used for
+/// another scan is refused. Rows are purged after `DOOR_SCAN_KEY_HOURS`.
+model EventDoorScan {
+  scannerWawuId String
+  key           String
+  eventId       String
+  fingerprint   String
+  /// The answer exactly as first sent (a `DoorCheckInResult` as JSON text, so
+  /// a repeat is the same bytes: a JSON column would reorder its keys).
+  response      String
+  createdAt     DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@id([scannerWawuId, key])
+  @@index([eventId])
+  @@index([createdAt])
 }
 
 // -----------------------------------------------------------------------------
@@ -3530,22 +3852,31 @@ model WalletWithdrawal {
 /// one. docs/contract/CONVENTIONS.md section 5 is the contract.
 /// ─────────────────────────────────────────────────────────────────────────
 model TransactionPin {
-  wawuUserId  String    @id
+  wawuUserId   String    @id
   /// argon2id, encoded with its own random salt (a fresh one on every set or
   /// change, so no two people share one). The PIN itself is never stored,
   /// logged or returned.
-  pinHash     String
-  /// Wrong tries in a row. A try is counted before the hash is compared, so
-  /// tries sent at the same moment cannot get past the limit together. Back
-  /// to 0 on a right PIN, a new PIN, or once a lock has ended.
-  failedTries Int       @default(0)
+  pinHash      String
+  /// Wrong tries in a row, counted when the comparison is over. Back to 0 on
+  /// a right PIN, a new PIN, or once a lock has ended.
+  failedTries  Int       @default(0)
   /// Set when the last allowed try was wrong; null when not locked. A lock
   /// that has passed is treated as no lock (and cleared on the next try).
-  lockedUntil DateTime?
+  lockedUntil  DateTime?
+  /// Checks reserved and not yet finished (MONEY-17 round 3). A check takes a
+  /// slot in one conditional update (`failedTries + pendingTries` below the
+  /// limit) BEFORE the hash is compared, compares with no transaction and no
+  /// row lock open, and gives the slot back in one more update. So wrong PINs
+  /// sent at the same moment cannot be compared past the limit, a right PIN
+  /// never uses up a try, and no database connection waits on argon2.
+  pendingTries Int       @default(0)
+  /// When the newest slot was taken. A slot older than 30 seconds belongs to a
+  /// check that died (a restart mid-compare) and counts as free.
+  pendingSince DateTime?
   /// When the PIN was set or last changed (W35 "last changed").
-  setAt       DateTime  @default(now())
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  setAt        DateTime  @default(now())
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
@@ -3606,32 +3937,32 @@ model TransactionPinReset {
 /// so does a PIN reset by code. Holds no secret: a public key.
 /// ─────────────────────────────────────────────────────────────────────────
 model ApprovalDevice {
-  wawuUserId  String    @id
+  wawuUserId String    @id
   /// New on every registration; the app keeps it to know this phone is the one.
-  deviceId    String    @unique @default(uuid())
+  deviceId   String    @unique @default(uuid())
   /// SubjectPublicKeyInfo (DER) of a P-256 key, base64url.
-  publicKey   String
+  publicKey  String
   /// What the phone approves with: `fingerprint` or `face` (W35's label).
-  biometric   String
+  biometric  String
   /// The last approval that passed.
-  lastUsedAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 }
 
 /// One challenge for one biometric approval (task MONEY-14): random, short
 /// lived, tied to the person and the phone it was issued for, and used up by
 /// the first approval that names it, right or wrong.
 model ApprovalChallenge {
-  id          String    @id @default(uuid())
-  wawuUserId  String
+  id         String    @id @default(uuid())
+  wawuUserId String
   /// ApprovalDevice.deviceId when the challenge was issued.
-  deviceId    String
+  deviceId   String
   /// 32 random bytes, base64url. Not a secret: only the phone's key can sign it.
-  challenge   String
-  expiresAt   DateTime
-  usedAt      DateTime?
-  createdAt   DateTime  @default(now())
+  challenge  String
+  expiresAt  DateTime
+  usedAt     DateTime?
+  createdAt  DateTime  @default(now())
 
   @@index([wawuUserId, createdAt])
 }
@@ -3662,6 +3993,11 @@ model FintavaWallet {
   /// `wallet.accountName` as Fintava answered when the account opened
   /// (MONEY-12, W1, A8). Null on a row written before the column existed.
   accountName   String?
+  /// Which wallet provider this row belongs to (NUV-01): `fintava` or
+  /// `nuvion`; null is Fintava (a row from before the column). A server acts
+  /// only on rows of the provider it runs, so after a rollback one
+  /// provider's ids are never sent to the other (MONEY-20 finding 2).
+  provider      String?  @default("fintava")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -3712,6 +4048,10 @@ model FintavaWalletOpening {
   failure          String?
   /// When Fintava was last asked about a lost answer.
   checkedAt        DateTime?
+  /// Which wallet provider this opening is with (NUV-01): `fintava` or
+  /// `nuvion`; null is Fintava. The opening sweep reconciles only openings
+  /// of the provider the server runs.
+  provider         String?   @default("fintava")
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -3871,9 +4211,16 @@ model BvnCheckAttempt {
   /// `pending` while Fintava is being asked; then `verified`,
   /// `phone_mismatch`, `refused` or `unavailable`.
   outcome    String   @default("pending")
+  /// NUV-02 round 3 (migration 20261019110000): under a provider that
+  /// reviews the person, the opening tries are counted per address too (at
+  /// most OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR from one place an hour). A keyed
+  /// hash of the caller's address, never the address; null for a Fintava
+  /// check and for a try with no client address.
+  addressKey String?
   createdAt  DateTime @default(now())
 
   @@index([wawuUserId, createdAt])
+  @@index([addressKey, createdAt])
 }
 
 /// One row per selfie match sent (or about to be sent) to Fintava (task
@@ -3885,16 +4232,16 @@ model BvnCheckAttempt {
 /// holds the selfie, the BVN photo or any part of the BVN: only the outcome,
 /// when, and Fintava's confidence score when it gives one.
 model SelfieMatchAttempt {
-  id         String    @id @default(uuid())
-  wawuUserId String
+  id            String    @id @default(uuid())
+  wawuUserId    String
   /// `pending` while Fintava is being asked; then `matched`, `not_matched`
   /// or `unavailable`.
-  outcome    String    @default("pending")
+  outcome       String    @default("pending")
   /// Fintava's confidence score for this match, as sent, when it sends one.
-  confidence Float?
+  confidence    Float?
   /// When Fintava's answer came back; null while pending.
-  settledAt  DateTime?
-  createdAt  DateTime  @default(now())
+  settledAt     DateTime?
+  createdAt     DateTime  @default(now())
   /// The passed BVN check this selfie was compared against, read once at the
   /// start of the request (migration 20261002230000): when that check passed
   /// (WalletIdentity.bvnVerifiedAt) and its BVN's keyed hash
@@ -4139,6 +4486,11 @@ model FintavaLedgerEntry {
   revivedAt    DateTime?
   revivedBy    String?
 
+  /// Which wallet provider recorded this movement (NUV-01): `fintava` or
+  /// `nuvion`; null is Fintava. The pending sweep and the ledger consumer
+  /// act only on rows of the provider the server runs.
+  provider String? @default("fintava")
+
   references FintavaLedgerReference[]
 
   @@index([wawuUserId, occurredAt])
@@ -4165,6 +4517,317 @@ model FintavaLedgerReference {
   @@id([accountNumber, direction, value])
   @@index([entryId])
   @@index([value])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// IDEMPOTENCY KEYS ON MONEY-MOVING REQUESTS (task MONEY-17)
+///
+/// One row per (person, method, route, Idempotency-Key): the primary key is
+/// the lock (docs/contract/CONVENTIONS.md section 4). The row is written in
+/// the same transaction as the payment it guards, once every check made
+/// before money moves has passed (wallet, PIN, body, quote, funds), so a
+/// refusal before that point stores nothing and the key can be sent again.
+/// `fingerprint` is the SHA-256 of the request body as canonical JSON (keys
+/// sorted); headers are not part of it, so the PIN is not either.
+///
+/// `state`:
+///   in_progress  the request that wrote it is still running (or died after
+///                writing it: `resourceId` names the payment, and a later
+///                request answers from that payment's record)
+///   done         `responseStatus` and `responseBody` are the answer, sent
+///                again byte for byte to every repeat
+/// Kept at least 24 hours (IDEMPOTENCY_KEY_HOURS), then purged.
+/// ─────────────────────────────────────────────────────────────────────────
+model MoneyIdempotencyKey {
+  wawuUserId     String
+  method         String
+  route          String
+  key            String
+  fingerprint    String
+  state          String
+  /// Which request holds the key (a random id per claim), so a request that
+  /// gives a key back never frees a later request's claim on it.
+  claimId        String?
+  /// The payment (or transfer) this request made.
+  resourceId     String?
+  responseStatus Int?
+  /// The JSON answer as sent, kept as text so a replay is the same bytes.
+  responseBody   String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@id([wawuUserId, method, route, key])
+  @@index([updatedAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// A PAYMENT FROM A WALLET (task MONEY-17)
+///
+/// One row per payment for anything WAWU sells: the buyer's wallet pays WAWU's
+/// Fintava merchant wallet (R-19) the price, and Fintava takes its
+/// balance-transfer charge on top (R-10), as quoted. The split is recorded
+/// here with the payment, of the price only (R-10, R-5: one 85/15 split):
+/// `payeeShareKobo` is the creator's 85% (floor), `wawuShareKobo` WAWU's 15%
+/// (the rest); with no payee (WAWU itself is paid) the whole price is WAWU's.
+/// Nothing here moves the payee's share: WALLET-16 lands it in their wallet
+/// (R-11) and sets `payeeSettledAt`.
+///
+/// The ledger rows of the movement (FintavaLedgerEntry, buyer `out` and
+/// merchant `in`) carry this row's id as `paymentId` and its
+/// `customerReference`. `status` follows Fintava: `pending` until the debit is
+/// confirmed (the answer was lost: the ledger's status check settles it,
+/// never a blind resend), `completed`, `failed` (no money left the wallet),
+/// `reversed`. Every figure is integer kobo.
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletPayment {
+  id                    String    @id @default(uuid())
+  /// Null once the payer's account is deleted: the payment stays (the
+  /// payee's share may be unpaid), the payer side is anonymised.
+  payerWawuUserId       String?
+  /// A PaymentKind of the wallet contract and the owning feature's id for it.
+  kind                  String
+  targetId              String
+  title                 String
+  /// Who the price is for; null when WAWU itself is paid.
+  payeeWawuUserId       String?
+  priceKobo             BigInt
+  /// Fintava's charge as quoted, WAWU's fee (0 on a purchase) and the total.
+  providerFeeKobo       BigInt
+  wawuFeeKobo           BigInt
+  totalKobo             BigInt
+  /// The 85/15 split of the price (R-5).
+  payeeShareKobo        BigInt
+  wawuShareKobo         BigInt
+  payeeSettledAt        DateTime?
+  /// OUR reference at the wallet provider, derived from this row's id.
+  customerReference     String    @unique
+  payerAccountNumber    String?
+  /// WAWU's own account at the provider the money went to (Fintava's
+  /// merchant wallet, Nuvion's operational account).
+  merchantAccountNumber String
+  /// The wallet provider that took the payment (WALLET_PROVIDER at the time:
+  /// `fintava` or `nuvion`). The sweep asks only the provider the server
+  /// runs about its own payments, so a rollback never asks one provider
+  /// about the other's transfers (MONEY-20 finding 2).
+  provider              String    @default("fintava")
+  status                String
+  /// `<payer>:<kind>:<targetId>` while the payment is `pending`, null once
+  /// it is settled: the unique key is the rule "one open payment per buyer
+  /// and item" (a second answers `409 payment_in_progress`).
+  openKey               String?   @unique
+  /// The sweep's schedule for a `pending` payment: when Fintava is next
+  /// asked, how many times it has been, and when it went to manual review
+  /// (past PAYMENT_REVIEW_AFTER_HOURS with no answer; still pending, never
+  /// "no money moved").
+  nextCheckAt           DateTime?
+  checks                Int       @default(0)
+  reviewSince           DateTime?
+  failureReason         String?
+  /// Fintava's record of the debit disagreed with the quote (a fee, an
+  /// amount): kept for review, as on the ledger row (MONEY-16 reports it).
+  discrepancy           String?
+  /// When the provider was found to have debited more than the quoted total
+  /// (lead ruling 5, 8 Oct 2026): the payment then records and answers the
+  /// real fee and total, `discrepancy` names both figures, and NUV-08
+  /// reconciles it with the provider. Null: the debit was as quoted or less.
+  debitReviewSince      DateTime?
+  /// When the provider's charge was found not to be believable (MONEY-18, N2):
+  /// below 0, or above the quoted fee by more than PAYMENT_CHARGE_REVIEW_ABOVE_KOBO.
+  /// The payment is then held for a person with both figures on `discrepancy`:
+  /// no path completes or delivers it (`reviewSince` is set with it while it is
+  /// `pending`). Null: the charge was believable.
+  chargeReviewSince     DateTime?
+  /// A tip's message.
+  note                  String?
+  /// When the debit was first sent to Fintava (the reconcile window).
+  sentAt                DateTime?
+  completedAt           DateTime?
+  /// When the owning feature delivered what was paid for.
+  fulfilledAt           DateTime?
+  /// The sweep's schedule for a `completed` payment not yet delivered (MONEY-17
+  /// round 4): the same capped backoff as the check (1, 2, 4 ... 60 minutes),
+  /// its own attempt count and next attempt; past PAYMENT_REVIEW_AFTER_HOURS it
+  /// goes to review (`reviewSince`), still claimed, and the sweep stops.
+  deliveryAttempts      Int       @default(0)
+  nextDeliveryAt        DateTime?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  /// Set for a held kind (paid DM, ticket, bill) once the payment completes (MONEY-18).
+  hold                  WalletHold?
+
+  @@index([payerWawuUserId, createdAt])
+  @@index([status, createdAt])
+  @@index([kind, targetId])
+  @@index([status, reviewSince, nextCheckAt, id])
+  @@index([status, fulfilledAt, reviewSince, nextDeliveryAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// MONEY HELD BETWEEN PAYER AND PAYEE (task MONEY-18, R-19)
+///
+/// A paid DM, an event ticket and a bill are paid into WAWU's own account at
+/// the wallet provider (a WalletPayment), and the price then waits there
+/// until something happens: it is RELEASED to the payee (the payee's 85%; the
+/// other 15% is WAWU's and stays) or REFUNDED to the payer (the price, never
+/// the provider's charge on the original payment, R-10). The provider cannot
+/// reserve part of a balance, so a hold is a row here plus money in WAWU's
+/// account; the provider's balance is still the only balance (MONEY-11).
+///
+/// One row per completed held payment, written in the same transaction as the
+/// payment's completion. `status` is what a person sees: `held` until the
+/// provider has CONFIRMED the move out of WAWU's account, then `released` or
+/// `refunded`. `action` is what was decided (the owning feature asked for it,
+/// once, and it never changes): while it is set and `status` is still `held`
+/// the move is waiting, in flight or in review. The money moves under OUR
+/// reference (`customerReference`, `wawu-rel-<id>` or `wawu-ref-<id>`, a
+/// number added after a proven failure), so a repeat can never move it twice
+/// at the provider, and a lost answer is looked up by that reference, never
+/// sent again. Every figure is integer kobo.
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletHold {
+  id                       String        @id @default(uuid())
+  paymentId                String        @unique
+  payment                  WalletPayment @relation(fields: [paymentId], references: [id])
+  /// Null once the payer's account is deleted: the hold stays (WAWU still holds the money).
+  payerWawuUserId          String?
+  /// Null when WAWU itself is the payee (a bill).
+  payeeWawuUserId          String?
+  /// What was paid for: the payment's kind, its target and its title.
+  kind                     String
+  targetId                 String
+  title                    String
+  /// dm_answered, event_took_place or bill_delivered.
+  releaseCondition         String
+  /// The held price.
+  amountKobo               BigInt
+  /// The 85/15 split of the price (R-5); a release moves only the payee's share.
+  payeeShareKobo           BigInt
+  wawuShareKobo            BigInt
+  /// WAWU's own account at the provider the price is held in.
+  merchantAccountNumber    String
+  /// The wallet provider that holds it (WALLET_PROVIDER when the payment was taken).
+  provider                 String        @default("fintava")
+  /// held, released or refunded.
+  status                   String        @default("held")
+  heldAt                   DateTime
+  /// When the provider confirmed the move out of WAWU's account.
+  settledAt                DateTime?
+  /// Set when refunded: what came back to the payer (the price).
+  refundedKobo             BigInt?
+
+  /// What was decided: `release` or `refund`. Set once, by the owning feature.
+  action                   String?
+  actionReason             String?
+  actionAt                 DateTime?
+  /// What the chosen action moves out of WAWU's account.
+  transferKobo             BigInt?
+  /// Which try this is: 1, 2 ... A new try (and a new reference) follows only a
+  /// move the provider's own record proved failed.
+  attempt                  Int           @default(1)
+  customerReference        String?       @unique
+  destinationAccountNumber String?
+  /// When the current try was handed to the provider. Set means "a record may
+  /// exist at the provider": it is asked, never sent again, until it says.
+  sentAt                   DateTime?
+  /// The provider's own charge on the move (WAWU's, R-31); null when its record did not say.
+  providerFeeKobo          BigInt?
+  /// The schedule: the next try or the next question to the provider, and how
+  /// many questions have been asked. `waiting` says why nothing has moved
+  /// (payee_wallet, payer_wallet, recipient_frozen, funds, provider, refused);
+  /// a hold waiting for a wallet rests a minute to an hour (it doubles with the
+  /// hold's age), and the first sweep after the person HAS a wallet wakes it
+  /// whatever its rest (MONEY-18 round 2, F4).
+  nextAttemptAt            DateTime?
+  attempts                 Int           @default(0)
+  checks                   Int           @default(0)
+  waiting                  String?
+  /// A person has to look (no answer from the provider past the review bound,
+  /// a reversed move, an amount that is not the price). Out of the sweep.
+  reviewSince              DateTime?
+  discrepancy              String?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+
+  @@index([status, action, reviewSince, nextAttemptAt])
+  @@index([payerWawuUserId, heldAt])
+  @@index([payeeWawuUserId, heldAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// A SEND FROM ONE WALLET TO ANOTHER (task WALLET-07)
+///
+/// One row per send of money from a person's wallet to another WAWU user's
+/// (W7 to W12): one wallet-to-wallet transfer at the wallet provider
+/// (Fintava, or Nuvion's book transfer) of `amountKobo`, under our reference
+/// `wawu-send-<id>`. The sender's balance falls by `totalKobo` (the amount
+/// plus the provider's charge and WAWU's fee, both quoted, R-10); the
+/// receiver's rises by exactly `amountKobo`. WAWU's fee is collected by the
+/// provider in the same transfer (Fintava's dashboard "Merchant charges",
+/// docs/fintava/fees.md), so there is no second transfer and no second
+/// provider charge.
+///
+/// `status` follows the provider: `pending` until the send is confirmed
+/// (the answer was lost, or the provider accepted it and has not finished:
+/// asked about by our reference, never sent again), `completed`, `failed`
+/// (no money left the wallet: the provider's own refusal or its failed
+/// record) and `reversed`. The ledger rows (FintavaLedgerEntry) carry this
+/// row's id as `transferId`: the sender's `out` row from the claim on, the
+/// receiver's `in` row once the send is confirmed. `kind` is `wawu_user`;
+/// WALLET-09's bank sends add their own columns, nullable, beside these.
+///
+/// Both people's sides are anonymised when their account is purged (the row
+/// is the other person's record too): see src/account-purge.
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletTransfer {
+  id                     String    @id @default(uuid())
+  /// wawu_user (WALLET-07); WALLET-09 adds bank_account.
+  kind                   String    @default("wawu_user")
+  /// Null once the payer's account is deleted.
+  payerWawuUserId        String?
+  /// Null once the receiver's account is deleted.
+  recipientWawuUserId    String?
+  /// The names as the people had them when the send was made (the ledger
+  /// rows' counterparty names): the receipt reads the live ones first.
+  payerName              String?
+  recipientName          String?
+  /// What the receiver gets.
+  amountKobo             BigInt
+  /// The provider's charge and WAWU's fee as quoted (R-10), and the total.
+  providerFeeKobo        BigInt
+  wawuFeeKobo            BigInt
+  totalKobo              BigInt
+  /// The sender's own note (W9).
+  note                   String?
+  /// OUR reference at the wallet provider, derived from this row's id.
+  customerReference      String    @unique
+  payerAccountNumber     String?
+  recipientAccountNumber String?
+  /// The wallet provider that took the send (WALLET_PROVIDER at the time).
+  provider               String    @default("fintava")
+  status                 String
+  /// The sweep's schedule for a `pending` send: when the provider is next
+  /// asked, how many times it has been, and when it went to manual review.
+  nextCheckAt            DateTime?
+  checks                 Int       @default(0)
+  reviewSince            DateTime?
+  failureReason          String?
+  /// The provider's record disagreed with the quote (a fee, an amount): kept
+  /// for review, as on the ledger row.
+  discrepancy            String?
+  /// The provider debited more than the quoted total (a believable charge):
+  /// the send records the real figures and is flagged for NUV-08.
+  debitReviewSince       DateTime?
+  /// When the send was first handed to the provider (the reconcile window).
+  sentAt                 DateTime?
+  completedAt            DateTime?
+  failedAt               DateTime?
+  reversedAt             DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@index([payerWawuUserId, createdAt])
+  @@index([recipientWawuUserId, createdAt])
+  @@index([status, reviewSince, nextCheckAt, id])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
@@ -4224,6 +4887,20 @@ model MoneyBeneficiary {
   accountNumber   String?
   /// The name the bank returned on the name check.
   accountName     String?
+  /// NUV-06 (migration 20261021280000): the bank's code in Nuvion's list,
+  /// once this account has been matched to it (by code, else by the bank's
+  /// name; `bankCode` above is Fintava's when the row was saved in the
+  /// Fintava days).
+  nuvionBankCode  String?
+  /// When the holder's name was last confirmed through Nuvion
+  /// (`POST /counterparty-lookups`). Null on a row saved in the Fintava days:
+  /// it is checked by name again before its first Nuvion send.
+  nuvionCheckedAt DateTime?
+  /// Nuvion's counterparty and its bank payment detail for this account,
+  /// under the owner's entity. Made by the first send and reused by every
+  /// later one; provider ids, never a personal detail.
+  nuvionCounterpartyId  String?
+  nuvionPaymentDetailId String?
   createdAt       DateTime @default(now())
 
   @@unique([ownerWawuId, recipientWawuId])
@@ -4242,6 +4919,20 @@ model MoneyPayoutAccount {
   bankName      String
   accountNumber String
   accountName   String
+  /// NUV-06 (migration 20261021280000): as on MoneyBeneficiary, the bank's
+  /// code in Nuvion's list and when the name was last confirmed through
+  /// Nuvion (null in the Fintava days).
+  nuvionBankCode  String?
+  nuvionCheckedAt DateTime?
+  /// Nuvion's counterparty and payment detail for this account under the
+  /// PERSON's entity (their own withdrawal to it).
+  nuvionCounterpartyId  String?
+  nuvionPaymentDetailId String?
+  /// The same account as a payee of WAWU's OPERATIONAL account (WAWU's own
+  /// payouts to this person, R-31): a counterparty belongs to the entity that
+  /// pays, so these are not the same ids.
+  nuvionOperationalCounterpartyId  String?
+  nuvionOperationalPaymentDetailId String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -4326,7 +5017,7 @@ model SchoolCourse {
   /// merchant cap any one payment is bounded by.
   priceKobo Int
   /// SCHOOLS-02: when the dashboard hid this course. Null: shown. SCHOOLS-04 serves only unhidden rows.
-  hiddenAt DateTime?
+  hiddenAt  DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4354,7 +5045,7 @@ model CourseIntake {
   capacity   Int
   seatsTaken Int          @default(0)
   /// SCHOOLS-02: when the dashboard hid this intake. Null: shown. SCHOOLS-04 serves only unhidden rows.
-  hiddenAt DateTime?
+  hiddenAt   DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4681,4 +5372,845 @@ model AdDailyTotal {
   skips      Int        @default(0)
 
   @@id([campaignId, day])
+}
+
+// -----------------------------------------------------------------------------
+// Phone push (INBOX-03)
+// -----------------------------------------------------------------------------
+
+/// One phone's Expo push token. The token is the address of a phone, so it is
+/// personal data and never leaves the server: no route returns it and no log
+/// line carries it. `expoPushToken` is unique: a phone belongs to one person
+/// at a time, so when somebody else signs in on it the row moves to them
+/// (userWawuId and createdAt change; see PushTokenService). `createdAt` means
+/// "this person has owned the token since": the sender never pushes a
+/// notification written before it.
+model PushToken {
+  id              String    @id @default(uuid())
+  userWawuId      String
+  /// `ExponentPushToken[...]` or `ExpoPushToken[...]`, as the app gives it.
+  expoPushToken   String    @unique
+  /// `android` or `ios`.
+  platform        String
+  /// The phone's own id and a name for it, both optional and app-supplied.
+  deviceId        String?
+  deviceLabel     String?
+  createdAt       DateTime  @default(now())
+  /// Set by every registration; the oldest-seen token goes first when a
+  /// person is over the cap.
+  lastSeenAt      DateTime  @default(now())
+  /// Set when Expo says the phone no longer takes pushes (DeviceNotRegistered).
+  /// A disabled token is never sent to; a fresh registration of the same token
+  /// clears it.
+  disabledAt      DateTime?
+  disabledReason  String?
+
+  deliveries PushDelivery[]
+
+  @@index([userWawuId])
+  @@index([disabledAt])
+}
+
+/// One notification going to one phone. The notification table is the outbox:
+/// a row here is made for a Notification the notification service already
+/// wrote, once per phone (the unique key), so two hub instances can never push
+/// the same notification to the same phone twice. `pending` -> `claimed` (an
+/// instance took it to check it) -> `sending` (set just before the request to
+/// Expo) -> `sent` (Expo accepted it and gave a ticket) -> `delivered` (the
+/// receipt says ok); or `failed`, `skipped` or `expired` with a `reason`.
+/// Every time column holds UTC, written and compared on the database's clock.
+model PushDelivery {
+  id              String    @id @default(uuid())
+  notificationId  String
+  userWawuId      String
+  pushTokenId     String
+  pushToken       PushToken @relation(fields: [pushTokenId], references: [id], onDelete: Cascade)
+  status          String    @default("pending")
+  reason          String?
+  attempts        Int       @default(0)
+  nextAttemptAt   DateTime  @default(now())
+  /// Set while an instance holds the row (`claimed` or `sending`).
+  lockedAt        DateTime?
+  /// The batch an instance claimed this row in. Only that batch may move it
+  /// on to `sending`, so a row the reaper put back cannot be sent twice.
+  claimId         String?
+  /// True once the reaper found this row mid-send and put it back in the
+  /// queue. It is put back once only; the second time it is failed.
+  interruptedSend Boolean   @default(false)
+  /// Expo's receipt id for this send.
+  ticketId        String?
+  sentAt          DateTime?
+  /// When to ask Expo for the receipt next, and how many times it was asked.
+  receiptDueAt    DateTime?
+  receiptChecks   Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([notificationId, pushTokenId])
+  @@index([status, nextAttemptAt])
+  @@index([status, receiptDueAt])
+  @@index([userWawuId])
+}
+
+/// An account whose deletion is scheduled (`DELETE /account`). Its push
+/// tokens were deleted when the deletion was asked for, a token it registers
+/// afterwards is not stored, and the sender sends it nothing. Deleted with
+/// the account at purge.
+model PushStoppedAccount {
+  userWawuId String   @id
+  createdAt  DateTime @default(now())
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// NUVION WEBHOOK EVENTS (task NUV-01)
+///
+/// Every signed delivery Nuvion sends to `POST /api/hub/webhooks/nuvion`,
+/// stored once and acknowledged (Nuvion retries anything but a 2xx for 15
+/// minutes, then drops it). Nothing here moves money or touches a balance:
+/// the handler registry (src/nuvion/handlers/, one file per task NUV-02 to
+/// NUV-08) reads the `pending` rows of the events it handles and marks them
+/// `processed` or `failed`. Nuvion's balance stays the only balance.
+///
+/// Exactly once, twice over: `eventId` (`x-nuvion-event-id`) is unique, so a
+/// retry of the same event lands on the same row; and the signed pair
+/// (`signedAt`, `bodySha256`) is unique, so a captured delivery replayed
+/// inside the time window under another event id (the id is not signed)
+/// lands on the same row too. The insert is `ON CONFLICT DO NOTHING`; there
+/// is no read before the write.
+/// ─────────────────────────────────────────────────────────────────────────
+enum NuvionWebhookProcessing {
+  /// Stored; waiting for the handlers of its event (or for a handler to exist).
+  pending
+  /// Every handler of its event finished with it.
+  processed
+  /// A handler could not use it; `note` says why. Kept for review.
+  failed
+  /// Not one of Nuvion's documented events (or none). Kept for review.
+  unrecognised
+  /// Nuvion's own test delivery (`POST /webhook-tests`): `{event_group,
+  /// event_name}`, no data. Proves the signature works; nothing acts on it.
+  test
+}
+
+model NuvionWebhookEvent {
+  id String @id @default(uuid())
+
+  /// `x-nuvion-event-id` as sent: the event's own id.
+  eventId    String  @unique
+  /// The body's `event` (`inflows.completed`), trimmed and lower case; for a
+  /// test delivery `<event_group>.<event_name>`. Empty when it named none.
+  event      String
+  /// The id the event is about: `data.id`, else `data.account.id` or
+  /// `data.account_details.id` (accounts.created, account_details.created
+  /// wrap their object). Null when the delivery carries none.
+  resourceId String?
+  /// The entity the event is about (`data.entity_id`, or the wrapped
+  /// object's): which person, through NuvionEntity.
+  entityId   String?
+
+  /// `x-nuvion-event-timestamp` exactly as sent: the signature covers it.
+  signedAt   String
+  /// The SHA-256, hex, of `rawBody`.
+  bodySha256 String
+  /// The body exactly as delivered (the bytes the signature covers). Its
+  /// personal data stays here and in `payload`, never in a log.
+  rawBody    Bytes
+  /// The same body parsed, every NUL in a key or string replaced by U+FFFD
+  /// (Postgres json cannot hold one).
+  payload    Json
+
+  processingStatus NuvionWebhookProcessing @default(pending)
+  /// What the handlers did, or why they could not.
+  note             String?
+  /// Tries by the dispatcher so far.
+  attempts         Int                     @default(0)
+  /// Not tried again before this (backing off after a handler waited).
+  nextAttemptAt    DateTime?
+  /// A dispatcher holds the row until then: one worker at a time.
+  claimedUntil     DateTime?
+  receivedAt       DateTime                @default(now())
+  processedAt      DateTime?
+
+  @@unique([signedAt, bodySha256])
+  @@index([processingStatus, event, receivedAt])
+  @@index([event, resourceId])
+  @@index([entityId])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// ONE PERSON AT NUVION (task NUV-01; written by NUV-02 to NUV-04 and NUV-09)
+///
+/// The person as Nuvion knows them: their individual entity (a child of
+/// WAWU's parent entity), its review, and the one account opened for them
+/// once approved, with its account details. One row per person.
+///
+/// Never the BVN, the NIN, a document, an image, the date of birth or the
+/// address: Nuvion holds those; the rejection reasons are Nuvion's own
+/// words with digits masked to their last 4. The balance is never here: it
+/// is Nuvion's `available`, read when it is shown.
+/// ─────────────────────────────────────────────────────────────────────────
+model NuvionEntity {
+  wawuUserId           String    @id
+  /// Nuvion's entity id (`POST /individual-entities`), once created.
+  entityId             String?   @unique
+  /// The entity's person record (`person.id`): documents link to it.
+  personId             String?
+  /// Nuvion's review state: incomplete, pending, approved, rejected,
+  /// failed or suspended (Nuvion's own words).
+  status               String    @default("incomplete")
+  /// When Nuvion approved or rejected it.
+  decidedAt            DateTime?
+  /// Why Nuvion said no, in its words (masked); empty otherwise.
+  rejectionReasons     String[]  @default([])
+  /// The account opened after approval (`POST /accounts`).
+  accountId            String?   @unique
+  /// The account's `nuvion_ban`: book transfers go to it.
+  nuvionBan            String?   @unique
+  /// The account details (`POST /account-details`), provisioned later.
+  accountDetailsId     String?   @unique
+  /// `pending` until Nuvion makes the account number `active`.
+  accountDetailsStatus String?
+  /// The number people send money to, once active.
+  accountNumber        String?
+  /// The bank that issued it (`issuer.name`, `issuer.code`).
+  issuerBankName       String?
+  issuerBankCode       String?
+  /// The account's currency: NGN, or USD for people billed in dollars (NUV-09).
+  currency             String?
+  /// NUV-02 (migration 20261019110000): each check of Nuvion's review, in
+  /// Nuvion's own words (`identification.identity_numbers[].verification_status`
+  /// for the BVN and the NIN, `identification.document` and
+  /// `identification.proof_of_address` for the two documents, and the
+  /// identification's overall status), as the last `GET /entities/{id}`
+  /// read them. Never the numbers themselves.
+  bvnStatus            String?
+  ninStatus            String?
+  documentStatus       String?
+  addressProofStatus   String?
+  identificationStatus String?
+  /// When the entity was last read back from Nuvion (`GET /entities/{id}`).
+  reviewReadAt         DateTime?
+  /// When the person last sent corrected details after a refusal
+  /// (`PATCH /individual-entities/{id}`): the review starts again from the
+  /// documents (NUV-03) while this is after `decidedAt`.
+  correctedAt          DateTime?
+  /// Nuvion's own `updated` time for the entity (its clock) as last read
+  /// back, and as the correction's answer gave it: a decision read with a
+  /// later time than this, after a correction, is a new decision, not the
+  /// echo of the correction itself (NUV-02 round 2, D3).
+  entityUpdatedAt      DateTime?
+  /// NUV-02 round 3: when the person last submitted something for Nuvion's
+  /// review: corrected details sent after a refusal (here) or the submit
+  /// call (NUV-03 sets it). A refusal read again is a new decision only
+  /// when it came after this and Nuvion's check words moved to a verdict
+  /// (N4): `isNewDecision`, src/money/opening/review-stage.ts.
+  submittedAt          DateTime?
+  /// NUV-02 round 3: when the person last did something that moves the
+  /// opening along (sent details, corrected them, uploaded a document,
+  /// submitted: NUV-03 calls `recordOpeningProgress`). An opening idle for
+  /// IDENTITY_HOLD_DAYS has its BVN hold released (N3).
+  progressAt           DateTime?
+  /// NUV-02 round 3: when the opening was marked expired (idle too long, or
+  /// support released the hold): its BVN is let go, the person is told once
+  /// and starts again. Nothing is deleted at Nuvion.
+  holdExpiredAt        DateTime?
+  /// The one naira account's claim: set just before `POST /accounts` is
+  /// sent, so two deliveries never open two; the account is looked for
+  /// (`GET /accounts`) before any second request.
+  accountRequestedAt   DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([status])
+  @@index([accountNumber])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE DOCUMENTS SENT TO NUVION (task NUV-03, R-42)
+///
+/// One row per person and kind (`identity`: the ID document; `proof_of_
+/// address`). The file goes to Nuvion and nowhere else: this table keeps
+/// which kind and which sides went in the one call, the state, Nuvion's
+/// document id, the time, and a SHA-256 fingerprint of the bytes so the
+/// same file sent twice (a double tap, a retry after a lost answer) is
+/// forwarded once. Never the file, a base64 copy of it, a number read off
+/// it, or a file name.
+///
+/// `state`: `sending` (claimed, the call is out), `uploaded` (Nuvion
+/// accepted it), `unknown` (the call went out and no answer came back: it
+/// is looked for at Nuvion before anything is sent again), `failed`
+/// (Nuvion refused it; nothing was made).
+/// ─────────────────────────────────────────────────────────────────────────
+model NuvionDocument {
+  wawuUserId       String
+  /// `identity` or `proof_of_address` (Nuvion's `key`).
+  kind             String
+  /// The Nuvion entity the file was sent for.
+  entityId         String
+  /// Which sides went in the call: `front`, and `back` when there was one.
+  sides            String[]  @default([])
+  state            String
+  /// Nuvion's id for the document (`data.document.id`), once it answered.
+  nuvionDocumentId String?
+  /// Every Nuvion document id this row has ever recorded, so a look for an
+  /// upload whose answer was lost never takes an earlier one for it.
+  knownDocumentIds String[]  @default([])
+  /// HMAC-SHA256 (hex) of the bytes sent, keyed by IDENTITY_HASH_KEY as the
+  /// BVN's hash is, so the same file sent twice is forwarded once. Not the
+  /// file, and not a bare hash of it: nobody who can read this table can test
+  /// whether a person sent a given file. Cleared (null) once the opening is
+  /// submitted: after that nothing compares a file with it.
+  fingerprint      String?
+  /// Calls made so far for this kind (each a new attempt).
+  attempts         Int       @default(1)
+  /// When the current attempt started: nothing is sent again before the
+  /// money timeout plus the resend safety has passed since then.
+  attemptStartedAt DateTime
+  uploadedAt       DateTime?
+  /// When Nuvion's review was seen to refuse this upload (its word for the
+  /// document after the file was sent). It stays through a correction of the
+  /// person's details, which Nuvion may answer with the check back at
+  /// pending; only a new upload of this kind clears it. While it is set the
+  /// document reads `needs_new` and the opening is not submitted.
+  reviewRefusedAt  DateTime?
+  /// Why the last attempt made nothing: our own word, never Nuvion's text.
+  failure          String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@id([wawuUserId, kind])
+  @@index([entityId])
+  @@index([state, attemptStartedAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE SUBMISSION AND THE HOSTED SELFIE (task NUV-03, R-39, R-42)
+///
+/// One row per person. `submitRequestedAt` is the claim taken before
+/// `POST /onboarding-submissions` is sent, so two uploads at once, a
+/// replayed delivery and a retry send it once; `submittedAt` is when Nuvion
+/// is known to have it (its answer, or the entity moving past `incomplete`).
+/// A submission older than the person's last correction (NuvionEntity.
+/// correctedAt) is no longer current, and the review starts again.
+///
+/// The selfie is Nuvion's hosted page: `livenessSessionId` is its session
+/// (`query_id`), saved on the entity as `meta.liveness_check_id`
+/// (`livenessLinkedAt`). Whether the selfie is a step at all is the
+/// server's one switch (NUVION_HOSTED_LIVENESS, and Nuvion saying the API is
+/// not available to us), never a row of one person: a refusal about one
+/// person's request or entity leaves the step required for them, and no one
+/// skips it. Never an image or a face; the result is one word.
+/// ─────────────────────────────────────────────────────────────────────────
+model NuvionOnboarding {
+  wawuUserId        String    @id
+  entityId          String
+  submitRequestedAt DateTime?
+  submittedAt       DateTime?
+  submitAttempts    Int       @default(0)
+  /// Nuvion read the last submission and refused it (nothing was made): not
+  /// sent again for a minute, or until a document changes.
+  submitRefusedAt   DateTime?
+  /// Nuvion's liveness session (`query_id`); null until one was started.
+  livenessSessionId String?
+  /// Taken just before a session is started, so two starts at once make one.
+  livenessClaimedAt DateTime?
+  livenessStartedAt DateTime?
+  /// When the session id was saved on the entity (`meta.liveness_check_id`).
+  livenessLinkedAt  DateTime?
+  /// `pending`, `passed` or `not_passed`, in our words, from Nuvion's.
+  livenessState     String?
+  livenessCheckedAt DateTime?
+  /// Sessions started for this person so far.
+  livenessSessions  Int       @default(0)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([submittedAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// BOOK TRANSFERS ON NUVION (task NUV-05, R-42)
+///
+/// The log of every book transfer this server sends on Nuvion: a payment from
+/// a person's wallet into WAWU's operational account, a release or a refund
+/// out of it, a send between two people. Nuvion has no lookup by our
+/// reference (`GET /transfers/{id}` is the only read of one transfer), so the
+/// id of every transfer whose answer was read is kept here beside our
+/// reference, and a transfer whose answer was LOST is found again by walking
+/// the sender's transfers (each carries its `unique_reference`).
+///
+/// The row is written BEFORE the send (`sending`), so a crash or a lost
+/// answer still leaves the record of what was attempted: which accounts,
+/// which amount, since when. `reference` is unique, so one reference is one
+/// row on every server; a reference is never sent for other accounts or
+/// another amount (the log refuses it before Nuvion is asked), and Nuvion's
+/// own idempotency on `unique_reference` returns the original for a repeat.
+///
+/// `status` is Nuvion's word as last read (`pending`, `processing`,
+/// `successful`, `failed`, `reversed`), `sending` while no answer was read
+/// (the request may or may not have reached Nuvion), or `refused` when
+/// Nuvion answered that it made nothing (the reference may be sent again).
+/// A status only moves forward; `successful` is never undone by a late
+/// `pending`. Never a balance: the balance is Nuvion's `available`.
+///
+/// `fromEntityId` / `toEntityId` are null for WAWU's operational account
+/// (its transfers carry no entity: it is the authenticating entity's own).
+/// No person column: a person's wallet is named by the account number their
+/// `FintavaWallet` row holds, which WAWU's records already decide.
+/// ─────────────────────────────────────────────────────────────────────────
+model NuvionBookTransfer {
+  id                String    @id @default(uuid())
+  /// Our reference, sent as `unique_reference` (at most 64 characters).
+  reference         String    @unique
+  /// Nuvion's transfer id, once an answer or a read gave it.
+  nuvionId          String?   @unique
+  /// The account debited (Nuvion's id) and its entity.
+  fromAccountId     String
+  fromEntityId      String?
+  /// True for WAWU's operational account.
+  fromOperational   Boolean   @default(false)
+  /// The number WAWU's records name the sending side by (a person's account
+  /// number, or the operational account's `nuvion_ban`).
+  fromAccountNumber String
+  /// The account credited, and the `nuvion_ban` the transfer named it by.
+  toAccountId       String
+  toEntityId        String?
+  toOperational     Boolean   @default(false)
+  toAccountNumber   String
+  toNuvionBan       String
+  amountKobo        BigInt
+  /// Nuvion's `applicable_fee` once its record says (kobo).
+  feeKobo           BigInt?
+  narration         String?
+  status            String    @default("sending")
+  /// Nuvion's `status_reason`, masked, or our note.
+  statusReason      String?
+  sentAt            DateTime  @default(now())
+  /// When an answer to the send was read.
+  answeredAt        DateTime?
+  /// When Nuvion's record of the transfer was last read.
+  readAt            DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([fromAccountId, sentAt])
+  @@index([toAccountId])
+}
+
+// -----------------------------------------------------------------------------
+// POINTS (task POINTS-01, R-43)
+//
+// Points are their own balance for the AI tools, always a count of points,
+// never naira or dollars, and separate from WAWU Credits (R-43 leaves open
+// whether they replace credits; the round 2 brief draws them apart). They are
+// WAWU's own instrument, not money a provider holds, so these lots are the
+// authority for a person's points.
+//
+// Points come in lots that expire (PointLot). Spending takes the
+// soonest-expiring lot first, through a hold (PointHold) that is committed or
+// released. Every change to a lot's points is one row in PointLedger, which
+// is append-only: the migration's triggers refuse an UPDATE of a ledger row,
+// and any DELETE but the account purge's (one person, all of their rows, in a
+// transaction that set wawu.points_purge to the person's id and its own
+// transaction id). A hold moves once, from held to
+// committed or released. CHECK constraints in the migration keep a lot
+// between 0 and what it was granted, so the balance can never go below zero,
+// and its end between 2000 and 2100 (UTC).
+// -----------------------------------------------------------------------------
+
+/// Where a lot of points came from. The task that grants each one owns its
+/// reference: TIER-03 (`tier_bonus`, `bump`), POINTS-02 (`pack`), REF-01
+/// (`referral`), POINTS-03 (`shortfall`), and points given back after a spend
+/// (`returned`).
+enum PointLotSource {
+  tier_bonus
+  pack
+  bump
+  referral
+  shortfall
+  returned
+}
+
+/// Why a ledger row moved a lot: a grant adds, a hold takes, a release gives
+/// back to the same lot, an expiry takes what a lapsed lot still had.
+enum PointLedgerReason {
+  grant
+  hold
+  release
+  expire
+}
+
+/// What held points are for: an AI tool's job (POINTS-03) or turning points
+/// into wallet cash (POINTS-04).
+enum PointHoldPurpose {
+  ai_job
+  cash_out
+}
+
+/// A hold is `held` until its job ends: `committed` (the points are spent) or
+/// `released` (every point went back to the lot it came from). Both are final.
+enum PointHoldState {
+  held
+  committed
+  released
+}
+
+/// One grant of points: how many, how many are left, and when they end.
+model PointLot {
+  id         String         @id @default(uuid())
+  wawuUserId String
+  source     PointLotSource
+  /// The granting task's own reference (a purchase, a referral, a job). One
+  /// lot per source and reference: the same grant twice grants once.
+  sourceRef  String
+  /// Points granted. Never changes.
+  quantity   Int
+  /// Points still in the lot. Taken by holds, put back by releases, set to 0
+  /// by the expiry job. CHECK: 0 <= remaining <= quantity.
+  remaining  Int
+  expiresAt  DateTime
+  /// When the expiry job took what the lot still had; null while it has not.
+  lapsedAt   DateTime?
+  createdAt  DateTime       @default(now())
+
+  ledger PointLedger[]
+
+  @@unique([source, sourceRef])
+  /// A person's live lots, soonest-expiring first.
+  @@index([wawuUserId, expiresAt])
+  /// The expiry job's search.
+  @@index([expiresAt])
+}
+
+/// Points taken from a person's lots for one job, until it is committed or
+/// released. Which lots, and how many from each, are the hold's ledger rows.
+model PointHold {
+  id         String           @id @default(uuid())
+  wawuUserId String
+  purpose    PointHoldPurpose
+  /// The job or conversion this hold pays for. One hold per purpose and
+  /// reference: the same hold asked for twice holds once.
+  reference  String
+  /// What the movement list calls it ("VoiceOver"), from the calling task's
+  /// own table, never from what a person typed.
+  title      String?
+  quantity   Int
+  state      PointHoldState   @default(held)
+  createdAt  DateTime         @default(now())
+  /// When it was committed or released.
+  settledAt  DateTime?
+
+  ledger PointLedger[]
+
+  @@unique([purpose, reference])
+  @@index([wawuUserId, createdAt])
+}
+
+/// Append-only: one row per change to one lot's points. Never updated; a
+/// person's rows are deleted only by the account purge, all together.
+model PointLedger {
+  id         String            @id @default(uuid())
+  wawuUserId String
+  lotId      String
+  lot        PointLot          @relation(fields: [lotId], references: [id], onDelete: Restrict)
+  /// Points added (positive) or taken (negative); never 0. CHECK: a grant
+  /// and a release add, a hold and an expiry take.
+  delta      Int
+  reason     PointLedgerReason
+  /// The hold a `hold` or `release` row belongs to.
+  holdId     String?
+  hold       PointHold?        @relation(fields: [holdId], references: [id], onDelete: Restrict)
+  /// The job or purchase reference: the lot's for a grant, the hold's for a
+  /// hold or a release; null for an expiry.
+  reference  String?
+  /// When the row was written (the app's clock at each INSERT, so the rows
+  /// of one hold can differ by milliseconds; `seq` orders them).
+  at         DateTime          @default(now())
+  /// The order rows were written in: a person's movements, newest first, are
+  /// read by this, never by `at`.
+  seq        BigInt            @default(autoincrement())
+
+  /// A person's last movements, newest first.
+  @@index([wawuUserId, seq])
+  @@index([lotId])
+  @@index([holdId])
+}
+
+enum WaitlistStatus {
+  pending
+  paid
+  failed
+}
+
+/// One person's registration for an event offer, paid by Flutterwave checkout
+/// (JOIN-01, R-48). A waiting list, not an account: nothing here is a WAWU ID
+/// account, and no row names one until the person signs up in the app and
+/// claims it (JOIN-03 writes `claimedByWawuId` and `claimedAt`).
+///
+/// `reference` is the Flutterwave tx_ref, random and at least 128 bits. The
+/// price is copied into `amountKobo` when the person registers, so a later
+/// change to the offer never decides whether their payment counts. `phone` is
+/// E.164 and `email` lower case, both normalised by the server.
+///
+/// Also in the database, and NOT expressible here (Prisma has no partial
+/// unique index): at most one `paid` row per offer and phone, and one per
+/// offer and email (`WaitlistRegistration_one_paid_phone_key`,
+/// `WaitlistRegistration_one_paid_email_key`), and the CHECKs in the
+/// migration. `failed` is only ever a second payment for a person who is
+/// already registered (kept so it can be refunded); a payment Flutterwave
+/// does not confirm leaves the row `pending`.
+model WaitlistRegistration {
+  id              String         @id @default(uuid())
+  offerId         String
+  fullName        String
+  phone           String
+  email           String
+  state           String?
+  makes           String?
+  /// What the person makes or does, one of `WAITLIST_CRAFTS` (the owner's
+  /// redesign of /join, JOIN-V2). NULL from a client that does not send it.
+  craft           String?
+  /// The conference city they will attend, one of `WAITLIST_CITIES`: Lagos,
+  /// Abuja, Port Harcourt, Enugu or Online (JOIN-V2). NULL from a client that
+  /// does not send it.
+  city            String?
+  /// Whether they asked for launch and conference updates (JOIN-V2): true
+  /// accepted, false declined, NULL not asked.
+  updatesOptIn    Boolean?
+  consentAt       DateTime
+  reference       String         @unique
+  /// The launch access code the payer sees as "XXXX XXXX": the first 8
+  /// characters of the reference after `wawu-join-`, upper-case. A column the
+  /// database computes from `reference` (GENERATED ALWAYS ... STORED), so it
+  /// can never disagree with the reference and the code never writes it; the
+  /// unique index is what makes it unique across ALL registrations.
+  accessCode      String         @unique @default(dbgenerated())
+  status          WaitlistStatus @default(pending)
+  amountKobo      Int
+  currency        String         @default("NGN")
+  /// Flutterwave's transaction id; set once, when the payment is accepted
+  /// (or recorded as a duplicate), and never shared by two rows.
+  flutterwaveTxId String?        @unique
+  /// What Flutterwave confirmed was paid, in kobo.
+  paidKobo        Int?
+  paidAt          DateTime?
+  /// The WAWU ID account that claimed this payment in the app (JOIN-03).
+  claimedByWawuId String?
+  claimedAt       DateTime?
+  /// What the claim told its claimer (JOIN-03 round 2): the offer's name, the
+  /// days given, whether they were added to a running plan, and the points
+  /// lot. Written in the claim's own transaction. The SAME account repeating
+  /// the SAME code is answered from it, as a 200, so a lost answer can be
+  /// replayed; nobody else ever sees it. Never carries another person's
+  /// details. NULL on an unclaimed row.
+  claimResult     Json?
+  /// The referral code this registration is counted under (REF-01): set only
+  /// when the code was active and under its limit at the moment of registering.
+  /// NULL for every row made before REF-01 and for everyone who used no code,
+  /// or whose code was switched off or full (they pay the standard price and are
+  /// not counted under the code).
+  referralCode      String?
+  /// The code's community name at that moment (REF-01); NULL with `referralCode`.
+  referralCommunity String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([offerId, status, createdAt])
+  @@index([phone])
+  @@index([email])
+  @@index([claimedByWawuId])
+  @@index([referralCode, status, createdAt])
+}
+
+/// A referral code for the paid registration page /join (REF-01, owner, 14 Oct
+/// 2026). It names the community a registrant came from and sets the price its
+/// users pay (0 to the offer's price; 0 is free), with an optional limit on
+/// how many people may use it. Created and changed by admins only. Never
+/// deleted: switched off (`active` false). A price or limit change affects only
+/// registrations started after it (each registration keeps its own
+/// `amountKobo`).
+model ReferralCode {
+  id         String   @id @default(uuid())
+  /// Upper case letters and digits, 3 to 20. Matched case-insensitively.
+  code       String   @unique
+  /// The label the owner tracks by.
+  community  String
+  /// What a person using the code pays, in whole kobo; 0 means free.
+  priceKobo  Int
+  /// How many people may use the code; NULL means no limit.
+  usageLimit Int?
+  active     Boolean  @default(true)
+  /// The admin who created it (admin id); NULL for the code the migration inserted.
+  createdBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// EMAIL-01: the email campaign tool in the admin dashboard. Additive: four
+// new tables, nothing existing is touched. Sent through Resend by the Hub
+// (src/admin/notifications/email/), only to people who consented.
+// ---------------------------------------------------------------------------
+
+enum EmailCampaignStatus {
+  /// Built and counted, nothing sent yet.
+  ready
+  /// The background job is working through the recipients.
+  sending
+  /// Every recipient has a result (sent, failed or skipped).
+  sent
+}
+
+enum EmailRecipientStatus {
+  queued
+  sent
+  failed
+  skipped
+}
+
+enum EmailSuppressionReason {
+  unsubscribed
+  bounced
+  complained
+}
+
+/// A saved email: the body is Markdown or simple text with {{first_name}} and
+/// {{join_link}}. `version` goes up on every save.
+model EmailTemplate {
+  id          String   @id @default(uuid())
+  name        String
+  subject     String
+  previewText String   @default("")
+  body        String
+  version     Int      @default(1)
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([updatedAt])
+}
+
+/// One send. The template is copied in (a snapshot), so editing or deleting the
+/// template later never changes what a campaign sent.
+model EmailCampaign {
+  id               String              @id @default(uuid())
+  templateId       String?
+  templateName     String
+  subject          String
+  previewText      String              @default("")
+  body             String
+  /// `csv` or `registrants`.
+  audienceKind     String
+  /// A sentence for the dashboard: "CSV upload (people.csv)" or
+  /// "Join registrants: paid, first 500".
+  audienceNote     String
+  status           EmailCampaignStatus @default(ready)
+  totalCount       Int                 @default(0)
+  sentCount        Int                 @default(0)
+  failedCount      Int                 @default(0)
+  skippedCount     Int                 @default(0)
+  /// CSV rows that were not an email address, and repeats of one already in.
+  invalidCount     Int                 @default(0)
+  duplicateCount   Int                 @default(0)
+  createdBy        String
+  createdAt        DateTime            @default(now())
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  updatedAt        DateTime            @updatedAt
+  recipients       EmailRecipient[]
+
+  @@index([createdAt])
+  @@index([status])
+}
+
+model EmailRecipient {
+  id         String               @id @default(uuid())
+  campaignId String
+  campaign   EmailCampaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  /// Lower case.
+  email      String
+  firstName  String?
+  status     EmailRecipientStatus @default(queued)
+  /// Set the moment one worker takes the row, before anything is sent. A row
+  /// with a claim and no result is never sent again (no double send).
+  claimedAt  DateTime?
+  providerId String?
+  error      String?
+  sentAt     DateTime?
+  createdAt  DateTime             @default(now())
+
+  @@unique([campaignId, email])
+  @@index([campaignId, status])
+}
+
+/// Addresses that must not be emailed again.
+model EmailSuppression {
+  email  String                 @id
+  reason EmailSuppressionReason
+  at     DateTime               @default(now())
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE NIGHTLY CHECK AGAINST THE WALLET PROVIDER (task MONEY-16)
+///
+/// One row per run of the nightly check: it compares WAWU's ledger with the
+/// provider's own record (every wallet's debits and balance, WAWU's own
+/// account, the money held for payers and payees, the merchant charge on each
+/// fee-bearing send) and reports a difference the same night. A run only
+/// reads and reports: it never changes a ledger row, a hold, a payment or a
+/// balance. The provider's balance is the truth.
+///
+/// The unique key is the lock: `night` is the Lagos calendar date the run
+/// belongs to, `sequence` is 1 for the scheduled run and counts up for a run
+/// made again by hand, so two Hub processes cannot both run one night. A run
+/// that dies leaves `running` with an old `leaseUntil`; any process may take
+/// it over after that (`attempt` counts the tries). A run never ends as
+/// clean unless every comparison was made: `verdict` says so, and `report`
+/// holds the counts and the references a person looks at (kobo as decimal
+/// text; never a name, a phone number or an account number).
+///
+/// `emailedTo` lists the WAWU ids the report was handed to WAWU ID for;
+/// `emailedAt` is set when every recipient has been; a failed hand-over is
+/// tried again (`nextEmailAt`).
+/// ─────────────────────────────────────────────────────────────────────────
+model MoneyCheckRun {
+  id             String    @id @default(uuid())
+  /// The wallet provider whose rows were checked: `fintava` or `nuvion`.
+  provider       String    @default("fintava")
+  /// The Lagos date this run belongs to, `YYYY-MM-DD`.
+  night          String
+  /// 1 for the scheduled run; a run made again by hand takes the next number.
+  sequence       Int       @default(1)
+  /// running, failed (this try threw; another may take it after `leaseUntil`)
+  /// or finished (`verdict` and `report` are set).
+  status         String    @default("running")
+  attempt        Int       @default(1)
+  byHand         Boolean   @default(false)
+  startedAt      DateTime
+  /// Until when the process that holds this run keeps it. Extended while it
+  /// works; any process may take a `running` or `failed` run after it.
+  leaseUntil     DateTime
+  finishedAt     DateTime?
+  /// What the movement comparison looked at: from (null: no lower bound) to.
+  windowFrom     DateTime?
+  windowTo       DateTime?
+  /// clean, needs_a_look, differences, incomplete or not_checked.
+  verdict        String?
+  walletsTotal   Int?
+  walletsChecked Int?
+  mismatchCount  Int?
+  lookCount      Int?
+  report         Json?
+  /// Why the last try failed, in words with no provider text in them.
+  failure        String?
+  emailedTo      String[]  @default([])
+  emailAttempts  Int       @default(0)
+  nextEmailAt    DateTime?
+  emailedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([provider, night, sequence])
+  @@index([provider, status, finishedAt])
+  @@index([emailedAt, finishedAt])
 }

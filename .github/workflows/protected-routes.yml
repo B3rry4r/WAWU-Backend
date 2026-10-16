@@ -35,11 +35,19 @@ name: Protected routes (V3)
 # On `pull_request` GitHub runs the workflow FILE from the pull request, so
 # this file is protected by CODEOWNERS and by making the job a required check
 # (README, "Protected route suite": repository settings, not code).
-# deploy.yml is untouched: this runs on pull requests only.
+# deploy.yml is untouched. This runs on pull requests, and (OPS-CI) on pushes
+# to wmt/** branches against main.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  # OPS-CI: a push to a task branch gets the same check as a pull request
+  # against main. The base is main's tip (the checker and the lock), the head
+  # is the pushed commit, and nothing else in this file changes. The
+  # relock-approved label only exists on a pull request, so a pushed branch
+  # that changes the lock is checked against main's lock until it has one.
+  push:
+    branches: ['wmt/**']
 
 permissions:
   contents: read
@@ -79,7 +87,7 @@ jobs:
       - name: Check out the BASE branch (the checker)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event.pull_request.base.sha || 'main' }}
           path: base
           fetch-depth: 0
           persist-credentials: false
@@ -87,7 +95,7 @@ jobs:
       - name: Check out the pull request's head commit (the code under test)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           path: pr
           fetch-depth: 0
           persist-credentials: false
@@ -99,7 +107,7 @@ jobs:
           # A local fetch from ./pr: no credentials, nothing checked out.
           git fetch --no-tags ../pr "+HEAD:refs/remotes/pr/head"
           PR_SHA="$(git rev-parse refs/remotes/pr/head)"
-          test "$PR_SHA" = "${{ github.event.pull_request.head.sha }}"
+          test "$PR_SHA" = "${{ github.event.pull_request.head.sha || github.sha }}"
           echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "pr=$PR_SHA" >> "$GITHUB_OUTPUT"
 

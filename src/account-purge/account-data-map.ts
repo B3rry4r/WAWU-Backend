@@ -25,14 +25,22 @@
  *             by WAWU ID's anonymize, not by dropping the other party's data.
  *   AUDIT     an admin action record. Kept deliberately: an audit trail that
  *             disappears when its subject does is not an audit trail.
+ *   ANONYMISED
+ *             the row is this account's AND carries somebody else's money
+ *             (a payment whose payee's 85% may not have landed yet, MONEY-17).
+ *             The row stays; this column and the ones in `clear` are set to
+ *             null, so nothing in it names or reaches the account.
  */
 
-export type Disposition = 'OWNED' | 'AUTHORED' | 'COUNTERPARTY' | 'AUDIT';
+export type Disposition =
+  'OWNED' | 'AUTHORED' | 'COUNTERPARTY' | 'AUDIT' | 'ANONYMISED';
 
 export interface ColumnRule {
   model: string;
   column: string;
   disposition: Disposition;
+  /** ANONYMISED only: other columns of the row set to null with it. */
+  clear?: readonly string[];
 }
 
 /**
@@ -43,6 +51,16 @@ export interface ColumnRule {
 export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // ── the account's own contributions to shared surfaces ──────────────────
   { model: 'Comment', column: 'authorWawuId', disposition: 'AUTHORED' },
+  // The key a community message was sent under (INBOX-05, defect 21): one row
+  // per message, made by the same person, so it is their sending record. It
+  // is listed before CommunityMessage, which it points at, and it would also
+  // go with the message through the foreign key; saying so here keeps the
+  // drift guard honest and the purge from depending on a cascade.
+  {
+    model: 'CommunityMessageKey',
+    column: 'senderWawuId',
+    disposition: 'AUTHORED',
+  },
   {
     model: 'CommunityMessage',
     column: 'senderWawuId',
@@ -138,6 +156,33 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // The maker plan (TIER-01): the currency this person is billed in, the
+  // tier they hold and the event passes it issued. Each exists only because
+  // this account exists and names nobody else.
+  { model: 'PersonBilling', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'MakerTier', column: 'wawuUserId', disposition: 'OWNED' },
+  // A tier this account bought, renewed or upgraded from its wallet
+  // (TIER-03): what it was and what it cost. OWNED, like VerificationPurchase
+  // above: the row exists only because this account bought something and
+  // names no counterparty. The money's record is the payment, which stays
+  // (WalletPayment below, anonymised); its id is this row's key and is not a
+  // link anyone follows once the account is gone.
+  { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
+  // An event registration this account claimed in the app (JOIN-01; claimed by
+  // JOIN-03, POST /waitlist/claims): its name, phone, email and the payment that
+  // bought the plan. It names this account only after the claim, so it goes
+  // with the claimer; what the claim granted (MakerTier, EventPass, PointLot
+  // and PointLedger) is mapped on its own rows above and below. An
+  // unclaimed registration names no account and is not touched here: an
+  // unpaid one is deleted after a week, a paid one waits for its person.
+  // Default (agent), owner may override: the payment record goes with the
+  // account, like VerificationPurchase above.
+  {
+    model: 'WaitlistRegistration',
+    column: 'claimedByWawuId',
+    disposition: 'OWNED',
+  },
   { model: 'CreditLot', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CreditSpend', column: 'userWawuId', disposition: 'OWNED' },
   {
@@ -159,6 +204,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'KycSubmission', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PendingCharge', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'HealthSubscription', column: 'wawuUserId', disposition: 'OWNED' },
+  // The files WAWU delivered on this person's legal requests (LEGAL-03).
+  { model: 'LegalDeliverable', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'LegalRequest', column: 'wawuUserId', disposition: 'OWNED' },
   // The assistant conversation on an intake (LEGAL-01): the client's own
   // words and the assistant's replies to them, removed before the intake.
@@ -174,6 +221,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // One row per AI call that tried to write a matter thread's opener
+  // (FIX-11): the claim and the hourly count; holds no words.
+  {
+    model: 'LegalChatOpenerCall',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
   { model: 'LegalIntake', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'ProfessionalProfile', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'StorageObject', column: 'wawuUserId', disposition: 'OWNED' },
@@ -182,6 +236,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // Working someone's door (EVENTS-05) is this person's role on that event;
   // it goes with them. A ticket they let in stays let in.
   { model: 'EventDoorStaff', column: 'staffWawuId', disposition: 'OWNED' },
+  // The first answer to each scan this person made at a door (EVENTS-09 round
+  // 2), kept a day or two so a scan asked again is answered the same. It goes
+  // with them; the ticket they let in stays let in.
+  { model: 'EventDoorScan', column: 'scannerWawuId', disposition: 'OWNED' },
   {
     model: 'CreatorNoResponseTracker',
     column: 'creatorWawuId',
@@ -250,14 +308,93 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // The person as Nuvion knows them (NUV-01; written by NUV-02 to NUV-04):
+  // the ids of their entity, account and account details, the review's
+  // state and the account number. Like FintavaWallet, it is WAWU's pointer,
+  // not the account at Nuvion, which stays there; deletion needs an empty
+  // wallet first (R-17).
+  { model: 'NuvionEntity', column: 'wawuUserId', disposition: 'OWNED' },
+  // NUV-05. NuvionBookTransfer, the log of every book transfer sent on
+  // Nuvion, has no person column (like NuvionWebhookEvent): it names Nuvion's
+  // account ids, a person's account number, the amount and WAWU's reference,
+  // never a name, and it is the record that finds a transfer whose answer
+  // was lost. It is a money record, kept after an account is deleted like the
+  // provider's own record of the same transfer (Default (agent), owner may
+  // override: how long money records are kept is the owner's call), so
+  // neither this map nor the export list names it.
+  // The documents sent to Nuvion and the onboarding submission and hosted
+  // selfie (NUV-03): which kind and which sides went, the state, Nuvion's
+  // document id, a SHA-256 of the bytes and the time; the session id and the
+  // result in one word. Never a file, a number read off one, or a face. Like
+  // NuvionEntity they are WAWU's pointers; Nuvion holds the documents.
+  { model: 'NuvionDocument', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'NuvionOnboarding', column: 'wawuUserId', disposition: 'OWNED' },
   // This person's saved beneficiaries and payout account (WALLET-14): their
   // own list of where they send money, and the bank account their
   // withdrawals go to. Both go with them.
   { model: 'MoneyBeneficiary', column: 'ownerWawuId', disposition: 'OWNED' },
   { model: 'MoneyPayoutAccount', column: 'wawuUserId', disposition: 'OWNED' },
+  // Pay from wallet (MONEY-17): this person's stored answers to their own
+  // money-moving requests (kept a day or two) go with them.
+  {
+    model: 'MoneyIdempotencyKey',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+  // The payments they made keep the record of what each payee is owed
+  // (its 85%, which WALLET-16 lands); their side of it is anonymised: who
+  // paid, from which account, and their tip message (MONEY-17 round 2).
+  {
+    model: 'WalletPayment',
+    column: 'payerWawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['payerAccountNumber', 'note', 'openKey'],
+  },
+  // The price of a held payment (a paid DM, a ticket, a bill) waits in WAWU's
+  // own account until it is released or refunded (MONEY-18). The hold keeps
+  // the money's record when the payer's account goes; their side is
+  // anonymised, and so is the account the money was returned to (a refund's
+  // destination is the payer's wallet; the ledger and the payment keep the
+  // rest for the nightly check).
+  {
+    model: 'WalletHold',
+    column: 'payerWawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['destinationAccountNumber'],
+  },
   // The codes this person made to share their receipts (WALLET-18). They go
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
+  // A send from one wallet to another (WALLET-07) is BOTH people's record of
+  // money that moved, so neither side's purge deletes the row: each person's
+  // side is set to null with the details that name or reach them (their
+  // account number and the name they went by on the other's history; the
+  // sender's note is the sender's words and goes with the sender).
+  {
+    model: 'WalletTransfer',
+    column: 'payerWawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['payerAccountNumber', 'payerName', 'note'],
+  },
+  {
+    model: 'WalletTransfer',
+    column: 'recipientWawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['recipientAccountNumber', 'recipientName'],
+  },
+
+  // ── points (POINTS-01) ──────────────────────────────────────────────────
+  // This person's points: the ledger of every change, the holds that spent
+  // them and the lots they were held in. All of it is theirs and goes with
+  // them, ledger first (it references the other two). The ledger is
+  // append-only: AccountPurgeService deletes these three in one transaction
+  // under the person's points lock (`purgePersonPoints`), the only delete
+  // the ledger's trigger accepts, and its table loop skips them. Default
+  // (agent), owner may override: unspent points are not paid out when an
+  // account is deleted.
+  { model: 'PointLedger', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'PointHold', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'PointLot', column: 'wawuUserId', disposition: 'OWNED' },
 
   // The city on this person's professional card (PROS-02). Theirs, and
   // public only beside a listing that goes with them.
@@ -266,11 +403,29 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'OWNED',
   },
+  // An admin's takedown of one of this person's professional listings, and
+  // the Hide or Show they had chosen (FIX-06). It exists only beside a
+  // listing that goes with them, as FeaturedCreator (an admin's choice about
+  // this account) does.
+  {
+    model: 'ProfessionalTakedown',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
 
   // Which ads this person viewed, tapped or skipped on which day (ADS-05):
   // theirs, so the rows go with them. The daily totals the owner invoices from
   // (AdDailyTotal) name nobody, are not walked back, and stay.
   { model: 'AdEvent', column: 'viewerWawuId', disposition: 'OWNED' },
+
+  // This person's phones for push (INBOX-03): the address of each phone, and
+  // the log of what was sent to it. Both are theirs alone and go with them.
+  // The deliveries go first; they also go with their token (cascade).
+  { model: 'PushDelivery', column: 'userWawuId', disposition: 'OWNED' },
+  { model: 'PushToken', column: 'userWawuId', disposition: 'OWNED' },
+  // The mark that this account's deletion was asked for, which stops push
+  // until the purge: the purge is that deletion, so the mark goes too.
+  { model: 'PushStoppedAccount', column: 'userWawuId', disposition: 'OWNED' },
 
   // Last: everything above may reference these.
   // An admin's choice to feature this creator in Explore (EXPLORE-03): a
@@ -364,6 +519,20 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'recipientWawuId',
     disposition: 'COUNTERPARTY',
   },
+  // Somebody else's payment that pays this account (MONEY-17): the payer's
+  // record, and the share it owes, survive.
+  {
+    model: 'WalletPayment',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
+  // Somebody else's held payment that pays this account (MONEY-18): the
+  // payer's hold, and the share it owes, survive.
+  {
+    model: 'WalletHold',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
 
   // ── admin audit trail, kept on purpose ──────────────────────────────────
   { model: 'AdminKycAudit', column: 'subjectWawuUserId', disposition: 'AUDIT' },
@@ -399,7 +568,19 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'Product', column: 'wawuVerified' },
   // WAWU's fee in kobo on a ledger row (MONEY-10), not a person.
   { model: 'FintavaLedgerEntry', column: 'wawuFeeKobo' },
+  // WAWU's fee and WAWU's 15% share in kobo on a payment (MONEY-17), not a person.
+  { model: 'WalletPayment', column: 'wawuFeeKobo' },
+  { model: 'WalletPayment', column: 'wawuShareKobo' },
+  // WAWU's 15% share in kobo on a hold (MONEY-18), not a person.
+  { model: 'WalletHold', column: 'wawuShareKobo' },
+  // WAWU's fee in kobo on a send between two people (WALLET-07), not a person.
+  { model: 'WalletTransfer', column: 'wawuFeeKobo' },
 ];
+
+/** The rows a purge keeps with the account's side set to null. */
+export function rowsToAnonymise(): ColumnRule[] {
+  return ACCOUNT_DATA_MAP.filter((r) => r.disposition === 'ANONYMISED');
+}
 
 /** The rows a purge actually removes. */
 export function rowsToDelete(): ColumnRule[] {

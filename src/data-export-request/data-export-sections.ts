@@ -620,6 +620,100 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // The maker plan (TIER-01): the person's billing currency, the tier they
+  // hold and the event passes their tiers issued. The purchase reference is
+  // a payment reference, so it stays out (rule 3).
+  {
+    key: 'billingCurrency',
+    models: ['PersonBilling'],
+    load: (prisma, me) =>
+      prisma.personBilling.findUnique({
+        where: { wawuUserId: me },
+        select: { currency: true, fixedBy: true, fixedAt: true },
+      }),
+  },
+  {
+    key: 'makerTier',
+    models: ['MakerTier'],
+    load: (prisma, me) =>
+      prisma.makerTier.findUnique({
+        where: { wawuUserId: me },
+        select: {
+          tierId: true,
+          activeFrom: true,
+          activeUntil: true,
+          productsIncluded: true,
+          extraProducts: true,
+          pointsIncluded: true,
+          voiceIntroIncluded: true,
+        },
+      }),
+  },
+  // What this person bought of the maker plan from their wallet (TIER-03).
+  // The payment reference is a payment id, so it stays out (rule 3).
+  {
+    key: 'tierPurchases',
+    models: ['MakerPurchase'],
+    load: (prisma, me) =>
+      prisma.makerPurchase.findMany({
+        where: { wawuUserId: me },
+        select: {
+          kind: true,
+          tierId: true,
+          fromTierId: true,
+          bump: true,
+          currency: true,
+          amountMinor: true,
+          method: true,
+          status: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'eventPasses',
+    models: ['EventPass'],
+    load: (prisma, me) =>
+      prisma.eventPass.findMany({
+        where: { wawuUserId: me },
+        select: { type: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
+  // An event registration this person claimed in the app (JOIN-01): what they
+  // told the event page and what they paid. The reference and transaction id
+  // are payment-provider references, so they stay out (rule 3).
+  {
+    key: 'eventRegistrations',
+    models: ['WaitlistRegistration'],
+    load: (prisma, me) =>
+      prisma.waitlistRegistration.findMany({
+        where: { claimedByWawuId: me },
+        select: {
+          offerId: true,
+          fullName: true,
+          phone: true,
+          email: true,
+          state: true,
+          makes: true,
+          craft: true,
+          city: true,
+          updatesOptIn: true,
+          // REF-01: the code they registered with and its community.
+          referralCode: true,
+          referralCommunity: true,
+          consentAt: true,
+          status: true,
+          amountKobo: true,
+          paidKobo: true,
+          paidAt: true,
+          claimedAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
   {
     key: 'courseEnrollments',
     models: ['CourseEnrollment'],
@@ -689,6 +783,19 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           reviewedAt: true,
         },
         orderBy: { submittedAt: 'desc' },
+      }),
+  },
+  {
+    key: 'professionalTakedowns',
+    models: ['ProfessionalTakedown'],
+    // When an admin took one of the person's listings down and when it was
+    // listed again (FIX-06). Which admin did it is not the person's data and
+    // is left out.
+    load: (prisma, me) =>
+      prisma.professionalTakedown.findMany({
+        where: { wawuUserId: me },
+        select: { professionalId: true, takenDownAt: true, liftedAt: true },
+        orderBy: { takenDownAt: 'desc' },
       }),
   },
   {
@@ -763,6 +870,63 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // POINTS-01: the person's points lots (what they were given, what is
+    // left, when each ends), the holds that spent them and every movement.
+    // Counts of points only; no provider reference (a lot's or hold's
+    // reference is the granting task's own id, not a payment provider's).
+    key: 'pointLots',
+    models: ['PointLot'],
+    load: (prisma, me) =>
+      prisma.pointLot.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          source: true,
+          quantity: true,
+          remaining: true,
+          expiresAt: true,
+          lapsedAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'pointHolds',
+    models: ['PointHold'],
+    load: (prisma, me) =>
+      prisma.pointHold.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          purpose: true,
+          title: true,
+          quantity: true,
+          state: true,
+          createdAt: true,
+          settledAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  {
+    key: 'pointMovements',
+    models: ['PointLedger'],
+    load: (prisma, me) =>
+      prisma.pointLedger.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          lotId: true,
+          holdId: true,
+          delta: true,
+          reason: true,
+          at: true,
+        },
+        orderBy: { seq: 'desc' },
+      }),
+  },
+  {
     key: 'exportRequests',
     models: ['DataExportRequest'],
     load: (prisma, me) =>
@@ -792,6 +956,26 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     {
       model: 'EventDoorStaff',
       reason: 'A door role the organiser gave, not data the person gave.',
+    },
+    {
+      model: 'EventDoorScan',
+      reason:
+        'The first answer to one scan at a door, kept a day or two so a repeat is answered the same; it holds the ticket holder name, which is not the scanner own data.',
+    },
+    {
+      model: 'PushToken',
+      reason:
+        'A phone push token is a working address for that phone, not content: a file that carries it hands the address to whoever opens the file.',
+    },
+    {
+      model: 'PushDelivery',
+      reason:
+        'A send log: every notification it names is already in the Notifications section.',
+    },
+    {
+      model: 'PushStoppedAccount',
+      reason:
+        'A switch the server keeps after the person asked to delete the account: it holds nothing but the time of that request.',
     },
     { model: 'TransactionPin', reason: 'A PIN hash is a secret.' },
     { model: 'TransactionPinReset', reason: 'A reset code hash is a secret.' },
@@ -825,6 +1009,29 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'FintavaWallet',
       reason: 'A pointer to the account at Fintava, which holds the balance.',
     },
+    // NUV-01. NuvionWebhookEvent, the other table NUV-01 adds, has no
+    // person column (like FintavaWebhookEvent): it is Nuvion's record of
+    // events, not the person's, so neither the purge map nor this list
+    // names it.
+    // NUV-05. NuvionBookTransfer, the log of book transfers sent on Nuvion,
+    // has no person column either: it holds account ids, an account number,
+    // an amount and WAWU's reference, and the person's own transfers reach
+    // them through their wallet history, so this list does not name it.
+    {
+      model: 'NuvionEntity',
+      reason:
+        'A pointer to the person at Nuvion (entity, account and review state), which holds the balance and the identity documents.',
+    },
+    {
+      model: 'NuvionDocument',
+      reason:
+        'A record that an ID document or proof of address was sent to Nuvion (kind, state, Nuvion id, whether its review refused it, and a keyed fingerprint of the bytes that is cleared once the opening is sent). WAWU keeps no copy of the file: Nuvion holds the document. Identity documents never travel by email.',
+    },
+    {
+      model: 'NuvionOnboarding',
+      reason:
+        "A record that the opening was sent to Nuvion for review and of the hosted selfie session (ids and one status word). The selfie itself is Nuvion's, never held here.",
+    },
     {
       model: 'FintavaLedgerEntry',
       reason:
@@ -848,6 +1055,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       reason: 'Other people bank details.',
     },
     { model: 'MoneyPayoutAccount', reason: 'A bank account number.' },
+    {
+      model: 'MoneyIdempotencyKey',
+      reason:
+        'The stored answer to one money request, kept a day or two so a repeat is answered the same; it holds the response and account numbers, and wallet transactions are not exported (G-130).',
+    },
     {
       model: 'MoneyReceipt',
       reason:
@@ -883,6 +1095,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     },
     { model: 'ChatParticipant', reason: 'A read position, not content.' },
     { model: 'CommunityReadMarker', reason: 'A read position, not content.' },
+    {
+      model: 'CommunityMessageKey',
+      reason:
+        'The key one community message was sent under, so a repeat is not stored twice; the message itself is exported under communityMessages.',
+    },
     { model: 'CartItem', reason: 'A transient basket, not a record.' },
     {
       model: 'EventReferral',
@@ -909,6 +1126,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
         'Legal matters may be privileged; whether they are emailed is the owner call.',
     },
     {
+      model: 'LegalDeliverable',
+      reason:
+        'The documents delivered on a legal matter; legal matters may be privileged, so whether they are emailed is the owner call.',
+    },
+    {
       model: 'LegalIntake',
       reason:
         'Legal matters may be privileged; whether they are emailed is the owner call.',
@@ -922,5 +1144,10 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'LegalAssistantCall',
       reason:
         'A bookkeeping row for the assistant hourly limit (when a paid AI call was made, never what was said); nothing the person wrote.',
+    },
+    {
+      model: 'LegalChatOpenerCall',
+      reason:
+        'A bookkeeping row for the opener of a legal thread (when its paid AI call was made and how it ended, never what was said); nothing the person wrote.',
     },
   ];

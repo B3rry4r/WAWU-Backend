@@ -226,16 +226,112 @@ export interface ProviderOpenWalletInput {
   dateOfBirth: string;
   bvn: string;
   nin: string;
+  /**
+   * What a provider that reviews the person itself (`capabilities.
+   * separateKyc`, Nuvion) needs beyond the fields above (NUV-02). Fintava
+   * takes none of it and ignores it.
+   */
+  review?: ProviderReviewDetails;
+}
+
+/** A home address in parts, as a reviewing provider takes it (NUV-02). */
+export interface ProviderAddressParts {
+  line1: string;
+  line2: string | null;
+  city: string;
+  state: string;
+  postalCode: string;
+  /** ISO 3166-1 alpha-2. */
+  countryCode: string;
+}
+
+/** The ID document the person holds (NUV-02). Its number is never stored. */
+export interface ProviderIdDocument {
+  type: 'international_passport' | 'drivers_license' | 'national_id';
+  number: string;
+  /** YYYY-MM-DD, or null when not given. */
+  issueDate: string | null;
+  expiryDate: string | null;
+  /** ISO 3166-1 alpha-2 of the issuing country. */
+  issuingCountry: string;
+}
+
+/**
+ * The person's details for a provider that reviews them (NUV-02), and what
+ * this call is: a first opening, a correction of the customer the provider
+ * already has (`customerId`, after its review said no), or an opening sent
+ * again after an earlier one's answer was lost (`lostAttemptAt`), which
+ * first looks for the customer that earlier call may have made and makes
+ * one only when the provider proves there is none.
+ */
+export interface ProviderReviewDetails {
+  middleName: string | null;
+  gender: 'male' | 'female';
+  /** ISO 3166-1 alpha-2. */
+  nationality: string;
+  address: ProviderAddressParts;
+  idDocument: ProviderIdDocument;
+  proofOfAddressType: 'utility_bill' | 'bank_statement';
+  /** The customer to correct instead of making another; null for a new one. */
+  customerId: string | null;
+  /**
+   * With `customerId`: send the BVN and NIN again, because the review named
+   * one of them as what failed.
+   */
+  numbersAgain: boolean;
+  /** When an earlier opening whose answer was lost was sent; null otherwise. */
+  lostAttemptAt: Date | null;
+  /**
+   * Run just before a create goes out, after the look for an earlier one
+   * found none (NUV-02 round 2): the caller moves its claim on the BVN to
+   * the number about to be sent, so a claim follows exactly what the
+   * provider was told. Never run when the earlier create is found or the
+   * details correct a customer. If it throws, nothing is sent and the
+   * error reaches the caller as it is.
+   */
+  beforeCreate?: () => Promise<void>;
+}
+
+/**
+ * Where a provider's own review of a person stands (NUV-02): its words,
+ * kept as it sends them, never a number or a document. `reasons` are the
+ * provider's own words for a refusal, already masked.
+ */
+export interface ProviderReviewState {
+  /** The person record documents are linked to, when the provider has one. */
+  personId: string | null;
+  /** The review's state in the provider's words (Nuvion: `incomplete` ...). */
+  status: string;
+  bvnStatus: string | null;
+  ninStatus: string | null;
+  documentStatus: string | null;
+  addressProofStatus: string | null;
+  identificationStatus: string | null;
+  reasons: string[];
+  /** True when the customer was found (after a lost answer), not made now. */
+  found: boolean;
+  /**
+   * The provider's own time for the customer's last change (Unix ms), when
+   * it gives one: a later decision is told from the echo of our own
+   * correction by this, never by our clock (NUV-02 round 2).
+   */
+  updated: number | null;
 }
 
 /**
  * What opening answered: the account (Fintava answers it at once), or a
  * customer whose account number comes later (Nuvion provisions it
- * asynchronously; `getWalletAccount` reads it when it is ready).
+ * asynchronously; `getWalletAccount` reads it when it is ready). A
+ * reviewing provider also says where its review stands (`review`, NUV-02).
  */
 export type ProviderOpenedWallet =
   | { state: 'open'; customer: ProviderCustomer }
-  | { state: 'provisioning'; customerId: string; walletId: string | null };
+  | {
+      state: 'provisioning';
+      customerId: string;
+      walletId: string | null;
+      review?: ProviderReviewState;
+    };
 
 // ---------------------------------------------------------------------------
 // Balances
@@ -269,12 +365,32 @@ export interface ProviderAccountNameInput {
   bankCode: string;
 }
 
+/**
+ * Why a name check did or did not confirm an account (NUV-06, ruling 2):
+ * `matched`; `not_found` (the bank has no such account); `bank_not_supported`
+ * (the bank is not one the check can ask); `bad_format` (the number or the
+ * bank code is not one a bank has: nothing was asked); `multiple_matches`
+ * (the bank found more than one); `timeout` (no answer in time, or the
+ * lookup service was down: nothing is known, try again). Each is its own
+ * plain answer and none of them sends anything. A provider whose check says
+ * only yes or no (Fintava's) leaves it out.
+ */
+export type ProviderAccountNameOutcome =
+  | 'matched'
+  | 'not_found'
+  | 'bank_not_supported'
+  | 'bad_format'
+  | 'multiple_matches'
+  | 'timeout';
+
 export interface ProviderAccountName {
   /** True only when the bank confirmed the account. */
   matched: boolean;
   accountName: string | null;
   accountNumber: string;
   bankCode: string;
+  /** Why not, when the provider says (Nuvion); absent from Fintava's answer. */
+  outcome?: ProviderAccountNameOutcome;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,7 +423,35 @@ export interface ProviderTransaction {
   providerReference: string | null;
   secondaryReference: string | null;
   sessionId: string | null;
+  /**
+   * What the provider charged the sender on top of the amount, when its
+   * record says (kobo). Nuvion's transfer object carries `applicable_fee`;
+   * Fintava's lookups and history carry no charge for a wallet-to-wallet
+   * send. Absent or null: the record does not say, and the fee the payment
+   * was quoted stands. An adapter fills it whenever its record has the
+   * figure, because a payment is completed at what the provider took, not at
+   * the quote (MONEY-17 round 7, lead ruling R6-1; SHARED-CHANGES MONEY-17 #6).
+   */
+  feeKobo?: bigint | null;
+  /**
+   * What kind of movement the provider's record says this is (MONEY-16, the
+   * nightly check): `transfer` is money sent to a wallet or a bank, `charge`
+   * is the provider's own charge to WAWU (a compliance check, say), `other`
+   * is a type this adapter does not know. Absent or null: the record does
+   * not say.
+   */
+  kind?: ProviderTransactionKind | null;
+  /**
+   * What the provider's own record shows as paid to WAWU's account as
+   * WAWU's charge on this transaction (Fintava's `merchantComm`, set in its
+   * dashboard as "Merchant charges", OPS-09). Only a provider's full record
+   * carries it (Fintava: the by-id lookup); absent or null: the record does
+   * not say, which is not the same as zero.
+   */
+  merchantChargeKobo?: bigint | null;
 }
+
+export type ProviderTransactionKind = 'transfer' | 'charge' | 'other';
 
 export interface ProviderPage<T> {
   items: T[];
@@ -391,6 +535,18 @@ export interface ProviderConfirmLimits {
 // Moving money
 // ---------------------------------------------------------------------------
 
+/**
+ * Where a provider keeps one payee (NUV-06): Nuvion's counterparty and the
+ * payment detail attached to it. The caller keeps them on the saved account
+ * it sent to and hands them back on the next send, so a second send to the
+ * same account reuses them. A provider that keeps no payee (Fintava) leaves
+ * both out of its receipt and ignores them on a send.
+ */
+export interface ProviderPayee {
+  counterpartyId: string | null;
+  paymentDetailId: string | null;
+}
+
 export interface ProviderBankTransferInput {
   /** Whose money: a person's (their customerId) or WAWU's own account. */
   from: ProviderHolder;
@@ -401,6 +557,8 @@ export interface ProviderBankTransferInput {
   /** Ours, always: the idempotency key at the provider. */
   reference: string;
   narration?: string;
+  /** The payee ids an earlier send to this account used (NUV-06); reused when present. */
+  payee?: ProviderPayee | null;
 }
 
 export interface ProviderWalletTransferInput {
@@ -423,6 +581,8 @@ export interface ProviderTransferReceipt {
   feeKobo: bigint;
   /** The sender's balance after, when the answer carries it. */
   sourceAvailableKobo: bigint | null;
+  /** The payee ids this send used or made, for the caller to keep (NUV-06). */
+  payee?: ProviderPayee | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -619,18 +779,55 @@ export interface WalletProvider {
    * provider could not say.
    */
   secondaryReferenceOf(t: ProviderTransaction): Promise<string | null>;
+
+  // Identity (MONEY-17, lead ruling R5-1, 8 Oct 2026)
+  /**
+   * Whether two references name one account at this provider. Each is any
+   * number or id the provider knows an account by: Nuvion's NGN account
+   * number, its account id and its `nuvion_ban` all name one account. Pay
+   * from wallet asks it before money moves, so a payment from WAWU's own
+   * account to WAWU's own account is refused however the provider names
+   * the two. Optional: a provider without it names each account by one
+   * number (Fintava's NUBAN), so two references are one account exactly
+   * when they are the same text. Never moves money; fails with a
+   * `WalletProviderError` when the provider cannot say.
+   */
+  isSameAccount?(a: string, b: string): Promise<boolean>;
+}
+
+/** One PIN reset code for one person, as an `OtpSender` sends it (NUV-01). */
+export interface OtpResetCode {
+  /** Whose code: an email sender has WAWU ID write to this account's address. */
+  wawuUserId: string;
+  /** The proved phone (E.164) an SMS sender texts; null when there is none. */
+  phone: string | null;
+  /** The code itself. Never logged, never stored in the clear. */
+  code: string;
+  /** How long it lives, in whole minutes. */
+  minutes: number;
+  /** The whole message, for a sender that sends a text as it is (SMS). */
+  text: string;
 }
 
 /**
- * Sends a short text to a person's phone (the PIN reset code). Separate from
- * the wallet provider: Nuvion has no SMS, and the owner rules codes go by
- * email, so the Nuvion task gives this token another sender.
+ * Sends the PIN reset code to a person (MONEY-14). Separate from the wallet
+ * provider: Nuvion has no SMS and the owner rules codes go by email (R-39),
+ * so under nuvion this token is an email sender (NUV-01) and under fintava
+ * Fintava's SMS.
  */
 export interface OtpSender {
   readonly configured: boolean;
   /**
+   * How the code reaches the person: `sms`, a text to the phone their BVN
+   * check proved; `email`, an email to their account's address.
+   */
+  readonly channel: 'sms' | 'email';
+  /**
    * Sends one text. Fails with a `WalletProviderError`: an unknown outcome
-   * (`recordMayExist`) may have arrived; any other kind was not sent.
+   * (`recordMayExist`) may have arrived; any other kind was not sent. An
+   * email sender sends no text (`not_supported`).
    */
   sendText(phone: string, text: string): Promise<void>;
+  /** Sends one PIN reset code by `channel`. Fails as `sendText` does. */
+  sendResetCode(code: OtpResetCode): Promise<void>;
 }

@@ -11,8 +11,10 @@ import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   ASSISTANT_BRIEF_ATTEMPTS_PER_HOUR,
+  ASSISTANT_CLAIM_MS,
   ASSISTANT_CLIENT_MESSAGES_PER_HOUR,
   ASSISTANT_CLIENT_MESSAGES_PER_INTAKE,
+  ASSISTANT_OPENER_FAILURES_PER_HOUR,
 } from './legal-assistant-config';
 
 export const ONE_HOUR_MS = 3_600_000;
@@ -28,6 +30,22 @@ export const TX_OPTIONS = { maxWait: 15_000, timeout: 15_000 };
 export type Spend = 'message' | 'reply' | 'brief';
 
 /**
+ * What `reserveOpener` found: this caller makes the opener's call (`claimed`,
+ * with the call's row id), the thread already has a line (`opened`), another
+ * read is making the call right now (`busy`), or a call for the thread ended
+ * without an opener after this read arrived (`ended`: the read answers the
+ * thread as it is and does not try again).
+ */
+export type OpenerClaim =
+  | { kind: 'claimed'; callId: string }
+  | { kind: 'opened' }
+  | { kind: 'busy' }
+  | { kind: 'ended' };
+
+/** How an opener call ended (`LegalChatOpenerCall.outcome`). */
+export type OpenerOutcome = 'written' | 'failed' | 'superseded';
+
+/**
  * Has a consultant written anywhere in this matter's thread? ONE question,
  * asked of the whole thread, by both sides of the handover: the reservation
  * (is this client message counted?) and the assistant (does it answer?). If
@@ -41,6 +59,51 @@ export async function consultantHasWritten(
 ): Promise<boolean> {
   const row = await db.legalChatMessage.findFirst({
     where: { legalRequestId: requestId, authorRole: 'consultant' },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+/** Does the matter's thread have any line at all? */
+async function threadHasLine(
+  db: Pick<Prisma.TransactionClient, 'legalChatMessage'>,
+  requestId: string,
+): Promise<boolean> {
+  const row = await db.legalChatMessage.findFirst({
+    where: { legalRequestId: requestId },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+/**
+ * Is an opener call running for this thread right now: claimed, not ended,
+ * and its claim not lapsed? `db` is the transaction or the client.
+ */
+export async function openerRunning(
+  db: Pick<Prisma.TransactionClient, 'legalChatOpenerCall'>,
+  requestId: string,
+  now: Date = new Date(),
+): Promise<boolean> {
+  const row = await db.legalChatOpenerCall.findFirst({
+    where: { legalRequestId: requestId, outcome: null, busyUntil: { gt: now } },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+/**
+ * Did an opener call for this thread stop holding its claim at or after
+ * `since` (it ended, or it lapsed)? `busyUntil` is when a claim stops
+ * holding: its lapse time while the call runs, the time it ended after.
+ */
+async function openerEndedSince(
+  db: Pick<Prisma.TransactionClient, 'legalChatOpenerCall'>,
+  requestId: string,
+  since: Date,
+): Promise<boolean> {
+  const row = await db.legalChatOpenerCall.findFirst({
+    where: { legalRequestId: requestId, busyUntil: { gte: since } },
     select: { id: true },
   });
   return row !== null;
@@ -73,6 +136,9 @@ export function refusal(
  * AI call (LEGAL-01). The assistant routes and the older matter-chat route
  * (`POST /legal/intake/chat/{requestId}`) both reserve through here, so a
  * client who mixes them still has ONE hourly allowance, not one per route.
+ * So does the opener a first read of a paid matter's thread writes
+ * (`GET /legal/intake/chat/{requestId}`, FIX-11): reading is not free of
+ * paid calls just because nobody typed.
  */
 @Injectable()
 export class LegalAssistantAllowance {
@@ -97,7 +163,9 @@ export class LegalAssistantAllowance {
    * this returns, never inside it.
    *
    * What counts: a client message, a reply asked for again and a brief
-   * prepared (`LegalAssistantCall`), and a client message written after Send.
+   * prepared (`LegalAssistantCall`), a client message written after Send,
+   * and every call that tried to write a matter thread's opener
+   * (`LegalChatOpenerCall`, FIX-11).
    */
   async reserve<T>(
     wawuUserId: string,
@@ -148,6 +216,95 @@ export class LegalAssistantAllowance {
   }
 
   /**
+   * Claim the ONE paid AI call that writes a matter thread's opener (FIX-11).
+   *
+   * Under the person's lock, in one step: if the thread has any line it is
+   * already open; if another opener call for it is running (its claim has
+   * not lapsed) this caller waits for that one; if one ended or lapsed after
+   * this read ARRIVED (`arrivedAt`, taken when the read began), the read was
+   * in flight while that call ran, so it answers the thread as it is and
+   * does not try again (only a read that arrives after a call has ended may
+   * claim the next one, so parallel reads make one call whatever the
+   * provider does and however slowly they reach the lock); otherwise the
+   * limits are checked and the call is written down (`LegalChatOpenerCall`),
+   * which both counts it and holds the claim. The provider is called after
+   * this returns, never inside it. Over a limit this throws the same 429
+   * `assistant_rate_limited` a message gets, and no call is made.
+   *
+   * Every thread line is written under this same lock (client messages in
+   * `reserveMatterMessage`, a consultant's in `writeAsConsultant`, the opener
+   * in `finishOpener`), so "is the thread empty" cannot change while it is
+   * being decided.
+   */
+  async reserveOpener(
+    wawuUserId: string,
+    requestId: string,
+    arrivedAt: Date,
+  ): Promise<OpenerClaim> {
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockPerson(tx, wawuUserId);
+      if (await threadHasLine(tx, requestId)) return { kind: 'opened' };
+      const now = new Date();
+      if (await openerRunning(tx, requestId, now)) return { kind: 'busy' };
+      if (await openerEndedSince(tx, requestId, arrivedAt)) {
+        return { kind: 'ended' };
+      }
+      await this.checkLimits(tx, wawuUserId, null, 'opener');
+      const call = await tx.legalChatOpenerCall.create({
+        data: {
+          legalRequestId: requestId,
+          wawuUserId,
+          busyUntil: new Date(now.getTime() + ASSISTANT_CLAIM_MS),
+          createdAt: now,
+        },
+        select: { id: true },
+      });
+      return { kind: 'claimed', callId: call.id };
+    }, TX_OPTIONS);
+  }
+
+  /**
+   * End the opener call `reserveOpener` claimed: write the opener (when the
+   * provider answered and the thread is still empty) and record how the call
+   * ended, in one step under the person's lock. A thread that gained a line
+   * while the call ran (the client wrote first, or a consultant did) keeps
+   * it: the opener is not stored after it (`superseded`). The call stays
+   * counted whatever the outcome; it was made. `write` is null when the
+   * provider failed or answered nothing (`failed`), which also frees the
+   * thread for the next read that ARRIVES after this moment to try again.
+   * `busyUntil` becomes the time the call ended.
+   */
+  async finishOpener(
+    wawuUserId: string,
+    requestId: string,
+    callId: string,
+    write:
+      | ((tx: Prisma.TransactionClient, createdAt: Date) => Promise<unknown>)
+      | null,
+  ): Promise<OpenerOutcome> {
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockPerson(tx, wawuUserId);
+      let outcome: OpenerOutcome = 'failed';
+      if (write) {
+        if (await threadHasLine(tx, requestId)) {
+          outcome = 'superseded';
+        } else {
+          await write(tx, new Date());
+          outcome = 'written';
+        }
+      }
+      // After the opener's own write, in the same transaction: the partial
+      // unique index refuses a second `written` row for the thread, and the
+      // opener goes with it.
+      await tx.legalChatOpenerCall.update({
+        where: { id: callId },
+        data: { outcome, busyUntil: new Date() },
+      });
+      return outcome;
+    }, TX_OPTIONS);
+  }
+
+  /**
    * A consultant's line in a matter thread, written under the client's lock.
    * `reserveMatterMessage` decides "has a consultant written" and counts the
    * hour by the ORDER of stamps, so the consultant's line takes the same lock
@@ -171,7 +328,7 @@ export class LegalAssistantAllowance {
     tx: Prisma.TransactionClient,
     wawuUserId: string,
     intakeId: string | null,
-    spend: Spend | 'matter_message',
+    spend: Spend | 'matter_message' | 'opener',
   ) {
     if (intakeId && (spend === 'message' || spend === 'reply')) {
       const [messages, calls] = await Promise.all([
@@ -196,7 +353,7 @@ export class LegalAssistantAllowance {
         select: { id: true },
       })
     ).map((r) => r.id);
-    const [clientRows, callRows, matterRows] = await Promise.all([
+    const [clientRows, callRows, openerRows, matterRows] = await Promise.all([
       tx.legalIntakeMessage.findMany({
         where: { wawuUserId, authorRole: 'client', createdAt: { gte: since } },
         select: { createdAt: true },
@@ -204,6 +361,11 @@ export class LegalAssistantAllowance {
       tx.legalAssistantCall.findMany({
         where: { wawuUserId, createdAt: { gte: since } },
         select: { createdAt: true, kind: true },
+      }),
+      // The opener calls on matter threads (FIX-11), every attempt.
+      tx.legalChatOpenerCall.findMany({
+        where: { wawuUserId, createdAt: { gte: since } },
+        select: { createdAt: true, outcome: true, busyUntil: true },
       }),
       requestIds.length === 0
         ? Promise.resolve(
@@ -242,7 +404,12 @@ export class LegalAssistantAllowance {
       return !(at !== undefined && at < r.createdAt.getTime());
     });
 
-    const stamps = [...clientRows, ...callRows, ...countedMatterRows]
+    const stamps = [
+      ...clientRows,
+      ...callRows,
+      ...openerRows,
+      ...countedMatterRows,
+    ]
       .map((r) => r.createdAt.getTime())
       .sort((a, b) => a - b);
     if (stamps.length >= ASSISTANT_CLIENT_MESSAGES_PER_HOUR) {
@@ -261,6 +428,28 @@ export class LegalAssistantAllowance {
         throw this.rateLimited(
           briefs[briefs.length - ASSISTANT_BRIEF_ATTEMPTS_PER_HOUR],
           'The brief could not be prepared a few times just now. Try again a little later.',
+        );
+      }
+    }
+
+    if (spend === 'opener') {
+      // Only the tries that came to nothing: a call that failed, or a claim
+      // that lapsed with no outcome (its Hub died). A written opener, or one
+      // superseded by a line the thread gained meanwhile, is not a retry.
+      const nowMs = Date.now();
+      const failures = openerRows
+        .filter(
+          (c) =>
+            c.outcome === 'failed' ||
+            (c.outcome === null &&
+              (c.busyUntil === null || c.busyUntil.getTime() <= nowMs)),
+        )
+        .map((c) => c.createdAt.getTime())
+        .sort((a, b) => a - b);
+      if (failures.length >= ASSISTANT_OPENER_FAILURES_PER_HOUR) {
+        throw this.rateLimited(
+          failures[failures.length - ASSISTANT_OPENER_FAILURES_PER_HOUR],
+          'The assistant could not open this conversation a few times just now. Try again a little later.',
         );
       }
     }

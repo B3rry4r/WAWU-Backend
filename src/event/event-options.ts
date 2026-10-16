@@ -3,6 +3,20 @@ import type {
   EventFormat,
   EventType,
 } from '../../generated/prisma/enums';
+import { commissionRate } from '../event-ticketing/event-ticketing.constants';
+import {
+  EVENT_ADDRESS_MAX,
+  EVENT_DESCRIPTION_MAX,
+  EVENT_HOST_ORG_MAX,
+  EVENT_NAME_MAX,
+  MAX_TICKET_TYPES_PER_EVENT,
+  TICKET_NAME_MAX,
+  TICKET_NAME_MIN,
+  TICKET_PRICE_MAX_NAIRA,
+  TICKET_PRICE_MIN_NAIRA,
+  TICKET_QUANTITY_MAX,
+  TICKET_QUANTITY_MIN,
+} from './dto/create-event.dto';
 
 /**
  * The words an app shows for each event value, and the value it sends back.
@@ -22,10 +36,42 @@ export interface EventOption<T extends string> {
   label: string;
 }
 
+/**
+ * The rules POST /events holds a host's ticket types to, and the share of
+ * each sale the host keeps (EVENTS-04). The app's wizard (E15) prints "You
+ * keep 85% of every ticket. Set price to ₦0 for a free event." and checks a
+ * price before sending it: both read these numbers, never a copy of them.
+ */
+export interface EventTicketRulesView {
+  /** Whole percent of a paid ticket's price the host keeps (100 less WAWU's commission). */
+  hostSharePercent: number;
+  /** The lowest price; a ticket at this price is the free tier (R-8). */
+  minPriceNaira: number;
+  maxPriceNaira: number;
+  minQuantity: number;
+  maxQuantity: number;
+  nameMinLength: number;
+  nameMaxLength: number;
+  /** How many ticket types one submit may carry. */
+  maxTypes: number;
+}
+
+/** The longest text each field of POST /events takes (EVENTS-04). */
+export interface EventFieldLimitsView {
+  nameMax: number;
+  descriptionMax: number;
+  hostOrgMax: number;
+  addressMax: number;
+}
+
 export interface EventOptionsView {
   categories: EventOption<EventCategory>[];
   formats: EventOption<EventFormat>[];
   types: EventOption<EventType>[];
+  /** Added by EVENTS-04, additive: the ticket rules the host wizard shows and checks. */
+  tickets: EventTicketRulesView;
+  /** Added by EVENTS-04, additive: the wizard's field lengths. */
+  fields: EventFieldLimitsView;
 }
 
 /**
@@ -81,5 +127,21 @@ export function eventOptions(): EventOptionsView {
     categories: toOptions(CATEGORY_LABELS),
     formats: toOptions(FORMAT_LABELS),
     types: toOptions(TYPE_LABELS),
+    tickets: {
+      hostSharePercent: Math.round((1 - commissionRate()) * 100),
+      minPriceNaira: TICKET_PRICE_MIN_NAIRA,
+      maxPriceNaira: TICKET_PRICE_MAX_NAIRA,
+      minQuantity: TICKET_QUANTITY_MIN,
+      maxQuantity: TICKET_QUANTITY_MAX,
+      nameMinLength: TICKET_NAME_MIN,
+      nameMaxLength: TICKET_NAME_MAX,
+      maxTypes: MAX_TICKET_TYPES_PER_EVENT,
+    },
+    fields: {
+      nameMax: EVENT_NAME_MAX,
+      descriptionMax: EVENT_DESCRIPTION_MAX,
+      hostOrgMax: EVENT_HOST_ORG_MAX,
+      addressMax: EVENT_ADDRESS_MAX,
+    },
   };
 }

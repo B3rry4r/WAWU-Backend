@@ -37,6 +37,14 @@ import {
   type ReplyTimeStats,
 } from './professional-reply-time';
 import type { ListProfessionalDirectoryQueryDto } from './dto/professional-directory.dto';
+import {
+  LISTING_TAKEN_DOWN,
+  LISTING_TAKEN_DOWN_MESSAGE,
+  lockListing,
+  standingTakedown,
+  visibilityOf,
+  type ProfessionalListingVisibilityView,
+} from './professional-takedown';
 
 /** A professional as a browser sees them. */
 export interface ProfessionalListItem {
@@ -288,24 +296,92 @@ export class ProfessionalService {
    * Availability, not approval. A professional who is at capacity hides
    * themselves without withdrawing an application a human already reviewed —
    * and gets back into the directory by flipping this, not by reapplying.
+   *
+   * FIX-06: on a listing an admin took down (professional-takedown.ts) a Show
+   * is refused, 409 with reason.code `listing_taken_down`, and a Hide is
+   * kept as the person's choice for when the takedown is lifted. Every other
+   * answer is the one this route always gave.
    */
   async setListed(wawuUserId: string, id: string, listed: boolean) {
-    const row = await this.prisma.professionalProfile.findUnique({
-      where: { id },
-      select: { wawuUserId: true, status: true },
+    return this.prisma.$transaction(async (tx) => {
+      // FIX-06: locked first, so an admin's unlist at the same moment either
+      // lands before this reads the takedown or waits for this to finish.
+      if (!(await lockListing(tx, id))) {
+        throw new NotFoundException('Professional profile not found');
+      }
+      const row = await tx.professionalProfile.findUnique({
+        where: { id },
+        select: { wawuUserId: true, status: true },
+      });
+      if (!row) throw new NotFoundException('Professional profile not found');
+      if (row.wawuUserId !== wawuUserId) {
+        throw new ForbiddenException('This professional profile is not yours.');
+      }
+      if (row.status !== 'approved') {
+        throw new ConflictException(
+          'Only an approved professional profile can be hidden or shown.',
+        );
+      }
+
+      const takedown = await standingTakedown(tx, id);
+      if (takedown) {
+        // An admin took it down: only an admin lists it again. A Hide is
+        // still the person's own choice, kept for when the takedown is
+        // lifted; the listing itself is already out of the directory.
+        if (listed) {
+          throw new ConflictException({
+            message: LISTING_TAKEN_DOWN_MESSAGE,
+            reason: {
+              code: LISTING_TAKEN_DOWN,
+              takenDownAt: takedown.takenDownAt,
+            },
+          });
+        }
+        await tx.professionalTakedown.update({
+          where: { professionalId: id },
+          data: { ownerListed: false },
+        });
+      }
+
+      return tx.professionalProfile.update({
+        where: { id },
+        data: { listed: takedown ? false : listed },
+      });
     });
-    if (!row) throw new NotFoundException('Professional profile not found');
-    if (row.wawuUserId !== wawuUserId) {
-      throw new ForbiddenException('This professional profile is not yours.');
-    }
-    if (row.status !== 'approved') {
-      throw new ConflictException(
-        'Only an approved professional profile can be hidden or shown.',
-      );
-    }
-    return this.prisma.professionalProfile.update({
-      where: { id },
-      data: { listed },
+  }
+
+  /**
+   * GET /professionals/applications/mine/visibility (FIX-06): each approved
+   * listing of the caller's and where it stands, so P8 can say that an admin
+   * took one down. Newest application first, as GET .../mine orders them.
+   */
+  async myVisibility(
+    wawuUserId: string,
+  ): Promise<ProfessionalListingVisibilityView[]> {
+    const rows = await this.prisma.professionalProfile.findMany({
+      where: { wawuUserId, status: 'approved' },
+      select: { id: true, category: true, listed: true },
+      orderBy: { submittedAt: 'desc' },
+    });
+    if (rows.length === 0) return [];
+    const takedowns = await this.prisma.professionalTakedown.findMany({
+      where: {
+        professionalId: { in: rows.map((r) => r.id) },
+        liftedAt: null,
+      },
+      select: { professionalId: true, takenDownAt: true },
+    });
+    const takenDownAt = new Map(
+      takedowns.map((t) => [t.professionalId, t.takenDownAt]),
+    );
+    return rows.map((r) => {
+      const at = takenDownAt.get(r.id) ?? null;
+      return {
+        id: r.id,
+        category: r.category,
+        visibility: visibilityOf(r.listed, at),
+        takenDownAt: at,
+      };
     });
   }
 

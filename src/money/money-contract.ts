@@ -35,6 +35,7 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   pin_incorrect: 403,
   pin_locked: 423,
   pin_mismatch: 400,
+  pin_changed_again: 409,
   reset_code_invalid: 400,
   insufficient_funds: 402,
   daily_limit_exceeded: 403,
@@ -69,13 +70,38 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // Never 401 (that signs the person out) and never a PIN code: a refused
   // biometric approval uses up no PIN try (R-26).
   device_approval_refused: 403,
+  // Default (lead), owner may override: a payment for this item is still
+  // being confirmed, so a second one is not taken (MONEY-17).
+  payment_in_progress: 409,
   // Default (agent/lead), owner may override: a period with too many rows
   // for one file is the caller's to shorten, so a 400 (WALLET-27).
   statement_too_large: 400,
   // The per-person statement limit and the two-at-once cap (WALLET-27 round 3).
   statement_rate_limited: 429,
   statement_busy: 503,
+  // WALLET-35. Default (agent), owner may override: 409, as wallet_opening:
+  // the request is understood, the person's email is not confirmed yet.
+  email_not_verified: 409,
+  // WALLET-35. Default (agent), owner may override: 503, as statement_busy:
+  // nothing was sent, trying again is right.
+  statement_email_failed: 503,
   recipient_search_rate_limited: 429,
+  // NUV-07 (R-42): the running provider's fees are settings not filled in
+  // yet; nothing is quoted or moved until they are. Not a provider failure.
+  fees_not_set: 503,
+  // Default (agent), owner may override: 403, as daily_limit_exceeded. The
+  // request is understood; this person may not move that much now.
+  limit_reached: 403,
+  // NUV-02. Default (agent), owner may override: 409, as wallet_opening. The
+  // request is understood; the person waits for the review to end.
+  identity_under_review: 409,
+  // NUV-02 round 2, U3. Default (agent), owner may override: 409, as
+  // wallet_already_open. The request is understood; this wallet is opened
+  // another way, so asking again changes nothing.
+  step_not_used: 409,
+  // NUV-02 round 3. Default (lead), owner may override: 429, as
+  // identity_checks_exhausted, with retryAfterSeconds.
+  open_address_limited: 429,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */
@@ -99,6 +125,9 @@ export const DEBIT_GATE_ERRORS: MoneyErrorCode[] = [
   'amount_out_of_range',
   'quote_changed',
   'provider_unreachable',
+  // NUV-07: fees not set (R-42), and WAWU's or the provider's own limit.
+  'fees_not_set',
+  'limit_reached',
 ];
 
 /** The task that serves this route, written into the contract as `x-wawu-built-by`. */
@@ -162,6 +191,25 @@ export function IdempotencyKeyHeader(): MethodDecorator {
     required: true,
     description:
       'One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.',
+    schema: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,128}$' },
+  });
+}
+
+/**
+ * The key on the two routes that replace a PIN (`PUT /money/pin` and `POST
+ * /money/pin/reset/confirm`, WALLET-06 round 2; CONVENTIONS.md section 4,
+ * "On the PIN routes"). Optional: without it the route answers as it always
+ * has. Not `IdempotencyKeyHeader()`: that one is for requests that move money
+ * and says the header is required. The refusals it brings are written here,
+ * not in the route's `@MoneyErrors` list, because that list is how a route is
+ * told to move money (money-moving-coverage.spec.ts), and these two do not.
+ */
+export function OptionalIdempotencyKeyHeader(): MethodDecorator {
+  return ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description:
+      'Optional. One value per attempt to change the PIN, made by the app when the person first confirms (a UUID) and sent again unchanged when the answer was lost. If the first request landed, its answer comes back with the header Idempotent-Replayed: true and the PIN is not checked again. The same key with another body is 409 idempotency_key_reused; while the first is still running, 409 idempotency_in_progress with retryAfterSeconds; a value that is not 8 to 128 of [A-Za-z0-9_-] is 400 idempotency_key_required. A refused request gives the key back. A repeat that comes more than a minute after the first, when the first landed but its answer was never stored, is answered from the PIN: 200 if the PIN is still the one that request set, otherwise 409 pin_changed_again.',
     schema: { type: 'string', pattern: '^[A-Za-z0-9_-]{8,128}$' },
   });
 }

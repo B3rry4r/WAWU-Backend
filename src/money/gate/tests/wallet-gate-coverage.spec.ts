@@ -40,6 +40,20 @@ const NOT_GATED: Record<string, string> = {
   'PUT money/identity/occupation': 'Open your wallet: A5 (KYC-01)',
   'GET money/identity/selfie': 'Open your wallet: the selfie state (KYC-02)',
   'POST money/identity/selfie': 'Open your wallet: the selfie (A6, KYC-02)',
+  // NUV-03: they run before a wallet exists, as opening itself does. A
+  // person sends the ID document and the proof of address (and takes the
+  // hosted selfie) so that Nuvion can review them and the wallet can be
+  // opened at all; behind the gate they would answer wallet_not_open to the
+  // one person who must reach them. Each answers a person with no opening
+  // started with the gate's own wallet_not_open sentence, from the route.
+  'GET money/identity/documents':
+    'Open your wallet: where the documents stand (NUV-03)',
+  'POST money/identity/documents':
+    'Open your wallet: the ID document and proof of address (NUV-03)',
+  'GET money/identity/liveness':
+    'Open your wallet: the hosted selfie state (NUV-03)',
+  'POST money/identity/liveness':
+    'Open your wallet: starts the hosted selfie (NUV-03)',
   'POST money/wallet/open':
     'Open your wallet: opening the account (A7, MONEY-12)',
   'GET money/wallet':
@@ -168,7 +182,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       ]),
     );
     expect(declared.map((r) => r.key)).toEqual(
-      expect.arrayContaining(['POST money/payments', 'GET money/holds']),
+      expect.arrayContaining(['POST money/transfers/bank']),
     );
   });
 
@@ -188,7 +202,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     expect(half).toEqual([]);
   });
 
-  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08)', () => {
+  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08), the payment quote, the payment and the poll of one payment (MONEY-17, MONEY-19), holds (MONEY-18), the send to a WAWU user and the read of one send (WALLET-07)', () => {
     expect(
       mounted
         .filter((r) => r.guards.includes(WalletGateGuard))
@@ -200,25 +214,38 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET money/beneficiaries',
       'GET money/device',
       'GET money/fees/quote',
+      'GET money/holds',
+      'GET money/holds/:id',
+      'GET money/payments/:id',
+      'GET money/payments/quote',
       'GET money/payout-account',
       'GET money/pin',
       'GET money/recipients',
       'GET money/recipients/recent',
       'GET money/statements',
+      'GET money/statements/delivery',
       'GET money/transactions',
       'GET money/transactions/:id',
       'GET money/transactions/:id/receipt/image',
       'GET money/transactions/:id/receipt/pdf',
       'GET money/transactions/summary',
+      'GET money/transfers/:id',
       'GET money/wallet/balance',
+      // TIER-03: the pay sheet of a tier.
+      'GET plans/purchases/quote',
       'POST money/approval/verify',
       'POST money/beneficiaries',
       'POST money/device/challenge',
+      'POST money/payments',
       'POST money/pin',
       'POST money/pin/reset',
       'POST money/pin/reset/confirm',
       'POST money/pin/verify',
+      'POST money/statements/email',
       'POST money/transactions/:id/receipt',
+      'POST money/transfers/wawu',
+      // TIER-03: the purchase of a tier pays from the wallet.
+      'POST plans/purchases',
       'PUT money/device',
       'PUT money/payout-account',
       'PUT money/pin',
@@ -231,7 +258,10 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     );
     expect(pinRoutes.map((r) => r.key).sort()).toEqual([
       'POST money/approval/verify',
+      'POST money/payments',
       'POST money/pin/verify',
+      'POST money/transfers/wawu',
+      'POST plans/purchases',
       'PUT money/device',
       'PUT money/pin',
     ]);

@@ -211,6 +211,13 @@ function parseSignal(payload: string): LiveSignal | LiveProbe | null {
         messageId: s('messageId'),
       };
     }
+    if (v.kind === 'legal.thread' && s('legalRequestId') && s('messageId')) {
+      return {
+        kind: 'legal.thread',
+        legalRequestId: s('legalRequestId'),
+        messageId: s('messageId'),
+      };
+    }
   } catch {
     // not ours
   }
