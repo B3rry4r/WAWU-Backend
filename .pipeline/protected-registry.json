@@ -7446,8 +7446,7 @@
           "adminRoles": null
         },
         "probe": {
-          "as": "buyer",
-          "why": "recentSearches is [] unless the request carries include=recent, which only the mobile app sends (EXPLORE-05, round 2); this probe does not send it and the web never does, so the answer is the same as on main."
+          "as": "buyer"
         },
         "expect": {
           "status": 200,
@@ -19379,7 +19378,7 @@
           "query": {
             "q": "Protected"
           },
-          "why": "Runs after content is live and a creator is listed, so content and creators have items whose shape is locked. communities is [] for every query unless the request carries include=communities, which only the mobile app sends (EXPLORE-05, round 2); this probe does not send it and the web never does, so the answer is the same as on main."
+          "why": "Runs after content is live and a creator is listed, so content and creators have items whose shape is locked. communities is [] on main for every query (search-response.service.ts returns it empty unconditionally)."
         },
         "expect": {
           "status": 200,
