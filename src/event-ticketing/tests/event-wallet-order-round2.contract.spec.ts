@@ -125,23 +125,26 @@ describe('EVENTS-07 round 2', () => {
         status: 'refunded',
         action: 'refund',
         refundedKobo: BigInt(PRICE),
+        transferKobo: BigInt(TOTAL),
       });
-      // The price is back; Fintava's charge on the first move is not (R-10).
-      expect(balance(p)).toBe(START - FEE);
+      // Everything the buyer paid is back, Fintava's charge included: they
+      // did nothing wrong, and WAWU carries the charge (round 3 ruling).
+      expect(balance(p)).toBe(START);
       expect(refundMoves(p)).toHaveLength(1);
+      expect(refundMoves(p)[0].amountKobo).toBe(TOTAL);
       expect(await ledgerOf(hold.customerReference!)).toEqual(
         expect.arrayContaining([
           {
             walletKind: 'merchant',
             direction: 'out',
             category: 'refund',
-            amountKobo: BigInt(PRICE),
+            amountKobo: BigInt(TOTAL),
           },
           {
             walletKind: 'user',
             direction: 'in',
             category: 'refund',
-            amountKobo: BigInt(PRICE),
+            amountKobo: BigInt(TOTAL),
           },
         ]),
       );
@@ -156,7 +159,7 @@ describe('EVENTS-07 round 2', () => {
       await h.purge.purge(e.hostId);
       await h.holds.sweep(LATER());
       expect(refundMoves(p)).toHaveLength(1);
-      expect(balance(p)).toBe(START - FEE);
+      expect(balance(p)).toBe(START);
     });
 
     it('keeps an event whose money cannot move now, with its orders, and sends it back when the provider is back', async () => {
@@ -198,7 +201,7 @@ describe('EVENTS-07 round 2', () => {
         await h.prisma.event.findUnique({ where: { id: e.id } }),
       ).toBeNull();
       expect(refundMoves(p)).toHaveLength(1);
-      expect(balance(p)).toBe(START - FEE);
+      expect(balance(p)).toBe(START);
     });
 
     it('reads a refunded order as refunded, with its tickets void, while a sibling order keeps the event', async () => {
@@ -220,7 +223,7 @@ describe('EVENTS-07 round 2', () => {
       expect(done.status).toBe('failed');
       expect(done.returned).toMatchObject({
         returned: true,
-        returnedKobo: PRICE,
+        returnedKobo: TOTAL,
       });
       expect(done.failureReason).toContain('can no longer take place');
       expect(
@@ -228,7 +231,7 @@ describe('EVENTS-07 round 2', () => {
           where: { orderId: orderA, status: { not: 'void' } },
         }),
       ).toBe(0);
-      expect(balance(a)).toBe(START - FEE);
+      expect(balance(a)).toBe(START);
       expect(refundMoves(a)).toHaveLength(1);
       // The event stays for B's order, which is untouched.
       expect(
@@ -249,7 +252,72 @@ describe('EVENTS-07 round 2', () => {
         await h.prisma.event.findUnique({ where: { id: e.id } }),
       ).toBeNull();
       expect(refundMoves(b)).toHaveLength(1);
-      expect(balance(b)).toBe(START - FEE);
+      expect(balance(b)).toBe(START);
+    });
+
+    it('keeps the holds of an event that had started, with its orders, refunds nobody, and keeps the event while any hold is held', async () => {
+      const e = await summit();
+      const p = await h.buyer(START);
+      const orderId = await buy(p, e);
+      // The event started yesterday (a multi-day event, still on) before its host left.
+      await h.prisma.event.update({
+        where: { id: e.id },
+        data: { startsAt: new Date(Date.now() - 24 * 60 * 60_000) },
+      });
+      // The same host has an event that has not started, with a buyer too.
+      const upcoming = await summit(100, { hostId: e.hostId });
+      const other = await h.buyer(START);
+      const upcomingOrder = await buy(other, upcoming);
+      const movesBefore = h.wallets.sends.length;
+
+      await h.purge.purge(e.hostId);
+
+      // The event that had not started is refunded in full and gone.
+      expect((await holdOf(upcomingOrder)).status).toBe('refunded');
+      expect(balance(other)).toBe(START);
+      expect(
+        await h.prisma.event.findUnique({ where: { id: upcoming.id } }),
+      ).toBeNull();
+      // The one that had started: nothing moved, the hold is held, the order
+      // is paid with its tickets, and the event is kept, naming nobody.
+      const kept = await h.prisma.event.findUniqueOrThrow({
+        where: { id: e.id },
+      });
+      expect(kept).toMatchObject({
+        hostWawuId: ERASED_HOST,
+        status: 'removed',
+      });
+      expect((await holdOf(orderId)).status).toBe('held');
+      expect(balance(p)).toBe(START - TOTAL);
+      expect(refundMoves(p)).toHaveLength(0);
+      expect(h.wallets.sends.length - movesBefore).toBe(1);
+      const order = await readOrder(p, orderId);
+      expect(order.status).toBe('paid');
+      expect(order.tickets).toHaveLength(2);
+
+      // Neither the sweeps nor a second purge refund it or delete it.
+      await h.purge.purge(e.hostId);
+      await h.holds.sweep(LATER());
+      expect(await h.erasure.sweep()).toEqual({ kept: 1, deleted: 0 });
+      expect((await holdOf(orderId)).status).toBe('held');
+      expect(refundMoves(p)).toHaveLength(0);
+      expect(
+        await h.prisma.event.findUnique({ where: { id: e.id } }),
+      ).not.toBeNull();
+      expect(
+        await h.prisma.eventOrder.findUnique({ where: { id: orderId } }),
+      ).toMatchObject({ status: 'paid' });
+
+      // Once a person has cleared the hold (it is no longer held), the sweep
+      // removes the leftover shell.
+      await h.prisma.walletHold.update({
+        where: { id: (await holdOf(orderId)).id },
+        data: { status: 'released', action: 'release', settledAt: new Date() },
+      });
+      expect(await h.erasure.sweep()).toEqual({ kept: 0, deleted: 1 });
+      expect(
+        await h.prisma.event.findUnique({ where: { id: e.id } }),
+      ).toBeNull();
     });
 
     it('leaves an event with no wallet order to the purge, as before', async () => {

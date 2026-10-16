@@ -12,8 +12,18 @@ import { EVENT_TICKET_PAYMENT_KIND } from './event-wallet-order-rules';
  */
 export const ERASED_HOST = 'erased-host';
 
+/** An event that had not started when its host left: its buyers get everything back. */
 const ERASED_REASON = 'The host closed their account.';
+/**
+ * An event that had started or ended when its host left: its holds stay held,
+ * with its orders, for the deleted-payee path (G-461, G-480), and nobody is
+ * refunded. The decision is made once, when the host leaves, and written here;
+ * the sweep reads it, so an event does not change sides as the clock moves.
+ */
+const BEGUN_REASON = 'The host closed their account after the event began.';
 const REFUND_REASON = 'the host closed their account';
+/** The buyer did nothing wrong: they get back everything the payment took, Fintava's charge included, and WAWU carries the charge (a losing buyer, a failed bill). */
+const RETURN_ALL = { returnCharge: true } as const;
 /** The most one pass looks at, so one slow provider cannot stall the rest. */
 const PAGE = 50;
 /** How long the purge itself spends sending money back before it leaves the rest to the sweep. */
@@ -21,8 +31,10 @@ const PURGE_BUDGET_MS = 20_000;
 const SWEEP_BUDGET_MS = 90_000;
 
 /**
- * When a host erases their account, the events they ran cannot happen (task
- * EVENTS-07 round 2, the lead's ruling), so their buyers' money goes back.
+ * When a host erases their account, the events they ran that had NOT started
+ * cannot happen (task EVENTS-07 round 2, the lead's ruling), so their buyers'
+ * money goes back. An event that has started or ended keeps its holds held
+ * (round 3, the lead's ruling).
  *
  * - **Before any event row goes.** `Event` is the host's own data, so the
  *   account purge deletes it, and the orders of an event go with it (the order
@@ -31,14 +43,23 @@ const SWEEP_BUDGET_MS = 90_000;
  *   with nothing to release it. So the purge calls `beforeErase` first.
  * - **Detach first, then settle.** `beforeErase` makes every event of the host
  *   that has a wallet order name nobody (`ERASED_HOST`) and takes it down, in
- *   one statement, so the purge's own delete by host no longer reaches it
- *   whatever happens next. It then sends each held price back to its payer
- *   through the existing hold refund, holding nothing across the provider's
- *   answer. An event whose every hold is back is deleted (the order is marked
- *   refunded and its tickets void just before). An event with a hold that
- *   cannot be settled now (the provider is down or has not answered, the
+ *   one statement per kind, so the purge's own delete by host no longer
+ *   reaches it whatever happens next. The statement also writes which kind the
+ *   event is (not started, or started and ended): that is read by every later
+ *   pass.
+ * - **Not started: everything goes back.** Each held price is sent back to its
+ *   payer through the existing hold refund, holding nothing across the
+ *   provider's answer, with Fintava's charge included (`returnCharge`: the
+ *   buyer did nothing wrong; WAWU carries the charge, as for a losing buyer or
+ *   a failed bill). An event whose every hold is back is deleted (the order is
+ *   marked refunded and its tickets void just before). An event with a hold
+ *   that cannot be settled now (the provider is down or has not answered, the
  *   wallet is frozen, a release is already under way) is KEPT, with its
  *   orders, and the sweep tries it again until its money has moved.
+ * - **Started or ended: nobody is refunded.** Its holds stay `held` with its
+ *   orders, for the deleted-payee path (G-461, G-480: money owed to a deleted
+ *   payee waits for a person). The event is not deleted while any hold of it
+ *   is held; once none is (a person cleared them), the sweep deletes it.
  * - **Once.** The refund is the hold's own, asked again by the sweep, a second
  *   server or a second purge: the hold's reference makes it one move.
  * - **A debit still being confirmed** keeps the event too: the price is not
@@ -66,27 +87,35 @@ export class EventHostErasureService implements OnModuleInit {
   async beforeErase(hostWawuId: string): Promise<void> {
     const events = await this.prisma.event.findMany({
       where: { hostWawuId, orders: { some: { paymentProvider: 'wallet' } } },
-      select: { id: true },
+      select: { id: true, startsAt: true },
     });
     if (events.length === 0) return;
-    const ids = events.map((e) => e.id);
-    await this.prisma.event.updateMany({
-      where: { id: { in: ids }, hostWawuId },
-      data: {
-        hostWawuId: ERASED_HOST,
-        status: 'removed',
-        featured: false,
-        lastDecisionReason: ERASED_REASON,
-      },
-    });
+    const now = new Date();
+    const upcoming = events.filter((e) => e.startsAt > now).map((e) => e.id);
+    const begun = events.filter((e) => e.startsAt <= now).map((e) => e.id);
+    for (const [ids, reason] of [
+      [upcoming, ERASED_REASON],
+      [begun, BEGUN_REASON],
+    ] as const) {
+      if (ids.length === 0) continue;
+      await this.prisma.event.updateMany({
+        where: { id: { in: ids }, hostWawuId },
+        data: {
+          hostWawuId: ERASED_HOST,
+          status: 'removed',
+          featured: false,
+          lastDecisionReason: reason,
+        },
+      });
+    }
     const deadline = Date.now() + PURGE_BUDGET_MS;
     let kept = 0;
-    for (const id of ids) {
+    for (const id of [...upcoming, ...begun]) {
       if (!(await this.settle(id, deadline))) kept += 1;
     }
     if (kept > 0) {
       this.logger.warn(
-        `${kept} event(s) of an erased host are kept until the buyers' money is back; the sweep tries again`,
+        `${kept} event(s) of an erased host are kept (buyers' money on its way back, or held for a person); the sweep looks again`,
       );
     }
   }
@@ -133,11 +162,18 @@ export class EventHostErasureService implements OnModuleInit {
   }
 
   /**
-   * Sends back every price held for the event's wallet orders and deletes the
-   * event once none is held. True when the event is gone. Each provider call
-   * is made holding nothing: no transaction, no lock.
+   * Sends back every price held for the event's wallet orders, if the event
+   * had not started when its host left, and deletes the event once none is
+   * held. True when the event is gone. Each provider call is made holding
+   * nothing: no transaction, no lock.
    */
   async settle(eventId: string, deadline: number): Promise<boolean> {
+    const event = await this.prisma.event.findFirst({
+      where: { id: eventId, hostWawuId: ERASED_HOST },
+      select: { lastDecisionReason: true },
+    });
+    if (!event) return false;
+    const refunds = event.lastDecisionReason !== BEGUN_REASON;
     const orders = await this.prisma.eventOrder.findMany({
       where: { eventId, paymentProvider: 'wallet' },
       select: { id: true },
@@ -145,19 +181,26 @@ export class EventHostErasureService implements OnModuleInit {
     const ids = orders.map((o) => o.id);
     if (ids.length > 0) {
       if (await this.unconfirmed(ids)) return false;
-      const held = await this.prisma.walletHold.findMany({
-        where: {
-          kind: EVENT_TICKET_PAYMENT_KIND,
-          status: 'held',
-          targetId: { in: ids },
-        },
-        select: { id: true, targetId: true },
-        orderBy: { id: 'asc' },
-      });
+      // An event that had started keeps its holds held: nothing is sent back.
+      const held = refunds
+        ? await this.prisma.walletHold.findMany({
+            where: {
+              kind: EVENT_TICKET_PAYMENT_KIND,
+              status: 'held',
+              targetId: { in: ids },
+            },
+            select: { id: true, targetId: true },
+            orderBy: { id: 'asc' },
+          })
+        : [];
       for (const hold of held) {
         if (Date.now() > deadline) return false;
         try {
-          await this.holds.refund({ holdId: hold.id }, REFUND_REASON);
+          await this.holds.refund(
+            { holdId: hold.id },
+            REFUND_REASON,
+            RETURN_ALL,
+          );
         } catch (e) {
           // A hold that went the other way (a release under way), or one the
           // provider would not move now: the event waits for the sweep.
@@ -168,14 +211,16 @@ export class EventHostErasureService implements OnModuleInit {
       }
       // Every price that is back with its buyer, by this pass or an earlier
       // one (the hold sweep may have finished a move): the order says so.
-      const back = await this.prisma.walletHold.findMany({
-        where: {
-          kind: EVENT_TICKET_PAYMENT_KIND,
-          status: 'refunded',
-          targetId: { in: ids },
-        },
-        select: { targetId: true },
-      });
+      const back = refunds
+        ? await this.prisma.walletHold.findMany({
+            where: {
+              kind: EVENT_TICKET_PAYMENT_KIND,
+              status: 'refunded',
+              targetId: { in: ids },
+            },
+            select: { targetId: true },
+          })
+        : [];
       for (const hold of back) await this.markRefunded(hold.targetId);
       if (await this.stillHeld(ids)) return false;
       if (await this.unconfirmed(ids)) return false;
