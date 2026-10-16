@@ -74,8 +74,11 @@ const CONTENT_STATUSES: ReadonlySet<string> = new Set(
  *     `removed`) in one transaction; which pieces were hidden is remembered,
  *     so a cancel puts back those and no others.
  *  4. Phone push stops (INBOX-03), and WAWU ID starts its own grace period.
- * If anything fails after the freeze the wallet is let go again, and if that
- * fails too the `freezing` row stays so a cancel or a retry can do it.
+ * If anything fails after the freeze the wallet is let go again, unless a
+ * deletion is in force by then (a request that got in after this one froze it
+ * for its own 30 days). If the unfreeze fails too the `freezing` row stays so
+ * a cancel or a retry can do it, and if nobody does, the hourly sweep lets the
+ * wallet go once the row is older than FREEZING_STALE_MINUTES.
  *
  * Cancelling does the reverse, in the order that cannot lose anything: the
  * wallet first (if the provider does not answer, nothing else changed and the
@@ -185,7 +188,8 @@ export class AccountService {
       // lets it go.
       await this.abandon(
         wawuUserId,
-        wallet?.walletId ?? null,
+        wallet,
+        { scheduledAt, purgeAfter },
         e instanceof AccountDeletionBlockedError,
       );
       throw e;
@@ -195,7 +199,12 @@ export class AccountService {
       // A cancel, or another request's failure, took the row while the
       // wallet was being frozen. The wallet may have been frozen after that:
       // let it go, and say nothing was scheduled.
-      await this.abandon(wawuUserId, wallet?.walletId ?? null, false);
+      await this.abandon(
+        wawuUserId,
+        wallet,
+        { scheduledAt, purgeAfter },
+        false,
+      );
       throw new ServiceUnavailableException(CHANGED_MESSAGE);
     }
     if (promoted.outcome === 'scheduled') {
@@ -426,31 +435,46 @@ export class AccountService {
 
   /**
    * Lets the wallet go after a request that will not be scheduled, and closes
-   * its `freezing` row. If the provider does not answer the unfreeze the row
-   * stays (a cancel or a new request finishes the job). `surface`: the
-   * person must be told to try again (503) instead of what went wrong,
-   * because the wallet stays frozen; otherwise the caller rethrows its own
-   * error.
+   * its `freezing` row. The row goes first (one conditional delete), then the
+   * wallet is let go, unless a deletion is in force by now: a request that got
+   * in after this one froze the wallet for its own 30 days, and letting it go
+   * would break that promise. If the provider does not answer the unfreeze,
+   * the `freezing` row is put back (or written, if the request that failed
+   * had none) so the hourly sweep, a cancel or a new request finishes the
+   * job. `surface`: the person must be told to try again (503) instead of
+   * what went wrong, because the wallet stays frozen; otherwise the caller
+   * rethrows its own error.
    */
   private async abandon(
     wawuUserId: string,
-    walletId: string | null,
+    wallet: { walletId: string; provider: string } | null,
+    when: { scheduledAt: Date; purgeAfter: Date },
     surface: boolean,
   ): Promise<void> {
-    if (walletId) {
-      try {
-        await this.money.unfreeze(walletId);
-      } catch (error) {
-        this.logger.error(
-          `The wallet of ${wawuUserId} may be frozen and could not be unfrozen after a deletion request that did not go through: ${(error as Error).message}. The request is recorded (freezing); a cancel or a new request lets it go.`,
-        );
-        if (surface) throw error;
-        return;
-      }
-    }
     await this.prisma.accountDeletion.deleteMany({
       where: { wawuUserId, status: 'freezing' },
     });
+    if (!wallet) return;
+    const inForce = await this.prisma.accountDeletion.findFirst({
+      where: { wawuUserId, status: { in: ['scheduled', 'purging'] } },
+      select: { wawuUserId: true },
+    });
+    if (inForce) return;
+    try {
+      await this.money.unfreeze(wallet.walletId);
+    } catch (error) {
+      this.logger.error(
+        `The wallet of ${wawuUserId} may be frozen and could not be unfrozen after a deletion request that did not go through: ${(error as Error).message}. The request is recorded (freezing); the hourly sweep, a cancel or a new request lets it go.`,
+      );
+      try {
+        await this.record(wawuUserId, wallet, when);
+      } catch (writeError) {
+        this.logger.error(
+          `Could not record the stranded wallet of ${wawuUserId}: ${(writeError as Error).message}`,
+        );
+      }
+      if (surface) throw error;
+    }
   }
 
   private async refreeze(wawuUserId: string, walletId: string): Promise<void> {

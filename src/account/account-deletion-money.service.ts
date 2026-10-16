@@ -203,6 +203,15 @@ export class AccountDeletionMoneyService {
     }
   }
 
+  /**
+   * True when the provider this server runs holds a wallet that a stored row
+   * names (its `provider` column; null is Fintava). A server acts only on rows
+   * of its own provider (R-39): another's wallet id is never sent here.
+   */
+  holdsWalletOf(rowProviderName: string | null | undefined): boolean {
+    return isRowOf(this.provider.name, rowProviderName);
+  }
+
   /** Freezes the wallet: it can neither send nor receive. Idempotent. */
   async freeze(walletId: string): Promise<FreezeOutcome> {
     if (!this.provider.freezeWallet) return { done: false };

@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { AccountPurgeService } from '../account-purge/account-purge.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PointsService } from '../points/points.service';
+import { FREEZING_STALE_MS } from './account-deletion-config';
 import {
   AccountDeletionMoneyService,
   type DeletionBlocker,
@@ -19,6 +20,8 @@ export interface DeletionSweepResult {
   blocked: number;
   /** The Hub's data is gone but WAWU ID did not answer; asked again next pass. */
   identityPending: number;
+  /** A stranded `freezing` row: the wallet was let go and the row removed. */
+  unfrozen: number;
 }
 
 type DueDeletion = {
@@ -54,6 +57,16 @@ type DueDeletion = {
  *  6. Marks the row `purged`, only if it is still `purging`. The row stays as
  *     the record that it ran.
  *
+ * Before those, one more step (round 3): a `freezing` row older than
+ * FREEZING_STALE_MS belongs to a request that died (its freeze answer was
+ * lost, and the unfreeze right after failed too), so nobody will retry it and
+ * its wallet would stay frozen for good. The sweep takes the row (touches
+ * it, so a second server leaves it alone), lets the wallet go through the
+ * wallet seam, and deletes the row only while it is still the row it took
+ * and still `freezing`. If the provider does not answer the row stays and
+ * the next pass tries again. A row naming another provider's wallet is left
+ * as it is (a server acts only on its own provider's rows).
+ *
  * Every write to the row names the status it expects. Every step is safe to
  * repeat, so two servers running the pass at once, or a pass that stopped
  * halfway, do no harm.
@@ -75,9 +88,9 @@ export class AccountDeletionSweepService {
   async sweep(): Promise<void> {
     try {
       const r = await this.runOnce();
-      if (r.purged + r.blocked + r.identityPending > 0) {
+      if (r.purged + r.blocked + r.identityPending + r.unfrozen > 0) {
         this.logger.log(
-          `Account deletions: ${r.purged} purged, ${r.blocked} kept for money or points, ${r.identityPending} waiting for WAWU ID`,
+          `Account deletions: ${r.purged} purged, ${r.blocked} kept for money or points, ${r.identityPending} waiting for WAWU ID, ${r.unfrozen} wallets let go`,
         );
       }
     } catch (e) {
@@ -95,7 +108,17 @@ export class AccountDeletionSweepService {
       purged: 0,
       blocked: 0,
       identityPending: 0,
+      unfrozen: 0,
     };
+    // A request that died after freezing leaves its wallet frozen; let it go.
+    // Never stops the purge below.
+    try {
+      result.unfrozen = await this.releaseStaleFreezing(now, limit);
+    } catch (e) {
+      this.logger.error(
+        `Letting go of stranded wallets stopped: ${(e as Error).message}`,
+      );
+    }
     // Due ones, and the ones an earlier pass claimed but could not finish
     // (WAWU ID down, a table that would not clear): those carry on.
     const due = await this.prisma.accountDeletion.findMany({
@@ -123,6 +146,72 @@ export class AccountDeletionSweepService {
       }
     }
     return result;
+  }
+
+  /**
+   * Round 3 (verifier R2-1): `freezing` rows nobody retried. Returns how many
+   * wallets were let go and rows removed.
+   */
+  private async releaseStaleFreezing(
+    now: Date,
+    limit: number,
+  ): Promise<number> {
+    const cutoff = new Date(now.getTime() - FREEZING_STALE_MS);
+    const stale = await this.prisma.accountDeletion.findMany({
+      where: { status: 'freezing', updatedAt: { lte: cutoff } },
+      orderBy: { updatedAt: 'asc' },
+      take: limit,
+      select: { wawuUserId: true, walletId: true, walletProvider: true },
+    });
+    let released = 0;
+    for (const row of stale) {
+      try {
+        if (await this.releaseOne(row, now, cutoff)) released += 1;
+      } catch (e) {
+        // The provider did not answer: the row stays, the next pass asks again.
+        this.logger.error(
+          `Wallet of ${row.wawuUserId} is still frozen by a deletion request that never finished (${(e as Error).message}); asking again next pass`,
+        );
+      }
+    }
+    return released;
+  }
+
+  private async releaseOne(
+    row: {
+      wawuUserId: string;
+      walletId: string | null;
+      walletProvider: string | null;
+    },
+    now: Date,
+    cutoff: Date,
+  ): Promise<boolean> {
+    const id = row.wawuUserId;
+    if (row.walletId && !this.money.holdsWalletOf(row.walletProvider)) {
+      this.logger.warn(
+        `A deletion request of ${id} left a wallet of another provider frozen; left for the server that runs it`,
+      );
+      return false;
+    }
+    // Take the row: touching it (while it is still stale and `freezing`)
+    // keeps a second server's pass off it, and marks the version we hold.
+    const taken = await this.prisma.accountDeletion.updateMany({
+      where: { wawuUserId: id, status: 'freezing', updatedAt: { lte: cutoff } },
+      data: { updatedAt: now },
+    });
+    if (taken.count !== 1) return false;
+    if (row.walletId) await this.money.unfreeze(row.walletId);
+    // Only the row we took: a request that took it over meanwhile has touched
+    // it, and its row is its own.
+    const gone = await this.prisma.accountDeletion.deleteMany({
+      where: { wawuUserId: id, status: 'freezing', updatedAt: now },
+    });
+    if (gone.count === 1) {
+      this.logger.log(
+        `A deletion request of ${id} never finished; its wallet was let go and the request dropped`,
+      );
+    }
+    return gone.count === 1;
   }
 
   private async purgeOne(
