@@ -25482,6 +25482,68 @@
         ]
       }
     },
+    "/api/hub/schools/courses/{id}/apply-link": {
+      "get": {
+        "operationId": "SchoolLinkController_link",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolApplyLinkView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The link SC9 prints. Records nothing.",
+        "tags": [
+          "SchoolLink"
+        ]
+      }
+    },
+    "/api/hub/schools/courses/{id}/apply-click": {
+      "post": {
+        "operationId": "SchoolLinkController_click",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolApplyLinkView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One tap on \"Continue to their site\": records one click, answers with the link to open.",
+        "tags": [
+          "SchoolLink"
+        ]
+      }
+    },
     "/api/hub/communities/mine": {
       "get": {
         "operationId": "CommunityRoomsController_mine",
@@ -47817,6 +47879,25 @@
         },
         "required": [
           "items"
+        ]
+      },
+      "SchoolApplyLinkView": {
+        "type": "object",
+        "properties": {
+          "courseId": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "courseId",
+          "code",
+          "url"
         ]
       },
       "PublicSchoolCard": {
