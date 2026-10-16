@@ -13,6 +13,7 @@ import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { StorageService, type UploadAllowanceView } from './storage.service';
 import { PresignUploadDto } from './dto/presign-upload.dto';
 import { ConfirmUploadDto } from './dto/confirm-upload.dto';
+import { GatesPublishing } from '../plans/publishing-offers.interceptor';
 
 /**
  * POST /uploads/presign — hands the authenticated caller a short-lived PUT
@@ -22,6 +23,11 @@ import { ConfirmUploadDto } from './dto/confirm-upload.dto';
  *
  * Any signed-in account may request one; the object key is namespaced by the
  * caller's own wawuId so accounts cannot collide or overwrite each other.
+ *
+ * A file for a product (folder `content/preview` or `content/full`) needs a
+ * running tier, or a tick that has not ended, and a free place for one more
+ * product (TIER-02): otherwise 402 `tier_required` or `product_limit_reached`
+ * with the offers. Every other folder is open to any signed-in account.
  */
 @UseGuards(WawuAuthGuard)
 @Controller('uploads')
@@ -30,6 +36,7 @@ export class StorageController {
 
   @Post('presign')
   @HttpCode(HttpStatus.OK)
+  @GatesPublishing()
   presign(@CurrentUser() user: WawuJwtClaims, @Body() dto: PresignUploadDto) {
     return this.storage.presignUpload(
       user.sub,

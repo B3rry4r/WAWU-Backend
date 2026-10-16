@@ -58,7 +58,7 @@ const TEST_REFRESH_SECRET = 'admin-content-review-refresh-secret-0123456789';
 const CREATOR = '1c000000-0000-4000-8000-0000000000c1';
 const CREATOR_STARTING_SLOTS = 3;
 /** The flat per-account cap — see src/common/creator-allowance.ts. */
-const CREATOR_SLOTS_TOTAL = 5;
+const CREATOR_SLOTS_TOTAL = 0;
 
 const PIECE_PENDING_OLD = '1c000000-0000-4000-8000-000000000001';
 const PIECE_PENDING_NEW = '1c000000-0000-4000-8000-000000000002';
@@ -338,8 +338,9 @@ describe('Admin content review contract', () => {
         handle: 'contract-content-creator',
         accountType: 'creator',
         slotsUsed: CREATOR_STARTING_SLOTS,
-        // Derived with the same uploadAllowanceFor() the app uses — never a
-        // second definition (law 13). Flat per account now, no tier ladder.
+        // What the publishing gate allows (TIER-02), read from the same
+        // PublishingAllowanceService the app uses — never a second definition
+        // (law 13). This creator holds no tier and no tick, so nothing.
         slotsTotal: CREATOR_SLOTS_TOTAL,
       });
       // Hazard H-5: the app synthesizes 'not_started' for a creator who has
