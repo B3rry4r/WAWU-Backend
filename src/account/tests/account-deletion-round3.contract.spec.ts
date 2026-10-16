@@ -288,7 +288,7 @@ describe('Delete account, round 3 (SETTINGS-06)', () => {
       });
       const result = await sweep.runOnce(new Date(), 100);
       expect(frozen(walletId)).toBe(false);
-      expect(await row(id)).toBeNull();
+      expect((await row(id))!.status).toBe('cancelled'); // round 7 (R6-1): closed, never deleted
       expect(result.unfrozen).toBeGreaterThanOrEqual(1);
       expect(
         await prisma.contentPiece.count({
@@ -336,7 +336,7 @@ describe('Delete account, round 3 (SETTINGS-06)', () => {
       await age(id, 60);
       const healed = await sweep.runOnce(new Date(), 100);
       expect(frozen(walletId)).toBe(false);
-      expect(await row(id)).toBeNull();
+      expect((await row(id))!.status).toBe('cancelled'); // round 7 (R6-1): closed, never deleted
       expect(healed.unfrozen).toBeGreaterThanOrEqual(1);
     });
 
@@ -369,7 +369,7 @@ describe('Delete account, round 3 (SETTINGS-06)', () => {
       const before = unfreezeCalls;
       await sweep.runOnce(new Date(), 100);
       expect(unfreezeCalls).toBe(before);
-      expect(await row(id)).toBeNull();
+      expect((await row(id))!.status).toBe('cancelled'); // round 7 (R6-1): closed, never deleted
     });
 
     it("a row of another provider's wallet is left exactly as it is", async () => {
@@ -416,7 +416,7 @@ describe('Delete account, round 3 (SETTINGS-06)', () => {
       // the first one's unfreeze land on the second one's wallet.
       expect(rb).toMatchObject({ ok: false, status: 503 });
       expect(frozen(walletId)).toBe(false);
-      expect(await row(id)).toBeNull();
+      expect((await row(id))!.status).toBe('cancelled'); // round 7 (R6-1): closed, never deleted
       // Asked again once the first is done: scheduled, frozen.
       expect((await attempt(id)).ok).toBe(true);
       const r = await row(id);
@@ -431,7 +431,7 @@ describe('Delete account, round 3 (SETTINGS-06)', () => {
       const only = await attempt(id);
       expect(only.ok).toBe(false);
       expect(frozen(walletId)).toBe(false);
-      expect(await row(id)).toBeNull();
+      expect((await row(id))!.status).toBe('cancelled'); // round 7 (R6-1): closed, never deleted
 
       // The unfreeze fails too: the row is there for the sweep to find.
       const second = await person();

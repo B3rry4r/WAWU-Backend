@@ -121,6 +121,6 @@ describe('SETTINGS-06 verifier: provider without freeze (Nuvion shape)', () => {
     console.log('N6', JSON.stringify(r), 'foreign', await left(foreign), 'legacy(null=fintava)', await left(legacy), 'own', await left(own));
     expect(await left(foreign)).toBe('freezing');
     expect(await left(legacy)).toBe('freezing');
-    expect(await left(own)).toBeNull();
+    expect(await left(own)).toBe('cancelled'); // round 7 (R6-1): closed, never deleted
   });
 });

@@ -30,6 +30,7 @@ import type { VerifyUnlockDto } from './dto/verify-unlock.dto';
 import type { UpdateContentDto } from './dto/update-content.dto';
 import type { MyContentFilter } from './dto/my-content-query.dto';
 import type { MyContentCounts, MyContentItem } from './dto/my-content.view';
+import { DELETED_CREATOR_ID } from './deleted-creator';
 
 /**
  * The commission rate, for every creator (conventions.md § Identity & format
@@ -193,10 +194,18 @@ export class ContentPieceService {
     }
     // Removed is gone for everyone, owner included — there is no undelete,
     // so an owner-exception here would resurrect a piece nothing else can see.
-    if (content.status === 'removed') {
+    // One kind of removed piece is still read by the people who paid for it:
+    // a sold piece whose creator deleted their account (owner ruling, 16 Oct
+    // 2026, SETTINGS-06). It belongs to DELETED_CREATOR_ID, and only a
+    // completed purchase opens it.
+    const keptForBuyers =
+      content.status === 'removed' &&
+      content.creatorWawuId === DELETED_CREATOR_ID;
+    if (content.status === 'removed' && !keptForBuyers) {
       throw new NotFoundException('Content not found');
     }
     if (
+      !keptForBuyers &&
       content.status !== 'live' &&
       content.creatorWawuId !== requesterWawuId
     ) {
@@ -206,6 +215,9 @@ export class ContentPieceService {
     const unlockedSet = await this.resolveUnlockedSet(requesterWawuId, [
       content.id,
     ]);
+    if (keptForBuyers && !unlockedSet.has(content.id)) {
+      throw new NotFoundException('Content not found');
+    }
     // SETTINGS-04: a piece by someone the caller blocked (or who blocked the
     // caller) is gone, with the same 404 as a piece that never existed. One
     // exception: somebody who already paid for it keeps their copy, because a

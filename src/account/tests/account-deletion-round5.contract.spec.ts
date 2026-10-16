@@ -272,7 +272,7 @@ describe('SETTINGS-06 round 5: one reconcile keeps the wallet and the deletion r
       // ten minutes on, the sweep lets it go
       await h.backdate(id, 11);
       await h.sweep.runOnce(new Date(), 50);
-      expect(await row(id)).toBeNull();
+      expect((await row(id))!.status).toBe('cancelled'); // round 7 (R6-1): closed, never deleted
       expect(frozen(walletId)).toBe(false);
     });
 
@@ -360,7 +360,7 @@ describe('SETTINGS-06 round 5: one reconcile keeps the wallet and the deletion r
       await h.backdate(p.id, 11);
       h.healthy(p.walletId);
       await h.sweep.runOnce(new Date(), 50);
-      expect(await row(p.id)).toBeNull();
+      expect((await row(p.id))!.status).toBe('cancelled'); // round 7 (R6-1): closed, never deleted
       expect(frozen(p.walletId)).toBe(false);
     });
 

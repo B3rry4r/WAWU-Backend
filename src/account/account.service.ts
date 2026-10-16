@@ -190,12 +190,9 @@ export class AccountService {
         };
         await this.money.unfreeze(existing.walletId);
       }
-      await this.prisma.accountDeletion.deleteMany({
-        where: {
-          wawuUserId,
-          status: 'freezing',
-          updatedAt: existing.updatedAt,
-        },
+      await this.closeFreezing({
+        wawuUserId,
+        updatedAt: existing.updatedAt,
       });
       existing = null;
     }
@@ -324,8 +321,17 @@ export class AccountService {
       // (round 6): a late freeze that landed after the cancel is let go here
       // instead of waiting for the hourly pass. Nothing was cancelled by this
       // call, so that is what it says.
+      //
+      // Not when a reconcile already confirmed it and the cancel is older than
+      // a request may run (round 7, verifier R6-4): SETTINGS-08 calls this at
+      // every sign-in of anyone who ever cancelled, and a confirmed wallet
+      // needs no provider call on that path.
       if (row?.status === 'cancelled') {
-        await this.money.reconcileWallet(wawuUserId);
+        const settled =
+          row.walletSyncedAt !== null &&
+          row.cancelledAt !== null &&
+          Date.now() - row.cancelledAt.getTime() >= FREEZING_STALE_MS;
+        if (!settled) await this.money.reconcileWallet(wawuUserId);
       }
       return { cancelled: false, walletUnfrozen: false, contentRestored: 0 };
     }
@@ -638,7 +644,7 @@ export class AccountService {
       scheduledAt: when.scheduledAt,
     };
     if (!wallet) {
-      await this.prisma.accountDeletion.deleteMany({ where: own });
+      await this.closeFreezing(own);
       return;
     }
     const inForce = await this.prisma.accountDeletion.findFirst({
@@ -653,7 +659,7 @@ export class AccountService {
       failure = error as Error;
     }
     if (!failure) {
-      await this.prisma.accountDeletion.deleteMany({ where: own });
+      await this.closeFreezing(own);
     } else {
       this.logger.error(
         `The wallet of ${wawuUserId} may be frozen and could not be unfrozen after a deletion request that did not go through: ${failure.message}. The request is recorded (freezing); the hourly sweep, a cancel or a new request lets it go.`,
@@ -661,6 +667,31 @@ export class AccountService {
       await this.keepStranded(wawuUserId, wallet, when);
     }
     if (failure && surface) throw failure;
+  }
+
+  /**
+   * Closes a `freezing` row that will not be scheduled: it becomes `cancelled`
+   * with `walletSyncedAt` null, and is never deleted (round 7, verifier R6-1).
+   * A freeze this request or a reconcile sent can still land after the
+   * unfreeze that followed it (the provider answers late), and with the row
+   * gone nothing would look at that wallet again. A cancelled row not yet
+   * confirmed is what the cancel route's reconcile and the hourly pass look
+   * at until a reconcile confirmed the wallet, so the late freeze is let go
+   * there. Only a row that is still `freezing` is touched, and `where` names
+   * which one.
+   */
+  private async closeFreezing(
+    where: Prisma.AccountDeletionWhereInput,
+  ): Promise<void> {
+    await this.prisma.accountDeletion.updateMany({
+      where: { ...where, status: 'freezing' },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        walletFrozenAt: null,
+        walletSyncedAt: null,
+      },
+    });
   }
 
   /**

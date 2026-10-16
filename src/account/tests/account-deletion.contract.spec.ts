@@ -485,9 +485,12 @@ describe('Delete account (SETTINGS-06)', () => {
       // request ends with finds no deletion row and confirms it (idempotent).
       expect(unfrozenCalls()).toBe(2);
       expect(wallets.get(walletId!)!.frozen).toBe(false);
-      expect(
-        await prisma.accountDeletion.count({ where: { wawuUserId: id } }),
-      ).toBe(0);
+      // Round 7 (R6-1): the request's row is closed (cancelled), never deleted,
+      // so a freeze that lands late still finds a row to be undone by.
+      const closed = await prisma.accountDeletion.findMany({
+        where: { wawuUserId: id },
+      });
+      expect(closed.map((r) => r.status)).toEqual(['cancelled']);
     });
   });
 

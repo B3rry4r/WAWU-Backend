@@ -5648,6 +5648,11 @@ model AccountDeletion {
   /// whatever this says). Cleared when a request takes the row over or a
   /// reconcile of a cancelled row could not be confirmed.
   walletSyncedAt  DateTime?
+  /// SETTINGS-06 round 7. The hourly pass claims a row before it asks the
+  /// provider about it. Future: a pass holds it until then (a second server
+  /// leaves it alone). Past: when the last pass finished with it, so the pass
+  /// takes the rows checked longest ago first. Null: never claimed.
+  reconcileClaimedUntil DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

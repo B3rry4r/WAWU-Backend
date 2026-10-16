@@ -354,7 +354,7 @@ describe('SETTINGS-06 round 4: a deletion in force keeps a frozen wallet, a canc
     await piece(q.id);
     const r = await sweep.runOnce(new Date(), 100);
     expect(r.unfrozen).toBe(1);
-    expect(await inForceOk(q.id, q.walletId)).toEqual({ row: undefined, frozen: false });
+    expect(await inForceOk(q.id, q.walletId)).toEqual({ row: 'cancelled', frozen: false }) // round 7 (R6-1): closed, never deleted;
     expect((await del(accounts, q.id)).ok).toBe(true);
     expect(await inForceOk(q.id, q.walletId)).toEqual({ row: 'scheduled', frozen: true });
   });
@@ -372,7 +372,7 @@ describe('SETTINGS-06 round 4: a deletion in force keeps a frozen wallet, a canc
     g.open();
     const r1 = await d1;
     expect(r1).toMatchObject({ ok: false, status: 409 });
-    expect(await inForceOk(id, walletId)).toEqual({ row: undefined, frozen: false });
+    expect(await inForceOk(id, walletId)).toEqual({ row: 'cancelled', frozen: false }) // round 7 (R6-1): closed, never deleted;
   });
 
   it('R3-4: a repeat DELETE freezes the wallet again while a cancel is in flight: the cancel still ends with the wallet unfrozen', async () => {

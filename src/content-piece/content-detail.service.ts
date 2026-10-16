@@ -10,6 +10,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { NotificationService } from '../notification/notification.service';
 import type { SetPreviewDto } from './dto/set-preview.dto';
+import { DELETED_CREATOR_ID } from './deleted-creator';
 
 /** The one wording for a piece that is missing, hidden or not the caller's. */
 const NOT_FOUND = 'Content not found';
@@ -148,14 +149,25 @@ export class ContentDetailService {
     const piece = await this.prisma.contentPiece.findUnique({
       where: { id: contentId },
     });
-    if (!piece || piece.status === 'removed') {
+    // A sold piece whose creator deleted their account stays readable to the
+    // people who paid for it (owner ruling, 16 Oct 2026, SETTINGS-06): hidden
+    // (`removed`), owned by DELETED_CREATOR_ID, opened only with a completed
+    // purchase. Every other removed piece is gone for everyone.
+    const keptForBuyers =
+      piece?.status === 'removed' && piece.creatorWawuId === DELETED_CREATOR_ID;
+    if (!piece || (piece.status === 'removed' && !keptForBuyers)) {
       throw new NotFoundException(NOT_FOUND);
     }
-    if (piece.status !== 'live' && piece.creatorWawuId !== viewer) {
+    if (
+      !keptForBuyers &&
+      piece.status !== 'live' &&
+      piece.creatorWawuId !== viewer
+    ) {
       throw new NotFoundException(NOT_FOUND);
     }
 
     const purchase = await this.completedPurchase(contentId, viewer);
+    if (keptForBuyers && !purchase) throw new NotFoundException(NOT_FOUND);
     // Same rule as GET /content/:id: somebody who already paid keeps their
     // copy after a block, so the detail of what they bought stays readable.
     if (!purchase) await this.assertNotHidden(viewer, piece.creatorWawuId);

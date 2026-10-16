@@ -1,4 +1,4 @@
--- Rollback for 20261022050000_account_deletion (SETTINGS-06). Run with: psql -1 -f rollback.sql
+-- Rollback for 20261024030000_account_deletion (SETTINGS-06). Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while a deletion is scheduled: dropping the
 -- table would forget which wallets are frozen and which content is hidden.
 DO $$
@@ -9,4 +9,4 @@ BEGIN
 END $$;
 DROP TABLE "AccountDeletionContent";
 DROP TABLE "AccountDeletion";
-DELETE FROM "_prisma_migrations" WHERE migration_name = '20261022050000_account_deletion';
+DELETE FROM "_prisma_migrations" WHERE migration_name = '20261024030000_account_deletion';

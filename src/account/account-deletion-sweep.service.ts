@@ -3,7 +3,13 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { AccountPurgeService } from '../account-purge/account-purge.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PointsService } from '../points/points.service';
-import { FREEZING_STALE_MS } from './account-deletion-config';
+import {
+  FREEZING_STALE_MS,
+  PASS_BATCH,
+  PASS_BUDGET_MS,
+  PASS_CLAIM_LEASE_MS,
+  PASS_OUTAGE_FAILURES,
+} from './account-deletion-config';
 import {
   AccountDeletionMoneyService,
   type DeletionBlocker,
@@ -24,9 +30,46 @@ export interface DeletionSweepResult {
   unfrozen: number;
   /** Rows in force, or cancelled and not yet confirmed, whose wallet the provider confirmed. */
   reconciled: number;
+  /**
+   * Why the pass stopped before every row was asked (round 7): `budget` (it ran
+   * out of time) or `outage` (the provider failed several times in a row). The
+   * rows it did not reach are asked first by the next pass. Null: it finished.
+   */
+  stopped: 'budget' | 'outage' | null;
 }
 
-const RECONCILE_PAGE = 100;
+/** What a pass may spend, and what it has seen (round 7). */
+export interface PassLimits {
+  budgetMs?: number;
+  outageAfter?: number;
+  batch?: number;
+}
+
+/** A pass's clock and its count of provider failures in a row. */
+class PassGuard {
+  private readonly startedAt = Date.now();
+  private failures = 0;
+  stopped: 'budget' | 'outage' | null = null;
+
+  constructor(
+    private readonly budgetMs: number,
+    private readonly outageAfter: number,
+  ) {}
+
+  /** True once no further row should be asked. */
+  halt(): boolean {
+    if (this.stopped) return true;
+    if (Date.now() - this.startedAt >= this.budgetMs) this.stopped = 'budget';
+    else if (this.failures >= this.outageAfter) this.stopped = 'outage';
+    return this.stopped !== null;
+  }
+
+  /** The provider failed (true) or answered (false) on the last row. */
+  saw(unreachable: boolean): void {
+    this.failures = unreachable ? this.failures + 1 : 0;
+  }
+}
+
 const RECONCILE_MAX = 5000;
 
 type DueDeletion = {
@@ -103,8 +146,18 @@ export class AccountDeletionSweepService {
     private readonly wawuId: WawuIdAccountGateway,
   ) {}
 
+  /** The cron entry: one pass at a time in this process (round 7, verifier R6-2). */
+  private running = false;
+
   @Cron(CronExpression.EVERY_HOUR, { name: 'account-deletion-purge' })
   async sweep(): Promise<void> {
+    if (this.running) {
+      this.logger.warn(
+        'Account deletion sweep: the last pass is still running; this hour is skipped',
+      );
+      return;
+    }
+    this.running = true;
     try {
       const r = await this.runOnce();
       if (r.purged + r.blocked + r.identityPending + r.unfrozen > 0) {
@@ -112,16 +165,26 @@ export class AccountDeletionSweepService {
           `Account deletions: ${r.purged} purged, ${r.blocked} kept for money or points, ${r.identityPending} waiting for WAWU ID, ${r.unfrozen} wallets let go, ${r.reconciled} wallets checked against their row`,
         );
       }
+      if (r.stopped) {
+        this.logger.warn(
+          r.stopped === 'outage'
+            ? `Account deletion sweep stopped early: the wallet provider failed ${PASS_OUTAGE_FAILURES} times in a row. The rows it did not reach are asked first next pass`
+            : `Account deletion sweep stopped early: it used its ${Math.round(PASS_BUDGET_MS / 60000)} minutes. The rows it did not reach are asked first next pass`,
+        );
+      }
     } catch (e) {
       this.logger.error(
         `Account deletion sweep failed: ${(e as Error).message}`,
       );
+    } finally {
+      this.running = false;
     }
   }
 
   async runOnce(
     now: Date = new Date(),
     limit = 20,
+    limits: PassLimits = {},
   ): Promise<DeletionSweepResult> {
     const result: DeletionSweepResult = {
       purged: 0,
@@ -129,54 +192,177 @@ export class AccountDeletionSweepService {
       identityPending: 0,
       unfrozen: 0,
       reconciled: 0,
+      stopped: null,
     };
+    const guard = new PassGuard(
+      limits.budgetMs ?? PASS_BUDGET_MS,
+      limits.outageAfter ?? PASS_OUTAGE_FAILURES,
+    );
+    const batch = limits.batch ?? PASS_BATCH;
+    // Rows claimed before this moment are free to claim; rows this pass has
+    // finished with carry a later time, so it never takes one twice.
+    const passStart = new Date();
     // Accounts this pass has already reconciled (their last step did it).
     const done = new Set<string>();
     // A request that died after freezing leaves its wallet frozen; let it go.
     // Never stops the purge below.
     try {
-      result.unfrozen = await this.releaseStaleFreezing(now, limit, done);
+      result.unfrozen = await this.releaseStaleFreezing(
+        now,
+        limit,
+        done,
+        guard,
+      );
     } catch (e) {
       this.logger.error(
         `Letting go of stranded wallets stopped: ${(e as Error).message}`,
       );
     }
     // Due ones, and the ones an earlier pass claimed but could not finish
-    // (WAWU ID down, a table that would not clear): those carry on.
-    const due = await this.prisma.accountDeletion.findMany({
-      where: {
-        OR: [
-          { status: 'scheduled', purgeAfter: { lte: now } },
-          { status: 'purging' },
-        ],
-      },
-      orderBy: { purgeAfter: 'asc' },
-      take: limit,
-      select: { wawuUserId: true, purgeAttempts: true, status: true },
-    });
-    for (const row of due) {
-      done.add(row.wawuUserId);
+    // (WAWU ID down, a table that would not clear): those carry on. Claimed
+    // first (round 7), so a second server's pass leaves them to this one.
+    try {
+      const lease = this.leaseEnd();
+      const due = await this.claimDue(now, limit, passStart, lease);
+      const finished: string[] = [];
       try {
-        const outcome = await this.purgeOne(row, now);
-        if (outcome !== 'skipped') result[outcome] += 1;
-      } catch (e) {
-        // One account never stops the rest.
-        result.blocked += 1;
-        await this.blocked(row, now, 'error');
-        this.logger.error(
-          `Purge of ${row.wawuUserId} stopped: ${(e as Error).message}`,
+        for (const row of due) {
+          if (guard.halt()) break;
+          done.add(row.wawuUserId);
+          finished.push(row.wawuUserId);
+          try {
+            const outcome = await this.purgeOne(row, now, guard);
+            if (outcome !== 'skipped') result[outcome] += 1;
+          } catch (e) {
+            // One account never stops the rest.
+            result.blocked += 1;
+            await this.blocked(row, now, 'error');
+            this.logger.error(
+              `Purge of ${row.wawuUserId} stopped: ${(e as Error).message}`,
+            );
+          }
+        }
+      } finally {
+        await this.release(finished, lease, true);
+        await this.release(
+          due.map((d) => d.wawuUserId).filter((id) => !finished.includes(id)),
+          lease,
+          false,
         );
       }
+    } catch (e) {
+      this.logger.error(
+        `Taking due deletions stopped: ${(e as Error).message}`,
+      );
     }
     // Every row that can owe its wallet a change: the wallet follows the row.
     try {
-      result.reconciled = await this.reconcileOwed(done);
+      result.reconciled = await this.reconcileOwed(
+        done,
+        passStart,
+        batch,
+        guard,
+      );
     } catch (e) {
       this.logger.error(
         `Reconciling deletions stopped: ${(e as Error).message}`,
       );
     }
+    result.stopped = guard.stopped;
     return result;
+  }
+
+  private leaseEnd(): Date {
+    return new Date(Date.now() + PASS_CLAIM_LEASE_MS);
+  }
+
+  /**
+   * Takes the due and purging rows nobody holds (oldest check first, then
+   * oldest due date): one statement, so no lock or transaction is held
+   * afterwards. `SKIP LOCKED` keeps two servers off the same row.
+   */
+  private async claimDue(
+    now: Date,
+    take: number,
+    passStart: Date,
+    lease: Date,
+  ): Promise<DueDeletion[]> {
+    const rows = await this.prisma.$queryRaw<
+      (DueDeletion & { purgeAfter: Date; prev: Date | null })[]
+    >`
+      WITH picked AS (
+        SELECT "wawuUserId", "reconcileClaimedUntil" AS "prev" FROM "AccountDeletion"
+        WHERE (("status" = 'scheduled' AND "purgeAfter" <= ${now}) OR "status" = 'purging')
+          AND ("reconcileClaimedUntil" IS NULL OR "reconcileClaimedUntil" < ${passStart})
+        ORDER BY "reconcileClaimedUntil" ASC NULLS FIRST, "purgeAfter" ASC
+        LIMIT ${take}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "AccountDeletion" a SET "reconcileClaimedUntil" = ${lease}
+      FROM picked p WHERE a."wawuUserId" = p."wawuUserId"
+      RETURNING a."wawuUserId", a."purgeAttempts", a."status", a."purgeAfter", p."prev"`;
+    // RETURNING has no order of its own: oldest check first, then oldest due.
+    return rows.sort(
+      (x, y) =>
+        (x.prev?.getTime() ?? -Infinity) - (y.prev?.getTime() ?? -Infinity) ||
+        x.purgeAfter.getTime() - y.purgeAfter.getTime(),
+    );
+  }
+
+  /** Takes the rows that can owe their wallet a change, oldest check first. */
+  private async claimOwed(
+    take: number,
+    passStart: Date,
+    lease: Date,
+  ): Promise<{ wawuUserId: string }[]> {
+    const rows = await this.prisma.$queryRaw<
+      { wawuUserId: string; prev: Date | null }[]
+    >`
+      WITH picked AS (
+        SELECT "wawuUserId", "reconcileClaimedUntil" AS "prev" FROM "AccountDeletion"
+        WHERE ("status" IN ('freezing', 'scheduled', 'purging')
+               OR ("status" = 'cancelled' AND "walletSyncedAt" IS NULL))
+          AND ("reconcileClaimedUntil" IS NULL OR "reconcileClaimedUntil" < ${passStart})
+        ORDER BY "reconcileClaimedUntil" ASC NULLS FIRST, "wawuUserId" ASC
+        LIMIT ${take}
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "AccountDeletion" a SET "reconcileClaimedUntil" = ${lease}
+      FROM picked p WHERE a."wawuUserId" = p."wawuUserId"
+      RETURNING a."wawuUserId", p."prev"`;
+    return rows.sort(
+      (x, y) =>
+        (x.prev?.getTime() ?? -Infinity) - (y.prev?.getTime() ?? -Infinity) ||
+        (x.wawuUserId < y.wawuUserId
+          ? -1
+          : x.wawuUserId > y.wawuUserId
+            ? 1
+            : 0),
+    );
+  }
+
+  /**
+   * Lets go of rows this pass claimed: asked (`checked`: the time is now, so
+   * the next pass takes them last) or not reached (null, so the next pass takes
+   * them first). Only the claim this pass made, and without touching
+   * `updatedAt`, which a `freezing` row's age is measured from.
+   */
+  private async release(
+    ids: string[],
+    lease: Date,
+    checked: boolean,
+  ): Promise<void> {
+    if (ids.length === 0) return;
+    const stamp = checked ? new Date() : null;
+    try {
+      await this.prisma.$executeRaw`
+        UPDATE "AccountDeletion" SET "reconcileClaimedUntil" = ${stamp}
+        WHERE "wawuUserId" = ANY(${ids}) AND "reconcileClaimedUntil" = ${lease}`;
+    } catch (e) {
+      this.logger.error(
+        `Could not let go of ${ids.length} claimed deletion row(s): ${(e as Error).message}`,
+      );
+    }
   }
 
   /**
@@ -193,52 +379,65 @@ export class AccountDeletionSweepService {
    *    cancelled row costs no provider call per hour; a reconcile that could
    *    not be confirmed leaves it (or puts it back) unset.
    *
-   * Returns how many wallets the provider confirmed. Pages go by id (greater
-   * than the last one seen), so rows that change while the pass runs are
-   * neither skipped nor repeated; the cap is a guard, not a limit anyone
-   * should meet.
+   * Round 7 (verifier R6-2, R6-3): rows are claimed a batch at a time (a second
+   * server's pass skips the rows this one holds), the oldest check first (so a
+   * budget or the cap never starves the same rows), and the pass stops when its
+   * time budget is used or the provider has failed several times in a row (the
+   * claimed rows it did not reach are let go as not asked, so the next pass
+   * takes them first).
+   *
+   * Returns how many wallets the provider confirmed.
    */
-  private async reconcileOwed(done: Set<string>): Promise<number> {
+  private async reconcileOwed(
+    done: Set<string>,
+    passStart: Date,
+    batch: number,
+    guard: PassGuard,
+  ): Promise<number> {
     let confirmed = 0;
-    let last = '';
     let seen = 0;
-    while (seen < RECONCILE_MAX) {
-      const rows = await this.prisma.accountDeletion.findMany({
-        where: {
-          wawuUserId: { gt: last },
-          OR: [
-            { status: { in: ['freezing', 'scheduled', 'purging'] } },
-            { status: 'cancelled', walletSyncedAt: null },
-          ],
-        },
-        orderBy: { wawuUserId: 'asc' },
-        take: RECONCILE_PAGE,
-        select: { wawuUserId: true },
-      });
+    while (seen < RECONCILE_MAX && !guard.halt()) {
+      const lease = this.leaseEnd();
+      const rows = await this.claimOwed(batch, passStart, lease);
       if (rows.length === 0) return confirmed;
-      for (const { wawuUserId } of rows) {
-        if (done.has(wawuUserId)) continue;
-        done.add(wawuUserId);
-        const r = await this.money.reconcileWallet(wawuUserId);
-        if (r.done) confirmed += 1;
+      const finished: string[] = [];
+      try {
+        for (const { wawuUserId } of rows) {
+          if (guard.halt()) break;
+          finished.push(wawuUserId);
+          if (done.has(wawuUserId)) continue;
+          done.add(wawuUserId);
+          const r = await this.money.reconcileWallet(wawuUserId);
+          guard.saw(r.failed);
+          if (r.done) confirmed += 1;
+        }
+      } finally {
+        await this.release(finished, lease, true);
+        await this.release(
+          rows.map((r) => r.wawuUserId).filter((id) => !finished.includes(id)),
+          lease,
+          false,
+        );
       }
       seen += rows.length;
-      last = rows[rows.length - 1].wawuUserId;
     }
-    this.logger.warn(
-      `Reconciling deletions stopped at ${RECONCILE_MAX} rows; the rest wait for the next pass`,
-    );
+    if (seen >= RECONCILE_MAX) {
+      this.logger.warn(
+        `Reconciling deletions stopped at ${RECONCILE_MAX} rows; the rest wait for the next pass`,
+      );
+    }
     return confirmed;
   }
 
   /**
    * Round 3 (verifier R2-1): `freezing` rows nobody retried. Returns how many
-   * wallets were let go and rows removed.
+   * wallets were let go and rows closed.
    */
   private async releaseStaleFreezing(
     now: Date,
     limit: number,
     done: Set<string>,
+    guard: PassGuard,
   ): Promise<number> {
     const cutoff = new Date(now.getTime() - FREEZING_STALE_MS);
     const stale = await this.prisma.accountDeletion.findMany({
@@ -249,11 +448,14 @@ export class AccountDeletionSweepService {
     });
     let released = 0;
     for (const row of stale) {
+      if (guard.halt()) break;
       done.add(row.wawuUserId);
       try {
         if (await this.releaseOne(row, now, cutoff)) released += 1;
+        guard.saw(false);
       } catch (e) {
         // The provider did not answer: the row stays, the next pass asks again.
+        guard.saw(true);
         this.logger.error(
           `Wallet of ${row.wawuUserId} is still frozen by a deletion request that never finished (${(e as Error).message}); asking again next pass`,
         );
@@ -297,8 +499,18 @@ export class AccountDeletionSweepService {
       // touched it, and its row is its own. Not removed while the unfreeze is
       // unanswered.
       if (!failure) {
-        const gone = await this.prisma.accountDeletion.deleteMany({
+        // Never deleted (round 7, verifier R6-1): a freeze that lands after
+        // this unfreeze must still find a row to be undone by. Cancelled and
+        // not yet confirmed, it is looked at by the pass until a reconcile
+        // confirmed the wallet.
+        const gone = await this.prisma.accountDeletion.updateMany({
           where: { wawuUserId: id, status: 'freezing', updatedAt: now },
+          data: {
+            status: 'cancelled',
+            cancelledAt: new Date(),
+            walletFrozenAt: null,
+            walletSyncedAt: null,
+          },
         });
         removed = gone.count === 1;
       }
@@ -326,20 +538,23 @@ export class AccountDeletionSweepService {
   private async purgeOne(
     row: DueDeletion,
     now: Date,
+    guard: PassGuard,
   ): Promise<'purged' | 'blocked' | 'identityPending' | 'skipped'> {
     try {
-      return await this.purgeSteps(row, now);
+      return await this.purgeSteps(row, now, guard);
     } finally {
       // Whatever the steps did (purged, kept, a cancel won, WAWU ID did not
       // answer), the wallet ends as the row says: frozen for a purging or
       // purged one, unfrozen for one a cancel took (round 5, R4-2).
-      await this.money.reconcileWallet(row.wawuUserId);
+      const r = await this.money.reconcileWallet(row.wawuUserId);
+      guard.saw(r.failed);
     }
   }
 
   private async purgeSteps(
     row: DueDeletion,
     now: Date,
+    guard: PassGuard,
   ): Promise<'purged' | 'blocked' | 'identityPending' | 'skipped'> {
     const id = row.wawuUserId;
 
@@ -349,6 +564,7 @@ export class AccountDeletionSweepService {
       // behind, and money that arrives before the freeze is seen below. A
       // wallet this server cannot freeze keeps the account for the next pass.
       const frozen = await this.money.reconcileWallet(id);
+      guard.saw(frozen.failed);
       if (frozen.failed) {
         await this.blocked(row, now, 'provider_unreachable');
         return 'blocked';

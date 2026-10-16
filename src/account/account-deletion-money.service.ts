@@ -318,9 +318,19 @@ export class AccountDeletionMoneyService {
     named?: { walletId: string; provider: string | null } | null,
   ): Promise<ReconcileOutcome> {
     let want: ReconcileOutcome['want'] = null;
+    // The wallets this call has asked the provider about (round 7, verifier
+    // R6-1): carried into every later round as if the caller had named them. A
+    // freeze sent under a row can land after the row changed, so the round
+    // that follows must still be able to undo it when no row is left to name
+    // the wallet.
+    const acted = new Map<
+      string,
+      { walletId: string; provider: string | null }
+    >();
+    const namedNow = () => [...(named ? [named] : []), ...acted.values()];
     try {
       for (let round = 1; round <= RECONCILE_ROUNDS; round++) {
-        const plan = await this.planFor(wawuUserId, named ?? null);
+        const plan = await this.planFor(wawuUserId, namedNow());
         want = plan.want;
         if (plan.wallets.length === 0) {
           // Nothing this server may act on. A cancelled row with no wallet to
@@ -334,6 +344,7 @@ export class AccountDeletionMoneyService {
         let done = true;
         let failure: Error | null = null;
         for (const wallet of plan.wallets) {
+          acted.set(wallet.walletId, wallet);
           try {
             const o =
               plan.want === 'frozen'
@@ -346,13 +357,13 @@ export class AccountDeletionMoneyService {
             break;
           }
         }
-        const after = await this.planFor(wawuUserId, named ?? null);
+        const after = await this.planFor(wawuUserId, namedNow());
         if (!sameWork(plan, after)) continue; // the row changed meanwhile: act on it as it is now
         if (failure) {
           this.logger.error(
             `The wallet of ${wawuUserId} could not be ${plan.want === 'frozen' ? 'frozen' : 'unfrozen'} to match its deletion (${failure.message}); the hourly pass asks again`,
           );
-          await this.keepOwed(wawuUserId, plan, named ?? null);
+          await this.keepOwed(wawuUserId, plan, namedNow()[0] ?? null);
           return { want, done: false, failed: true };
         }
         if (done && plan.status === 'cancelled') {
@@ -386,7 +397,7 @@ export class AccountDeletionMoneyService {
    */
   private async planFor(
     wawuUserId: string,
-    named: { walletId: string; provider: string | null } | null,
+    named: { walletId: string; provider: string | null }[],
   ): Promise<ReconcilePlan> {
     const [row, current] = await Promise.all([
       this.prisma.accountDeletion.findUnique({
@@ -414,12 +425,13 @@ export class AccountDeletionMoneyService {
       if (row.walletId) {
         add({ walletId: row.walletId, provider: row.walletProvider });
       }
-      add(named);
+      for (const n of named) add(n);
       add(current);
     } else {
-      // No row: only the wallet the caller froze is let go, never the person's
-      // own wallet that nobody here froze.
-      add(named);
+      // No row: only the wallets the caller froze (or this reconcile asked
+      // about, round 7) are let go, never the person's own wallet that nobody
+      // here froze.
+      for (const n of named) add(n);
     }
     const all = [...known.values()];
     const wallets = all.filter((w) => this.holdsWalletOf(w.provider));
@@ -432,7 +444,7 @@ export class AccountDeletionMoneyService {
     let want: ReconcilePlan['want'] = null;
     if (wallets.length > 0) {
       if (row) want = row.status === 'cancelled' ? 'unfrozen' : 'frozen';
-      else if (named) want = 'unfrozen';
+      else if (named.length > 0) want = 'unfrozen';
     }
     return {
       want,

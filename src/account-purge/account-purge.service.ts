@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { rowsToAnonymise, rowsToDelete } from './account-data-map';
 import { POINTS_PURGE_MODELS, purgePersonPoints } from '../points/points-purge';
+import { DELETED_CREATOR_ID } from '../content-piece/deleted-creator';
+import { objectKeyFrom } from '../storage/storage.service';
 
 /** What a bought content piece is called once its creator's account is gone. */
 export const REMOVED_CONTENT_TITLE = 'Removed content';
@@ -9,8 +11,8 @@ export const REMOVED_CONTENT_TITLE = 'Removed content';
 /**
  * Rows that must outlive their owner's delete because another table points at
  * them with `onDelete: Restrict`: only the unreferenced ones are deleted, the
- * rest are handled on purpose (`anonymiseSoldContent`). A Purchase is what a
- * buyer paid for (schema: Purchase.content).
+ * rest are handled on purpose (`keepSoldContent`, `stripReferencedContent`). A
+ * Purchase is what a buyer paid for (schema: Purchase.content).
  */
 const KEPT_WHEN_REFERENCED: Record<string, Record<string, unknown>> = {
   ContentPiece: { purchases: { none: {} } },
@@ -49,6 +51,12 @@ export class AccountPurgeService {
    * Purchase restricts their deletion (a financial record), so they are
    * hidden and stripped of the person's words instead and the purge counts
    * that as done.
+   *
+   * Round 7 (owner ruling, 16 Oct 2026): `keptForBuyers` counts the pieces a
+   * buyer paid for (a completed purchase). They are NOT deleted or stripped:
+   * buyers keep them, readable in their library, hidden from everything
+   * public, with the creator's id taken off (`deleted-creator.ts`). Their
+   * files are kept too.
    */
   async purge(wawuUserId: string): Promise<{
     deleted: Record<string, number>;
@@ -81,6 +89,19 @@ export class AccountPurgeService {
       );
     }
 
+    // Content a buyer paid for stays (owner ruling, round 7), and so do its
+    // files: found before anything is deleted, so the storage rows below can
+    // leave those files alone.
+    let sold: SoldContent = { ids: [], keys: [] };
+    try {
+      sold = await this.findSoldContent(wawuUserId);
+    } catch (e) {
+      this.logger.error(
+        `Purge could not look for bought content of ${wawuUserId}: ${(e as Error).message}`,
+      );
+      failed.push('ContentPiece.creatorWawuId');
+    }
+
     for (const rule of rowsToDelete()) {
       if (pointsModels.has(rule.model)) continue;
       const delegateName =
@@ -105,6 +126,9 @@ export class AccountPurgeService {
           where: {
             [rule.column]: wawuUserId,
             ...(KEPT_WHEN_REFERENCED[rule.model] ?? {}),
+            ...(rule.model === 'StorageObject' && sold.keys.length > 0
+              ? { key: { notIn: sold.keys } }
+              : {}),
           },
         });
         if (count > 0) {
@@ -122,14 +146,26 @@ export class AccountPurgeService {
       }
     }
 
-    // Content a buyer paid for could not be deleted above (Purchase.content
-    // is Restrict). It goes dark and loses everything that names the person.
+    // Content a buyer paid for was left standing above (Purchase.content is
+    // Restrict, and the owner ruled buyers keep it). It stays whole, hidden
+    // from everything public, and loses the creator.
     let keptForBuyers = 0;
     try {
-      keptForBuyers = await this.anonymiseSoldContent(wawuUserId);
+      keptForBuyers = await this.keepSoldContent(sold);
     } catch (e) {
       this.logger.error(
         `Purge failed on ContentPiece (bought) for ${wawuUserId}: ${(e as Error).message}`,
+      );
+      failed.push('ContentPiece.creatorWawuId');
+    }
+    // A piece with only an unfinished or failed purchase was nobody's: it
+    // cannot be deleted either (the row is restricted), so it goes dark and
+    // loses what names the person, as before.
+    try {
+      await this.stripReferencedContent(wawuUserId);
+    } catch (e) {
+      this.logger.error(
+        `Purge failed on ContentPiece (referenced) for ${wawuUserId}: ${(e as Error).message}`,
       );
       failed.push('ContentPiece.creatorWawuId');
     }
@@ -187,19 +223,82 @@ export class AccountPurgeService {
   }
 
   /**
-   * The person's content pieces that are still there after the delete above
-   * and have a Purchase: kept, because a buyer's receipt points at them. Each
-   * is hidden (`removed`) and loses its title, description, preview, files,
-   * tags and slug, and its lessons, frames and preview settings go, so
-   * nothing a reader could see names the person. Idempotent.
+   * The person's pieces with a completed purchase of type `content` (a buyer
+   * paid, and the library lists it), and the storage keys of their files:
+   * preview, full file and photo frames.
    */
-  private async anonymiseSoldContent(wawuUserId: string): Promise<number> {
-    const sold = await this.prisma.contentPiece.findMany({
+  private async findSoldContent(wawuUserId: string): Promise<SoldContent> {
+    const rows = await this.prisma.contentPiece.findMany({
+      where: {
+        creatorWawuId: wawuUserId,
+        purchases: { some: { type: 'content', status: 'completed' } },
+      },
+      select: {
+        id: true,
+        previewAssetUrl: true,
+        fullAssetUrl: true,
+        frames: { select: { url: true } },
+      },
+    });
+    const keys = new Set<string>();
+    for (const r of rows) {
+      for (const stored of [
+        r.previewAssetUrl,
+        r.fullAssetUrl,
+        ...r.frames.map((f) => f.url),
+      ]) {
+        if (stored) keys.add(objectKeyFrom(stored));
+      }
+    }
+    return { ids: rows.map((r) => r.id), keys: [...keys] };
+  }
+
+  /**
+   * Owner ruling (16 Oct 2026): buyers keep the content they paid for. Each
+   * sold piece stays exactly as the buyers bought it (title, text, files,
+   * lessons, frames) and is hidden from everything public (`removed`); what
+   * names the creator goes: their id on the piece becomes DELETED_CREATOR_ID,
+   * the slug and tags (discovery words) are cleared, and the storage rows of
+   * its files are filed under that id too, so they are not the person's and
+   * not deleted. Idempotent: a second run finds no piece under the person.
+   */
+  private async keepSoldContent(sold: SoldContent): Promise<number> {
+    if (sold.ids.length === 0) return 0;
+    await this.prisma.$transaction([
+      ...sold.ids.map((id) =>
+        this.prisma.contentPiece.update({
+          where: { id },
+          data: {
+            status: 'removed',
+            creatorWawuId: DELETED_CREATOR_ID,
+            slug: `removed-${id}`,
+            tags: [],
+            specializations: [],
+          },
+        }),
+      ),
+      this.prisma.storageObject.updateMany({
+        where: { key: { in: sold.keys } },
+        data: { wawuUserId: DELETED_CREATOR_ID },
+      }),
+    ]);
+    return sold.ids.length;
+  }
+
+  /**
+   * The person's pieces that are still there after the delete above and have a
+   * Purchase that never completed (pending or failed): kept because the row is
+   * restricted, hidden (`removed`), and stripped of title, description,
+   * preview, files, tags and slug, with their lessons, frames and preview
+   * settings, so nothing a reader could see names the person. Idempotent.
+   */
+  private async stripReferencedContent(wawuUserId: string): Promise<number> {
+    const left = await this.prisma.contentPiece.findMany({
       where: { creatorWawuId: wawuUserId, purchases: { some: {} } },
       select: { id: true },
     });
-    if (sold.length === 0) return 0;
-    const ids = sold.map((p) => p.id);
+    if (left.length === 0) return 0;
+    const ids = left.map((p) => p.id);
     await this.prisma.$transaction([
       this.prisma.courseLesson.deleteMany({
         where: { contentId: { in: ids } },
@@ -231,3 +330,6 @@ export class AccountPurgeService {
     return ids.length;
   }
 }
+
+/** The pieces a purge keeps for their buyers, and the storage keys of their files. */
+type SoldContent = { ids: string[]; keys: string[] };

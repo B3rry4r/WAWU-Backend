@@ -270,7 +270,7 @@ describe('Delete account, round 2 (SETTINGS-06)', () => {
       faults.failBalanceWhenFrozen = false;
       expect(first).toMatchObject({ ok: false, status: 503 });
       expect(wallets.get(walletId)!.frozen).toBe(false);
-      expect(await row(id)).toBeNull();
+      expect((await row(id))!.status).toBe('cancelled'); // round 7 (R6-1): closed, never deleted
       expect((await accounts.cancelDeletion(id)).cancelled).toBe(false);
 
       wallets.get(walletId)!.balanceKobo = 5000;
@@ -281,7 +281,7 @@ describe('Delete account, round 2 (SETTINGS-06)', () => {
         code: 'account_deletion_blocked',
       });
       expect(wallets.get(walletId)!.frozen).toBe(false);
-      expect(await row(id)).toBeNull();
+      expect((await row(id))!.status).toBe('cancelled'); // round 7 (R6-1): closed, never deleted
     });
 
     it('the freeze answer is lost after the provider froze it: the wallet is let go again', async () => {
@@ -291,7 +291,7 @@ describe('Delete account, round 2 (SETTINGS-06)', () => {
       faults.lostFreezeAnswer = false;
       expect(first).toMatchObject({ ok: false, status: 503 });
       expect(wallets.get(walletId)!.frozen).toBe(false);
-      expect(await row(id)).toBeNull();
+      expect((await row(id))!.status).toBe('cancelled'); // round 7 (R6-1): closed, never deleted
     });
 
     it('the unfreeze fails too: the request stays recorded, and a cancel lets the wallet go once the provider answers', async () => {
@@ -349,7 +349,7 @@ describe('Delete account, round 2 (SETTINGS-06)', () => {
         code: 'account_deletion_blocked',
       });
       expect(wallets.get(walletId)!.frozen).toBe(false);
-      expect(await row(id)).toBeNull();
+      expect((await row(id))!.status).toBe('cancelled'); // round 7 (R6-1): closed, never deleted
     });
 
     it('the unfreeze fails too, then the person asks again with an empty wallet: it schedules, frozen, with one date', async () => {
@@ -499,7 +499,11 @@ describe('Delete account, round 2 (SETTINGS-06)', () => {
   });
 
   describe('purged means the purge fully worked', () => {
-    it('content a buyer paid for is hidden and anonymised, noted on the row, and WAWU ID is asked only after', async () => {
+    it('content a buyer paid for is kept whole for the buyer, hidden and without its creator, noted on the row, and WAWU ID is asked only after', async () => {
+      // Round 7, OWNER RULING (16 Oct 2026): buyers keep what they paid for.
+      // Round 2 asserted the opposite (the piece stripped to "Removed content",
+      // lessons and frames deleted); this is the one test whose expectations
+      // that ruling changes. The unsold piece going is unchanged.
       const { id } = await person(0);
       const sold = await piece(id);
       const unsold = await piece(id);
@@ -528,12 +532,12 @@ describe('Delete account, round 2 (SETTINGS-06)', () => {
       expect((await attempt(id)).ok).toBe(true);
       await due(id);
 
-      let seenAtFinalize: { title: string; status: string } | null = null;
+      let seenAtFinalize: { creator: string; status: string } | null = null;
       gateway.finalizeAccountDeletion.mockImplementation(async () => {
         const p = await prisma.contentPiece.findUnique({
           where: { id: sold.id },
         });
-        seenAtFinalize = p && { title: p.title, status: p.status };
+        seenAtFinalize = p && { creator: p.creatorWawuId, status: p.status };
         return { finalized: true };
       });
       const result = await sweep.runOnce();
@@ -542,35 +546,29 @@ describe('Delete account, round 2 (SETTINGS-06)', () => {
       const left = await prisma.contentPiece.findUniqueOrThrow({
         where: { id: sold.id },
       });
+      // what the buyer paid for is intact
       expect(left).toMatchObject({
         status: 'removed',
-        title: 'Removed content',
-        description: '',
-        previewAssetUrl: '',
-        fullAssetUrl: null,
-        tags: [],
-        slug: `removed-${sold.id}`,
+        title: sold.title,
+        description: sold.description,
+        previewAssetUrl: sold.previewAssetUrl,
+        fullAssetUrl: sold.fullAssetUrl,
+        creatorWawuId: 'deleted-account',
       });
-      for (const text of [
-        left.title,
-        left.description,
-        left.slug,
-        left.previewAssetUrl,
-        ...left.tags,
-      ]) {
-        expect(text.toLowerCase()).not.toContain('ada');
-      }
+      // what names the creator is gone
+      expect(left.slug).toBe(`removed-${sold.id}`);
+      expect(left.tags).toEqual([]);
       expect(
         await prisma.courseLesson.count({ where: { contentId: sold.id } }),
-      ).toBe(0);
+      ).toBe(1);
       expect(
         await prisma.contentFrame.count({ where: { contentId: sold.id } }),
-      ).toBe(0);
+      ).toBe(1);
       expect(
         await prisma.contentPiece.count({ where: { id: unsold.id } }),
       ).toBe(0);
       expect(seenAtFinalize).toEqual({
-        title: 'Removed content',
+        creator: 'deleted-account',
         status: 'removed',
       });
       const done = await row(id);
@@ -578,6 +576,8 @@ describe('Delete account, round 2 (SETTINGS-06)', () => {
       expect(done?.purgeNote).toBe(
         '1 content piece(s) that buyers paid for were kept hidden and anonymised',
       );
+      await prisma.purchase.deleteMany({ where: { contentId: sold.id } });
+      await prisma.contentPiece.deleteMany({ where: { id: sold.id } });
     });
 
     it('a table that would not clear keeps the row purging, WAWU ID is not asked, and the next pass finishes', async () => {
