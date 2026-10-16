@@ -108,7 +108,7 @@ interface ReconcilePlan {
   /** The row's status; null: no row. */
   status: string | null;
   cancelledAt: Date | null;
-  /** A wallet is known but belongs to another provider: nothing was asked. */
+  /** A wallet is known but another provider holds it: nothing was asked. */
   foreign: boolean;
 }
 
