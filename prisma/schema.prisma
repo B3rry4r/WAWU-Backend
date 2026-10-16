@@ -5351,6 +5351,66 @@ model PushStoppedAccount {
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
+/// A DELETION THAT WAITS 30 DAYS (task SETTINGS-06, R-17)
+///
+/// One row per account that asked to be deleted (`DELETE /account`). The
+/// request is refused while money is in the person's wallet, a hold is open or
+/// earnings are waiting (Z6, R-11, R-19); otherwise the person's Naira wallet
+/// is frozen at the provider (it can neither send nor receive, so nothing new
+/// reaches it), their content is hidden, and `purgeAfter` is 30 days out.
+/// `POST /account/cancel-deletion` (WAWU ID calls it when the person signs in
+/// during the 30 days, SETTINGS-08) unfreezes the wallet, brings the content
+/// back and sets `status` to cancelled. After `purgeAfter` the purge sweep
+/// looks at the money once more (a balance, a hold or an earning that
+/// appeared keeps the account, `purgeBlockedBy` says why), releases any held
+/// points, deletes the Hub's data (AccountPurgeService), asks WAWU ID to
+/// anonymise the identity and sets `status` to purged. The row is kept after
+/// the purge as the record that it ran (it holds no personal detail).
+///
+/// `status`: scheduled, cancelled or purged. No balance is stored here: the
+/// provider's balance is the only balance (R-1).
+/// ─────────────────────────────────────────────────────────────────────────
+model AccountDeletion {
+  wawuUserId      String    @id
+  status          String    @default("scheduled")
+  scheduledAt     DateTime  @default(now())
+  /// The end of the 30 days: the earliest the purge runs.
+  purgeAfter      DateTime
+  /// The wallet frozen for the 30 days, and who froze it. Null: the person had
+  /// no wallet, or the provider cannot freeze (nothing was frozen).
+  walletId        String?
+  walletProvider  String?
+  walletFrozenAt  DateTime?
+  cancelledAt     DateTime?
+  purgedAt        DateTime?
+  /// The purge sweep's last look found money (or the provider unreachable):
+  /// when it first did, what it found, how many looks have been made.
+  purgeBlockedAt  DateTime?
+  purgeBlockedBy  String?
+  purgeAttempts   Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status, purgeAfter])
+}
+
+/// The content pieces a scheduled deletion hid, with the status each had, so
+/// a cancelled deletion puts back exactly those pieces and no others (a piece
+/// the person had already removed is not listed, so it stays removed). Deleted
+/// when the deletion is cancelled or the account is purged.
+model AccountDeletionContent {
+  id             String   @id @default(uuid())
+  wawuUserId     String
+  contentPieceId String
+  /// The piece's `status` before the deletion hid it.
+  priorStatus    String
+  createdAt      DateTime @default(now())
+
+  @@unique([wawuUserId, contentPieceId])
+  @@index([wawuUserId])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
 /// NUVION WEBHOOK EVENTS (task NUV-01)
 ///
 /// Every signed delivery Nuvion sends to `POST /api/hub/webhooks/nuvion`,

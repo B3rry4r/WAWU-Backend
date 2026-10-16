@@ -18445,8 +18445,41 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "account_deletion_blocked: money to settle first (reason.blockers, reason.balanceKobo).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDeletionBlockedBody"
+                }
+              }
+            }
           }
         },
+        "summary": "Asks to delete the account (R-17: it waits 30 days). Refused with\n`409 account_deletion_blocked` while the wallet holds money, a hold is\nopen or earnings are waiting (SETTINGS-06). `503 provider_unreachable`\nwhen the wallet provider does not answer, so \"empty\" is never guessed.",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/api/hub/account/cancel-deletion": {
+      "post": {
+        "operationId": "AccountController_cancelDeletion",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelDeletionResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cancels a deletion that is waiting (SETTINGS-06): the wallet is\nunfrozen, the content comes back and phone push resumes. WAWU ID calls\nit with the person's new token when they sign in during the 30 days\n(SETTINGS-08). Answers 200 `cancelled: false` when nothing was waiting.",
         "tags": [
           "Account"
         ]
@@ -18511,6 +18544,28 @@
         "summary": "Remove this phone (sign-out). Removing a token twice, or one that is not yours, is a 200 with `removed: false`.",
         "tags": [
           "PushToken"
+        ]
+      }
+    },
+    "/api/hub/me/points": {
+      "get": {
+        "operationId": "PointsController_mine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPointsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Balance, live lots with their end dates, the next end, the last 20 movements.",
+        "tags": [
+          "Points"
         ]
       }
     },
@@ -28208,28 +28263,6 @@
         ]
       }
     },
-    "/api/hub/me/points": {
-      "get": {
-        "operationId": "PointsController_mine",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MyPointsView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Balance, live lots with their end dates, the next end, the last 20 movements.",
-        "tags": [
-          "Points"
-        ]
-      }
-    },
     "/api/hub/plans": {
       "get": {
         "operationId": "PlansController_get",
@@ -32524,6 +32557,98 @@
       "DeleteAccountDto": {
         "type": "object",
         "properties": {}
+      },
+      "AccountDeletionBlockedReason": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "account_deletion_blocked"
+            ]
+          },
+          "blockers": {
+            "type": "array",
+            "description": "What to settle first. The app leads with `wallet_balance` (Withdraw).",
+            "items": {
+              "type": "string",
+              "enum": [
+                "wallet_balance",
+                "open_hold",
+                "waiting_earnings",
+                "payment_in_progress",
+                "cash_out_in_flight",
+                "wallet_opening"
+              ]
+            }
+          },
+          "balanceKobo": {
+            "type": "integer",
+            "description": "The wallet provider's balance in kobo, when the person has a wallet."
+          },
+          "openHolds": {
+            "type": "integer",
+            "description": "Holds open for or against the person (paid DMs, tickets, bills)."
+          },
+          "waitingEarnings": {
+            "type": "integer",
+            "description": "Sales whose share has not reached the person's wallet yet."
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence the app may show as it is."
+          }
+        },
+        "required": [
+          "code",
+          "blockers",
+          "openHolds",
+          "waitingEarnings",
+          "message"
+        ]
+      },
+      "AccountDeletionBlockedBody": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "null",
+            "nullable": true
+          },
+          "statusCode": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/AccountDeletionBlockedReason"
+          }
+        },
+        "required": [
+          "data",
+          "statusCode",
+          "message",
+          "reason"
+        ]
+      },
+      "CancelDeletionResponseDto": {
+        "type": "object",
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          },
+          "walletUnfrozen": {
+            "type": "boolean"
+          },
+          "contentRestored": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "cancelled",
+          "walletUnfrozen",
+          "contentRestored"
+        ]
       },
       "RegisterPushTokenDto": {
         "type": "object",
@@ -45140,6 +45265,135 @@
           "removed"
         ]
       },
+      "PointNextExpiryView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "number"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "points",
+          "expiresAt"
+        ]
+      },
+      "PointLotView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "granted": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "tier_bonus",
+              "pack",
+              "bump",
+              "referral",
+              "shortfall",
+              "returned"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "granted",
+          "source",
+          "label",
+          "expiresAt"
+        ]
+      },
+      "PointMovementView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "hold",
+              "grant",
+              "release",
+              "expire"
+            ]
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "label",
+          "reason",
+          "pending",
+          "createdAt"
+        ]
+      },
+      "MyPointsView": {
+        "type": "object",
+        "properties": {
+          "balance": {
+            "type": "number"
+          },
+          "nextExpiry": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PointNextExpiryView"
+              }
+            ],
+            "nullable": true
+          },
+          "lots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointLotView"
+            }
+          },
+          "lotCount": {
+            "type": "number"
+          },
+          "movements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointMovementView"
+            }
+          }
+        },
+        "required": [
+          "balance",
+          "nextExpiry",
+          "lots",
+          "lotCount",
+          "movements"
+        ]
+      },
       "CommentAuthor": {
         "type": "object",
         "properties": {
@@ -49068,135 +49322,6 @@
           "chats",
           "paidDms",
           "communities"
-        ]
-      },
-      "PointNextExpiryView": {
-        "type": "object",
-        "properties": {
-          "points": {
-            "type": "number"
-          },
-          "expiresAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "points",
-          "expiresAt"
-        ]
-      },
-      "PointLotView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "points": {
-            "type": "number"
-          },
-          "granted": {
-            "type": "number"
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "tier_bonus",
-              "pack",
-              "bump",
-              "referral",
-              "shortfall",
-              "returned"
-            ]
-          },
-          "label": {
-            "type": "string"
-          },
-          "expiresAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "points",
-          "granted",
-          "source",
-          "label",
-          "expiresAt"
-        ]
-      },
-      "PointMovementView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "points": {
-            "type": "number"
-          },
-          "label": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string",
-            "enum": [
-              "hold",
-              "grant",
-              "release",
-              "expire"
-            ]
-          },
-          "pending": {
-            "type": "boolean"
-          },
-          "createdAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "points",
-          "label",
-          "reason",
-          "pending",
-          "createdAt"
-        ]
-      },
-      "MyPointsView": {
-        "type": "object",
-        "properties": {
-          "balance": {
-            "type": "number"
-          },
-          "nextExpiry": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PointNextExpiryView"
-              }
-            ],
-            "nullable": true
-          },
-          "lots": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PointLotView"
-            }
-          },
-          "lotCount": {
-            "type": "number"
-          },
-          "movements": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PointMovementView"
-            }
-          }
-        },
-        "required": [
-          "balance",
-          "nextExpiry",
-          "lots",
-          "lotCount",
-          "movements"
         ]
       },
       "MeCountsView": {

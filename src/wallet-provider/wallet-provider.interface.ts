@@ -344,6 +344,15 @@ export interface ProviderBalance {
   bookedKobo: bigint;
 }
 
+/**
+ * Whether one person's wallet can send and receive (SETTINGS-06). A frozen
+ * wallet does neither; its balance can still be read.
+ */
+export interface ProviderWalletState {
+  walletId: string;
+  frozen: boolean;
+}
+
 /** WAWU's own account at the provider (its merchant or operational account). */
 export interface ProviderPlatformAccount extends ProviderBalance {
   accountNumber: string;
@@ -739,6 +748,23 @@ export interface WalletProvider {
    * `WalletProviderError` when the provider cannot say.
    */
   isSameAccount?(a: string, b: string): Promise<boolean>;
+
+  // Freezing (SETTINGS-06, R-17)
+  /**
+   * Freezes one person's wallet: it can neither send nor receive, and its
+   * balance can still be read. Used for the 30 days between asking to delete
+   * an account and the deletion. Optional, like `isSameAccount`: a provider
+   * without it (Nuvion, until it is built) leaves the wallet as it is, and
+   * the caller says so; it never guesses. Idempotent at Fintava. Fails with a
+   * `WalletProviderError`; an unknown outcome (`recordMayExist`) may have
+   * frozen it.
+   */
+  freezeWallet?(
+    wallet: { walletId: string },
+    reason: string,
+  ): Promise<ProviderWalletState>;
+  /** Undoes `freezeWallet`. Optional and idempotent in the same way. */
+  unfreezeWallet?(wallet: { walletId: string }): Promise<ProviderWalletState>;
 }
 
 /** One PIN reset code for one person, as an `OtpSender` sends it (NUV-01). */

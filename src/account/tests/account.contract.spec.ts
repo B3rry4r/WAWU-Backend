@@ -87,9 +87,20 @@ describe('Account (contract)', () => {
       (await prisma.pushStoppedAccount.count({
         where: { userWawuId: PLAIN_USER_SUB },
       })) > 0;
+    // SETTINGS-06: DELETE /account now records the wait in AccountDeletion,
+    // and a second call keeps its date. Start every run with none.
+    await prisma.accountDeletion.deleteMany({
+      where: { wawuUserId: PLAIN_USER_SUB },
+    });
   });
 
   afterAll(async () => {
+    await prisma.accountDeletionContent.deleteMany({
+      where: { wawuUserId: PLAIN_USER_SUB },
+    });
+    await prisma.accountDeletion.deleteMany({
+      where: { wawuUserId: PLAIN_USER_SUB },
+    });
     if (!hadPushStop) {
       await prisma.pushStoppedAccount.deleteMany({
         where: { userWawuId: PLAIN_USER_SUB },
@@ -103,7 +114,7 @@ describe('Account (contract)', () => {
   });
 
   describe('DELETE /account', () => {
-    it('valid request -> 200 with {deletionScheduledAt} ~48h out, and orchestrates WAWU ID deletion', async () => {
+    it('valid request -> 200 with {deletionScheduledAt} 30 days out (R-17), and orchestrates WAWU ID deletion', async () => {
       const before = Date.now();
 
       const res = await request(app.getHttpServer())
@@ -118,8 +129,9 @@ describe('Account (contract)', () => {
       });
 
       const scheduledAt = new Date(res.body.data.deletionScheduledAt).getTime();
-      const expectedMs = 48 * 60 * 60 * 1000;
-      // Allow generous test-runtime slack either side of the 48h mark.
+      // R-17 (SETTINGS-06): the wait is 30 days, no longer 48 hours.
+      const expectedMs = 30 * 24 * 60 * 60 * 1000;
+      // Allow generous test-runtime slack either side of the 30-day mark.
       expect(scheduledAt).toBeGreaterThan(before + expectedMs - 60_000);
       expect(scheduledAt).toBeLessThan(before + expectedMs + 60_000);
 
