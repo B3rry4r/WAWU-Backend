@@ -105,7 +105,7 @@ export class ServiceApplicationService {
       {
         label: 'Application started',
         occurredAt: new Date().toISOString(),
-        note: `${dto.names.length} name choice(s) submitted for ${dto.registrationType} — ${dto.nature}.`,
+        note: `${dto.names.length} name choice(s) submitted for ${dto.registrationType}: ${dto.nature}.`,
       },
     ];
 
@@ -239,7 +239,7 @@ export class ServiceApplicationService {
       where: { id: application.id, status: 'awaiting_payment' },
       data: {
         status: 'submitted',
-        statusLabel: 'Submitted — under review',
+        statusLabel: 'Submitted, under review',
         amountPaid: CAC_FEE_NAIRA,
         timeline: timeline as unknown as object[],
         // The column is @db.Date, so only the calendar day is stored.
@@ -267,7 +267,7 @@ export class ServiceApplicationService {
         title: 'NEPC export registration',
         reference: this.generateReference('NEPC'),
         status: 'submitted',
-        statusLabel: 'Submitted — under review',
+        statusLabel: 'Submitted, under review',
         amountPaid: null,
         timeline: timeline as unknown as object[],
         // The apply screen requires three uploads and this dropped all of

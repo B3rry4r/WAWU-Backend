@@ -425,6 +425,31 @@ model EventPass {
   @@index([wawuUserId])
 }
 
+/// A product being drafted (TIER-02, VF2): everything about it except its files,
+/// kept free for any creator account until they publish it. A draft is not a
+/// product: it holds no file, no storage and no place against the tier's
+/// product count. Publishing it (POST /product-drafts/:id/publish, which needs
+/// a running tier and a free place) creates the ContentPiece and deletes the
+/// draft in one transaction. Every field but the title is nullable because a
+/// draft may be saved half written. Its own table, with no relation to
+/// ContentPiece, so no feed, count or review queue can ever see a draft.
+model ProductDraft {
+  id              String       @id @default(uuid())
+  wawuUserId      String
+  title           String
+  contentType     ContentType?
+  description     String?
+  category        String?
+  specializations String[]     @default([])
+  tags            String[]     @default([])
+  accessType      AccessType?
+  price           Int?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([wawuUserId, createdAt])
+}
+
 /// One featured work on somebody's profile (ME-16): what M33 shows under
 /// "Featured works", M34 lists and M35 opens.
 ///
@@ -3992,6 +4017,16 @@ model FintavaWallet {
   /// only on rows of the provider it runs, so after a rollback one
   /// provider's ids are never sent to the other (MONEY-20 finding 2).
   provider      String?  @default("fintava")
+  /// The provider's own name for the account's level (`TIER_2`), as its last
+  /// balance read said it (WALLET-23). For ops only: the app is never shown it.
+  accountTier   String?
+  /// What the account may send in a Lagos day, in kobo, as of `limitsReadAt`
+  /// (WALLET-23); null when the provider named no limit. A copy for the
+  /// limit check and the W35 row, refreshed on every balance read; the
+  /// provider stays the one that enforces it.
+  dailyLimitKobo BigInt?
+  /// When `accountTier` and `dailyLimitKobo` were last read. Null: never read.
+  limitsReadAt  DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }

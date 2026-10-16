@@ -91,6 +91,15 @@ const AWKWARD = [
   'Twin School',
   'Twin School',
   'Twin School',
+  // FIX-28: `[ \ ] ^ _` and the back-quote sit between the capitals and the
+  // lower-case letters in code point order. Lower-casing the name puts them
+  // BEFORE every letter ("a_b" before "ab"); upper-casing it would put them
+  // AFTER every letter ("AB" before "A_B"). These names are the ones that tell
+  // the two apart, so a `lower(` turned into `upper(` fails this spec.
+  'AB School',
+  'A_B School',
+  '_Under First',
+  '`Quote First',
 ];
 
 /** Rising with the lower-case name first: the reverse of the promised order. */
@@ -293,6 +302,21 @@ describe('The schools list is in one order on every database (FIX-27)', () => {
     const twins = ['CASE TWIN', 'Case Twin', 'case twin'].map(at);
     expect(twins[1]).toBe(twins[0] + 1);
     expect(twins[2]).toBe(twins[1] + 1);
+  });
+
+  it('punctuation between Z and a sorts before the letters, because the name is lower-cased, not upper-cased (FIX-28)', async () => {
+    const names = (await page('limit=50')).items.map((s) => s.name);
+    const at = (n: string) => names.indexOf(n);
+    expect(at('A_B School')).toBeGreaterThanOrEqual(0);
+    // lower-cased: "a_b school" < "ab school" (the underscore is below b);
+    // upper-cased it would be "AB SCHOOL" < "A_B SCHOOL"
+    expect(at('A_B School')).toBeLessThan(at('AB School'));
+    // lower-cased: the underscore and the back-quote are below every letter
+    // and above every digit; upper-cased they would sit after Z
+    expect(at('100 Women Coders')).toBeLessThan(at('_Under First'));
+    expect(at('_Under First')).toBeLessThan(at('`Quote First'));
+    expect(at('`Quote First')).toBeLessThan(at('altSchool Africa'));
+    expect(at('_Under First')).toBeLessThan(at('A_B School'));
   });
 
   it('a name outside the plane sorts by code point, after a flag, on every database', async () => {
