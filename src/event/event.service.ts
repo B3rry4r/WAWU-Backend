@@ -18,6 +18,7 @@ import type {
   EventModel,
   EventSpeakerModel,
 } from '../../generated/prisma/models';
+import type { TicketTier } from '../../generated/prisma/enums';
 import type { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import {
@@ -26,7 +27,13 @@ import {
   type EventSaveView,
   type EventView,
 } from './event-view.type';
-import type { CreateEventDto, EventSpeakerDto } from './dto/create-event.dto';
+import type {
+  CreateEventDto,
+  EventSpeakerDto,
+  NewEventTicketTypeDto,
+} from './dto/create-event.dto';
+import { eventOptions, type EventOptionsView } from './event-options';
+import type { EventFromPricesView } from './event-view.type';
 import type { UpdateEventDto } from './dto/update-event.dto';
 import type { ListEventsQueryDto } from './dto/list-events-query.dto';
 
@@ -38,14 +45,12 @@ type EventWithSpeakers = EventModel & { speakers: EventSpeakerModel[] };
  * docs/00_PLATFORM_MAP.md; both documents were amended with that date rather
  * than left contradicting this code.
  *
- * ── NO MONEY, ANYWHERE IN THIS FILE ──────────────────────────────────────────
- * What the spec cut was event TICKETS. This service never reads or writes a
- * price, an amount, a Purchase, a CreditSpend, a CreatorEarnings figure or a
- * Flutterwave reference, and it must not start: "Going" is an interest signal,
- * one row per person, and that is the entire economics of this feature. An
- * organiser who charges for entry does it on their own page behind
- * `externalUrl`. Anything that would put a naira figure on an event is a spec
- * conflict — stop and flag it rather than building it.
+ * ── NO MONEY MOVES IN THIS FILE ───────────────────────────────────────────────
+ * This service never charges, refunds or credits anybody, and never writes a
+ * Purchase, a CreditSpend, a CreatorEarnings figure or a payment reference.
+ * The one price it writes is a ticket type's, when a host sends the tickets
+ * with the event in one submit (EVENTS-02); selling them is
+ * EventTicketingService's. "Going" is an interest signal, one row per person.
  *
  * ── WHAT USERS CAN AND CANNOT DO ─────────────────────────────────────────────
  * Any authenticated WAWU user may submit an event; it is created `pending` and
@@ -266,12 +271,71 @@ export class EventService {
     return (await this.toViews([event], userWawuId))[0];
   }
 
-  /** POST /events — created `pending`, always. There is no path here that publishes. */
+  /**
+   * GET /events/from-prices: for each published event asked about, the cheapest
+   * tier a person can buy right now. A tier counts when its sales have opened,
+   * have not closed (a null end means "until the event begins", as `buy`
+   * decides) and it has stock left. `buy` is the rule; this mirrors it.
+   * Events that are not published, or are called off, are left out, so the
+   * route says nothing about a submission still in the queue.
+   */
+  async fromPrices(ids: string[]): Promise<EventFromPricesView> {
+    if (ids.length === 0) return { prices: [] };
+    const now = new Date();
+    const events = await this.prisma.event.findMany({
+      where: { id: { in: ids }, status: 'published', cancelledAt: null },
+      select: {
+        id: true,
+        startsAt: true,
+        ticketTypes: {
+          select: {
+            priceNaira: true,
+            quantity: true,
+            sold: true,
+            salesStartAt: true,
+            salesEndAt: true,
+          },
+        },
+      },
+    });
+    return {
+      prices: events.map((e) => {
+        const buyable = e.ticketTypes.filter(
+          (t) =>
+            t.sold < t.quantity &&
+            (!t.salesStartAt || now >= t.salesStartAt) &&
+            now <= (t.salesEndAt ?? e.startsAt),
+        );
+        return {
+          eventId: e.id,
+          priceFromNaira: buyable.length
+            ? Math.min(...buyable.map((t) => t.priceNaira))
+            : null,
+        };
+      }),
+    };
+  }
+
+  /** GET /events/options: the label for every category, format and kind. */
+  options(): EventOptionsView {
+    return eventOptions();
+  }
+
+  /**
+   * POST /events: created `pending`, always. There is no path here that
+   * publishes.
+   *
+   * The ticket types, when sent, are created in the same write as the event
+   * (EVENTS-02), so a host never has an event in the queue whose tickets
+   * failed to save, and the reviewer sees both at once.
+   */
   async create(userWawuId: string, dto: CreateEventDto): Promise<EventView> {
     await this.assertMayHost(userWawuId);
     const startsAt = new Date(dto.startsAt);
     const endsAt = dto.endsAt ? new Date(dto.endsAt) : null;
     assertWindowOrdered(startsAt, endsAt);
+    const ticketTypes = ticketTypeRows(dto.ticketTypes);
+    const address = dto.address?.trim() || null;
 
     const created = await this.prisma.event.create({
       data: {
@@ -286,7 +350,7 @@ export class EventService {
         endsAt,
         timeLabel: dto.timeLabel?.trim() ?? null,
         timezone: dto.timezone?.trim() ?? null,
-        location: dto.location.trim(),
+        location: dto.location?.trim() || address || '',
         address: dto.address?.trim() ?? null,
         venueName: dto.venueName?.trim() || null,
         externalUrl: dto.externalUrl ?? null,
@@ -298,6 +362,9 @@ export class EventService {
         // named here — there is no argument this method could ever take that
         // would make it anything else.
         speakers: { create: speakerRows(dto.speakers) },
+        ...(ticketTypes.length > 0
+          ? { ticketTypes: { create: ticketTypes } }
+          : {}),
       },
       include: { speakers: { orderBy: { order: 'asc' } } },
     });
@@ -371,9 +438,7 @@ export class EventService {
           ...(dto.timezone !== undefined
             ? { timezone: dto.timezone.trim() || null }
             : {}),
-          ...(dto.location !== undefined
-            ? { location: dto.location.trim() }
-            : {}),
+          ...locationUpdate(existing, dto),
           ...(dto.address !== undefined
             ? { address: dto.address.trim() || null }
             : {}),
@@ -652,6 +717,47 @@ function assertWindowOrdered(startsAt: Date, endsAt: Date | null): void {
   if (endsAt && endsAt.getTime() < startsAt.getTime()) {
     throw new BadRequestException('endsAt cannot be before startsAt.');
   }
+}
+
+/**
+ * `location` on an edit. Sent, it is stored as sent. Not sent, it follows a
+ * new `address` only when it was filled from the address in the first place
+ * (empty, or equal to the old address), so a location a host typed is never
+ * overwritten by an address edit.
+ */
+function locationUpdate(
+  existing: { location: string; address: string | null },
+  dto: UpdateEventDto,
+): { location?: string } {
+  if (dto.location !== undefined) return { location: dto.location.trim() };
+  if (dto.address === undefined) return {};
+  const derived =
+    existing.location === '' || existing.location === existing.address;
+  return derived ? { location: dto.address.trim() } : {};
+}
+
+/**
+ * The ticket types sent with a new event, as rows.
+ *
+ * A type with no `tier` is `free` at a price of 0 (R-8) and `regular` at any
+ * other price. A type that names its tier is held to the rules
+ * PUT /events/:id/tickets applies, with the same words.
+ */
+function ticketTypeRows(types: NewEventTicketTypeDto[] | undefined) {
+  return (types ?? []).map((t) => {
+    const name = t.name.trim();
+    const tier: TicketTier =
+      t.tier ?? (t.priceNaira === 0 ? 'free' : 'regular');
+    if (tier !== 'free' && t.priceNaira <= 0) {
+      throw new BadRequestException(
+        `"${name}" is a paid tier, so it needs a price above zero. Use the Free tier for free tickets.`,
+      );
+    }
+    if (tier === 'free' && t.priceNaira !== 0) {
+      throw new BadRequestException('A free ticket cannot have a price.');
+    }
+    return { tier, name, priceNaira: t.priceNaira, quantity: t.quantity };
+  });
 }
 
 /** Speaker rows, ordered by the position they arrived in unless one says otherwise. */

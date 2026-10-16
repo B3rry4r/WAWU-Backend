@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { AccountDeletionResponse } from '../common/types';
+import { PushTokenService } from '../push/push-token.service';
 import {
   WAWU_ID_ACCOUNT_GATEWAY,
   type WawuIdAccountGateway,
@@ -24,6 +25,7 @@ export class AccountService {
     @Inject(WAWU_ID_ACCOUNT_GATEWAY)
     private readonly wawuIdGateway: WawuIdAccountGateway,
     private readonly prisma: PrismaService,
+    private readonly pushTokens: PushTokenService,
   ) {}
 
   async deleteAccount(wawuUserId: string): Promise<AccountDeletionResponse> {
@@ -56,6 +58,18 @@ export class AccountService {
       // if this write fails, same reasoning as the WAWU ID call below.
       this.logger.error(
         `Could not remove content for deleted account ${wawuUserId}: ${(error as Error).message}`,
+      );
+    }
+
+    // INBOX-03 (lead ruling, 7 Oct 2026): no phone push to an account whose
+    // deletion is scheduled. Its push tokens and queued pushes are deleted
+    // now, a token it registers later is not stored, and the sender skips it.
+    // Loud, not fatal, like the content step above.
+    try {
+      await this.pushTokens.stopAccount(wawuUserId);
+    } catch (error) {
+      this.logger.error(
+        `Could not stop phone push for deleted account ${wawuUserId}: ${(error as Error).message}`,
       );
     }
 

@@ -1,4 +1,4 @@
-import type { FintavaBvnIdentity } from '../../fintava/fintava.interface';
+import type { ProviderIdentity } from '../../wallet-provider/wallet-provider.interface';
 
 /**
  * The BVN name, kept only as keyed hashes of its words (task WALLET-14), so
@@ -78,7 +78,7 @@ export function nameWords(raw: string | null | undefined): string[] {
  * payout account says so with `matchesBvnName: null`).
  */
 export function bvnNameKeys(
-  identity: Pick<FintavaBvnIdentity, 'firstName' | 'lastName'>,
+  identity: Pick<ProviderIdentity, 'firstName' | 'lastName'>,
   hash: NameHash,
   binding: NameBinding,
 ): BvnNameKeys | null {

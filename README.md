@@ -85,6 +85,61 @@ every table, so check `DATABASE_URL` first. Note that re-seeding alone does
 **not** repair a mutated seed row: `prisma/seed.ts` upserts with `update: {}`,
 so an existing row is left exactly as the last test run left it.
 
+## Local test stack
+
+One command starts and stops a whole local stack, so nobody builds one by hand.
+Full suites run in GitHub (OPS-CI) on every push to `wmt/**`, not locally: use a
+stack to run a single spec, or to drive the Hub, the web or the app in a browser.
+
+```bash
+scripts/dev/stack.sh up --name <n> --ports <a>-<b> [--with id,web,mobile] \
+    [--web <path>] [--id <path>] [--mobile <path>] [--rebuild] [--scratch <dir>]
+scripts/dev/stack.sh status --name <n>
+scripts/dev/stack.sh down   --name <n>
+```
+
+| Service | Port | Always? | What it is |
+| --- | --- | --- | --- |
+| Hub | `a` | yes | built from this checkout, database `<n>_wawu_hub_test`, migrations applied |
+| wawu-id | `a+1` | `--with id` | the real identity service from `--id`, database `<n>_wawu_id_test` |
+| web | `a+2` | `--with web` | production build of `--web` (`VERCEL_ENV=production`, so `/join` only), pointed at this Hub |
+| mobile | `a+3` | `--with mobile` | web export of `--mobile` with its own Metro cache, then a grep that only this stack's ports are baked in |
+| mock WAWU ID | `b` | yes | the mock the contract suite uses (`mock-wawu-id/`), on the last port of the range |
+
+- The Hub signs people in through wawu-id when `id` is on, and through the mock
+  otherwise. Payments use the repo's own Flutterwave mock (no key is set).
+  Fintava points at a closed port on this machine. `scripts/dev/block-net.cjs`
+  is preloaded into the Hub and wawu-id and refuses any request to a host that
+  is not this machine, so nothing reaches a real provider or a wawuafrica.com host.
+- The range must hold every port asked for and end above them, for example
+  `--ports 6531-6534 --with id,web` (Hub 6531, id 6532, web 6533, mock 6534) or
+  `--ports 6537-6538` (Hub 6537, mock 6538).
+- Names are lower case letters, digits and `_` (agents use their brief's prefix,
+  for example `ostk1`). Each name has its own databases, logs and PIDs.
+- Logs go to `<scratch>/<n>/logs/`, PIDs to `<scratch>/<n>/pids`. `<scratch>` is
+  `--scratch`, else `$STACK_SCRATCH`, else `${TMPDIR:-/tmp}/wawu-stack`; give
+  `status` and `down` the same one. `up` prints one summary: each service, URL,
+  PID and `UP`, or the last 15 lines of the log that failed. Whatever started
+  stays up after a failure; `down` stops it.
+- `. <scratch>/<n>/env.sh` points one spec at the stack (`DATABASE_URL` and the
+  mock WAWU ID's URLs), e.g. `npm run test:contract -- <spec>`.
+- `up` refuses to start when `free -g` shows under 5 GB available
+  (`STACK_MIN_FREE_GB`) or when any of its ports is in use, and changes nothing.
+- `down` stops every recorded PID and its children, confirms the ports are
+  closed with a connect test and drops the databases. Running it twice is safe.
+- `--id`, `--web` and `--mobile` take a checkout of your own (a worktree): the
+  stack builds inside it (`dist/`, `.next/`), and one web checkout serves one
+  stack at a time. If a checkout has no `node_modules`, `up` links the folder in
+  `STACK_NM_HUB`, `STACK_NM_ID`, `STACK_NM_WEB` or `STACK_NM_MOBILE` when its
+  lockfile is the same, and runs `npm ci` otherwise. `dist/` is rebuilt only when
+  the source is newer (`--rebuild` forces it), so do not rebuild the Hub checkout
+  while a stack from it is running.
+
+`scripts/dev/quiet.sh <name> -- <command...>` runs any command with its full
+output in `<scratch>/logs/<name>.log`, appends `EXIT <code>`, prints the last 15
+lines and, on failure, up to 20 lines matching `FAIL`, `Error`, `✕` or `failed`.
+It exits with the command's code.
+
 ## Protected route suite (MONEY-01, V3)
 
 Nothing the live web app or the admin dashboard uses may change behaviour while
@@ -268,6 +323,50 @@ Revocation has no session table: bump `AdminUser.tokenVersion` and every
 outstanding access and refresh token for that admin stops working on the next
 request.
 
+### Ads (`/api/hub/admin/ads`, task ADS-06)
+
+Ads are booked by the WAWU team and invoiced by hand (R-15), so these routes
+are where staff create, edit, schedule, pause, resume, end and report on
+sponsored cards. Same admin auth as above; reads are open to every admin role,
+writes to `superadmin` and `reviewer`.
+
+| Route | Notes |
+| --- | --- |
+| `GET /admin/ads` | Filters `status`, `placement`, `phase` (`upcoming`, `running`, `over`), `from` and `to` (campaigns whose window overlaps the range); `sort` `latest` or `soonest` by window start, ties by id; `page` and `perPage` like the other admin lists. |
+| `GET /admin/ads/report` | Campaigns in a range counted by status, placement and phase, how many serving would show right now per placement, and `delivery` (views, taps, skips, ctr) overall, `deliveryByStatus` and `deliveryByPlacement` for those campaigns over the range's UTC days. |
+| `POST /admin/ads` | A draft with its card. Nothing is served until it is scheduled. |
+| `GET /admin/ads/:id` | Campaign, card, its event, overlapping bookings on the placement and the whole audit history. |
+| `GET /admin/ads/:id/report` | Window, how much of it has run, what was done to it, and `delivery` plus `days` (`{ day, views, taps, skips }`, oldest first, empty days omitted) over `from` and `to`; `range` echoes what they became. |
+| `PATCH /admin/ads/:id` | Edit a draft or a paused campaign; the audit row records each changed field's before and after. |
+| `DELETE /admin/ads/:id` | A draft only. Its audit rows stay. |
+| `POST /admin/ads/:id/schedule`, `/pause`, `/resume`, `/end` | The state machine in `src/admin/ads/ad-campaign-state.ts`. An illegal move, or a repeat, is a 409 whose `reason` names the code and the statuses allowed. |
+
+Every change runs in one transaction that locks the campaign row, so two
+requests for one campaign take turns: one outcome, one audit row
+(`AdminAdAudit`), and a 409 for the loser. Serving reads `status` on every
+request with no cache, so a pause is in force before its response is sent.
+Nothing moves a campaign to `live` or `ended` on a timer: serving checks the
+window itself. Times are UTC, written `2026-10-18T09:00:00Z`; the picture is an
+`https` link the admin supplies (there is no admin upload route). Text is
+checked by Unicode category and capped by `src/ads/ads-text-limits.ts`
+(provisional).
+
+**Views, taps and skips** are ADS-05's counts, read through `AdsCountsService`
+(`AdminAdsModule` imports `AdsEventsModule`; nothing is recounted). Every
+campaign view (list row, detail, write response, report) has
+`delivery { views, taps, skips, ctr }`: `ctr` is taps over views as a fraction,
+`null` when there are no views, and a campaign with nothing counted is zeros,
+not an error. The list reads every row's counts in one grouped query. `from`
+and `to` are UTC instants with `to` exclusive; for counts they become the UTC
+days with any part inside them (the day of `from` through the day of the last
+millisecond before `to`, both inclusive), so a `to` at exactly midnight leaves
+that day out. On the list and the summary the same `from` and `to` also choose
+which campaigns (window overlap). **For the dashboard (ADS-02):** a campaign's
+page calls `GET /admin/ads/:id/report?from=&to=` and draws `delivery` and
+`days`; the table calls `GET /admin/ads?...` and reads `delivery` on each row;
+the overview calls `GET /admin/ads/report`. Counts survive a pause or an end.
+A counted campaign cannot be deleted (end it instead).
+
 ### Environment
 
 | Variable | Required | Notes |
@@ -380,6 +479,28 @@ dashboard and puts the dashboard's webhook secret in
 - **Status codes**: `200` recorded or duplicate; `400` no JSON body; `401`
   signature missing or wrong, or no secret; `503` not stored, resend.
 - Run `npx prisma migrate deploy` so `FintavaWebhookEvent` exists.
+
+### The nightly check against the wallet provider (MONEY-16)
+
+Once a night (`MONEY_CHECK_TIME`, Lagos, default 02:30) the Hub compares its
+ledger with the wallet provider's own record: every wallet's debits and
+balance, WAWU's own account, the money held for payers and payees, and WAWU's
+charge on each send. It lists what a person has to look at (a payment or a
+hold in review, money owed to a deleted payee) and has the report emailed
+through WAWU ID to the accounts in `MONEY_CHECK_RECIPIENT_WAWU_IDS`. It only
+reads and reports. No route; the cron runs where `ScheduleModule.forRoot()` is
+loaded, and a run is claimed in the database (`MoneyCheckRun`), so any number
+of Hub processes make one run a night.
+
+- **By hand**: `npm run build`, then `npm run money:check` with the Hub's
+  environment (`-- --night=YYYY-MM-DD`, `-- --again`). It prints one line and
+  exits 0 when the run finished (or had), 2 otherwise.
+- **Reading a night**: `MoneyCheckRun.report` (kobo as text, references only).
+  The verdict is `clean` only when every comparison was made and nothing was
+  found. What the provider's adapter cannot answer is `not_checked`, never clean.
+- The settings are in `.env.example`; what it does and does not compare is in
+  `docs/contract/CONVENTIONS.md` section 19.
+- Run `npx prisma migrate deploy` so `MoneyCheckRun` exists.
 
 ## Verification: two ticks, not a ladder
 
@@ -495,6 +616,18 @@ object through to the caller when a thrower attaches one:
 person, so the app can render "here is what you need to do" instead of a wall.
 An exception without a `reason` produces exactly the envelope this filter has
 always produced.
+
+## Phone push (INBOX-03)
+
+`POST` and `DELETE /api/hub/push-tokens` register a phone; a sender behind
+`NotificationService` pushes each notification the service wrote, through Expo,
+when the person's Z3 switch allows. Routes, payload, the per-kind decisions and
+how two instances stay safe are in [`docs/contract/PUSH.md`](docs/contract/PUSH.md).
+
+It is **off unless `PUSH_ENABLED=true`**. `EXPO_ACCESS_TOKEN` (only for an Expo
+project with enhanced push security) and `EXPO_PUSH_BASE_URL` (default
+`https://exp.host`) are optional; both are listed in `deploy/README.md` and
+`.env.example`. Android needs the owner's FCM credentials uploaded to Expo.
 
 ## Blocking and data export (SETTINGS-04)
 

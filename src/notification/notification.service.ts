@@ -8,6 +8,7 @@ import type {
 } from '../common/types';
 import {
   composeNotification,
+  targetFor,
   type NotificationEvent,
   type NotificationKind,
   type NotificationTone,
@@ -64,7 +65,7 @@ export type NotificationPrismaClient = PrismaService | Prisma.TransactionClient;
  * This is the only place a notification is decided, so any push sender
  * (INBOX-03) must send only for a row emit() returned, never from the event.
  */
-const SETTINGS_GATE: Partial<
+export const SETTINGS_GATE: Partial<
   Record<NotificationKind, keyof NotificationSettings>
 > = {
   new_follower: 'newFollowers',
@@ -78,6 +79,10 @@ const SETTINGS_GATE: Partial<
   sale: 'moneyIn',
   content_published: 'contentReviews',
   content_rejected: 'contentReviews',
+  // ME-10. A buyer's star rating is a review too: whoever switched "Reviews"
+  // off does not want it. Default (agent), owner may override: the Z3 row's
+  // own words are "Approved or sent back" (BACKEND_GAPS, ME-10).
+  review_received: 'contentReviews',
   // `communityMessages` is stored (Settings saves it) but gates NOTHING yet:
   // no community message notification kind or sender exists. The task that
   // adds that kind (and any other new kind) must add its entry here, or the
@@ -171,8 +176,14 @@ export class NotificationService {
       if (await this.isSuppressed(event.userWawuId, event.kind, client)) {
         return null;
       }
+      // ME-10: what it is about goes in the same insert (a nested create),
+      // so a notification and its target are written together or not at all.
+      const target = targetFor(event);
       return await client.notification.create({
-        data: composeNotification(event),
+        data: {
+          ...composeNotification(event),
+          ...(target ? { target: { create: target } } : {}),
+        },
       });
     } catch (error) {
       this.logger.error(
@@ -283,7 +294,21 @@ export class NotificationService {
   ): Promise<boolean> {
     const flag = SETTINGS_GATE[kind];
     if (!flag) return false;
+    return this.isSwitchOff(userWawuId, flag, client);
+  }
 
+  /**
+   * Whether this person has switched `flag` off. The one reading of a Z3
+   * switch: `emit()` asks it when a notification is written, and the phone
+   * push sender (INBOX-03) asks it again just before it sends, so a switch
+   * turned off a second ago is honoured and no second reading of the table
+   * exists. A person with no settings row, or a switch never set, is ON.
+   */
+  async isSwitchOff(
+    userWawuId: string,
+    flag: keyof NotificationSettings,
+    client: NotificationPrismaClient = this.prisma,
+  ): Promise<boolean> {
     const settings = await client.notificationSettings.findUnique({
       where: { userWawuId },
     });

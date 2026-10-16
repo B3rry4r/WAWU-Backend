@@ -9,12 +9,20 @@ import { StorageService } from '../../storage/storage.service';
 import { isRegulatedCategory } from '../../professional/professional-categories';
 import type { ReviewStatus } from '../../../generated/prisma/enums';
 import type { AdminProfessionalQueueQueryDto } from './dto/professional-review.dto';
+import type { AdminActor } from '../../common/audit/admin-ops-audit.service';
+import {
+  LISTING_NOT_TAKEN_DOWN,
+  lockListing,
+  standingTakedown,
+  visibilityOf,
+} from '../../professional/professional-takedown';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type {
   AdminProfessionalDecisionView,
   AdminProfessionalDetailView,
   AdminProfessionalDocumentUrlView,
   AdminProfessionalQueueItemView,
+  AdminProfessionalVisibilityView,
 } from './admin-professional-view.type';
 
 /**
@@ -186,6 +194,50 @@ export class AdminProfessionalReviewService {
   }
 
   /**
+   * GET /admin/professionals/:id/visibility (FIX-06): where the listing
+   * stands and the latest takedown on record, for the dashboard's "List
+   * again". A read: nothing is locked and nothing is written.
+   */
+  async visibility(id: string): Promise<AdminProfessionalVisibilityView> {
+    const [row, takedown] = await Promise.all([
+      this.prisma.professionalProfile.findUnique({
+        where: { id },
+        select: { id: true, status: true, listed: true },
+      }),
+      this.prisma.professionalTakedown.findUnique({
+        where: { professionalId: id },
+      }),
+    ]);
+    if (!row) throw new NotFoundException('Application not found');
+
+    const standing = takedown !== null && takedown.liftedAt === null;
+    const takenDownAt = standing ? takedown.takenDownAt : null;
+    return {
+      id: row.id,
+      status: row.status,
+      visibility:
+        standing || row.status === 'approved'
+          ? visibilityOf(row.listed, takenDownAt)
+          : null,
+      takenDownAt,
+      latestTakedown: takedown
+        ? {
+            standing,
+            takenDownAt: takedown.takenDownAt,
+            takenDownByAdminId: takedown.takenDownByAdminId,
+            takenDownByAdminEmail: takedown.takenDownByAdminEmail,
+            takenDownByAdminRole: takedown.takenDownByAdminRole,
+            relistsAs: takedown.ownerListed ? 'listed' : 'hidden',
+            liftedAt: takedown.liftedAt,
+            liftedByAdminId: takedown.liftedByAdminId,
+            liftedByAdminEmail: takedown.liftedByAdminEmail,
+            liftedByAdminRole: takedown.liftedByAdminRole,
+          }
+        : null,
+    };
+  }
+
+  /**
    * A short-lived signed URL for one uploaded document.
    *
    * Minted per request rather than embedded in the detail payload, so a
@@ -233,17 +285,52 @@ export class AdminProfessionalReviewService {
       'certified_professional',
     );
 
-    return this.toDecision(
-      await this.prisma.professionalProfile.update({
+    // FIX-06: the decision itself is made under the listing's row lock, on
+    // the application as it is NOW, not as it was before the WAWU ID call.
+    // Another admin may have decided it, and a third pulled it, meanwhile:
+    // then this answers what a decided application always answered, and
+    // writes nothing. The WAWU ID call stays outside the lock (no external
+    // call holds a row or a connection); it is the same idempotent elevate
+    // the winning decision made, or, if a rejection won, the one main makes
+    // today whenever its later write is the rejection.
+    return this.prisma.$transaction(async (tx) => {
+      if (!(await lockListing(tx, id))) {
+        throw new NotFoundException('Application not found');
+      }
+      const current = await tx.professionalProfile.findUnique({
         where: { id },
-        data: {
-          status: 'approved',
-          reviewedAt: new Date(),
-          rejectionReason: null,
-          listed: true,
-        },
-      }),
-    );
+        select: { status: true },
+      });
+      if (!current) throw new NotFoundException('Application not found');
+      if (current.status !== 'pending') {
+        throw new ConflictException(
+          `This application is already ${current.status}.`,
+        );
+      }
+
+      // A takedown outlives a rejection and a fresh application in the same
+      // field: the new approval stays out of the directory until an admin
+      // lists it again, and relist then lists it (an approval's default).
+      const takedown = await standingTakedown(tx, id);
+      if (takedown) {
+        await tx.professionalTakedown.update({
+          where: { professionalId: id },
+          data: { ownerListed: true },
+        });
+      }
+
+      return this.toDecision(
+        await tx.professionalProfile.update({
+          where: { id },
+          data: {
+            status: 'approved',
+            reviewedAt: new Date(),
+            rejectionReason: null,
+            listed: !takedown,
+          },
+        }),
+      );
+    });
   }
 
   /**
@@ -252,31 +339,43 @@ export class AdminProfessionalReviewService {
    * No WAWU ID call: a rejection here says nothing about the ladder rung they
    * may already hold from another category, and silently downgrading someone
    * because one application in one field did not stand up would be wrong.
+   *
+   * FIX-06: decided under the listing's row lock on the application as it is
+   * now, so a rejection that read `pending` before another admin approved
+   * (and a third pulled the listing) is refused instead of landing over
+   * them. A standing takedown is left as it is: it survives the rejection.
    */
   async reject(
     id: string,
     reason: string,
   ): Promise<AdminProfessionalDecisionView> {
-    const row = await this.prisma.professionalProfile.findUnique({
-      where: { id },
-      select: { status: true },
-    });
-    if (!row) throw new NotFoundException('Application not found');
-    if (row.status !== 'pending') {
-      throw new ConflictException(`This application is already ${row.status}.`);
-    }
-
-    return this.toDecision(
-      await this.prisma.professionalProfile.update({
+    return this.prisma.$transaction(async (tx) => {
+      if (!(await lockListing(tx, id))) {
+        throw new NotFoundException('Application not found');
+      }
+      const row = await tx.professionalProfile.findUnique({
         where: { id },
-        data: {
-          status: 'rejected',
-          rejectionReason: reason,
-          reviewedAt: new Date(),
-          listed: false,
-        },
-      }),
-    );
+        select: { status: true },
+      });
+      if (!row) throw new NotFoundException('Application not found');
+      if (row.status !== 'pending') {
+        throw new ConflictException(
+          `This application is already ${row.status}.`,
+        );
+      }
+
+      return this.toDecision(
+        await tx.professionalProfile.update({
+          where: { id },
+          data: {
+            status: 'rejected',
+            rejectionReason: reason,
+            reviewedAt: new Date(),
+            listed: false,
+          },
+        }),
+      );
+    });
   }
 
   /**
@@ -285,23 +384,102 @@ export class AdminProfessionalReviewService {
    * Deliberately NOT a delete and NOT a status change: the approval happened
    * and the record of it should survive. This is the control for a complaint
    * that needs acting on before it can be investigated properly.
+   *
+   * FIX-06: the pull now HOLDS. It records a ProfessionalTakedown (who, when,
+   * and what the person had chosen themselves), so the person's Show is
+   * refused until an admin lists it again (`relist`). The answer is the one
+   * this route always gave (the dashboard reads it). Unlisting a listing that
+   * is already taken down changes nothing: the first takedown stands.
    */
-  async unlist(id: string): Promise<AdminProfessionalDecisionView> {
-    const row = await this.prisma.professionalProfile.findUnique({
-      where: { id },
-      select: { status: true },
-    });
-    if (!row) throw new NotFoundException('Application not found');
-    if (row.status !== 'approved') {
-      throw new ConflictException(
-        'Only an approved listing can be pulled from the directory.',
-      );
-    }
-    return this.toDecision(
-      await this.prisma.professionalProfile.update({
+  async unlist(
+    id: string,
+    admin: AdminActor,
+  ): Promise<AdminProfessionalDecisionView> {
+    return this.prisma.$transaction(async (tx) => {
+      if (!(await lockListing(tx, id))) {
+        throw new NotFoundException('Application not found');
+      }
+      const row = await tx.professionalProfile.findUnique({
         where: { id },
-        data: { listed: false },
-      }),
-    );
+        select: { status: true, wawuUserId: true, listed: true },
+      });
+      if (!row) throw new NotFoundException('Application not found');
+      if (row.status !== 'approved') {
+        throw new ConflictException(
+          'Only an approved listing can be pulled from the directory.',
+        );
+      }
+
+      if (!(await standingTakedown(tx, id))) {
+        const takedown = {
+          wawuUserId: row.wawuUserId,
+          // The person's own choice as it stands now, put back on relist.
+          ownerListed: row.listed,
+          takenDownAt: new Date(),
+          takenDownByAdminId: admin.id,
+          takenDownByAdminEmail: admin.email,
+          takenDownByAdminRole: admin.role,
+          liftedAt: null,
+          liftedByAdminId: null,
+          liftedByAdminEmail: null,
+          liftedByAdminRole: null,
+        };
+        await tx.professionalTakedown.upsert({
+          where: { professionalId: id },
+          create: { professionalId: id, ...takedown },
+          update: takedown,
+        });
+      }
+
+      return this.toDecision(
+        await tx.professionalProfile.update({
+          where: { id },
+          data: { listed: false },
+        }),
+      );
+    });
+  }
+
+  /**
+   * List again a listing an admin took down (FIX-06): lifts the takedown,
+   * records who lifted it and when, and puts the listing back to what its
+   * owner had chosen (listed, unless they pressed Hide before or during the
+   * takedown). From then on the owner hides and shows it as before.
+   *
+   * Refused (409, reason.code `listing_not_taken_down`) when no takedown
+   * stands: a listing its owner hid is theirs to show, not an admin's.
+   */
+  async relist(
+    id: string,
+    admin: AdminActor,
+  ): Promise<AdminProfessionalDecisionView> {
+    return this.prisma.$transaction(async (tx) => {
+      if (!(await lockListing(tx, id))) {
+        throw new NotFoundException('Application not found');
+      }
+      const takedown = await standingTakedown(tx, id);
+      if (!takedown) {
+        throw new ConflictException({
+          message:
+            'This listing was not taken down by an admin, so there is nothing to lift. Its owner shows or hides it.',
+          reason: { code: LISTING_NOT_TAKEN_DOWN },
+        });
+      }
+      await tx.professionalTakedown.update({
+        where: { professionalId: id },
+        data: {
+          liftedAt: new Date(),
+          liftedByAdminId: admin.id,
+          liftedByAdminEmail: admin.email,
+          liftedByAdminRole: admin.role,
+        },
+      });
+      return this.toDecision(
+        await tx.professionalProfile.update({
+          where: { id },
+          data: { listed: takedown.ownerListed },
+        }),
+      );
+    });
   }
 }

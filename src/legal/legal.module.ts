@@ -2,10 +2,21 @@ import { Module } from '@nestjs/common';
 import { PrismaModule } from '../common/prisma/prisma.module';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
 import { AdminOpsAuditModule } from '../common/audit/admin-ops-audit.module';
+import { NotificationModule } from '../notification/notification.module';
+import { LegalIntakeModule } from '../legal-intake/legal-intake.module';
 import { FlutterwaveCheckoutVerifier } from '../common/flutterwave/checkout-verifier';
 import { LegalRequestsService } from './legal.service';
 import { LegalController } from './legal.controller';
 import { LegalOpsController } from './legal-ops.controller';
+import { LegalConsultationController } from './legal-consultation.controller';
+import { LegalPricesOpsController } from './legal-prices-ops.controller';
+import { StorageModule } from '../storage/storage.module';
+import { LegalDeliverablesOpsController } from './legal-deliverables-ops.controller';
+import { LegalConsultationService } from './legal-consultation.service';
+import { LegalDeliverablesService } from './legal-deliverables.service';
+import { LegalPricesService } from './legal-prices.service';
+import { LegalDeliveryRule } from './legal-delivery-rule';
+import { LegalDeliverySettings } from './legal-delivery-settings';
 
 /**
  * AdminAuthModule is imported for its two exported GUARDS only — nothing else
@@ -20,9 +31,34 @@ import { LegalOpsController } from './legal-ops.controller';
  * documents at length as load-bearing — is therefore untouched.
  */
 @Module({
-  imports: [PrismaModule, AdminAuthModule, AdminOpsAuditModule],
-  controllers: [LegalController, LegalOpsController],
-  providers: [LegalRequestsService, FlutterwaveCheckoutVerifier],
-  exports: [LegalRequestsService],
+  imports: [
+    PrismaModule,
+    AdminAuthModule,
+    AdminOpsAuditModule,
+    NotificationModule,
+    StorageModule,
+    // The consultant's chat line goes through LEGAL-01's allowance lock.
+    LegalIntakeModule,
+  ],
+  controllers: [
+    LegalController,
+    LegalOpsController,
+    LegalConsultationController,
+    LegalPricesOpsController,
+    LegalDeliverablesOpsController,
+  ],
+  providers: [
+    LegalRequestsService,
+    LegalPricesService,
+    LegalConsultationService,
+    LegalDeliverablesService,
+    // FIX-24: which files may be delivered to whom. The settings read
+    // LEGAL_DELIVERY_UPLOADER_IDS once at boot and stop the server, naming
+    // it, when it is set but unusable.
+    LegalDeliverySettings,
+    LegalDeliveryRule,
+    FlutterwaveCheckoutVerifier,
+  ],
+  exports: [LegalRequestsService, LegalPricesService],
 })
 export class LegalModule {}

@@ -2,11 +2,20 @@ import { Module } from '@nestjs/common';
 import { AiModule } from '../common/ai/ai.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
+import { LivePublisherModule } from '../live/live-publisher.module';
 import { LegalIntakeController } from './legal-intake.controller';
 import { LegalIntakeOpsController } from './legal-intake-ops.controller';
 import { LegalIntakeService } from './legal-intake.service';
 import { LegalIntakeOpsService } from './legal-intake-ops.service';
 import { LegalChatService } from './legal-chat.service';
+import { LegalAssistantController } from './assistant/legal-assistant.controller';
+import { LegalAssistantOpsController } from './assistant/legal-assistant-ops.controller';
+import { LegalAssistantService } from './assistant/legal-assistant.service';
+import { LegalAssistantAllowance } from './assistant/legal-assistant-allowance';
+import {
+  ASSISTANT_OPENER_WAIT_MS,
+  LEGAL_OPENER_WAIT_MS,
+} from './assistant/legal-assistant-config';
 
 /**
  * Legal profiling. AiModule supplies the Gemini client that writes the brief;
@@ -20,9 +29,23 @@ import { LegalChatService } from './legal-chat.service';
  * from LegalController.
  */
 @Module({
-  imports: [AiModule, WawuAuthModule, AdminAuthModule],
-  controllers: [LegalIntakeController, LegalIntakeOpsController],
-  providers: [LegalIntakeService, LegalIntakeOpsService, LegalChatService],
-  exports: [LegalIntakeService, LegalChatService],
+  imports: [AiModule, WawuAuthModule, AdminAuthModule, LivePublisherModule],
+  controllers: [
+    LegalIntakeController,
+    LegalIntakeOpsController,
+    // LEGAL-01: legal starts as a chat, on the same intake table.
+    LegalAssistantController,
+    LegalAssistantOpsController,
+  ],
+  providers: [
+    LegalIntakeService,
+    LegalIntakeOpsService,
+    LegalChatService,
+    LegalAssistantAllowance,
+    LegalAssistantService,
+    // FIX-11: how long a read waits for another read's opener.
+    { provide: LEGAL_OPENER_WAIT_MS, useValue: ASSISTANT_OPENER_WAIT_MS },
+  ],
+  exports: [LegalIntakeService, LegalChatService, LegalAssistantAllowance],
 })
 export class LegalIntakeModule {}

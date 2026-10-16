@@ -15,6 +15,12 @@ import { ChangePinDto, SetPinDto } from '../dto/money-request.dto';
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import type { PinStateView } from '../money-view.type';
 import { RequireOpenWallet } from '../gate/wallet-gate';
+import {
+  CurrentPinRequestKey,
+  RequireTransactionPinWithKey,
+} from './pin-request-key';
+import { PIN_CHANGE_ROUTE, PinRequestKeys } from './pin-request-keys.service';
+import type { IdempotencyScope } from '../payments/idempotency';
 import { RequireTransactionPin } from './transaction-pin.guard';
 import { TransactionPinService } from './transaction-pin.service';
 
@@ -36,7 +42,10 @@ import { TransactionPinService } from './transaction-pin.service';
 @UseGuards(WawuAuthGuard)
 @Controller('money')
 export class MoneyPinController {
-  constructor(private readonly pins: TransactionPinService) {}
+  constructor(
+    private readonly pins: TransactionPinService,
+    private readonly keyed: PinRequestKeys,
+  ) {}
 
   /** Is a PIN set, when it last changed, tries left, and the lock if any. */
   @Get('pin')
@@ -62,7 +71,7 @@ export class MoneyPinController {
   /** Change the PIN. The current PIN is X-Transaction-Pin. */
   @Put('pin')
   @BuiltBy('MONEY-09')
-  @RequireTransactionPin()
+  @RequireTransactionPinWithKey(PIN_CHANGE_ROUTE)
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'pin_required',
@@ -70,12 +79,20 @@ export class MoneyPinController {
     'pin_incorrect',
     'pin_locked',
     'pin_mismatch',
+    'pin_changed_again',
   )
   change(
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: ChangePinDto,
+    @CurrentPinRequestKey() key: IdempotencyScope | undefined,
   ): Promise<PinStateView> {
-    return this.pins.change(user.sub, dto);
+    // An optional Idempotency-Key makes a repeat answer the first outcome
+    // (WALLET-06 round 2): the key is looked at after the wallet gate and
+    // BEFORE the PIN, because the PIN a landed request was sent under is no
+    // longer the PIN. See pin-request-keys.service.ts.
+    return this.keyed.under(key, user.sub, (inTransaction) =>
+      this.pins.change(user.sub, dto, inTransaction),
+    );
   }
 
   /**

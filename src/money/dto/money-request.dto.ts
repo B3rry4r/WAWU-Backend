@@ -12,8 +12,10 @@ import {
   MaxLength,
   Min,
   MinLength,
+  registerDecorator,
   ValidateIf,
 } from 'class-validator';
+import { isCleanText } from '../../admin/legal-documents/policy-input';
 import {
   APPROVAL_BIOMETRICS,
   type ApprovalBiometricKind,
@@ -162,11 +164,16 @@ export class NameCheckDto {
 
 /**
  * GET /money/recipients?q=. A name, an @handle, or a phone number in any
- * common Nigerian form (080..., 234..., +234..., spaces allowed); the
- * server normalises a phone to +234 before matching, and matches a phone
- * only in full.
+ * common Nigerian form (080..., 80..., 234..., +234..., spaces, dashes and
+ * brackets allowed). The server normalises a phone to +234 and matches it
+ * only in full; a name or @handle is matched by its beginning, and needs at
+ * least 2 characters once trimmed (a leading "@" does not count). Anything
+ * shorter is a plain 400.
  */
 export class RecipientSearchQueryDto {
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' ? value.trim() : value,
+  )
   @IsString()
   @MinLength(2)
   @MaxLength(60)
@@ -273,10 +280,22 @@ export class WawuTransferDto {
   @Min(1)
   expectedTotalKobo!: number;
 
-  /** W9's optional note. */
+  /**
+   * `quoteToken` from that fee quote (`GET /money/fees/quote?kind=
+   * wawu_transfer`; BACKEND_GAPS G-64): the server checks it is its own, for
+   * this person and this amount, and not past `expiresAt`; otherwise `409
+   * quote_changed` with the new quote.
+   */
+  @IsString()
+  @Length(1, 1024)
+  @IsStorableText()
+  quoteToken!: string;
+
+  /** W9's optional note, 100 characters at most. */
   @IsOptional()
   @IsString()
   @MaxLength(100)
+  @IsStorableText(true)
   note?: string;
 }
 
@@ -331,14 +350,46 @@ export class PaymentQuoteQueryDto {
   @Matches(TARGET_ID_PATTERN, { message: 'targetId is not a valid id' })
   targetId!: string;
 
-  /** Only for a tip, where the payer chooses the amount. Refused on every other kind. */
+  /**
+   * Only for a tip, where the payer chooses the amount. Refused on every
+   * other kind. Digits only, as on the fee quote: `100.00`, `1e4` or
+   * `10,000` is a 400, never read as some other number of kobo.
+   */
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' && /^[0-9]{1,16}$/.test(value)
+      ? Number(value)
+      : value,
+  )
   @ApiPropertyOptional({ type: 'integer' })
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(MAX_EXACT_KOBO)
+  @IsInt({ message: FEE_QUOTE_AMOUNT_MESSAGE })
+  @Min(1, { message: FEE_QUOTE_AMOUNT_MESSAGE })
+  @Max(MAX_EXACT_KOBO, { message: FEE_QUOTE_AMOUNT_MESSAGE })
   amountKobo?: number;
+}
+
+/**
+ * Text the database can store (MONEY-17, lead ruling R5-2): no NUL and no
+ * lone surrogate, read by main's one rule (`isCleanText`, SETTINGS-02 and
+ * FIX-07). `blankAllowed`: an empty or all-space value passes too (a tip's
+ * note, stored as none). A value that fails is a plain 400 naming the field,
+ * answered before anything is claimed, never a 500 from the database.
+ */
+function IsStorableText(blankAllowed = false) {
+  return (object: object, propertyName: string) =>
+    registerDecorator({
+      name: 'isStorableText',
+      target: object.constructor,
+      propertyName,
+      options: {
+        message: '$property must have no null characters or broken characters',
+      },
+      validator: {
+        validate: (v: unknown) =>
+          typeof v === 'string' &&
+          ((blankAllowed && v.trim() === '') || isCleanText(v)),
+      },
+    });
 }
 
 /** POST /money/payments (H14 to H18 and every "Pay from wallet"). Headers: Idempotency-Key, X-Transaction-Pin. */
@@ -363,12 +414,24 @@ export class PaymentDto {
   @ApiProperty({ type: 'integer' })
   @IsInt()
   @Min(1)
+  @Max(MAX_EXACT_KOBO)
   expectedTotalKobo!: number;
+
+  /**
+   * `quoteToken` from that payment quote (MONEY-17, BACKEND_GAPS G-64): the
+   * server checks it is its own, for this person and this price, and not
+   * past `expiresAt`; otherwise `409 quote_changed` with the new quote.
+   */
+  @IsString()
+  @Length(1, 1024)
+  @IsStorableText()
+  quoteToken!: string;
 
   /** Only for a tip: the message that goes with it, 500 characters as POST /tips takes today. */
   @IsOptional()
   @IsString()
   @MaxLength(500)
+  @IsStorableText(true)
   note?: string;
 }
 

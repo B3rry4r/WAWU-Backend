@@ -385,6 +385,11 @@ export class DirectMessageService {
       kind: 'dm_received',
       userWawuId: created.creatorWawuId,
       amount: created.amount,
+      // ME-10: Reply opens this question; the asker is the other person.
+      about: {
+        target: { kind: 'paid_question', id: created.id },
+        actorWawuId: created.senderWawuId,
+      },
     });
 
     return toWireDm(created);

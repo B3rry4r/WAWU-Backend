@@ -1,5 +1,6 @@
 import type {
   FintavaReconciliation,
+  FintavaTransaction,
   FintavaRetryDecision,
   FintavaSendKind,
 } from './fintava.interface';
@@ -29,11 +30,13 @@ import type {
  *   asked): wait. `{}` is never "not found", and neither is a history
  *   walk cut off by its page limit.
  */
-export function decideFintavaRetry(
+export function decideFintavaRetry<
+  T extends { status: string } = FintavaTransaction,
+>(
   kind: FintavaSendKind,
-  reconciliation: FintavaReconciliation,
+  reconciliation: FintavaReconciliation<T>,
   clock: { attemptedAt: Date; now: Date; resendAfterMs: number },
-): FintavaRetryDecision {
+): FintavaRetryDecision<T> {
   switch (reconciliation.state) {
     case 'found': {
       const t = reconciliation.transaction;

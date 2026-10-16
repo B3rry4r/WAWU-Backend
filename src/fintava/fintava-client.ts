@@ -9,6 +9,7 @@ import {
 } from './fintava-amount';
 import {
   FINTAVA_CONFIG_KEYS,
+  FintavaConfigError,
   fintavaIsUnconfigured,
   readFintavaSettings,
   unconfiguredFintavaSettings,
@@ -21,6 +22,7 @@ import {
   type FintavaCallKind,
   type FintavaErrorKind,
 } from './fintava-error';
+import { readMeterAnswer } from './fintava-meter-answer';
 import { decideFintavaRetry } from './fintava-reconcile';
 import {
   readSelfieAnswer,
@@ -70,6 +72,8 @@ import type {
   FintavaWalletState,
   FintavaWalletTransferInput,
 } from './fintava.interface';
+import { connectionNeverOpened } from '../wallet-provider/connection-never-opened';
+import { toLocalNigerianPhone } from '../wallet-provider/nigerian-phone';
 
 // ---------------------------------------------------------------------------
 // Reading Fintava's bodies from `unknown`
@@ -265,9 +269,8 @@ const DIGITS = /^\d+$/;
  * section 2).
  */
 export function toFintavaLocalPhone(phone: string): string | null {
-  const d = phone.replace(/[\s\-()]/g, '');
-  const m = /^(?:\+?234|0)?([789][01]\d{8})$/.exec(d);
-  return m ? `0${m[1]}` : null;
+  // The rule is provider-neutral and lives with the seam (MONEY-20).
+  return toLocalNigerianPhone(phone);
 }
 
 // ---------------------------------------------------------------------------
@@ -357,7 +360,9 @@ class FintavaDeadline {
         },
         (e: unknown) => {
           this.#onTimeout = null;
-          reject(e instanceof Error ? e : new Error('fetch failed'));
+          reject(
+            e instanceof Error ? e : new Error('fetch failed', { cause: e }),
+          );
         },
       );
     });
@@ -497,6 +502,15 @@ export function historyPageConsistent(
 const RECONCILE_SKEW_MS = 10 * 60_000;
 
 /**
+ * True when WALLET_PROVIDER names Nuvion (NUV-01). Read here directly, not
+ * through the seam's reader, so a WALLET_PROVIDER value the seam refuses
+ * still stops the server with the seam's own message.
+ */
+function runsOnNuvion(get: (key: string) => string | undefined): boolean {
+  return (get('WALLET_PROVIDER') ?? '').trim().toLowerCase() === 'nuvion';
+}
+
+/**
  * The one place this backend talks to Fintava (task MONEY-06). Bearer key,
  * no request signing. It goes beside the Flutterwave code, which it does not
  * touch; it serves no route itself (the tasks that use it, MONEY-07 onwards, do).
@@ -541,8 +555,26 @@ export class FintavaClient {
       return;
     }
     // A set value is checked here, at boot: a wrong or non-Fintava host
-    // stops the app (MONEY-06).
-    this.settings = readFintavaSettings(get);
+    // stops the app (MONEY-06). Except when Nuvion runs the wallets
+    // (WALLET_PROVIDER=nuvion, NUV-01): a leftover wrong FINTAVA_* value
+    // must not stop a Nuvion server, so the client starts unconfigured and
+    // sends nothing (MONEY-20 verifier finding 1). The Fintava webhook
+    // receiver does not use this client and keeps running.
+    let settings: FintavaSettings;
+    try {
+      settings = readFintavaSettings(get);
+    } catch (e) {
+      if (!(e instanceof FintavaConfigError) || !runsOnNuvion(get)) throw e;
+      this.settings = unconfiguredFintavaSettings();
+      this.#apiKey = '';
+      this.logger.warn(
+        `A Fintava setting is wrong (${e.message}) and WALLET_PROVIDER=nuvion: ` +
+          'Fintava is not configured on this server and nothing is sent to it. ' +
+          'Fix the setting before rolling back to Fintava.',
+      );
+      return;
+    }
+    this.settings = settings;
     this.#apiKey = (get(FINTAVA_CONFIG_KEYS.apiKey) ?? '').trim();
   }
 
@@ -582,6 +614,8 @@ export class FintavaClient {
       messages?: string[];
       reference?: string | null;
       recordMayExist?: boolean;
+      requestNotSent?: boolean;
+      serviceNotAvailable?: boolean;
     },
   ): FintavaError {
     const messages = this.clean(args.messages ?? []);
@@ -592,6 +626,8 @@ export class FintavaClient {
       messages,
       reference: args.reference ?? null,
       recordMayExist: args.recordMayExist,
+      requestNotSent: args.requestNotSent,
+      serviceNotAvailable: args.serviceNotAvailable,
     });
     this.logger.warn(
       `${op.name}: ${args.kind}` +
@@ -648,11 +684,14 @@ export class FintavaClient {
     const deadline = new FintavaDeadline(this.timeoutFor(op.call));
     // No answer, or an answer cut short by the deadline, is not evidence
     // about the money (a send may have landed).
-    const lost = (why: string) =>
+    // A connection that never opened proves the request was not sent
+    // (`requestNotSent`); every other loss stays an unknown outcome.
+    const lost = (why: string, requestNotSent = false) =>
       this.fail(op, {
         kind: op.call === 'write' ? 'outcome_unknown' : 'unavailable',
         messages: [why],
         reference: opts.reference,
+        requestNotSent,
       });
     let res: Response;
     let read: BodyRead;
@@ -668,8 +707,10 @@ export class FintavaClient {
             redirect: 'error',
           }),
         );
-      } catch {
-        throw lost(deadline.timedOut ? 'timed out' : 'no connection');
+      } catch (e) {
+        throw deadline.timedOut
+          ? lost('timed out')
+          : lost('no connection', connectionNeverOpened(e));
       }
       read = await readBody(res, cap, deadline);
     } finally {
@@ -1690,22 +1731,70 @@ export class FintavaClient {
   //     carries it: cable answered 201 "service not currently available".
   // -------------------------------------------------------------------------
 
-  /** `GET /billing/discos`: limits are per disco; postpaid codes included. */
+  /**
+   * `GET /billing/discos`: limits are per disco; postpaid codes included. A row
+   * Fintava got wrong (a null or unreadable limit, no code) is skipped and the
+   * skip logged, so one bad row cannot take the list away from everyone
+   * (BILLS-01 D7). A list in which no row can be read is not readable.
+   */
   async listDiscos(): Promise<FintavaDisco[]> {
     const op: Op = { name: 'list discos', method: 'GET', call: 'read' };
     const answer = await this.request(op, '/billing/discos');
     return this.read(op, answer, (data) => {
       if (!Array.isArray(data)) throw new FintavaShapeError('rows missing');
-      return data.map((row) => {
-        const o = obj(row, 'disco');
-        return {
-          code: str(o, 'code'),
-          description: strOrNull(o, 'description') ?? str(o, 'code'),
-          minimumKobo: fintavaAmountToKobo(o.minimum_value),
-          maximumKobo: fintavaAmountToKobo(o.maximum_value),
-          available: o.is_available === 'Yes',
+      const discos: FintavaDisco[] = [];
+      data.forEach((row: unknown, i) => {
+        // The row's place and code only: its values are Fintava's, and the
+        // amount error would repeat one.
+        const skip = (why: string) => {
+          const code =
+            isObj(row) && typeof row.code === 'string' ? row.code : '';
+          this.logger.warn(
+            `${op.name}: skipped row ${i + 1}` +
+              (code
+                ? ` "${maskFintavaText(code, [this.#apiKey]).slice(0, 80)}"`
+                : '') +
+              ` (${why})`,
+          );
         };
+        try {
+          const o = obj(row, 'disco');
+          const disco: FintavaDisco = {
+            code: str(o, 'code'),
+            description: strOrNull(o, 'description') ?? str(o, 'code'),
+            minimumKobo: fintavaAmountToKobo(o.minimum_value),
+            maximumKobo: fintavaAmountToKobo(o.maximum_value),
+            available: o.is_available === 'Yes',
+          };
+          // A company no amount fits (a negative limit, a minimum above its
+          // maximum, or a maximum of nothing, which with a minimum that is not
+          // negative and not above it is a minimum of nothing too) is not
+          // listed: S3 would offer a row nobody can pay (BILLS-01 round 3,
+          // R2-4; round 4, R3-5).
+          // (A negative maximum is one of the first two: below a minimum of
+          // nothing or above, or itself below a negative minimum.)
+          if (
+            disco.minimumKobo < 0 ||
+            disco.minimumKobo > disco.maximumKobo ||
+            disco.maximumKobo === 0
+          ) {
+            skip('limits do not fit');
+            return;
+          }
+          discos.push(disco);
+        } catch (e) {
+          if (!(
+            e instanceof FintavaShapeError || e instanceof FintavaAmountError
+          )) {
+            throw e;
+          }
+          skip('not readable');
+        }
       });
+      if (data.length > 0 && discos.length === 0) {
+        throw new FintavaShapeError('no row could be read');
+      }
+      return discos;
     });
   }
 
@@ -1735,9 +1824,42 @@ export class FintavaClient {
       }
       throw e;
     }
-    return this.read(op, answer, (data) => ({
-      details: scalars(obj(data, 'data')),
-    }));
+    // A 2xx is read for what it says (`fintava-meter-answer.ts`): a meter is
+    // found only when `data` names an owner. Fintava styles failures inside a
+    // 2xx, and a body nobody has seen the success shape of is never trusted
+    // to mean "found".
+    const reading = readMeterAnswer(answer.body);
+    switch (reading.kind) {
+      case 'owner':
+        return {
+          details: scalars(reading.data),
+          ownerName: reading.name,
+          ownerAddress: reading.address,
+        };
+      case 'not_found':
+        return null;
+      case 'service_unavailable':
+        throw this.fail(op, {
+          kind: 'unavailable',
+          status: answer.status,
+          messages: ['service not currently available'],
+          serviceNotAvailable: true,
+        });
+      case 'failed':
+        // The status the body carries is judged as the same status on the
+        // wire is, above.
+        if (reading.failure === 'refused' || reading.failure === 'not_found') {
+          return null;
+        }
+        throw this.fail(op, {
+          kind: reading.failure,
+          status: reading.status,
+          messages: reading.messages,
+        });
+      case 'unreadable':
+        // No messages: the body might name someone, and it is not logged.
+        throw this.fail(op, { kind: 'bad_response', status: answer.status });
+    }
   }
 
   /**

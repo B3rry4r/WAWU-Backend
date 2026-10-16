@@ -20,7 +20,10 @@ import {
   ledgerStatusMayMove,
   reversalDisagreement,
 } from '../ledger.service';
-import { ledgerStatusOf, readLedgerWebhook } from '../ledger-webhook';
+import {
+  ledgerStatusOf,
+  readLedgerWebhook,
+} from '../../../fintava/fintava-ledger-delivery';
 
 /**
  * The ledger's pure rules (task MONEY-10): reading each documented Fintava
@@ -49,10 +52,10 @@ describe('ledger: reading the documented deliveries', () => {
       from: {
         accountNumbers: ['0020886993', '0031886994'],
         customerId: null,
-        where: 'fintava_wallet',
+        where: 'provider_wallet',
       },
       to: {
-        where: 'fintava_wallet',
+        where: 'provider_wallet',
         accountNumbers: ['0040497763', '0032497867'],
       },
     });
@@ -76,7 +79,7 @@ describe('ledger: reading the documented deliveries', () => {
       category: 'top_up',
       trustAlone: true,
       to: {
-        where: 'fintava_wallet',
+        where: 'provider_wallet',
         customerId: 'bf61c3cf-4894-4a01-91b1-e4c5e2fa2b08',
         accountNumbers: ['0094886003'],
       },
@@ -103,7 +106,7 @@ describe('ledger: reading the documented deliveries', () => {
       feeKobo: 3075,
       totalKobo: 13075,
       from: {
-        where: 'fintava_wallet',
+        where: 'provider_wallet',
         customerId: 'e17402-0d82-4774-a020-716d819d0',
       },
       to: {

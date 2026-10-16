@@ -6,6 +6,7 @@ import {
   IsEmail,
   IsEnum,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   IsUrl,
@@ -13,9 +14,10 @@ import {
   Max,
   MaxLength,
   Min,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
-import { EventCategory } from '../../../generated/prisma/enums';
+import { EventCategory, TicketTier } from '../../../generated/prisma/enums';
 import { EventFormat, EventType } from '../../../generated/prisma/enums';
 
 /**
@@ -49,36 +51,98 @@ export class EventSpeakerDto {
   order?: number;
 }
 
+/** How many ticket types one submit may carry. */
+export const MAX_TICKET_TYPES_PER_EVENT = 20;
+
+/**
+ * The bounds a new ticket type is held to. Named so GET /events/options can
+ * hand the same numbers to the app's wizard (EVENTS-04) that this DTO
+ * enforces: a client never keeps its own copy of a server limit.
+ */
+export const TICKET_PRICE_MIN_NAIRA = 0;
+export const TICKET_PRICE_MAX_NAIRA = 10_000_000;
+export const TICKET_QUANTITY_MIN = 1;
+export const TICKET_QUANTITY_MAX = 1_000_000;
+export const TICKET_NAME_MIN = 2;
+export const TICKET_NAME_MAX = 60;
+
+/** The longest text each wizard field may carry (the `@MaxLength` on CreateEventDto below). */
+export const EVENT_NAME_MAX = 160;
+export const EVENT_DESCRIPTION_MAX = 5000;
+export const EVENT_HOST_ORG_MAX = 160;
+export const EVENT_ADDRESS_MAX = 300;
+
+// One message per field: class-validator reports a single constraint, and for a
+// value that is not a number it is the range one, which names the wrong problem.
+const PRICE_MESSAGE =
+  'priceNaira must be a whole number of naira, from 0 to 10000000.';
+const QUANTITY_MESSAGE = 'quantity must be a whole number, from 1 to 1000000.';
+
+/**
+ * One ticket type sent with a new event: what the host wizard asks for, a
+ * name, a price and how many.
+ *
+ * `tier` is optional because the wizard never asks for one. Left out, a price
+ * of 0 is the `free` tier (R-8: a ₦0 event is allowed) and any other price is
+ * `regular`. Sent, it follows the same rules PUT /events/:id/tickets applies:
+ * a paid tier needs a price above 0 and a free tier cannot have one.
+ */
+export class NewEventTicketTypeDto {
+  @IsString()
+  @Matches(/\S/, { message: 'a ticket type needs a name.' })
+  @MinLength(TICKET_NAME_MIN)
+  @MaxLength(TICKET_NAME_MAX)
+  name!: string;
+
+  /** Naira, like every ticket price this backend stores. 0 is a free ticket. */
+  // No `@Type(() => Number)` here or on `quantity`: JSON must carry a number.
+  // Coercion turned `""` into a free ticket and `"5000"`, `true` and `"0x10"`
+  // into values the host never typed. PUT /events/:id/tickets refuses them too.
+  @IsInt({ message: PRICE_MESSAGE })
+  @Min(TICKET_PRICE_MIN_NAIRA, { message: PRICE_MESSAGE })
+  @Max(TICKET_PRICE_MAX_NAIRA, { message: PRICE_MESSAGE })
+  priceNaira!: number;
+
+  /** How many exist. A venue has a capacity, so there is no unlimited option. */
+  @IsInt({ message: QUANTITY_MESSAGE })
+  @Min(TICKET_QUANTITY_MIN, { message: QUANTITY_MESSAGE })
+  @Max(TICKET_QUANTITY_MAX, { message: QUANTITY_MESSAGE })
+  quantity!: number;
+
+  @IsOptional()
+  @IsEnum(TicketTier)
+  tier?: TicketTier;
+}
+
 /**
  * POST /events body.
  *
- * ── NO TICKETING, ENFORCED HERE FIRST ────────────────────────────────────────
+ * ── PRICES ONLY THROUGH `ticketTypes` ─────────────────────────────────────────
  * The global ValidationPipe runs with `forbidNonWhitelisted`, so a request
  * carrying `price`, `ticketPrice`, `amount`, `currency` or anything else not
- * declared below is a 400 before the service is ever reached. That is not an
- * accident of configuration — it is the cheapest possible enforcement of the
- * one line docs/01_SPEC.md draws around this feature. Paid registration, if the
- * organiser runs one, lives behind `externalUrl` on their own site.
+ * declared below is a 400 before the service is ever reached. The one place a
+ * price enters an event is a ticket type: `ticketTypes` here (EVENTS-02, so
+ * the app's wizard submits once) or PUT /events/:id/tickets. Selling a ticket
+ * is EventTicketingService's, never this module's.
  *
- * Creation is open to any authenticated WAWU user, not only creator accounts:
- * an event costs no upload slot and earns nobody anything, so there is no gate
- * for a paid subscription to be. The moderation queue is the gate.
+ * Hosting is for verified accounts only (EventService.assertMayHost). The
+ * moderation queue then decides whether anyone else ever sees the event.
  */
 export class CreateEventDto {
   @IsString()
   @Matches(/\S/, { message: 'name is required.' })
-  @MaxLength(160)
+  @MaxLength(EVENT_NAME_MAX)
   name!: string;
 
   @IsString()
   @Matches(/\S/, { message: 'description is required.' })
-  @MaxLength(5000)
+  @MaxLength(EVENT_DESCRIPTION_MAX)
   description!: string;
 
   /** The organisation running it — the old EventItem's `org`. */
   @IsString()
   @Matches(/\S/, { message: 'hostOrg is required.' })
-  @MaxLength(160)
+  @MaxLength(EVENT_HOST_ORG_MAX)
   hostOrg!: string;
 
   @IsOptional()
@@ -118,14 +182,21 @@ export class CreateEventDto {
   @MaxLength(40)
   timezone?: string;
 
+  /**
+   * The city or venue line the card shows. Optional (EVENTS-02): the app's
+   * host wizard asks only for the street address, so when this is left out
+   * the server fills it from `address`, and leaves it empty when there is no
+   * address either. A value sent here is stored as sent, as before.
+   */
+  @IsOptional()
   @IsString()
-  @Matches(/\S/, { message: 'location is required.' })
+  @Matches(/\S/, { message: 'location cannot be blank.' })
   @MaxLength(160)
-  location!: string;
+  location?: string;
 
   @IsOptional()
   @IsString()
-  @MaxLength(300)
+  @MaxLength(EVENT_ADDRESS_MAX)
   address?: string;
 
   /**
@@ -175,4 +246,22 @@ export class CreateEventDto {
   @ValidateNested({ each: true })
   @Type(() => EventSpeakerDto)
   speakers?: EventSpeakerDto[];
+
+  /**
+   * The ticket types, sent with the event in the same submit (EVENTS-02), so
+   * the event and its tickets go to review together. Omitted or empty, the
+   * event sells nothing, exactly as before. The tiers can still be replaced
+   * afterwards through PUT /events/:id/tickets.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_TICKET_TYPES_PER_EVENT)
+  // `@ValidateNested` lets an element that is an array (`[[]]`) through, and
+  // the service then failed on it with a 500. Every element that is not a
+  // plain object (an array, null, a string, a number) is a 400 here, before
+  // anything is written.
+  @IsObject({ each: true, message: 'each ticket type must be an object' })
+  @ValidateNested({ each: true })
+  @Type(() => NewEventTicketTypeDto)
+  ticketTypes?: NewEventTicketTypeDto[];
 }

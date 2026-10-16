@@ -66,6 +66,16 @@ matters most here:
   Credits are a count, never naira.
 - Fintava's balance is the truth. Never add up our own records and show that
   as a balance.
+- **One provider seam** (R-39, owner, 6 Oct 2026; MONEY-20). Code under
+  `src/money/` reaches the wallet provider only through `WALLET_PROVIDER`
+  (and `OTP_SENDER` for the PIN reset text), defined in `src/wallet-provider/`.
+  It never imports `src/fintava/` (a spec checks). `WALLET_PROVIDER=fintava`
+  (the default) or `nuvion` picks the adapter at boot; rollback is that one
+  setting and a restart. Provider quirks live in the provider's adapter.
+  The Nuvion adapter (NUV-01, `src/nuvion/`) hands each method to one area
+  file per task (`src/nuvion/areas/`), and Nuvion's webhooks to one handler
+  file per task (`src/nuvion/handlers/`); a server acts only on wallet,
+  opening and ledger rows of the provider it runs (their `provider` column).
 - What Fintava's API really does is in the mobile repo's `docs/fintava/`.
   Facts come from there and from real sandbox responses, never from the design.
 - **Money routes follow `docs/contract/CONVENTIONS.md`** (kobo, `+234`, one
@@ -84,6 +94,8 @@ npm run lint                eslint (it runs with --fix, so it edits files)
 npm run test:contract       contract suite; always this, never bare jest (README)
 python3 scripts/gates/run.py          the gates
 python3 scripts/gates/check_baseline.py   every accepted finding has an owner and a reason
+scripts/dev/stack.sh up|status|down   a local test stack in one command (README, "Local test stack")
+scripts/dev/quiet.sh <name> -- <cmd>  full output to a log, only the end on screen
 npm run contract:build      regenerate contract/openapi.json (never hand-edit it)
 ```
 

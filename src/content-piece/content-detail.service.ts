@@ -8,6 +8,7 @@ import { randomUUID } from 'crypto';
 import { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
+import { NotificationService } from '../notification/notification.service';
 import type { SetPreviewDto } from './dto/set-preview.dto';
 
 /** The one wording for a piece that is missing, hidden or not the caller's. */
@@ -84,6 +85,7 @@ export class ContentDetailService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly blocked: BlockedAccountService,
+    private readonly notifications: NotificationService,
   ) {}
 
   /**
@@ -228,6 +230,7 @@ export class ContentDetailService {
         status: true,
         creatorWawuId: true,
         accessType: true,
+        title: true,
       },
     });
     if (!piece || piece.status !== 'live') {
@@ -245,12 +248,31 @@ export class ContentDetailService {
     // One statement on the unique (person, piece) key: two taps at once land
     // on the same row (the second updates it), so there is never a second row
     // and never a duplicate-key error. Nothing on ContentPiece is written.
-    await this.prisma.$executeRaw(Prisma.sql`
+    //
+    // ME-10: `xmax = 0` is true only for a row this statement inserted, so the
+    // creator hears about a first rating once, and never about a change.
+    const written = await this.prisma.$queryRaw<{ inserted: boolean }[]>(
+      Prisma.sql`
       INSERT INTO "ContentRating" ("id", "userWawuId", "contentId", "stars")
       VALUES (${randomUUID()}, ${rater}, ${contentId}, ${stars})
       ON CONFLICT ("userWawuId", "contentId")
       DO UPDATE SET "stars" = EXCLUDED."stars", "updatedAt" = CURRENT_TIMESTAMP
-    `);
+      RETURNING ("xmax" = 0) AS "inserted"
+    `,
+    );
+    if (written[0]?.inserted) {
+      // emit() never throws; the rating is already stored.
+      await this.notifications.emit({
+        kind: 'review_received',
+        userWawuId: piece.creatorWawuId,
+        contentTitle: piece.title,
+        stars,
+        about: {
+          target: { kind: 'content', id: piece.id },
+          actorWawuId: rater,
+        },
+      });
+    }
 
     return this.ratingState(contentId, rater, piece, !!purchase);
   }

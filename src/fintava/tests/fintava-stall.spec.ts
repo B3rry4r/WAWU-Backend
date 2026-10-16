@@ -1,3 +1,4 @@
+import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { setFlagsFromString } from 'node:v8';
 import { runInNewContext } from 'node:vm';
 
@@ -34,10 +35,19 @@ import { FintavaError } from '../fintava-error';
  */
 
 const TIMEOUT_MS = 300;
-/** How late past the timeout a call may end and still pass. */
+/**
+ * How late past the timeout a call may end and still pass, on an idle
+ * machine. On a loaded one (the deploy suite beside other jobs, forced
+ * garbage collection every 20 ms) the event loop itself runs late, and that
+ * lag, measured during the call, is added (MONEY-17 round 2: the suite failed
+ * at load average 6 to 8 with nothing wrong in the client). A hang is still a
+ * hang: the bug this spec holds ended at undici's 300 s.
+ */
 const MARGIN_MS = 700;
 /** A call still going at this point is reported as hanging. */
-const WATCHDOG_MS = 3000;
+const WATCHDOG_MS = 10_000;
+
+jest.setTimeout(30_000);
 
 /**
  * `global.gc`, without needing `node --expose-gc`: the flag is set at run
@@ -82,6 +92,8 @@ function outcome(p: Promise<unknown>): Promise<string> {
 interface Run {
   result: string;
   ms: number;
+  /** The worst event-loop delay seen during the call, in ms. */
+  lagMs: number;
 }
 
 /**
@@ -105,6 +117,8 @@ async function run(
   };
   if (collect && mode === 'silent') collectNow();
   else if (collect) void server.headersSent().then(collectNow);
+  const lag = monitorEventLoopDelay({ resolution: 10 });
+  lag.enable();
   const started = Date.now();
   let watchdog: NodeJS.Timeout | undefined;
   const result = await Promise.race([
@@ -117,10 +131,12 @@ async function run(
     }),
   ]);
   const ms = Date.now() - started;
+  lag.disable();
+  const lagMs = Math.ceil(lag.max / 1e6);
   done = true;
   clearTimeout(watchdog);
   if (collector) clearInterval(collector);
-  return { result, ms };
+  return { result, ms, lagMs };
 }
 
 // Inputs as the MONEY-06 contract tests send them.
@@ -292,7 +308,7 @@ const timeoutPath = new Map<string, string>();
 function expectOnTime(r: Run, expected: string): void {
   expect(r.result).toBe(expected);
   expect(r.ms).toBeGreaterThanOrEqual(TIMEOUT_MS - 20);
-  expect(r.ms).toBeLessThan(TIMEOUT_MS + MARGIN_MS);
+  expect(r.ms).toBeLessThan(TIMEOUT_MS + MARGIN_MS + r.lagMs);
 }
 
 describe('the existing timeout path: a server that sends no headers', () => {
@@ -303,7 +319,7 @@ describe('the existing timeout path: a server that sends no headers', () => {
     expect(r.result).toMatch(
       /^(unavailable \["timed out"\]|outcome_unknown \["timed out"\]|resolved .*"unreachable")/,
     );
-    expect(r.ms).toBeLessThan(TIMEOUT_MS + MARGIN_MS);
+    expect(r.ms).toBeLessThan(TIMEOUT_MS + MARGIN_MS + r.lagMs);
     timeoutPath.set(name, r.result);
   });
 });
@@ -335,7 +351,7 @@ describe('the stalled body is dropped, not left open', () => {
     const r = await run('stall-200', (c) => c.getMerchantBalance(), true);
     expect(r.result).toBe(timeoutPath.get('getMerchantBalance'));
     expect(server.opened - openedBefore).toBe(1);
-    const until = Date.now() + 1000;
+    const until = Date.now() + 5000;
     while (server.closed - closedBefore < 1 && Date.now() < until) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }

@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { FintavaModule } from '../fintava/fintava.module';
 import { MoneyBalanceController } from './balance/money-balance.controller';
 import { MoneyHistoryController } from './history/money-history.controller';
 import { TransactionHistoryService } from './history/transaction-history.service';
@@ -9,7 +8,9 @@ import {
   StatementRateLimiter,
   StatementSlots,
 } from './statements/statement-config';
+import { StatementEmailService } from './statements/statement-email.service';
 import { StatementService } from './statements/statement.service';
+import { WawuIdMailRelay } from '../admin/notifications/email/email-provider';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { FeeSettings } from './fees/fee-config';
@@ -33,14 +34,45 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
 import { BeneficiaryService } from './saved-accounts/beneficiary.service';
 import { MoneySavedAccountsController } from './saved-accounts/money-saved-accounts.controller';
 import { PayoutAccountService } from './saved-accounts/payout-account.service';
+import { SavedAccountTargetService } from './saved-accounts/saved-account-target.service';
+import { PinRequestKeyFilter, PinRequestKeyGuard } from './pin/pin-request-key';
+import {
+  PinRequestFingerprints,
+  PinRequestKeys,
+} from './pin/pin-request-keys.service';
+import { IdempotencyGuard, IdempotencyService } from './payments/idempotency';
+import { MerchantWallet } from './payments/merchant-wallet';
+import { HoldViewService } from './holds/hold-view.service';
+import { MoneyHoldsController } from './holds/money-holds.controller';
+import { WalletHoldService } from './holds/wallet-hold.service';
+import { MoneyPaymentsController } from './payments/money-payments.controller';
+import { MoneyTransfersController } from './transfers/money-transfers.controller';
+import {
+  TransferRecipientGuard,
+  TransferRecipients,
+} from './transfers/transfer-recipient';
+import { WalletTransferService } from './transfers/wallet-transfer.service';
+import { PayableRegistry } from './payments/payable-registry';
+import { PaymentSettings } from './payments/payment-config';
+import { WalletPaymentService } from './payments/wallet-payment.service';
 import { PinResetSettings } from './pin/pin-reset-config';
 import { PinResetService } from './pin/pin-reset.service';
 import { TransactionPinGuard } from './pin/transaction-pin.guard';
 import { TransactionPinService } from './pin/transaction-pin.service';
+import { MoneyRecipientController } from './recipients/money-recipient.controller';
+import { RecipientSearchLimiter } from './recipients/recipient-config';
+import { RecipientService } from './recipients/recipient.service';
 import { MoneyReceiptController } from './receipts/money-receipt.controller';
 import { PublicReceiptController } from './receipts/public-receipt.controller';
 import { ReceiptSettings } from './receipts/receipt-config';
 import { ReceiptService } from './receipts/receipt.service';
+import { MoneyCheckSettings } from './check/money-check-config';
+import { MoneyCheckMailer } from './check/money-check-mailer';
+import { MoneyCheckScope } from './check/money-check-scope';
+import { MoneyCheckService } from './check/money-check.service';
+import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
+import { MoneyLimitsModule } from './limits/money-limits.module';
+import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
 
 /**
  * The served half of the Naira wallet contract. Routes move here from
@@ -52,7 +84,9 @@ import { ReceiptService } from './receipts/receipt.service';
  * its service are exported for that.
  *
  * MONEY-11: the balance, read from Fintava through the MONEY-06 client on
- * every request. Importing FintavaModule here mounts that client in the app.
+ * every request. MONEY-20: every service here reaches the provider through
+ * WalletProviderModule (`WALLET_PROVIDER`, `OTP_SENDER`), which mounts the
+ * client and picks the adapter from WALLET_PROVIDER (`fintava` by default).
  * The server starts without any FINTAVA_* setting (the client is then
  * unconfigured and the balance answers 503); the settings are needed for the
  * wallet to work (deploy/README.md step 4).
@@ -102,10 +136,53 @@ import { ReceiptService } from './receipts/receipt.service';
  * quoted (WALLET-07, WALLET-09, MONEY-17): they fill their fees from it and
  * check the quote the person saw with `check()`.
  *
+ * MONEY-17: pay from wallet (`GET /money/payments/quote`, `POST
+ * /money/payments`): the price from the buyer's wallet to WAWU's merchant
+ * wallet, with the 85/15 split recorded and the Idempotency-Key enforced,
+ * plus a sweep that settles a payment whose answer was lost from the
+ * ledger's status check (it runs where ScheduleModule.forRoot() is loaded).
+ * Exported: PayableRegistry, where each selling feature registers its kind
+ * (HOME-14, HOME-15, INBOX-16, ME-18, LEGAL-05, SCHOOLS-07, TIER-03); the
+ * Idempotency-Key service and guard, for the sends (WALLET-07, WALLET-09),
+ * through `@RequireIdempotentApproval()`. WalletPaymentService is exported for
+ * a feature route that pays and answers its own view of the payment (TIER-03's
+ * `POST /plans/purchases`: `quote`, `pay`, `view`, `presentRoute`).
+ *
+ * MONEY-18: hold, release and refund (`GET /money/holds`, `GET
+ * /money/holds/{id}`). A held kind (paid DM, ticket, bill) registers with
+ * PayableRegistry like any other; its payment completes into a `WalletHold`,
+ * and the owning feature later releases it to the payee or refunds it to the
+ * payer through the exported `WalletHoldService` (never a client request).
+ * A sweep every minute settles a move whose answer was lost and tries again
+ * what is waiting (a wallet not opened yet, a frozen one, the provider out of
+ * reach); it runs where ScheduleModule.forRoot() is loaded.
  * WALLET-18: receipts. The owner's routes (`/money/transactions/{id}/receipt`,
  * its image and its PDF) sit behind the wallet gate and read the row through
  * the history's detail; the public check (`/r/{code}`, no sign-in,
  * throttled) shows only what proves the movement. Neither calls Fintava.
+ *
+ * MONEY-16: the nightly check against the wallet provider
+ * (`src/money/check/`). Once a night, at the hour in MONEY_CHECK_TIME (Lagos),
+ * it compares every wallet's debits and balance, WAWU's own account, the money
+ * held for payers and payees, and WAWU's charge on each send with the ledger,
+ * lists what a person has to look at, and has the report emailed through WAWU
+ * ID. It adds no route and only reads: a difference is reported, never fixed.
+ * It runs where ScheduleModule.forRoot() is loaded; a run is claimed in the
+ * database, so two Hub processes make one run. `npm run money:check` makes
+ * it by hand.
+ *
+ * WALLET-08: finding a person to send money to (`/money/recipients`,
+ * `/money/recipients/recent`), behind the wallet gate: only people with an
+ * open wallet, never the caller, never anyone blocked either way
+ * (BlockedAccountService), the recent ones from the ledger. It never calls
+ * Fintava.
+ *
+ * WALLET-07: sending money to another WAWU user (`POST /money/transfers/wawu`,
+ * `GET /money/transfers/{id}`): one wallet-to-wallet transfer from the
+ * sender's wallet to the receiver's, the Idempotency-Key enforced, who the
+ * money goes to checked before the PIN, and a sweep that settles a send whose
+ * answer was lost from the provider's own record (it runs where
+ * ScheduleModule.forRoot() is loaded). It never sends twice.
  *
  * WALLET-27: statements (`/money/statements`), the caller's completed
  * movements over a period of Lagos days as a CSV file, behind the wallet
@@ -114,10 +191,16 @@ import { ReceiptService } from './receipts/receipt.service';
 @Module({
   imports: [
     ConfigModule,
-    FintavaModule,
+    WalletProviderModule,
     LedgerModule,
     WawuAuthModule,
     BlockedAccountModule,
+    // Limits (task NUV-07): validates the WAWU_LIMIT_* settings at boot and gives the
+    // quote today's standing.
+    MoneyLimitsModule,
+    // Identity documents and the hosted selfie for a Nuvion opening (task NUV-03,
+    // SHARED-CHANGES NUV-03 #1).
+    NuvionDocumentsModule,
   ],
   controllers: [
     MoneyPinController,
@@ -130,14 +213,22 @@ import { ReceiptService } from './receipts/receipt.service';
     MoneyHistoryController,
     MoneyStatementController,
     MoneyFeesController,
+    MoneyPaymentsController,
+    MoneyTransfersController,
+    MoneyHoldsController,
     MoneyReceiptController,
     PublicReceiptController,
+    MoneyRecipientController,
   ],
   providers: [
     WalletGate,
     WalletGateGuard,
     TransactionPinService,
     TransactionPinGuard,
+    PinRequestFingerprints,
+    PinRequestKeys,
+    PinRequestKeyGuard,
+    PinRequestKeyFilter,
     PinResetSettings,
     PinResetService,
     ApprovalDeviceService,
@@ -150,14 +241,34 @@ import { ReceiptService } from './receipts/receipt.service';
     BankAccountCheckService,
     BeneficiaryService,
     PayoutAccountService,
+    SavedAccountTargetService,
     TransactionHistoryService,
     StatementService,
+    StatementEmailService,
+    WawuIdMailRelay,
     StatementRateLimiter,
     StatementSlots,
     FeeSettings,
     FeeQuoteService,
+    PaymentSettings,
+    IdempotencyService,
+    IdempotencyGuard,
+    MerchantWallet,
+    PayableRegistry,
+    WalletPaymentService,
+    TransferRecipients,
+    TransferRecipientGuard,
+    WalletTransferService,
+    HoldViewService,
+    WalletHoldService,
     ReceiptSettings,
     ReceiptService,
+    RecipientService,
+    RecipientSearchLimiter,
+    MoneyCheckSettings,
+    MoneyCheckMailer,
+    MoneyCheckScope,
+    MoneyCheckService,
   ],
   exports: [
     WalletGate,
@@ -170,6 +281,14 @@ import { ReceiptService } from './receipts/receipt.service';
     WalletOpeningService,
     FeeSettings,
     FeeQuoteService,
+    PaymentSettings,
+    IdempotencyService,
+    IdempotencyGuard,
+    PayableRegistry,
+    WalletPaymentService,
+    WalletHoldService,
+    HoldViewService,
+    MoneyCheckService,
   ],
 })
 export class MoneyModule {}

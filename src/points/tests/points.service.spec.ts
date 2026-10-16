@@ -1,0 +1,2147 @@
+// Task POINTS-01: points in lots that expire, holds, and the append-only
+// ledger. Runs against the caller's DATABASE_URL with the real migration
+// (its CHECKs and triggers), like every other database spec here. Each run
+// uses its own people (random ids) and removes every row it wrote: a whole
+// person's ledger at once, the one delete the ledger allows.
+
+process.env.DATABASE_URL =
+  process.env.DATABASE_URL ??
+  'postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public';
+
+import { randomUUID } from 'node:crypto';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+import { Logger } from '@nestjs/common';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { Client } from 'pg';
+import { PrismaClient } from '../../../generated/prisma/client';
+import { PrismaService } from '../../common/prisma/prisma.service';
+import { AccountPurgeService } from '../../account-purge/account-purge.service';
+import { EXPORT_SECTIONS } from '../../data-export-request/data-export-sections';
+import { PointsService } from '../points.service';
+import { PointsError } from '../points-error';
+import { PointsExpiryService } from '../points-expiry.service';
+import { POINTS_LATEST_END, POINTS_VIEW } from '../points-config';
+import { purgePersonPoints } from '../points-purge';
+
+// "Now" for every call that takes one, so the lots' January and March ends
+// stay in the future whatever day the suite runs.
+const NOW = new Date('2026-10-08T09:00:00.000Z');
+const JANUARY = new Date('2027-01-31T22:00:00.000Z');
+const MARCH = new Date('2027-03-31T22:00:00.000Z');
+const at = { now: NOW };
+const minutes = (d: Date, n: number) => new Date(d.getTime() + n * 60_000);
+
+describe('POINTS-01: lots, holds and the ledger', () => {
+  let prisma: PrismaService;
+  let points: PointsService;
+  const people: string[] = [];
+
+  const person = (): string => {
+    const id = `p01-${randomUUID()}`;
+    people.push(id);
+    return id;
+  };
+  const ref = (what: string) => `p01-${what}-${randomUUID()}`;
+
+  const lotsOf = (wawuUserId: string) =>
+    prisma.pointLot.findMany({
+      where: { wawuUserId },
+      orderBy: { expiresAt: 'asc' },
+    });
+  const ledgerOf = (wawuUserId: string) =>
+    prisma.pointLedger.findMany({
+      where: { wawuUserId },
+      orderBy: { seq: 'asc' },
+    });
+
+  /** Every lot holds exactly the sum of its ledger rows. */
+  async function expectLotsMatchLedger(wawuUserId: string): Promise<void> {
+    const lots = await lotsOf(wawuUserId);
+    const rows = await ledgerOf(wawuUserId);
+    for (const lot of lots) {
+      const sum = rows
+        .filter((r) => r.lotId === lot.id)
+        .reduce((s, r) => s + r.delta, 0);
+      expect({ lot: lot.id, remaining: lot.remaining }).toEqual({
+        lot: lot.id,
+        remaining: sum,
+      });
+      expect(lot.remaining).toBeGreaterThanOrEqual(0);
+    }
+  }
+
+  async function refusal(p: Promise<unknown>): Promise<PointsError> {
+    try {
+      await p;
+    } catch (e) {
+      expect(e).toBeInstanceOf(PointsError);
+      return e as PointsError;
+    }
+    throw new Error('expected a refusal');
+  }
+
+  beforeAll(async () => {
+    prisma = new PrismaService();
+    await prisma.$connect();
+    points = new PointsService(prisma);
+  }, 60000);
+
+  afterAll(async () => {
+    // The purge's points step for every person this run made: the only
+    // delete the ledger allows.
+    for (const id of people) await purgePersonPoints(prisma, id);
+    await prisma.$disconnect();
+  }, 120000);
+
+  // ---------------------------------------------------------------------------
+  describe('spending takes the soonest-expiring lot first', () => {
+    it('a person with a January lot and a March lot spends January first', async () => {
+      const me = person();
+      // March is granted first, so the order is by end date, not by grant.
+      const march = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('march'),
+          points: 100,
+          expiresAt: MARCH,
+        },
+        at,
+      );
+      const january = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'tier_bonus',
+          sourceRef: ref('jan'),
+          points: 100,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+
+      const held = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'ai_job',
+          reference: ref('job'),
+          points: 150,
+          title: 'VoiceOver',
+        },
+        at,
+      );
+      expect(held.parts).toEqual([
+        { lotId: january.lotId, points: 100 },
+        { lotId: march.lotId, points: 50 },
+      ]);
+      const lots = await lotsOf(me);
+      expect(lots.map((l) => [l.id, l.remaining])).toEqual([
+        [january.lotId, 0],
+        [march.lotId, 50],
+      ]);
+      const rows = await ledgerOf(me);
+      expect(rows.map((r) => [r.reason, r.lotId, r.delta])).toEqual([
+        ['grant', march.lotId, 100],
+        ['grant', january.lotId, 100],
+        ['hold', january.lotId, -100],
+        ['hold', march.lotId, -50],
+      ]);
+      expect((await points.view(me, NOW)).balance).toBe(50);
+      await expectLotsMatchLedger(me);
+    });
+
+    it('a hold larger than the balance is refused and nothing changes', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('a'),
+          points: 30,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'referral',
+          sourceRef: ref('b'),
+          points: 20,
+          expiresAt: MARCH,
+        },
+        at,
+      );
+      const lotsBefore = await lotsOf(me);
+      const rowsBefore = await ledgerOf(me);
+
+      const reference = ref('too-big');
+      const err = await refusal(
+        points.hold(
+          { wawuUserId: me, purpose: 'ai_job', reference, points: 51 },
+          at,
+        ),
+      );
+      expect(err.code).toBe('insufficient_points');
+      expect(err.getStatus()).toBe(402);
+      expect(err.getResponse()).toEqual({
+        message: "You don't have enough points for this.",
+        reason: {
+          code: 'insufficient_points',
+          message: "You don't have enough points for this.",
+          balancePoints: 50,
+          neededPoints: 51,
+          shortfallPoints: 1,
+        },
+      });
+
+      expect(await lotsOf(me)).toEqual(lotsBefore);
+      expect(await ledgerOf(me)).toEqual(rowsBefore);
+      expect(
+        await prisma.pointHold.count({
+          where: { purpose: 'ai_job', reference },
+        }),
+      ).toBe(0);
+      // The same reference is still free once the person has the points.
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('c'),
+          points: 1,
+          expiresAt: MARCH,
+        },
+        at,
+      );
+      const ok = await points.hold(
+        { wawuUserId: me, purpose: 'ai_job', reference, points: 51 },
+        at,
+      );
+      expect(ok.replayed).toBe(false);
+      await expectLotsMatchLedger(me);
+    });
+
+    it('another person’s points are never taken', async () => {
+      const me = person();
+      const other = person();
+      await points.grant(
+        {
+          wawuUserId: other,
+          source: 'pack',
+          sourceRef: ref('other'),
+          points: 500,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('mine'),
+          points: 10,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const err = await refusal(
+        points.hold(
+          {
+            wawuUserId: me,
+            purpose: 'ai_job',
+            reference: ref('j'),
+            points: 11,
+          },
+          at,
+        ),
+      );
+      expect(err.detail).toEqual({
+        balancePoints: 10,
+        neededPoints: 11,
+        shortfallPoints: 1,
+      });
+      expect((await lotsOf(other))[0].remaining).toBe(500);
+    });
+
+    it('an ended lot is never spent, even before the expiry job reaches it', async () => {
+      const me = person();
+      const soon = minutes(NOW, 60);
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'bump',
+          sourceRef: ref('soon'),
+          points: 40,
+          expiresAt: soon,
+        },
+        at,
+      );
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('later'),
+          points: 10,
+          expiresAt: MARCH,
+        },
+        at,
+      );
+      const later = { now: minutes(soon, 1) };
+      expect((await points.view(me, later.now)).balance).toBe(10);
+      const err = await refusal(
+        points.hold(
+          {
+            wawuUserId: me,
+            purpose: 'ai_job',
+            reference: ref('j'),
+            points: 11,
+          },
+          later,
+        ),
+      );
+      expect(err.detail.balancePoints).toBe(10);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('the same grant twice grants once', () => {
+    it('a repeated reference returns the first lot and writes nothing', async () => {
+      const me = person();
+      const sourceRef = ref('purchase');
+      const first = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'tier_bonus',
+          sourceRef,
+          points: 600,
+          expiresAt: MARCH,
+        },
+        at,
+      );
+      // A replayed webhook computes a later end; the first grant's end stands.
+      const again = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'tier_bonus',
+          sourceRef,
+          points: 600,
+          expiresAt: minutes(MARCH, 5),
+        },
+        at,
+      );
+      expect(first.granted).toBe(true);
+      expect(again).toEqual({
+        lotId: first.lotId,
+        granted: false,
+        points: 600,
+        expiresAt: MARCH,
+      });
+      expect(await prisma.pointLot.count({ where: { wawuUserId: me } })).toBe(
+        1,
+      );
+      expect(
+        await prisma.pointLedger.count({ where: { wawuUserId: me } }),
+      ).toBe(1);
+      expect((await points.view(me, NOW)).balance).toBe(600);
+    });
+
+    it('ten grants of one reference at once make one lot and one ledger row', async () => {
+      const me = person();
+      const sourceRef = ref('race');
+      const results = await Promise.all(
+        Array.from({ length: 10 }, () =>
+          points.grant(
+            {
+              wawuUserId: me,
+              source: 'pack',
+              sourceRef,
+              points: 1000,
+              expiresAt: JANUARY,
+            },
+            at,
+          ),
+        ),
+      );
+      expect(results.filter((r) => r.granted)).toHaveLength(1);
+      expect(new Set(results.map((r) => r.lotId)).size).toBe(1);
+      expect(
+        await prisma.pointLedger.count({ where: { wawuUserId: me } }),
+      ).toBe(1);
+      expect((await points.view(me, NOW)).balance).toBe(1000);
+    });
+
+    it('one reference for another person or another amount is refused', async () => {
+      const me = person();
+      const other = person();
+      const sourceRef = ref('shared');
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'referral',
+          sourceRef,
+          points: 100,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const otherPerson = await refusal(
+        points.grant(
+          {
+            wawuUserId: other,
+            source: 'referral',
+            sourceRef,
+            points: 100,
+            expiresAt: JANUARY,
+          },
+          at,
+        ),
+      );
+      expect(otherPerson.code).toBe('points_grant_conflict');
+      const otherAmount = await refusal(
+        points.grant(
+          {
+            wawuUserId: me,
+            source: 'referral',
+            sourceRef,
+            points: 101,
+            expiresAt: JANUARY,
+          },
+          at,
+        ),
+      );
+      expect(otherAmount.code).toBe('points_grant_conflict');
+      expect(
+        await prisma.pointLot.count({ where: { wawuUserId: other } }),
+      ).toBe(0);
+      // The same reference under another source is another grant.
+      const pack = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef,
+          points: 5,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      expect(pack.granted).toBe(true);
+    });
+
+    it('two people racing for one reference: one lot, one refusal', async () => {
+      const a = person();
+      const b = person();
+      const sourceRef = ref('race-two');
+      const settled = await Promise.allSettled([
+        points.grant(
+          {
+            wawuUserId: a,
+            source: 'pack',
+            sourceRef,
+            points: 50,
+            expiresAt: JANUARY,
+          },
+          at,
+        ),
+        points.grant(
+          {
+            wawuUserId: b,
+            source: 'pack',
+            sourceRef,
+            points: 50,
+            expiresAt: JANUARY,
+          },
+          at,
+        ),
+      ]);
+      expect(settled.filter((s) => s.status === 'fulfilled')).toHaveLength(1);
+      const rejected = settled.find(
+        (s) => s.status === 'rejected',
+      ) as PromiseRejectedResult;
+      expect((rejected.reason as PointsError).code).toBe(
+        'points_grant_conflict',
+      );
+      expect(
+        await prisma.pointLot.count({ where: { sourceRef, source: 'pack' } }),
+      ).toBe(1);
+    });
+
+    it.each([
+      ['zero points', { points: 0 }],
+      ['a fraction', { points: 1.5 }],
+      ['below zero', { points: -5 }],
+      ['an end in the past', { expiresAt: minutes(NOW, -1) }],
+      ['an end now', { expiresAt: NOW }],
+      ['no reference', { sourceRef: '' }],
+      ['a reference too long', { sourceRef: 'r'.repeat(201) }],
+    ])('refuses %s and writes nothing', async (_what, change) => {
+      const me = person();
+      const err = await refusal(
+        points.grant(
+          {
+            wawuUserId: me,
+            source: 'pack',
+            sourceRef: ref('bad'),
+            points: 10,
+            expiresAt: JANUARY,
+            ...change,
+          },
+          at,
+        ),
+      );
+      expect(err.code).toBe('points_invalid');
+      expect(await prisma.pointLot.count({ where: { wawuUserId: me } })).toBe(
+        0,
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('two holds at once never take the balance below zero', () => {
+    it('eight holds of 30 against 100 points: three are held, five refused', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('a'),
+          points: 60,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('b'),
+          points: 40,
+          expiresAt: MARCH,
+        },
+        at,
+      );
+      const settled = await Promise.allSettled(
+        Array.from({ length: 8 }, (_, i) =>
+          points.hold(
+            {
+              wawuUserId: me,
+              purpose: 'ai_job',
+              reference: ref(`h${i}`),
+              points: 30,
+            },
+            at,
+          ),
+        ),
+      );
+      const held = settled.filter((s) => s.status === 'fulfilled');
+      const refused = settled.filter((s) => s.status === 'rejected');
+      expect(held).toHaveLength(3);
+      expect(refused).toHaveLength(5);
+      for (const r of refused) {
+        expect((r.reason as PointsError).code).toBe('insufficient_points');
+        expect((r.reason as PointsError).detail.balancePoints).toBe(10);
+      }
+      const lots = await lotsOf(me);
+      expect(lots.map((l) => l.remaining)).toEqual([0, 10]);
+      expect((await points.view(me, NOW)).balance).toBe(10);
+      expect(await prisma.pointHold.count({ where: { wawuUserId: me } })).toBe(
+        3,
+      );
+      await expectLotsMatchLedger(me);
+    });
+
+    it('two holds of 60 against 100 at once: exactly one is held', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('a'),
+          points: 100,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const settled = await Promise.allSettled([
+        points.hold(
+          {
+            wawuUserId: me,
+            purpose: 'ai_job',
+            reference: ref('x'),
+            points: 60,
+          },
+          at,
+        ),
+        points.hold(
+          {
+            wawuUserId: me,
+            purpose: 'cash_out',
+            reference: ref('y'),
+            points: 60,
+          },
+          at,
+        ),
+      ]);
+      expect(settled.map((s) => s.status).sort()).toEqual([
+        'fulfilled',
+        'rejected',
+      ]);
+      expect((await lotsOf(me))[0].remaining).toBe(40);
+      await expectLotsMatchLedger(me);
+    });
+
+    it('the same hold asked for twice at once holds once', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('a'),
+          points: 100,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const reference = ref('same-job');
+      const [one, two] = await Promise.all([
+        points.hold(
+          { wawuUserId: me, purpose: 'ai_job', reference, points: 70 },
+          at,
+        ),
+        points.hold(
+          { wawuUserId: me, purpose: 'ai_job', reference, points: 70 },
+          at,
+        ),
+      ]);
+      expect(one.holdId).toBe(two.holdId);
+      expect([one.replayed, two.replayed].sort()).toEqual([false, true]);
+      expect((await lotsOf(me))[0].remaining).toBe(30);
+      // Another person or amount on the same reference is refused.
+      const err = await refusal(
+        points.hold(
+          { wawuUserId: me, purpose: 'ai_job', reference, points: 10 },
+          at,
+        ),
+      );
+      expect(err.code).toBe('points_hold_conflict');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('commit and release', () => {
+    it('a released hold returns its points to the same lots', async () => {
+      const me = person();
+      const jan = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'tier_bonus',
+          sourceRef: ref('jan'),
+          points: 100,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const mar = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('mar'),
+          points: 300,
+          expiresAt: MARCH,
+        },
+        at,
+      );
+      // Spend some of January first, so the release has to find its exact lots.
+      await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'ai_job',
+          reference: ref('earlier'),
+          points: 30,
+        },
+        at,
+      );
+
+      const reference = ref('voiceover');
+      const held = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'ai_job',
+          reference,
+          points: 250,
+          title: 'VoiceOver',
+        },
+        at,
+      );
+      expect(held.parts).toEqual([
+        { lotId: jan.lotId, points: 70 },
+        { lotId: mar.lotId, points: 180 },
+      ]);
+      const released = await points.release(
+        { purpose: 'ai_job', reference },
+        at,
+      );
+      expect(released.state).toBe('released');
+      expect(released.replayed).toBe(false);
+
+      const lots = await lotsOf(me);
+      expect(lots.map((l) => [l.id, l.remaining])).toEqual([
+        [jan.lotId, 70],
+        [mar.lotId, 300],
+      ]);
+      const rows = (await ledgerOf(me)).filter((r) => r.holdId === held.holdId);
+      expect(rows.map((r) => [r.reason, r.lotId, r.delta])).toEqual([
+        ['hold', jan.lotId, -70],
+        ['hold', mar.lotId, -180],
+        ['release', jan.lotId, 70],
+        ['release', mar.lotId, 180],
+      ]);
+
+      // Again: nothing more. Committing it now is refused.
+      const again = await points.release({ holdId: held.holdId }, at);
+      expect(again.replayed).toBe(true);
+      expect(
+        (await ledgerOf(me)).filter((r) => r.holdId === held.holdId),
+      ).toHaveLength(4);
+      const late = await refusal(points.commit({ holdId: held.holdId }, at));
+      expect(late.code).toBe('points_hold_settled');
+      expect(late.message).toBe('Those points were already given back.');
+      await expectLotsMatchLedger(me);
+    });
+
+    it('a committed hold stays spent and cannot be released', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('a'),
+          points: 100,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const held = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'ai_job',
+          reference: ref('c'),
+          points: 40,
+          title: 'Captions',
+        },
+        at,
+      );
+      const rowsBefore = await ledgerOf(me);
+      const done = await points.commit({ holdId: held.holdId }, at);
+      expect(done).toMatchObject({
+        state: 'committed',
+        points: 40,
+        replayed: false,
+      });
+      // Committing writes no ledger row: the hold already moved the points.
+      expect(await ledgerOf(me)).toEqual(rowsBefore);
+      expect((await points.commit({ holdId: held.holdId }, at)).replayed).toBe(
+        true,
+      );
+      const err = await refusal(points.release({ holdId: held.holdId }, at));
+      expect(err.code).toBe('points_hold_settled');
+      expect(err.message).toBe('Those points were already spent.');
+      expect((await points.view(me, NOW)).balance).toBe(60);
+      const hold = await prisma.pointHold.findUniqueOrThrow({
+        where: { id: held.holdId },
+      });
+      expect(hold.settledAt).toEqual(NOW);
+    });
+
+    it('an unknown hold is not found', async () => {
+      const err = await refusal(points.commit({ holdId: randomUUID() }, at));
+      expect(err.code).toBe('points_hold_not_found');
+      expect(err.getStatus()).toBe(404);
+    });
+
+    it('points given back to a lot that ended meanwhile end with it', async () => {
+      const me = person();
+      const soon = minutes(NOW, 30);
+      const lot = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'bump',
+          sourceRef: ref('soon'),
+          points: 100,
+          expiresAt: soon,
+        },
+        at,
+      );
+      const held = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'ai_job',
+          reference: ref('long-job'),
+          points: 80,
+        },
+        at,
+      );
+      const after = minutes(soon, 5);
+      // The expiry job takes the 20 the lot still had.
+      expect((await points.expireLapsed(after)).points).toBeGreaterThanOrEqual(
+        20,
+      );
+      await points.release({ holdId: held.holdId }, { now: after });
+
+      const rows = await ledgerOf(me);
+      expect(rows.map((r) => [r.reason, r.delta])).toEqual([
+        ['grant', 100],
+        ['hold', -80],
+        ['expire', -20],
+        ['release', 80],
+        ['expire', -80],
+      ]);
+      const stored = await prisma.pointLot.findUniqueOrThrow({
+        where: { id: lot.lotId },
+      });
+      expect(stored.remaining).toBe(0);
+      expect((await points.view(me, after)).balance).toBe(0);
+      await expectLotsMatchLedger(me);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('the expiry job', () => {
+    it('each lapsed lot leaves the balance with one ledger row', async () => {
+      const me = person();
+      const t1 = minutes(NOW, 10);
+      const t2 = minutes(NOW, 20);
+      const a = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('a'),
+          points: 100,
+          expiresAt: t1,
+        },
+        at,
+      );
+      const b = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'referral',
+          sourceRef: ref('b'),
+          points: 50,
+          expiresAt: t2,
+        },
+        at,
+      );
+      const c = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'tier_bonus',
+          sourceRef: ref('c'),
+          points: 30,
+          expiresAt: MARCH,
+        },
+        at,
+      );
+      // Spend part of the first lot, and all of a fourth that ends with them.
+      await points.hold(
+        { wawuUserId: me, purpose: 'ai_job', reference: ref('j'), points: 25 },
+        at,
+      );
+      const empty = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('empty'),
+          points: 5,
+          expiresAt: t1,
+        },
+        at,
+      );
+      // 80 more: the 75 left in `a`, then all of `empty` (same end, granted later).
+      await points.hold(
+        { wawuUserId: me, purpose: 'ai_job', reference: ref('k'), points: 80 },
+        at,
+      );
+      const before = await lotsOf(me);
+      const remaining = Object.fromEntries(
+        before.map((l) => [l.id, l.remaining]),
+      );
+      expect(remaining[a.lotId] + remaining[empty.lotId]).toBe(0);
+      expect(remaining[b.lotId]).toBe(50);
+      expect(remaining[c.lotId]).toBe(30);
+
+      // Two passes at once after both ends: one row per lot that still had points.
+      const after = minutes(t2, 1);
+      const [x, y] = await Promise.all([
+        points.expireLapsed(after),
+        points.expireLapsed(after),
+      ]);
+      const mine = (await ledgerOf(me)).filter((r) => r.reason === 'expire');
+      expect(mine.map((r) => [r.lotId, r.delta])).toEqual([[b.lotId, -50]]);
+      expect(x.points + y.points).toBeGreaterThanOrEqual(50);
+      const view = await points.view(me, after);
+      expect(view.balance).toBe(30);
+      expect(view.movements[0]).toMatchObject({
+        reason: 'expire',
+        points: -50,
+        label: 'Expired',
+      });
+
+      // A later pass finds nothing more of theirs.
+      await points.expireLapsed(minutes(after, 1));
+      expect(
+        (await ledgerOf(me)).filter((r) => r.reason === 'expire'),
+      ).toHaveLength(1);
+      const lapsed = await prisma.pointLot.findUniqueOrThrow({
+        where: { id: b.lotId },
+      });
+      expect(lapsed.remaining).toBe(0);
+      expect(lapsed.lapsedAt).toEqual(after);
+      await expectLotsMatchLedger(me);
+    });
+
+    it('a lot the database refuses is reported and the rest of the pass goes on', async () => {
+      const me = person();
+      const end = minutes(NOW, 2);
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('x1'),
+          points: 3,
+          expiresAt: end,
+        },
+        at,
+      );
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('x2'),
+          points: 4,
+          expiresAt: end,
+        },
+        at,
+      );
+      // The first write-off of the pass is refused, as the database refuses a
+      // lot whose points no longer match its ledger.
+      let calls = 0;
+      const refusesFirst = new Proxy(prisma, {
+        get(target, key, receiver) {
+          if (key === '$transaction') {
+            return (fn: Parameters<PrismaService['$transaction']>[0]) =>
+              calls++ === 0
+                ? Promise.reject(new Error('refused'))
+                : target.$transaction(fn as never);
+          }
+          const value: unknown = Reflect.get(target, key, receiver);
+          if (typeof value !== 'function') return value;
+          return (value as (...args: unknown[]) => unknown).bind(
+            target,
+          ) as unknown;
+        },
+      });
+      const after = minutes(end, 1);
+      const outcome = await new PointsService(refusesFirst).expireLapsed(after);
+      expect(outcome.failed).toBe(1);
+      expect(
+        (await ledgerOf(me)).filter((r) => r.reason === 'expire'),
+      ).toHaveLength(1);
+      // The refused lot is untouched and the next pass writes it off.
+      await points.expireLapsed(after);
+      const expired = (await ledgerOf(me)).filter((r) => r.reason === 'expire');
+      expect(expired.map((r) => r.delta).sort()).toEqual([-3, -4]);
+      await expectLotsMatchLedger(me);
+    });
+
+    it('the scheduled job runs a pass and never throws', async () => {
+      const me = person();
+      const soon = minutes(NOW, 1);
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'returned',
+          sourceRef: ref('r'),
+          points: 7,
+          expiresAt: soon,
+        },
+        at,
+      );
+      await new PointsExpiryService(points).run(minutes(soon, 1));
+      expect((await ledgerOf(me)).map((r) => [r.reason, r.delta])).toEqual([
+        ['grant', 7],
+        ['expire', -7],
+      ]);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('the ledger is append-only', () => {
+    let me: string;
+    let rowId: string;
+    let lotId: string;
+
+    beforeAll(async () => {
+      me = person();
+      const lot = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('ao'),
+          points: 10,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('ao2'),
+          points: 5,
+          expiresAt: MARCH,
+        },
+        at,
+      );
+      lotId = lot.lotId;
+      rowId = (await ledgerOf(me))[0].id;
+    });
+
+    it('an UPDATE of a ledger row is refused by the database', async () => {
+      await expect(
+        prisma.pointLedger.update({
+          where: { id: rowId },
+          data: { delta: 1000 },
+        }),
+      ).rejects.toThrow(/append-only/);
+      await expect(
+        prisma.$executeRawUnsafe(
+          'UPDATE "PointLedger" SET "reference" = $1 WHERE "id" = $2',
+          'x',
+          rowId,
+        ),
+      ).rejects.toThrow(/append-only/);
+      expect(
+        (await prisma.pointLedger.findUniqueOrThrow({ where: { id: rowId } }))
+          .delta,
+      ).toBe(10);
+    });
+
+    it('a DELETE of some of a person’s rows is refused by the database', async () => {
+      await expect(
+        prisma.pointLedger.delete({ where: { id: rowId } }),
+      ).rejects.toThrow(/append-only/);
+      await expect(
+        prisma.$executeRawUnsafe(
+          'DELETE FROM "PointLedger" WHERE "id" = $1',
+          rowId,
+        ),
+      ).rejects.toThrow(/append-only/);
+      await expect(
+        prisma.$executeRawUnsafe('TRUNCATE "PointLedger"'),
+      ).rejects.toThrow(/append-only/);
+      expect(
+        await prisma.pointLedger.count({ where: { wawuUserId: me } }),
+      ).toBe(2);
+    });
+
+    it('only the purge deletes ledger rows: one person, all of them, with the purge setting', async () => {
+      const other = person();
+      await points.grant(
+        {
+          wawuUserId: other,
+          source: 'pack',
+          sourceRef: ref('ao3'),
+          points: 7,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const total = await prisma.pointLedger.count();
+      // A bare delete of the whole table (every person's whole ledger).
+      await expect(
+        prisma.$executeRawUnsafe('DELETE FROM "PointLedger"'),
+      ).rejects.toThrow(/only by the account purge/);
+      // One person's whole ledger, without the purge setting.
+      await expect(
+        prisma.pointLedger.deleteMany({ where: { wawuUserId: me } }),
+      ).rejects.toThrow(/only by the account purge/);
+      // The setting names one person; the statement takes another's rows too.
+      const both = (who: string) =>
+        prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('wawu.points_purge', ${who}::text || ':' || txid_current()::text, true)`;
+          await tx.pointLedger.deleteMany({
+            where: { wawuUserId: { in: [me, other] } },
+          });
+        });
+      await expect(both(me)).rejects.toThrow(/only the purged person/);
+      // The setting names the person, but only some of their rows go.
+      await expect(
+        prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('wawu.points_purge', ${me}::text || ':' || txid_current()::text, true)`;
+          await tx.pointLedger.delete({ where: { id: rowId } });
+        }),
+      ).rejects.toThrow(/all together or not at all/);
+      // The setting ends with its transaction.
+      await expect(
+        prisma.pointLedger.deleteMany({ where: { wawuUserId: other } }),
+      ).rejects.toThrow(/only by the account purge/);
+      // The person's id alone (round 2's form, without the transaction id)
+      // is no longer enough (round 3, U4).
+      await expect(
+        prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT set_config('wawu.points_purge', ${other}, true)`;
+          await tx.pointLedger.deleteMany({ where: { wawuUserId: other } });
+        }),
+      ).rejects.toThrow(/only by the account purge/);
+      expect(await prisma.pointLedger.count()).toBe(total);
+      // The purge step itself takes all of one person's rows and nobody else's.
+      expect(await purgePersonPoints(prisma, other)).toEqual({
+        PointLedger: 1,
+        PointHold: 0,
+        PointLot: 1,
+      });
+      expect(await prisma.pointLedger.count()).toBe(total - 1);
+      expect(
+        await prisma.pointLedger.count({ where: { wawuUserId: me } }),
+      ).toBe(2);
+    });
+
+    it('a lot cannot change without its ledger row, nor change what it is', async () => {
+      await expect(
+        prisma.pointLot.update({
+          where: { id: lotId },
+          data: { remaining: 3 },
+        }),
+      ).rejects.toThrow(/ledger sums to 10/);
+      await expect(
+        prisma.pointLot.update({
+          where: { id: lotId },
+          data: { expiresAt: MARCH },
+        }),
+      ).rejects.toThrow(/only its remaining points/);
+      await expect(
+        prisma.pointLot.update({
+          where: { id: lotId },
+          data: { remaining: 11 },
+        }),
+      ).rejects.toThrow();
+      expect(
+        (await prisma.pointLot.findUniqueOrThrow({ where: { id: lotId } }))
+          .remaining,
+      ).toBe(10);
+    });
+
+    it('no code outside a spec and the purge step updates or deletes ledger rows', () => {
+      const src = join(__dirname, '..', '..');
+      const offenders: string[] = [];
+      const walk = (dir: string): void => {
+        for (const name of readdirSync(dir)) {
+          const full = join(dir, name);
+          if (statSync(full).isDirectory()) {
+            if (name !== 'tests') walk(full);
+          } else if (name.endsWith('.ts') && !name.endsWith('.spec.ts')) {
+            const text = readFileSync(full, 'utf8');
+            if (
+              /pointLedger\s*\.\s*(update|updateMany|upsert|delete|deleteMany)\b/.test(
+                text,
+              ) ||
+              /\b(UPDATE|DELETE\s+FROM)\s+"?(public"?\."?)?PointLedger\b/i.test(
+                text,
+              )
+            ) {
+              offenders.push(full.slice(src.length + 1));
+            }
+          }
+        }
+      };
+      walk(src);
+      // The purge's points step is the one delete, and the trigger lets
+      // nothing else through.
+      expect(offenders).toEqual([join('points', 'points-purge.ts')]);
+    });
+
+    it('a full grant, hold, commit, release and expiry sends no UPDATE or DELETE to the ledger', async () => {
+      const logged = new PrismaClient({
+        adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
+        log: [{ emit: 'event', level: 'query' }],
+      });
+      const sql: string[] = [];
+      logged.$on('query', (e) => sql.push(e.query));
+      try {
+        const svc = new PointsService(logged as unknown as PrismaService);
+        const who = person();
+        const soon = minutes(NOW, 15);
+        await svc.grant(
+          {
+            wawuUserId: who,
+            source: 'pack',
+            sourceRef: ref('l1'),
+            points: 50,
+            expiresAt: soon,
+          },
+          at,
+        );
+        await svc.grant(
+          {
+            wawuUserId: who,
+            source: 'pack',
+            sourceRef: ref('l2'),
+            points: 50,
+            expiresAt: MARCH,
+          },
+          at,
+        );
+        const h1 = await svc.hold(
+          {
+            wawuUserId: who,
+            purpose: 'ai_job',
+            reference: ref('q1'),
+            points: 30,
+          },
+          at,
+        );
+        await svc.commit({ holdId: h1.holdId }, at);
+        const h2 = await svc.hold(
+          {
+            wawuUserId: who,
+            purpose: 'cash_out',
+            reference: ref('q2'),
+            points: 40,
+          },
+          at,
+        );
+        const later = minutes(soon, 1);
+        await svc.expireLapsed(later);
+        await svc.release({ holdId: h2.holdId }, { now: later });
+        await svc.view(who, later);
+      } finally {
+        await logged.$disconnect();
+      }
+      expect(
+        sql.some((q) => /INSERT INTO "public"\."PointLedger"/.test(q)),
+      ).toBe(true);
+      expect(
+        sql.filter((q) => /^\s*(UPDATE|DELETE)\b[\s\S]*"PointLedger"/i.test(q)),
+      ).toEqual([]);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('what GET /me/points reads', () => {
+    it('balance, live lots soonest first, the next end and the last 20 movements, newest first', async () => {
+      const me = person();
+      const other = person();
+      await points.grant(
+        {
+          wawuUserId: other,
+          source: 'pack',
+          sourceRef: ref('o'),
+          points: 999,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const mar = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('mar'),
+          points: 1000,
+          expiresAt: MARCH,
+        },
+        at,
+      );
+      const jan = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'tier_bonus',
+          sourceRef: ref('jan'),
+          points: 100,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      // 24 more movements: 12 holds, 6 committed and 6 released.
+      for (let i = 0; i < 12; i += 1) {
+        const h = await points.hold(
+          {
+            wawuUserId: me,
+            purpose: 'ai_job',
+            reference: ref(`v${i}`),
+            points: 10,
+            title: 'VoiceOver',
+          },
+          at,
+        );
+        if (i % 2 === 0) await points.commit({ holdId: h.holdId }, at);
+        else await points.release({ holdId: h.holdId }, at);
+      }
+      const pending = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'cash_out',
+          reference: ref('cash'),
+          points: 5,
+        },
+        at,
+      );
+
+      const view = await points.view(me, NOW);
+      expect(view.balance).toBe(1100 - 60 - 5);
+      expect(view.lotCount).toBe(2);
+      expect(view.lots).toEqual([
+        {
+          id: jan.lotId,
+          points: 35,
+          granted: 100,
+          source: 'tier_bonus',
+          label: 'Tier bonus',
+          expiresAt: JANUARY.toISOString(),
+        },
+        {
+          id: mar.lotId,
+          points: 1000,
+          granted: 1000,
+          source: 'pack',
+          label: 'Bought points',
+          expiresAt: MARCH.toISOString(),
+        },
+      ]);
+      expect(view.nextExpiry).toEqual({
+        points: 35,
+        expiresAt: JANUARY.toISOString(),
+      });
+
+      expect(view.movements).toHaveLength(POINTS_VIEW.movements);
+      const all = await prisma.pointLedger.findMany({
+        where: { wawuUserId: me },
+        orderBy: { seq: 'desc' },
+        take: 20,
+      });
+      expect(view.movements.map((m) => m.id)).toEqual(all.map((r) => r.id));
+      expect(view.movements[0]).toMatchObject({
+        reason: 'hold',
+        points: -5,
+        label: 'Converting to cash',
+        pending: true,
+      });
+      expect(pending.state).toBe('held');
+      const labels = new Set(view.movements.map((m) => m.label));
+      expect(labels).toEqual(
+        new Set([
+          'Tier bonus',
+          'Converting to cash',
+          'Returned from VoiceOver',
+          'Held for VoiceOver',
+          'Spent on VoiceOver',
+        ]),
+      );
+      for (const m of view.movements) {
+        expect(Number.isInteger(m.points)).toBe(true);
+        expect(m.label).not.toMatch(/₦|\$|naira|dollar|\u2014/i);
+        if (m.reason !== 'hold') expect(m.pending).toBe(false);
+      }
+      // The other person's lot and movement are nowhere.
+      const theirs = [
+        ...(await lotsOf(other)).map((l) => l.id),
+        ...(await ledgerOf(other)).map((r) => r.id),
+      ];
+      expect(theirs).toHaveLength(2);
+      const shown = [
+        ...view.lots.map((l) => l.id),
+        ...view.movements.map((m) => m.id),
+      ];
+      expect(shown.filter((id) => theirs.includes(id))).toEqual([]);
+    });
+
+    it('someone with no points sees an empty view', async () => {
+      expect(await points.view(person(), NOW)).toEqual({
+        balance: 0,
+        nextExpiry: null,
+        lots: [],
+        lotCount: 0,
+        movements: [],
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('account deletion and the data export', () => {
+    it('the export holds the person’s own lots, holds and movements only', async () => {
+      const me = person();
+      const other = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('e1'),
+          points: 20,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      await points.grant(
+        {
+          wawuUserId: other,
+          source: 'pack',
+          sourceRef: ref('e2'),
+          points: 30,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'ai_job',
+          reference: ref('e3'),
+          points: 5,
+          title: 'Captions',
+        },
+        at,
+      );
+      const section = (key: string) =>
+        EXPORT_SECTIONS.find((s) => s.key === key)!;
+      const lots = (await section('pointLots').load(prisma, me)) as Array<
+        Record<string, unknown>
+      >;
+      const holds = (await section('pointHolds').load(prisma, me)) as Array<
+        Record<string, unknown>
+      >;
+      const moves = (await section('pointMovements').load(prisma, me)) as Array<
+        Record<string, unknown>
+      >;
+      expect(lots).toHaveLength(1);
+      expect(lots[0]).toMatchObject({
+        source: 'pack',
+        quantity: 20,
+        remaining: 15,
+      });
+      expect(lots[0]).not.toHaveProperty('sourceRef');
+      expect(holds).toEqual([
+        expect.objectContaining({
+          title: 'Captions',
+          quantity: 5,
+          state: 'held',
+        }),
+      ]);
+      expect(moves.map((m) => m.delta)).toEqual([-5, 20]);
+      expect(moves[0]).not.toHaveProperty('reference');
+    });
+
+    it('deleting an account removes all of its points rows and nobody else’s', async () => {
+      const me = person();
+      const other = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('d1'),
+          points: 20,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const h = await points.hold(
+        { wawuUserId: me, purpose: 'ai_job', reference: ref('d2'), points: 5 },
+        at,
+      );
+      await points.release({ holdId: h.holdId }, at);
+      await points.grant(
+        {
+          wawuUserId: other,
+          source: 'pack',
+          sourceRef: ref('d3'),
+          points: 30,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+
+      const purged = await new AccountPurgeService(prisma).purge(me);
+      expect(purged.pointsLeft).toBe(false);
+      expect(purged.deleted).toMatchObject({
+        'PointLedger.wawuUserId': 3,
+        'PointHold.wawuUserId': 1,
+        'PointLot.wawuUserId': 1,
+      });
+      expect(
+        await prisma.pointLedger.count({ where: { wawuUserId: me } }),
+      ).toBe(0);
+      expect(await prisma.pointLot.count({ where: { wawuUserId: me } })).toBe(
+        0,
+      );
+      expect(
+        await prisma.pointLedger.count({ where: { wawuUserId: other } }),
+      ).toBe(1);
+      expect((await points.view(other, NOW)).balance).toBe(30);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('round 2: what the verifier found', () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    it('the next end counts every live lot that ends then, not only the 50 listed (D1)', async () => {
+      const me = person();
+      const end = minutes(NOW, 30 * 24 * 60);
+      for (let i = 0; i < 60; i += 1) {
+        await points.grant(
+          {
+            wawuUserId: me,
+            source: 'referral',
+            sourceRef: ref(`d1-${i}`),
+            points: 1,
+            expiresAt: end,
+          },
+          at,
+        );
+      }
+      for (let i = 0; i < 5; i += 1) {
+        await points.grant(
+          {
+            wawuUserId: me,
+            source: 'pack',
+            sourceRef: ref(`d1-late-${i}`),
+            points: 100,
+            expiresAt: MARCH,
+          },
+          at,
+        );
+      }
+      const view = await points.view(me, NOW);
+      expect(view.balance).toBe(560);
+      expect(view.lotCount).toBe(65);
+      expect(view.lots).toHaveLength(POINTS_VIEW.lots);
+      expect(view.nextExpiry).toEqual({
+        points: 60,
+        expiresAt: end.toISOString(),
+      });
+    }, 120000);
+
+    it('two people holding one reference at the same moment: one hold and one 409, 50 rounds (D3)', async () => {
+      const a = person();
+      const b = person();
+      for (const who of [a, b]) {
+        await points.grant(
+          {
+            wawuUserId: who,
+            source: 'pack',
+            sourceRef: ref('d3'),
+            points: 1000,
+            expiresAt: JANUARY,
+          },
+          at,
+        );
+      }
+      for (let round = 0; round < 50; round += 1) {
+        const reference = ref(`d3-${round}`);
+        const settled = await Promise.allSettled(
+          [a, b].map((who) =>
+            points.hold(
+              { wawuUserId: who, purpose: 'ai_job', reference, points: 1 },
+              at,
+            ),
+          ),
+        );
+        const held = settled.filter((r) => r.status === 'fulfilled');
+        const refused = settled.filter(
+          (r): r is PromiseRejectedResult => r.status === 'rejected',
+        );
+        expect({ round, held: held.length, refused: refused.length }).toEqual({
+          round,
+          held: 1,
+          refused: 1,
+        });
+        expect(refused[0].reason).toBeInstanceOf(PointsError);
+        expect((refused[0].reason as PointsError).code).toBe(
+          'points_hold_conflict',
+        );
+        expect(
+          await prisma.pointHold.count({
+            where: { purpose: 'ai_job', reference },
+          }),
+        ).toBe(1);
+      }
+      expect(
+        (await points.view(a, NOW)).balance +
+          (await points.view(b, NOW)).balance,
+      ).toBe(1950);
+      await expectLotsMatchLedger(a);
+      await expectLotsMatchLedger(b);
+    }, 180000);
+
+    it.each([
+      ['the year 10000', new Date(Date.UTC(10000, 0, 1))],
+      ['the last JavaScript date', new Date(8.64e15)],
+      ['2100-01-01 itself', POINTS_LATEST_END],
+    ])(
+      'refuses an end at %s and the person’s view still reads (D4)',
+      async (_what, end) => {
+        const me = person();
+        const err = await refusal(
+          points.grant(
+            {
+              wawuUserId: me,
+              source: 'pack',
+              sourceRef: ref('d4'),
+              points: 5,
+              expiresAt: end,
+            },
+            at,
+          ),
+        );
+        expect(err.code).toBe('points_invalid');
+        expect(await prisma.pointLot.count({ where: { wawuUserId: me } })).toBe(
+          0,
+        );
+        expect((await points.view(me, NOW)).balance).toBe(0);
+      },
+    );
+
+    it('takes an end just before 2100, and the database refuses one after it (D4)', async () => {
+      const me = person();
+      const lastDay = new Date(POINTS_LATEST_END.getTime() - 1000);
+      const ok = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('d4-ok'),
+          points: 5,
+          expiresAt: lastDay,
+        },
+        at,
+      );
+      expect(ok.granted).toBe(true);
+      expect((await points.view(me, NOW)).nextExpiry).toEqual({
+        points: 5,
+        expiresAt: lastDay.toISOString(),
+      });
+      // Written past the service, as a caller mixing seconds and
+      // milliseconds might: the CHECK refuses it.
+      await expect(
+        prisma.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe(
+            `INSERT INTO "PointLot"(id,"wawuUserId",source,"sourceRef",quantity,remaining,"expiresAt") VALUES ($1,$2,'pack',$3,5,5,'10000-01-01')`,
+            randomUUID(),
+            me,
+            ref('d4-raw'),
+          );
+        }),
+      ).rejects.toThrow(/PointLot_expiresAt_bounded/);
+    });
+
+    it('a cancelled conversion reads as cancelled, never as still converting (D5)', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('d5'),
+          points: 100,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const h = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'cash_out',
+          reference: ref('d5-cash'),
+          points: 40,
+        },
+        at,
+      );
+      expect((await points.view(me, NOW)).movements[0]).toMatchObject({
+        label: 'Converting to cash',
+        pending: true,
+      });
+      await points.release({ holdId: h.holdId }, at);
+      const [returned, hold] = (await points.view(me, NOW)).movements;
+      expect(returned).toMatchObject({
+        reason: 'release',
+        points: 40,
+        label: 'Returned from a cancelled conversion',
+        pending: false,
+      });
+      expect(hold).toMatchObject({
+        reason: 'hold',
+        points: -40,
+        label: 'Conversion cancelled',
+        pending: false,
+      });
+      const done = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'cash_out',
+          reference: ref('d5-done'),
+          points: 10,
+        },
+        at,
+      );
+      await points.commit({ holdId: done.holdId }, at);
+      expect((await points.view(me, NOW)).movements[0]).toMatchObject({
+        label: 'Converted to cash',
+        pending: false,
+      });
+    });
+
+    it('a hold moves once: held to committed or released, never back (U2)', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('u2'),
+          points: 100,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const spent = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'ai_job',
+          reference: ref('u2-a'),
+          points: 30,
+        },
+        at,
+      );
+      await points.commit({ holdId: spent.holdId }, at);
+      const back = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'ai_job',
+          reference: ref('u2-b'),
+          points: 20,
+        },
+        at,
+      );
+      await points.release({ holdId: back.holdId }, at);
+      const raw = (sql: string, id: string) =>
+        prisma.$executeRawUnsafe(sql, id);
+      await expect(
+        raw(
+          `UPDATE "PointHold" SET state = 'held', "settledAt" = NULL WHERE id = $1`,
+          spent.holdId,
+        ),
+      ).rejects.toThrow(/never changes/);
+      await expect(
+        raw(
+          `UPDATE "PointHold" SET state = 'committed' WHERE id = $1`,
+          back.holdId,
+        ),
+      ).rejects.toThrow(/never changes/);
+      await expect(
+        raw(
+          `UPDATE "PointHold" SET "settledAt" = now() WHERE id = $1`,
+          spent.holdId,
+        ),
+      ).rejects.toThrow(/never changes/);
+      await expect(
+        raw(`UPDATE "PointHold" SET quantity = 1 WHERE id = $1`, spent.holdId),
+      ).rejects.toThrow(/only its state/);
+      const running = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'ai_job',
+          reference: ref('u2-c'),
+          points: 10,
+        },
+        at,
+      );
+      await expect(
+        raw(
+          `UPDATE "PointHold" SET "wawuUserId" = 'someone-else' WHERE id = $1`,
+          running.holdId,
+        ),
+      ).rejects.toThrow(/only its state/);
+      // The service's own moves still work.
+      expect((await points.commit({ holdId: running.holdId }, at)).state).toBe(
+        'committed',
+      );
+      expect((await points.view(me, NOW)).balance).toBe(60);
+    });
+
+    it('equal ends spend the oldest grant first (the verifier’s tie mutant)', async () => {
+      const me = person();
+      const older = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('tie-1'),
+          points: 10,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      await sleep(15);
+      const newer = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('tie-2'),
+          points: 10,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const h = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'ai_job',
+          reference: ref('tie-h'),
+          points: 12,
+        },
+        at,
+      );
+      expect(h.parts).toEqual([
+        { lotId: older.lotId, points: 10 },
+        { lotId: newer.lotId, points: 2 },
+      ]);
+    });
+
+    it('a lot ending exactly now is not spendable and the pass at that instant writes it off (the verifier’s boundary mutants)', async () => {
+      const me = person();
+      const end = minutes(NOW, 10);
+      const ending = await points.grant(
+        {
+          wawuUserId: me,
+          source: 'bump',
+          sourceRef: ref('edge'),
+          points: 30,
+          expiresAt: end,
+        },
+        at,
+      );
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('edge-live'),
+          points: 5,
+          expiresAt: MARCH,
+        },
+        at,
+      );
+      const atEnd = { now: end };
+      const view = await points.view(me, end);
+      expect(view.balance).toBe(5);
+      expect(view.lots.map((l) => l.id)).not.toContain(ending.lotId);
+      const err = await refusal(
+        points.hold(
+          {
+            wawuUserId: me,
+            purpose: 'ai_job',
+            reference: ref('edge-h'),
+            points: 6,
+          },
+          atEnd,
+        ),
+      );
+      expect(err.detail.balancePoints).toBe(5);
+      // One millisecond before the end it was still live.
+      expect((await points.view(me, new Date(end.getTime() - 1))).balance).toBe(
+        35,
+      );
+      await points.expireLapsed(end);
+      expect(
+        (await ledgerOf(me))
+          .filter((r) => r.reason === 'expire')
+          .map((r) => [r.lotId, r.delta]),
+      ).toEqual([[ending.lotId, -30]]);
+    });
+
+    it('the purge and a hold for the same person never leave rows behind, 50 rounds (U1)', async () => {
+      let heldFirst = 0;
+      let purgedFirst = 0;
+      for (let round = 0; round < 50; round += 1) {
+        const who = person();
+        await points.grant(
+          {
+            wawuUserId: who,
+            source: 'pack',
+            sourceRef: ref(`u1-${round}`),
+            points: 100,
+            expiresAt: JANUARY,
+          },
+          at,
+        );
+        const [purge, hold] = await Promise.allSettled([
+          purgePersonPoints(prisma, who),
+          points.hold(
+            {
+              wawuUserId: who,
+              purpose: 'ai_job',
+              reference: ref(`u1h-${round}`),
+              points: 60,
+            },
+            at,
+          ),
+        ]);
+        expect(purge.status).toBe('fulfilled');
+        if (hold.status === 'fulfilled') {
+          heldFirst += 1;
+        } else {
+          purgedFirst += 1;
+          expect((hold.reason as PointsError).code).toBe('insufficient_points');
+        }
+        const left = await Promise.all([
+          prisma.pointLedger.count({ where: { wawuUserId: who } }),
+          prisma.pointHold.count({ where: { wawuUserId: who } }),
+          prisma.pointLot.count({ where: { wawuUserId: who } }),
+        ]);
+        expect({ round, left }).toEqual({ round, left: [0, 0, 0] });
+      }
+      expect(heldFirst + purgedFirst).toBe(50);
+    }, 180000);
+  });
+
+  // ---------------------------------------------------------------------------
+  describe('round 3: what the round 2 verifier found', () => {
+    const counts = (who: string) =>
+      Promise.all([
+        prisma.pointLedger.count({ where: { wawuUserId: who } }),
+        prisma.pointHold.count({ where: { wawuUserId: who } }),
+        prisma.pointLot.count({ where: { wawuUserId: who } }),
+      ]);
+    const rawClient = async (): Promise<Client> => {
+      const c = new Client({ connectionString: process.env.DATABASE_URL });
+      await c.connect();
+      return c;
+    };
+    /** Advisory locks waited on in this database right now. */
+    const waiting = async (): Promise<number> => {
+      const rows = await prisma.$queryRaw<Array<{ n: bigint }>>`
+        SELECT count(*)::bigint AS n FROM pg_locks
+         WHERE locktype = 'advisory' AND NOT granted
+           AND database = (SELECT oid FROM pg_database WHERE datname = current_database())`;
+      return Number(rows[0].n);
+    };
+
+    it('a commit and a release that waited while the purge deleted the hold answer points_hold_not_found, and nothing is written (D6)', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('d6'),
+          points: 100,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const h = await points.hold(
+        {
+          wawuUserId: me,
+          purpose: 'ai_job',
+          reference: ref('d6-h'),
+          points: 40,
+        },
+        at,
+      );
+      const c = await rawClient();
+      try {
+        // The purge's own steps, by hand: the lock first.
+        await c.query('BEGIN');
+        await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `points:${me}`,
+        ]);
+        const before = await waiting();
+        const release = points.release({ holdId: h.holdId }, at);
+        const commit = points.commit({ holdId: h.holdId }, at);
+        // Both have found the hold and now wait for the person's lock.
+        for (let i = 0; i < 100 && (await waiting()) < before + 2; i += 1) {
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        expect(await waiting()).toBeGreaterThanOrEqual(before + 2);
+        await c.query(
+          `SELECT set_config('wawu.points_purge', $1::text || ':' || txid_current()::text, true)`,
+          [me],
+        );
+        await c.query('DELETE FROM "PointLedger" WHERE "wawuUserId" = $1', [
+          me,
+        ]);
+        await c.query('DELETE FROM "PointHold" WHERE "wawuUserId" = $1', [me]);
+        await c.query('DELETE FROM "PointLot" WHERE "wawuUserId" = $1', [me]);
+        await c.query('COMMIT');
+        const settled = await Promise.allSettled([release, commit]);
+        for (const r of settled) {
+          expect(r.status).toBe('rejected');
+          const reason = (r as PromiseRejectedResult).reason as unknown;
+          expect(reason).toBeInstanceOf(PointsError);
+          expect((reason as PointsError).code).toBe('points_hold_not_found');
+          expect((reason as PointsError).getStatus()).toBe(404);
+        }
+      } finally {
+        await c.end();
+      }
+      expect(await counts(me)).toEqual([0, 0, 0]);
+    });
+
+    it('the purge racing a commit or a release, 50 rounds: only typed answers, nothing left (D6)', async () => {
+      let notFound = 0;
+      let settledFirst = 0;
+      for (let round = 0; round < 50; round += 1) {
+        const who = person();
+        await points.grant(
+          {
+            wawuUserId: who,
+            source: 'pack',
+            sourceRef: ref(`d6r-${round}`),
+            points: 100,
+            expiresAt: JANUARY,
+          },
+          at,
+        );
+        const h = await points.hold(
+          {
+            wawuUserId: who,
+            purpose: 'ai_job',
+            reference: ref(`d6rh-${round}`),
+            points: 30,
+          },
+          at,
+        );
+        const settle =
+          round % 2 === 0
+            ? points.commit({ holdId: h.holdId }, at)
+            : points.release({ holdId: h.holdId }, at);
+        const [purge, done] = await Promise.allSettled([
+          purgePersonPoints(prisma, who),
+          settle,
+        ]);
+        expect(purge.status).toBe('fulfilled');
+        if (done.status === 'fulfilled') {
+          settledFirst += 1;
+        } else {
+          expect(done.reason).toBeInstanceOf(PointsError);
+          expect((done.reason as PointsError).code).toBe(
+            'points_hold_not_found',
+          );
+          notFound += 1;
+        }
+        expect({ round, left: await counts(who) }).toEqual({
+          round,
+          left: [0, 0, 0],
+        });
+      }
+      expect(notFound + settledFirst).toBe(50);
+    }, 180000);
+
+    it('a purge flag set at session level in one transaction is refused in the next (U4)', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('u4'),
+          points: 9,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      const c = await rawClient();
+      try {
+        // Session level (is_local false), with that transaction's own id.
+        await c.query('BEGIN');
+        await c.query(
+          `SELECT set_config('wawu.points_purge', $1::text || ':' || txid_current()::text, false)`,
+          [me],
+        );
+        await c.query('COMMIT');
+        const left = await c.query<{ flag: string }>(
+          `SELECT current_setting('wawu.points_purge', true) AS flag`,
+        );
+        expect(left.rows[0].flag.startsWith(`${me}:`)).toBe(true);
+        // The next transaction on the same connection still carries it.
+        await c.query('BEGIN');
+        await expect(
+          c.query('DELETE FROM "PointLedger" WHERE "wawuUserId" = $1', [me]),
+        ).rejects.toThrow(/only by the account purge/);
+        await c.query('ROLLBACK');
+        // A plain SET naming the person and some transaction id: also refused.
+        await c.query(`SET wawu.points_purge = '${me}:1'`);
+        await c.query('BEGIN');
+        await expect(
+          c.query('DELETE FROM "PointLedger" WHERE "wawuUserId" = $1', [me]),
+        ).rejects.toThrow(/only by the account purge/);
+        await c.query('ROLLBACK');
+      } finally {
+        await c.end();
+      }
+      expect(await counts(me)).toEqual([1, 0, 1]);
+    });
+
+    it.each([
+      ['-infinity', '-infinity'],
+      ['1999-12-31', '1999-12-31 23:59:59'],
+      ['2000-01-01 itself', '2000-01-01 00:00:00'],
+    ])('the database refuses a lot ending at %s (N3)', async (_what, end) => {
+      const me = person();
+      await expect(
+        prisma.$transaction(async (tx) => {
+          await tx.$executeRawUnsafe(
+            `INSERT INTO "PointLot"(id,"wawuUserId",source,"sourceRef",quantity,remaining,"expiresAt") VALUES ($1,$2,'pack',$3,5,5,$4::timestamp)`,
+            randomUUID(),
+            me,
+            ref('n3'),
+            end,
+          );
+        }),
+      ).rejects.toThrow(/PointLot_expiresAt_bounded/);
+      expect(await counts(me)).toEqual([0, 0, 0]);
+    });
+
+    it('when the points step fails, the purge says the points were left (N4)', async () => {
+      const me = person();
+      await points.grant(
+        {
+          wawuUserId: me,
+          source: 'pack',
+          sourceRef: ref('n4'),
+          points: 12,
+          expiresAt: JANUARY,
+        },
+        at,
+      );
+      // The points step's transaction fails, as it does when another call
+      // holds the person's points lock past Prisma's 5 s.
+      const failing = new Proxy(prisma, {
+        get(target, key, receiver) {
+          if (key === '$transaction') {
+            return () =>
+              Promise.reject(new Error('Transaction already closed'));
+          }
+          const value: unknown = Reflect.get(target, key, receiver);
+          if (typeof value !== 'function') return value;
+          return (value as (...args: unknown[]) => unknown).bind(
+            target,
+          ) as unknown;
+        },
+      });
+      const logged: string[] = [];
+      const spy = jest
+        .spyOn(Logger.prototype, 'log')
+        .mockImplementation((message: unknown) => {
+          logged.push(String(message));
+        });
+      try {
+        const out = await new AccountPurgeService(failing).purge(me);
+        expect(out.pointsLeft).toBe(true);
+        expect(out.deleted).toEqual({});
+      } finally {
+        spy.mockRestore();
+      }
+      expect(logged.some((l) => l.includes('points were left'))).toBe(true);
+      expect(await counts(me)).toEqual([1, 0, 1]);
+      // A purge that works says nothing was left.
+      const again = await new AccountPurgeService(prisma).purge(me);
+      expect(again.pointsLeft).toBe(false);
+      expect(again.deleted).toMatchObject({
+        'PointLedger.wawuUserId': 1,
+        'PointLot.wawuUserId': 1,
+      });
+      expect(await counts(me)).toEqual([0, 0, 0]);
+    });
+  });
+});

@@ -73,6 +73,9 @@ import { StorageModule } from '../storage/storage.module';
   // action through the SAME client the content unlock verifies against,
   // rather than adding a sixth hand-copied FlutterwaveClient, adapter pair
   // and DI token to the five the forks gate already reports.
-  exports: [ContentPieceService, FLUTTERWAVE_CLIENT],
+  //
+  // FeedCardsService is exported for MeModule (ME-10): its saved, purchase
+  // and notification lists show people through the same creatorsFor().
+  exports: [ContentPieceService, FLUTTERWAVE_CLIENT, FeedCardsService],
 })
 export class ContentPieceModule {}

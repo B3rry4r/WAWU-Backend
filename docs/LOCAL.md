@@ -264,6 +264,32 @@ CARDEX_SIGNING_SECRET=
 CARDEX_WEBHOOK_SECRET=
 ```
 
+`WALLET_PROVIDER` picks the wallet provider's adapter (MONEY-20): leave it
+empty (or `fintava`) locally. `nuvion` (NUV-01) builds the Nuvion adapter and
+needs `NUVION_BASE_URL=https://api.nuvion.dev` (the sandbox; never
+`api.nuvion.co` locally), a sandbox `NUVION_API_KEY` from app.nuvion.dev,
+`NUVION_WEBHOOK_SECRET` and `NUVION_OPERATIONAL_ACCOUNT_ID` (see
+`.env.example`); a missing one stops the server at boot naming it. Until the
+Nuvion tasks NUV-02 to NUV-08 fill their areas, wallet calls under `nuvion`
+answer 503 and nothing is sent to Nuvion. PIN reset codes then go by email
+through WAWU ID (the mock records them at `GET /internal/mail-outbox`).
+Rolling back is setting `WALLET_PROVIDER=fintava` (or empty) and restarting:
+each server acts only on its own provider's wallets, openings and ledger
+rows. Nuvion's webhooks arrive at `POST /api/hub/webhooks/nuvion`, signed
+with `NUVION_WEBHOOK_SECRET` (a tunnel, as for Fintava below).
+
+Opening on Nuvion takes an ID document and a proof of address (NUV-03,
+`POST /api/hub/money/identity/documents`, a PDF, JPG or PNG up to 10 MB; the two
+sides of an ID go in one request as `file` and `file_back`). WAWU keeps no copy
+of any file: it goes to Nuvion, and WAWU keeps the kind, the state, Nuvion's id,
+whether its review refused the file, and a keyed fingerprint (an HMAC under
+`IDENTITY_HASH_KEY`, cleared once the opening is sent). When both are in, the
+opening is sent for review once. The hosted selfie
+(`/api/hub/money/identity/liveness`) is off unless `NUVION_HOSTED_LIVENESS=on`
+(with `NUVION_LIVENESS_REDIRECT_ORIGINS` listing where its page may return to:
+an origin and a path prefix per entry, empty allows none); with it off the
+opening does not wait for one.
+
 Put the **sandbox** values in `wawu-backend/.env` and restart. Never the live
 ones: local testing is sandbox only, and `up.sh` refuses any Fintava URL but the sandbox
 and any Cardex key that is not `cdx_test_`.

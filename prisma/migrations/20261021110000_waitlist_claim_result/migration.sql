@@ -1,0 +1,21 @@
+-- JOIN-03 round 2 (N3): a claim repeated by the account that made it answers
+-- what it first answered, instead of "already claimed".
+--
+-- A claim can succeed while its answer is lost on the way to the phone. The
+-- retry must not be told the code is used up: the plan is on the account and
+-- the person has nothing to look at. The claim now keeps the answer it gave
+-- (the offer's name, the days, whether they were added to a running plan, the
+-- bonus points and when they end) beside the claim, in the same transaction.
+-- The same account repeating the same code is answered from it with a 200;
+-- any other account still gets "already claimed", and nothing is granted twice.
+--
+-- Additive: one NULLABLE jsonb column on one table. No existing column, index,
+-- constraint or value is changed, and an older instance never reads or writes
+-- it. A row claimed before this migration keeps NULL there and is answered as
+-- before (409 `claimed_by_you`).
+--
+-- Rollback (also in rollback.sql):
+--   ALTER TABLE "WaitlistRegistration" DROP COLUMN "claimResult";
+--   DELETE FROM "_prisma_migrations" WHERE migration_name = '20261021110000_waitlist_claim_result';
+
+ALTER TABLE "WaitlistRegistration" ADD COLUMN "claimResult" JSONB;

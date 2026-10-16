@@ -1,12 +1,14 @@
-import { HttpException, Injectable, Logger } from '@nestjs/common';
+import { HttpException, Inject, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { FintavaClient } from '../../fintava/fintava-client';
-import { FINTAVA_DEFAULTS } from '../../fintava/fintava-config';
 import {
-  FintavaError,
-  type FintavaErrorKind,
-} from '../../fintava/fintava-error';
-import type { FintavaSelfieResult } from '../../fintava/fintava.interface';
+  type ProviderSelfieResult,
+  WALLET_PROVIDER,
+  type WalletProvider,
+} from '../../wallet-provider/wallet-provider.interface';
+import {
+  WalletProviderError,
+  type WalletProviderErrorKind,
+} from '../../wallet-provider/wallet-provider-error';
 import { MoneyError } from '../money-error';
 import type { SelfieMatchDto } from './dto/identity-request.dto';
 import {
@@ -40,9 +42,14 @@ export const SELFIE_UNAVAILABLE_MESSAGE =
  * list: the selfie match was charged while WAWU's sandbox merchant was
  * inactive (`sandbox/05-bvn-selfie.md`), so a merchant refusal is not
  * assumed free. Everything else counts, a timeout included (it may have
- * been charged).
+ * been charged). `not_supported` (MONEY-20): a provider with no selfie
+ * match sends nothing, so nothing is charged.
  */
-const NOT_CHARGED: readonly FintavaErrorKind[] = ['not_configured', 'auth'];
+const NOT_CHARGED: readonly WalletProviderErrorKind[] = [
+  'not_configured',
+  'auth',
+  'not_supported',
+];
 
 /**
  * The selfie match to the BVN photo (task KYC-02, A6, A7, A16), after a
@@ -82,7 +89,7 @@ export class SelfieMatchService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly fintava: FintavaClient,
+    @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
     private readonly hasher: IdentityHasher,
     private readonly identity: WalletIdentityService,
   ) {}
@@ -117,10 +124,7 @@ export class SelfieMatchService {
     wawuUserId: string,
     input: SelfieMatchDto,
   ): Promise<SelfieMatchView> {
-    if (
-      !this.hasher.configured ||
-      this.fintava.environment === 'unconfigured'
-    ) {
+    if (!this.hasher.configured || !this.provider.configured) {
       throw this.unavailable();
     }
 
@@ -156,14 +160,14 @@ export class SelfieMatchService {
         ),
     );
 
-    let result: FintavaSelfieResult;
+    let result: ProviderSelfieResult;
     try {
-      result = await this.fintava.verifyBvnSelfie({
+      result = await this.provider.matchSelfie({
         bvn: proven.bvn,
         imageBase64: input.image,
       });
     } catch (e) {
-      if (!(e instanceof FintavaError)) {
+      if (!(e instanceof WalletProviderError)) {
         await this.settle(attempt.id, 'unavailable');
         throw e;
       }
@@ -311,7 +315,7 @@ export class SelfieMatchService {
 
   private unavailable(): HttpException {
     return new MoneyError('provider_unreachable', SELFIE_UNAVAILABLE_MESSAGE, {
-      retryAfterSeconds: FINTAVA_DEFAULTS.retryAfterSeconds,
+      retryAfterSeconds: this.provider.timings.retryAfterSeconds,
     });
   }
 }

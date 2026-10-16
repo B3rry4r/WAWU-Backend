@@ -175,6 +175,12 @@ export class PurchaseService {
         kind: 'tip_received',
         userWawuId: purchase.creatorWawuId,
         netAmount: netOfCommission(purchase.amount, purchase.commissionRate),
+        // ME-10: a tip names no piece (contentId is null on tip rows), so it
+        // opens the person who tipped.
+        about: {
+          target: { kind: 'profile', id: purchase.buyerWawuId },
+          actorWawuId: purchase.buyerWawuId,
+        },
       });
     }
 

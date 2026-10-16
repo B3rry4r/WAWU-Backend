@@ -62,6 +62,12 @@ export type FeePartCode = (typeof FEE_PART_CODES)[number];
  *   paid_dm         INBOX-17 (held)
  *   event_ticket    EVENTS-07 (held)
  *   bill            BILLS-04 (held)
+ *
+ * `tier` and `tier_bump` (TIER-03) are WAWU's own sale of a maker tier: a
+ * tier bought, renewed or upgraded (`tier`), and the same with the checkout
+ * offer's extra points (`tier_bump`). They are paid in one debit into WAWU's
+ * own account with no seller split, and are not held. Their `targetId` names
+ * the terms (docs/contract/PLANS.md section 8).
  */
 export const PAYMENT_KINDS = [
   'content_unlock',
@@ -73,6 +79,8 @@ export const PAYMENT_KINDS = [
   'paid_dm',
   'event_ticket',
   'bill',
+  'tier',
+  'tier_bump',
 ] as const;
 export type PaymentKind = (typeof PAYMENT_KINDS)[number];
 
@@ -126,6 +134,7 @@ export const MONEY_ERROR_CODES = [
   'pin_incorrect',
   'pin_locked',
   'pin_mismatch',
+  'pin_changed_again',
   'reset_code_invalid',
   'insufficient_funds',
   'daily_limit_exceeded',
@@ -161,9 +170,30 @@ export const MONEY_ERROR_CODES = [
   // Resetting the PIN by a code, and approving with a fingerprint or face (MONEY-14).
   'reset_codes_exhausted',
   'device_approval_refused',
+  // Pay from wallet (MONEY-17): one open payment per buyer and item.
+  'payment_in_progress',
   // Statements (WALLET-27).
   'statement_too_large',
   'statement_rate_limited',
   'statement_busy',
+  // Emailing a statement (WALLET-35).
+  'email_not_verified',
+  'statement_email_failed',
+  // Finding a recipient (WALLET-08).
+  'recipient_search_rate_limited',
+  // Fees and limits as settings (NUV-07): the running provider's fees are
+  // not set, so nothing is quoted or moved (R-42); a movement passes a limit.
+  'fees_not_set',
+  'limit_reached',
+  // Opening a wallet on Nuvion (NUV-02): the person's details are with the
+  // provider's compliance review; they wait, and nothing is sent again.
+  'identity_under_review',
+  // A step Open your wallet used under Fintava that a provider reviewing
+  // the person itself does not have (NUV-02 round 2, U3): permanent, not
+  // "try again".
+  'step_not_used',
+  // Opening tries from one address in an hour (NUV-02 round 3): a plain 429
+  // with its own code, beside the person's `identity_checks_exhausted`.
+  'open_address_limited',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

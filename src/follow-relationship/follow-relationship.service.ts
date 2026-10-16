@@ -73,6 +73,11 @@ export class FollowRelationshipService {
       await this.notifications.emit({
         kind: 'new_follower',
         userWawuId: followingWawuId,
+        // ME-10: opens the follower's profile.
+        about: {
+          target: { kind: 'profile', id: followerWawuId },
+          actorWawuId: followerWawuId,
+        },
       });
     }
 

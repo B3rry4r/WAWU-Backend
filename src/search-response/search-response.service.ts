@@ -19,6 +19,8 @@ import type {
   SearchSuggestions,
   ClosestSearchResult,
 } from '../common/types';
+import { SchoolsPublicService } from '../schools/schools-public.service';
+import type { PublicSchoolCard } from '../schools/schools-public.views';
 import type { SearchTab } from './dto/search-query.dto';
 
 /** Result cap per array — search is discovery, not pagination (registry.json gives SearchResponse no page/perPage params). */
@@ -48,6 +50,7 @@ export class SearchResponseService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly schools: SchoolsPublicService,
   ) {}
 
   // ---------------------------------------------------------------------
@@ -78,7 +81,15 @@ export class SearchResponseService {
       wantCreators ? this.searchCreators(q, hidden) : Promise.resolve([]),
     ]);
 
+    // SCHOOLS-04: `schools` appears only on tab=schools, so every answer
+    // the web gets from the other tabs keeps its exact keys.
+    // Typed here as SearchResults so the contract's SearchResults schema, which
+    // the web reads, does not change; the app types the cards from GET /schools.
+    const schools: { schools?: PublicSchoolCard[] } =
+      tab === 'schools' ? { schools: await this.schools.searchTab(q) } : {};
+
     return {
+      ...schools,
       content,
       creators,
       // JUDGMENT (task brief, loud call-out): Community is Wave 3 and
