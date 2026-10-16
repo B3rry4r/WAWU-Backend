@@ -11,7 +11,18 @@ import { unsetFeeSettings } from '../fees/provider-fee-schedule';
 import { lagosDayStart, lagosMonthStart } from './lagos-window';
 import { limitReached } from './limit-reached';
 import { type MoneyLimitKind, MoneyLimitSettings } from './money-limit-config';
+import { assertOwnTransaction, type MovementTx } from './movement-tx';
 import { assertReadCommitted } from './read-committed';
+
+/**
+ * How a movement is checked: in the transaction in which the caller writes
+ * its pending ledger row, always (FIX-26). `now` is for specs.
+ */
+export interface MovementCheckOptions {
+  /** The `tx` of `prisma.$transaction(async (tx) => ...)`; never the service's own client. */
+  tx: MovementTx;
+  now?: Date;
+}
 
 /** One movement about to be sent to the provider. */
 export interface MovementInput {
@@ -73,16 +84,20 @@ const KIND_WHERE: Record<MoneyLimitKind, Prisma.FintavaLedgerEntryWhereInput> =
  * fees, read from the ledger. That is a count of what was moved, never a
  * balance: the balance is the provider's.
  *
- * Concurrency: called with the transaction in which the caller writes the
- * movement's pending ledger row, it first takes a per-person lock for that
+ * Concurrency: it is called with the transaction in which the caller writes
+ * the movement's pending ledger row, and takes a per-person lock for that
  * transaction, so two movements by one person are checked one after the
- * other and the second sees the first. That holds only at READ COMMITTED
- * (Prisma's default), so given a transaction it first reads that
+ * other and the second sees the first. The transaction is required (task
+ * FIX-26): the lock ends with the transaction, so outside one it would end
+ * with its own statement and order nothing. `tx` is typed as a transaction
+ * client, which the service's own client is not (`movement-tx.ts`), and at
+ * run time anything that is not the caller's own transaction (nothing, the
+ * service's own client, any root client) is refused with a
+ * NotInTransactionError, before anything is locked, read or written. That
+ * holds only at READ COMMITTED (Prisma's default), so it then reads that
  * transaction's isolation level and refuses any other with an
- * IsolationLevelError naming it (task FIX-21, `read-committed.ts`): a
- * programming error, before anything is locked, read or written. Called
- * without one it reads, and two movements at the same instant could each
- * pass.
+ * IsolationLevelError naming it (task FIX-21, `read-committed.ts`). Both are
+ * programming errors, never an answer a person reads.
  *
  * The provider's own limit refusals answer the same `limit_reached`
  * (`WalletProviderLimitError.toHttpException()`,
@@ -111,23 +126,29 @@ export class MoneyLimits {
    */
   async assertMayMove(
     input: MovementInput,
-    opts: { tx?: Prisma.TransactionClient; now?: Date } = {},
+    opts: MovementCheckOptions,
   ): Promise<void> {
+    // A programming error, whatever the settings: refused before fees_not_set
+    // so it is met in the caller's own specs and not only once fees are set.
+    assertOwnTransaction(opts?.tx, this.prisma);
     if (this.unsetFees.length > 0) throw feesNotSet();
     await this.assertWithinLimits(input, opts);
   }
 
   /**
-   * The limits alone: per transaction, then today, then this month. Given
-   * the caller's transaction, its isolation level is checked first, whatever
-   * limits are set, so a caller at the wrong level fails in its own specs
-   * and not only where a daily or monthly limit happens to be set.
+   * The limits alone: per transaction, then today, then this month. The
+   * caller's transaction is required and its isolation level is checked
+   * first, whatever limits are set, so a caller at the wrong level fails in
+   * its own specs and not only where a daily or monthly limit happens to be
+   * set.
    */
   async assertWithinLimits(
     input: MovementInput,
-    opts: { tx?: Prisma.TransactionClient; now?: Date } = {},
+    opts: MovementCheckOptions,
   ): Promise<void> {
-    if (opts.tx) await assertReadCommitted(opts.tx);
+    assertOwnTransaction(opts?.tx, this.prisma);
+    const { tx } = opts;
+    await assertReadCommitted(tx);
     const amount = this.amountOf(input);
     const { kind } = input;
     const perTransaction = this.settings.limitOf(kind, 'per_transaction');
@@ -139,17 +160,13 @@ export class MoneyLimits {
     if (daily === null && monthly === null) return;
 
     const now = opts.now ?? new Date();
-    const db: Db = opts.tx ?? this.prisma;
-    if (opts.tx) {
-      await opts.tx
-        .$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`money-limits:${input.wawuUserId}`}, 0))`;
-    }
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`money-limits:${input.wawuUserId}`}, 0))`;
     if (daily !== null) {
-      const used = await this.movedSince(db, input, lagosDayStart(now));
+      const used = await this.movedSince(tx, input, lagosDayStart(now));
       if (used + amount > BigInt(daily)) throw limitReached('daily');
     }
     if (monthly !== null) {
-      const used = await this.movedSince(db, input, lagosMonthStart(now));
+      const used = await this.movedSince(tx, input, lagosMonthStart(now));
       if (used + amount > BigInt(monthly)) throw limitReached('monthly');
     }
   }
