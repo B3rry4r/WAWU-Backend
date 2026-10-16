@@ -1246,6 +1246,12 @@ model CreditPurchase {
   amount           Int
   status           TransactionStatus @default(pending)
   purchasedAt      DateTime          @default(now())
+  /// The wallet payment that bought this pack (INBOX-16); null for a
+  /// Flutterwave purchase. Unique: one payment settles at most one purchase,
+  /// so a delivery that runs twice finds its row and writes nothing more.
+  /// `flutterwaveTxRef` carries `wallet:<payment id>` on these rows (it is
+  /// required and unique, and no Flutterwave charge exists to name).
+  walletPaymentId  String?           @unique
   /// The cost-basis lot this purchase opens. Created ONLY when the charge is
   /// verified `completed` — see CreditLot.
   lot              CreditLot?

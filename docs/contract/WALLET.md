@@ -127,7 +127,7 @@ payment onto the wallet.
 |---|---|---|---|---|
 | `content_unlock` | HOME-15 | the content piece id (`POST /content/:id/unlock`) | no | no |
 | `tip` | HOME-14 | the creator's wawuUserId (`POST /tips` takes `creatorWawuId`); `note` is the tip's message | yes, `amountKobo` | no |
-| `credit_pack` | INBOX-16 | the pack: `starter`, `popular` or `pro` (`POST /credits/purchase`) | no | no |
+| `credit_pack` | INBOX-16 | the pack: `starter`, `popular` or `pro` (`GET /credits/packs` lists them; `POST /credits/purchase` is the web's Flutterwave route and stays as it is) | no | no (WAWU's own sale: the price stays in WAWU's account and the 85/15 split is applied per spent credit, as for a Flutterwave pack) |
 | `verification` | ME-18 | the tick: `creator` or `professional` | no | no |
 | `legal_fee` | LEGAL-05 | the legal request id | no | no |
 | `school_fee` | SCHOOLS-07 | the enrolment order id | no | no |
@@ -136,6 +136,32 @@ payment onto the wallet.
 | `bill` | BILLS-04 | the bill id `POST /bills/wallet` returns (`POST /bills/init` is the web's Flutterwave route and stays as it is); the price moved is the bill, Fintava's bill charge and WAWU's bill fee, in one transfer (R-31) | no | until the biller delivers |
 | `tier`, `tier_bump` | TIER-03 | the terms: `tier-<tierId>`, `renew-<tierId>` or `upgrade-<fromTierId>-<tierId>` (`GET /plans/purchases/quote` builds it; `tier_bump` adds the checkout bump) | no | no (WAWU's own sale, no seller split; a payment whose plan cannot be granted when it confirms is refunded in full, docs/contract/PLANS.md section 8) |
 | `points_cash_out` | POINTS-04 | the conversion id `POST /points/convert` returns | no | no (never paid by a person: it is the ledger link of WAWU's cash paid into the wallet for points, docs/contract/CONVENTIONS.md section 20; a payment for it is `target_not_payable`) |
+
+#### Credits from the wallet (INBOX-16)
+
+A pack is bought with the wallet through four routes, all declared in
+`contract/openapi.json` and all new (the web's `POST /credits/purchase` and
+`/verify` are unchanged):
+
+- `GET /credits/packs`: the server's pack table, cheapest first
+  (`{ pack, credits, priceKobo }`). Needs no wallet. Credits are a count, never
+  naira (R-5).
+- `GET /credits/purchase/wallet/quote?pack=`: the pack and the payment quote
+  (price, the provider's charge on top, total, balance, shortfall, token).
+  For `popular`: ₦1,000 + ₦23.25 = ₦1,023.25.
+- `POST /credits/purchase/wallet` `{ pack, expectedTotalKobo, quoteToken }`
+  with `Idempotency-Key` and the PIN: pays and answers 201 with the purchase
+  (`paid`, `pending` or `failed`). The same key and body answer the first
+  result again and charge once. One payment gives one purchase row, one
+  balance increase and one cost-basis lot, in one database transaction.
+- `GET /credits/purchase/wallet/{id}`: the purchase as it stands now (what the
+  app polls after `pending`). `creditBalance` is the person's count once the
+  purchase had landed; `GET /credits` is the live count.
+
+A payment whose credits cannot be written yet (`payment.delivered` false) is
+`pending`: the sweep writes them once, and no second charge is possible.
+`CreditPurchase.walletPaymentId` (unique) is the link from a purchase to its
+payment; `flutterwaveTxRef` carries `wallet:<payment id>` on these rows.
 
 ## 2. The named schemas (G-1)
 

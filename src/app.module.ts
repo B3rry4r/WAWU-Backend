@@ -84,6 +84,7 @@ import { MeModule } from './me/me.module';
 import { PlansModule } from './plans/plans.module';
 import { PlanPurchasesModule } from './plans/purchases/plan-purchases.module';
 import { WalletBillsModule } from './wallet-bills/wallet-bills.module';
+import { CreditWalletModule } from './credit-purchase/wallet/credit-wallet.module';
 import { PointsConvertModule } from './points/convert/points-convert.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
@@ -406,6 +407,12 @@ import { PushModule } from './push/push.module';
     // controllers but declares only literal paths no `bills/:id/...` route matches;
     // listed after PlansModule and MoneyModule so no route registered before it moves.
     WalletBillsModule,
+    // Buy WAWU Credits from the wallet (task INBOX-16): `credits/packs` and
+    // `credits/purchase/wallet` (the quote, the purchase and one purchase by id), and
+    // the payment kind `credit_pack` registered with the wallet payments. The paths are
+    // literals CreditsStateModule's `credits` and CreditPurchaseModule's
+    // `credits/purchase` do not declare; listed after PlansModule and MoneyModule.
+    CreditWalletModule,
     // Convert points to cash (task POINTS-04): `points/convert/quote`,
     // `points/convert` (POST) and `points/convert/{id}`, and the sweep that
     // finishes a conversion whose answer was lost. `points` is a first segment
