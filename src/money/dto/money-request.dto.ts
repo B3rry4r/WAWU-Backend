@@ -351,11 +351,12 @@ export class BankTransferDto {
 
   /**
    * `nameToken` from the name check the person saw (`POST
-   * /money/banks/name-check`), for an account that is not saved (WALLET-09
-   * round 2): the send is bound to the holder's name they were shown. If the
+   * /money/banks/name-check`). Required for an account that is not saved
+   * (WALLET-09 round 2, FIX-41): the send is bound to the holder's name they
+   * were shown, and a send without it is a `400` with nothing sent. If the
    * bank names another holder now, the answer is `409 account_name_changed`
-   * and nothing is sent. The app always sends it for an account it has not
-   * saved; a saved account is compared with its kept name and ignores it.
+   * and nothing is sent. A saved account (a beneficiary, or the payout
+   * account) is compared with its kept name and ignores it.
    */
   @IsOptional()
   @IsString()

@@ -33764,7 +33764,7 @@
           },
           "nameToken": {
             "type": "string",
-            "description": "`nameToken` from the name check the person saw (`POST\n/money/banks/name-check`), for an account that is not saved (WALLET-09\nround 2): the send is bound to the holder's name they were shown. If the\nbank names another holder now, the answer is `409 account_name_changed`\nand nothing is sent. The app always sends it for an account it has not\nsaved; a saved account is compared with its kept name and ignores it.",
+            "description": "`nameToken` from the name check the person saw (`POST\n/money/banks/name-check`). Required for an account that is not saved\n(WALLET-09 round 2, FIX-41): the send is bound to the holder's name they\nwere shown, and a send without it is a `400` with nothing sent. If the\nbank names another holder now, the answer is `409 account_name_changed`\nand nothing is sent. A saved account (a beneficiary, or the payout\naccount) is compared with its kept name and ignores it.",
             "minLength": 1,
             "maxLength": 1024
           },

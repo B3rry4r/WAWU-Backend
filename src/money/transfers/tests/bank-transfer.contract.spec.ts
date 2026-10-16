@@ -16,6 +16,7 @@ import {
   WRONG_PIN,
 } from '../../../../test/transfers/harness';
 import {
+  customerHistory,
   FintavaDouble,
   fintavaError,
   MERCHANT_BALANCE,
@@ -30,6 +31,11 @@ import { ResponseInterceptor } from '../../../common/interceptors/response.inter
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { FintavaWebhookModule } from '../../../fintava/webhook/fintava-webhook.module';
+import {
+  FINTAVA_SIGNATURE_HEADER,
+  signFintavaBody,
+} from '../../../fintava/webhook/fintava-signature';
+import { LedgerConsumerService } from '../../ledger/ledger-consumer.service';
 import { HUB_APP_OPTIONS } from '../../../hub-app-options';
 import { LedgerService } from '../../ledger/ledger.service';
 import { IDEMPOTENT_REPLAYED_HEADER } from '../../payments/idempotency';
@@ -73,6 +79,9 @@ const FEE = PROVIDER_FEE + WAWU_FEE;
 /** WAWU's own per transaction limit for a bank send, a spec value (₦100,000). */
 const PER_TXN_LIMIT_KOBO = 10_000_000;
 const DAILY_LIMIT_KOBO = 4_000_000;
+
+/** Signs the stand-in webhook deliveries of the FIX-41 cases (a spec value). */
+const WEBHOOK_SECRET = 'whsec_local_fix41_Hk4Rz8Wq2Np6Ty1Lb';
 
 const GTB = { code: '000013', name: 'GUARANTY TRUST BANK' };
 const ACCESS = { code: '000014', name: 'ACCESS BANK' };
@@ -180,18 +189,50 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
     return body<FeeQuoteView>(res).data!;
   }
 
-  function send(
+  /**
+   * FIX-41: a send to an account that is not saved must carry the `nameToken`
+   * of the name check the person saw, so the helper does what the app does:
+   * it checks the name first and sends the token with the body. A test that
+   * wants another token, or none, puts the key `nameToken` in the body
+   * itself (`nameToken: undefined` is "none").
+   */
+  const tokenOfBody = new WeakMap<object, string>();
+  async function send(
     p: Person,
     payload: Record<string, unknown>,
     key: string | null = randomUUID(),
     pin: string | null = PIN,
   ): Promise<Response> {
+    let sendable = payload;
+    const known = tokenOfBody.get(payload);
+    if (known !== undefined) sendable = { ...payload, nameToken: known };
+    else if (
+      !('nameToken' in payload) &&
+      typeof payload.bankCode === 'string' &&
+      /^\d{3,6}$/.test(payload.bankCode) &&
+      typeof payload.accountNumber === 'string' &&
+      /^\d{10}$/.test(payload.accountNumber)
+    ) {
+      const checked = await request(app.getHttpServer())
+        .post(`${BASE}/banks/name-check`)
+        .set('Authorization', p.auth)
+        .send({
+          bankCode: payload.bankCode,
+          accountNumber: payload.accountNumber,
+        });
+      if (checked.status === 200) {
+        const nameToken = body<AccountNameView>(checked).data!.nameToken;
+        // The same body object is the same send: a repeat carries the same token.
+        tokenOfBody.set(payload, nameToken);
+        sendable = { ...payload, nameToken };
+      }
+    }
     let req = request(app.getHttpServer())
       .post(`${BASE}/transfers/bank`)
       .set('Authorization', p.auth);
     if (key !== null) req = req.set('Idempotency-Key', key);
     if (pin !== null) req = req.set('X-Transaction-Pin', pin);
-    return req.send(payload);
+    return req.send(sendable);
   }
 
   function sendBody(
@@ -427,6 +468,7 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
       WAWU_LIMIT_BANK_TRANSFER_PER_TRANSACTION_KOBO: String(PER_TXN_LIMIT_KOBO),
       // The provider's daily limit for the wallet's tier, a spec value (₦40,000).
       FINTAVA_TIER_DAILY_LIMITS_KOBO: `TIER_2:${DAILY_LIMIT_KOBO}`,
+      FINTAVA_WEBHOOK_SECRET: WEBHOOK_SECRET,
       PIN_LOCK_MINUTES: '',
       IDEMPOTENCY_KEY_HOURS: '',
       PAYMENT_REVIEW_AFTER_HOURS: '',
@@ -1214,7 +1256,7 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
     ]);
   });
 
-  it('finding 3: a name token for another account, another person, a made up one or an old one is the same account_name_changed; a send without one keeps its current behaviour', async () => {
+  it('finding 3: a name token for another account, another person, a made up one or an old one is the same account_name_changed', async () => {
     const me = await person(5_000_000);
     const other = await person(5_000_000);
     const number = account('BOUND HOLDER');
@@ -1257,10 +1299,324 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
     }
     expect(creditCalls()).toHaveLength(0);
     expect(await triesLeft(me)).toBe(tries);
-    // The good one, and none at all, send.
+    // The good one sends.
     expect((await send(me, { ...b, nameToken: good })).status).toBe(201);
+    expect(creditCalls()).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // FIX-41 (the verifier's round 2 findings 1 and 3)
+  // -------------------------------------------------------------------------
+
+  const NO_TOKEN = { nameToken: undefined };
+
+  it('FIX-41 N3: a send to an account that is not saved needs the name token: without it the route answers 400 with a plain sentence, sends nothing and gives the key back', async () => {
+    const me = await person(5_000_000);
+    const number = account('ALICE SEEN');
+    const shown = body<AccountNameView>(
+      await nameCheck(me, GTB.code, number),
+    ).data!;
+    // The holder changes after the check.
+    bank.holders.set(holderKey(GTB.code, number), 'MALLORY NEW');
+    const q = await quoted(me, 100_000);
+    const tries = await triesLeft(me);
+    const key = randomUUID();
+    const calls = providerCalls().length;
+
+    const bare = await send(
+      me,
+      sendBody(q, { number }, NO_TOKEN),
+      key,
+      WRONG_PIN,
+    );
+    expect(bare.status).toBe(400);
+    expect(typeof body(bare).message).toBe('string');
+    expect(body(bare).message).toMatch(/name/i);
+    expect(body(bare).message).not.toMatch(/\u2014/);
+    expect(sendsFrom(me)).toHaveLength(0);
+    expect(creditCalls()).toHaveLength(0);
+    expect(await triesLeft(me)).toBe(tries);
+    expect(providerCalls().length - calls).toBeLessThanOrEqual(1);
+
+    // The key was given back: the token of the name the person saw is
+    // refused for the new holder, and the same key then sends to the new
+    // holder once a new check names it.
+    const old = await send(
+      me,
+      sendBody(q, { number }, { nameToken: shown.nameToken }),
+      key,
+    );
+    expect(old.status).toBe(409);
+    expect(body(old).reason?.code).toBe('account_name_changed');
+    expect(sendsFrom(me)).toHaveLength(0);
+    const again = body<AccountNameView>(
+      await nameCheck(me, GTB.code, number),
+    ).data!;
+    expect(again.accountName).toBe('MALLORY NEW');
+    const ok = await send(
+      me,
+      sendBody(q, { number }, { nameToken: again.nameToken }),
+      key,
+    );
+    expect(ok.status).toBe(201);
+    expect(sendsFrom(me).map((x) => x.accountName)).toEqual(['MALLORY NEW']);
+  });
+
+  it('FIX-41 N3: a saved account and the payout account still send without a name token', async () => {
+    const me = await person(5_000_000);
+    const saved = account('SAVED ONE');
+    const savedRes = await request(app.getHttpServer())
+      .post(`${BASE}/beneficiaries`)
+      .set('Authorization', me.auth)
+      .send({ kind: 'bank_account', bankCode: GTB.code, accountNumber: saved });
+    expect(savedRes.status).toBe(201);
+    const q = await quoted(me, 100_000);
+    const toSaved = await send(me, sendBody(q, { number: saved }, NO_TOKEN));
+    expect(toSaved.status).toBe(201);
+
+    const payout = account('PAYOUT ONE');
+    const put = await request(app.getHttpServer())
+      .put(`${BASE}/payout-account`)
+      .set('Authorization', me.auth)
+      .send({ bankCode: GTB.code, accountNumber: payout });
+    expect(put.status).toBe(200);
     const q2 = await quoted(me, 100_000);
-    expect((await send(me, sendBody(q2, { number }))).status).toBe(201);
-    expect(creditCalls()).toHaveLength(2);
+    const toPayout = await send(me, sendBody(q2, { number: payout }, NO_TOKEN));
+    expect(toPayout.status).toBe(201);
+    expect(sendsFrom(me).map((x) => x.accountName)).toEqual([
+      'SAVED ONE',
+      'PAYOUT ONE',
+    ]);
+  });
+
+  // ---- A success seen after the send was failed (SWEEP-MONEY F8) ----------
+
+  const transferRow = (id: string) =>
+    prisma.walletTransfer.findUniqueOrThrow({ where: { id } });
+  const rowsFor = (p: Person) =>
+    prisma.walletTransfer.findMany({
+      where: { payerWawuUserId: p.id },
+      orderBy: { createdAt: 'asc' },
+    });
+  /** The log lines that say a failed send was seen completed, for one send. */
+  const lateLines = (id: string) =>
+    logger.lines.filter(
+      (l) => l.includes(id) && /completed after it was failed/.test(l),
+    );
+  /** The provider lookups made for one of our references. */
+  const lookupsOf = (ref: string) =>
+    double.seen.filter(
+      (r) =>
+        r.path.startsWith('/transaction/reference/') && r.path.includes(ref),
+    );
+  const refusals: Array<[string, string, number]> = [
+    ['payouts_blocked', 'Unable to find customers', 503],
+    [
+      'wallet_inactive',
+      'Kindly confirm both customer accounts are active',
+      423,
+    ],
+    ['insufficient_funds', 'Insufficient balance', 402],
+  ];
+
+  async function deliver(text: string): Promise<void> {
+    const res = await request(app.getHttpServer())
+      .post('/api/hub/webhooks/fintava')
+      .set('Content-Type', 'application/json')
+      .set(
+        FINTAVA_SIGNATURE_HEADER,
+        signFintavaBody(WEBHOOK_SECRET, Buffer.from(text)),
+      )
+      .send(text);
+    expect(res.status).toBe(200);
+    const ids = await prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT id FROM "FintavaWebhookEvent"
+       WHERE position(convert_to(${text}, 'UTF8') in "rawBody") > 0`;
+    expect(ids.length).toBeGreaterThanOrEqual(1);
+    await moduleRef
+      .get(LedgerConsumerService, { strict: false })
+      .consume(ids[0].id);
+  }
+
+  const bankDelivery = (o: {
+    customerId: string;
+    ref: string;
+    fin: string;
+    status: string;
+    amount: number;
+  }) =>
+    JSON.stringify({
+      event: 'customer_bank_transfer',
+      data: {
+        amount: o.amount / 100,
+        vat: 0,
+        reference: o.fin,
+        customerId: o.customerId,
+        availableBalance: 109.52,
+        bookedBalance: 109.52,
+        status: o.status,
+        total: (o.amount + FEE) / 100,
+        description: 'Payment',
+        destination: '81450/100004',
+        sessionID: `S-${o.fin}`,
+        customerReference: o.ref,
+        senderName: 'Bayo Sandbox',
+        senderAccountNumber: '0000037726',
+        charges: FEE / 100,
+      },
+    });
+
+  /** A bank send the provider refused before it took the money, so it is `failed`. */
+  async function refusedSend(label: string, message: string, status: number) {
+    const me = await person(5_000_000);
+    const number = account(`LATE ${label}`);
+    const b = await ready(me, { number }, 100_000);
+    const key = randomUUID();
+    bank.refuseWith = message;
+    const refused = await send(me, b, key);
+    bank.refuseWith = null;
+    expect(refused.status).toBe(status);
+    const [t] = await rowsFor(me);
+    expect(t.status).toBe('failed');
+    expect(t.reviewSince).toBeNull();
+    return { me, number, b, key, t };
+  }
+
+  it.each(refusals)(
+    'FIX-41 R1 (%s): a success the webhook brings after the send was failed puts the send in front of a person once, moves no balance and sends nothing again',
+    async (label, message, status) => {
+      const { me, number, b, key, t } = await refusedSend(
+        label,
+        message,
+        status,
+      );
+      const kobo = bank.kobo.get(me.accountNumber);
+      // The provider turns out to have the transfer after all and says so.
+      bank.sends.push({
+        from: me.accountNumber,
+        accountNumber: number,
+        accountName: `LATE ${label}`,
+        sortCode: GTB.code,
+        amountKobo: 100_000,
+        feeKobo: FEE,
+        reference: t.customerReference,
+      });
+      const delivery = bankDelivery({
+        customerId: me.customerId,
+        ref: t.customerReference,
+        fin: `tagapay${randomUUID().replace(/-/g, '')}`,
+        status: 'SUCCESS',
+        amount: 100_000,
+      });
+      await deliver(delivery);
+      await until(async () => (await transferRow(t.id)).reviewSince !== null);
+      const after = await transferRow(t.id);
+      expect(after.status).toBe('failed');
+      expect(after.reviewSince).not.toBeNull();
+      expect(after.discrepancy).toMatch(/completed/);
+      expect(bank.kobo.get(me.accountNumber)).toBe(kobo);
+      expect(creditCalls()).toHaveLength(1);
+      expect(lateLines(t.id)).toHaveLength(1);
+
+      // The same word again, and the sweep, change nothing and log nothing more.
+      await deliver(delivery);
+      await transfers.sweep(new Date(Date.now() + 3 * 3_600_000));
+      const still = await transferRow(t.id);
+      expect(still.reviewSince?.getTime()).toBe(after.reviewSince?.getTime());
+      expect(still.discrepancy).toBe(after.discrepancy);
+      expect(lateLines(t.id)).toHaveLength(1);
+      expect(creditCalls()).toHaveLength(1);
+
+      // The retry with the same key is a new send (correct), and the first
+      // one stays in front of a person.
+      const retry = await send(me, b, key);
+      expect(retry.status).toBe(201);
+      const rows = await rowsFor(me);
+      expect(rows.map((r) => r.status)).toEqual(['failed', 'completed']);
+      expect((await transferRow(t.id)).reviewSince).not.toBeNull();
+    },
+  );
+
+  it('FIX-41 R1: the sweep asks the provider once about a bank send failed without a provider record, and flags a success the webhook missed', async () => {
+    const { me, number, t } = await refusedSend(
+      'insufficient_funds',
+      'Insufficient balance',
+      402,
+    );
+    const lookups = () => lookupsOf(t.customerReference);
+    const calls = creditCalls().length;
+
+    // Too soon: the orphan record needs time, so nothing is asked yet.
+    await transfers.sweep(new Date(Date.now() + 10 * 60_000));
+    expect(lookups()).toHaveLength(0);
+
+    // The provider has the transfer, and no webhook came.
+    bank.sends.push({
+      from: me.accountNumber,
+      accountNumber: number,
+      accountName: 'LATE insufficient_funds',
+      sortCode: GTB.code,
+      amountKobo: 100_000,
+      feeKobo: FEE,
+      reference: t.customerReference,
+    });
+    const later = new Date(Date.now() + 2 * 3_600_000);
+    await transfers.sweep(later);
+    const flagged = await transferRow(t.id);
+    expect(flagged.status).toBe('failed');
+    expect(flagged.reviewSince).not.toBeNull();
+    expect(flagged.discrepancy).toMatch(/completed/);
+    expect(lateLines(t.id)).toHaveLength(1);
+    expect(creditCalls()).toHaveLength(calls);
+    const asked = lookups().length;
+    expect(asked).toBeGreaterThanOrEqual(1);
+
+    // Once: the next sweeps do not ask again.
+    await transfers.sweep(new Date(later.getTime() + 60_000));
+    await transfers.sweep(new Date(later.getTime() + 3_600_000));
+    expect(lookups()).toHaveLength(asked);
+    expect(lateLines(t.id)).toHaveLength(1);
+  });
+
+  it('FIX-41 R1: the sweep asks once about a failed bank send with no record at the provider and flags nothing, and leaves one older than 48 hours alone', async () => {
+    const none = await refusedSend(
+      'payouts_blocked',
+      'Unable to find customers',
+      503,
+    );
+    const old = await refusedSend(
+      'frozen',
+      'Kindly confirm both customer accounts are active',
+      423,
+    );
+    await prisma.walletTransfer.update({
+      where: { id: old.t.id },
+      data: { failedAt: new Date(Date.now() - 49 * 3_600_000) },
+    });
+    // The provider would say success about the old one if it were asked.
+    bank.sends.push({
+      from: old.me.accountNumber,
+      accountNumber: old.number,
+      accountName: 'OLD',
+      sortCode: GTB.code,
+      amountKobo: 100_000,
+      feeKobo: FEE,
+      reference: old.t.customerReference,
+    });
+    // The sender's history is complete and has no row for it: "no record".
+    double.on('GET', '/txn', { status: 200, body: customerHistory([]) });
+    await transfers.sweep(new Date(Date.now() + 2 * 3_600_000));
+    expect(lookupsOf(none.t.customerReference).length).toBeGreaterThanOrEqual(
+      1,
+    );
+    expect(lookupsOf(old.t.customerReference)).toHaveLength(0);
+    expect((await transferRow(none.t.id)).reviewSince).toBeNull();
+    expect((await transferRow(old.t.id)).reviewSince).toBeNull();
+    expect(lateLines(none.t.id)).toHaveLength(0);
+    expect(lateLines(old.t.id)).toHaveLength(0);
+    // The one with no record was asked and is not asked again.
+    const asked = lookupsOf(none.t.customerReference).length;
+    await transfers.sweep(new Date(Date.now() + 3 * 3_600_000));
+    expect(lookupsOf(none.t.customerReference)).toHaveLength(asked);
   });
 });

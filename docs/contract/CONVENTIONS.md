@@ -2629,7 +2629,8 @@ route of its own. Reading one send, of either kind, is `GET
   (what the account gets), `expectedTotalKobo` and `quoteToken` (both from
   `GET /money/fees/quote?kind=bank_transfer`, BACKEND_GAPS G-64), an
   optional `note` (trimmed, at most 100 characters) and, for an account that
-  is not saved, the `nameToken` of the name check the person saw. The app
+  is not saved, the `nameToken` of the name check the person saw (required
+  for such an account: without it the answer is `400`, FIX-41). The app
   never sends a name: the server asks the bank again, just before the send, and sends to
   the name it gets. Answers `201` with `TransferView` (`kind: bank_account`,
   `toBankAccount`: the bank's code and name, the account number and the
@@ -2669,8 +2670,10 @@ route of its own. Reading one send, of either kind, is `GET
   or bank that the bank names differently now, or a token that is not this
   person's, this account's, or is past its 15 minutes, is the same
   `409 account_name_changed` and nothing is sent; the app shows the names
-  and runs the name check again. A send with no token goes to the name the
-  bank gives.
+  and runs the name check again. A send to an account that is not saved with
+  no token is `400` with one plain sentence, before the PIN: nothing is sent,
+  no PIN try is used and the key is given back (FIX-41). A saved account and
+  a withdrawal to the payout account need no token.
 - **Once per key, written first.** The send, its pending ledger row (with the
   quoted `providerFeeKobo` and `wawuFeeKobo`) and the key's link to it are
   written in one transaction BEFORE the provider hears of the send. The

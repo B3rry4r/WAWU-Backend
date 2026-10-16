@@ -47,6 +47,14 @@ import { SELF_TRANSFER_MESSAGE } from './transfer-recipient';
 export const ACCOUNT_CHANGED_MESSAGE =
   'Check the bank and the name on this account, then confirm that it is the right one.';
 
+/**
+ * The route's `400` for a send to an account that is not saved and carries no
+ * `nameToken` (FIX-41): the person must have seen the name the bank gives
+ * before the money goes there. One plain sentence for the app to show.
+ */
+export const NAME_TOKEN_REQUIRED_MESSAGE =
+  'Check the name on this account first, then send again.';
+
 /** Where the bank send found its place: a saved place, so its payee ids are kept after the send. */
 export type BankSendPlace =
   | { kind: 'beneficiary'; id: string }
@@ -237,12 +245,14 @@ export class BankSendTargets {
  *   not run without a target (round 2, verifier finding 1). The rest of the
  *   body is the pipe's, after the PIN.
  * - **An account that is not saved is bound to the name the person saw**
- *   (round 2, finding 7): the send carries the `nameToken` of the name check;
- *   when the bank names another holder now (or the token is not this
- *   person's, this account's, or is old), it is `409 account_name_changed`
- *   with the names as they stand, and nothing is sent. A send without a
- *   token keeps its current behaviour: it goes to the name the bank gives.
- *   A saved account is compared with the name kept for it, as before.
+ *   (round 2, finding 7; FIX-41): the send carries the `nameToken` of the
+ *   name check, and a send without one is the route's `400` (a plain
+ *   sentence, nothing sent, no PIN try used, the key given back). When the
+ *   bank names another holder now (or the token is not this person's, this
+ *   account's, or is old), it is `409 account_name_changed` with the names
+ *   as they stand, and nothing is sent. A saved account (a beneficiary, or
+ *   the payout account a withdrawal goes to) is compared with the name kept
+ *   for it, as before, and needs no token.
  *
  * A refusal here drops any PIN or biometric header unread, as the wallet gate
  * does.
@@ -284,7 +294,13 @@ export class BankSendTargetGuard implements CanActivate {
         bankCode,
         accountNumber,
       );
-      if (resolved.place === null && nameToken !== undefined) {
+      if (resolved.place === null) {
+        // An account that is not saved is sent to only under the name the
+        // person was shown (FIX-41): a send with no token is refused here,
+        // before the PIN, with nothing sent and the key given back.
+        if (nameToken === undefined) {
+          throw new BadRequestException(NAME_TOKEN_REQUIRED_MESSAGE);
+        }
         const now = resolved.target;
         if (!this.nameTokens.matches(nameToken, owner, now)) {
           throw new MoneyError(
