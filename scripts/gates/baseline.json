@@ -32,6 +32,14 @@
       "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
       "where": "src/direct-message/flutterwave-client.interface.ts:72"
     },
+    "11dede1fa5cff62e": {
+      "evidence": "* belongs to the role that is already accountable for the platform.",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "YOU, owner-approved 16 Oct 2026 (R-60)",
+      "reason": "False positive of the deferral check. 'belongs to the role that is already accountable for the platform' is ordinary English in a doc comment that explains why dispatching a campaign is a capability held by one role. It hands nothing off and leaves nothing open. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or comment changed.",
+      "where": "src/admin/notifications/admin-notifications.controller.ts:40"
+    },
     "125d7419783e363f": {
       "evidence": "export const MOCK_FLUTTERWAVE_FAIL_TXN_ID = 'MOCK_TXN_FAIL';",
       "gate": "fake_data",
@@ -111,6 +119,14 @@
       "owner": "legacy-app-repair 2026-08-31",
       "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
       "where": "src/creator-subscription/creator-subscription.service.ts:529"
+    },
+    "17eaf7bef75a96e8": {
+      "evidence": "src/content-piece/content-piece.service.ts:48, src/credit-purchase/credit-purchase.service.ts:23, src/purchase/purchase.service.ts:25",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveConfigResponse' is declared in 3 files - one of them is a fork",
+      "owner": "YOU, owner-approved 16 Oct 2026 (R-60)",
+      "reason": "R-1 and CLAUDE.md (Money): the web stays on Flutterwave until after launch, so the per-module copies of FlutterwaveConfigResponse in content-piece, credit-purchase and purchase stay as built; the web's protected routes use them. Merging them changes money code the web calls, so it belongs to the after-launch Flutterwave removal task, which deletes all of them. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or code changed.",
+      "where": "src/content-piece/content-piece.service.ts:48"
     },
     "19962616ce6035dc": {
       "evidence": "if (params.transactionId === MOCK_FAILURE_TRANSACTION_ID || !initialized) {",
@@ -239,6 +255,14 @@
       "owner": "legacy-app-repair 2026-08-31",
       "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
       "where": "src/content-piece/content-piece.module.ts:38"
+    },
+    "4994dca35d52e465": {
+      "evidence": "* What it deliberately does NOT say is anything in the future tense. \"We",
+      "gate": "deferrals",
+      "message": "deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "YOU, owner-approved 16 Oct 2026 (R-60)",
+      "reason": "False positive of the deferral check. 'does NOT say anything in the future tense' is a copy rule on the verification-badge notification text (DECISIONS D17b): the text promises nothing, because no event is emitted on approval. It defers no work. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or comment changed.",
+      "where": "src/notification/notification-event.ts:496"
     },
     "4bee7a62a8d3a40e": {
       "evidence": "if (params.flutterwaveCustomerRef === MOCK_RETRY_FAILURE_CUSTOMER_REF) {",
@@ -736,6 +760,14 @@
       "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
       "where": "src/creator-subscription/creator-subscription.service.ts:204"
     },
+    "c29f56072d78a67b": {
+      "evidence": "*           390px; past ~70 nobody reads the end of it anyway.",
+      "gate": "deferrals",
+      "message": "known dead code left as prose - resolve it or baseline it with a reason",
+      "owner": "YOU, owner-approved 16 Oct 2026 (R-60)",
+      "reason": "False positive of the deferral check. 'nobody reads the end of it anyway' is the stated reason for the 70 character cap on a campaign title, in a doc comment on the DTO bounds. It is not a note about dead code. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or comment changed.",
+      "where": "src/admin/notifications/dto/compose-campaign.dto.ts:44"
+    },
     "c38ce6a7f5f51dca": {
       "evidence": "export interface FlutterwaveConfigResponse {",
       "gate": "wire_types",
@@ -895,6 +927,14 @@
       "owner": "legacy-app-repair 2026-08-31",
       "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
       "where": "src/direct-message/mock-flutterwave.adapter.ts:28"
+    },
+    "f43c5de9ed35d5c5": {
+      "evidence": "/** Confirms an account number belongs to the name we are about to pay. */",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "YOU, owner-approved 16 Oct 2026 (R-60)",
+      "reason": "False positive of the deferral check. 'an account number belongs to the name we are about to pay' describes what the account-name lookup (resolveAccount) confirms. It is a method description, not an ownership deferral. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or comment changed.",
+      "where": "src/wallet/flutterwave-wallet.gateway.ts:72"
     },
     "f5582aba775b715f": {
       "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
