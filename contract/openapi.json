@@ -15821,14 +15821,6 @@
         "operationId": "MoneyStatementController_emailStatement",
         "parameters": [
           {
-            "name": "idempotency-key",
-            "required": true,
-            "in": "header",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
             "name": "Idempotency-Key",
             "in": "header",
             "description": "8 to 128 of A-Z a-z 0-9 _ -. The same key for the same person answers the first mail again.",

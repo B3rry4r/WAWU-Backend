@@ -3,13 +3,14 @@ import {
   Controller,
   Get,
   Header,
-  Headers,
   HttpCode,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
+import type { Request } from 'express';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
@@ -149,14 +150,22 @@ export class MoneyStatementController {
     @CurrentWallet() wallet: OpenWallet,
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: StatementEmailDto,
-    @Headers('idempotency-key') idempotencyKey?: string,
+    // Read from the request, not declared as a parameter: the header is
+    // optional, and a declared one would be required in the contract.
+    @Req() req: Request,
   ): Promise<StatementEmailView> {
     // The route's own 400s and the 409 come before the person is counted.
     checkedPeriod(dto.from, dto.to, new Date());
     const to = this.emails.addressFor(user);
     const giveBack = this.limiter.take(wallet.wawuUserId);
     try {
-      return await this.emails.send(wallet, to, dto, idempotencyKey);
+      const key = req.headers['idempotency-key'];
+      return await this.emails.send(
+        wallet,
+        to,
+        dto,
+        typeof key === 'string' ? key : undefined,
+      );
     } catch (e) {
       if (e instanceof MoneyError && e.code === 'statement_too_large')
         giveBack();
