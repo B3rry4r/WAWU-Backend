@@ -1,4 +1,3 @@
-import { randomBytes } from 'crypto';
 import {
   BadRequestException,
   Injectable,
@@ -7,39 +6,21 @@ import {
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { Prisma } from '../../generated/prisma/client';
 import type { ShopFulfilment } from '../../generated/prisma/enums';
-import { slugify } from './shop.constants';
 import {
   toAdminProduct,
   type AdminProductView,
 } from '../common/types/shop.type';
-import type {
-  AdminListProductsDto,
-  UpdateFulfilmentDto,
-  UpsertProductDto,
-} from './dto/shop.dto';
+import type { AdminListProductsDto, UpdateFulfilmentDto } from './dto/shop.dto';
 
 /**
- * Product and order management, from the admin dashboard.
+ * WAWU Shop from the admin dashboard, after the shop was retired (R-2,
+ * OPS-08).
  *
- * This is where WAWU Commerce stock comes from — the brief says products are
- * uploaded from the dashboard, so there is no seller-facing upload path and no
- * revenue split to snapshot. WAWU is the seller.
- *
- * ── THE TWO RULES THAT ARE NOT COSMETIC ────────────────────────────────────
- *
- * A LIVE PRODUCT NEEDS A PICTURE AND STOCK. Enforced on publish, not on save,
- * so a draft can be written before the photographs arrive. A live product with
- * no image is a grey box in a grid whose entire design is large imagery; a
- * live product with no stock is an advert for something nobody can buy.
- *
- * A "WAS" PRICE MUST ACTUALLY BE HIGHER. `compareAtNaira` that equals or
- * undercuts the real price renders as a discount that is not one. That is a
- * false claim about money, and it is refused rather than left to an admin to
- * notice.
- *
- * ── PRODUCTS ARE NEVER DELETED ─────────────────────────────────────────────
- * `hidden` pulls something off the storefront and keeps the row, because order
- * lines point at it. A deleted product is an old order nobody can explain.
+ * The catalogue can be read but no longer written: creating or editing a
+ * product answers 410 at the controller (`shop-retired.ts`). Products are
+ * never deleted, because order lines point at them, and `toAdminProduct`
+ * keeps reading them. The order queue and fulfilment stay: a paid order is
+ * still a box somebody is owed.
  */
 @Injectable()
 export class ShopAdminService {
@@ -48,7 +29,10 @@ export class ShopAdminService {
   async list(query: AdminListProductsDto): Promise<{
     items: AdminProductView[];
     total: number;
-    /** `currentPage` — see the note in ShopService.listProducts. */
+    /**
+     * `currentPage`, not `page`: ResponseInterceptor reads `currentPage` off a
+     * `{items, total}` return to work out `nextPage`.
+     */
     currentPage: number;
     perPage: number;
   }> {
@@ -91,88 +75,6 @@ export class ShopAdminService {
     const row = await this.prisma.product.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('Product not found');
     return toAdminProduct(row);
-  }
-
-  async create(dto: UpsertProductDto): Promise<AdminProductView> {
-    this.assertSellable(dto);
-    const row = await this.prisma.product.create({
-      data: {
-        name: dto.name,
-        // The random tail is not decoration: two products genuinely can share
-        // a name, and a bare name-slug collides on the second one mid-save.
-        slug: slugify(dto.name, randomBytes(3).toString('hex')),
-        brand: dto.brand ?? null,
-        description: dto.description,
-        category: dto.category,
-        subcategory: dto.subcategory.trim(),
-        priceNaira: dto.priceNaira,
-        compareAtNaira: dto.compareAtNaira ?? null,
-        stock: dto.stock,
-        images: dto.images,
-        wawuVerified: dto.wawuVerified ?? false,
-        wawuPick: dto.wawuPick ?? false,
-        status: dto.status ?? 'draft',
-      },
-    });
-    return toAdminProduct(row);
-  }
-
-  async update(id: string, dto: UpsertProductDto): Promise<AdminProductView> {
-    const existing = await this.prisma.product.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Product not found');
-    this.assertSellable(dto);
-
-    const row = await this.prisma.product.update({
-      where: { id },
-      data: {
-        name: dto.name,
-        // The slug is NOT regenerated on rename. It is in a URL somebody may
-        // have shared, and changing it silently breaks that link.
-        brand: dto.brand ?? null,
-        description: dto.description,
-        category: dto.category,
-        subcategory: dto.subcategory.trim(),
-        priceNaira: dto.priceNaira,
-        compareAtNaira: dto.compareAtNaira ?? null,
-        stock: dto.stock,
-        images: dto.images,
-        wawuVerified: dto.wawuVerified ?? false,
-        wawuPick: dto.wawuPick ?? false,
-        ...(dto.status ? { status: dto.status } : {}),
-      },
-    });
-    return toAdminProduct(row);
-  }
-
-  /**
-   * What "live" costs you.
-   *
-   * A draft may be as incomplete as the admin likes — that is what a draft is
-   * for. The moment it goes on the storefront it has to be something a
-   * stranger can actually buy.
-   */
-  private assertSellable(dto: UpsertProductDto): void {
-    if (
-      dto.compareAtNaira !== undefined &&
-      dto.compareAtNaira !== null &&
-      dto.compareAtNaira <= dto.priceNaira
-    ) {
-      throw new BadRequestException(
-        'The "was" price has to be higher than the price you are selling at, or it reads as a discount that is not one.',
-      );
-    }
-    if (dto.status !== 'live') return;
-
-    if (dto.images.length === 0) {
-      throw new BadRequestException(
-        'A product needs at least one image before it can go on the storefront.',
-      );
-    }
-    if (dto.stock <= 0) {
-      throw new BadRequestException(
-        'A product with no stock cannot go live — shoppers would see something they cannot buy. Save it as a draft, or add stock.',
-      );
-    }
   }
 
   /* ------------------------------------------------------------------ *
