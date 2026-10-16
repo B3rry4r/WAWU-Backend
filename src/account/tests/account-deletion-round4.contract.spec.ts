@@ -276,7 +276,9 @@ describe('SETTINGS-06 round 4: a deletion in force keeps a frozen wallet, a canc
     wallets.get(walletId)!.frozen = false; // a late unfreeze of a request that gave up
     const before = calls(walletId, 'freeze');
     expect((await del(accounts, id)).ok).toBe(true);
-    expect(calls(walletId, 'freeze')).toBe(before + 1);
+    // Round 5: the freeze asserted again, and the reconcile that ends the
+    // request freezes it once more (idempotent).
+    expect(calls(walletId, 'freeze')).toBe(before + 2);
     expect(await inForceOk(id, walletId, pc.id)).toEqual({ row: 'scheduled', frozen: true, piece: 'removed' });
   });
 
@@ -443,18 +445,24 @@ describe('SETTINGS-06 round 4: a deletion in force keeps a frozen wallet, a canc
     const v: string[] = [];
     const st = d?.status ?? 'none';
     if (st === 'scheduled' && !(fr && ps === 'removed')) v.push(`scheduled but frozen=${fr} piece=${ps}`);
-    if ((st === 'none' || st === 'cancelled') && (fr || ps !== 'live')) v.push(`${st} but frozen=${fr} piece=${ps}`);
+    // Round 5 (R4-5): a cancel whose last unfreeze the provider refused stands
+    // (it answered walletUnfrozen false) with a frozen wallet; the hourly pass
+    // lets it go. Same as a stranded `freezing` row below: healed by the sweep.
+    const strandedCancel = unfreezeFails && st === 'cancelled' && fr && ps === 'live';
+    if (strandedCancel) v.push('stranded cancelled, wallet frozen');
+    else if ((st === 'none' || st === 'cancelled') && (fr || ps !== 'live')) v.push(`${st} but frozen=${fr} piece=${ps}`);
     if (st === 'freezing') v.push(`stranded freezing frozen=${fr}`);
     const anyDelOk = res.some((x) => x.q.type === 'delete' && x.res.ok);
     if (!reqs.some((q) => q.type === 'cancel') && anyDelOk && st !== 'scheduled') v.push(`delete answered ok but ${st}`);
     // a stranded row must be healed by the sweep
     let healed = true;
-    if (st === 'freezing') {
+    if (st === 'freezing' || strandedCancel) {
       plans.set(walletId, { freeze: [], unfreeze: [], balance: [] });
       counts.set(walletId, { freeze: 0, unfreeze: 0, balance: 0 });
       await backdate(id);
       await sweep.runOnce(new Date(), 200);
-      healed = (await row(id)) === null && !frozen(walletId);
+      const after = await row(id);
+      healed = (after === null || after.status === 'cancelled') && !frozen(walletId);
     }
     const plan = plans.get(walletId);
     const tl = evs.map((e) => `${e.op}#${e.n}@${Math.round(e.recv - t0)}/${e.apply == null ? '-' : Math.round(e.apply - t0)}`).join(' ');
@@ -477,7 +485,7 @@ describe('SETTINGS-06 round 4: a deletion in force keeps a frozen wallet, a canc
       const viol = out.filter((o) => o.v.length > 0);
       // With a failing unfreeze a `freezing` row left behind is by design (the
       // sweep, a cancel or a retry lets it go); `healed` below proves the sweep does.
-      const logic = viol.filter((o) => !o.reorder && (!uf || o.v.some((x) => !x.startsWith('stranded freezing'))));
+      const logic = viol.filter((o) => !o.reorder && (!uf || o.v.some((x) => !x.startsWith('stranded'))));
       console.log(`${name}: rounds ${n}, violations ${viol.length}, without provider reordering ${logic.length}; stranded not healed ${out.filter((o) => !o.healed).length}`);
       expect(out.filter((o) => !o.healed).map((o) => o.seed)).toEqual([]);
       expect(logic.map((o) => ({ seed: o.seed, v: o.v, reqs: o.reqs, tl: o.tl, plan: o.plan }))).toEqual([]);

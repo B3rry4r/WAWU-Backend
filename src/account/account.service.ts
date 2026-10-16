@@ -16,6 +16,7 @@ import {
 import {
   AccountDeletionBlockedError,
   AccountDeletionMoneyService,
+  type ReconcileOutcome,
 } from './account-deletion-money.service';
 import type { CancelDeletionResponseDto } from './dto/account-deletion.dto';
 import {
@@ -42,6 +43,13 @@ const CHANGED_MESSAGE =
 /** What a repeat request is told while the first one is still being set up. No em-dash. */
 const IN_FLIGHT_MESSAGE =
   'Your request is already being processed. Try again in a moment.';
+
+/** What a request touched, for the reconcile it ends with. */
+type DeleteContext = {
+  touched: boolean;
+  /** The wallet this request froze or let go, for when no row names it. */
+  wallet: { walletId: string; provider: string | null } | null;
+};
 
 type Promoted = {
   outcome: 'scheduled' | 'purging' | 'lost';
@@ -84,11 +92,19 @@ const CONTENT_STATUSES: ReadonlySet<string> = new Set(
  * If anything fails after the freeze the wallet is let go again, unless a
  * deletion is in force by then (a request that got in after this one froze it
  * for its own 30 days). The wallet is let go first and the `freezing` row
- * removed after, and the row is read once more: if a deletion is in force by
- * now, the unfreeze may have landed after its freeze, so the wallet is frozen
- * again (round 4). If the unfreeze fails the `freezing` row stays so a
- * cancel or a retry can do it, and if nobody does, the hourly sweep lets the
- * wallet go once the row is older than FREEZING_STALE_MINUTES.
+ * removed after. If the unfreeze fails the `freezing` row stays so a cancel
+ * or a retry can do it, and if nobody does, the hourly sweep lets the wallet
+ * go once the row is older than FREEZING_STALE_MINUTES.
+ *
+ * One rule decides what the wallet is (round 5, R-1 wallet safety): a
+ * deletion in force always has a frozen wallet, and a cancelled or absent
+ * deletion never does. `AccountDeletionMoneyService.reconcileWallet` is the
+ * only thing that enforces it. Every path that can change the row or the
+ * wallet ends (in a `finally`, so an error does not skip it) by calling it,
+ * and it reads the row as it is by then and drives the provider to match. So
+ * a freeze or unfreeze whose answer was lost, or that landed late, is put
+ * right by the call that follows it, and one the provider would not take is
+ * put right by the hourly sweep (every row changed in the last 24 hours).
  *
  * One request at a time owns a `freezing` row (round 4). A young one makes a
  * second request answer 503 "already being processed" and undo nothing; only
@@ -99,9 +115,10 @@ const CONTENT_STATUSES: ReadonlySet<string> = new Set(
  * Cancelling does the reverse, in the order that cannot lose anything: the
  * wallet first (if the provider does not answer, nothing else changed and the
  * caller tries again), then content, push and the record, under a lock on the
- * row, then the wallet once more (a request still running may have frozen it
- * after the first unfreeze, round 4). From `purging` on it is refused: it answers `cancelled: false` with
- * `deletionInProgress`, never "restored".
+ * row, then the rule above is applied (a request still running may have
+ * frozen the wallet after the first unfreeze). `walletUnfrozen` is true only
+ * when that last step confirmed it. From `purging` on it is refused: it
+ * answers `cancelled: false` with `deletionInProgress`, never "restored".
  */
 @Injectable()
 export class AccountService {
@@ -116,12 +133,30 @@ export class AccountService {
   ) {}
 
   async deleteAccount(wawuUserId: string): Promise<AccountDeletionResponse> {
+    const ctx: DeleteContext = { touched: false, wallet: null };
+    try {
+      return await this.deleteAccountSteps(wawuUserId, ctx);
+    } finally {
+      // Whatever happened above, the wallet ends as the row says (round 5).
+      // Not reached by a refusal before anything was touched (money to settle
+      // first, a request still running): those change nothing.
+      if (ctx.touched) {
+        await this.money.reconcileWallet(wawuUserId, ctx.wallet);
+      }
+    }
+  }
+
+  private async deleteAccountSteps(
+    wawuUserId: string,
+    ctx: DeleteContext,
+  ): Promise<AccountDeletionResponse> {
     let existing = await this.prisma.accountDeletion.findUnique({
       where: { wawuUserId },
     });
-    // The sweep already took it: nothing is left to ask for. The answer is
-    // the date it was due.
-    if (existing?.status === 'purging') {
+    // The sweep already took it, or has finished with it: nothing is left to
+    // ask for, and nothing is scheduled again (round 5, R4-4: a `purged` row
+    // was taken over like a cancelled one). The answer is the date it was due.
+    if (existing?.status === 'purging' || existing?.status === 'purged') {
       return { deletionScheduledAt: existing.purgeAfter.toISOString() };
     }
     // A `freezing` row is a request that is running right now (a few seconds
@@ -139,7 +174,20 @@ export class AccountService {
       if (Date.now() - existing.updatedAt.getTime() < FREEZING_STALE_MS) {
         throw new ServiceUnavailableException(IN_FLIGHT_MESSAGE);
       }
-      if (existing.walletId) await this.money.unfreeze(existing.walletId);
+      ctx.touched = true;
+      // Only a wallet of the provider this server runs is asked (round 5,
+      // R4-3, R-39): a stale row naming another provider's wallet is dropped
+      // without sending that wallet id here.
+      if (
+        existing.walletId &&
+        this.money.holdsWalletOf(existing.walletProvider)
+      ) {
+        ctx.wallet = {
+          walletId: existing.walletId,
+          provider: existing.walletProvider,
+        };
+        await this.money.unfreeze(existing.walletId);
+      }
       await this.prisma.accountDeletion.deleteMany({
         where: {
           wawuUserId,
@@ -158,6 +206,7 @@ export class AccountService {
     // asserted again (idempotent: a late unfreeze from a request that gave up
     // may have landed after it).
     if (existing?.status === 'scheduled') {
+      ctx.touched = true;
       return this.finishScheduled(wawuUserId, existing);
     }
 
@@ -167,6 +216,10 @@ export class AccountService {
       throw new AccountDeletionBlockedError(check);
     }
     const wallet = check.wallet;
+    ctx.touched = true;
+    ctx.wallet = wallet
+      ? { walletId: wallet.walletId, provider: wallet.provider }
+      : ctx.wallet;
 
     const scheduledAt = new Date();
     const purgeAfter = new Date(scheduledAt.getTime() + DELETION_GRACE_MS);
@@ -265,19 +318,49 @@ export class AccountService {
       return { cancelled: false, walletUnfrozen: false, contentRestored: 0 };
     }
 
+    let answer: CancelDeletionResponseDto;
+    let reconciled: ReconcileOutcome | null = null;
+    try {
+      answer = await this.cancelSteps(wawuUserId, row);
+    } finally {
+      // Whatever happened above (cancelled, too late, an unfreeze whose
+      // answer was lost), the wallet ends as the row says: unfrozen if the
+      // deletion is cancelled, frozen if it is still in force (round 5, R4-1,
+      // R4-2).
+      reconciled = await this.money.reconcileWallet(wawuUserId);
+    }
+    if (!answer.cancelled) return answer;
+    // The truth (round 5, R4-5): unfrozen is said only when the last look at
+    // the provider confirmed it. If it could not, the cancel stands and the
+    // hourly pass lets the wallet go (the row was changed in the last 24 hours).
+    const walletUnfrozen = reconciled.want === 'unfrozen' && reconciled.done;
+    if (reconciled.failed) {
+      this.logger.warn(
+        `Deletion cancelled for ${wawuUserId} but the wallet could not be confirmed unfrozen; the hourly pass asks again`,
+      );
+    }
+    return { ...answer, walletUnfrozen };
+  }
+
+  private async cancelSteps(
+    wawuUserId: string,
+    row: {
+      status: string;
+      walletId: string | null;
+      walletProvider: string | null;
+      walletFrozenAt: Date | null;
+    },
+  ): Promise<CancelDeletionResponseDto> {
     // The wallet first: if the provider does not answer, nothing else has
     // changed and the same call can be made again. A `freezing` row may have
-    // a frozen wallet whose answer was lost, so it is let go too.
-    let walletUnfrozen = false;
-    // Round 4 (verifier R3-4): a request still running (a DELETE that is
-    // freezing, or a repeat DELETE asserting the freeze again) may freeze the
-    // wallet after this unfreeze was applied, so once the cancel has
-    // committed the wallet is let go once more (idempotent).
+    // a frozen wallet whose answer was lost, so it is let go too. (If this
+    // unfreeze is applied and its answer lost, the deletion is still in
+    // force, and the reconcile that ends the cancel freezes the wallet again.)
     const mayBeFrozen =
-      row.walletId && (row.walletFrozenAt || row.status === 'freezing');
-    if (mayBeFrozen) {
-      walletUnfrozen = (await this.money.unfreeze(row.walletId!)).done;
-    }
+      row.walletId &&
+      this.money.holdsWalletOf(row.walletProvider) &&
+      (row.walletFrozenAt || row.status === 'freezing');
+    if (mayBeFrozen) await this.money.unfreeze(row.walletId!);
 
     let contentRestored = 0;
     let cancelled = false;
@@ -313,38 +396,22 @@ export class AccountService {
     });
 
     if (!cancelled) {
-      // The sweep took the row between the look above and the lock. The
-      // wallet was let go for nothing: freeze it again (it stays frozen
-      // until the purge), and say the truth.
+      // The sweep took the row between the look and the lock (or finished
+      // with it). The deletion runs, so the wallet must be frozen: the
+      // reconcile that ends the cancel does it. Say the truth.
       const now = await this.prisma.accountDeletion.findUnique({
         where: { wawuUserId },
         select: { status: true },
       });
-      if (now?.status === 'purging') {
-        if (walletUnfrozen) {
-          await this.refreeze(wawuUserId, row.walletId!);
-        }
+      if (now?.status === 'purging' || now?.status === 'purged') {
         return { ...IN_PROGRESS };
       }
       return { cancelled: false, walletUnfrozen: false, contentRestored: 0 };
     }
-    if (walletUnfrozen && row.walletId) {
-      try {
-        await this.money.unfreeze(row.walletId);
-      } catch (error) {
-        this.logger.error(
-          `Could not unfreeze the wallet of ${wawuUserId} a second time after a cancel: ${(error as Error).message}. The request is recorded (freezing); the hourly sweep lets it go.`,
-        );
-        await this.keepStranded(wawuUserId, {
-          walletId: row.walletId,
-          provider: row.walletProvider ?? 'fintava',
-        });
-      }
-    }
     this.logger.log(
-      `Deletion cancelled for ${wawuUserId}: wallet unfrozen ${walletUnfrozen}, ${contentRestored} content piece(s) back`,
+      `Deletion cancelled for ${wawuUserId}: ${contentRestored} content piece(s) back`,
     );
-    return { cancelled: true, walletUnfrozen, contentRestored };
+    return { cancelled: true, walletUnfrozen: false, contentRestored };
   }
 
   /**
@@ -370,8 +437,8 @@ export class AccountService {
       skipDuplicates: true,
     });
     if (created.count === 1) return true;
-    // A row from an earlier deletion (cancelled or purged), or one left by a
-    // request that stopped (`freezing` and older than FREEZING_STALE_MS): take
+    // A row from an earlier deletion (cancelled; a purged one is never taken
+    // over, round 5 R4-4), or one left by a request that stopped (`freezing` and older than FREEZING_STALE_MS): take
     // it over. A row in force is left alone, and so is a young `freezing` row:
     // that request is running, and only one request at a time owns the row
     // (round 4, R3-1: two owners of one row could unfreeze each other).
@@ -380,7 +447,7 @@ export class AccountService {
       where: {
         wawuUserId,
         OR: [
-          { status: { in: ['cancelled', 'purged'] } },
+          { status: 'cancelled' },
           { status: 'freezing', updatedAt: { lte: cutoff } },
         ],
       },
@@ -469,42 +536,23 @@ export class AccountService {
     });
     if (inForce) {
       await this.stopPushAndTell(wawuUserId);
-      await this.reassertFreeze(wawuUserId, row);
+      await this.reassertFreeze(row);
     }
     return { deletionScheduledAt: row.purgeAfter.toISOString() };
   }
 
   /**
-   * Freezes the wallet of a scheduled deletion again. If a cancel committed
-   * while the freeze was on its way, that cancel's unfreeze may have come
-   * first, so the wallet is let go again. A freeze the provider does not
-   * answer is an error to the caller (the same call is made again).
+   * Freezes the wallet of a scheduled deletion again, so a late unfreeze from
+   * a request that gave up cannot leave it open. A freeze the provider does
+   * not answer is an error to the caller (the same call is made again); what
+   * the wallet ends as is decided by the reconcile that ends the request.
    */
-  private async reassertFreeze(
-    wawuUserId: string,
-    row: { walletId: string | null; walletProvider: string | null },
-  ): Promise<void> {
+  private async reassertFreeze(row: {
+    walletId: string | null;
+    walletProvider: string | null;
+  }): Promise<void> {
     if (!row.walletId || !this.money.holdsWalletOf(row.walletProvider)) return;
-    const done = (await this.money.freeze(row.walletId)).done;
-    if (!done) return;
-    const after = await this.prisma.accountDeletion.findUnique({
-      where: { wawuUserId },
-      select: { status: true },
-    });
-    if (after && ['scheduled', 'purging', 'freezing'].includes(after.status)) {
-      return;
-    }
-    try {
-      await this.money.unfreeze(row.walletId);
-    } catch (error) {
-      this.logger.error(
-        `The wallet of ${wawuUserId} may be frozen after a cancelled deletion and could not be unfrozen: ${(error as Error).message}`,
-      );
-      await this.keepStranded(wawuUserId, {
-        walletId: row.walletId,
-        provider: row.walletProvider ?? 'fintava',
-      });
-    }
+    await this.money.freeze(row.walletId);
   }
 
   /** Hide the content, and remember which pieces and what each was, so a cancel restores exactly these. */
@@ -596,9 +644,6 @@ export class AccountService {
       );
       await this.keepStranded(wawuUserId, wallet, when);
     }
-    await this.money.holdIfDeleting(wawuUserId, wallet.walletId, {
-      includeFreezing: !failure,
-    });
     if (failure && surface) throw failure;
   }
 
@@ -619,16 +664,6 @@ export class AccountService {
     } catch (writeError) {
       this.logger.error(
         `Could not record the stranded wallet of ${wawuUserId}: ${(writeError as Error).message}`,
-      );
-    }
-  }
-
-  private async refreeze(wawuUserId: string, walletId: string): Promise<void> {
-    try {
-      await this.money.freeze(walletId);
-    } catch (error) {
-      this.logger.error(
-        `Could not freeze the wallet of ${wawuUserId} again after a refused cancel: ${(error as Error).message}`,
       );
     }
   }

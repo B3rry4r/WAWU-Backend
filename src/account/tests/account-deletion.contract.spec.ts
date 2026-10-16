@@ -481,7 +481,9 @@ describe('Delete account (SETTINGS-06)', () => {
       expect(refusal.blockers).toEqual(['wallet_balance']);
       expect(refusal.balanceKobo).toBe(250_000);
       expect(frozenCalls()).toBe(1);
-      expect(unfrozenCalls()).toBe(1);
+      // Round 5: one unfreeze to let the wallet go, and the reconcile every
+      // request ends with finds no deletion row and confirms it (idempotent).
+      expect(unfrozenCalls()).toBe(2);
       expect(wallets.get(walletId!)!.frozen).toBe(false);
       expect(
         await prisma.accountDeletion.count({ where: { wawuUserId: id } }),
@@ -542,8 +544,10 @@ describe('Delete account (SETTINGS-06)', () => {
       gateway.scheduleAccountDeletion.mockClear();
       const second = await accounts.deleteAccount(id);
       expect(second.deletionScheduledAt).toBe(first.deletionScheduledAt);
-      // Round 4 (R3-1): a repeat request asserts the freeze again, once.
-      expect(frozenCalls()).toBe(1);
+      // Round 4 (R3-1): a repeat request asserts the freeze again. Round 5:
+      // and the reconcile every request ends with freezes it once more
+      // (idempotent), so two calls.
+      expect(frozenCalls()).toBe(2);
       expect(unfrozenCalls()).toBe(0);
       expect(scheduleCalls()).toHaveLength(1);
       expect(

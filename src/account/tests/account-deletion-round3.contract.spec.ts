@@ -223,7 +223,11 @@ describe('Delete account, round 3 (SETTINGS-06)', () => {
     sweep = moduleRef.get(AccountDeletionSweepService);
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    // Round 5: a pass also looks at every row changed in the last 24 hours,
+    // so the rows earlier tests left are moved out of that window; the
+    // counters below then count what this test's rows cause.
+    await prisma.$executeRaw`UPDATE "AccountDeletion" SET "updatedAt" = now() - interval '2 days'`;
     double.seen.length = 0;
     freezeCalls = 0;
     unfreezeCalls = 0;

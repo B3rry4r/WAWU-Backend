@@ -8,7 +8,11 @@ import {
 export class CancelDeletionResponseDto {
   /** False: no deletion was waiting, and nothing was changed. */
   cancelled!: boolean;
-  /** True when the wallet was frozen for the deletion and is let go again. */
+  /**
+   * True when the wallet was frozen for the deletion and the provider
+   * confirmed it is let go again after the cancel. False: the cancel stands
+   * and the hourly sweep lets the wallet go (or there was no wallet to let go).
+   */
   walletUnfrozen!: boolean;
   /** How many content pieces the deletion had hidden and are back. */
   contentRestored!: number;
