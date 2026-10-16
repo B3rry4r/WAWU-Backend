@@ -86,7 +86,11 @@ export class CommunityService {
     return { ...community, memberCount, messagesToday };
   }
 
-  /** GET /communities — no ordering contract given; name asc for a stable, predictable list. */
+  /**
+   * GET /communities — no ordering contract given; name asc for a predictable
+   * list. A name is not unique, so the id breaks a tie (FIX-28): without it,
+   * equal names could repeat or go missing between offset pages.
+   */
   async list(
     page: number,
     perPage: number,
@@ -99,7 +103,7 @@ export class CommunityService {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.community.findMany({
         where,
-        orderBy: { name: 'asc' },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
         skip: (page - 1) * perPage,
         take: perPage,
       }),
