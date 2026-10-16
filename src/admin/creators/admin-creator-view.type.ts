@@ -109,13 +109,14 @@ export interface AdminCreatorVerificationView {
   authority: 'wawu-id';
 }
 
-/** Upload slots. `slotsTotal` is derived, never stored — see `uploadAllowanceFor`. */
+/** Upload slots. `slotsTotal` is derived, never stored — see PublishingAllowanceService. */
 export interface AdminCreatorUploadsView {
   slotsUsed: number | null;
   /**
-   * The per-account cap, from the shared `uploadAllowanceFor()` helper and
-   * the creator's tick (R-7: 5, or 25 with a tick), exactly as
-   * CreatorStateService derives it. There is no free/paid sub-split.
+   * The products the creator may have published at once, from the shared
+   * PublishingAllowanceService (TIER-02), exactly as CreatorStateService
+   * reads it: a running tier's products plus extras, or 25 for a tick that
+   * has not ended, else 0. There is no free/paid sub-split.
    */
   slotsTotal: number | null;
   /** Pieces currently waiting on a moderator — the other reason "I cannot see my upload". */

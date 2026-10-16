@@ -46,9 +46,9 @@ export interface AdminKycMaskedIdentifiersView {
  *
  * `kycStatus` reproduces CreatorStateService's `not_started` synthesis
  * (protected-surface hazard H-5) so a reviewer and the creator are looking at
- * the same word for the same state, and `slotsTotal` is derived with the
- * shared `uploadAllowanceFor()` helper rather than recomputed — law 13, one
- * definition of one number. Nothing here is written back.
+ * the same word for the same state, and `slotsTotal` is what the publishing
+ * gate allows (PublishingAllowanceService, TIER-02) rather than recomputed —
+ * law 13, one definition of one number. Nothing here is written back.
  *
  * The upload gate used to sit beside it as `subscriptionPaid`, `tier`,
  * `subscriptionStatus` and `subscriptionCurrentPeriodEnd`. Uploading is no

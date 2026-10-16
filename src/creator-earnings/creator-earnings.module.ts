@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { CreatorEarningsController } from './creator-earnings.controller';
 import { CreatorEarningsService } from './creator-earnings.service';
-import { CreatorAccountGuard } from './guards/creator-account-guard';
+import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 
 /**
  * registry.json "CreatorEarnings" resource module. PrismaService comes from

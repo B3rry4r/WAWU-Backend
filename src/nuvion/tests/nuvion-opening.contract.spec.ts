@@ -135,6 +135,25 @@ function digits(n: number): string {
   return out;
 }
 
+/**
+ * Every client address this file draws differs from every other it has drawn
+ * in the run. The opening routes count tries per address per hour in the
+ * database, so two equal draws (about 1 run in 70) turned a test into a 429
+ * (FIX-29). A pick already used is dropped and drawn again; the ranges the
+ * callers pass in are unchanged.
+ */
+const drawnAddresses = new Set<string>();
+function freshAddress(draw: () => string): string {
+  for (let tries = 0; tries < 1000; tries += 1) {
+    const address = draw();
+    if (!drawnAddresses.has(address)) {
+      drawnAddresses.add(address);
+      return address;
+    }
+  }
+  throw new Error('no unused test address left in the range');
+}
+
 type Body = Record<string, unknown> & {
   bvn: string;
   nin: string;
@@ -2751,7 +2770,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   });
 
   describe('round 3: at most 10 opening tries an hour from one address (a setting)', () => {
-    const addr = () => `203.0.113.${randomInt(1, 250)}`;
+    const addr = () => freshAddress(() => `203.0.113.${randomInt(1, 250)}`);
     const trial = (a: string) => {
       const p = person();
       return { p, call: () => openFrom(p, a) };
@@ -2803,7 +2822,12 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     });
 
     it('the addresses of one IPv6 /64 are one place', async () => {
-      const block = `2001:db8:${randomInt(1, 60000).toString(16)}:${randomInt(1, 60000).toString(16)}`;
+      const block64 = () =>
+        freshAddress(
+          () =>
+            `2001:db8:${randomInt(1, 60000).toString(16)}:${randomInt(1, 60000).toString(16)}`,
+        );
+      const block = block64();
       for (let i = 1; i <= 4; i += 1) {
         await openFrom(person(), `${block}::${i}`).expect(200);
       }
@@ -2813,10 +2837,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       ).expect(429);
       expect(body(over).reason?.code).toBe('open_address_limited');
       // The next block is another place.
-      await openFrom(
-        person(),
-        `2001:db8:${randomInt(1, 60000).toString(16)}:${randomInt(1, 60000).toString(16)}::1`,
-      ).expect(200);
+      await openFrom(person(), `${block64()}::1`).expect(200);
     });
 
     it('a request that names no client address (a call on the server itself) is not counted by address', async () => {
@@ -3297,7 +3318,8 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
 
   // -------------------------------------------------------------------------
   describe('round 4, N12: the address limit holds under any burst', () => {
-    const place = () => `198.18.${randomInt(1, 250)}.${randomInt(1, 250)}`;
+    const place = () =>
+      freshAddress(() => `198.18.${randomInt(1, 250)}.${randomInt(1, 250)}`);
     const reserved = (people: Person[]) =>
       prisma.bvnCheckAttempt.count({
         where: {
@@ -3810,7 +3832,8 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
 
   // -------------------------------------------------------------------------
   describe('NUV-03 round 4, R4-3: a place the same account holds on another address is no sign of a double tap', () => {
-    const addr = () => `198.19.${randomInt(1, 250)}.${randomInt(1, 250)}`;
+    const addr = () =>
+      freshAddress(() => `198.19.${randomInt(1, 250)}.${randomInt(1, 250)}`);
     const keyOf = (address: string) =>
       addressKeyOf(moduleRef.get(IdentityHasher), address);
 

@@ -159,6 +159,27 @@ describe('My content: edit, send again, reason, sales (contract)', () => {
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
     prisma = moduleRef.get(PrismaService);
+    // TIER-02 (R-43): sending a piece again, or a file for one, needs a way to
+    // publish. The owner holds a running tier of 25 products for this suite,
+    // so what it checks (edit, send again, the reason, the sales) is about the
+    // piece and not about the tier; the gate has its own suite
+    // (plans/tests/publishing-gate.contract.spec.ts).
+    await prisma.makerTier.upsert({
+      where: { wawuUserId: OWNER },
+      create: {
+        wawuUserId: OWNER,
+        tierId: 'me09-suite',
+        activeFrom: new Date(Date.now() - 86_400_000),
+        activeUntil: new Date(Date.now() + 86_400_000 * 30),
+        productsIncluded: 25,
+        pointsIncluded: 0,
+      },
+      update: {
+        activeUntil: new Date(Date.now() + 86_400_000 * 30),
+        productsIncluded: 25,
+        extraProducts: 0,
+      },
+    });
     ownerState = await prisma.creatorState.findUnique({
       where: { wawuUserId: OWNER },
       select: { slotsUsed: true },
@@ -180,6 +201,7 @@ describe('My content: edit, send again, reason, sales (contract)', () => {
   });
 
   afterAll(async () => {
+    await prisma?.makerTier.deleteMany({ where: { wawuUserId: OWNER } });
     await app?.close();
     if (ownedMock && mock) mock.kill();
   });
@@ -521,8 +543,8 @@ describe('My content: edit, send again, reason, sales (contract)', () => {
       const res = await request(server())
         .post(`/content/${p.id}/resubmit`)
         .set('Authorization', as(ownerToken))
-        .expect(403);
-      expect(JSON.stringify(res.body)).toContain('upload_limit_reached');
+        .expect(402);
+      expect(JSON.stringify(res.body)).toContain('product_limit_reached');
       const row = await prisma.contentPiece.findUniqueOrThrow({
         where: { id: p.id },
       });

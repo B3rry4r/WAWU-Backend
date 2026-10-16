@@ -107,6 +107,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'CartItem', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventGoing', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventSave', column: 'userWawuId', disposition: 'OWNED' },
+  // A tap on a school's "Continue to their site" (SCHOOLS-10): who, which
+  // course, when. The person's own record of what they opened, so it goes
+  // with them. The school's code needs no person and stays.
+  { model: 'SchoolLinkClick', column: 'userWawuId', disposition: 'OWNED' },
   // This person's saved creators and finished course lessons (ME-10): their
   // own bookmarks and their own progress. Both go with them.
   { model: 'SavedCreator', column: 'userWawuId', disposition: 'OWNED' },
@@ -169,6 +173,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // link anyone follows once the account is gone.
   { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
+  // A product this person was still drafting (TIER-02): its details, no file.
+  // It exists only because this account does and is shown to nobody else.
+  { model: 'ProductDraft', column: 'wawuUserId', disposition: 'OWNED' },
   // An event registration this account claimed in the app (JOIN-01; claimed by
   // JOIN-03, POST /waitlist/claims): its name, phone, email and the payment that
   // bought the plan. It names this account only after the claim, so it goes
@@ -314,6 +321,18 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // not the account at Nuvion, which stays there; deletion needs an empty
   // wallet first (R-17).
   { model: 'NuvionEntity', column: 'wawuUserId', disposition: 'OWNED' },
+  // FIX-20. FintavaWebhookEvent and NuvionWebhookEvent, the stored provider
+  // deliveries, have no person column: each keeps the delivery's raw body and
+  // a parsed copy, which hold names, account numbers and narrations, and the
+  // purge cannot find a person's rows in them. RETENTION covers these rows,
+  // not the purge: a daily job (src/webhook-retention/) clears the body and
+  // the parsed copy once a delivery is older than WEBHOOK_RETENTION_DAYS (90
+  // by default) and finished with, and keeps the ids, references, hash,
+  // outcome and times that make a repeat a repeat. A delivery still pending,
+  // failed or held for review keeps its body until a consumer or a person is
+  // done with it (docs/contract/CONVENTIONS.md section 21). A person's own
+  // money history is the ledger (FintavaLedgerEntry above), which the purge
+  // does cover, so neither table is named in this map.
   // NUV-05. NuvionBookTransfer, the log of every book transfer sent on
   // Nuvion, has no person column (like NuvionWebhookEvent): it names Nuvion's
   // account ids, a person's account number, the amount and WAWU's reference,
@@ -395,6 +414,20 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PointLedger', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointHold', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointLot', column: 'wawuUserId', disposition: 'OWNED' },
+  // Points turned into cash (POINTS-04): each row is WAWU's own movement of
+  // cash from its account to this person's wallet, and the provider's record
+  // of it (our reference, the amount, whether it was confirmed) must outlive
+  // the account while a move may still be in flight. The row stays; the
+  // person and the wallet account it paid into are set to null. Its points
+  // hold went with the person's points above, and a conversion still held
+  // when the account is deleted is cancelled by the sweep (nothing is paid
+  // into a wallet that is gone).
+  {
+    model: 'PointConversion',
+    column: 'wawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['destinationAccountNumber'],
+  },
 
   // The city on this person's professional card (PROS-02). Theirs, and
   // public only beside a listing that goes with them.

@@ -2,6 +2,10 @@ import { ConfigService } from '@nestjs/config';
 import { StorageService, objectKeyFrom } from '../storage.service';
 import { serveAs } from '../dto/presign-upload.dto';
 import type { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  publishingOver,
+  publishingTables,
+} from '../../plans/tests/publishing-fakes';
 
 /**
  * Regression cover for the bug that made EVERY upload in the product fail.
@@ -36,12 +40,17 @@ function serviceWith(): StorageService {
       findMany: async () => [],
       update: async () => ({}),
     },
-    creatorState: { findUnique: async () => null },
-    // The storage allowance reads the account's tick (R-7); no profile row
-    // means no tick, the free allowance.
-    userProfile: { findUnique: () => Promise.resolve(null) },
+    // The storage allowance and the publishing gate read the account's tier
+    // and tick (R-7, TIER-02). `user-1` holds a running tier with room, so a
+    // content file may be signed for it; the other accounts only sign
+    // folders that are not products, which the gate never asks about.
+    ...publishingTables(
+      { tier: { endsInDays: 30, productsIncluded: 3 }, slotsUsed: 0 },
+      'user-1',
+    ),
   } as unknown as PrismaService;
-  return new StorageService(config, prisma);
+  const { allowance, gate } = publishingOver(prisma);
+  return new StorageService(config, prisma, allowance, gate);
 }
 
 describe('StorageService presigning', () => {
