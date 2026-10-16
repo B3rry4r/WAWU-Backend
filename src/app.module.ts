@@ -84,6 +84,7 @@ import { MeModule } from './me/me.module';
 import { PlansModule } from './plans/plans.module';
 import { PlanPurchasesModule } from './plans/purchases/plan-purchases.module';
 import { WalletBillsModule } from './wallet-bills/wallet-bills.module';
+import { EventWalletOrdersModule } from './event-ticketing/wallet/event-wallet-orders.module';
 import { PointsConvertModule } from './points/convert/points-convert.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
@@ -406,6 +407,12 @@ import { PushModule } from './push/push.module';
     // controllers but declares only literal paths no `bills/:id/...` route matches;
     // listed after PlansModule and MoneyModule so no route registered before it moves.
     WalletBillsModule,
+    // Buy event tickets from the wallet (task EVENTS-07): `events/:id/orders/wallet`
+    // (POST), `events/orders/wallet/pay`, `events/orders/wallet/:orderId/quote` and
+    // `events/orders/wallet/:orderId`, and the `event_ticket` payment kind. Every path is
+    // deeper than EventController's `GET :id` and none matches a route of the web's
+    // ticketing; listed after MoneyModule so no route registered before it moves.
+    EventWalletOrdersModule,
     // Convert points to cash (task POINTS-04): `points/convert/quote`,
     // `points/convert` (POST) and `points/convert/{id}`, and the sweep that
     // finishes a conversion whose answer was lost. `points` is a first segment
