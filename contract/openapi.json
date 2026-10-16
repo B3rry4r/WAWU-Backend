@@ -36143,7 +36143,9 @@
               "legal_fee",
               "school_fee",
               "paid_dm",
-              "event_ticket"
+              "event_ticket",
+              "tier",
+              "tier_bump"
             ]
           },
           "earnedKobo": {
@@ -36241,7 +36243,9 @@
               "legal_fee",
               "school_fee",
               "paid_dm",
-              "event_ticket"
+              "event_ticket",
+              "tier",
+              "tier_bump"
             ]
           },
           "targetId": {
