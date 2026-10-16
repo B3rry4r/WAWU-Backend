@@ -1,4 +1,10 @@
-import { HttpException, Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  HttpException,
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { isRowOf } from '../../wallet-provider/provider-rows';
 import {
@@ -8,6 +14,7 @@ import {
 } from '../../wallet-provider/wallet-provider.interface';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import type { OpenWallet } from '../gate/wallet-gate';
+import { AccountLimits } from '../limits/account-limits.service';
 import { MoneyError } from '../money-error';
 import type { WalletBalanceView } from '../money-view.type';
 
@@ -27,6 +34,8 @@ export const BALANCE_UNREACHABLE_MESSAGE =
  * - Naira becomes kobo once, inside the MONEY-06 client
  *   (`fintavaAmountToKobo`, decimal text, no float arithmetic). This file
  *   passes the integer through untouched.
+ * - The same answer carries the account's limit when the provider names one;
+ *   it is kept beside the wallet (`AccountLimits.record`, WALLET-23).
  * - The wallet is found from the caller's token only. No request names a
  *   wallet, so nobody can ask for somebody else's.
  * - No wallet yet, or one still being opened, never gets here: the route's
@@ -44,6 +53,8 @@ export class WalletBalanceService {
   constructor(
     @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
     private readonly prisma: PrismaService,
+    // WALLET-23: keeps the account's limit the balance answer carried.
+    @Optional() private readonly accountLimits?: AccountLimits,
   ) {}
 
   /** The balance of the wallet the gate found for the caller. */
@@ -70,6 +81,12 @@ export class WalletBalanceService {
       const balance = await this.provider.getBalance({
         walletId: wallet.walletId,
       });
+      // The same answer says what the account may move (WALLET-23): kept for
+      // the limit check and W35's row. A failure to keep it never fails this.
+      await this.accountLimits?.record(
+        wallet.wawuUserId,
+        balance.accountLimits,
+      );
       return {
         availableKobo: safeKoboNumber(balance.availableKobo),
         asOf: new Date().toISOString(),
