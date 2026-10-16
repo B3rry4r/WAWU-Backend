@@ -15907,7 +15907,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Email a statement (W38 \"Send statement\"). The same period rules and the\nsame file as `GET /money/statements`, attached to a mail sent to the\nperson's own confirmed address: the request carries none, so a statement\ncannot be sent to anyone else. No confirmed email is `409\nemail_not_verified`; a mail that could not be handed to WAWU ID's sender\nis `503 statement_email_failed`. The limits of `GET /money/statements`\napply and are shared with it: an emailed statement is one statement.\nAn optional `Idempotency-Key` makes a repeat answer the first mail\ninstead of sending a second.",
+        "summary": "Email a statement (W38 \"Send statement\"). The same period rules and the\nsame file as `GET /money/statements`, attached to a mail sent to the\nperson's own confirmed address: the request carries none, so a statement\ncannot be sent to anyone else. No confirmed email is `409\nemail_not_verified`; a mail that could not be handed to WAWU ID's sender\n(or whose file WAWU ID did not confirm taking) is `503\nstatement_email_failed`; a file over 12 MiB, WAWU ID's cap, is `400\nstatement_too_large` before anything is sent. The limits of `GET /money/statements`\napply and are shared with it: an emailed statement is one statement.\nAn optional `Idempotency-Key` makes a repeat answer the first mail\ninstead of sending a second.",
         "tags": [
           "MoneyStatement"
         ],

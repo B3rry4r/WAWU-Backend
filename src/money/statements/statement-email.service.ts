@@ -14,6 +14,7 @@ import type {
   StatementDeliveryView,
   StatementEmailView,
 } from './statement-email-view.type';
+import { STATEMENT_EMAIL_MAX_BYTES } from './statement-config';
 import { STATEMENT_FORMATS } from './statement-view.type';
 import { StatementService } from './statement.service';
 
@@ -21,6 +22,8 @@ export const EMAIL_NOT_VERIFIED_MESSAGE =
   'Confirm your email address to get a statement by email.';
 export const STATEMENT_EMAIL_FAILED_MESSAGE =
   "We couldn't send your statement. Try again in a moment.";
+export const STATEMENT_EMAIL_TOO_BIG_MESSAGE =
+  'This statement is too big to send by email. Pick a shorter range.';
 
 /**
  * Emailing a statement (task WALLET-35, W38). The statement is built by
@@ -65,6 +68,14 @@ export class StatementEmailService {
     clientKey: string | undefined,
   ): Promise<StatementEmailView> {
     const view = await this.statements.statement(wallet, query);
+    // The relay refuses a file past its cap with a 400 that can never succeed,
+    // which the person would see as "try again". Say it now, as a final answer.
+    if (Buffer.byteLength(view.content, 'utf8') > STATEMENT_EMAIL_MAX_BYTES) {
+      throw new MoneyError(
+        'statement_too_large',
+        STATEMENT_EMAIL_TOO_BIG_MESSAGE,
+      );
+    }
     const mail = statementMail(view);
     const result = await this.relay.send({
       from: '',
