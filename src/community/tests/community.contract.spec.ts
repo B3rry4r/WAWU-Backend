@@ -814,7 +814,7 @@ describe('Community (contract)', () => {
         .expect(400);
 
       expect(res.body.message).toBe(
-        'Nothing to update — send a name, a description and/or an image.',
+        'Nothing to update. Send a name, a description and/or an image.',
       );
     });
 

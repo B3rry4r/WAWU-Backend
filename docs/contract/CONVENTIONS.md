@@ -1314,14 +1314,19 @@ this applies and every answer is as in section 9.
   - calls `MoneyLimits.assertMayMove({ wawuUserId, kind, amountKobo }, { tx
     })` in the transaction that writes the movement's pending ledger row,
     before the provider is called: `fees_not_set`, then `403 limit_reached`
-    with `limit` (per transaction, then today, then this month). With `tx`
-    it takes a per-person lock first, so two movements by one person are
-    checked one after the other. That transaction stays at READ COMMITTED
-    (Prisma's default: no `isolationLevel`): the lock orders the reads only
-    there, so with `tx` the check first reads `transaction_isolation` and
-    refuses any other level with an `IsolationLevelError` naming it, a
-    programming error answered as a 500 (FIX-21,
-    `src/money/limits/read-committed.ts`);
+    with `limit` (per transaction, then today, then this month). `tx` is
+    required: the check takes a per-person lock for that transaction, so two
+    movements by one person are checked one after the other. It is the `tx`
+    of `prisma.$transaction(async (tx) => ...)`, never the service's own
+    client: the types refuse the root client, and a check given nothing, the
+    service's own client or any root client throws a `NotInTransactionError`
+    before anything is locked, read or written (FIX-26,
+    `src/money/limits/movement-tx.ts`). That transaction stays at READ
+    COMMITTED (Prisma's default: no `isolationLevel`): the lock orders the
+    reads only there, so the check first reads `transaction_isolation` and
+    refuses any other level with an `IsolationLevelError` naming it (FIX-21,
+    `src/money/limits/read-committed.ts`). Both are programming errors,
+    answered as a 500;
   - answers a provider failure with `error.toHttpException()`: the
     provider's own limit refusal (a `WalletProviderLimitError`; Nuvion's
     `error_transfer_transaction_limit_exceeded`,
@@ -2577,3 +2582,20 @@ provider the server runs (their `provider` column).
   decimal text.
 - **Rows.** `MoneyCheckRun.report` holds the first 500 mismatches and the first 500 looks
   and counts the rest; finished runs are kept `MONEY_CHECK_KEEP_DAYS` (120).
+
+## 23. Publishing needs a tier (TIER-02)
+
+Publishing a piece, or taking a file for one, answers `402` in this one error
+shape when the person has no way to publish or has used every product they
+may have:
+
+| `reason.code` | HTTP | When | Extra fields |
+|---|---|---|---|
+| `tier_required` | 402 | no running tier and no verification tick that has not ended | `tierState` (`none` or `ended`), `productsUsed`, `productsAllowed`, `currency`, `tiers`, `extraProducts` |
+| `product_limit_reached` | 402 | every product the person may have is published | the same fields |
+| `draft_limit_reached` | 409 | a person already keeps `PRODUCT_DRAFTS_MAX` drafts (`POST /product-drafts`) | `draftsKept`, `draftsAllowed` |
+| `draft_incomplete` | 400 | a draft being published still lacks details | `missing` |
+
+The offers inside `reason` are `GET /plans`' figures in the person's billing
+currency only (`priceMinor` in the minor unit of `currency`). The rules, the
+routes that ask and the drafts are in [`PLANS.md`](PLANS.md) section 6.

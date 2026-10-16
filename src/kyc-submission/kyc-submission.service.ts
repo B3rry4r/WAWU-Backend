@@ -55,7 +55,7 @@ export class KycSubmissionService {
       select: { accountType: true },
     });
     if (profile?.accountType !== 'creator') {
-      throw new ForbiddenException('This account has no creator state — a creator account type is required.');
+      throw new ForbiddenException('This account has no creator state. A creator account type is required.');
     }
   }
 
