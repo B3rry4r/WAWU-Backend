@@ -48,6 +48,7 @@ caller from the token.
 | `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-07 (served; CONVENTIONS.md section 19) |
 | `POST /money/transfers/bank` | `TransferView` | `BankTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-09 (served; CONVENTIONS.md section 24) |
 | `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 (served; CONVENTIONS.md section 19) |
+| `GET /money/transfers/presets` | `TransferPresetsView` | | WALLET-02 (served; the quick amounts under W9's keypad from `TRANSFER_AMOUNT_PRESETS_KOBO`, a provisional setting owned by YOU, and the note's longest length) |
 | `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 (served; CONVENTIONS.md section 14) |
 | `POST /money/payments` | `PaymentView` | `PaymentDto`, `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | MONEY-17 (served; CONVENTIONS.md section 14) |
 | `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 (served; CONVENTIONS.md section 14a) |

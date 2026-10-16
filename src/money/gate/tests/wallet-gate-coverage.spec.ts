@@ -233,6 +233,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET money/transactions/:id/receipt/pdf',
       'GET money/transactions/summary',
       'GET money/transfers/:id',
+      'GET money/transfers/presets',
       'GET money/wallet/balance',
       // TIER-03: the pay sheet of a tier.
       'GET plans/purchases/quote',

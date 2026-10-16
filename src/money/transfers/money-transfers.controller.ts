@@ -9,6 +9,7 @@ import {
   UseGuards,
   HttpCode,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import { BankTransferDto, WawuTransferDto } from '../dto/money-request.dto';
@@ -24,7 +25,7 @@ import {
   MoneyErrors,
   WALLET_GATE_ERRORS,
 } from '../money-contract';
-import type { TransferView } from '../money-view.type';
+import type { TransferPresetsView, TransferView } from '../money-view.type';
 import {
   CurrentIdempotencyScope,
   type IdempotencyScope,
@@ -36,6 +37,10 @@ import {
   type ResolvedBankTarget,
 } from './bank-send-target';
 import { TransferRecipientGuard } from './transfer-recipient';
+import {
+  readTransferPresets,
+  TRANSFER_NOTE_MAX_LENGTH,
+} from './transfer-presets';
 import {
   BANK_TRANSFER_ROUTE,
   TRANSFER_ROUTE,
@@ -52,7 +57,15 @@ import {
 @UseGuards(WawuAuthGuard)
 @Controller('money')
 export class MoneyTransfersController {
-  constructor(private readonly transfers: WalletTransferService) {}
+  /** Read once when the app starts: a setting that is set and wrong stops it there. */
+  private readonly quickAmountsKobo: number[];
+
+  constructor(
+    private readonly transfers: WalletTransferService,
+    config: ConfigService,
+  ) {
+    this.quickAmountsKobo = readTransferPresets(config);
+  }
 
   /**
    * Send to a WAWU user (W10 to W12): one wallet-to-wallet transfer from the
@@ -125,6 +138,25 @@ export class MoneyTransfersController {
     @Body() dto: BankTransferDto,
   ): Promise<TransferView> {
     return this.transfers.sendToBank(wallet, dto, scope, target);
+  }
+
+  /**
+   * What W9 draws that is not the person's own: the quick amounts under the
+   * keypad (settings, documented in transfer-presets.ts) and the note's
+   * longest length. It reads settings only: no provider, no fee, no money
+   * moves. It sits above the read of one send so the word presets is not
+   * taken for an id.
+   */
+  @Get('transfers/presets')
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('WALLET-02')
+  @RequireOpenWallet()
+  @MoneyErrors(...WALLET_GATE_ERRORS)
+  presets(): TransferPresetsView {
+    return {
+      quickAmounts: this.quickAmountsKobo.map((amountKobo) => ({ amountKobo })),
+      noteMaxLength: TRANSFER_NOTE_MAX_LENGTH,
+    };
   }
 
   /**

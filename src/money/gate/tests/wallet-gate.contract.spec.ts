@@ -412,6 +412,7 @@ describe('No wallet yet: every wallet route answers the same (MONEY-13) over HTT
       'get /api/hub/money/transactions/:id/receipt/pdf',
       'get /api/hub/money/transactions/summary',
       'get /api/hub/money/transfers/:id',
+      'get /api/hub/money/transfers/presets',
       'get /api/hub/money/wallet/balance',
       'post /api/hub/money/approval/verify',
       'post /api/hub/money/beneficiaries',
