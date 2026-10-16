@@ -934,7 +934,14 @@ describe('NUV-05 end to end: pay from the wallet and held money over Nuvion book
       ];
       for (const data of strangers) {
         const stored = await deliverAndDispatch('outflows.completed', data);
-        expect(stored.processingStatus).toBe('processed');
+        // NUV-06 (changed there, SHARED-CHANGES NUV-06 #5): a `bank-transfer`
+        // outflow is that task's rail. Its handler reads the transfer back,
+        // finds none Nuvion holds under this made-up id, and waits (it is not
+        // a send of ours to leave alone); this task's handler still leaves it
+        // alone, and the ledger below is unchanged.
+        expect(stored.processingStatus).toBe(
+          data.payment_type === 'bank-transfer' ? 'pending' : 'processed',
+        );
       }
       // A card's refund shares the event name.
       const card = await deliverAndDispatch('outflows.refunded', {
@@ -948,7 +955,7 @@ describe('NUV-05 end to end: pay from the wallet and held money over Nuvion book
         standin.seen.filter(
           (r) => r.method === 'GET' && r.path.startsWith('/transfers/'),
         ),
-      ).toHaveLength(0);
+      ).toHaveLength(1); // NUV-06's read-back of the bank-transfer stranger; none by this task's handler
     });
 
     it('a delivery that names another transfer than the one under our reference is a stop kept for review', async () => {

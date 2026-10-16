@@ -74,6 +74,14 @@ const EVENTS: NotificationEvent[] = [
     netAmount: 8500,
   },
   { kind: 'tip_received', userWawuId: 'u', netAmount: 850 },
+  // WALLET-10: a bank transfer into the account.
+  {
+    kind: 'money_in',
+    userWawuId: 'u',
+    amountKobo: 250_050n,
+    senderName: 'Ada Obi',
+    senderAccountNumber: '0865231291',
+  },
   { kind: 'dm_received', userWawuId: 'u', amount: 2000 },
   { kind: 'dm_deadline', userWawuId: 'u', hoursLeft: 3 },
   { kind: 'dm_refunded', userWawuId: 'u', amount: 2000 },

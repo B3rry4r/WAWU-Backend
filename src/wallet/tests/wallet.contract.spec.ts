@@ -279,6 +279,68 @@ describe('Wallet (contract)', () => {
       expect(res.body.data[1].amount).toBe(1_000);
     }, 30000);
 
+    it('answers 400 naming take for a take that is not a number or is sent twice, never 500 (FIX-18)', async () => {
+      const { token } = await newAccount('history-bad-take', 'creator');
+      const server = app.getHttpServer() as Parameters<typeof request>[0];
+      for (const q of [
+        'take=abc',
+        'take=NaN',
+        'take=1_0',
+        'take=1&take=2',
+        'take=&take=',
+        'take=5&take=5&take=5',
+        'take=-Infinity',
+        'take=-1e21',
+      ]) {
+        const res = await request(server)
+          .get(`/wallet/history?${q}`)
+          .set('Authorization', `Bearer ${token}`)
+          .expect(400);
+        const { message } = res.body as { message: string };
+        expect(message).toMatch(/^take /);
+        expect(message).not.toContain('\u2014');
+      }
+    }, 30000);
+
+    it('reads every take that never failed exactly as before (FIX-18)', async () => {
+      const { sub, token } = await newAccount('history-same-take', 'creator');
+      const server = app.getHttpServer() as Parameters<typeof request>[0];
+      for (const [i, amount] of [1_000, 2_000, 3_000].entries()) {
+        await wallet.creditEarning({
+          wawuUserId: sub,
+          amount,
+          reference: `contract-same-take-${sub}-${i}`,
+          sourceType: 'purchase',
+          sourceId: `contract-spec-same-take-${i}`,
+        });
+      }
+      // Newest first is 3000, 2000, 1000. A negative take is the last rows,
+      // and Prisma truncates a fraction; both answered 200 before.
+      const cases: Array<[string, number[]]> = [
+        ['', [3_000, 2_000, 1_000]],
+        ['?take=', [3_000, 2_000, 1_000]],
+        ['?take=0', []],
+        ['?take=1', [3_000]],
+        ['?take=2', [3_000, 2_000]],
+        ['?take=1.5', [3_000]],
+        ['?take=0.5', []],
+        ['?take=1e2', [3_000, 2_000, 1_000]],
+        ['?take=999', [3_000, 2_000, 1_000]],
+        ['?take=Infinity', [3_000, 2_000, 1_000]],
+        ['?take=-1', [1_000]],
+        ['?take=-2', [2_000, 1_000]],
+        ['?foo=bar', [3_000, 2_000, 1_000]],
+      ];
+      for (const [query, amounts] of cases) {
+        const res = await request(server)
+          .get(`/wallet/history${query}`)
+          .set('Authorization', `Bearer ${token}`)
+          .expect(200);
+        const { data } = res.body as { data: Array<{ amount: number }> };
+        expect(data.map((e) => e.amount)).toEqual(amounts);
+      }
+    }, 30000);
+
     it('refuses a caller with no token at all', async () => {
       await request(app.getHttpServer()).get('/wallet').expect(401);
     });

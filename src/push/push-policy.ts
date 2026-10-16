@@ -25,6 +25,8 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   // Money in, refunds, followers, reviews: each has its Z3 switch.
   sale: 'send',
   tip_received: 'send',
+  // WALLET-10. A bank transfer into the account: "Money in" (Z3) mutes it.
+  money_in: 'send',
   dm_refunded: 'send',
   new_follower: 'send',
   dm_deadline: 'send',
