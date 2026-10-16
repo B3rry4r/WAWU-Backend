@@ -365,6 +365,23 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // The codes this person made to share their receipts (WALLET-18). They go
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
+  // A send from one wallet to another (WALLET-07) is BOTH people's record of
+  // money that moved, so neither side's purge deletes the row: each person's
+  // side is set to null with the details that name or reach them (their
+  // account number and the name they went by on the other's history; the
+  // sender's note is the sender's words and goes with the sender).
+  {
+    model: 'WalletTransfer',
+    column: 'payerWawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['payerAccountNumber', 'payerName', 'note'],
+  },
+  {
+    model: 'WalletTransfer',
+    column: 'recipientWawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['recipientAccountNumber', 'recipientName'],
+  },
 
   // ── points (POINTS-01) ──────────────────────────────────────────────────
   // This person's points: the ledger of every change, the holds that spent
@@ -568,6 +585,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'WalletPayment', column: 'wawuShareKobo' },
   // WAWU's 15% share in kobo on a hold (MONEY-18), not a person.
   { model: 'WalletHold', column: 'wawuShareKobo' },
+  // WAWU's fee in kobo on a send between two people (WALLET-07), not a person.
+  { model: 'WalletTransfer', column: 'wawuFeeKobo' },
 ];
 
 /** The rows a purge keeps with the account's side set to null. */

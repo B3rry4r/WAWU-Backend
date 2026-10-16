@@ -336,11 +336,25 @@ export interface LedgerPaymentSettled {
   status: TransferStatus;
 }
 
+/**
+ * The same for a ledger row that carries a send between two people
+ * (`transferId`, task WALLET-07): the sending feature hears of it at once,
+ * from whatever settled it, so a send never waits on its own sweep.
+ */
+export interface LedgerTransferSettled {
+  entryId: string;
+  transferId: string;
+  status: TransferStatus;
+}
+
 @Injectable()
 export class LedgerService {
   private readonly logger = new Logger(LedgerService.name);
   private readonly settledListeners: Array<
     (e: LedgerPaymentSettled) => Promise<unknown>
+  > = [];
+  private readonly transferSettledListeners: Array<
+    (e: LedgerTransferSettled) => Promise<unknown>
   > = [];
   private readonly debitListeners: Array<
     (e: LedgerDebitSighting) => Promise<unknown>
@@ -371,6 +385,17 @@ export class LedgerService {
     listener: (e: LedgerPaymentSettled) => Promise<unknown>,
   ): void {
     this.settledListeners.push(listener);
+  }
+
+  /**
+   * Called (not awaited) after a write committed that left a row with a
+   * `transferId` completed, failed or reversed (WALLET-07). Errors are
+   * logged, never thrown into the ledger's own work.
+   */
+  onTransferSettled(
+    listener: (e: LedgerTransferSettled) => Promise<unknown>,
+  ): void {
+    this.transferSettledListeners.push(listener);
   }
 
   /**
@@ -434,29 +459,54 @@ export class LedgerService {
   }
 
   private async notifySettled(entryId: string): Promise<void> {
-    if (this.settledListeners.length === 0) return;
-    let row: { paymentId: string | null; status: TransferStatus } | null;
+    if (
+      this.settledListeners.length === 0 &&
+      this.transferSettledListeners.length === 0
+    ) {
+      return;
+    }
+    let row: {
+      paymentId: string | null;
+      transferId: string | null;
+      status: TransferStatus;
+    } | null;
     try {
       row = await this.prisma.fintavaLedgerEntry.findUnique({
         where: { id: entryId },
-        select: { paymentId: true, status: true },
+        select: { paymentId: true, transferId: true, status: true },
       });
     } catch {
-      // The payment sweep settles it later; the ledger write stands.
+      // The payment (or send) sweep settles it later; the ledger write stands.
       return;
     }
-    if (!row?.paymentId || row.status === 'pending') return;
-    const event = {
-      entryId,
-      paymentId: row.paymentId,
-      status: row.status,
-    };
-    for (const listener of this.settledListeners) {
-      void listener(event).catch((e: unknown) =>
-        this.logger.error(
-          `ledger: a payment settle listener failed (${e instanceof Error ? e.name : 'error'})`,
-        ),
-      );
+    if (!row || row.status === 'pending') return;
+    if (row.paymentId) {
+      const event = {
+        entryId,
+        paymentId: row.paymentId,
+        status: row.status,
+      };
+      for (const listener of this.settledListeners) {
+        void listener(event).catch((e: unknown) =>
+          this.logger.error(
+            `ledger: a payment settle listener failed (${e instanceof Error ? e.name : 'error'})`,
+          ),
+        );
+      }
+    }
+    if (row.transferId) {
+      const event = {
+        entryId,
+        transferId: row.transferId,
+        status: row.status,
+      };
+      for (const listener of this.transferSettledListeners) {
+        void listener(event).catch((e: unknown) =>
+          this.logger.error(
+            `ledger: a send settle listener failed (${e instanceof Error ? e.name : 'error'})`,
+          ),
+        );
+      }
     }
   }
 
@@ -655,14 +705,19 @@ export class LedgerService {
    * the row changed.
    */
   async completeDebitAt(
-    paymentId: string,
+    // A payment's id, or (WALLET-07) a send between two people.
+    movement: string | { transferId: string },
     quoted: { feeKobo: bigint; totalKobo: bigint },
     taken: { feeKobo: bigint; totalKobo: bigint },
     source: 'send' | 'lookup' | 'history' | 'webhook',
   ): Promise<boolean> {
     const now = new Date();
+    const owner =
+      typeof movement === 'string'
+        ? { paymentId: movement }
+        : { transferId: movement.transferId };
     const where = {
-      paymentId,
+      ...owner,
       walletKind: 'user' as const,
       direction: 'out' as const,
       feeKobo: quoted.feeKobo,
