@@ -8,7 +8,9 @@ import {
   StatementRateLimiter,
   StatementSlots,
 } from './statements/statement-config';
+import { StatementEmailService } from './statements/statement-email.service';
 import { StatementService } from './statements/statement.service';
+import { WawuIdMailRelay } from '../admin/notifications/email/email-provider';
 import { LedgerModule } from './ledger/ledger.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { FeeSettings } from './fees/fee-config';
@@ -44,6 +46,12 @@ import { HoldViewService } from './holds/hold-view.service';
 import { MoneyHoldsController } from './holds/money-holds.controller';
 import { WalletHoldService } from './holds/wallet-hold.service';
 import { MoneyPaymentsController } from './payments/money-payments.controller';
+import { MoneyTransfersController } from './transfers/money-transfers.controller';
+import {
+  TransferRecipientGuard,
+  TransferRecipients,
+} from './transfers/transfer-recipient';
+import { WalletTransferService } from './transfers/wallet-transfer.service';
 import { PayableRegistry } from './payments/payable-registry';
 import { PaymentSettings } from './payments/payment-config';
 import { WalletPaymentService } from './payments/wallet-payment.service';
@@ -169,6 +177,13 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
  * (BlockedAccountService), the recent ones from the ledger. It never calls
  * Fintava.
  *
+ * WALLET-07: sending money to another WAWU user (`POST /money/transfers/wawu`,
+ * `GET /money/transfers/{id}`): one wallet-to-wallet transfer from the
+ * sender's wallet to the receiver's, the Idempotency-Key enforced, who the
+ * money goes to checked before the PIN, and a sweep that settles a send whose
+ * answer was lost from the provider's own record (it runs where
+ * ScheduleModule.forRoot() is loaded). It never sends twice.
+ *
  * WALLET-27: statements (`/money/statements`), the caller's completed
  * movements over a period of Lagos days as a CSV file, behind the wallet
  * gate, read from the ledger only; it never calls Fintava.
@@ -199,6 +214,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyStatementController,
     MoneyFeesController,
     MoneyPaymentsController,
+    MoneyTransfersController,
     MoneyHoldsController,
     MoneyReceiptController,
     PublicReceiptController,
@@ -228,6 +244,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     SavedAccountTargetService,
     TransactionHistoryService,
     StatementService,
+    StatementEmailService,
+    WawuIdMailRelay,
     StatementRateLimiter,
     StatementSlots,
     FeeSettings,
@@ -238,6 +256,9 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MerchantWallet,
     PayableRegistry,
     WalletPaymentService,
+    TransferRecipients,
+    TransferRecipientGuard,
+    WalletTransferService,
     HoldViewService,
     WalletHoldService,
     ReceiptSettings,

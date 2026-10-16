@@ -15768,6 +15768,152 @@
         "x-wawu-built-by": "WALLET-27"
       }
     },
+    "/api/hub/money/statements/delivery": {
+      "get": {
+        "operationId": "MoneyStatementController_delivery",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementDeliveryView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Where a statement can be sent and in which formats (W38's \"Send to\" and\nits format choice). Reads the token only: the address is the person's\nown confirmed email, masked, or null when there is none to use\n(`canEmail` false).",
+        "tags": [
+          "MoneyStatement"
+        ],
+        "x-wawu-built-by": "WALLET-35"
+      }
+    },
+    "/api/hub/money/statements/email": {
+      "post": {
+        "operationId": "MoneyStatementController_emailStatement",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of A-Z a-z 0-9 _ -. The same key for the same person answers the first mail again.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatementEmailDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementEmailView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: statement_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, email_not_verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: statement_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: statement_email_failed, statement_busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Email a statement (W38 \"Send statement\"). The same period rules and the\nsame file as `GET /money/statements`, attached to a mail sent to the\nperson's own confirmed address: the request carries none, so a statement\ncannot be sent to anyone else. No confirmed email is `409\nemail_not_verified`; a mail that could not be handed to WAWU ID's sender\nis `503 statement_email_failed`. The limits of `GET /money/statements`\napply and are shared with it: an emailed statement is one statement.\nAn optional `Idempotency-Key` makes a repeat answer the first mail\ninstead of sending a second.",
+        "tags": [
+          "MoneyStatement"
+        ],
+        "x-wawu-built-by": "WALLET-35"
+      }
+    },
     "/api/hub/money/fees/quote": {
       "get": {
         "operationId": "MoneyFeesController_feeQuote",
@@ -16202,6 +16348,212 @@
           "MoneyPayments"
         ],
         "x-wawu-built-by": "MONEY-19"
+      }
+    },
+    "/api/hub/money/transfers/wawu": {
+      "post": {
+        "operationId": "MoneyTransfersController_sendToWawuUser",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WawuTransferDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range, self_transfer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded, recipient_blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: recipient_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, recipient_has_no_wallet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Send to a WAWU user (W10 to W12): one wallet-to-wallet transfer from the\nsender's wallet to the receiver's. The sender's balance falls by the\nquoted total (the amount, the provider's charge and WAWU's fee on top,\nR-10); the receiver's rises by exactly the amount. Answers 201 with the\nsend: completed, pending when the provider has not confirmed it yet (it\nis never sent again blindly; poll `GET /money/transfers/{id}`), or failed\nwhen the provider refused it and nothing moved. The same Idempotency-Key\nand body answer the first result again (`Idempotent-Replayed: true`)\nwithout checking the PIN. Who the money goes to (yourself, a closed\naccount, a block, no wallet) is answered before the PIN is looked at.\nfees_not_set comes before the wallet gate, the key and the PIN;\nlimit_reached (WAWU's limit or the provider's) before anything is sent.",
+        "tags": [
+          "MoneyTransfers"
+        ],
+        "x-wawu-built-by": "WALLET-07"
+      }
+    },
+    "/api/hub/money/transfers/{id}": {
+      "get": {
+        "operationId": "MoneyTransfersController_transfer",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One send as it stands now (W12 receipt, W14 failed): what the app polls\nafter `pending`. Only the sender reads it: another person's send is the\nsame `404 not_found` as one nobody holds. It reads our record only,\nnever the provider, and moves nothing, so it is not behind the fee\nsettings, the key or the PIN.",
+        "tags": [
+          "MoneyTransfers"
+        ],
+        "x-wawu-built-by": "WALLET-07"
       }
     },
     "/api/hub/money/holds": {
@@ -29769,137 +30121,6 @@
         "x-wawu-served": false
       }
     },
-    "/api/hub/money/transfers/wawu": {
-      "post": {
-        "operationId": "MoneyTransferController_sendToWawuUser",
-        "parameters": [
-          {
-            "name": "X-Transaction-Pin",
-            "in": "header",
-            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}$"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]{8,128}$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WawuTransferDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransferView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: idempotency_key_required, amount_out_of_range, self_transfer",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "402": {
-            "description": "reason.code: insufficient_funds",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: pin_required, pin_incorrect, limit_reached, daily_limit_exceeded, recipient_blocked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: recipient_not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, recipient_has_no_wallet",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, pin_locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable, fees_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Send to a WAWU user (W10 to W12). Completes at once or is refused; never pending.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-07",
-        "description": "Declared by MONEY-04, not served yet: WALLET-07 serves it.",
-        "x-wawu-served": false
-      }
-    },
     "/api/hub/money/transfers/bank": {
       "post": {
         "operationId": "MoneyTransferController_sendToBank",
@@ -30028,75 +30249,6 @@
         ],
         "x-wawu-built-by": "WALLET-09",
         "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/transfers/{id}": {
-      "get": {
-        "operationId": "MoneyTransferController_transfer",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransferView"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "One send, as it stands now (W12 receipt, W14 failed, W19 timeline). Only the sender can read it.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-07",
-        "description": "Declared by MONEY-04, not served yet: WALLET-07 serves it.",
         "x-wawu-served": false
       }
     }
@@ -31791,6 +31943,8 @@
               "statement_too_large",
               "statement_rate_limited",
               "statement_busy",
+              "email_not_verified",
+              "statement_email_failed",
               "recipient_search_rate_limited",
               "fees_not_set",
               "limit_reached",
@@ -32213,6 +32367,35 @@
           "accountNumber"
         ]
       },
+      "StatementEmailDto": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "The first day of the statement, YYYY-MM-DD in Africa/Lagos time, included.",
+            "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+            "example": "2026-09-01"
+          },
+          "to": {
+            "type": "string",
+            "description": "The last day of the statement, YYYY-MM-DD in Africa/Lagos time,\nincluded. On or after `from`, not after today in Lagos, and at most\n366 days from `from`, both days counted (STATEMENT_MAX_DAYS).",
+            "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+            "example": "2026-09-30"
+          },
+          "format": {
+            "type": "string",
+            "description": "The file. Only `csv` today: Fintava issues no stamped statement\n(WALLET-27, BACKEND_GAPS G-68), so there is no `pdf`.",
+            "enum": [
+              "csv"
+            ]
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "format"
+        ]
+      },
       "PaymentDto": {
         "type": "object",
         "properties": {
@@ -32264,6 +32447,43 @@
           "kind",
           "targetId",
           "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
+      "WawuTransferDto": {
+        "type": "object",
+        "properties": {
+          "amountKobo": {
+            "type": "integer",
+            "description": "What the recipient gets, in kobo.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`totalKobo` from the fee quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1
+          },
+          "recipientWawuUserId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from that fee quote (`GET /money/fees/quote?kind=\nwawu_transfer`; BACKEND_GAPS G-64): the server checks it is its own, for\nthis person and this amount, and not past `expiresAt`; otherwise `409\nquote_changed` with the new quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "note": {
+            "type": "string",
+            "description": "W9's optional note, 100 characters at most.",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "amountKobo",
+          "expectedTotalKobo",
+          "recipientWawuUserId",
           "quoteToken"
         ]
       },
@@ -34736,36 +34956,6 @@
           "accountNumber"
         ]
       },
-      "WawuTransferDto": {
-        "type": "object",
-        "properties": {
-          "amountKobo": {
-            "type": "integer",
-            "description": "What the recipient gets, in kobo.",
-            "minimum": 1,
-            "maximum": 9007199254740991
-          },
-          "expectedTotalKobo": {
-            "type": "integer",
-            "description": "`totalKobo` from the fee quote the person saw. A different server total is `quote_changed`.",
-            "minimum": 1
-          },
-          "recipientWawuUserId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "note": {
-            "type": "string",
-            "description": "W9's optional note.",
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "amountKobo",
-          "expectedTotalKobo",
-          "recipientWawuUserId"
-        ]
-      },
       "BankTransferDto": {
         "type": "object",
         "properties": {
@@ -35141,6 +35331,70 @@
           "rowCount",
           "content",
           "generatedAt"
+        ]
+      },
+      "StatementDeliveryView": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "canEmail": {
+            "type": "boolean"
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "csv"
+              ]
+            }
+          }
+        },
+        "required": [
+          "email",
+          "canEmail",
+          "formats"
+        ]
+      },
+      "StatementEmailView": {
+        "type": "object",
+        "properties": {
+          "sentTo": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv"
+            ]
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "rowCount": {
+            "type": "number"
+          },
+          "sentAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sentTo",
+          "from",
+          "to",
+          "format",
+          "fileName",
+          "rowCount",
+          "sentAt"
         ]
       },
       "FeeQuotePartView": {
@@ -36182,6 +36436,151 @@
           "failureReason",
           "delivered",
           "statusMessage",
+          "createdAt",
+          "completedAt"
+        ]
+      },
+      "TransferTimelineEntry": {
+        "type": "object",
+        "properties": {
+          "step": {
+            "type": "string",
+            "enum": [
+              "completed",
+              "failed",
+              "reversed",
+              "requested",
+              "sent_to_bank"
+            ]
+          }
+        },
+        "required": [
+          "step"
+        ]
+      },
+      "TransferReversalView": {
+        "type": "object",
+        "properties": {
+          "returnedKobo": {
+            "type": "integer"
+          },
+          "keptKobo": {
+            "type": "integer"
+          },
+          "reversedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "returnedKobo",
+          "keptKobo",
+          "reversedAt"
+        ]
+      },
+      "TransferView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "wawu_user",
+              "bank_account"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed",
+              "reversed"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "fee": {
+            "$ref": "#/components/schemas/FeeBreakdown"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "reference": {
+            "type": "string"
+          },
+          "toWawuUser": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoneyPartyView"
+              }
+            ],
+            "nullable": true
+          },
+          "toBankAccount": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BankAccountView"
+              }
+            ],
+            "nullable": true
+          },
+          "timeline": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransferTimelineEntry"
+            }
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "reversal": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransferReversalView"
+              }
+            ],
+            "nullable": true
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "transactionId": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "amountKobo",
+          "fee",
+          "totalKobo",
+          "note",
+          "reference",
+          "toWawuUser",
+          "toBankAccount",
+          "timeline",
+          "failureReason",
+          "reversal",
+          "statusMessage",
+          "transactionId",
           "createdAt",
           "completedAt"
         ]
@@ -51586,141 +51985,6 @@
           "bankName",
           "accountNumber",
           "accountName"
-        ]
-      },
-      "TransferTimelineEntry": {
-        "type": "object",
-        "properties": {
-          "step": {
-            "type": "string",
-            "enum": [
-              "completed",
-              "failed",
-              "reversed",
-              "requested",
-              "sent_to_bank"
-            ]
-          }
-        },
-        "required": [
-          "step"
-        ]
-      },
-      "TransferReversalView": {
-        "type": "object",
-        "properties": {
-          "returnedKobo": {
-            "type": "integer"
-          },
-          "keptKobo": {
-            "type": "integer"
-          },
-          "reversedAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "returnedKobo",
-          "keptKobo",
-          "reversedAt"
-        ]
-      },
-      "TransferView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "wawu_user",
-              "bank_account"
-            ]
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "completed",
-              "failed",
-              "reversed"
-            ]
-          },
-          "amountKobo": {
-            "type": "integer"
-          },
-          "fee": {
-            "$ref": "#/components/schemas/FeeBreakdown"
-          },
-          "totalKobo": {
-            "type": "integer"
-          },
-          "note": {
-            "type": "string",
-            "nullable": true
-          },
-          "reference": {
-            "type": "string"
-          },
-          "toWawuUser": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MoneyPartyView"
-              }
-            ],
-            "nullable": true
-          },
-          "toBankAccount": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/BankAccountView"
-              }
-            ],
-            "nullable": true
-          },
-          "timeline": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/TransferTimelineEntry"
-            }
-          },
-          "failureReason": {
-            "type": "string",
-            "nullable": true
-          },
-          "reversal": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/TransferReversalView"
-              }
-            ],
-            "nullable": true
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "completedAt": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "kind",
-          "status",
-          "amountKobo",
-          "fee",
-          "totalKobo",
-          "note",
-          "reference",
-          "toWawuUser",
-          "toBankAccount",
-          "timeline",
-          "failureReason",
-          "reversal",
-          "createdAt",
-          "completedAt"
         ]
       }
     }
