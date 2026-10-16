@@ -2578,7 +2578,24 @@ provider the server runs (their `provider` column).
 - **Rows.** `MoneyCheckRun.report` holds the first 500 mismatches and the first 500 looks
   and counts the rest; finished runs are kept `MONEY_CHECK_KEEP_DAYS` (120).
 
-## 23. Delete account: money first, 30 days, cancel (SETTINGS-06)
+## 23. Publishing needs a tier (TIER-02)
+
+Publishing a piece, or taking a file for one, answers `402` in this one error
+shape when the person has no way to publish or has used every product they
+may have:
+
+| `reason.code` | HTTP | When | Extra fields |
+|---|---|---|---|
+| `tier_required` | 402 | no running tier and no verification tick that has not ended | `tierState` (`none` or `ended`), `productsUsed`, `productsAllowed`, `currency`, `tiers`, `extraProducts` |
+| `product_limit_reached` | 402 | every product the person may have is published | the same fields |
+| `draft_limit_reached` | 409 | a person already keeps `PRODUCT_DRAFTS_MAX` drafts (`POST /product-drafts`) | `draftsKept`, `draftsAllowed` |
+| `draft_incomplete` | 400 | a draft being published still lacks details | `missing` |
+
+The offers inside `reason` are `GET /plans`' figures in the person's billing
+currency only (`priceMinor` in the minor unit of `currency`). The rules, the
+routes that ask and the drafts are in [`PLANS.md`](PLANS.md) section 6.
+
+## 24. Delete account: money first, 30 days, cancel (SETTINGS-06)
 
 `DELETE /account` (R-17) asks to delete the signed-in account. It waits 30
 days; signing in during them cancels it (WAWU ID, SETTINGS-08).
@@ -2612,12 +2629,27 @@ days; signing in during them cancels it (WAWU ID, SETTINGS-08).
   recorded before the freeze call, so a freeze whose answer is lost is undone
   by a cancel or a new request. A request that fails after the freeze lets
   the wallet go again before it answers.
+- **The wallet follows the row** (round 5, R-1 wallet safety): a deletion in
+  force (`freezing`, `scheduled`, `purging`, `purged`) always has a frozen
+  wallet, and a cancelled or absent one never does. One function
+  (`reconcileWallet`) enforces it: it reads the row and freezes or unfreezes
+  to match, idempotently and one request at a time per person, acts only on a
+  wallet of the provider the server runs, and never throws. Every request that
+  can change the row or the wallet ends with it, and the hourly sweep runs it
+  for every row changed in the last 24 hours, so a freeze or unfreeze whose
+  answer was lost, or that the provider refused, is put right within the hour.
+  A repeat `DELETE /account` on a row the purge has finished answers the date
+  it was due and schedules nothing.
 - **`POST /account/cancel-deletion`** (the person's own token; WAWU ID sends
   the new one when they sign in) unfreezes the wallet, brings back exactly the
   hidden pieces, resumes push and answers `200 { cancelled, walletUnfrozen,
   contentRestored }`. With nothing scheduled it changes nothing and answers
   `cancelled: false`. If the provider does not answer the unfreeze it answers
-  `503` having changed nothing, and can be called again. Once the purge has
+  `503` having changed nothing, and can be called again (the wallet is frozen
+  again if that call was applied and only its answer was lost).
+  `walletUnfrozen` is `true` only when the provider confirmed the unfreeze
+  after the cancel; if it could not, the cancel stands with `false` and the
+  hourly sweep lets the wallet go. Once the purge has
   started it answers `200 { cancelled: false, deletionInProgress: true,
   message }` (data may already be gone, so it is never answered as restored);
   the app shows `message` as it is.

@@ -20,8 +20,10 @@ import { ContentPieceModule } from '../../content-piece/content-piece.module';
 import { StorageModule } from '../storage.module';
 
 /**
- * ME-17 over HTTP, on the real database: R-7's allowance (5 uploads and 1 GB
- * free, 25 and 10 GB with a tick) and R-8's free pieces, through
+ * ME-17 over HTTP, on the real database: R-7's storage (1 GB free, 10 GB with
+ * a tick), R-8's free pieces and, since TIER-02 (R-43), the publishing gate
+ * that replaced R-7's upload counts (a running tier, or a tick that has not
+ * ended; the people who hold neither can publish nothing), through
  *   GET  /uploads/allowance   (new)
  *   GET  /uploads/usage
  *   POST /uploads/presign
@@ -35,7 +37,10 @@ import { StorageModule } from '../storage.module';
 const GB = 1024 ** 3;
 const OWN = (n: number) =>
   `d1700000-0000-4000-8000-${String(n).padStart(12, '0')}`;
-/** No tick, 5 pieces, 1.5 GB stored: above both of R-7's free limits. */
+/**
+ * No tier, no tick, 5 pieces and 1.5 GB stored from before tiers: the person
+ * TIER-02 leaves with everything they published and nothing to add to it.
+ */
 const OVER_FREE = OWN(1);
 /** Creator tick until 2099, 5 pieces. */
 const TICKED = OWN(2);
@@ -43,7 +48,15 @@ const TICKED = OWN(2);
 const NEW_CREATOR = OWN(3);
 /** Plain (non-creator) account. */
 const PLAIN = OWN(4);
-const OWNED = [OVER_FREE, TICKED, NEW_CREATOR, PLAIN];
+/**
+ * A running tier of 10 products, more than 10 GB stored: above R-7's storage
+ * limit. One row holds at most 2 GB (the column is an INTEGER), so it is six
+ * files of 1.8 GB.
+ */
+const OVER_TIER = OWN(5);
+const OVER_TIER_FILE = Math.floor(1.8 * GB);
+const OVER_TIER_USED = 6 * OVER_TIER_FILE;
+const OWNED = [OVER_FREE, TICKED, NEW_CREATOR, PLAIN, OVER_TIER];
 const PIECE_ID = (owner: number, n: number) =>
   `d1700000-0000-4000-9000-${String(owner * 100 + n).padStart(12, '0')}`;
 
@@ -179,12 +192,24 @@ describe('Upload allowance (ME-17, contract)', () => {
         },
         { wawuUserId: NEW_CREATOR, accountType: 'creator', ...noTick },
         { wawuUserId: PLAIN, accountType: 'user', ...noTick },
+        { wawuUserId: OVER_TIER, accountType: 'creator', ...noTick },
       ],
+    });
+    await prisma.makerTier.create({
+      data: {
+        wawuUserId: OVER_TIER,
+        tierId: 'me17-suite',
+        activeFrom: new Date(Date.now() - 86_400_000),
+        activeUntil: new Date(Date.now() + 30 * 86_400_000),
+        productsIncluded: 10,
+        pointsIncluded: 0,
+      },
     });
     await prisma.creatorState.createMany({
       data: [
         { wawuUserId: OVER_FREE, slotsUsed: 5 },
         { wawuUserId: TICKED, slotsUsed: 5 },
+        { wawuUserId: OVER_TIER, slotsUsed: 0 },
       ],
     });
     await seedPieces(OVER_FREE, 1, 5);
@@ -200,6 +225,17 @@ describe('Upload allowance (ME-17, contract)', () => {
         confirmedAt: new Date('2026-09-01T00:00:00Z'),
       },
     });
+    await prisma.storageObject.createMany({
+      data: [1, 2, 3, 4, 5, 6].map((n) => ({
+        wawuUserId: OVER_TIER,
+        key: `content/full/${OVER_TIER}/kept-${n}.mp4`,
+        bytes: OVER_TIER_FILE,
+        contentType: 'video/mp4',
+        folder: 'content/full',
+        status: 'confirmed' as const,
+        confirmedAt: new Date('2026-09-01T00:00:00Z'),
+      })),
+    });
   });
 
   afterAll(async () => {
@@ -210,6 +246,9 @@ describe('Upload allowance (ME-17, contract)', () => {
       where: { wawuUserId: { in: OWNED } },
     });
     await prisma.creatorState.deleteMany({
+      where: { wawuUserId: { in: OWNED } },
+    });
+    await prisma.makerTier.deleteMany({
       where: { wawuUserId: { in: OWNED } },
     });
     await prisma.userProfile.deleteMany({
@@ -231,7 +270,7 @@ describe('Upload allowance (ME-17, contract)', () => {
         .expect(401);
     });
 
-    it('a creator without a tick sees 5 uploads and 1 GB, what they used, and what a tick gives', async () => {
+    it('a creator with neither a tier nor a tick sees 0 uploads and 1 GB, what they used, and what a tick gives', async () => {
       const res = await request(server())
         .get('/uploads/allowance')
         .set('Authorization', bearer(OVER_FREE))
@@ -241,14 +280,30 @@ describe('Upload allowance (ME-17, contract)', () => {
         message: 'OK',
         data: {
           tickHeld: false,
-          uploads: { used: 5, allowed: 5, remaining: 0 },
+          uploads: { used: 5, allowed: 0, remaining: 0 },
           storage: {
             usedBytes: 1.5 * GB,
             limitBytes: 1 * GB,
             remainingBytes: 0,
           },
-          free: { uploads: 5, storageBytes: 1 * GB },
+          free: { uploads: 0, storageBytes: 1 * GB },
           withTick: { uploads: 25, storageBytes: 10 * GB },
+        },
+      });
+    });
+
+    it('a creator on a running tier sees its products and the 10 GB', async () => {
+      const res = await request(server())
+        .get('/uploads/allowance')
+        .set('Authorization', bearer(OVER_TIER))
+        .expect(200);
+      expect(dataOf(res)).toMatchObject({
+        tickHeld: false,
+        uploads: { used: 0, allowed: 10, remaining: 10 },
+        storage: {
+          usedBytes: OVER_TIER_USED,
+          limitBytes: 10 * GB,
+          remainingBytes: 0,
         },
       });
     });
@@ -272,29 +327,29 @@ describe('Upload allowance (ME-17, contract)', () => {
         .expect(200);
       expect(dataOf(res)).toMatchObject({
         tickHeld: false,
-        uploads: { used: 0, allowed: 5, remaining: 5 },
+        uploads: { used: 0, allowed: 0, remaining: 0 },
       });
     });
   });
 
   describe('POST /content', () => {
-    it('an unticked creator at 5 cannot upload a 6th, free or paid, and is told why', async () => {
+    it('a creator with neither a tier nor a tick cannot upload a 6th, free or paid, and is told to pick a tier', async () => {
       for (const kind of ['paid', 'free'] as const) {
         const res = await request(server())
           .post('/content')
           .set('Authorization', bearer(OVER_FREE))
           .send(piece(kind))
-          .expect(403);
-        expect(res.body).toEqual({
-          statusCode: 403,
+          .expect(402);
+        expect(res.body).toMatchObject({
+          statusCode: 402,
           message:
-            'You have used all 5 of your upload slots. Remove an item to free one up.',
+            'Publishing and uploading files need a tier. Pick one to carry on. Drafts stay free.',
           data: null,
           reason: {
-            code: 'upload_limit_reached',
-            uploadsAllowed: 5,
-            tickHeld: false,
-            uploadsWithTick: 25,
+            code: 'tier_required',
+            tierState: 'none',
+            productsUsed: 5,
+            productsAllowed: 0,
           },
         });
       }
@@ -312,7 +367,17 @@ describe('Upload allowance (ME-17, contract)', () => {
       expect(state?.slotsUsed).toBe(6);
     });
 
-    it('a new creator can publish a free piece as their first upload, and it counts', async () => {
+    it('a new creator on a tier can publish a free piece as their first upload, and it counts', async () => {
+      await prisma.makerTier.create({
+        data: {
+          wawuUserId: NEW_CREATOR,
+          tierId: 'me17-suite',
+          activeFrom: new Date(Date.now() - 86_400_000),
+          activeUntil: new Date(Date.now() + 30 * 86_400_000),
+          productsIncluded: 3,
+          pointsIncluded: 0,
+        },
+      });
       const res = await request(server())
         .post('/content')
         .set('Authorization', bearer(NEW_CREATOR))
@@ -325,17 +390,17 @@ describe('Upload allowance (ME-17, contract)', () => {
         .expect(200);
       expect((dataOf(allowance) as { uploads: unknown }).uploads).toEqual({
         used: 1,
-        allowed: 5,
-        remaining: 4,
+        allowed: 3,
+        remaining: 2,
       });
     });
   });
 
   describe('POST /uploads/presign', () => {
-    it('a creator above 1 GB without a tick is refused a new file, with the limit in the answer', async () => {
+    it('a creator on a tier above its 10 GB is refused a new file, with the limit in the answer', async () => {
       const res = await request(server())
         .post('/uploads/presign')
-        .set('Authorization', bearer(OVER_FREE))
+        .set('Authorization', bearer(OVER_TIER))
         .send({
           folder: 'content/full',
           contentType: 'video/mp4',
@@ -346,20 +411,20 @@ describe('Upload allowance (ME-17, contract)', () => {
       expect(res.body).toEqual({
         statusCode: 413,
         message:
-          'This file needs 1000 bytes, but only 0 bytes of your 1GB storage is free. A verification tick raises the limit to 10GB.',
+          'This file needs 1000 bytes, but only 0 bytes of your 10GB storage is free.',
         data: null,
         reason: {
           code: 'storage_limit_reached',
           neededBytes: 1000,
-          usedBytes: 1.5 * GB,
-          limitBytes: 1 * GB,
+          usedBytes: OVER_TIER_USED,
+          limitBytes: 10 * GB,
           tickHeld: false,
           storageBytesWithTick: 10 * GB,
         },
       });
     });
 
-    it('a creator above 1 GB of content can still upload a KYC document and an avatar, but not new content', async () => {
+    it('a creator with neither a tier nor a tick, above 1 GB of content, can still upload a KYC document and an avatar, but gets tier_required for new content', async () => {
       const presign = (folder: string, contentType: string) =>
         request(server())
           .post('/uploads/presign')
@@ -367,7 +432,12 @@ describe('Upload allowance (ME-17, contract)', () => {
           .send({ folder, contentType, extension: 'x', contentLength: 1000 });
       await presign('kyc/id-document', 'application/pdf').expect(200);
       await presign('avatars', 'image/jpeg').expect(200);
-      await presign('content/preview', 'image/jpeg').expect(413);
+      const refused = await presign('content/preview', 'image/jpeg').expect(
+        402,
+      );
+      expect((refused.body as { reason: { code: string } }).reason.code).toBe(
+        'tier_required',
+      );
       // The identity document and the avatar are not content: the numbers the
       // screens read are unchanged by them.
       const usage = await request(server())
@@ -381,7 +451,7 @@ describe('Upload allowance (ME-17, contract)', () => {
       });
     });
 
-    it('a creator with a tick can store a file past 1 GB', async () => {
+    it('a creator with a tick that has not ended can store a file past 1 GB', async () => {
       // One file is at most 512 MB (MAX_UPLOAD_BYTES), so 1 GB is two of
       // them and the third file is the one past it.
       for (const bytes of [512 * 1024 * 1024, 512 * 1024 * 1024, 1000]) {
