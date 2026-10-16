@@ -77,8 +77,14 @@ export const BILL_ALREADY_PAID_MESSAGE =
   'This bill has already been paid. Start a new one to pay again.';
 export const BILL_CHANGED_MESSAGE =
   'This bill is no longer available as it was. Start it again.';
-export const BILL_FAILED_REASON =
+/** A failed bill's words, by whether the refund has completed (it is a move of its own and can wait). */
+export const BILL_FAILED_RETURNING_REASON =
+  'The biller did not confirm the payment. Your money is on its way back to your wallet.';
+export const BILL_FAILED_RETURNED_REASON =
   'The biller did not confirm the payment. Your money was returned to your wallet.';
+/** What a person reads on paying a bill that failed again. */
+export const BILL_FAILED_MESSAGE =
+  'This bill did not go through. Start a new bill to try again.';
 
 const REFERENCE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -217,24 +223,42 @@ export type HistoryReading =
   | { state: 'unknown' }
   | { state: 'none' };
 
-/** Fintava's clock and ours may differ by this much when a record is matched to a purchase. */
-export const HISTORY_SKEW_MS = 2 * 60_000;
+/** Fintava's clock and ours may differ by this much when a record is matched to a purchase (seconds, never minutes). */
+export const HISTORY_SKEW_MS = 10_000;
+
+/** What already belongs to other bills, so a record settles at most one. */
+export interface HistoryGuard {
+  /** A record made before this moment is an earlier purchase's: the previous bill for the same meter or number and amount was delivered then. */
+  notBefore?: Date | null;
+  /** A record made after this moment is a later purchase's (for a bill that already failed: when it failed, plus the clock difference). */
+  notAfter?: Date | null;
+  /** Fintava transaction ids stored on another bill. */
+  takenIds?: ReadonlySet<string>;
+  /** Fintava references stored on another bill. */
+  takenReferences?: ReadonlySet<string>;
+}
 
 /**
  * Finds the record of a purchase whose answer was lost, in Fintava's merchant
- * history. A record counts only when it was made after the purchase was
- * handed over, at the bill's amount (or that plus the bill charge), and, for
- * electricity, for the same meter; for the other three, when it names the
- * phone or smartcard number. Exactly one such record decides; none is
- * `none` (absence is never proof the purchase did not happen) and two or
+ * history. A record counts only when it was made at or after the purchase was
+ * handed over (less a few seconds of clock difference, and never before the
+ * previous bill for the same number and amount was delivered), is not already
+ * on another bill, is at the bill's amount (or that plus the bill charge),
+ * and, for electricity, is for the same meter; for the other three, when it
+ * names the phone or smartcard number. Exactly one such record decides; none
+ * is `none` (absence is never proof the purchase did not happen) and two or
  * more are `unknown` (never guessed between).
  */
 export function readHistory(
   bill: BillSpec & { billChargeKobo: number },
   sentAt: Date,
   rows: readonly FintavaTransaction[],
+  guard: HistoryGuard = {},
 ): HistoryReading {
-  const since = sentAt.getTime() - HISTORY_SKEW_MS;
+  const since = Math.max(
+    sentAt.getTime() - HISTORY_SKEW_MS,
+    guard.notBefore?.getTime() ?? Number.NEGATIVE_INFINITY,
+  );
   const amounts = new Set([
     bill.amountKobo,
     bill.amountKobo + bill.billChargeKobo,
@@ -243,6 +267,19 @@ export function readHistory(
   const tail = account.replace(/\D/g, '').slice(-9);
   const matches = rows.filter((r) => {
     if (Date.parse(r.createdAt) < since) return false;
+    if (
+      guard.notAfter != null &&
+      Date.parse(r.createdAt) > guard.notAfter.getTime()
+    ) {
+      return false;
+    }
+    if (guard.takenIds?.has(r.id)) return false;
+    if (
+      r.fintavaReference !== null &&
+      guard.takenReferences?.has(r.fintavaReference)
+    ) {
+      return false;
+    }
     if (!amounts.has(r.amountKobo)) return false;
     if (bill.category === 'electricity') {
       return r.meterNumber !== null && r.meterNumber === account;

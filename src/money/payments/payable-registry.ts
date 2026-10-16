@@ -22,6 +22,14 @@ export interface PayableTarget {
    * it (NUV-09), so cents are never charged as kobo.
    */
   currency?: string;
+  /**
+   * The part of `priceKobo` that is WAWU's own fee (R-10), when the price
+   * carries one (a bill: the amount, Fintava's bill charge and WAWU's fee all
+   * move into WAWU's account in one transfer). It is recorded as the
+   * payment's `wawuFeeKobo` so fee reports see it; it changes no figure the
+   * person pays. Unset: none.
+   */
+  wawuFeeKobo?: number;
 }
 
 /** What a feature is asked to price. */

@@ -6509,8 +6509,10 @@ model WalletBill {
   purchaseSentAt       DateTime?
   /// How many times Fintava has been asked what became of an unknown purchase.
   checks               Int       @default(0)
-  fintavaTransactionId String?
-  fintavaReference     String?
+  /// Fintava's record of the purchase. Unique, so one history record settles
+  /// at most one bill (a lost purchase is never settled with another bill's).
+  fintavaTransactionId String?   @unique
+  fintavaReference     String?   @unique
   /// The electricity token and the units bought, as Fintava answered them.
   token                String?
   units                String?

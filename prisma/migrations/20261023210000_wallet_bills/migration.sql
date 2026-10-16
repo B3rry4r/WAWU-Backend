@@ -9,7 +9,7 @@
 -- to Fintava, whose bill calls take no reference of ours: it is asked about and
 -- never sent again until Fintava's own record says.
 --
--- Rollback: DROP TABLE "WalletBill";
+-- Rollback: DROP INDEX "WalletBill_fintavaReference_key"; DROP INDEX "WalletBill_fintavaTransactionId_key"; DROP TABLE "WalletBill";
 
 -- CreateTable
 CREATE TABLE "WalletBill" (
@@ -51,6 +51,14 @@ CREATE UNIQUE INDEX "WalletBill_reference_key" ON "WalletBill"("reference");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "WalletBill_paymentId_key" ON "WalletBill"("paymentId");
+
+-- CreateIndex
+-- One Fintava record settles at most one bill (nulls are not equal, so bills
+-- not yet bought do not clash).
+CREATE UNIQUE INDEX "WalletBill_fintavaTransactionId_key" ON "WalletBill"("fintavaTransactionId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "WalletBill_fintavaReference_key" ON "WalletBill"("fintavaReference");
 
 -- CreateIndex
 CREATE INDEX "WalletBill_wawuUserId_createdAt_idx" ON "WalletBill"("wawuUserId", "createdAt");

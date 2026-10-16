@@ -446,7 +446,9 @@ export class WalletPaymentService implements OnModuleInit {
       payeeWawuUserId: target.payee?.wawuUserId ?? null,
       priceKobo: BigInt(price),
       providerFeeKobo: BigInt(fee.fee.providerFeeKobo),
-      wawuFeeKobo: BigInt(fee.fee.wawuFeeKobo),
+      // WAWU's fee riding inside the price (a bill's) is recorded here too, so
+      // fee reports see it; the total the person pays is the quote's.
+      wawuFeeKobo: BigInt(fee.fee.wawuFeeKobo + (target.wawuFeeKobo ?? 0)),
       totalKobo: BigInt(fee.totalKobo),
       payeeShareKobo: BigInt(split.payeeShareKobo),
       wawuShareKobo: BigInt(split.wawuShareKobo),
@@ -2107,7 +2109,12 @@ export class WalletPaymentService implements OnModuleInit {
 
   view(p: PaymentRow, hold: HoldView | null = null): PaymentView {
     const providerFeeKobo = koboNumber(p.providerFeeKobo);
-    const wawuFeeKobo = koboNumber(p.wawuFeeKobo);
+    // A WAWU fee that rides inside the price (a bill's) is not an extra charge
+    // on top of it: the fee shown is the one that adds up to the total.
+    const wawuOnTop =
+      koboNumber(p.priceKobo) + providerFeeKobo + koboNumber(p.wawuFeeKobo) ===
+      koboNumber(p.totalKobo);
+    const wawuFeeKobo = wawuOnTop ? koboNumber(p.wawuFeeKobo) : 0;
     const status = p.status as PaymentStatus;
     // The buyer's claim on the item (`openKey`) is given up exactly when what
     // was paid for is delivered, or when there is nothing to deliver

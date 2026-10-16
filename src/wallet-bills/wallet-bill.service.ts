@@ -4,6 +4,7 @@ import {
   Logger,
   OnModuleInit,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import type { WalletBill } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { BillsError } from '../bills-catalogue/bills-catalogue-error';
@@ -11,10 +12,16 @@ import { BILLS_RETRY_AFTER_SECONDS } from '../bills-catalogue/bills-catalogue-er
 import { BillsCatalogueService } from '../bills-catalogue/bills-catalogue.service';
 import { FintavaClient } from '../fintava/fintava-client';
 import { FintavaError } from '../fintava/fintava-error';
-import type { FintavaBillReceipt } from '../fintava/fintava.interface';
+import type {
+  FintavaBillReceipt,
+  FintavaTransaction,
+} from '../fintava/fintava.interface';
 import { toLocalNigerianPhone } from '../wallet-provider/nigerian-phone';
 import type { BillCategory } from '../money/dto/money-enums';
-import { FeeQuoteService } from '../money/fees/fee-quote.service';
+import {
+  BILLS_UNAVAILABLE_MESSAGE,
+  FeeQuoteService,
+} from '../money/fees/fee-quote.service';
 import type { FeeLines } from '../money/fees/fee-quote.service';
 import type { OpenWallet } from '../money/gate/wallet-gate';
 import { HoldViewService } from '../money/holds/hold-view.service';
@@ -30,6 +37,7 @@ import {
   type PayableTarget,
 } from '../money/payments/payable-registry';
 import { MerchantWallet } from '../money/payments/merchant-wallet';
+import { joinNotes } from '../money/payments/payment-figures';
 import { WalletPaymentService } from '../money/payments/wallet-payment.service';
 import { isUniqueViolationOn } from '../money/prisma-unique';
 import type { CreateWalletBillDto, PayWalletBillDto } from './wallet-bill.dto';
@@ -37,13 +45,17 @@ import {
   AIRTIME_MINIMUM_KOBO,
   BILL_ALREADY_PAID_MESSAGE,
   BILL_CHANGED_MESSAGE,
-  BILL_FAILED_REASON,
+  BILL_FAILED_MESSAGE,
+  BILL_FAILED_RETURNED_REASON,
+  BILL_FAILED_RETURNING_REASON,
   BILL_NOT_FOUND_MESSAGE,
   BILLER_TITLES,
   boughtNothing,
   type BillSpec,
   type BillStatus,
   CABLE_PROVIDERS,
+  type HistoryGuard,
+  HISTORY_SKEW_MS,
   NETWORKS,
   newBillReference,
   progressOf,
@@ -63,6 +75,10 @@ export const BILL_PAY_ROUTE = 'POST bills/wallet/pay';
 
 /** What Fintava sees on the purchase; it names nobody. */
 export const BILL_NARRATION = 'WAWU bill';
+
+/** How far back the late-success look goes, and the words it leaves on the payment. */
+const LATE_SCAN_HOURS = 48;
+const LATE_MARKER = 'bill delivered after the bill was refunded';
 
 /** The payment kind this feature registers. */
 export const BILL_PAYMENT_KIND = 'bill' as const;
@@ -175,6 +191,11 @@ export class WalletBillService implements OnModuleInit {
     wallet: OpenWallet,
     dto: CreateWalletBillDto,
   ): Promise<WalletBillQuoteView> {
+    // Bills ride on Fintava only (R-45): where the running provider has none,
+    // nothing asks Fintava for a list first.
+    if (!this.fees.providerFees.bills) {
+      throw new MoneyError('target_not_payable', BILLS_UNAVAILABLE_MESSAGE);
+    }
     const priced = await this.price(wallet.wawuUserId, dto);
     const lines = this.lines(dto.category, priced.amountKobo);
     const charges = chargesOf(lines);
@@ -441,7 +462,12 @@ export class WalletBillService implements OnModuleInit {
   private async resolve(lookup: PayableLookup): Promise<PayableTarget> {
     const row = await this.owned(lookup.payerWawuUserId, lookup.targetId);
     if (row.status !== 'draft') {
-      throw new MoneyError('target_not_payable', BILL_ALREADY_PAID_MESSAGE);
+      throw new MoneyError(
+        'target_not_payable',
+        row.status === 'failed'
+          ? BILL_FAILED_MESSAGE
+          : BILL_ALREADY_PAID_MESSAGE,
+      );
     }
     await this.stillOffered(row);
     const category = row.category as BillCategory;
@@ -451,6 +477,7 @@ export class WalletBillService implements OnModuleInit {
       title: row.title,
       priceKobo: amount + charges.billChargeKobo + charges.serviceFeeKobo,
       payee: null,
+      wawuFeeKobo: charges.serviceFeeKobo,
     };
   }
 
@@ -624,6 +651,7 @@ export class WalletBillService implements OnModuleInit {
       FintavaBillReceipt,
       'transactionId' | 'fintavaReference' | 'meterToken' | 'details'
     >,
+    source: 'purchase' | 'history' = 'purchase',
   ): Promise<void> {
     let token = tokenOf({ ...receipt, amountKobo: null });
     if (
@@ -634,19 +662,165 @@ export class WalletBillService implements OnModuleInit {
     ) {
       token = await this.tokenFromRecord(receipt.transactionId);
     }
-    await this.prisma.walletBill.updateMany({
-      where: { id: row.id, status: 'buying' },
-      data: {
-        status: 'delivered',
-        deliveredAt: new Date(),
-        fintavaTransactionId: receipt.transactionId,
-        fintavaReference: receipt.fintavaReference,
-        token,
-        units: unitsOf(receipt.details),
-      },
-    });
+    const data = {
+      status: 'delivered',
+      deliveredAt: new Date(),
+      fintavaTransactionId: receipt.transactionId,
+      fintavaReference: receipt.fintavaReference,
+      token,
+      units: unitsOf(receipt.details),
+    };
+    let settled: { count: number };
+    try {
+      settled = await this.prisma.walletBill.updateMany({
+        where: { id: row.id, status: 'buying' },
+        data,
+      });
+    } catch (e) {
+      if (
+        !isUniqueViolationOn(e, 'fintavaTransactionId') &&
+        !isUniqueViolationOn(e, 'fintavaReference')
+      ) {
+        throw e;
+      }
+      if (source === 'history') {
+        // Another bill took this record first: it settles one bill at most.
+        this.logger.warn(
+          `bill ${row.id}: the record found for it is another bill's; it is not decided`,
+        );
+        throw new BillOutcomeOpen(row.id);
+      }
+      // The answer to the purchase just made names a record another bill
+      // holds. The purchase happened: deliver it, leave the ids unsaved.
+      this.logger.error(
+        `bill ${row.id}: Fintava answered with a record another bill holds; delivered without saving its ids`,
+      );
+      settled = await this.prisma.walletBill.updateMany({
+        where: { id: row.id, status: 'buying' },
+        data: { ...data, fintavaTransactionId: null, fintavaReference: null },
+      });
+    }
+    if (settled.count === 0) {
+      const now = await this.prisma.walletBill.findUnique({
+        where: { id: row.id },
+      });
+      if (now?.status === 'failed') {
+        await this.lateSuccess(now, receipt);
+        return;
+      }
+    }
     await this.recordPurchase(row, receipt);
     await this.holds.release({ paymentId: payment.paymentId });
+  }
+
+  /**
+   * The biller delivered a bill that was already failed and refunded to the
+   * payer: WAWU paid the biller and got nothing back. Nothing is taken from
+   * the person again. The payment carries the note for review (its
+   * `discrepancy`, as every other money stop does), the purchase is in the
+   * ledger, and it is logged once (the note is written once).
+   */
+  private async lateSuccess(
+    row: WalletBill,
+    receipt: Pick<FintavaBillReceipt, 'transactionId' | 'fintavaReference'>,
+  ): Promise<void> {
+    if (row.paymentId === null) return;
+    const amount = koboNumber(row.amountKobo) + koboNumber(row.billChargeKobo);
+    const note = `bill delivered after the bill was refunded to the payer; WAWU paid the biller ${amount} kobo and the payer was refunded (review)`;
+    const payment = await this.prisma.walletPayment.findUnique({
+      where: { id: row.paymentId },
+      select: { discrepancy: true },
+    });
+    const joined = joinNotes(payment?.discrepancy, note);
+    if (joined !== null && joined !== payment?.discrepancy) {
+      const { count } = await this.prisma.walletPayment.updateMany({
+        where: { id: row.paymentId, discrepancy: payment?.discrepancy ?? null },
+        data: { discrepancy: joined },
+      });
+      if (count > 0) {
+        this.logger.error(
+          `bill ${row.id}: the biller delivered after the bill was refunded; recorded on payment ${row.paymentId} for review`,
+        );
+      }
+    }
+    await this.recordPurchase(row, receipt);
+    // Keep the record on the bill, so no other bill can take it.
+    try {
+      await this.prisma.walletBill.updateMany({
+        where: { id: row.id, fintavaTransactionId: null },
+        data: {
+          fintavaTransactionId: receipt.transactionId,
+          fintavaReference: receipt.fintavaReference,
+        },
+      });
+    } catch {
+      // Held by another bill already: the note above stands.
+    }
+  }
+
+  /**
+   * Every half hour: a bill that failed and was refunded, whose purchase may
+   * still have been made (a refusal that left no record is a guess, G-647),
+   * is looked for once in Fintava's merchant history. A record that shows up
+   * is a loss to WAWU and goes to review (`lateSuccess`). Only bills that
+   * failed in the last two days are looked at, and nothing is asked while
+   * there are none.
+   */
+  @Cron(CronExpression.EVERY_30_MINUTES, { name: 'bill-late-success' })
+  async scanLateSuccesses(now: Date = new Date()): Promise<void> {
+    const failed = await this.prisma.walletBill.findMany({
+      where: {
+        status: 'failed',
+        purchaseSentAt: { not: null },
+        paymentId: { not: null },
+        failedAt: { gt: new Date(now.getTime() - LATE_SCAN_HOURS * 3_600_000) },
+      },
+      orderBy: { failedAt: 'asc' },
+      take: 50,
+    });
+    if (failed.length === 0) return;
+    const noted = await this.prisma.walletPayment.findMany({
+      where: {
+        id: { in: failed.map((b) => b.paymentId!) },
+        discrepancy: { contains: LATE_MARKER },
+      },
+      select: { id: true },
+    });
+    const done = new Set(noted.map((p) => p.id));
+    const todo = failed.filter((b) => !done.has(b.paymentId!));
+    if (todo.length === 0) return;
+    let rows: readonly FintavaTransaction[];
+    try {
+      const oldest = todo.reduce(
+        (t, b) => Math.min(t, b.purchaseSentAt!.getTime()),
+        Number.POSITIVE_INFINITY,
+      );
+      const page = await this.fintava.getMerchantHistory({
+        startDate: new Date(oldest - 24 * 3_600_000).toISOString().slice(0, 10),
+        order: 'DESC',
+        take: 100,
+      });
+      rows = page.items;
+    } catch (e) {
+      this.logger.warn(
+        `bills: Fintava's history could not be read for the late-success look (${e instanceof FintavaError ? e.kind : 'error'})`,
+      );
+      return;
+    }
+    for (const bill of todo) {
+      const sentAt = bill.purchaseSentAt!;
+      const guard = await this.guardFor(bill, sentAt, rows);
+      const reading = readHistory(spec(bill), sentAt, rows, {
+        ...guard,
+        notAfter: new Date((bill.failedAt ?? now).getTime() + HISTORY_SKEW_MS),
+      });
+      if (reading.state === 'delivered') {
+        await this.lateSuccess(bill, {
+          transactionId: reading.row.id,
+          fintavaReference: reading.row.fintavaReference,
+        });
+      }
+    }
   }
 
   /**
@@ -720,7 +894,7 @@ export class WalletBillService implements OnModuleInit {
       data: {
         status: 'failed',
         failedAt: new Date(),
-        failureReason: BILL_FAILED_REASON,
+        failureReason: BILL_FAILED_RETURNING_REASON,
       },
     });
     this.logger.warn(
@@ -754,19 +928,29 @@ export class WalletBillService implements OnModuleInit {
         order: 'DESC',
         take: 100,
       });
-      reading = readHistory(spec(row), sentAt, page.items);
+      reading = readHistory(
+        spec(row),
+        sentAt,
+        page.items,
+        await this.guardFor(row, sentAt, page.items),
+      );
     } catch (e) {
       this.logger.warn(
         `bill ${row.id}: Fintava's history could not be read (${e instanceof FintavaError ? e.kind : 'error'})`,
       );
     }
     if (reading.state === 'delivered') {
-      await this.deliver(row, payment, {
-        transactionId: reading.row.id,
-        fintavaReference: reading.row.fintavaReference,
-        meterToken: reading.row.meterToken,
-        details: {},
-      });
+      await this.deliver(
+        row,
+        payment,
+        {
+          transactionId: reading.row.id,
+          fintavaReference: reading.row.fintavaReference,
+          meterToken: reading.row.meterToken,
+          details: {},
+        },
+        'history',
+      );
       return;
     }
     if (reading.state === 'failed') {
@@ -774,6 +958,59 @@ export class WalletBillService implements OnModuleInit {
       return;
     }
     throw new BillOutcomeOpen(row.id);
+  }
+
+  /**
+   * What already belongs to other bills, so one history record settles at
+   * most one bill: records stored on another bill, and nothing made before
+   * the previous bill for the same meter or number and amount was delivered.
+   */
+  private async guardFor(
+    row: WalletBill,
+    sentAt: Date,
+    rows: readonly FintavaTransaction[],
+  ): Promise<HistoryGuard> {
+    const ids = rows.map((r) => r.id);
+    const refs = rows.flatMap((r) =>
+      r.fintavaReference === null ? [] : [r.fintavaReference],
+    );
+    const [taken, previous] = await Promise.all([
+      this.prisma.walletBill.findMany({
+        where: {
+          id: { not: row.id },
+          OR: [
+            { fintavaTransactionId: { in: ids } },
+            { fintavaReference: { in: refs } },
+          ],
+        },
+        select: { fintavaTransactionId: true, fintavaReference: true },
+      }),
+      this.prisma.walletBill.findFirst({
+        where: {
+          id: { not: row.id },
+          status: 'delivered',
+          category: row.category,
+          accountNumber: row.accountNumber,
+          amountKobo: row.amountKobo,
+          deliveredAt: { not: null, lte: sentAt },
+        },
+        orderBy: { deliveredAt: 'desc' },
+        select: { deliveredAt: true },
+      }),
+    ]);
+    return {
+      notBefore: previous?.deliveredAt ?? null,
+      takenIds: new Set(
+        taken.flatMap((t) =>
+          t.fintavaTransactionId === null ? [] : [t.fintavaTransactionId],
+        ),
+      ),
+      takenReferences: new Set(
+        taken.flatMap((t) =>
+          t.fintavaReference === null ? [] : [t.fintavaReference],
+        ),
+      ),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -842,7 +1079,14 @@ export class WalletBillService implements OnModuleInit {
       totalKobo: paid ? koboNumber(paid.totalKobo) : null,
       token: row.token,
       units: row.units,
-      failureReason: row.failureReason,
+      // The refund is a move of its own: until it has completed the money is
+      // on its way back, not returned.
+      failureReason:
+        row.status === 'failed'
+          ? returned?.returned
+            ? BILL_FAILED_RETURNED_REASON
+            : BILL_FAILED_RETURNING_REASON
+          : row.failureReason,
       returned,
       createdAt: row.createdAt.toISOString(),
       paidAt: row.paidAt?.toISOString() ?? null,

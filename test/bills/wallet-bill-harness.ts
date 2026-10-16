@@ -43,8 +43,8 @@ export { PIN };
 
 /** What a bill purchase at the double does next. */
 export interface BillBook {
-  /** `ok`: delivers; `refuse`: "Unable to find customers"; `unavailable`: a 2xx "service not currently available"; `lost`: takes it and drops the connection. */
-  mode: 'ok' | 'refuse' | 'unavailable' | 'lost';
+  /** `ok`: delivers; `refuse`: "Unable to find customers"; `unavailable`: a 2xx "service not currently available"; `lost`: takes it and drops the connection; `gateway`: a 504 and nothing bought. */
+  mode: 'ok' | 'refuse' | 'unavailable' | 'lost' | 'gateway';
   /** `unknown`: the meter check answers Fintava's bare 400 "Http Exception" (S10). */
   meter: 'found' | 'unknown';
   /** Fintava takes this long to answer a purchase (a spec that needs two callers at once). */
@@ -139,6 +139,13 @@ export function installBills(
           body: fintavaError(400, 'Unable to find customers'),
         };
       }
+      if (book.mode === 'gateway') {
+        return {
+          status: 504,
+          body: 'gateway timeout',
+          contentType: 'text/plain',
+        };
+      }
       if (book.mode === 'unavailable') {
         return {
           status: 201,
@@ -173,9 +180,15 @@ export function installBills(
   return book;
 }
 
-/** A merchant history row for one purchase, as Fintava would list it. */
+/**
+ * A merchant history row for one purchase, as Fintava would list it. Every
+ * row has an id and a reference of its own (a record settles at most one
+ * bill, so rows that share them would not be told apart).
+ */
 export function purchaseRow(over: Record<string, unknown>) {
   return historyRow({
+    id: randomUUID(),
+    reference: randomUUID(),
     transType: 'ELECTRICITY',
     entry: 'DEBIT',
     status: 'SUCCESS',
