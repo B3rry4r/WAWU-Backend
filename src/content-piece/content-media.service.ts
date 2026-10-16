@@ -4,7 +4,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import type { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { LOCKED_TX, lockStorageQuota } from '../storage/storage-lock';
 import { StorageService, objectKeyFrom } from '../storage/storage.service';
 import { ContentPieceService } from './content-piece.service';
 import type { SetMediaDto } from './dto/set-media.dto';
@@ -161,25 +163,41 @@ export class ContentMediaService {
 
   /**
    * Each frame must be an upload this person made: the url or key resolves to
-   * their own `content/` key and a StorageObject row of theirs that is not
-   * abandoned (the chat attachment rule). The key is what is stored, so the
-   * read path signs it fresh. Anything else is a 400.
+   * their own `content/` key. The key is what is stored, so the read path
+   * signs it fresh. Anything else is a 400. This half looks at the text only;
+   * `assertFramesUsable` checks the rows, inside the transaction.
    */
-  private async ownedFrameKeys(
-    values: string[],
-    ownerWawuId: string,
-  ): Promise<string[]> {
+  private frameKeys(values: string[], ownerWawuId: string): string[] {
     const keys = values.map((v) => objectKeyFrom(v));
     if (!keys.every((k) => isOwnContentKey(k, ownerWawuId))) {
       throw new BadRequestException(
         'Every frame must be a picture you uploaded.',
       );
     }
-    const rows = await this.prisma.storageObject.findMany({
+    return keys;
+  }
+
+  /**
+   * Each frame is a StorageObject row of this person's that is not abandoned
+   * (the chat attachment rule) and not being removed. A frame is a claim on
+   * the key, like a listing's file, so this runs under the same storage lock
+   * as a create (ME-04 round 5): a release or the sweep that is deciding about
+   * the key finishes first, and a key released a moment ago is seen here as
+   * released. Without the lock a frame could be set on a file the same person
+   * had just released and that is being deleted.
+   */
+  private async assertFramesUsable(
+    tx: Prisma.TransactionClient,
+    keys: string[],
+    ownerWawuId: string,
+  ): Promise<void> {
+    await lockStorageQuota(tx, ownerWawuId);
+    const rows = await tx.storageObject.findMany({
       where: {
         key: { in: keys },
         wawuUserId: ownerWawuId,
         status: { not: 'abandoned' },
+        removingAt: null,
       },
       select: { key: true },
     });
@@ -189,7 +207,6 @@ export class ContentMediaService {
         'Every frame must be a picture you uploaded.',
       );
     }
-    return keys;
   }
 
   /**
@@ -240,9 +257,12 @@ export class ContentMediaService {
     }
 
     const frames = dto.frames
-      ? await this.ownedFrameKeys(dto.frames, ownerWawuId)
+      ? this.frameKeys(dto.frames, ownerWawuId)
       : undefined;
     await this.prisma.$transaction(async (tx) => {
+      if (frames !== undefined) {
+        await this.assertFramesUsable(tx, frames, ownerWawuId);
+      }
       if (dto.durationLabel !== undefined || dto.pageCount !== undefined) {
         await tx.contentPiece.update({
           where: { id: contentId },
@@ -266,7 +286,7 @@ export class ContentMediaService {
           })),
         });
       }
-    });
+    }, LOCKED_TX);
     return this.get(contentId, ownerWawuId);
   }
 }

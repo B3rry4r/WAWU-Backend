@@ -3697,6 +3697,12 @@ model StorageObject {
   sweptHourAt DateTime?
   /// The third and last look, a day or more after the first. Null until then.
   sweptDayAt  DateTime?
+  /// When a removal of this file from the bucket began (a release, or the
+  /// sweep). Set under the person's lock, cleared under it when the removal
+  /// ends; no lock or transaction is held while the bucket is called (ME-04
+  /// round 5). A row with this set is also released and `abandoned`, so no
+  /// listing can name its key. Null when no removal is under way.
+  removingAt  DateTime?
 
   @@index([wawuUserId, status])
   @@index([status, createdAt])

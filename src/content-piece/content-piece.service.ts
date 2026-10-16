@@ -596,7 +596,12 @@ export class ContentPieceService {
     if (keys.length === 0) return;
     await lockStorageQuota(tx, creatorWawuId);
     const given = await tx.storageObject.findFirst({
-      where: { key: { in: keys }, status: 'abandoned' },
+      where: {
+        key: { in: keys },
+        // A file being removed is released and abandoned already; the mark is
+        // named too so the rule reads as it is (ME-04 round 5).
+        OR: [{ status: 'abandoned' }, { removingAt: { not: null } }],
+      },
       select: { id: true },
     });
     if (given) throw new BadRequestException(GIVEN_UP_FILE);

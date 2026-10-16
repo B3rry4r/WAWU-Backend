@@ -1,11 +1,8 @@
-import {
-  DeleteObjectCommand,
-  HeadObjectCommand,
-  type S3Client,
-} from '@aws-sdk/client-s3';
+import { HeadObjectCommand, type S3Client } from '@aws-sdk/client-s3';
 import type { Logger } from '@nestjs/common';
 import type { PrismaService } from '../common/prisma/prisma.service';
-import { LOCKED_TX, lockStorageQuota } from './storage-lock';
+import { deleteFromBucket } from './bucket-delete';
+import { LOCKED_TX, lockStorageQuota, removalInFlight } from './storage-lock';
 import { isClaimed } from './upload-release';
 
 /**
@@ -39,12 +36,15 @@ import { isClaimed } from './upload-release';
  * Rules it keeps:
  * - Only a definite answer settles a row. A bucket that cannot be asked, or a
  *   delete it refuses, leaves the row for the next pass.
- * - Everything that changes a row, and the delete itself, happens under the
- *   person's storage lock (storage-lock.ts), the one a release, a confirm and a
- *   create take, and the row is read again inside it. So a listing that names
- *   the key a moment earlier is seen and the file kept, a confirm that counted
- *   the file is seen, and two sweeps at once settle a row once (the second
- *   finds it done and counts nothing).
+ * - Everything that changes a row happens under the person's storage lock
+ *   (storage-lock.ts), the one a release, a confirm and a create take, and the
+ *   row is read again inside it. So a listing that names the key a moment
+ *   earlier is seen and the file kept, a confirm that counted the file is seen,
+ *   and two sweeps at once settle a row once (the second finds the first one's
+ *   mark, or its record, and counts nothing). The delete itself is the one
+ *   step outside the lock and outside any transaction (round 5): the row is
+ *   marked `removingAt` first, which is also what keeps every other step off
+ *   the key, and the result is recorded under the lock afterwards.
  */
 export interface LateSweepDeps {
   client: S3Client | null;
@@ -281,9 +281,20 @@ async function recordLook(
 }
 
 /**
- * The file is in the bucket. Under the person's lock, read the row again and
- * decide: count the file (the person never released it, or a listing uses it)
- * or delete it (released, used by no listing).
+ * The file is in the bucket. Decide under the person's lock, delete outside
+ * it (ME-04 round 5: nothing holds a transaction, a pooled connection or the
+ * lock across the bucket call).
+ *
+ * 1. Under the lock, a short transaction: read the row again and decide.
+ *    Count the file (the person never released it, or a listing uses it) and
+ *    finish; skip a row somebody else is removing; or, for a released file no
+ *    listing uses, mark the row `removingAt` and commit. A row being removed
+ *    is released and `abandoned`, which every listing, frame and confirm
+ *    already refuses, so nothing can claim the key from here on.
+ * 2. Holding nothing: ask the bucket to delete the file.
+ * 3. Under the lock again, a short transaction: record the removal, or, if the
+ *    bucket refused the delete or did not answer, clear the mark so the row is
+ *    taken again at the next pass.
  */
 async function settleFile(
   deps: LateSweepDeps,
@@ -292,56 +303,87 @@ async function settleFile(
   now: Date,
 ): Promise<Verdict> {
   const { client, bucket, prisma, logger } = deps;
-  return prisma.$transaction(async (tx): Promise<Verdict> => {
-    await lockStorageQuota(tx, row.wawuUserId);
-    const fresh = await tx.storageObject.findUnique({
-      where: { id: row.id },
-      select: { status: true, releasedAt: true, sweptRemovedAt: true },
-    });
-    // Not ours any more: counted by a confirm, or removed by another sweep.
-    if (!fresh || fresh.status !== 'abandoned' || fresh.sweptRemovedAt) {
-      return 'skipped';
-    }
-    const claimed = await isClaimed(tx, row.key);
-
-    if (!fresh.releasedAt || claimed) {
-      // The file counts. A row the person never released is theirs to keep
-      // (their upload took longer than the give-up time), and a file a listing
-      // uses is never deleted, so what stays is counted.
-      const counted = await tx.storageObject.updateMany({
-        where: { id: row.id, status: 'abandoned' },
-        data: {
-          status: 'confirmed',
-          confirmedAt: now,
-          ...lookData(look, row, now),
+  const claim = await prisma.$transaction(
+    async (tx): Promise<Verdict | { at: Date }> => {
+      await lockStorageQuota(tx, row.wawuUserId);
+      const fresh = await tx.storageObject.findUnique({
+        where: { id: row.id },
+        select: {
+          status: true,
+          releasedAt: true,
+          sweptRemovedAt: true,
+          removingAt: true,
         },
       });
-      if (counted.count === 0) return 'skipped';
-      if (fresh.releasedAt) {
-        logger.warn(
-          `Counted storage object ${row.key}: the person released it, but a listing uses it.`,
-        );
-      } else {
-        logger.log(`Counted late storage object ${row.key}: never released.`);
+      // Not ours any more: counted by a confirm, or removed by another sweep.
+      if (!fresh || fresh.status !== 'abandoned' || fresh.sweptRemovedAt) {
+        return 'skipped';
       }
-      return 'counted';
-    }
+      // A release or another sweep is removing it right now.
+      if (removalInFlight(fresh)) return 'skipped';
+      const claimed = await isClaimed(tx, row.key);
 
-    try {
-      await client!.send(
-        new DeleteObjectCommand({ Bucket: bucket, Key: row.key }),
-      );
-    } catch (err) {
-      if (statusOf(err) !== 404) {
-        logger.warn(
-          `Could not remove late storage object ${row.key}: ${String(err)}`,
-        );
-        return 'left';
+      if (!fresh.releasedAt || claimed) {
+        // The file counts. A row the person never released is theirs to keep
+        // (their upload took longer than the give-up time), and a file a
+        // listing uses is never deleted, so what stays is counted.
+        const counted = await tx.storageObject.updateMany({
+          where: { id: row.id, status: 'abandoned' },
+          data: {
+            status: 'confirmed',
+            confirmedAt: now,
+            removingAt: null,
+            ...lookData(look, row, now),
+          },
+        });
+        if (counted.count === 0) return 'skipped';
+        if (fresh.releasedAt) {
+          logger.warn(
+            `Counted storage object ${row.key}: the person released it, but a listing uses it.`,
+          );
+        } else {
+          logger.log(`Counted late storage object ${row.key}: never released.`);
+        }
+        return 'counted';
       }
+
+      const at = new Date();
+      await tx.storageObject.update({
+        where: { id: row.id },
+        data: { removingAt: at },
+      });
+      return { at };
+    },
+    LOCKED_TX,
+  );
+  if (typeof claim === 'string') return claim;
+
+  const outcome = await deleteFromBucket(client!, bucket, row.key);
+
+  return prisma.$transaction(async (tx): Promise<Verdict> => {
+    await lockStorageQuota(tx, row.wawuUserId);
+    if (outcome.result !== 'gone') {
+      logger.warn(
+        `Could not remove late storage object ${row.key}: ${String(outcome.error)}`,
+      );
+      await tx.storageObject.updateMany({
+        where: { id: row.id, removingAt: claim.at },
+        data: { removingAt: null },
+      });
+      return 'left';
     }
     const removed = await tx.storageObject.updateMany({
-      where: { id: row.id, status: 'abandoned', sweptRemovedAt: null },
-      data: { sweptRemovedAt: now, ...lookData(look, row, now) },
+      where: {
+        id: row.id,
+        status: 'abandoned',
+        sweptRemovedAt: null,
+        removingAt: claim.at,
+      },
+      data: {
+        sweptRemovedAt: now,
+        removingAt: null,
+        ...lookData(look, row, now),
+      },
     });
     if (removed.count === 0) return 'skipped';
     logger.log(`Removed late storage object ${row.key} of a given-up upload.`);

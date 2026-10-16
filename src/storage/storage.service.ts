@@ -17,7 +17,7 @@ import {
 } from './dto/presign-upload.dto';
 import { formatFolderRule } from './upload-formats';
 import { releaseOwnUpload } from './upload-release';
-import { lockStorageQuota } from './storage-lock';
+import { LOCKED_TX, lockStorageQuota } from './storage-lock';
 import { sweepLateFiles, type LateSweepResult } from './late-file-sweep';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
@@ -69,6 +69,8 @@ const UPLOAD_URL_SECONDS = 300;
  * reconcileStale gives a slow upload before it settles one.
  */
 const DEFAULT_SWEEP_MARGIN_SECONDS = 600;
+/** How long the storage client waits to connect, for an answer and in all (STORAGE_REQUEST_TIMEOUT_MS). */
+const DEFAULT_STORAGE_REQUEST_TIMEOUT_MS = 10_000;
 
 /**
  * How long after presign `POST /uploads/confirm` leaves a missing file alone:
@@ -375,6 +377,13 @@ export class StorageService {
       'STORAGE_SECRET_ACCESS_KEY',
     );
     this.bucket = this.config.get<string>('STORAGE_BUCKET') ?? '';
+    const timeout = Number(
+      this.config.get<string>('STORAGE_REQUEST_TIMEOUT_MS'),
+    );
+    const requestTimeoutMs =
+      Number.isFinite(timeout) && timeout >= 100
+        ? timeout
+        : DEFAULT_STORAGE_REQUEST_TIMEOUT_MS;
 
     // Storage is optional at boot so the rest of the API still runs in
     // environments where it isn't configured yet — but every upload request
@@ -405,6 +414,21 @@ export class StorageService {
       // upload with 400 Bad Request. KYC documents, content assets, CAC and
       // NEPC paperwork: none of it could be uploaded at all.
       requestChecksumCalculation: 'WHEN_REQUIRED',
+      // No bucket call may hang a request or the sweep (ME-04 round 5). The
+      // calls this client makes are a HEAD and a DELETE of one key, so a
+      // short bound on connecting, on silence and on the whole request is
+      // plenty. The SDK's own default is no limit at all, and it warns rather
+      // than fails when only `requestTimeout` is set, hence
+      // `throwOnRequestTimeout`. One retry, so a hung bucket costs a caller
+      // about twenty seconds at most, and nothing is held meanwhile (see
+      // storage-lock.ts).
+      requestHandler: {
+        connectionTimeout: requestTimeoutMs,
+        socketTimeout: requestTimeoutMs,
+        requestTimeout: requestTimeoutMs,
+        throwOnRequestTimeout: true,
+      },
+      maxAttempts: 2,
     });
   }
 
@@ -726,7 +750,7 @@ export class StorageService {
     // afterwards, through the link that was still valid, is not counted again:
     // the row stays released, and the sweep removes the file once the link has
     // expired. Nothing to ask of the bucket.
-    if (row.releasedAt) return { key, status: 'abandoned' };
+    if (row.releasedAt || row.removingAt) return { key, status: 'abandoned' };
 
     const held = await this.bucketHolds(key, 'settle');
     if (held === 'unknown') throw new ServiceUnavailableException(CHECK_LATER);
@@ -767,8 +791,9 @@ export class StorageService {
       await lockStorageQuota(tx, wawuId);
       const row = await tx.storageObject.findUnique({ where: { id: rowId } });
       if (!row || row.status === 'confirmed') return null;
-      // Released while this confirm was under way: it stays released.
-      if (row.releasedAt) return 'released' as const;
+      // Released while this confirm was under way, or being removed: it
+      // stays released.
+      if (row.releasedAt || row.removingAt) return 'released' as const;
       if (row.status === 'abandoned' && CONTENT_FOLDERS.includes(row.folder)) {
         const { usage, tickHeld } = await this.readUsage(wawuId, tx);
         if (usage.usedBytes + row.bytes > usage.limitBytes) {
@@ -779,11 +804,11 @@ export class StorageService {
       // confirmed row that is also released, with no file, could not be
       // cleared by the person.
       await tx.storageObject.updateMany({
-        where: { id: rowId, releasedAt: null },
+        where: { id: rowId, releasedAt: null, removingAt: null },
         data: { status: 'confirmed', confirmedAt: new Date() },
       });
       return null;
-    });
+    }, LOCKED_TX);
     if (refusal === 'released') return false;
     if (!refusal) return true;
     try {

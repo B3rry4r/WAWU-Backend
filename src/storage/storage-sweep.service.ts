@@ -15,10 +15,26 @@ import { StorageService } from './storage.service';
 export class StorageSweepService {
   private readonly logger = new Logger(StorageSweepService.name);
 
+  /** A run is under way: the next tick skips (ME-04 round 5). */
+  private running = false;
+
   constructor(private readonly storage: StorageService) {}
 
+  /**
+   * One run at a time. A run that is slow (a bucket that answers late, many
+   * rows) must not be joined by the next tick: each run holds database
+   * connections while it works, and two together only wait on each other's
+   * rows. A tick that finds the last run still going skips and says so once.
+   */
   @Cron(CronExpression.EVERY_10_MINUTES, { name: 'sweep-late-uploads' })
   async sweep(): Promise<void> {
+    if (this.running) {
+      this.logger.warn(
+        'Late-file sweep skipped: the previous run is still going.',
+      );
+      return;
+    }
+    this.running = true;
     try {
       const { removed, counted, left } = await this.storage.sweepLateFiles();
       if (removed > 0 || counted > 0 || left > 0) {
@@ -28,6 +44,8 @@ export class StorageSweepService {
       }
     } catch (err) {
       this.logger.warn(`Late-file sweep failed: ${String(err)}`);
+    } finally {
+      this.running = false;
     }
   }
 }
