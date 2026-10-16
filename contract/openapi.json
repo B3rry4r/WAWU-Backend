@@ -18831,7 +18831,7 @@
             }
           }
         },
-        "summary": "Cancels a deletion that is waiting (SETTINGS-06): the wallet is\nunfrozen, the content comes back and phone push resumes. WAWU ID calls\nit with the person's new token when they sign in during the 30 days\n(SETTINGS-08). Answers 200 `cancelled: false` when nothing was waiting.",
+        "summary": "Cancels a deletion that is waiting (SETTINGS-06): the wallet is\nunfrozen, the content comes back and phone push resumes. WAWU ID calls\nit with the person's new token when they sign in during the 30 days\n(SETTINGS-08). Answers 200 `cancelled: false` when nothing was waiting,\nand 200 `cancelled: false, deletionInProgress: true` with a `message`\nonce the purge has started (data may already be gone, so it is never\nanswered as restored).",
         "tags": [
           "Account"
         ]
@@ -32862,6 +32862,14 @@
           },
           "contentRestored": {
             "type": "number"
+          },
+          "deletionInProgress": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
