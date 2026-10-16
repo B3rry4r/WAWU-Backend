@@ -2024,7 +2024,8 @@ added up into one.
   (`status: held`), `GET /money/payments/quote` says `willBeHeld: true`, and
   the feature's `onCompleted` is told its id (`CompletedPayment.holdId`).
   What releases each kind is fixed: `paid_dm` `dm_answered`, `event_ticket`
-  `event_took_place`, `bill` `bill_delivered` (`holds/hold-rules.ts`). The
+  `event_took_place`, `bill` `bill_delivered`, `school_fee` `intake_started`
+  (`holds/hold-rules.ts`). The
   buyer's ledger row stays a `purchase`; they paid the price and the
   provider's charge (R-10) and the price is not spendable: it is already in
   WAWU's account.

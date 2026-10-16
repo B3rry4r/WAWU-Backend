@@ -130,7 +130,7 @@ payment onto the wallet.
 | `credit_pack` | INBOX-16 | the pack: `starter`, `popular` or `pro` (`POST /credits/purchase`) | no | no |
 | `verification` | ME-18 | the tick: `creator` or `professional` | no | no |
 | `legal_fee` | LEGAL-05 | the legal request id | no | no |
-| `school_fee` | SCHOOLS-07 | the enrolment order id | no | no |
+| `school_fee` | SCHOOLS-07 | the enrolment order id `POST /schools/enrolments` returns; the price is the course fee quoted when the place was held, and the 85/15 split (R-12) is recorded with the payment and its hold although the school is not on WAWU | no | until the intake starts |
 | `paid_dm` | INBOX-17 | the message id `POST /dm/:creatorWawuId/send` returns | no | until the creator answers |
 | `event_ticket` | EVENTS-07 | the order id `POST /events/:id/orders` returns | no | until the event takes place |
 | `bill` | BILLS-04 | the bill id `POST /bills/wallet` returns (`POST /bills/init` is the web's Flutterwave route and stays as it is); the price moved is the bill, Fintava's bill charge and WAWU's bill fee, in one transfer (R-31) | no | until the biller delivers |

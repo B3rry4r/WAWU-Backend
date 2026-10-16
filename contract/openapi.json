@@ -26096,6 +26096,89 @@
         ]
       }
     },
+    "/api/hub/schools/enrolments": {
+      "post": {
+        "operationId": "SchoolEnrolmentsController_enrol",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrolDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolEnrolmentView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code class_full (reason.nextIntake), intake_closed, already_enrolled (reason.enrolmentId), reservation_limit, or payment_in_progress (reason.paymentId) when the place being moved already has a payment started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolEnrolmentErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "SC4 Continue: holds a place in the class the student picked and answers\nthe order (the course, school and class, the fee that will be asked for,\nand `reservedUntil`, when the place goes back to the class if it is not\npaid). Pay it with `POST /money/payments`. The same request again answers\nthe same order and keeps the place a while longer; asking for another\nclass of the same course moves the place. A class with no seat left is\n`409 reason.code class_full` with `reason.nextIntake`, the soonest other\nclass of the course that has a seat (SC11), or null; a class that has\nstarted is `409 intake_closed`; a student already enrolled in the course\nis `409 already_enrolled` with `reason.enrolmentId`; a student holding\ntoo many unpaid places is `409 reservation_limit`. An unknown or hidden\nclass is 404. A course with no fee enrols at once (`status enrolled`,\nnothing to pay).",
+        "tags": [
+          "SchoolEnrolments"
+        ]
+      }
+    },
+    "/api/hub/schools/enrolments/{id}": {
+      "get": {
+        "operationId": "SchoolEnrolmentsController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolEnrolmentView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One enrolment as it stands now: what the app polls after a payment, and\nSC7's receipt (the course, class, fee and what the wallet was actually\ndebited). Only its student reads it; another person's and an id nobody\nholds are the same 404. It reads our own records only.",
+        "tags": [
+          "SchoolEnrolments"
+        ]
+      }
+    },
     "/api/hub/communities/mine": {
       "get": {
         "operationId": "CommunityRoomsController_mine",
@@ -35207,6 +35290,83 @@
           "q"
         ]
       },
+      "EnrolDto": {
+        "type": "object",
+        "properties": {
+          "intakeId": {
+            "type": "string",
+            "description": "The intake to hold a place in. The course and school come from it.",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "intakeId"
+        ]
+      },
+      "SchoolEnrolmentErrorReason": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "enum": [
+              "class_full",
+              "intake_closed",
+              "already_enrolled",
+              "reservation_limit"
+            ],
+            "type": "string"
+          },
+          "nextIntake": {
+            "nullable": true,
+            "description": "class_full: the soonest other class of the course that has a seat and has not started; null when there is none (SC11).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PublicIntakeView"
+              }
+            ]
+          },
+          "enrolmentId": {
+            "type": "string",
+            "description": "already_enrolled: the enrolment the student already has in this course.",
+            "format": "uuid"
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence the app may show as it is."
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "SchoolEnrolmentErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "description": "Always null on an error.",
+            "type": "object",
+            "nullable": true,
+            "example": null
+          },
+          "statusCode": {
+            "type": "number",
+            "description": "The HTTP status again."
+          },
+          "message": {
+            "type": "string",
+            "description": "Same as reason.message."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/SchoolEnrolmentErrorReason"
+          }
+        },
+        "required": [
+          "data",
+          "statusCode",
+          "message",
+          "reason"
+        ]
+      },
       "CreateCommunityDto": {
         "type": "object",
         "properties": {
@@ -37932,6 +38092,7 @@
               "dm_answered",
               "event_took_place",
               "bill_delivered",
+              "intake_started",
               "plan_granted"
             ]
           },
@@ -49779,6 +49940,151 @@
         },
         "required": [
           "cleared"
+        ]
+      },
+      "EnrolmentReturnView": {
+        "type": "object",
+        "properties": {
+          "holdStatus": {
+            "type": "string",
+            "enum": [
+              "held",
+              "released",
+              "refunded"
+            ]
+          },
+          "returned": {
+            "type": "boolean"
+          },
+          "returnedKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "holdStatus",
+          "returned",
+          "returnedKobo"
+        ]
+      },
+      "SchoolEnrolmentView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "released",
+              "refunded",
+              "reserved",
+              "enrolled"
+            ]
+          },
+          "reference": {
+            "type": "string"
+          },
+          "course": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ]
+          },
+          "school": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          },
+          "intake": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "startDate": {
+                "type": "string"
+              },
+              "schedule": {
+                "type": "string"
+              },
+              "location": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "id",
+              "startDate",
+              "schedule",
+              "location"
+            ]
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "paymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "providerFeeKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "totalKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "reservedUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "enrolledAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "returned": {
+            "$ref": "#/components/schemas/EnrolmentReturnView",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "reference",
+          "course",
+          "school",
+          "intake",
+          "priceKobo",
+          "paymentId",
+          "providerFeeKobo",
+          "totalKobo",
+          "reservedUntil",
+          "createdAt",
+          "enrolledAt",
+          "returned"
         ]
       },
       "SchoolApplyLinkView": {

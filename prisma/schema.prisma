@@ -5090,11 +5090,12 @@ model School {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  courses SchoolCourse[]
+  courses    SchoolCourse[]
+  enrolments SchoolEnrolment[]
   /// SCHOOLS-10: the code this school's apply link carries. Made the first
   /// time the link is asked for.
-  link    SchoolLink?
-  clicks  SchoolLinkClick[]
+  link       SchoolLink?
+  clicks     SchoolLinkClick[]
 
   @@index([category])
   @@index([name])
@@ -5122,8 +5123,9 @@ model SchoolCourse {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  intakes CourseIntake[]
-  clicks  SchoolLinkClick[]
+  intakes    CourseIntake[]
+  clicks     SchoolLinkClick[]
+  enrolments SchoolEnrolment[]
 
   @@index([schoolId])
 }
@@ -5150,6 +5152,8 @@ model CourseIntake {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  enrolments SchoolEnrolment[]
 
   @@index([courseId, startDate])
 }
@@ -5185,6 +5189,68 @@ model SchoolLinkClick {
   @@index([schoolId, clickedAt])
   @@index([courseId])
   @@index([userWawuId, clickedAt])
+}
+
+/// SCHOOLS-07: one student's place in one intake, and the order that pays for
+/// it. It is the target of a `school_fee` wallet payment (MONEY-17): the
+/// payment's id is `paymentId`, the fee waits in WAWU's merchant wallet in a
+/// hold (R-19) until the intake starts, then goes to the school at 85/15
+/// (R-12, SCHOOLS-11).
+///
+/// `status`: reserved (the seat is claimed, `reservedUntil` is how long it is
+/// kept for an unpaid order), enrolled (paid), released (the reservation was
+/// given up, or ran out, and its seat went back), refunded (paid, but the
+/// class filled in the gap and the fee went back through the hold).
+///
+/// The seat is claimed by one conditional write on CourseIntake
+/// (`seatsTaken < capacity`), the Product.stock pattern, and given back once
+/// when a reserved order is released. The course, school and intake are copied
+/// onto the order, so the receipt reads as it was when the person enrolled
+/// even if the school edits them later. The figures are integer kobo:
+/// `priceKobo` is the course fee that was quoted; `schoolShareKobo` and
+/// `wawuShareKobo` are its 85/15 split (R-12) at that time, `commissionBps`
+/// WAWU's part of it.
+///
+/// A partial unique index (migration SQL, not modelled here) allows one live
+/// order (reserved or enrolled) per student and course, so sending the same
+/// enrol request twice makes one order and takes one seat.
+model SchoolEnrolment {
+  id              String       @id @default(uuid())
+  /// The student. Null once their account is deleted: the money record stays
+  /// (the school's share may still be owed), the person goes.
+  wawuUserId      String?
+  schoolId        String
+  school          School       @relation(fields: [schoolId], references: [id])
+  courseId        String
+  course          SchoolCourse @relation(fields: [courseId], references: [id])
+  intakeId        String
+  intake          CourseIntake @relation(fields: [intakeId], references: [id])
+  status          String       @default("reserved")
+  /// What a person quotes: WAW- and two groups of four characters.
+  reference       String       @unique
+  courseTitle     String
+  schoolName      String
+  intakeStartDate DateTime     @db.Date
+  intakeSchedule  String
+  intakeLocation  String?
+  priceKobo       Int
+  schoolShareKobo Int
+  wawuShareKobo   Int
+  commissionBps   Int
+  reservedUntil   DateTime
+  /// The wallet payment that paid it (WalletPayment.id) and its hold.
+  paymentId       String?      @unique
+  holdId          String?
+  enrolledAt      DateTime?
+  releasedAt      DateTime?
+  refundedAt      DateTime?
+  failureReason   String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([wawuUserId, createdAt])
+  @@index([intakeId, status])
+  @@index([status, reservedUntil])
 }
 
 /// SETTINGS-02: the owner's legal text, one row per document ("terms",

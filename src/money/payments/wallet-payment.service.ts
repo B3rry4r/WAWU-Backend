@@ -435,7 +435,10 @@ export class WalletPaymentService implements OnModuleInit {
     }
 
     const id = randomUUID();
-    const split = splitPrice(price, target.payee !== null);
+    const split = splitPrice(
+      price,
+      target.payee !== null || target.payeeOutsideWawu === true,
+    );
     const now = new Date();
     const data: Prisma.WalletPaymentCreateInput = {
       id,
