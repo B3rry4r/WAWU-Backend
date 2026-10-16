@@ -32,6 +32,7 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
 import { BeneficiaryService } from './saved-accounts/beneficiary.service';
 import { MoneySavedAccountsController } from './saved-accounts/money-saved-accounts.controller';
 import { PayoutAccountService } from './saved-accounts/payout-account.service';
+import { SavedAccountTargetService } from './saved-accounts/saved-account-target.service';
 import { PinRequestKeyFilter, PinRequestKeyGuard } from './pin/pin-request-key';
 import {
   PinRequestFingerprints,
@@ -57,6 +58,10 @@ import { MoneyReceiptController } from './receipts/money-receipt.controller';
 import { PublicReceiptController } from './receipts/public-receipt.controller';
 import { ReceiptSettings } from './receipts/receipt-config';
 import { ReceiptService } from './receipts/receipt.service';
+import { MoneyCheckSettings } from './check/money-check-config';
+import { MoneyCheckMailer } from './check/money-check-mailer';
+import { MoneyCheckScope } from './check/money-check-scope';
+import { MoneyCheckService } from './check/money-check.service';
 import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
 import { MoneyLimitsModule } from './limits/money-limits.module';
 import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
@@ -148,6 +153,16 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
  * the history's detail; the public check (`/r/{code}`, no sign-in,
  * throttled) shows only what proves the movement. Neither calls Fintava.
  *
+ * MONEY-16: the nightly check against the wallet provider
+ * (`src/money/check/`). Once a night, at the hour in MONEY_CHECK_TIME (Lagos),
+ * it compares every wallet's debits and balance, WAWU's own account, the money
+ * held for payers and payees, and WAWU's charge on each send with the ledger,
+ * lists what a person has to look at, and has the report emailed through WAWU
+ * ID. It adds no route and only reads: a difference is reported, never fixed.
+ * It runs where ScheduleModule.forRoot() is loaded; a run is claimed in the
+ * database, so two Hub processes make one run. `npm run money:check` makes
+ * it by hand.
+ *
  * WALLET-08: finding a person to send money to (`/money/recipients`,
  * `/money/recipients/recent`), behind the wallet gate: only people with an
  * open wallet, never the caller, never anyone blocked either way
@@ -210,6 +225,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     BankAccountCheckService,
     BeneficiaryService,
     PayoutAccountService,
+    SavedAccountTargetService,
     TransactionHistoryService,
     StatementService,
     StatementRateLimiter,
@@ -228,6 +244,10 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     ReceiptService,
     RecipientService,
     RecipientSearchLimiter,
+    MoneyCheckSettings,
+    MoneyCheckMailer,
+    MoneyCheckScope,
+    MoneyCheckService,
   ],
   exports: [
     WalletGate,
@@ -247,6 +267,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletPaymentService,
     WalletHoldService,
     HoldViewService,
+    MoneyCheckService,
   ],
 })
 export class MoneyModule {}
