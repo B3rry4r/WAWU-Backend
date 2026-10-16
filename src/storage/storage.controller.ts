@@ -44,10 +44,13 @@ export class StorageController {
    * POST /uploads/confirm: the app has finished sending the file it got a URL
    * for, taken or turned away by the storage host. The server asks the bucket
    * and answers `confirmed` (the file is there and counts against the person's
-   * storage) or `abandoned` (it is not, and the space it held goes back at
-   * once instead of when the sweep settles it). The app's word decides
-   * nothing; only the person's own upload can be settled. A bucket that cannot
-   * be asked answers 503 and changes nothing.
+   * storage), `pending` (it is not there yet and the URL could still be used,
+   * so nothing changes and the sweep settles it) or `abandoned` (it is not
+   * there and the URL is spent, so the space it held goes back at once instead
+   * of when the sweep settles it). A file that lands after it was given up on
+   * and no longer fits the person's storage is removed and answers 413. The
+   * app's word decides nothing; only the person's own upload can be settled. A
+   * bucket that cannot be asked answers 503 and changes nothing.
    */
   @Post('confirm')
   @HttpCode(HttpStatus.OK)

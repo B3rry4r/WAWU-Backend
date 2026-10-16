@@ -48,7 +48,11 @@ const OTHER = OWN(2);
 const SWEEP = OWN(3);
 /** Many stale reservations, more than one pass of the sweep. */
 const MANY = OWN(4);
-const OWNED = [PERSON, OTHER, SWEEP, MANY];
+/** Confirm sent before the PUT, and files that land after a give-up. */
+const EARLY = OWN(5);
+const LATE = OWN(6);
+const RACE = OWN(7);
+const OWNED = [PERSON, OTHER, SWEEP, MANY, EARLY, LATE, RACE];
 const BUCKET = 'fix15-bucket';
 
 describe('A refused upload does not count against storage (FIX-15, contract)', () => {
@@ -120,6 +124,12 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
         });
         return;
       }
+      if (req.method === 'DELETE') {
+        stored.delete(key);
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
       if (req.method === 'HEAD') {
         res.statusCode = stored.has(key) ? 200 : 404;
         res.end();
@@ -174,7 +184,11 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
   const rowFor = (key: string) =>
     prisma.storageObject.findUniqueOrThrow({ where: { key } });
 
-  /** Moves a reservation's presign time back, past the sweep's grace. */
+  /**
+   * Moves a reservation's presign time back: 7 minutes is past the life of
+   * the upload URL (confirm gives up on a missing file), 20 is past the
+   * sweep's grace.
+   */
   const age = (key: string, minutes: number) =>
     prisma.storageObject.update({
       where: { key },
@@ -258,7 +272,7 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
       expect((await confirm(PERSON, { key: 'a', other: 1 })).status).toBe(400);
     });
 
-    it('a refused upload gives its space back as soon as the app confirms', async () => {
+    it('a refused upload gives its space back when the app confirms after the URL is spent', async () => {
       // 574 MB already stored, so a 400 MB file fits, and a second one does
       // not while the first one's reservation stands.
       const held = FREE_STORAGE_BYTES - 450 * MB;
@@ -290,7 +304,15 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
       expect(await usedBytes(PERSON)).toBe(before + size);
       expect((await presign(PERSON, size)).status).toBe(413);
 
-      // The app says it is done. The bucket does not have the file.
+      // The app says it is done while the URL could still be used: the
+      // bucket does not have the file, but the row is left as it is.
+      const early = await confirm(PERSON, { key: firstKey });
+      expect(dataOf(early)).toEqual({ key: firstKey, status: 'pending' });
+      expect((await rowFor(firstKey)).status).toBe('pending');
+      expect(await usedBytes(PERSON)).toBe(before + size);
+
+      // Once the URL is spent the bucket's answer is final.
+      await age(firstKey, 7);
       const settled = await confirm(PERSON, { key: firstKey });
       expect(settled.status).toBe(200);
       expect(dataOf(settled)).toEqual({ key: firstKey, status: 'abandoned' });
@@ -301,7 +323,9 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
       const retry = await presign(PERSON, size);
       expect(retry.status).toBe(200);
       // Leave the room free for the cases below.
-      await confirm(PERSON, { key: dataOf<{ key: string }>(retry).key });
+      const retryKey = dataOf<{ key: string }>(retry).key;
+      await age(retryKey, 7);
+      await confirm(PERSON, { key: retryKey });
       expect(await usedBytes(PERSON)).toBe(before);
     });
 
@@ -346,7 +370,9 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
         res,
       );
 
-      // The app confirms while the host has nothing yet: given up on.
+      // The app confirms, past the URL's life, while the host has nothing yet:
+      // given up on.
+      await age(key, 7);
       expect(dataOf(await confirm(PERSON, { key }))).toEqual({
         key,
         status: 'abandoned',
@@ -390,6 +416,146 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
 
       expect((await rowFor(key)).status).toBe('pending');
       expect(await usedBytes(PERSON)).toBe(before);
+    });
+  });
+
+  describe('confirm cannot be used to store past the limit (verifier finding, round 2)', () => {
+    it('a confirm sent before the PUT frees nothing, so the limit still refuses the third 500 MB file', async () => {
+      const size = 500 * MB;
+      const uploads: { key: string; uploadUrl: string }[] = [];
+      let refusedAt = -1;
+      for (let n = 0; n < 8; n++) {
+        const res = await presign(EARLY, size);
+        if (res.status === 413) {
+          refusedAt = n;
+          break;
+        }
+        expect(res.status).toBe(200);
+        const { key, uploadUrl } = dataOf<{ key: string; uploadUrl: string }>(
+          res,
+        );
+        // The attack: confirm before the PUT, to get the space back at once.
+        expect(dataOf(await confirm(EARLY, { key }))).toEqual({
+          key,
+          status: 'pending',
+        });
+        uploads.push({ key, uploadUrl });
+      }
+      // 2 x 500 MB fits in 1 GiB; the third does not, whatever was confirmed.
+      expect(refusedAt).toBe(2);
+      expect(uploads).toHaveLength(2);
+      expect(await usedBytes(EARLY)).toBe(2 * size);
+
+      // The PUTs land; everything the bucket holds is counted, and still
+      // nothing more can be presigned.
+      for (const { uploadUrl } of uploads) {
+        expect(await putTo(uploadUrl, 1)).toBe(200);
+      }
+      expect(await usedBytes(EARLY)).toBe(2 * size);
+      expect((await presign(EARLY, size)).status).toBe(413);
+      for (const { key } of uploads) {
+        expect(dataOf(await confirm(EARLY, { key }))).toEqual({
+          key,
+          status: 'confirmed',
+        });
+      }
+      expect(await usedBytes(EARLY)).toBe(2 * size);
+    });
+
+    it('a file that lands after it was given up on is refused and removed when it no longer fits', async () => {
+      const size = 400 * MB;
+      const held = 600 * MB;
+      await prisma.storageObject.create({
+        data: {
+          wawuUserId: LATE,
+          key: `content/full/${LATE}/00000000-0000-4000-8000-0000000000cc.mp4`,
+          bytes: held,
+          contentType: 'video/mp4',
+          folder: 'content/full',
+          status: 'confirmed',
+          confirmedAt: new Date('2026-09-01T00:00:00Z'),
+        },
+      });
+      const first = await presign(LATE, size);
+      const { key, uploadUrl } = dataOf<{ key: string; uploadUrl: string }>(
+        first,
+      );
+      // Given up on (URL spent, bucket empty): the room goes back.
+      await age(key, 7);
+      expect(
+        dataOf<{ status: string }>(await confirm(LATE, { key })).status,
+      ).toBe('abandoned');
+      expect(await usedBytes(LATE)).toBe(held);
+
+      // The room is used by another file.
+      const second = await presign(LATE, size);
+      expect(second.status).toBe(200);
+      expect(await usedBytes(LATE)).toBe(held + size);
+
+      // Then the slow upload lands. It does not fit: 413, the file is gone
+      // from the bucket, the row stays abandoned, and the figure is the same.
+      expect(await putTo(uploadUrl, 1)).toBe(200);
+      expect(stored.has(key)).toBe(true);
+      const refused = await confirm(LATE, { key });
+      expect(refused.status).toBe(413);
+      expect((refused.body as { reason: { code: string } }).reason.code).toBe(
+        'storage_limit_reached',
+      );
+      expect(stored.has(key)).toBe(false);
+      expect((await rowFor(key)).status).toBe('abandoned');
+      expect(await usedBytes(LATE)).toBe(held + size);
+    });
+
+    it('two given-up files landing together take the last of the room once', async () => {
+      const keys: string[] = [];
+      for (let n = 0; n < 2; n++) {
+        const res = await presign(RACE, 500 * MB);
+        const { key, uploadUrl } = dataOf<{ key: string; uploadUrl: string }>(
+          res,
+        );
+        await age(key, 7);
+        expect(
+          dataOf<{ status: string }>(await confirm(RACE, { key })).status,
+        ).toBe('abandoned');
+        expect(await putTo(uploadUrl, 1)).toBe(200);
+        keys.push(key);
+      }
+      // 524 MB stored leaves room for one 500 MB file, not two.
+      await prisma.storageObject.create({
+        data: {
+          wawuUserId: RACE,
+          key: `content/full/${RACE}/00000000-0000-4000-8000-0000000000bb.mp4`,
+          bytes: FREE_STORAGE_BYTES - 500 * MB,
+          contentType: 'video/mp4',
+          folder: 'content/full',
+          status: 'confirmed',
+          confirmedAt: new Date('2026-09-01T00:00:00Z'),
+        },
+      });
+      const answers = await Promise.all(
+        keys.map((key) => confirm(RACE, { key })),
+      );
+      expect(answers.map((a) => a.status).sort()).toEqual([200, 413]);
+      expect(await usedBytes(RACE)).toBe(FREE_STORAGE_BYTES);
+      const rows = await Promise.all(keys.map((key) => rowFor(key)));
+      expect(rows.map((r) => r.status).sort()).toEqual([
+        'abandoned',
+        'confirmed',
+      ]);
+    });
+
+    it('a key with a NUL character is an unknown key (404), not a 500', async () => {
+      const unknown = await confirm(PERSON, {
+        key: `content/full/${PERSON}/00000000-0000-4000-8000-000000000000.mp4`,
+      });
+      expect(unknown.status).toBe(404);
+      for (const key of ['a\u0000b', 'https://h.example/a\u0000b']) {
+        const res = await confirm(PERSON, { key });
+        expect(res.status).toBe(404);
+        expect((res.body as { message: string }).message).toBe(
+          (unknown.body as { message: string }).message,
+        );
+      }
     });
   });
 

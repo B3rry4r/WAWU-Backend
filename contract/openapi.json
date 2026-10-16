@@ -1116,6 +1116,7 @@
                     "status": {
                       "type": "string",
                       "enum": [
+                        "pending",
                         "confirmed",
                         "abandoned"
                       ]
@@ -1130,7 +1131,7 @@
             }
           }
         },
-        "summary": "POST /uploads/confirm: the app has finished sending the file it got a URL\nfor, taken or turned away by the storage host. The server asks the bucket\nand answers `confirmed` (the file is there and counts against the person's\nstorage) or `abandoned` (it is not, and the space it held goes back at\nonce instead of when the sweep settles it). The app's word decides\nnothing; only the person's own upload can be settled. A bucket that cannot\nbe asked answers 503 and changes nothing.",
+        "summary": "POST /uploads/confirm: the app has finished sending the file it got a URL\nfor, taken or turned away by the storage host. The server asks the bucket\nand answers `confirmed` (the file is there and counts against the person's\nstorage), `pending` (it is not there yet and the URL could still be used,\nso nothing changes and the sweep settles it) or `abandoned` (it is not\nthere and the URL is spent, so the space it held goes back at once instead\nof when the sweep settles it). A file that lands after it was given up on\nand no longer fits the person's storage is removed and answers 413. The\napp's word decides nothing; only the person's own upload can be settled. A\nbucket that cannot be asked answers 503 and changes nothing.",
         "tags": [
           "Storage"
         ]
