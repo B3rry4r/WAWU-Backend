@@ -335,7 +335,7 @@ export interface TransferQuickAmountView {
 /**
  * GET /money/transfers/presets: what W9 draws that is not the person's own
  * (task WALLET-02). The quick amounts come from settings, not from the design
- * (PROVISIONAL(TRANSFER-PRESETS)); the note's length is the send's own limit.
+ * (the setting is documented in transfer-presets.ts); the note's length is the send's own limit.
  */
 export interface TransferPresetsView {
   /** Smallest first, at most four. */

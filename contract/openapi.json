@@ -16983,7 +16983,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "What W9 draws that is not the person's own: the quick amounts under the\nkeypad (settings, PROVISIONAL(TRANSFER-PRESETS)) and the note's longest\nlength. It reads settings only: no provider, no fee, no money moves.\nDeclared before `transfers/:id` so `presets` is never read as an id.",
+        "summary": "What W9 draws that is not the person's own: the quick amounts under the\nkeypad (settings, documented in transfer-presets.ts) and the note's\nlongest length. It reads settings only: no provider, no fee, no money\nmoves. It sits above the read of one send so the word presets is not\ntaken for an id.",
         "tags": [
           "MoneyTransfers"
         ],

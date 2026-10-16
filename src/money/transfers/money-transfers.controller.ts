@@ -99,9 +99,10 @@ export class MoneyTransfersController {
 
   /**
    * What W9 draws that is not the person's own: the quick amounts under the
-   * keypad (settings, PROVISIONAL(TRANSFER-PRESETS)) and the note's longest
-   * length. It reads settings only: no provider, no fee, no money moves.
-   * Declared before `transfers/:id` so `presets` is never read as an id.
+   * keypad (settings, documented in transfer-presets.ts) and the note's
+   * longest length. It reads settings only: no provider, no fee, no money
+   * moves. It sits above the read of one send so the word presets is not
+   * taken for an id.
    */
   @Get('transfers/presets')
   @Header('Cache-Control', 'no-store')
