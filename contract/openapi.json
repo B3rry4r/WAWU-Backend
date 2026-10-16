@@ -15768,6 +15768,152 @@
         "x-wawu-built-by": "WALLET-27"
       }
     },
+    "/api/hub/money/statements/delivery": {
+      "get": {
+        "operationId": "MoneyStatementController_delivery",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementDeliveryView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Where a statement can be sent and in which formats (W38's \"Send to\" and\nits format choice). Reads the token only: the address is the person's\nown confirmed email, masked, or null when there is none to use\n(`canEmail` false).",
+        "tags": [
+          "MoneyStatement"
+        ],
+        "x-wawu-built-by": "WALLET-35"
+      }
+    },
+    "/api/hub/money/statements/email": {
+      "post": {
+        "operationId": "MoneyStatementController_emailStatement",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of A-Z a-z 0-9 _ -. The same key for the same person answers the first mail again.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StatementEmailDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatementEmailView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: statement_too_large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, email_not_verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "reason.code: statement_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: statement_email_failed, statement_busy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Email a statement (W38 \"Send statement\"). The same period rules and the\nsame file as `GET /money/statements`, attached to a mail sent to the\nperson's own confirmed address: the request carries none, so a statement\ncannot be sent to anyone else. No confirmed email is `409\nemail_not_verified`; a mail that could not be handed to WAWU ID's sender\nis `503 statement_email_failed`. The limits of `GET /money/statements`\napply and are shared with it: an emailed statement is one statement.\nAn optional `Idempotency-Key` makes a repeat answer the first mail\ninstead of sending a second.",
+        "tags": [
+          "MoneyStatement"
+        ],
+        "x-wawu-built-by": "WALLET-35"
+      }
+    },
     "/api/hub/money/fees/quote": {
       "get": {
         "operationId": "MoneyFeesController_feeQuote",
@@ -31797,6 +31943,8 @@
               "statement_too_large",
               "statement_rate_limited",
               "statement_busy",
+              "email_not_verified",
+              "statement_email_failed",
               "recipient_search_rate_limited",
               "fees_not_set",
               "limit_reached",
@@ -32217,6 +32365,35 @@
         "required": [
           "bankCode",
           "accountNumber"
+        ]
+      },
+      "StatementEmailDto": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string",
+            "description": "The first day of the statement, YYYY-MM-DD in Africa/Lagos time, included.",
+            "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+            "example": "2026-09-01"
+          },
+          "to": {
+            "type": "string",
+            "description": "The last day of the statement, YYYY-MM-DD in Africa/Lagos time,\nincluded. On or after `from`, not after today in Lagos, and at most\n366 days from `from`, both days counted (STATEMENT_MAX_DAYS).",
+            "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$",
+            "example": "2026-09-30"
+          },
+          "format": {
+            "type": "string",
+            "description": "The file. Only `csv` today: Fintava issues no stamped statement\n(WALLET-27, BACKEND_GAPS G-68), so there is no `pdf`.",
+            "enum": [
+              "csv"
+            ]
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "format"
         ]
       },
       "PaymentDto": {
@@ -35154,6 +35331,70 @@
           "rowCount",
           "content",
           "generatedAt"
+        ]
+      },
+      "StatementDeliveryView": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "nullable": true
+          },
+          "canEmail": {
+            "type": "boolean"
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "csv"
+              ]
+            }
+          }
+        },
+        "required": [
+          "email",
+          "canEmail",
+          "formats"
+        ]
+      },
+      "StatementEmailView": {
+        "type": "object",
+        "properties": {
+          "sentTo": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv"
+            ]
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "rowCount": {
+            "type": "number"
+          },
+          "sentAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sentTo",
+          "from",
+          "to",
+          "format",
+          "fileName",
+          "rowCount",
+          "sentAt"
         ]
       },
       "FeeQuotePartView": {
