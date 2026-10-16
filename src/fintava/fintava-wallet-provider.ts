@@ -33,6 +33,7 @@ import {
   type ProviderSelfieResult,
   type ProviderSendKind,
   type ProviderTransaction,
+  type ProviderTransactionKind,
   type ProviderTransferReceipt,
   type ProviderWalletTransferInput,
   safeKoboNumber,
@@ -120,7 +121,23 @@ export function fromFintavaTransaction(
     providerReference: t.fintavaReference,
     secondaryReference: t.tagapayTransRef,
     sessionId: t.sessionId,
+    kind: fintavaKindOf(t.transType),
+    merchantChargeKobo:
+      t.merchantCommKobo === null ? null : BigInt(t.merchantCommKobo),
   };
+}
+
+/**
+ * Fintava's `transType` as the seam's kind (MONEY-16): `AATRANSFER` is a
+ * send, a type ending in `CHARGE` (`BVNCHARGE` in the sandbox,
+ * `sandbox/10-`, `25-`) is Fintava charging WAWU, anything else is a type
+ * this adapter has not seen.
+ */
+export function fintavaKindOf(transType: string): ProviderTransactionKind {
+  const t = transType.trim().toUpperCase();
+  if (t === 'AATRANSFER') return 'transfer';
+  if (t.endsWith('CHARGE')) return 'charge';
+  return 'other';
 }
 
 function fromFintavaCustomer(c: FintavaCustomer): ProviderCustomer {
