@@ -30,9 +30,9 @@ import type {
  * Who uploaded this, and what their gates say.
  *
  * Everything here is read from the same rows the app reads — no second
- * definition of any number is computed (law 13). `slotsTotal` is derived with
- * `uploadAllowanceFor()`, exactly as CreatorStateService does, because it
- * is not a stored column. `kycStatus` reproduces CreatorStateService's
+ * definition of any number is computed (law 13). `slotsTotal` is what the
+ * publishing gate allows (PublishingAllowanceService, TIER-02), exactly as
+ * CreatorStateService reads it, because it is not a stored column. `kycStatus` reproduces CreatorStateService's
  * `not_started` synthesis (protected-surface hazard H-5) so a reviewer and the
  * creator are looking at the same word for the same state.
  */

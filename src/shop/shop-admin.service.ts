@@ -170,7 +170,7 @@ export class ShopAdminService {
     }
     if (dto.stock <= 0) {
       throw new BadRequestException(
-        'A product with no stock cannot go live — shoppers would see something they cannot buy. Save it as a draft, or add stock.',
+        'A product with no stock cannot go live. Shoppers would see something they cannot buy. Save it as a draft, or add stock.',
       );
     }
   }

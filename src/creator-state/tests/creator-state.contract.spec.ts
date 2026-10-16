@@ -242,7 +242,7 @@ describe('CreatorState (contract)', () => {
   });
 
   describe('GET /creator/state', () => {
-    it('200s with the shape + the derived flat slotsTotal for a creator', async () => {
+    it('200s with the shape + the derived slotsTotal for a creator', async () => {
       const res = await request(app.getHttpServer())
         .get('/creator/state')
         .set('Authorization', `Bearer ${signToken(OWN_CREATOR_BASIC)}`)
@@ -255,14 +255,16 @@ describe('CreatorState (contract)', () => {
           wawuUserId: OWN_CREATOR_BASIC,
           kycStatus: 'pending',
           slotsUsed: 1,
-          slotsTotal: 5,
+          // TIER-02 (R-43): what the publishing gate allows. This creator
+          // holds no tier and no tick, so nothing may be published.
+          slotsTotal: 0,
           dmPrice: 100,
           dmEnabled: true,
         },
       });
     });
 
-    it('200s with the SAME allowance for every other creator — there is no ladder left', async () => {
+    it('200s with the SAME rule for every other creator — no tier and no tick, no slots', async () => {
       const res = await request(app.getHttpServer())
         .get('/creator/state')
         .set('Authorization', `Bearer ${signToken(OWN_CREATOR_PRO)}`)
@@ -270,7 +272,7 @@ describe('CreatorState (contract)', () => {
 
       expect(res.body.data).toMatchObject({
         wawuUserId: OWN_CREATOR_PRO,
-        slotsTotal: 5,
+        slotsTotal: 0,
       });
     });
 
@@ -309,7 +311,7 @@ describe('CreatorState (contract)', () => {
         .expect(200);
       expect(res.body.data).toMatchObject({
         slotsUsed: 0,
-        slotsTotal: 5,
+        slotsTotal: 0,
         kycStatus: 'not_started',
       });
     });
@@ -342,12 +344,9 @@ describe('CreatorState (contract)', () => {
       expect(res.body).toMatchObject({
         statusCode: 200,
         message: 'OK',
-        // slotsTotal is MAX_ITEMS_PER_ACCOUNT for every creator account now.
-        // The 6 this used to expect was the tier-derived allowance, and tiers
-        // went with subscriptions -- uploadAllowanceFor() takes no argument
-        // and can only return 5, which is what GET /creator/state asserts
-        // higher up in this same suite.
-        data: { wawuUserId: OWN_CREATOR_BASIC, dmEnabled: false, dmPrice: 250, slotsTotal: 5 },
+        // slotsTotal is what the publishing gate allows (TIER-02): the same
+        // number GET /creator/state asserts higher up in this same suite.
+        data: { wawuUserId: OWN_CREATOR_BASIC, dmEnabled: false, dmPrice: 250, slotsTotal: 0 },
       });
 
       const persisted = await prisma.creatorState.findUnique({ where: { wawuUserId: OWN_CREATOR_BASIC } });

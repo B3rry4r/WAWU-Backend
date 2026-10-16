@@ -13,7 +13,7 @@ import { IsString, Matches, MaxLength } from 'class-validator';
  */
 export class RejectContentDto {
   @IsString()
-  @Matches(/\S/, { message: 'reason is required — the creator is shown it.' })
+  @Matches(/\S/, { message: 'reason is required. The creator is shown it.' })
   @MaxLength(1000)
   reason!: string;
 }

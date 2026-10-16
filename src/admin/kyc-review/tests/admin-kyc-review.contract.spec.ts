@@ -446,9 +446,10 @@ describe('Admin KYC review contract', () => {
         // The EARNING gate, as the creator's own screen words it.
         kycStatus: 'pending',
         slotsUsed: STARTING_SLOTS,
-        // Derived with the same uploadAllowanceFor() the app uses — never a
-        // second definition (law 13). Flat per account, no tier ladder.
-        slotsTotal: 5,
+        // What the publishing gate allows (TIER-02), read from the same
+        // PublishingAllowanceService the app uses — never a second definition
+        // (law 13). This creator holds no tier and no tick, so nothing.
+        slotsTotal: 0,
       });
 
       // Both filings, newest first, so the reviewer can read the earlier
@@ -733,7 +734,7 @@ describe('Admin KYC review contract', () => {
         .set(auth(reviewerToken))
         .send({ reason: '   ' })
         .expect(400);
-      expect(res.body.message).toBe('reason is required — the creator is shown it.');
+      expect(res.body.message).toBe('reason is required. The creator is shown it.');
 
       // Nothing was written on either refusal, and the gate did not move.
       const row = await prisma.kycSubmission.findUniqueOrThrow({ where: { id: SUB_PENDING_OLD } });

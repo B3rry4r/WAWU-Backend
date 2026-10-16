@@ -23,6 +23,7 @@ import {
 } from '../money-limit-config';
 import { MONEY_LIMIT_NAMES } from '../money-limit-names';
 import { MoneyLimits } from '../money-limits.service';
+import type { MovementTx } from '../movement-tx';
 
 /**
  * WAWU's limits as settings, and the provider's own limit errors (task
@@ -48,6 +49,25 @@ const NO_LEDGER = new Proxy(
     },
   },
 ) as unknown as PrismaService;
+
+/**
+ * The caller's transaction, as far as these checks reach it: it answers the
+ * isolation-level read and nothing else (the ledger and the lock are the
+ * contract spec's, over a real Postgres), and has none of a root client's
+ * methods. Anything else it is asked fails the spec.
+ */
+const TX = new Proxy(
+  {},
+  {
+    get(_target, prop) {
+      if (prop === '$queryRaw') {
+        return () => Promise.resolve([{ level: 'read committed' }]);
+      }
+      if (prop === '$connect' || prop === 'then') return undefined;
+      throw new Error('the ledger was read');
+    },
+  },
+) as unknown as MovementTx;
 
 function limits(
   env: Record<string, string>,
@@ -156,19 +176,25 @@ describe('NUV-07: the per-transaction limit and the fee check, before anything i
   it('at the limit passes; one kobo above is 403 limit_reached naming per_transaction', async () => {
     const l = limits({ [per]: '500000' });
     await expect(
-      l.assertMayMove({
-        wawuUserId: USER,
-        kind: 'wawu_transfer',
-        amountKobo: 500_000,
-      }),
+      l.assertMayMove(
+        {
+          wawuUserId: USER,
+          kind: 'wawu_transfer',
+          amountKobo: 500_000,
+        },
+        { tx: TX },
+      ),
     ).resolves.toBeUndefined();
     expect(
       await refusal(
-        l.assertMayMove({
-          wawuUserId: USER,
-          kind: 'wawu_transfer',
-          amountKobo: 500_001,
-        }),
+        l.assertMayMove(
+          {
+            wawuUserId: USER,
+            kind: 'wawu_transfer',
+            amountKobo: 500_001,
+          },
+          { tx: TX },
+        ),
       ),
     ).toEqual({
       status: 403,
@@ -183,29 +209,38 @@ describe('NUV-07: the per-transaction limit and the fee check, before anything i
     const l = limits({ [per]: '500000' });
     for (const kind of ['bank_transfer', 'purchase', 'bill'] as const) {
       await expect(
-        l.assertMayMove({ wawuUserId: USER, kind, amountKobo: 9_000_000 }),
+        l.assertMayMove(
+          { wawuUserId: USER, kind, amountKobo: 9_000_000 },
+          { tx: TX },
+        ),
       ).resolves.toBeUndefined();
     }
   });
 
   it('with no limit set, nothing is refused and the ledger is never read', async () => {
     await expect(
-      limits({}).assertMayMove({
-        wawuUserId: USER,
-        kind: 'bank_transfer',
-        amountKobo: Number.MAX_SAFE_INTEGER,
-      }),
+      limits({}).assertMayMove(
+        {
+          wawuUserId: USER,
+          kind: 'bank_transfer',
+          amountKobo: Number.MAX_SAFE_INTEGER,
+        },
+        { tx: TX },
+      ),
     ).resolves.toBeUndefined();
   });
 
   it('under nuvion with a fee unset, fees_not_set comes first, even before a limit', async () => {
     const l = limits({ [per]: '1' }, 'nuvion');
     const r = await refusal(
-      l.assertMayMove({
-        wawuUserId: USER,
-        kind: 'wawu_transfer',
-        amountKobo: 500,
-      }),
+      l.assertMayMove(
+        {
+          wawuUserId: USER,
+          kind: 'wawu_transfer',
+          amountKobo: 500,
+        },
+        { tx: TX },
+      ),
     );
     expect(r.code).toBe('fees_not_set');
     expect(r.status).toBe(503);
@@ -214,11 +249,14 @@ describe('NUV-07: the per-transaction limit and the fee check, before anything i
     expect(
       (
         await refusal(
-          set.assertMayMove({
-            wawuUserId: USER,
-            kind: 'wawu_transfer',
-            amountKobo: 500,
-          }),
+          set.assertMayMove(
+            {
+              wawuUserId: USER,
+              kind: 'wawu_transfer',
+              amountKobo: 500,
+            },
+            { tx: TX },
+          ),
         )
       ).limit,
     ).toBe('per_transaction');
@@ -226,11 +264,14 @@ describe('NUV-07: the per-transaction limit and the fee check, before anything i
     expect(
       (
         await refusal(
-          l.assertWithinLimits({
-            wawuUserId: USER,
-            kind: 'wawu_transfer',
-            amountKobo: 500,
-          }),
+          l.assertWithinLimits(
+            {
+              wawuUserId: USER,
+              kind: 'wawu_transfer',
+              amountKobo: 500,
+            },
+            { tx: TX },
+          ),
         )
       ).code,
     ).toBe('limit_reached');
@@ -240,7 +281,10 @@ describe('NUV-07: the per-transaction limit and the fee check, before anything i
     const l = limits({});
     for (const amountKobo of [0, -1, 1.5, Number.NaN, 2 ** 53]) {
       await expect(
-        l.assertMayMove({ wawuUserId: USER, kind: 'purchase', amountKobo }),
+        l.assertMayMove(
+          { wawuUserId: USER, kind: 'purchase', amountKobo },
+          { tx: TX },
+        ),
       ).rejects.toThrow(RangeError);
     }
   });
@@ -308,11 +352,14 @@ describe("NUV-07: the provider's own limit errors give the same answer", () => {
     };
     let own: MoneyError | null = null;
     try {
-      await limits(env).assertMayMove({
-        wawuUserId: USER,
-        kind: 'bank_transfer',
-        amountKobo: 1001,
-      });
+      await limits(env).assertMayMove(
+        {
+          wawuUserId: USER,
+          kind: 'bank_transfer',
+          amountKobo: 1001,
+        },
+        { tx: TX },
+      );
     } catch (e) {
       own = e as MoneyError;
     }
