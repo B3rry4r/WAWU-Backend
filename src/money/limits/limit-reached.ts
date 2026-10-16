@@ -1,3 +1,4 @@
+import { nairaText } from '../insufficient-funds';
 import { MoneyError } from '../money-error';
 import type { MoneyLimitName } from './money-limit-names';
 
@@ -22,4 +23,25 @@ export function limitReached(limit: MoneyLimitName): MoneyError {
   return new MoneyError('limit_reached', LIMIT_REACHED_MESSAGES[limit], {
     limit,
   });
+}
+
+/**
+ * `403 limit_reached` for the limit the wallet provider puts on the account
+ * for a day (task WALLET-23). It names the limit (`limit: daily`) and shows
+ * it, in the sentence and in `limitKobo`, with what is left of it today in
+ * `remainingTodayKobo`. Nothing has moved when it is thrown.
+ */
+export function accountLimitReached(
+  limitKobo: number,
+  remainingKobo: number,
+): MoneyError {
+  const left =
+    remainingKobo > 0
+      ? `You can still move ${nairaText(remainingKobo)} today.`
+      : 'Try again tomorrow.';
+  return new MoneyError(
+    'limit_reached',
+    `This would pass your daily limit of ${nairaText(limitKobo)}. ${left}`,
+    { limit: 'daily', limitKobo, remainingTodayKobo: remainingKobo },
+  );
 }

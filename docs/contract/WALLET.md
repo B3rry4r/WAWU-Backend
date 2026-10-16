@@ -45,9 +45,9 @@ caller from the token.
 | `GET /money/payout-account` | `PayoutAccountView` or `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `GET /money/fees/quote?kind=&amountKobo=&billCategory=` | `FeeQuoteView` | | WALLET-15 (served; CONVENTIONS.md section 11) |
-| `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-07 |
+| `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-07 (served; CONVENTIONS.md section 19) |
 | `POST /money/transfers/bank` | `TransferView` | `BankTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-09 |
-| `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 |
+| `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 (served; CONVENTIONS.md section 19) |
 | `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 (served; CONVENTIONS.md section 14) |
 | `POST /money/payments` | `PaymentView` | `PaymentDto`, `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | MONEY-17 (served; CONVENTIONS.md section 14) |
 | `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 (served; CONVENTIONS.md section 14a) |
@@ -60,6 +60,8 @@ caller from the token.
 | `GET /money/transactions/{id}/receipt/image` | PNG (`image/png`) | | WALLET-18 (served; throttled 10 a minute, 60 an hour) |
 | `GET /money/transactions/{id}/receipt/pdf` | one-page A4 PDF (`application/pdf`) | | WALLET-18 (served; throttled as the image) |
 | `GET /money/statements?from=&to=&format=` | `StatementView` (the CSV file as text) | | WALLET-27 (served; CONVENTIONS.md section 12) |
+| `GET /money/statements/delivery` | `StatementDeliveryView` (the masked address, `canEmail`, the formats) | | WALLET-35 (served; CONVENTIONS.md section 12) |
+| `POST /money/statements/email` | `StatementEmailView` (`{ from, to, format }` in; the CSV mailed to the person's own confirmed address) | | WALLET-35 (served; CONVENTIONS.md section 12) |
 
 The public check of a receipt, `GET /r/{code}` (wawu/r/<code>), is not a
 money route: no sign-in, HTML only, throttled 10 a minute and 60 an hour per
@@ -133,6 +135,7 @@ payment onto the wallet.
 | `event_ticket` | EVENTS-07 | the order id `POST /events/:id/orders` returns | no | until the event takes place |
 | `bill` | BILLS-04 | the bill id `POST /bills/init` returns | no | until the biller delivers |
 | `tier`, `tier_bump` | TIER-03 | the terms: `tier-<tierId>`, `renew-<tierId>` or `upgrade-<fromTierId>-<tierId>` (`GET /plans/purchases/quote` builds it; `tier_bump` adds the checkout bump) | no | no (WAWU's own sale, no seller split; a payment whose plan cannot be granted when it confirms is refunded in full, docs/contract/PLANS.md section 8) |
+| `points_cash_out` | POINTS-04 | the conversion id `POST /points/convert` returns | no | no (never paid by a person: it is the ledger link of WAWU's cash paid into the wallet for points, docs/contract/CONVENTIONS.md section 20; a payment for it is `target_not_payable`) |
 
 ## 2. The named schemas (G-1)
 
@@ -192,9 +195,9 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | W10 Review | fee breakdown per transfer type; total; "They get" | `GET /money/fees/quote` → `fee` (`providerFeeKobo` + `wawuFeeKobo` = `totalFeeKobo`), one row per charge in `parts`, `totalKobo`, `amountKobo` |
 | W11 PIN | PIN checked on the debit itself; tries left; lock | `X-Transaction-Pin` on the transfer; `403 pin_incorrect.triesLeft`, `423 pin_locked.lockedUntil`; `GET /money/pin` |
 | | fingerprint or face instead of the PIN (R-26) | `X-Device-Approval` on the debit (`@RequireApproval()`): `POST /money/device/challenge`, then the registered phone's signature; a refusal is `403 device_approval_refused` and uses no PIN try (MONEY-14, CONVENTIONS.md section 5) |
-| W12 Receipt | status, fee, total paid, reference, time | the transfer response, then `GET /money/transfers/{id}` → `TransferView` |
+| W12 Receipt | status, fee, total paid, reference, time | the transfer response, then `GET /money/transfers/{id}` → `TransferView`; a send whose outcome is not known yet is `pending` with `statusMessage` (CONVENTIONS.md section 19) |
 | | Save as beneficiary | `POST /money/beneficiaries` |
-| | Share receipt | at launch the phone's share sheet (R-33); the image and the PDF after launch (WALLET-12) on WALLET-18's routes, keyed by the ledger row's id: `TransferView` names no row yet (mobile repo BACKEND_GAPS G-66) |
+| | Share receipt | at launch the phone's share sheet (R-33); the image and the PDF after launch (WALLET-12) on WALLET-18's routes, keyed by the ledger row's id: `TransferView.transactionId` is that id (WALLET-07; mobile repo BACKEND_GAPS G-66) |
 | W13 Not enough | balance and the total, server-checked | `GET /money/wallet/balance` with `FeeQuoteView.totalKobo`; on send `402 insufficient_funds` → `balanceKobo`, `totalKobo`, `shortfallKobo` |
 | W14 Send failed | final status and reason | `TransferView.status` (`failed`, `reversed`), `failureReason` |
 | | what came back, a kept charge as its own row | `TransferView.reversal` → `returnedKobo`, `keptKobo`, `reversedAt` |
@@ -219,7 +222,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | W27 Transaction detail | type, counterparty, linked content, destination, reference, fee breakdown | `GET /money/transactions/{id}` → `category`, `counterparty`, `link`, `fee`, `reference` |
 | | Report a problem (support chat with the reference) | no support route exists: gap (section 5) |
 | W28 No results | a filtered, empty month | `filter=bills&month=2026-09` → `items: []` |
-| W35 Wallet settings | limits row (fill or hide) | `WalletView.limits` (null hides; section 5: no task fills it yet) |
+| W35 Wallet settings | limits row (fill or hide) | `WalletView.limits` (null hides; filled by WALLET-23, section 5) |
 | | PIN last changed | `WalletView.pin.changedAt` |
 | | beneficiaries count | `WalletView.beneficiaryCount` |
 | | account details | `WalletView.account` |
@@ -227,6 +230,9 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | | Cards; Statements | after launch (WALLET-22; statements WALLET-27 serves, WALLET-35 builds the row); W38 is hidden at launch |
 | W38 Statements (after launch) | period: presets or a custom range | `GET /money/statements?from=&to=` (Lagos days, both included; at most 366 days and 50,000 movements, `400 statement_too_large`; 5 a minute, 30 an hour) |
 | | format: CSV | `format=csv` → `StatementView.content`, `fileName`, `contentType` |
+| | formats offered | `StatementDeliveryView.formats` (`csv` today) |
+| | Send to | `StatementDeliveryView.email` (masked, the account's own confirmed address, read only) and `canEmail`; never typed |
+| | Send statement | `POST /money/statements/email` → `StatementEmailView` (`409 email_not_verified`, `503 statement_email_failed`) |
 | | format: Stamped PDF | not served: Fintava issues no statement (BACKEND_GAPS G-68) |
 | | Send to (email) | not served: the backend has no email sender (G-69); the app saves or shares the file |
 | W36 PIN create | set; confirm | `POST /money/pin` (`pin`, `pinConfirmation`); change is `PUT /money/pin` |
@@ -361,18 +367,35 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
 
 ## 5. Gaps this task found (not done here)
 
-- **Daily limits have no owner task.** `limits.md` wants `TIER_LIMITS` in
-  config, the day's limit and what is left on W35 and A8, and a send over it
-  stopped before the PIN. The contract has the fields
-  (`WalletView.limits`, `FeeQuoteView.withinDailyLimit`,
-  `daily_limit_exceeded`), but no launch task fills them. Until one does,
-  `limits` is null and the row is hidden.
+- **Daily limits are served by WALLET-23** (the provider's limit on the
+  account). Fintava publishes no limit; it reports the wallet's tier on every
+  balance read (`data.tier`), and the tier's daily limit is the setting
+  `FINTAVA_TIER_DAILY_LIMITS_KOBO` (unset: Fintava's policy of 2 Oct 2026 in
+  `limits.md`, Tier 1 ₦50,000, Tier 2 ₦500,000, Tier 3 ₦5,000,000). The read
+  is kept on the wallet row (`accountTier`, `dailyLimitKobo`, `limitsReadAt`),
+  so `GET /money/wallet` still never calls the provider.
+  - `WalletView.limits` is filled once a balance read has kept a limit, with
+    `tier: null` (the row names no tier, BRIEF W35), and stays null (the row
+    hides) before that and for a tier the setting does not know. Nuvion names
+    no limit, so it is null there.
+  - The check (`MoneyLimits.assertMayMove`) counts every kind of movement out
+    of the wallet today in Lagos together, by amount before fees, and refuses
+    `403 limit_reached` with `limit: daily`, `limitKobo` (the limit) and
+    `remainingTodayKobo` (what is left), the sentence carrying both in naira.
+    The quote's `withinDailyLimit` and `remainingTodayKobo` use the tighter of
+    this and WAWU's own daily limit for the kind.
+  - The code stays `limit_reached` (NUV-07), not `daily_limit_exceeded`, which
+    the declared transfer routes still list for WALLET-07 and WALLET-09 to
+    decide when they serve them.
+  - Fintava's own refusal for a limit has never been seen in the sandbox
+    (`limits.md`), so there is no mapping for it yet; WAWU's early refusal is
+    what a person sees.
 - **Biometric approval routes** are served by MONEY-14 (`/money/device`,
   `/money/approval/verify`, the `X-Device-Approval` format: a device key's
   signature, CONVENTIONS.md section 5). The declared debits still document
-  `X-Transaction-Pin` alone; the tasks that serve them (WALLET-07,
-  WALLET-09, MONEY-17) put `@RequireApproval()` on the route, which documents
-  both headers.
+  `X-Transaction-Pin` alone; the tasks that serve them (WALLET-07, served;
+  WALLET-09, MONEY-17, served) put `@RequireApproval()` on the route, which
+  documents both headers.
 - **The request that opens a wallet** is served by MONEY-12: `POST
   /money/wallet/open` (CONVENTIONS.md section 9). It carries the BVN, NIN,
   address and A5's name and date of birth from the app again, reads the

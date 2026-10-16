@@ -595,6 +595,14 @@ export function composeNotification(
         event.outcome,
         event.fixes ?? [],
       );
+
+    /**
+     * WALLET-10 (W15). Money reached the person's account. The amount is
+     * said in naira from the kobo the ledger holds; the sender only when the
+     * provider named one.
+     */
+    case 'money_in':
+      return composeMoneyIn(event);
   }
 }
 
@@ -659,6 +667,99 @@ function composeIdentityReview(
   }
 }
 
+/**
+ * ₦ from whole kobo, exactly: `₦1,250` for a whole number of naira and
+ * `₦1,250.50` otherwise. Nothing is rounded and nothing goes through a float
+ * (the ledger holds BIGINT kobo, and a credit is told as it was credited).
+ * Naira only.
+ */
+export function formatNairaFromKobo(kobo: bigint): string {
+  const negative = kobo < 0n;
+  const abs = negative ? -kobo : kobo;
+  const whole = (abs / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const rest = Number(abs % 100n);
+  const fraction = rest === 0 ? '' : `.${String(rest).padStart(2, '0')}`;
+  return `${negative ? '-' : ''}₦${whole}${fraction}`;
+}
+
+/** Longest sender name the copy carries; a lock screen has no room for more. */
+const MONEY_IN_NAME_MAX = 60;
+
+/**
+ * The sender's name as another bank wrote it, made safe to show: control
+ * characters out, runs of space made one, an em-dash or en-dash written as a
+ * hyphen (R-5: nothing a person reads has one, and a name is not ours to
+ * keep them in), cut to MONEY_IN_NAME_MAX characters. Null when nothing is
+ * left.
+ */
+export function moneyInSenderName(
+  raw: string | null | undefined,
+): string | null {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw
+    .replace(/[\u2013\u2014]/g, '-')
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (cleaned === '') return null;
+  const chars = Array.from(cleaned);
+  return chars.length <= MONEY_IN_NAME_MAX
+    ? cleaned
+    : chars.slice(0, MONEY_IN_NAME_MAX).join('').trimEnd();
+}
+
+/**
+ * The last four digits of the sender's account number as `****1234`, or null
+ * when the provider gave no number of at least six digits (a shorter one
+ * would show most of it).
+ */
+export function moneyInMaskedAccount(
+  raw: string | null | undefined,
+): string | null {
+  if (typeof raw !== 'string') return null;
+  const digits = raw.replace(/\D/g, '');
+  return digits.length >= 6 ? `****${digits.slice(-4)}` : null;
+}
+
+/**
+ * WALLET-10. "You received ₦5,000 from Ada Obi (****1234)." with a sender
+ * name, "You received ₦5,000 by bank transfer." without one. The number is
+ * only ever shown with a name beside it, masked to its last four digits:
+ * a lock screen shows this text. No wallet, balance or cash-out language,
+ * no dash.
+ *
+ * `amount` (whole naira, an Int column) is set only when the credit is a
+ * whole number of naira that fits: a credit with kobo in it is told in the
+ * body, never rounded into the column.
+ */
+function composeMoneyIn(
+  event: Extract<NotificationEvent, { kind: 'money_in' }>,
+): NotificationDraft {
+  const name = moneyInSenderName(event.senderName);
+  const mask = name ? moneyInMaskedAccount(event.senderAccountNumber) : null;
+  const sentence = name
+    ? `You received ${formatNairaFromKobo(event.amountKobo)} from ${name}${mask ? ` (${mask})` : ''}.`
+    : `You received ${formatNairaFromKobo(event.amountKobo)} by bank transfer.`;
+  const wholeNaira =
+    event.amountKobo % 100n === 0n ? event.amountKobo / 100n : null;
+  return {
+    userWawuId: event.userWawuId,
+    kind: 'money_in',
+    title: 'Money received',
+    body: sentence,
+    tone: 'success',
+    amount:
+      wholeNaira !== null && wholeNaira <= 2147483647n
+        ? Number(wholeNaira)
+        : null,
+    creditsCount: null,
+    actionLabel: null,
+    imageUrl: null,
+    actionHref: null,
+    campaignId: null,
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /* ME-10: reviews, and what a notification is about                     */
 /* ------------------------------------------------------------------ */
@@ -672,7 +773,9 @@ export type NotificationKind =
   | CoreNotificationKind
   | 'review_received'
   // NUV-02 round 2: the wallet provider's review of the person ended.
-  | 'identity_review';
+  | 'identity_review'
+  // WALLET-10: money reached the person's account by bank transfer.
+  | 'money_in';
 
 /**
  * ME-10. Somebody rated a piece for the first time (a changed rating is not
@@ -698,6 +801,23 @@ interface IdentityReviewEvent {
   userWawuId: string;
   outcome: 'approved' | 'rejected' | 'stopped' | 'expired';
   fixes?: readonly string[];
+}
+
+/**
+ * WALLET-10 (W15). A bank transfer reached the person's account. Recipient:
+ * the person whose account it is. Sent once per credited ledger row
+ * (src/money/money-in-notice), after the credit is a completed `in` row, never
+ * from the webhook delivery. `amountKobo` is the whole kobo credited.
+ * `senderName` and `senderAccountNumber` are what the provider gave about the
+ * sender, null when it gave nothing; the copy shows the account number only as
+ * its last four digits and only beside a name.
+ */
+interface MoneyInEvent {
+  kind: 'money_in';
+  userWawuId: string;
+  amountKobo: bigint;
+  senderName?: string | null;
+  senderAccountNumber?: string | null;
 }
 
 /**
@@ -727,7 +847,10 @@ export interface NotificationAbout {
  * which may also say what it is about (ME-10).
  */
 export type NotificationEvent = (
-  NotificationEventCore | ReviewReceivedEvent | IdentityReviewEvent
+  | NotificationEventCore
+  | ReviewReceivedEvent
+  | IdentityReviewEvent
+  | MoneyInEvent
 ) & {
   about?: NotificationAbout;
 };
@@ -760,6 +883,7 @@ export const NOTIFICATION_CATEGORY: Record<
   verify_reminder: 'other',
   legal_delivered: 'other',
   identity_review: 'other',
+  money_in: 'money',
 };
 
 /** The NotificationTarget row emit() writes beside a notification, minus its id. */

@@ -90,16 +90,19 @@ export interface WalletAccountView {
 }
 
 /**
- * The daily send limit and what is left of it today (limits.md in the
- * mobile repo). The figures come from config per tier, marked provisional
- * there; `tier` is whatever Fintava reports, or null when it reports none.
+ * The daily limit the wallet provider puts on the account, what was moved
+ * today and what is left (W35; task WALLET-23, `AccountLimits`). The limit is
+ * the provider's: Fintava reports the wallet's tier on every balance read and
+ * the tier's daily limit is a setting (limits.md in the mobile repo). `tier`
+ * is always null: the limits row names no tier (BRIEF W35), and the provider's
+ * own name for the level stays on the wallet row for ops.
  */
 export interface WalletLimitsView {
   tier: string | null;
   dailyLimitKobo: number;
   usedTodayKobo: number;
   remainingTodayKobo: number;
-  /** When today's limit starts again. The day boundary is Fintava's policy, read from config. */
+  /** When today's limit starts again: the next midnight in Lagos, where WAWU's own daily limits also turn over. */
   resetsAt: string;
 }
 
@@ -137,7 +140,7 @@ export interface WalletView {
   state: WalletState;
   /** Null while state is not_open or opening. */
   account: WalletAccountView | null;
-  /** Null when no limit is known; the screen hides the row (A8, W35). */
+  /** Null until a balance read has kept the provider's limit, and when it names none; the screen hides the row (A8, W35). */
   limits: WalletLimitsView | null;
   pin: PinStateView;
   bankTransfers: BankTransferAccessView;
@@ -419,7 +422,10 @@ export interface FeeQuoteView {
 /* ------------------------------------------------------------------ */
 
 /**
- * pending:   accepted and debited; the bank has not confirmed (bank sends).
+ * pending:   accepted and debited; the bank has not confirmed (bank sends),
+ *            or the provider has not yet said whether it took a send to a
+ *            WAWU user whose answer was lost (WALLET-07: asked about by our
+ *            reference, never sent again).
  * completed: the money arrived.
  * failed:    refused before any money left the wallet.
  * reversed:  the money left, the send failed, and it came back (W14).
@@ -465,6 +471,19 @@ export interface TransferView {
   /** A sentence for the person, set when status is failed or reversed. */
   failureReason: string | null;
   reversal: TransferReversalView | null;
+  /**
+   * A sentence for the person while status is pending: the send is not
+   * confirmed yet, so nothing says it failed and they are told not to send
+   * again (WALLET-07; the same sentence as a payment's). Null otherwise.
+   */
+  statusMessage: string | null;
+  /**
+   * The sender's row in the history (`TransactionView.id`): what the receipt
+   * routes (`/money/transactions/{id}/receipt`, WALLET-18) are keyed by, so
+   * W12's Share can ask for its receipt (BACKEND_GAPS G-66). Null for a send
+   * the ledger holds no row of.
+   */
+  transactionId: string | null;
   createdAt: string;
   completedAt: string | null;
 }
