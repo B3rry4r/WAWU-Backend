@@ -32,6 +32,7 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
 import { BeneficiaryService } from './saved-accounts/beneficiary.service';
 import { MoneySavedAccountsController } from './saved-accounts/money-saved-accounts.controller';
 import { PayoutAccountService } from './saved-accounts/payout-account.service';
+import { SavedAccountTargetService } from './saved-accounts/saved-account-target.service';
 import { PinRequestKeyFilter, PinRequestKeyGuard } from './pin/pin-request-key';
 import {
   PinRequestFingerprints,
@@ -224,6 +225,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     BankAccountCheckService,
     BeneficiaryService,
     PayoutAccountService,
+    SavedAccountTargetService,
     TransactionHistoryService,
     StatementService,
     StatementRateLimiter,

@@ -4804,6 +4804,20 @@ model MoneyBeneficiary {
   accountNumber   String?
   /// The name the bank returned on the name check.
   accountName     String?
+  /// NUV-06 (migration 20261021280000): the bank's code in Nuvion's list,
+  /// once this account has been matched to it (by code, else by the bank's
+  /// name; `bankCode` above is Fintava's when the row was saved in the
+  /// Fintava days).
+  nuvionBankCode  String?
+  /// When the holder's name was last confirmed through Nuvion
+  /// (`POST /counterparty-lookups`). Null on a row saved in the Fintava days:
+  /// it is checked by name again before its first Nuvion send.
+  nuvionCheckedAt DateTime?
+  /// Nuvion's counterparty and its bank payment detail for this account,
+  /// under the owner's entity. Made by the first send and reused by every
+  /// later one; provider ids, never a personal detail.
+  nuvionCounterpartyId  String?
+  nuvionPaymentDetailId String?
   createdAt       DateTime @default(now())
 
   @@unique([ownerWawuId, recipientWawuId])
@@ -4822,6 +4836,20 @@ model MoneyPayoutAccount {
   bankName      String
   accountNumber String
   accountName   String
+  /// NUV-06 (migration 20261021280000): as on MoneyBeneficiary, the bank's
+  /// code in Nuvion's list and when the name was last confirmed through
+  /// Nuvion (null in the Fintava days).
+  nuvionBankCode  String?
+  nuvionCheckedAt DateTime?
+  /// Nuvion's counterparty and payment detail for this account under the
+  /// PERSON's entity (their own withdrawal to it).
+  nuvionCounterpartyId  String?
+  nuvionPaymentDetailId String?
+  /// The same account as a payee of WAWU's OPERATIONAL account (WAWU's own
+  /// payouts to this person, R-31): a counterparty belongs to the entity that
+  /// pays, so these are not the same ids.
+  nuvionOperationalCounterpartyId  String?
+  nuvionOperationalPaymentDetailId String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
