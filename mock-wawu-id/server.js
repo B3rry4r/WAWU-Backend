@@ -466,6 +466,37 @@ app.post("/internal/mail/send", requireServiceKey, (req, res) => {
   });
   res.json({ id });
 });
+// The nightly money check's report email (MONEY-16). Mirrors the route WAWU ID
+// builds (BACKEND_GAPS G-690, wawu-id wmt/MONEY-16):
+// POST /internal/users/:userId/money-check-report
+// { night, provider, verdict, walletsTotal, walletsChecked, mismatchCount,
+// lookCount, checks, held, items, itemsOmitted, notices, ranAt }. The Hub names
+// the person and gives the counts and references (never a name, a phone number
+// or an account number); WAWU ID owns the address and the wording, so the mock
+// records who was mailed which report and sends nothing.
+const MONEY_CHECK_VERDICTS = ["clean", "needs_a_look", "differences", "incomplete", "not_checked"];
+app.post("/internal/users/:userId/money-check-report", requireServiceKey, (req, res) => {
+  const user = Object.values(USERS).find((u) => u.sub === req.params.userId);
+  if (!user) return res.status(404).json({ message: "user not found" });
+  const b = req.body ?? {};
+  if (typeof b.night !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(b.night)) {
+    return res.status(400).json({ message: "night must be a date" });
+  }
+  if (!MONEY_CHECK_VERDICTS.includes(b.verdict)) {
+    return res.status(400).json({ message: "verdict is not one we know" });
+  }
+  if (!Array.isArray(b.checks) || !Array.isArray(b.items)) {
+    return res.status(400).json({ message: "checks and items must be lists" });
+  }
+  MAIL_OUTBOX.push({
+    kind: "money-check-report",
+    userId: user.sub,
+    to: user.email,
+    report: b,
+    sentAt: new Date().toISOString(),
+  });
+  res.json({ data: { emailed: true } });
+});
 app.get("/internal/mail-outbox", requireServiceKey, (_req, res) => {
   res.json({ data: MAIL_OUTBOX });
 });
