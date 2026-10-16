@@ -549,7 +549,11 @@ export type HoldStatus = 'held' | 'released' | 'refunded';
  * be granted after the payment confirmed, and it is refunded at once.
  */
 export type HoldReleaseCondition =
-  'dm_answered' | 'event_took_place' | 'bill_delivered' | 'plan_granted';
+  | 'dm_answered'
+  | 'event_took_place'
+  | 'bill_delivered'
+  | 'intake_started'
+  | 'plan_granted';
 
 /**
  * Money held between payer and payee in WAWU's merchant wallet (R-19). The

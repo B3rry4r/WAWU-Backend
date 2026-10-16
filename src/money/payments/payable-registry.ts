@@ -30,6 +30,15 @@ export interface PayableTarget {
    * person pays. Unset: none.
    */
   wawuFeeKobo?: number;
+  /**
+   * True when the price has a payee who is not on WAWU (a school, paid by
+   * bank transfer out of WAWU's account: SCHOOLS-07, SCHOOLS-11). `payee`
+   * stays null, because there is no WAWU wallet to pay, but the 85/15 split
+   * (R-5, R-12) is recorded with the payment and its hold all the same, so
+   * the hold says how much of the price is owed to the payee. Unset: the
+   * split follows `payee` as it always has.
+   */
+  payeeOutsideWawu?: boolean;
 }
 
 /** What a feature is asked to price. */

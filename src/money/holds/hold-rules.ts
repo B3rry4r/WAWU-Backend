@@ -8,7 +8,7 @@ import type { HoldReleaseCondition, HoldStatus } from '../money-view.type';
  * account at the wallet provider, and the price waits there until something
  * happens. What releases it is fixed by the kind, so a feature never says
  * it: a paid DM when the creator answers, a ticket when the event takes
- * place, a bill when the biller delivers. The opposite outcome refunds the
+ * place, a bill when the biller delivers, a school fee when the intake starts. The opposite outcome refunds the
  * payer (no answer in time, an event called off, a biller failure); which
  * outcome happened is the owning feature's to know and to ask for.
  */
@@ -18,6 +18,7 @@ export const HOLD_RELEASE_CONDITIONS: Readonly<
   paid_dm: 'dm_answered',
   event_ticket: 'event_took_place',
   bill: 'bill_delivered',
+  school_fee: 'intake_started',
 };
 
 /** The release condition of a held kind; null for a kind that is not held. */
