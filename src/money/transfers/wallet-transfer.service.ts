@@ -93,6 +93,22 @@ export const SEND_STILL_CONFIRMING_MESSAGE =
 const SWEEP_PAGE = 50;
 const SWEEP_PAGES = 20;
 const MINUTE = 60_000;
+/**
+ * A bank send that failed without the provider ever having a record of it is
+ * asked about ONCE, between this long after it failed (an orphan record the
+ * provider wrote when it refused the send was still pending 37 minutes on,
+ * mobile repo docs/fintava/sandbox/14-) and 48 hours after (FIX-41, SWEEP-MONEY
+ * F8). A read only: nothing is sent.
+ */
+const FAILED_SEND_LOOK_AFTER_MS = 60 * MINUTE;
+const FAILED_SEND_LOOK_UNTIL_MS = 48 * 60 * MINUTE;
+/**
+ * How the ledger words a sighting that said a failed row completed
+ * (`<source> sighting: status failed vs completed`, LedgerService.merge): the
+ * ledger keeps the row failed and notes the disagreement, and this is how a
+ * failed bank send learns of it.
+ */
+const LATE_SUCCESS_SIGHTING = /\bstatus failed vs completed\b/;
 /** How long the receipt waits for WAWU ID before it names the person from our own records. */
 const PARTY_WAIT_MS = 3_000;
 
@@ -831,6 +847,7 @@ export class WalletTransferService implements OnModuleInit {
         const last = due[due.length - 1];
         after = { at: last.nextCheckAt!, id: last.id };
       }
+      await this.lookForLateSuccess(now);
     } catch (e) {
       this.logger.error(
         `send sweep failed: ${e instanceof Error ? e.message : 'unknown'}`,
@@ -839,6 +856,100 @@ export class WalletTransferService implements OnModuleInit {
       this.sweeping = false;
     }
     return counts;
+  }
+
+  /**
+   * A bank send the provider refused before it took the money is failed at
+   * once, on the word that no transfer exists (NO_TRANSFER_REFUSALS). When
+   * that word is wrong the transfer completes anyway, and the app has told
+   * the person it failed. A webhook that says so is caught by `settle`
+   * (`noteLateSuccess`); this is the other way in, for a success the webhook
+   * missed (FIX-41, SWEEP-MONEY F8): each bank send that failed in the last
+   * 48 hours, at least an hour ago, with no provider record and not yet asked,
+   * is asked about ONCE, by our reference. A read only, through the provider
+   * seam (R-39): it sends nothing, and holds no row or connection while the
+   * provider answers. A provider that could not be reached is asked again.
+   */
+  private async lookForLateSuccess(now: Date): Promise<void> {
+    const due = await this.prisma.walletTransfer.findMany({
+      where: {
+        status: 'failed',
+        kind: 'bank_account',
+        provider: this.provider.name,
+        checks: 0,
+        reviewSince: null,
+        sentToBankAt: null,
+        failedAt: {
+          gte: new Date(now.getTime() - FAILED_SEND_LOOK_UNTIL_MS),
+          lte: new Date(now.getTime() - FAILED_SEND_LOOK_AFTER_MS),
+        },
+      },
+      orderBy: { failedAt: 'asc' },
+      take: SWEEP_PAGE,
+      select: { id: true },
+    });
+    for (const { id } of due) {
+      // Marked as asked first, under one short statement.
+      const claimed = await this.prisma.walletTransfer.updateMany({
+        where: { id, status: 'failed', checks: 0, reviewSince: null },
+        data: { checks: { increment: 1 } },
+      });
+      if (claimed.count !== 1) continue;
+      const t = await this.prisma.walletTransfer.findUnique({ where: { id } });
+      if (!t) continue;
+      const answer = await this.askAboutFailed(t);
+      if (answer === 'retry') {
+        await this.prisma.walletTransfer.updateMany({
+          where: { id, status: 'failed', checks: 1 },
+          data: { checks: { decrement: 1 } },
+        });
+        continue;
+      }
+      if (
+        answer?.state === 'found' &&
+        answer.transaction.outcome === 'completed'
+      ) {
+        await this.recordSighting(
+          t,
+          'completed',
+          answer.transaction,
+          answer.source,
+        );
+        await this.flagLateSuccess(t, answer.source);
+      }
+    }
+  }
+
+  /**
+   * What the provider knows of a failed send: a read by our reference.
+   * `retry` when the provider could not be reached, null when it cannot be
+   * asked at all (the sender's wallet is gone).
+   */
+  private async askAboutFailed(
+    t: TransferRow,
+  ): Promise<ProviderReconciliation | 'retry' | null> {
+    const wallet = t.payerAccountNumber
+      ? await this.prisma.fintavaWallet.findUnique({
+          where: { accountNumber: t.payerAccountNumber },
+          select: { customerId: true, provider: true },
+        })
+      : null;
+    if (!wallet || !isRowOf(this.provider.name, wallet.provider)) return null;
+    try {
+      const answer = await this.provider.reconcileSend(
+        t.customerReference,
+        { kind: 'customer', customerId: wallet.customerId },
+        t.sentAt ?? t.createdAt,
+      );
+      return answer.state === 'unknown' && answer.why === 'unreachable'
+        ? 'retry'
+        : answer;
+    } catch (e) {
+      this.logger.warn(
+        `send ${t.id}: ${this.provider.label} could not be asked about a failed send (${e instanceof WalletProviderError ? e.kind : 'error'})`,
+      );
+      return 'retry';
+    }
   }
 
   /**
@@ -862,8 +973,10 @@ export class WalletTransferService implements OnModuleInit {
     if (t.status === 'failed' && t.kind === 'bank_account') {
       // A failed bank send arrives as the provider's reversal of the debit
       // (MONEY-07): the sender's row became `reversed` after the send was
-      // failed, and the send follows it, once.
-      return (await this.followReversal(t)).status as TransferStatus;
+      // failed, and the send follows it, once. A SUCCESS seen on it instead
+      // is put in front of a person (FIX-41, SWEEP-MONEY F8).
+      const followed = await this.followReversal(t);
+      return (await this.noteLateSuccess(followed)).status as TransferStatus;
     }
     if (t.status !== 'pending') return t.status as TransferStatus;
     const row = await this.prisma.fintavaLedgerEntry.findFirst({
@@ -1002,11 +1115,13 @@ export class WalletTransferService implements OnModuleInit {
   /**
    * The provider's record of a transfer that FAILED or was REVERSED onto the
    * sender's ledger row (a revival when the row was failed as absent). No
-   * money is owed on either, so the charge is not compared.
+   * money is owed on either, so the charge is not compared. A COMPLETED
+   * record of a send we failed (FIX-41) changes no status: the ledger keeps
+   * the row failed and notes the disagreement, as it does for a webhook.
    */
   private async recordSighting(
     t: TransferRow,
-    status: 'failed' | 'reversed',
+    status: 'failed' | 'reversed' | 'completed',
     found: ProviderTransaction,
     source: 'lookup' | 'history',
   ): Promise<void> {
@@ -1361,6 +1476,54 @@ export class WalletTransferService implements OnModuleInit {
         reversedAt: row.reversedAt ?? new Date(),
       },
     });
+    return this.reload(t);
+  }
+
+  /**
+   * A failed bank send whose sender's ledger row says the transfer completed
+   * (a webhook, or a provider read, saw a SUCCESS after the send was failed):
+   * the send is put in front of a person (FIX-41, SWEEP-MONEY F8). Nothing
+   * else moves, and the money is never sent again.
+   */
+  private async noteLateSuccess(t: TransferRow): Promise<TransferRow> {
+    if (t.status !== 'failed' || t.reviewSince) return t;
+    const row = await this.prisma.fintavaLedgerEntry.findFirst({
+      where: {
+        customerReference: t.customerReference,
+        direction: 'out',
+        walletKind: 'user',
+      },
+      select: { status: true, discrepancy: true },
+    });
+    const seen =
+      row?.status === 'completed' ||
+      (row?.status === 'failed' &&
+        LATE_SUCCESS_SIGHTING.test(row.discrepancy ?? ''));
+    return seen ? this.flagLateSuccess(t, 'webhook') : t;
+  }
+
+  /**
+   * Sets the review flag and the discrepancy on a failed send that was seen
+   * completed, and logs it once (the flag is set by one conditional write).
+   * It changes no balance and never sends again.
+   */
+  private async flagLateSuccess(
+    t: TransferRow,
+    source: string,
+  ): Promise<TransferRow> {
+    const note = `${this.provider.label} shows this send completed after it was failed (${source})`;
+    const flagged = await this.prisma.walletTransfer.updateMany({
+      where: { id: t.id, status: 'failed', reviewSince: null },
+      data: {
+        reviewSince: new Date(),
+        discrepancy: (joinNotes(t.discrepancy, note) ?? note).slice(0, 1000),
+      },
+    });
+    if (flagged.count > 0) {
+      this.logger.warn(
+        `send ${t.id}: ${note}; it is held for review and nothing is sent again`,
+      );
+    }
     return this.reload(t);
   }
 
