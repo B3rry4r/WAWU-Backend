@@ -17,7 +17,10 @@ import { CreatorAccountGuard } from './guards/creator-account-guard';
 import { PaidDmService } from './paid-dm.service';
 import { PaidDmPauseService } from './paid-dm-pause.service';
 import { PaidDmSettingsService } from './paid-dm-settings.service';
-import { UpdatePaidDmSettingsDto } from './dto/paid-dm-settings.dto';
+import {
+  PaidDmEarnQueryDto,
+  UpdatePaidDmSettingsDto,
+} from './dto/paid-dm-settings.dto';
 import {
   PaidDmPageQueryDto,
   PaidDmReplyDto,
@@ -27,6 +30,7 @@ import type {
   PaidDmAvailability,
   PaidDmQuestion,
   PaidDmQueuePage,
+  PaidDmEarn,
   PaidDmSettings,
   PaidDmStanding,
   PaidDmThreadDetail,
@@ -77,6 +81,22 @@ export class PaidDmController {
   @UseGuards(CreatorAccountGuard)
   getSettings(@CurrentUser() user: WawuJwtClaims): Promise<PaidDmSettings> {
     return this.settings.get(user.sub);
+  }
+
+  /** What the creator keeps of one message at a price they are typing (I21, R-21). Read only; saves nothing. */
+  @Get('settings/earn')
+  @ApiResponse({
+    status: 400,
+    description:
+      'The price is missing, not an integer, outside the bounds, or not a whole number of naira.',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'The caller is not a creator account.',
+  })
+  @UseGuards(CreatorAccountGuard)
+  earn(@Query() query: PaidDmEarnQueryDto): PaidDmEarn {
+    return this.settings.earnAt(query.priceKobo);
   }
 
   /** Saves the creator's paid message settings. Refused while paid messages are paused (R-13). */

@@ -304,6 +304,100 @@ describe('Paid message settings (contract, INBOX-12)', () => {
     });
   });
 
+  describe('what the creator keeps at a typed price (R-21)', () => {
+    type Earn = {
+      priceKobo: number;
+      creatorSharePct: number;
+      earnPerMessageKobo: number;
+    };
+    const earn = (who: Person, query: string) =>
+      as(who).get(`/paid-dm/settings/earn${query}`);
+
+    it('401s with no token and 403s a plain account', async () => {
+      await http().get('/paid-dm/settings/earn?priceKobo=100000').expect(401);
+      await earn(plain, '?priceKobo=100000').expect(403);
+    });
+
+    it('answers with the share and what the creator keeps, in integer kobo', async () => {
+      const c = await creator('Earn');
+      // Whole naira at 85% are always whole kobo; the floor only guards a share that is not 85.
+      const cases: Array<[number, number]> = [
+        [5_000, 4_250],
+        [5_100, 4_335],
+        [10_000, 8_500],
+        [150_000, 127_500],
+        [250_000, 212_500],
+        [1_000_000_000, 850_000_000],
+      ];
+      for (const [priceKobo, earnPerMessageKobo] of cases) {
+        const res = await earn(c, `?priceKobo=${priceKobo}`).expect(200);
+        expect(data<Earn>(res)).toEqual({
+          priceKobo,
+          creatorSharePct: 85,
+          earnPerMessageKobo,
+        });
+        expect(Number.isInteger(data<Earn>(res).earnPerMessageKobo)).toBe(true);
+      }
+    });
+
+    it('gives the same figure the saved settings give for the same price', async () => {
+      const c = await creator('EarnSame');
+      for (const priceKobo of [5_100, 9_900, 123_400, 777_700]) {
+        await as(c)
+          .put('/paid-dm/settings', { enabled: false, priceKobo })
+          .expect(200);
+        const read = data<Earn>(await earn(c, `?priceKobo=${priceKobo}`));
+        const saved = await settings(c);
+        expect(read.earnPerMessageKobo).toBe(saved.earnPerMessageKobo);
+        expect(read.creatorSharePct).toBe(saved.creatorSharePct);
+      }
+    });
+
+    it('refuses a price the save would refuse, and writes nothing', async () => {
+      const c = await creator('EarnBad', { dmEnabled: true, dmPrice: 1500 });
+      const before = await stored(c);
+      for (const query of [
+        '',
+        '?priceKobo=',
+        '?priceKobo=abc',
+        '?priceKobo=1.5',
+        '?priceKobo=150050',
+        '?priceKobo=4900',
+        '?priceKobo=0',
+        '?priceKobo=-100',
+        '?priceKobo=1000000100',
+        '?priceKobo=100000&priceKobo=200000',
+        '?price=100000',
+        '?priceKobo=100000&extra=1',
+      ]) {
+        await earn(c, query).expect(400);
+      }
+      expect(await stored(c)).toEqual(before);
+    });
+
+    it('is the same for a creator with no row, and does not create one', async () => {
+      const c = await creator('EarnNoRow');
+      const res = await earn(c, '?priceKobo=100000').expect(200);
+      expect(data<Earn>(res).earnPerMessageKobo).toBe(85_000);
+      expect(
+        await prisma.creatorState.findUnique({ where: { wawuUserId: c.sub } }),
+      ).toBeNull();
+    });
+
+    it('still answers while paid messages are paused: it only reads', async () => {
+      const c = await creator('EarnPaused', { dmEnabled: true, dmPrice: 1500 });
+      await prisma.creatorNoResponseTracker.create({
+        data: {
+          creatorWawuId: c.sub,
+          penaltyState: 'disabled_7d',
+          noResponseRatePct: 34,
+          dmDisabledUntil: new Date(Date.now() + 3 * DAY),
+        },
+      });
+      await earn(c, '?priceKobo=100000').expect(200);
+    });
+  });
+
   describe('the warning (I22)', () => {
     it('says how many of the last questions were missed, and warns from 20%', async () => {
       const c = await creator('Warned', { dmEnabled: true, dmPrice: 1500 });
@@ -397,6 +491,62 @@ describe('Paid message settings (contract, INBOX-12)', () => {
         dmPrice: 1500,
         dmResponseHours: 72,
       });
+    });
+
+    it('refuses null for every field and leaves the row as it was, where a field left out keeps its saved value', async () => {
+      const c = await creator('Nulls', {
+        dmEnabled: true,
+        dmPrice: 1500,
+        dmResponseHours: 72,
+      });
+      const before = await stored(c);
+      const body = { enabled: false, priceKobo: 100_000, responseHours: 48 };
+      for (const field of Object.keys(body)) {
+        const res = await as(c)
+          .put('/paid-dm/settings', { ...body, [field]: null })
+          .expect(400);
+        expect(JSON.stringify(res.body)).toContain(field);
+      }
+      // null by itself, on a creator who is on 150,000 kobo, saves nothing.
+      await as(c)
+        .put('/paid-dm/settings', { enabled: true, priceKobo: null })
+        .expect(400);
+      await as(c)
+        .put('/paid-dm/settings', { enabled: null, priceKobo: 100_000 })
+        .expect(400);
+      expect(await stored(c)).toEqual(before);
+      expect((await settings(c)).priceKobo).toBe(150_000);
+      // Left out is still fine, and keeps what was saved.
+      await as(c)
+        .put('/paid-dm/settings', { enabled: false, responseHours: 48 })
+        .expect(200);
+      expect(await stored(c)).toMatchObject({
+        dmEnabled: false,
+        dmPrice: 1500,
+        dmResponseHours: 48,
+      });
+      await as(c).put('/paid-dm/settings', { enabled: true }).expect(200);
+      expect(await stored(c)).toMatchObject({
+        dmEnabled: true,
+        dmPrice: 1500,
+        dmResponseHours: 48,
+      });
+    });
+
+    it('does not let a null price past the floor or the set-a-price guard, and writes no row', async () => {
+      const c = await creator('NullFresh');
+      for (const body of [
+        { enabled: true, priceKobo: null },
+        { enabled: false, priceKobo: null },
+        { enabled: true, responseHours: null },
+      ]) {
+        await as(c).put('/paid-dm/settings', body).expect(400);
+      }
+      expect(
+        await prisma.creatorState.findUnique({
+          where: { wawuUserId: c.sub },
+        }),
+      ).toBeNull();
     });
 
     it('turning off needs no price', async () => {

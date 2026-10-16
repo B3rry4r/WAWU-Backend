@@ -167,3 +167,17 @@ export interface PaidDmSettings {
   /** Warned, paused and when paid messages come back (I22, I23). */
   standing: PaidDmStanding;
 }
+
+/**
+ * GET /paid-dm/settings/earn: what a creator keeps of one message at a price
+ * they are typing, worked out by the Hub with the same share and rounding as
+ * the saved settings (R-21: the screen never multiplies or divides money).
+ */
+export interface PaidDmEarn {
+  /** The price asked about, in kobo, as sent. */
+  priceKobo: number;
+  /** The share of each message the creator keeps, in whole percent (R-5: 85). */
+  creatorSharePct: number;
+  /** What the creator keeps of one message at that price, in kobo, rounded down. */
+  earnPerMessageKobo: number;
+}

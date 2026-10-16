@@ -11,7 +11,7 @@ import {
   PAID_MESSAGES_PAUSED,
   PaidDmPauseService,
 } from './paid-dm-pause.service';
-import type { PaidDmSettings } from './paid-dm-view.type';
+import type { PaidDmEarn, PaidDmSettings } from './paid-dm-view.type';
 
 const KOBO = 100;
 /** What a creator who has never configured anything starts with (the same as `GET /creator/state`). */
@@ -126,6 +126,35 @@ export class PaidDmSettingsService {
     );
   }
 
+  /**
+   * What a creator keeps of one message at a price (R-21: the Hub decides the
+   * figure the screen shows while the creator types). The price is checked
+   * like the save's: whole naira, and the same share and rounding as `view`.
+   */
+  earnAt(priceKobo: number): PaidDmEarn {
+    if (priceKobo % KOBO !== 0) {
+      throw new BadRequestException(
+        'The price must be a whole number of naira.',
+      );
+    }
+    const creatorSharePct = this.sharePct();
+    return {
+      priceKobo,
+      creatorSharePct,
+      earnPerMessageKobo: this.earnOf(priceKobo, creatorSharePct),
+    };
+  }
+
+  /** The creator's share in whole percent, from the commission config (R-5). */
+  private sharePct(): number {
+    return Math.round((1 - commissionRate()) * 100);
+  }
+
+  /** What the creator keeps of `priceKobo` at `sharePct`, rounded down to the kobo. */
+  private earnOf(priceKobo: number, sharePct: number): number {
+    return Math.floor((priceKobo * sharePct) / 100);
+  }
+
   private async view(
     creatorWawuId: string,
     stored: {
@@ -138,16 +167,14 @@ export class PaidDmSettingsService {
     const cfg = paidDmSettingsConfig();
     const priceKobo =
       stored.priceNaira === null ? null : stored.priceNaira * KOBO;
-    const creatorSharePct = Math.round((1 - commissionRate()) * 100);
+    const creatorSharePct = this.sharePct();
     return {
       enabled: stored.enabled,
       priceKobo,
       responseHours: stored.responseHours,
       creatorSharePct,
       earnPerMessageKobo:
-        priceKobo === null
-          ? null
-          : Math.floor((priceKobo * creatorSharePct) / 100),
+        priceKobo === null ? null : this.earnOf(priceKobo, creatorSharePct),
       raiseToKobo:
         priceKobo === null
           ? null

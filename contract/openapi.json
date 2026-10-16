@@ -534,6 +534,46 @@
         ]
       }
     },
+    "/api/hub/paid-dm/settings/earn": {
+      "get": {
+        "operationId": "PaidDmController_earn",
+        "parameters": [
+          {
+            "name": "priceKobo",
+            "required": true,
+            "in": "query",
+            "description": "The price to price a message at, in kobo.",
+            "schema": {
+              "minimum": 5000,
+              "maximum": 1000000000,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmEarn"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The price is missing, not an integer, outside the bounds, or not a whole number of naira."
+          },
+          "403": {
+            "description": "The caller is not a creator account."
+          }
+        },
+        "summary": "What the creator keeps of one message at a price they are typing (I21, R-21). Read only; saves nothing.",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
     "/api/hub/paid-dm/creators/{wawuId}/availability": {
       "get": {
         "operationId": "PaidDmController_availability",
@@ -40186,6 +40226,25 @@
           "raiseToKobo",
           "options",
           "standing"
+        ]
+      },
+      "PaidDmEarn": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer"
+          },
+          "creatorSharePct": {
+            "type": "number"
+          },
+          "earnPerMessageKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceKobo",
+          "creatorSharePct",
+          "earnPerMessageKobo"
         ]
       },
       "PaidDmAvailability": {
