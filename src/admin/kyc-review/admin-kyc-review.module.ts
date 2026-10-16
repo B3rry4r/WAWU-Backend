@@ -8,6 +8,7 @@ import { StorageModule } from '../../storage/storage.module';
 import { KycSubmissionService } from '../../kyc-submission/kyc-submission.service';
 import { AdminKycReviewController } from './admin-kyc-review.controller';
 import { AdminKycReviewService } from './admin-kyc-review.service';
+import { PlansModule } from '../../plans/plans.module';
 
 /**
  * Admin KYC review — the queue that makes the existing, unreachable
@@ -36,7 +37,7 @@ import { AdminKycReviewService } from './admin-kyc-review.service';
  * it.
  */
 @Module({
-  imports: [AdminAuthModule, StorageModule, NotificationModule],
+  imports: [AdminAuthModule, StorageModule, NotificationModule, PlansModule],
   controllers: [AdminKycReviewController],
   providers: [AdminKycReviewService, KycSubmissionService],
 })

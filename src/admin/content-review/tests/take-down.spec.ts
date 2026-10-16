@@ -1,4 +1,8 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { AdminContentReviewService } from '../admin-content-review.service';
 import { AdminRole, AdminUserStatus } from '../../../../generated/prisma/enums';
 import type { AdminUserView } from '../../auth/admin-user-view.type';
@@ -23,7 +27,15 @@ type ContentRow = Record<string, unknown> & {
   creatorWawuId: string;
 };
 
-function buildService(seed: ContentRow) {
+/**
+ * `lostClaims`: how many of the take-down's writes lose a race. A lost write
+ * does what a second request would have done a moment before it: it moves the
+ * piece to the other of `pending` and `rejected` and changes no row, so the
+ * next pass reads a status that is not the one it just tried to change.
+ */
+function buildService(seed: ContentRow, opts: { lostClaims?: number } = {}) {
+  let lostClaims = opts.lostClaims ?? 0;
+  const calls = { reads: 0, claims: 0 };
   const content = new Map<string, ContentRow>([[seed.id, { ...seed }]]);
   const reviews: Record<string, unknown>[] = [];
   const creatorStates = new Map<
@@ -33,16 +45,36 @@ function buildService(seed: ContentRow) {
 
   const tx = {
     contentPiece: {
+      // The service reads the piece inside its transaction (TIER-02 round 3,
+      // D5), so the transaction double answers the read too.
+      findUnique: ({ where }: { where: { id: string } }) => {
+        calls.reads += 1;
+        const row = content.get(where.id);
+        return Promise.resolve(row ? { ...row } : null);
+      },
       updateMany: ({
         where,
         data,
       }: {
-        where: { id: string; status?: { not?: string } };
+        where: { id: string; status?: string | { not?: string } };
         data: Record<string, unknown>;
       }) => {
+        calls.claims += 1;
         const row = content.get(where.id);
         if (!row) return Promise.resolve({ count: 0 });
-        if (where.status?.not && row.status === where.status.not) {
+        if (lostClaims > 0) {
+          lostClaims -= 1;
+          row.status = row.status === 'pending' ? 'rejected' : 'pending';
+          return Promise.resolve({ count: 0 });
+        }
+        if (typeof where.status === 'string' && row.status !== where.status) {
+          return Promise.resolve({ count: 0 });
+        }
+        if (
+          typeof where.status === 'object' &&
+          where.status.not &&
+          row.status === where.status.not
+        ) {
           return Promise.resolve({ count: 0 });
         }
         Object.assign(row, data);
@@ -106,12 +138,17 @@ function buildService(seed: ContentRow) {
     ),
   };
 
+  // The creator context reads what the publishing gate allows (TIER-02); this
+  // spec is about the take-down, so nobody is allowed anything.
+  const publishing = { ofMany: () => Promise.resolve(new Map()) };
+
   const service = new AdminContentReviewService(
     prisma as never,
     notifications as never,
     storage as never,
+    publishing as never,
   );
-  return { service, content, creatorStates, reviews };
+  return { service, content, creatorStates, reviews, calls };
 }
 
 const ADMIN: AdminUserView = {
@@ -198,5 +235,87 @@ describe('admin content takedown', () => {
     await expect(
       service.takeDown('does-not-exist', { reason: 'Cleaning up.' }, ADMIN),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+});
+
+/**
+ * The give-up path (TIER-02 round 4, T9). A take-down whose write changes no
+ * row reads the piece again and acts on what is now true, up to three passes;
+ * a fourth lost race in a row is not a race but a fight over one piece, and
+ * staff are asked to look again with a 409 and nothing written. The verifier's
+ * live runs reached this path only under a status storm, so these pin it
+ * without luck: the double loses the write as many times as it is told to.
+ */
+describe('admin content takedown when the piece keeps changing', () => {
+  const SENTENCE =
+    'This piece changed while you were taking it down. Try again.';
+
+  it('gives up after three lost passes with a 409, a plain sentence and nothing written', async () => {
+    const { service, content, creatorStates, reviews, calls } = buildService(
+      row({ status: 'pending' }),
+      { lostClaims: 3 },
+    );
+
+    const err: unknown = await service
+      .takeDown('content-1', { reason: 'Cleaning up.' }, ADMIN)
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+    expect(err).toBeInstanceOf(ConflictException);
+    const conflict = err as ConflictException;
+    expect(conflict.getStatus()).toBe(409);
+    expect(conflict.message).toBe(SENTENCE);
+    expect(conflict.message).not.toMatch(/[—–]/);
+    // Exactly three passes: each read the piece once and tried to change it once.
+    expect(calls).toEqual({ reads: 3, claims: 3 });
+    // Nothing was written: no audit row, no place moved, the piece not removed.
+    expect(reviews).toHaveLength(0);
+    expect(creatorStates.get('creator-gone')?.slotsUsed).toBe(3);
+    expect(content.get('content-1')?.status).not.toBe('removed');
+  });
+
+  it('still succeeds on the third pass: two lost races are not given up on', async () => {
+    const { service, content, creatorStates, reviews, calls } = buildService(
+      row({ status: 'pending' }),
+      { lostClaims: 2 },
+    );
+
+    const result = await service.takeDown(
+      'content-1',
+      { reason: 'Cleaning up.' },
+      ADMIN,
+    );
+
+    expect(calls).toEqual({ reads: 3, claims: 3 });
+    expect(content.get('content-1')?.status).toBe('removed');
+    expect(result.content.status).toBe('removed');
+    // Two flips from pending leave it pending again; the audit row names the
+    // status the winning pass really changed, and the place comes back once.
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]).toMatchObject({
+      decision: 'removed',
+      previousStatus: 'pending',
+      newStatus: 'removed',
+      slotReturned: true,
+    });
+    expect(creatorStates.get('creator-gone')?.slotsUsed).toBe(2);
+  });
+
+  it('a piece that ends up rejected on the winning pass returns no place', async () => {
+    // One lost race flips pending to rejected; the next pass acts on that.
+    const { service, creatorStates, reviews } = buildService(
+      row({ status: 'pending' }),
+      { lostClaims: 1 },
+    );
+
+    await service.takeDown('content-1', { reason: 'Cleaning up.' }, ADMIN);
+
+    expect(reviews[0]).toMatchObject({
+      previousStatus: 'rejected',
+      slotReturned: false,
+    });
+    expect(creatorStates.get('creator-gone')?.slotsUsed).toBe(3);
   });
 });

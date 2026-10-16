@@ -9,12 +9,7 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
-import {
-  TICK_COLUMNS,
-  TICK_UPLOADS,
-  holdsTick,
-  uploadAllowanceFor,
-} from '../common/creator-allowance';
+import { PublishingGate } from '../plans/publishing-gate.service';
 import { RANKING, type ContentSort } from './ranking';
 import { Prisma } from '../../generated/prisma/client';
 import type { ContentPieceModel as ContentPieceRow } from '../../generated/prisma/models';
@@ -42,6 +37,13 @@ import type { MyContentCounts, MyContentItem } from './dto/my-content.view';
  * no tier left to vary on.
  */
 const STANDARD_COMMISSION_RATE = 0.15;
+
+/**
+ * How many times `delete` reads a piece again when its status moved between
+ * the read and the write. Two moves in a row (rejected, sent again, rejected
+ * again) inside one request's few milliseconds is not a case worth more.
+ */
+const DELETE_ATTEMPTS = 3;
 
 export interface FlutterwaveConfigResponse {
   flutterwaveConfig: {
@@ -102,6 +104,7 @@ export class ContentPieceService {
     private readonly notifications: NotificationService,
     private readonly storage: StorageService,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly gate: PublishingGate,
   ) {}
 
   /**
@@ -474,30 +477,54 @@ export class ContentPieceService {
    * piece already had its slot returned at review time (`occupiesASlot` in
    * `create()` never counted it); returning it again here would let one
    * upload free two slots.
+   *
+   * One piece gives its place back once, however many requests remove it
+   * (TIER-02 round 2, D1: six `DELETE`s sent together used to free six).
+   * The flip is conditional on the status this request read INSIDE the
+   * transaction, so of any number of requests only the one whose write
+   * changed the row decrements, and it decrements for the status it really
+   * changed from. A request that loses answers as a repeat delete does, 404.
+   * If the status moved between the read and the write (an admin rejected the
+   * piece, or the creator sent it again) the read is taken again.
    */
   async delete(id: string, requesterWawuId: string): Promise<void> {
-    const existing = await this.prisma.contentPiece.findUnique({
-      where: { id },
-    });
-    if (!existing || existing.status === 'removed') {
-      throw new NotFoundException('Content not found');
-    }
-    if (existing.creatorWawuId !== requesterWawuId) {
-      throw new ForbiddenException('You can only delete your own content.');
-    }
-
     await this.prisma.$transaction(async (tx) => {
-      await tx.contentPiece.update({
-        where: { id },
-        data: { status: 'removed' },
-      });
-
-      if (existing.status !== 'rejected') {
-        await tx.creatorState.updateMany({
-          where: { wawuUserId: existing.creatorWawuId, slotsUsed: { gt: 0 } },
-          data: { slotsUsed: { decrement: 1 } },
+      for (let attempt = 0; attempt < DELETE_ATTEMPTS; attempt += 1) {
+        const existing = await tx.contentPiece.findUnique({
+          where: { id },
+          select: { status: true, creatorWawuId: true },
         });
+        if (!existing || existing.status === 'removed') {
+          throw new NotFoundException('Content not found');
+        }
+        if (existing.creatorWawuId !== requesterWawuId) {
+          throw new ForbiddenException('You can only delete your own content.');
+        }
+
+        // Only a row still in the status just read is changed. That status
+        // is not `removed` (checked above), so a piece another request has
+        // already removed never matches and frees nothing.
+        const flipped = await tx.contentPiece.updateMany({
+          where: {
+            id,
+            creatorWawuId: requesterWawuId,
+            status: existing.status,
+          },
+          data: { status: 'removed' },
+        });
+        if (flipped.count === 0) continue;
+
+        if (existing.status !== 'rejected') {
+          await tx.creatorState.updateMany({
+            where: { wawuUserId: requesterWawuId, slotsUsed: { gt: 0 } },
+            data: { slotsUsed: { decrement: 1 } },
+          });
+        }
+        return;
       }
+      throw new ConflictException(
+        'This piece changed while you removed it. Try again.',
+      );
     });
   }
 
@@ -512,24 +539,42 @@ export class ContentPieceService {
     );
   }
 
+  /**
+   * The person's place counter, made if it is not there yet, so the claim
+   * that follows always finds a row. Insert-or-nothing and not an upsert:
+   * an upsert reads first and then inserts, so two first publishes sent
+   * together both missed the row and the loser answered 409 "That record
+   * already exists." to a publish that was fine (TIER-02 round 2, D2). Here
+   * the second request waits for the first to commit and does nothing.
+   */
+  private async ensureCreatorState(
+    tx: Prisma.TransactionClient,
+    wawuUserId: string,
+  ): Promise<void> {
+    await tx.creatorState.createMany({
+      data: [{ wawuUserId }],
+      skipDuplicates: true,
+    });
+  }
+
+  /**
+   * `inTransaction`, when given, runs inside the publish transaction before
+   * the place is claimed: a draft being published deletes itself there, so a
+   * second tap finds it gone and publishes nothing twice.
+   */
   async create(
     creatorWawuId: string,
     dto: CreateContentDto,
+    inTransaction?: (tx: Prisma.TransactionClient) => Promise<void>,
   ): Promise<ContentPieceResponse> {
-    // No payment gate on uploading (build brief B1). CreatorAccountGuard on
-    // POST /content has already proved this caller is a creator account, which
-    // is the only thing that was ever checked here besides the subscription.
-    //
-    // The cap comes from whether the creator holds a tick now (R-7): 5 without
-    // one, 25 with one. A free piece is allowed as the first upload or any
-    // other, and claims a slot exactly like a paid one (R-8).
-    const tickHeld = holdsTick(
-      await this.prisma.userProfile.findUnique({
-        where: { wawuUserId: creatorWawuId },
-        select: TICK_COLUMNS,
-      }),
-    );
-    const allowance = uploadAllowanceFor(tickHeld);
+    // Publishing needs a tier (R-43, TIER-02), or a verification tick that has
+    // not ended, and a free place for one more product. CreatorAccountGuard on
+    // POST /content has already proved this caller is a creator account.
+    // The gate refuses with 402 `tier_required` or `product_limit_reached`;
+    // the route's interceptor adds the offers. A free piece is allowed as the
+    // first upload or any other, and takes a place exactly like a paid one
+    // (R-8).
+    const allowance = await this.gate.assertRoomForProduct(creatorWawuId);
 
     // `previewAsset` is public by design — it is returned to every caller,
     // including anonymous ones on /content/public/featured. If it points at
@@ -538,7 +583,7 @@ export class ContentPieceService {
     // than silently shipping unlocked content.
     if (dto.accessType === 'paid' && dto.previewAsset === dto.fullAsset) {
       throw new BadRequestException(
-        'Paid content needs a separate free preview — previewAsset must not be the same file as fullAsset.',
+        'Paid content needs a separate free preview: previewAsset must not be the same file as fullAsset.',
       );
     }
     if (dto.accessType === 'free' && dto.price !== 0) {
@@ -556,6 +601,7 @@ export class ContentPieceService {
     // would let two uploads sent at the same moment both read "2 used" and
     // both be written.
     const created = await this.prisma.$transaction(async (tx) => {
+      if (inTransaction) await inTransaction(tx);
       // A REJECTED or REMOVED piece occupies no slot.
       //
       // POST /admin/content/:id/reject and DELETE /content/:id both give the
@@ -585,34 +631,23 @@ export class ContentPieceService {
       // The row is created on demand: it used to exist only once a creator had
       // paid for a subscription, so requiring one here would be the payment
       // gate under another name.
-      await tx.creatorState.upsert({
-        where: { wawuUserId: creatorWawuId },
-        create: { wawuUserId: creatorWawuId },
-        update: {},
-      });
+      await this.ensureCreatorState(tx, creatorWawuId);
 
       // Claimed conditionally, so the cap holds even against a concurrent
       // upload that read the same count.
       const claimed = await tx.creatorState.updateMany({
         where: {
           wawuUserId: creatorWawuId,
-          slotsUsed: { lt: allowance.total },
+          slotsUsed: { lt: allowance.productsAllowed },
         },
         data: { slotsUsed: { increment: 1 } },
       });
       if (claimed.count === 0) {
         // Only this NEW upload is refused. Pieces already published stay as
-        // they are, even when the account is above the cap (a tick that
-        // lapsed with more than 5 pieces live).
-        throw new ForbiddenException({
-          message: `You have used all ${allowance.total} of your upload slots. Remove an item to free one up.`,
-          reason: {
-            code: 'upload_limit_reached',
-            uploadsAllowed: allowance.total,
-            tickHeld,
-            uploadsWithTick: TICK_UPLOADS,
-          },
-        });
+        // they are, even when the account is above its allowance (a tier or
+        // a tick that ended with more pieces live). Throwing rolls the
+        // transaction back, so a draft deleted above comes back with it.
+        throw await this.gate.limitReachedFor(creatorWawuId);
       }
 
       return tx.contentPiece.create({
@@ -786,6 +821,11 @@ export class ContentPieceService {
         'A live piece cannot be edited. Take it down to change it.',
       );
     }
+    // An edit that carries a file is accepting a file (TIER-02): it needs a
+    // way to publish. It does not ask for room: the piece has its place
+    // already, or gets one when it is sent again (`resubmit`).
+    if (dto.previewAsset !== undefined || dto.fullAsset !== undefined)
+      await this.gate.assertMayUpload(creatorWawuId);
 
     const changes: Prisma.ContentPieceUpdateManyMutationInput = {};
     if (dto.title !== undefined) changes.title = dto.title;
@@ -856,8 +896,9 @@ export class ContentPieceService {
    *
    * A rejection handed the slot back (admin reject), so sending it again
    * claims one, conditionally and in the same transaction as the status flip,
-   * against the same allowance as an upload. At the cap it is refused with
-   * the same `upload_limit_reached` reason as POST /content. Pressing it
+   * against the same allowance as an upload (TIER-02): without a running
+   * tier or a held tick it is refused `tier_required`, and at the limit
+   * `product_limit_reached`, the same two answers as POST /content. Pressing it
    * twice is safe: a piece already `pending` is returned unchanged and no
    * second slot is claimed.
    */
@@ -870,13 +911,7 @@ export class ContentPieceService {
       throw new ConflictException('Only a rejected piece can be sent again.');
     }
 
-    const tickHeld = holdsTick(
-      await this.prisma.userProfile.findUnique({
-        where: { wawuUserId: creatorWawuId },
-        select: TICK_COLUMNS,
-      }),
-    );
-    const allowance = uploadAllowanceFor(tickHeld);
+    const allowance = await this.gate.assertRoomForProduct(creatorWawuId);
 
     await this.prisma.$transaction(async (tx) => {
       const flipped = await tx.contentPiece.updateMany({
@@ -887,29 +922,17 @@ export class ContentPieceService {
       if (flipped.count === 0) return;
       await this.stampUpdated(tx, id);
 
-      await tx.creatorState.upsert({
-        where: { wawuUserId: creatorWawuId },
-        create: { wawuUserId: creatorWawuId },
-        update: {},
-      });
+      await this.ensureCreatorState(tx, creatorWawuId);
       const claimed = await tx.creatorState.updateMany({
         where: {
           wawuUserId: creatorWawuId,
-          slotsUsed: { lt: allowance.total },
+          slotsUsed: { lt: allowance.productsAllowed },
         },
         data: { slotsUsed: { increment: 1 } },
       });
       if (claimed.count === 0) {
         // Throwing rolls the status flip back with it.
-        throw new ForbiddenException({
-          message: `You have used all ${allowance.total} of your upload slots. Remove an item to free one up.`,
-          reason: {
-            code: 'upload_limit_reached',
-            uploadsAllowed: allowance.total,
-            tickHeld,
-            uploadsWithTick: TICK_UPLOADS,
-          },
-        });
+        throw await this.gate.limitReachedFor(creatorWawuId);
       }
     });
     return this.getMyPiece(id, creatorWawuId);
@@ -959,7 +982,7 @@ export class ContentPieceService {
     );
     if (content.accessType === 'free') {
       throw new BadRequestException(
-        'This content is free — no unlock required.',
+        'This content is free, so no unlock is required.',
       );
     }
     if (content.creatorWawuId === buyerWawuId) {

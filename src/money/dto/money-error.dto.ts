@@ -53,9 +53,13 @@ export class MoneyErrorReason {
   @ApiPropertyOptional({ type: 'integer' })
   shortfallKobo?: number;
 
-  /** daily_limit_exceeded: what is left of today's limit. */
+  /** daily_limit_exceeded, limit_reached: what is left of today's limit. */
   @ApiPropertyOptional({ type: 'integer' })
   remainingTodayKobo?: number;
+
+  /** limit_reached on the account's daily limit (WALLET-23): the limit itself, in kobo. */
+  @ApiPropertyOptional({ type: 'integer' })
+  limitKobo?: number;
 
   /** amount_out_of_range: the smallest amount accepted. */
   @ApiPropertyOptional({ type: 'integer' })
@@ -91,6 +95,22 @@ export class MoneyErrorReason {
   /** limit_reached: which limit the movement passes (NUV-07), WAWU's own or the provider's. */
   @ApiPropertyOptional({ enum: MONEY_LIMIT_NAMES })
   limit?: MoneyLimitName;
+
+  /** below_minimum: the fewest points one conversion to cash takes (POINTS-04). */
+  @ApiPropertyOptional({ type: 'integer' })
+  minimumPoints?: number;
+
+  /** below_minimum, insufficient_points: the points the person has now. */
+  @ApiPropertyOptional({ type: 'integer' })
+  balancePoints?: number;
+
+  /** insufficient_points: the points asked for. */
+  @ApiPropertyOptional({ type: 'integer' })
+  neededPoints?: number;
+
+  /** insufficient_points: neededPoints minus balancePoints. */
+  @ApiPropertyOptional({ type: 'integer' })
+  shortfallPoints?: number;
 }
 
 /** The body of every refused money request. */

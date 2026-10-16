@@ -1081,8 +1081,67 @@
                 }
               }
             }
+          },
+          "402": {
+            "description": "reason.code: tier_required, product_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
           }
         },
+        "tags": [
+          "Storage"
+        ]
+      }
+    },
+    "/api/hub/uploads/confirm": {
+      "post": {
+        "operationId": "StorageController_confirm",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "confirmed",
+                        "abandoned"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "status"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "POST /uploads/confirm: the app has finished sending the file it got a URL\nfor, taken or turned away by the storage host. The server asks the bucket\nand answers `confirmed` (the file is there and counts against the person's\nstorage), `pending` (it is not there yet and the URL could still be used,\nso nothing changes and the sweep settles it) or `abandoned` (it is not\nthere and the URL is spent, so the space it held goes back at once instead\nof when the sweep settles it). A file that lands after it was given up on\nand no longer fits the person's storage is removed and answers 413. The\napp's word decides nothing; only the person's own upload can be settled. A\nbucket that cannot be asked answers 503 and changes nothing.",
         "tags": [
           "Storage"
         ]
@@ -1129,6 +1188,72 @@
         "summary": "GET /uploads/allowance: the upload count and the storage this account\nmay use, what it has used, and both of R-7's levels (free and with a\ntick). Any signed-in account: an account with no CreatorState row has\nused 0 uploads.",
         "tags": [
           "Storage"
+        ]
+      }
+    },
+    "/api/hub/plans": {
+      "get": {
+        "operationId": "PlansController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlansView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The plan as the caller pays for it. Every amount is whole minor units of\n`currency` (kobo for NGN, cents for USD); one currency per answer.\n`no-store`: the answer is the caller's own (their currency).",
+        "tags": [
+          "Plans"
+        ]
+      }
+    },
+    "/api/hub/me/tier": {
+      "get": {
+        "operationId": "MeTierController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyTierView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "`none`, `active`, `ending` or `ended`, with what the tier gives.\n`no-store`: the answer is the caller's own.",
+        "tags": [
+          "MeTier"
+        ]
+      }
+    },
+    "/api/hub/me/points": {
+      "get": {
+        "operationId": "PointsController_mine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPointsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Balance, live lots with their end dates, the next end, the last 20 movements.",
+        "tags": [
+          "Points"
         ]
       }
     },
@@ -7722,8 +7847,19 @@
                 }
               }
             }
+          },
+          "402": {
+            "description": "reason.code: tier_required, product_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
           }
         },
+        "summary": "Publishes a piece. Needs a running tier or a tick that has not ended, and\na free place for one more product: otherwise 402 `tier_required` or\n`product_limit_reached` with the offers (TIER-02).",
         "tags": [
           "ContentPiece"
         ]
@@ -8020,9 +8156,19 @@
                 }
               }
             }
+          },
+          "402": {
+            "description": "reason.code: tier_required, product_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
           }
         },
-        "summary": "Edit the details or the file of a piece that is pending or rejected.",
+        "summary": "Edit the details or the file of a piece that is pending or rejected.\nSending a file needs a way to publish (402 `tier_required`, TIER-02).",
         "tags": [
           "ContentPiece"
         ]
@@ -8051,9 +8197,19 @@
                 }
               }
             }
+          },
+          "402": {
+            "description": "reason.code: tier_required, product_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
           }
         },
-        "summary": "Send a rejected piece for review again.",
+        "summary": "Send a rejected piece for review again. It takes a place like a new\npublish, so it answers the same 402s (TIER-02).",
         "tags": [
           "ContentPiece"
         ]
@@ -8922,6 +9078,201 @@
         ]
       }
     },
+    "/api/hub/product-drafts": {
+      "post": {
+        "operationId": "ProductDraftController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProductDraftDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductDraftView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Save a draft. Free: no tier is asked and no file is taken.",
+        "tags": [
+          "ProductDraft"
+        ]
+      },
+      "get": {
+        "operationId": "ProductDraftController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProductDraftView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "My drafts, newest first.",
+        "tags": [
+          "ProductDraft"
+        ]
+      }
+    },
+    "/api/hub/product-drafts/{id}": {
+      "get": {
+        "operationId": "ProductDraftController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductDraftView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProductDraft"
+        ]
+      },
+      "patch": {
+        "operationId": "ProductDraftController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProductDraftDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductDraftView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "ProductDraft"
+        ]
+      },
+      "delete": {
+        "operationId": "ProductDraftController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "ProductDraft"
+        ]
+      }
+    },
+    "/api/hub/product-drafts/{id}/publish": {
+      "post": {
+        "operationId": "ProductDraftController_publish",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishProductDraftDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentPieceResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: tier_required, product_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Publish a draft with its two files. Needs a running tier or a tick that\nhas not ended, and a free place: otherwise 402 `tier_required` or\n`product_limit_reached` with the offers. The piece is created waiting\nfor review, exactly as POST /content creates it, and the draft is gone.",
+        "tags": [
+          "ProductDraft"
+        ]
+      }
+    },
     "/api/hub/credits/purchase": {
       "post": {
         "operationId": "CreditPurchaseController_createPurchase",
@@ -9032,9 +9383,6 @@
                       "id": {
                         "type": "string"
                       },
-                      "status": {
-                        "type": "string"
-                      },
                       "kind": {
                         "type": "string",
                         "enum": [
@@ -9049,6 +9397,9 @@
                         ]
                       },
                       "title": {
+                        "type": "string"
+                      },
+                      "status": {
                         "type": "string"
                       },
                       "applicantWawuId": {
@@ -9225,9 +9576,9 @@
                     },
                     "required": [
                       "id",
-                      "status",
                       "kind",
                       "title",
+                      "status",
                       "applicantWawuId",
                       "reference",
                       "appliedDate",
@@ -9273,9 +9624,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -9290,6 +9638,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -9466,9 +9817,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -9573,9 +9924,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -9590,6 +9938,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -9766,9 +10117,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -9814,9 +10165,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -9831,6 +10179,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10007,9 +10358,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10056,9 +10407,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10073,6 +10421,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10249,9 +10600,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10297,9 +10648,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10314,6 +10662,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10490,9 +10841,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10669,9 +11020,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10686,6 +11034,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -10862,9 +11213,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -10920,9 +11271,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -10937,6 +11285,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -11113,9 +11464,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -11170,9 +11521,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -11187,6 +11535,9 @@
                       ]
                     },
                     "title": {
+                      "type": "string"
+                    },
+                    "status": {
                       "type": "string"
                     },
                     "applicantWawuId": {
@@ -11363,9 +11714,9 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "kind",
                     "title",
+                    "status",
                     "applicantWawuId",
                     "reference",
                     "appliedDate",
@@ -12079,6 +12430,10 @@
                           "id": {
                             "type": "string"
                           },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
@@ -12088,10 +12443,6 @@
                               "paid",
                               "cancelled"
                             ]
-                          },
-                          "createdAt": {
-                            "type": "string",
-                            "format": "date-time"
                           },
                           "flutterwaveTxRef": {
                             "type": "string"
@@ -12163,8 +12514,8 @@
                         "required": [
                           "items",
                           "id",
-                          "status",
                           "createdAt",
+                          "status",
                           "flutterwaveTxRef",
                           "flutterwaveTxId",
                           "refundError",
@@ -12246,6 +12597,10 @@
                     "id": {
                       "type": "string"
                     },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
@@ -12255,10 +12610,6 @@
                         "paid",
                         "cancelled"
                       ]
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
                     },
                     "flutterwaveTxRef": {
                       "type": "string"
@@ -12329,8 +12680,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "createdAt",
+                    "status",
                     "flutterwaveTxRef",
                     "flutterwaveTxId",
                     "refundError",
@@ -16044,7 +16395,8 @@
                 "event_ticket",
                 "bill",
                 "tier",
-                "tier_bump"
+                "tier_bump",
+                "points_cash_out"
               ]
             }
           },
@@ -19696,11 +20048,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "nullable": true
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -19711,6 +20058,11 @@
                     },
                     "title": {
                       "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
                     },
                     "updated": {
                       "type": "string",
@@ -19880,9 +20232,9 @@
                   },
                   "required": [
                     "id",
-                    "updatedAt",
                     "kind",
                     "title",
+                    "updatedAt",
                     "updated",
                     "country",
                     "subtitle",
@@ -19937,11 +20289,6 @@
                     "id": {
                       "type": "string"
                     },
-                    "updatedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "nullable": true
-                    },
                     "kind": {
                       "type": "string",
                       "enum": [
@@ -19952,6 +20299,11 @@
                     },
                     "title": {
                       "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time",
+                      "nullable": true
                     },
                     "updated": {
                       "type": "string",
@@ -20121,9 +20473,9 @@
                   },
                   "required": [
                     "id",
-                    "updatedAt",
                     "kind",
                     "title",
+                    "updatedAt",
                     "updated",
                     "country",
                     "subtitle",
@@ -20610,16 +20962,16 @@
                           "id": {
                             "type": "string"
                           },
+                          "imageUrl": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "status": {
                             "type": "string",
                             "enum": [
                               "live",
                               "coming"
                             ]
-                          },
-                          "imageUrl": {
-                            "type": "string",
-                            "nullable": true
                           },
                           "slug": {
                             "type": "string"
@@ -20800,8 +21152,8 @@
                         "required": [
                           "name",
                           "id",
-                          "status",
                           "imageUrl",
+                          "status",
                           "slug",
                           "category",
                           "featured",
@@ -20835,16 +21187,16 @@
                               "id": {
                                 "type": "string"
                               },
+                              "imageUrl": {
+                                "type": "string",
+                                "nullable": true
+                              },
                               "status": {
                                 "type": "string",
                                 "enum": [
                                   "live",
                                   "coming"
                                 ]
-                              },
-                              "imageUrl": {
-                                "type": "string",
-                                "nullable": true
                               },
                               "slug": {
                                 "type": "string"
@@ -21012,8 +21364,8 @@
                             "required": [
                               "name",
                               "id",
-                              "status",
                               "imageUrl",
+                              "status",
                               "slug",
                               "category",
                               "featured",
@@ -21089,16 +21441,16 @@
                     "id": {
                       "type": "string"
                     },
+                    "imageUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "status": {
                       "type": "string",
                       "enum": [
                         "live",
                         "coming"
                       ]
-                    },
-                    "imageUrl": {
-                      "type": "string",
-                      "nullable": true
                     },
                     "slug": {
                       "type": "string"
@@ -21302,8 +21654,8 @@
                   "required": [
                     "name",
                     "id",
-                    "status",
                     "imageUrl",
+                    "status",
                     "slug",
                     "category",
                     "featured",
@@ -21413,13 +21765,13 @@
                     "id": {
                       "type": "string"
                     },
+                    "title": {
+                      "type": "string"
+                    },
                     "updatedAt": {
                       "type": "string",
                       "format": "date-time",
                       "nullable": true
-                    },
-                    "title": {
-                      "type": "string"
                     },
                     "description": {
                       "type": "string"
@@ -21723,8 +22075,8 @@
                   },
                   "required": [
                     "id",
-                    "updatedAt",
                     "title",
+                    "updatedAt",
                     "description",
                     "format",
                     "fileUrl",
@@ -24047,12 +24399,12 @@
                     "id": {
                       "type": "string"
                     },
-                    "status": {
-                      "type": "string"
-                    },
                     "createdAt": {
                       "type": "string",
                       "format": "date-time"
+                    },
+                    "status": {
+                      "type": "string"
                     },
                     "topics": {
                       "type": "array",
@@ -24075,8 +24427,8 @@
                   },
                   "required": [
                     "id",
-                    "status",
                     "createdAt",
+                    "status",
                     "topics",
                     "mentorId",
                     "requesterWawuId",
@@ -28560,72 +28912,6 @@
         ]
       }
     },
-    "/api/hub/me/points": {
-      "get": {
-        "operationId": "PointsController_mine",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MyPointsView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Balance, live lots with their end dates, the next end, the last 20 movements.",
-        "tags": [
-          "Points"
-        ]
-      }
-    },
-    "/api/hub/plans": {
-      "get": {
-        "operationId": "PlansController_get",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PlansView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "The plan as the caller pays for it. Every amount is whole minor units of\n`currency` (kobo for NGN, cents for USD); one currency per answer.\n`no-store`: the answer is the caller's own (their currency).",
-        "tags": [
-          "Plans"
-        ]
-      }
-    },
-    "/api/hub/me/tier": {
-      "get": {
-        "operationId": "MeTierController_get",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MyTierView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "`none`, `active`, `ending` or `ended`, with what the tier gives.\n`no-store`: the answer is the caller's own.",
-        "tags": [
-          "MeTier"
-        ]
-      }
-    },
     "/api/hub/plans/purchases/quote": {
       "get": {
         "operationId": "PlanPurchasesController_quote",
@@ -28919,6 +29205,262 @@
         "tags": [
           "PlanPurchases"
         ]
+      }
+    },
+    "/api/hub/points/convert/quote": {
+      "get": {
+        "operationId": "PointsConvertController_quote",
+        "parameters": [
+          {
+            "name": "points",
+            "required": false,
+            "in": "query",
+            "description": "The points to quote. Left out, the quote is for the whole balance.\nDigits only: `1e3` or `1,000` is a 400, never read as some other number.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 2147483647,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsConvertQuoteView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "PT6 before the PIN: the rate (1,000 points for so many kobo, from the\nconfig), the fewest points one conversion takes, the balance, and the\ncash for `points` (the whole balance when none is asked). WAWU pays the\nprovider's charge, so the person pays nothing to convert (R-31).\n`canConvert` and `blockedBy` say when the points asked cannot be\nconverted as they are (below the minimum, more than the balance, more\nthan one move carries), with the figures, instead of refusing. Nothing is\nheld. A person billed in dollars is `409 currency_not_supported`; with no\nwallet, `409 wallet_not_open`.",
+        "tags": [
+          "PointsConvert"
+        ],
+        "x-wawu-built-by": "POINTS-04"
+      }
+    },
+    "/api/hub/points/convert": {
+      "post": {
+        "operationId": "PointsConvertController_convertPoints",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointsConvertDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsConversionView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds, insufficient_points",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, currency_not_supported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: below_minimum",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Turns points into cash in the wallet, once. The cash is worked out at the\nconfig's rate and rounded down; the points are held (soonest-ending lots\nfirst) and the cash is paid from WAWU's own account into the person's\nwallet; the points are spent only when the provider has confirmed it, and\ngo back to their lots if it did not move. Answers 201 with the\nconversion: `completed`, `pending` while the provider has not confirmed\nthe cash yet (the points stay on hold; poll `GET /points/convert/{id}`;\nit is never sent again), or `failed` when the cash did not move and the\npoints are back. The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN.\nBefore the PIN, and changing nothing: `422 below_minimum`, `402\ninsufficient_points`, `400 amount_out_of_range` (more than one move\ncarries), `409 currency_not_supported`, `409 wallet_not_open`, `503\nfees_not_set`.",
+        "tags": [
+          "PointsConvert"
+        ],
+        "x-wawu-built-by": "POINTS-04"
+      }
+    },
+    "/api/hub/points/convert/{id}": {
+      "get": {
+        "operationId": "PointsConvertController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsConversionView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One conversion as it stands now: what the app polls after `pending`.\nOnly its owner reads it; another person's conversion and an id nobody\nholds are the same `404 not_found`. It reads our own records only and\nnever asks the provider.",
+        "tags": [
+          "PointsConvert"
+        ],
+        "x-wawu-built-by": "POINTS-04"
       }
     },
     "/api/hub/waitlist/offers/current": {
@@ -30426,6 +30968,113 @@
           "contentLength"
         ]
       },
+      "TierGateReasonDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "enum": [
+              "tier_required",
+              "product_limit_reached"
+            ],
+            "type": "string"
+          },
+          "tierState": {
+            "description": "The person's tier: `none` (never had one), `active`, `ending` or `ended`.\n`tier_required` answers `none` or `ended`.",
+            "enum": [
+              "none",
+              "active",
+              "ending",
+              "ended"
+            ],
+            "type": "string"
+          },
+          "productsUsed": {
+            "type": "integer",
+            "description": "Products published now."
+          },
+          "productsAllowed": {
+            "type": "integer",
+            "description": "Products they may have published at once (0 when nothing allows publishing)."
+          },
+          "currency": {
+            "description": "The currency of every amount in `tiers` and `extraProducts`. The offers\n(`currency`, `tiers`, `extraProducts`) are always there; they are absent\nonly when the Hub could not read the plan at that moment, and the app\nthen shows `message` alone.",
+            "enum": [
+              "NGN",
+              "USD"
+            ],
+            "type": "string"
+          },
+          "tiers": {
+            "type": "array",
+            "description": "The tiers that would let the person publish another, in both refusals:\nonce bought they leave more places than the person has products\npublished now (the extras they hold carry over). For `tier_required`\nthat is every tier for someone with nothing published, and only the big\nenough ones for someone who still has products up after a tick or tier\nended. For `product_limit_reached` it is the tiers above the one they\nhold. The list is empty when no tier does (they hold the top one, or they\nhave more published than any tier allows); `message` then says products\nmust come down first.",
+            "items": {
+              "$ref": "#/components/schemas/PlanTierView"
+            }
+          },
+          "extraProducts": {
+            "description": "The extra products they can buy now, or null when they cannot: no running\ntier, or buying them would still leave fewer places than products\npublished.",
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanExtraProductsView"
+              }
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence the app may show as it is. No em-dash."
+          }
+        },
+        "required": [
+          "code",
+          "tierState",
+          "productsUsed",
+          "productsAllowed",
+          "message"
+        ]
+      },
+      "TierGateErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "integer",
+            "description": "402.",
+            "example": 402
+          },
+          "data": {
+            "description": "Always null on an error.",
+            "type": "object",
+            "nullable": true,
+            "example": null
+          },
+          "reason": {
+            "$ref": "#/components/schemas/TierGateReasonDto"
+          },
+          "message": {
+            "type": "string",
+            "description": "Same as reason.message."
+          }
+        },
+        "required": [
+          "statusCode",
+          "data",
+          "reason",
+          "message"
+        ]
+      },
+      "ConfirmUploadDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The `key` or the `fileUrl` POST /uploads/presign returned for this file.",
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "key"
+        ]
+      },
       "ValidateCustomerDto": {
         "type": "object",
         "properties": {
@@ -31306,6 +31955,190 @@
           }
         }
       },
+      "CreateProductDraftDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "\\S"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "agriculture_food",
+              "trade_commerce",
+              "business_entrepreneurship",
+              "finance",
+              "technology",
+              "education",
+              "healthcare",
+              "employment",
+              "entertainment_creative",
+              "beauty",
+              "family_lifestyle",
+              "culture_heritage",
+              "religion_faith",
+              "travel_tourism",
+              "real_estate",
+              "transport_logistics",
+              "manufacturing",
+              "energy_utilities",
+              "media_communications",
+              "professional_services",
+              "legal_services",
+              "insurance_pensions",
+              "sports_fitness",
+              "government_public",
+              "social_impact"
+            ]
+          },
+          "specializations": {
+            "description": "At most three, as on POST /content.",
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "description": "At most twenty, as on POST /content.",
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "price": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000000
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "UpdateProductDraftDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "\\S"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 5000
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "agriculture_food",
+              "trade_commerce",
+              "business_entrepreneurship",
+              "finance",
+              "technology",
+              "education",
+              "healthcare",
+              "employment",
+              "entertainment_creative",
+              "beauty",
+              "family_lifestyle",
+              "culture_heritage",
+              "religion_faith",
+              "travel_tourism",
+              "real_estate",
+              "transport_logistics",
+              "manufacturing",
+              "energy_utilities",
+              "media_communications",
+              "professional_services",
+              "legal_services",
+              "insurance_pensions",
+              "sports_fitness",
+              "government_public",
+              "social_impact"
+            ]
+          },
+          "specializations": {
+            "maxItems": 3,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ]
+          },
+          "price": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000000
+          }
+        }
+      },
+      "PublishProductDraftDto": {
+        "type": "object",
+        "properties": {
+          "previewAsset": {
+            "type": "string",
+            "format": "uri"
+          },
+          "fullAsset": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "previewAsset",
+          "fullAsset"
+        ]
+      },
       "CreateCreditPurchaseDto": {
         "type": "object",
         "properties": {
@@ -31950,7 +32783,10 @@
               "limit_reached",
               "identity_under_review",
               "step_not_used",
-              "open_address_limited"
+              "open_address_limited",
+              "below_minimum",
+              "insufficient_points",
+              "currency_not_supported"
             ],
             "type": "string"
           },
@@ -31968,7 +32804,11 @@
           },
           "remainingTodayKobo": {
             "type": "integer",
-            "description": "daily_limit_exceeded: what is left of today's limit."
+            "description": "daily_limit_exceeded, limit_reached: what is left of today's limit."
+          },
+          "limitKobo": {
+            "type": "integer",
+            "description": "limit_reached on the account's daily limit (WALLET-23): the limit itself, in kobo."
           },
           "minimumKobo": {
             "type": "integer",
@@ -32011,6 +32851,22 @@
               "monthly"
             ],
             "type": "string"
+          },
+          "minimumPoints": {
+            "type": "integer",
+            "description": "below_minimum: the fewest points one conversion to cash takes (POINTS-04)."
+          },
+          "balancePoints": {
+            "type": "integer",
+            "description": "below_minimum, insufficient_points: the points the person has now."
+          },
+          "neededPoints": {
+            "type": "integer",
+            "description": "insufficient_points: the points asked for."
+          },
+          "shortfallPoints": {
+            "type": "integer",
+            "description": "insufficient_points: neededPoints minus balancePoints."
           },
           "message": {
             "type": "string",
@@ -32411,7 +33267,8 @@
               "event_ticket",
               "bill",
               "tier",
-              "tier_bump"
+              "tier_bump",
+              "points_cash_out"
             ],
             "type": "string"
           },
@@ -34605,6 +35462,19 @@
           "quoteToken"
         ]
       },
+      "PointsConvertDto": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          }
+        },
+        "required": [
+          "points"
+        ]
+      },
       "CreateWaitlistRegistrationDto": {
         "type": "object",
         "properties": {
@@ -35101,7 +35971,8 @@
               "paid_dm",
               "event_ticket",
               "tier",
-              "tier_bump"
+              "tier_bump",
+              "points_cash_out"
             ]
           },
           "targetId": {
@@ -35395,6 +36266,138 @@
           "fileName",
           "rowCount",
           "sentAt"
+        ]
+      },
+      "PaginationMeta": {
+        "type": "object",
+        "properties": {
+          "currentPage": {
+            "type": "number"
+          },
+          "nextPage": {
+            "type": "number",
+            "nullable": true
+          },
+          "perPage": {
+            "type": "number"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "currentPage",
+          "nextPage",
+          "perPage",
+          "total"
+        ]
+      },
+      "NotificationsResponse": {
+        "type": "object",
+        "properties": {
+          "unreadCount": {
+            "type": "number"
+          },
+          "items": {
+            "type": "object",
+            "properties": {
+              "statusCode": {
+                "type": "number",
+                "enum": [
+                  200
+                ]
+              },
+              "message": {
+                "type": "string"
+              },
+              "data": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "userWawuId": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "tone": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "creditsCount": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "actionLabel": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "read": {
+                      "type": "boolean"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "imageUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "actionHref": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "campaignId": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "userWawuId",
+                    "kind",
+                    "title",
+                    "body",
+                    "tone",
+                    "amount",
+                    "creditsCount",
+                    "actionLabel",
+                    "read",
+                    "createdAt",
+                    "imageUrl",
+                    "actionHref",
+                    "campaignId"
+                  ]
+                }
+              },
+              "pagination": {
+                "$ref": "#/components/schemas/PaginationMeta"
+              }
+            },
+            "required": [
+              "statusCode",
+              "message",
+              "data",
+              "pagination"
+            ]
+          }
+        },
+        "required": [
+          "unreadCount",
+          "items"
         ]
       },
       "FeeQuotePartView": {
@@ -36183,7 +37186,8 @@
               "paid_dm",
               "event_ticket",
               "tier",
-              "tier_bump"
+              "tier_bump",
+              "points_cash_out"
             ]
           },
           "status": {
@@ -36278,7 +37282,8 @@
               "paid_dm",
               "event_ticket",
               "tier",
-              "tier_bump"
+              "tier_bump",
+              "points_cash_out"
             ]
           },
           "targetId": {
@@ -36365,7 +37370,8 @@
               "paid_dm",
               "event_ticket",
               "tier",
-              "tier_bump"
+              "tier_bump",
+              "points_cash_out"
             ]
           },
           "targetId": {
@@ -36944,136 +37950,454 @@
           "expiresIn"
         ]
       },
-      "PaginationMeta": {
+      "PointNextExpiryView": {
         "type": "object",
         "properties": {
-          "currentPage": {
+          "points": {
             "type": "number"
           },
-          "nextPage": {
-            "type": "number",
-            "nullable": true
-          },
-          "perPage": {
-            "type": "number"
-          },
-          "total": {
-            "type": "number"
+          "expiresAt": {
+            "type": "string"
           }
         },
         "required": [
-          "currentPage",
-          "nextPage",
-          "perPage",
-          "total"
+          "points",
+          "expiresAt"
         ]
       },
-      "NotificationsResponse": {
+      "PointLotView": {
         "type": "object",
         "properties": {
-          "unreadCount": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
             "type": "number"
           },
-          "items": {
-            "type": "object",
-            "properties": {
-              "statusCode": {
-                "type": "number",
-                "enum": [
-                  200
-                ]
-              },
-              "message": {
-                "type": "string"
-              },
-              "data": {
-                "type": "array",
-                "items": {
-                  "type": "object",
-                  "properties": {
-                    "id": {
-                      "type": "string"
-                    },
-                    "userWawuId": {
-                      "type": "string"
-                    },
-                    "createdAt": {
-                      "type": "string",
-                      "format": "date-time"
-                    },
-                    "kind": {
-                      "type": "string"
-                    },
-                    "title": {
-                      "type": "string"
-                    },
-                    "body": {
-                      "type": "string"
-                    },
-                    "tone": {
-                      "type": "string"
-                    },
-                    "amount": {
-                      "type": "number",
-                      "nullable": true
-                    },
-                    "creditsCount": {
-                      "type": "number",
-                      "nullable": true
-                    },
-                    "actionLabel": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "read": {
-                      "type": "boolean"
-                    },
-                    "imageUrl": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "actionHref": {
-                      "type": "string",
-                      "nullable": true
-                    },
-                    "campaignId": {
-                      "type": "string",
-                      "nullable": true
-                    }
-                  },
-                  "required": [
-                    "id",
-                    "userWawuId",
-                    "createdAt",
-                    "kind",
-                    "title",
-                    "body",
-                    "tone",
-                    "amount",
-                    "creditsCount",
-                    "actionLabel",
-                    "read",
-                    "imageUrl",
-                    "actionHref",
-                    "campaignId"
-                  ]
-                }
-              },
-              "pagination": {
-                "$ref": "#/components/schemas/PaginationMeta"
+          "granted": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "tier_bonus",
+              "pack",
+              "bump",
+              "referral",
+              "shortfall",
+              "returned"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "granted",
+          "source",
+          "label",
+          "expiresAt"
+        ]
+      },
+      "PointMovementView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "hold",
+              "grant",
+              "release",
+              "expire"
+            ]
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "label",
+          "reason",
+          "pending",
+          "createdAt"
+        ]
+      },
+      "MyPointsView": {
+        "type": "object",
+        "properties": {
+          "balance": {
+            "type": "number"
+          },
+          "nextExpiry": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PointNextExpiryView"
               }
-            },
-            "required": [
-              "statusCode",
+            ],
+            "nullable": true
+          },
+          "lots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointLotView"
+            }
+          },
+          "lotCount": {
+            "type": "number"
+          },
+          "movements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PointMovementView"
+            }
+          }
+        },
+        "required": [
+          "balance",
+          "nextExpiry",
+          "lots",
+          "lotCount",
+          "movements"
+        ]
+      },
+      "PlanBadgeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "numbered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "numbered"
+        ]
+      },
+      "MyTierSummaryView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanBadgeView"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "badge"
+        ]
+      },
+      "PlanEventPassView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "MyTierView": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "none",
+              "active",
+              "ending",
+              "ended"
+            ]
+          },
+          "tier": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MyTierSummaryView"
+              }
+            ],
+            "nullable": true
+          },
+          "activeFrom": {
+            "type": "string",
+            "nullable": true
+          },
+          "activeUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "productsAllowed": {
+            "type": "integer"
+          },
+          "productsUsed": {
+            "type": "integer"
+          },
+          "extraProducts": {
+            "type": "integer"
+          },
+          "pointsIncluded": {
+            "type": "integer"
+          },
+          "firstVoiceIntroIncluded": {
+            "type": "boolean"
+          },
+          "eventPass": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanEventPassView"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "state",
+          "tier",
+          "activeFrom",
+          "activeUntil",
+          "productsAllowed",
+          "productsUsed",
+          "extraProducts",
+          "pointsIncluded",
+          "firstVoiceIntroIncluded",
+          "eventPass"
+        ]
+      },
+      "PlanTierView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "days": {
+            "type": "integer"
+          },
+          "products": {
+            "type": "integer"
+          },
+          "bonusPoints": {
+            "type": "integer"
+          },
+          "bonusPointsExpireDays": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          },
+          "eventPass": {
+            "$ref": "#/components/schemas/PlanEventPassView"
+          },
+          "badge": {
+            "$ref": "#/components/schemas/PlanBadgeView"
+          },
+          "packBonusPercent": {
+            "type": "integer"
+          },
+          "firstVoiceIntroIncluded": {
+            "type": "boolean"
+          },
+          "preselected": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "days",
+          "products",
+          "bonusPoints",
+          "bonusPointsExpireDays",
+          "priceMinor",
+          "eventPass",
+          "badge",
+          "packBonusPercent",
+          "firstVoiceIntroIncluded",
+          "preselected"
+        ]
+      },
+      "PlanExtraProductsView": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "priceMinor"
+        ]
+      },
+      "PlanPackView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "points",
+          "priceMinor"
+        ]
+      },
+      "PlanCheckoutBumpView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "integer"
+          },
+          "priceMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "points",
+          "priceMinor"
+        ]
+      },
+      "PlanActionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "points": {
+            "type": "integer"
+          },
+          "per": {
+            "type": "string",
+            "enum": [
+              "use",
+              "minute",
+              "track",
               "message",
-              "data",
-              "pagination"
+              "minute_per_language"
             ]
           }
         },
         "required": [
-          "unreadCount",
-          "items"
+          "id",
+          "points",
+          "per"
+        ]
+      },
+      "PlanCapsView": {
+        "type": "object",
+        "properties": {
+          "dailyPoints": {
+            "type": "integer"
+          },
+          "maxCharactersPerJob": {
+            "type": "integer"
+          },
+          "maxAudioMinutesPerJob": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "dailyPoints",
+          "maxCharactersPerJob",
+          "maxAudioMinutesPerJob"
+        ]
+      },
+      "PlansView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN",
+              "USD"
+            ]
+          },
+          "currencyFixed": {
+            "type": "boolean"
+          },
+          "tiers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanTierView"
+            }
+          },
+          "extraProducts": {
+            "$ref": "#/components/schemas/PlanExtraProductsView"
+          },
+          "packs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanPackView"
+            }
+          },
+          "checkoutBump": {
+            "$ref": "#/components/schemas/PlanCheckoutBumpView"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanActionView"
+            }
+          },
+          "caps": {
+            "$ref": "#/components/schemas/PlanCapsView"
+          }
+        },
+        "required": [
+          "currency",
+          "currencyFixed",
+          "tiers",
+          "extraProducts",
+          "packs",
+          "checkoutBump",
+          "actions",
+          "caps"
         ]
       },
       "StorageUsage": {
@@ -38759,6 +40083,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -38767,13 +40098,6 @@
               "live",
               "removed"
             ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "title": {
-            "type": "string"
           },
           "creatorWawuId": {
             "type": "string"
@@ -38857,9 +40181,9 @@
         },
         "required": [
           "id",
-          "status",
-          "createdAt",
           "title",
+          "createdAt",
+          "status",
           "creatorWawuId",
           "slug",
           "contentType",
@@ -38887,6 +40211,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -38895,13 +40226,6 @@
               "live",
               "removed"
             ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "title": {
-            "type": "string"
           },
           "creatorWawuId": {
             "type": "string"
@@ -38997,9 +40321,9 @@
         },
         "required": [
           "id",
-          "status",
-          "createdAt",
           "title",
+          "createdAt",
+          "status",
           "creatorWawuId",
           "slug",
           "contentType",
@@ -39235,6 +40559,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -39243,13 +40574,6 @@
               "live",
               "removed"
             ]
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "title": {
-            "type": "string"
           },
           "creatorWawuId": {
             "type": "string"
@@ -39351,9 +40675,9 @@
         },
         "required": [
           "id",
-          "status",
-          "createdAt",
           "title",
+          "createdAt",
+          "status",
           "creatorWawuId",
           "slug",
           "contentType",
@@ -39753,6 +41077,87 @@
           "rating"
         ]
       },
+      "ProductDraftView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ],
+            "nullable": true
+          },
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "category": {
+            "type": "string",
+            "nullable": true
+          },
+          "specializations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessType": {
+            "type": "string",
+            "enum": [
+              "free",
+              "paid"
+            ],
+            "nullable": true
+          },
+          "price": {
+            "type": "number",
+            "nullable": true
+          },
+          "missing": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "contentType",
+          "description",
+          "category",
+          "specializations",
+          "tags",
+          "accessType",
+          "price",
+          "missing",
+          "createdAt",
+          "updatedAt"
+        ]
+      },
       "DmSendInitResponse": {
         "type": "object",
         "properties": {
@@ -39826,6 +41231,9 @@
           "id": {
             "type": "string"
           },
+          "amount": {
+            "type": "number"
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -39833,9 +41241,6 @@
               "awaiting_response",
               "responded"
             ]
-          },
-          "amount": {
-            "type": "number"
           },
           "creatorWawuId": {
             "type": "string"
@@ -39895,8 +41300,8 @@
         },
         "required": [
           "id",
-          "status",
           "amount",
+          "status",
           "creatorWawuId",
           "senderWawuId",
           "text",
@@ -45706,11 +47111,6 @@
           "id": {
             "type": "string"
           },
-          "updatedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
           "kind": {
             "type": "string",
             "enum": [
@@ -45721,6 +47121,11 @@
           },
           "title": {
             "type": "string"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
           },
           "updated": {
             "type": "string",
@@ -45758,9 +47163,9 @@
         },
         "required": [
           "id",
-          "updatedAt",
           "kind",
           "title",
+          "updatedAt",
           "updated",
           "country",
           "subtitle",
@@ -45807,13 +47212,13 @@
           "id": {
             "type": "string"
           },
+          "title": {
+            "type": "string"
+          },
           "updatedAt": {
             "type": "string",
             "format": "date-time",
             "nullable": true
-          },
-          "title": {
-            "type": "string"
           },
           "description": {
             "type": "string"
@@ -45851,8 +47256,8 @@
         },
         "required": [
           "id",
-          "updatedAt",
           "title",
+          "updatedAt",
           "description",
           "format",
           "fileUrl",
@@ -49469,135 +50874,6 @@
           "communities"
         ]
       },
-      "PointNextExpiryView": {
-        "type": "object",
-        "properties": {
-          "points": {
-            "type": "number"
-          },
-          "expiresAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "points",
-          "expiresAt"
-        ]
-      },
-      "PointLotView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "points": {
-            "type": "number"
-          },
-          "granted": {
-            "type": "number"
-          },
-          "source": {
-            "type": "string",
-            "enum": [
-              "tier_bonus",
-              "pack",
-              "bump",
-              "referral",
-              "shortfall",
-              "returned"
-            ]
-          },
-          "label": {
-            "type": "string"
-          },
-          "expiresAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "points",
-          "granted",
-          "source",
-          "label",
-          "expiresAt"
-        ]
-      },
-      "PointMovementView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "points": {
-            "type": "number"
-          },
-          "label": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string",
-            "enum": [
-              "hold",
-              "grant",
-              "release",
-              "expire"
-            ]
-          },
-          "pending": {
-            "type": "boolean"
-          },
-          "createdAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "points",
-          "label",
-          "reason",
-          "pending",
-          "createdAt"
-        ]
-      },
-      "MyPointsView": {
-        "type": "object",
-        "properties": {
-          "balance": {
-            "type": "number"
-          },
-          "nextExpiry": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PointNextExpiryView"
-              }
-            ],
-            "nullable": true
-          },
-          "lots": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PointLotView"
-            }
-          },
-          "lotCount": {
-            "type": "number"
-          },
-          "movements": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PointMovementView"
-            }
-          }
-        },
-        "required": [
-          "balance",
-          "nextExpiry",
-          "lots",
-          "lotCount",
-          "movements"
-        ]
-      },
       "MeCountsView": {
         "type": "object",
         "properties": {
@@ -50175,323 +51451,6 @@
           "nextCursor"
         ]
       },
-      "PlanBadgeView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "numbered": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "id",
-          "numbered"
-        ]
-      },
-      "MyTierSummaryView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string",
-            "nullable": true
-          },
-          "badge": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PlanBadgeView"
-              }
-            ],
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "badge"
-        ]
-      },
-      "PlanEventPassView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "name"
-        ]
-      },
-      "MyTierView": {
-        "type": "object",
-        "properties": {
-          "state": {
-            "type": "string",
-            "enum": [
-              "none",
-              "active",
-              "ending",
-              "ended"
-            ]
-          },
-          "tier": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MyTierSummaryView"
-              }
-            ],
-            "nullable": true
-          },
-          "activeFrom": {
-            "type": "string",
-            "nullable": true
-          },
-          "activeUntil": {
-            "type": "string",
-            "nullable": true
-          },
-          "productsAllowed": {
-            "type": "integer"
-          },
-          "extraProducts": {
-            "type": "integer"
-          },
-          "pointsIncluded": {
-            "type": "integer"
-          },
-          "firstVoiceIntroIncluded": {
-            "type": "boolean"
-          },
-          "eventPass": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/PlanEventPassView"
-              }
-            ],
-            "nullable": true
-          }
-        },
-        "required": [
-          "state",
-          "tier",
-          "activeFrom",
-          "activeUntil",
-          "productsAllowed",
-          "extraProducts",
-          "pointsIncluded",
-          "firstVoiceIntroIncluded",
-          "eventPass"
-        ]
-      },
-      "PlanTierView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "days": {
-            "type": "integer"
-          },
-          "products": {
-            "type": "integer"
-          },
-          "bonusPoints": {
-            "type": "integer"
-          },
-          "bonusPointsExpireDays": {
-            "type": "integer"
-          },
-          "priceMinor": {
-            "type": "integer"
-          },
-          "eventPass": {
-            "$ref": "#/components/schemas/PlanEventPassView"
-          },
-          "badge": {
-            "$ref": "#/components/schemas/PlanBadgeView"
-          },
-          "packBonusPercent": {
-            "type": "integer"
-          },
-          "firstVoiceIntroIncluded": {
-            "type": "boolean"
-          },
-          "preselected": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "days",
-          "products",
-          "bonusPoints",
-          "bonusPointsExpireDays",
-          "priceMinor",
-          "eventPass",
-          "badge",
-          "packBonusPercent",
-          "firstVoiceIntroIncluded",
-          "preselected"
-        ]
-      },
-      "PlanExtraProductsView": {
-        "type": "object",
-        "properties": {
-          "count": {
-            "type": "integer"
-          },
-          "priceMinor": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "count",
-          "priceMinor"
-        ]
-      },
-      "PlanPackView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "points": {
-            "type": "integer"
-          },
-          "priceMinor": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "id",
-          "points",
-          "priceMinor"
-        ]
-      },
-      "PlanCheckoutBumpView": {
-        "type": "object",
-        "properties": {
-          "points": {
-            "type": "integer"
-          },
-          "priceMinor": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "points",
-          "priceMinor"
-        ]
-      },
-      "PlanActionView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "points": {
-            "type": "integer"
-          },
-          "per": {
-            "type": "string",
-            "enum": [
-              "use",
-              "minute",
-              "track",
-              "message",
-              "minute_per_language"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "points",
-          "per"
-        ]
-      },
-      "PlanCapsView": {
-        "type": "object",
-        "properties": {
-          "dailyPoints": {
-            "type": "integer"
-          },
-          "maxCharactersPerJob": {
-            "type": "integer"
-          },
-          "maxAudioMinutesPerJob": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "dailyPoints",
-          "maxCharactersPerJob",
-          "maxAudioMinutesPerJob"
-        ]
-      },
-      "PlansView": {
-        "type": "object",
-        "properties": {
-          "currency": {
-            "type": "string",
-            "enum": [
-              "NGN",
-              "USD"
-            ]
-          },
-          "currencyFixed": {
-            "type": "boolean"
-          },
-          "tiers": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PlanTierView"
-            }
-          },
-          "extraProducts": {
-            "$ref": "#/components/schemas/PlanExtraProductsView"
-          },
-          "packs": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PlanPackView"
-            }
-          },
-          "checkoutBump": {
-            "$ref": "#/components/schemas/PlanCheckoutBumpView"
-          },
-          "actions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PlanActionView"
-            }
-          },
-          "caps": {
-            "$ref": "#/components/schemas/PlanCapsView"
-          }
-        },
-        "required": [
-          "currency",
-          "currencyFixed",
-          "tiers",
-          "extraProducts",
-          "packs",
-          "checkoutBump",
-          "actions",
-          "caps"
-        ]
-      },
       "PlanPurchaseQuoteView": {
         "type": "object",
         "properties": {
@@ -50695,6 +51654,137 @@
           "grant",
           "createdAt",
           "paidAt"
+        ]
+      },
+      "PointsConvertQuoteView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "balancePoints": {
+            "type": "number"
+          },
+          "minimumPoints": {
+            "type": "number"
+          },
+          "maximumPoints": {
+            "type": "number",
+            "nullable": true
+          },
+          "rate": {
+            "type": "object",
+            "properties": {
+              "points": {
+                "type": "number"
+              },
+              "kobo": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "points",
+              "kobo"
+            ]
+          },
+          "points": {
+            "type": "number"
+          },
+          "cashKobo": {
+            "type": "integer"
+          },
+          "feeKobo": {
+            "type": "integer"
+          },
+          "wawuPaysProviderCharge": {
+            "type": "boolean"
+          },
+          "canConvert": {
+            "type": "boolean"
+          },
+          "blockedBy": {
+            "type": "string",
+            "enum": [
+              "below_minimum",
+              "insufficient_points",
+              "above_maximum"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "currency",
+          "balancePoints",
+          "minimumPoints",
+          "maximumPoints",
+          "rate",
+          "points",
+          "cashKobo",
+          "feeKobo",
+          "wawuPaysProviderCharge",
+          "canConvert",
+          "blockedBy"
+        ]
+      },
+      "PointsConversionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "points": {
+            "type": "number"
+          },
+          "cashKobo": {
+            "type": "integer"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "currency",
+          "points",
+          "cashKobo",
+          "reference",
+          "statusMessage",
+          "failureReason",
+          "createdAt",
+          "completedAt"
         ]
       },
       "AdminWaitlistRegistrationView": {
@@ -51353,10 +52443,10 @@
           "status": {
             "type": "string",
             "enum": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ]
           },
@@ -51440,10 +52530,10 @@
               "status": {
                 "type": "string",
                 "enum": [
+                  "ended",
                   "live",
                   "paused",
                   "draft",
-                  "ended",
                   "scheduled"
                 ],
                 "nullable": true
@@ -51485,17 +52575,17 @@
           "deliveryByStatus": {
             "type": "object",
             "properties": {
+              "ended": {},
               "live": {},
               "paused": {},
               "draft": {},
-              "ended": {},
               "scheduled": {}
             },
             "required": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ]
           },
@@ -51513,17 +52603,17 @@
           "byStatus": {
             "type": "object",
             "properties": {
+              "ended": {},
               "live": {},
               "paused": {},
               "draft": {},
-              "ended": {},
               "scheduled": {}
             },
             "required": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ]
           },
@@ -51588,10 +52678,10 @@
           "status": {
             "type": "string",
             "enum": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ]
           },
@@ -51625,9 +52715,9 @@
           "action": {
             "type": "string",
             "enum": [
+              "ended",
               "paused",
               "updated",
-              "ended",
               "scheduled",
               "created",
               "resumed",
@@ -51637,10 +52727,10 @@
           "previousStatus": {
             "type": "string",
             "enum": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ],
             "nullable": true
@@ -51648,10 +52738,10 @@
           "newStatus": {
             "type": "string",
             "enum": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ],
             "nullable": true
@@ -51734,10 +52824,10 @@
           "status": {
             "type": "string",
             "enum": [
+              "ended",
               "live",
               "paused",
               "draft",
-              "ended",
               "scheduled"
             ]
           },

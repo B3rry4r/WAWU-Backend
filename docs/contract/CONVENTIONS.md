@@ -256,6 +256,9 @@ Every refusal is the envelope this backend already answers with
 | `open_address_limited` | 429 | under a provider that reviews the person (Nuvion): one address has made `OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR` opening tries (default 10, PROVISIONAL) in the last hour, across every account; a plain 429 before anything is claimed, sent or counted for the account. A call with no client address (made on the server itself) is not limited by address (NUV-02 round 3, section 9a) | `retryAfterSeconds` |
 | `identity_under_review` | 409 | under a provider that reviews the person itself (Nuvion): the person's details are with the provider's compliance review; they wait and nothing is sent again. The sentence promises a notification, and one is written when the review ends (NUV-02, section 9a). Any money route can answer it when the provider says so (`walletProviderErrorToHttp`) | |
 | `step_not_used` | 409 | `POST /money/identity/bvn` under a provider with no BVN lookup (Nuvion): that step does not exist there, the BVN is checked inside the review when the details are sent to open the wallet. Permanent, never "try again"; nothing is hashed, counted or sent (NUV-02 round 2, section 9a) | |
+| `below_minimum` | 422 | `POST /points/convert` with fewer points than the config's minimum; answered before the PIN, nothing held or changed (POINTS-04, section 20) | `minimumPoints`, `balancePoints` |
+| `insufficient_points` | 402 | more points than the person has (`PointsError`, section 16); answered before the PIN by the conversion, and again under the person's points lock (POINTS-04) | `balancePoints`, `neededPoints`, `shortfallPoints` |
+| `currency_not_supported` | 409 | `GET /points/convert/quote` or `POST /points/convert` for a person billed in dollars: their cash would be dollars and the dollar wallet is not built (NUV-09). Nothing is held (POINTS-04) | |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
 operation in the contract lists the codes it can answer with, grouped by
@@ -1311,14 +1314,19 @@ this applies and every answer is as in section 9.
   - calls `MoneyLimits.assertMayMove({ wawuUserId, kind, amountKobo }, { tx
     })` in the transaction that writes the movement's pending ledger row,
     before the provider is called: `fees_not_set`, then `403 limit_reached`
-    with `limit` (per transaction, then today, then this month). With `tx`
-    it takes a per-person lock first, so two movements by one person are
-    checked one after the other. That transaction stays at READ COMMITTED
-    (Prisma's default: no `isolationLevel`): the lock orders the reads only
-    there, so with `tx` the check first reads `transaction_isolation` and
-    refuses any other level with an `IsolationLevelError` naming it, a
-    programming error answered as a 500 (FIX-21,
-    `src/money/limits/read-committed.ts`);
+    with `limit` (per transaction, then today, then this month). `tx` is
+    required: the check takes a per-person lock for that transaction, so two
+    movements by one person are checked one after the other. It is the `tx`
+    of `prisma.$transaction(async (tx) => ...)`, never the service's own
+    client: the types refuse the root client, and a check given nothing, the
+    service's own client or any root client throws a `NotInTransactionError`
+    before anything is locked, read or written (FIX-26,
+    `src/money/limits/movement-tx.ts`). That transaction stays at READ
+    COMMITTED (Prisma's default: no `isolationLevel`): the lock orders the
+    reads only there, so the check first reads `transaction_isolation` and
+    refuses any other level with an `IsolationLevelError` naming it (FIX-21,
+    `src/money/limits/read-committed.ts`). Both are programming errors,
+    answered as a 500;
   - answers a provider failure with `error.toHttpException()`: the
     provider's own limit refusal (a `WalletProviderLimitError`; Nuvion's
     `error_transfer_transaction_limit_exceeded`,
@@ -2270,6 +2278,190 @@ still declared. Finding the person is WALLET-08.
   user id, account number and name are set to null when that person is
   purged, and the sender's note goes with the sender.
 
+## 20. Points to cash (POINTS-04)
+
+A person turns points into naira in their wallet at the config's rate
+(`plans.config.json`, `cash_out`: kobo for 1,000 points, and the fewest points
+one conversion takes; TIER-01, R-43). The cash is WAWU's own money moving
+from its account at the wallet provider into the person's wallet: Fintava's
+merchant wallet or Nuvion's operational account, whichever `WALLET_PROVIDER`
+runs, through the seam only (MONEY-20). The provider's charge on the move is
+WAWU's (R-31); the person pays nothing to convert.
+
+- **Routes** (`src/points/convert/`, `PointsConvertModule`; `points/convert` is
+  a path nothing else declares):
+  - `GET /points/convert/quote?points=` (wallet gate, `fees_not_set` first,
+    `no-store`): `balancePoints`, `minimumPoints`, `maximumPoints` (from the
+    provider's cap on one move, or null), `rate` (`points: 1000`, `kobo`),
+    `points` (the ones asked about, else the whole balance), `cashKobo`,
+    `feeKobo` 0, `wawuPaysProviderCharge` true, `canConvert` and `blockedBy`
+    (`below_minimum`, `insufficient_points` or `above_maximum`). It answers
+    the figures instead of refusing, so PT6 can draw "below the minimum".
+    A dollar-billed person is `409 currency_not_supported`.
+  - `POST /points/convert` `{ points }` with `Idempotency-Key` and
+    `X-Transaction-Pin` (or a device approval): answers `201` with the
+    conversion `{ id, status, currency, points, cashKobo, reference,
+    statusMessage, failureReason, createdAt, completedAt }`.
+  - `GET /points/convert/{id}`: the same view for its owner (anybody else, and
+    an id nobody holds, are the same `404 not_found`), from our records only.
+- **Status** is `completed` (the provider confirmed the cash; the points are
+  spent), `pending` (the points are on hold and the cash is not confirmed yet:
+  poll the id; the move is never sent again) or `failed` (the cash did not
+  move and the points are back; `failureReason` says so in words). A `pending`
+  answer is stored for replays like any other: the app polls the id.
+- **Cash** = `floor(points x kobo per 1,000 points / 1,000)`: rounded down, so
+  nobody is paid more than the rate says. A conversion worth no kobo is
+  refused (`400 amount_out_of_range`). The migration holds the same sum as a
+  CHECK, with the rate the row was worked out at stored on it.
+- **Before the PIN, changing nothing** (a guard between the Idempotency-Key and
+  the PIN; `RequireIdempotentApproval(route, ...guards)`): no wallet is the
+  wallet gate's `409 wallet_not_open` (it runs first, takes no key); then a
+  dollar-billed person `409 currency_not_supported`, fewer points than the
+  minimum `422 below_minimum` (`minimumPoints`, `balancePoints`), more cash
+  than one move may carry `400 amount_out_of_range` (`maximumKobo`), more
+  points than the person has `402 insufficient_points` (`balancePoints`,
+  `neededPoints`, `shortfallPoints`). None uses a PIN try, holds a point or
+  keeps the Idempotency-Key. A repeat of a finished request is answered
+  before any of them, so a balance that has since changed never turns a replay
+  into a refusal. `points` that is not a whole number of 1 or more is the
+  validation pipe's plain `400`, also before the PIN.
+- **The order of the steps.** (1) The conversion row, the key's link to it and
+  the points hold are written in ONE transaction (the hold last, so the
+  person's points lock is taken after everything else and let go at once):
+  there is no row without held points and no held points without a row. The
+  points leave their lots soonest-ending first (POINTS-01). (2) The provider is
+  asked to move the cash, outside every transaction: nothing waits on a
+  provider while it holds a person's points lock. (3) Only when the provider
+  has CONFIRMED the move, one transaction marks the conversion `paid` and
+  commits the hold; when its own record, or a refusal that proves nothing
+  moved, says the cash did not move, one transaction marks it `cancelled` and
+  releases the hold, back to the lots it came from with their own end dates
+  (a lot that ended meanwhile loses them, as POINTS-01 says). At commit the
+  database requires the conversion and its hold to agree (a deferred trigger).
+- **Once.** The Idempotency-Key links to one conversion; the conversion has
+  one reference at the provider, `wawu-pts-<id>` (45 characters, inside
+  Nuvion's 64; unique in our table, refused as a repeat by the provider); the
+  move is handed over by a lease (`sentAt`) only one caller wins, whichever
+  Hub process or sweep it is. A new reference exists only for a NEW
+  conversion: one the provider did not make is cancelled, and asking again is
+  a new request with a new key.
+- **The provider's record is the truth** (the rules of sections 14 and 18).
+  A move whose outcome is unknown (a timeout, a 5xx, a transfer accepted and
+  not finished, a repeated reference, a Hub killed between the provider's
+  answer and our write) is `pending`: `sentAt` is set, the provider is asked
+  about our reference (`reconcileSend` on WAWU's own account; backing off 1,
+  2, 4 ... 60 minutes), the move is never sent again and never read as
+  "nothing moved", and the points stay HELD. Nothing times a `cash_out` hold
+  out. Past `PAYMENT_REVIEW_AFTER_HOURS` (72) with no answer it goes to review
+  (`reviewSince`): out of the sweep, still held, a person decides. A record
+  that it was completed and then reversed, another amount than asked, or
+  cash confirmed for points already given back, is review too. Only a
+  refusal that proves nothing moved (`recordMayExist` false or
+  `requestNotSent`: WAWU's account short, a frozen wallet, the provider's
+  limits, a body it refused) or the provider's own record that the move
+  failed gives the points back.
+- **A sweep** every minute (`points-cash-out-settle`) drives every held
+  conversion that is due, of the provider this server runs, by a keyset cursor
+  with a time budget (the hold sweep's shape): it sends what a request that
+  died after the hold never sent, and asks about every move whose answer was
+  lost. A conversion of the other provider is left alone.
+- **Ledger.** Both sides of the move, under our reference: WAWU's account (out,
+  the provider's charge on top, `wawuFeeKobo` 0) and the person's wallet (in),
+  category `earning`, counterparty "Who Made This", link kind
+  `points_cash_out` (a `PAYMENT_KINDS` value that no feature registers, so a
+  payment for it is `target_not_payable`), link title the points. History
+  reads "Points to cash". The provider's balance is still the only balance.
+- **Deleting an account.** The row is `ANONYMISED` (the person and the wallet
+  account it paid into are set to null); its hold goes with the person's
+  points. A conversion not yet sent is then cancelled by the sweep; one the
+  provider already moved is paid with no person on it.
+- **For MONEY-16 / NUV-08:** `PointsCashOutService.inFlightTotals()` counts and
+  sums (kobo) the conversions still held of the running provider: cash that
+  may already have left WAWU's account without our record knowing yet.
+
+## 21. Provider webhook deliveries are not kept for ever (FIX-20)
+
+(Numbered 21 because MONEY-16 and WALLET-16 both add a section 19 on their
+branches; the lead renumbers at merge.)
+
+`FintavaWebhookEvent` and `NuvionWebhookEvent` keep each signed delivery's raw
+body and a parsed copy of it: names, account numbers, narrations. Neither table
+has a person column, so **retention, not the account purge or the data export,
+covers these rows**. The purge map (`src/account-purge/account-data-map.ts`)
+and the export list (`src/data-export-request/data-export-sections.ts`) say so
+in their comments and name neither table; a person's own money history is the
+ledger, which the purge and the export do cover.
+
+**The rule.** A daily job (`src/webhook-retention/`, 02:40 server time) clears
+the raw body (`rawBody` becomes empty) and the parsed copy (`payload` becomes
+JSON null) of a delivery when both are true:
+
+- it was received more than `WEBHOOK_RETENTION_DAYS` ago (default **90**,
+  PROVISIONAL, whole days from 7 to 3650, anything else stops the app at boot);
+  the period counts from the time received, not the time processed; and
+- its state says nothing can still read it.
+
+**Which states are cleared, and which are held.** A held row keeps its body
+whatever its age, and the job reports how many such rows are past the period.
+The table is `WEBHOOK_STATE_RULES` in
+`src/webhook-retention/webhook-retention-config.ts`, typed over each enum, so a
+new state does not compile until it is classified.
+
+| State | Fintava | Nuvion | Why |
+|---|---|---|---|
+| `processed` | cleared | cleared | Every consumer is finished with it. The ledger keeps the references and the figures; each Nuvion handler re-fetches from Nuvion before it acts on money. |
+| `test` | no such state | cleared | Nuvion's own test delivery: no data, nothing acts on it. |
+| `pending` | held | held | A consumer has not used it yet: the ledger sweep and the Nuvion dispatcher read its payload. It may be resting after a wait, held by a worker, waiting for a consumer that is not built yet (Fintava cards, an event no Nuvion handler lists), or left for a rollback to the other provider. |
+| `failed` | held | held | The consumer could not use it. That is a stop for review (a reversal with no debit, a disagreement), and the body is the evidence. |
+| `unrecognised` | held | held | Kept for review: an event nobody documents is how a real payload format is learned. |
+
+Nothing marks a review closed, so a held row stays until a person or a
+consumer finishes with it (BACKEND_GAPS G-750).
+
+**What stays on a cleared row.** Everything the repeat check and every reader
+needs: the id, the event, the references (`reference`, `dataReference`,
+`dataCustomerReference`; the ledger's absent check reads them), the SHA-256 of
+the body, the outcome (`processingStatus`, `note`), `receivedAt` and
+`processedAt`, and `bodyClearedAt`, the time the body went. The database holds
+the rule: `*_body_cleared_check` refuses `bodyClearedAt` on a row that still has
+a body (and on a Fintava row without its `bodySha256`).
+
+**A delivery sent again after clearing is still a repeat.** The receivers'
+inserts are `ON CONFLICT DO NOTHING` on unique keys the job never touches, so
+the answer is `200 duplicate`, no row is written, the body is not put back, and
+the ledger or the handler is not told again:
+
+- Fintava sends no event id and no timestamp, so its key is `bodySha256`, the
+  SHA-256 of the exact bytes it signed. It is the only protection against a
+  captured signed body being replayed, which is why a Fintava row without one
+  is never cleared.
+- Nuvion's keys are `eventId` and the signed pair (`signedAt`, `bodySha256`),
+  and the signature check refuses a timestamp more than 20 minutes from our
+  clock before the insert is reached.
+
+**Safe to run twice, on two servers, and while a delivery arrives.**
+
+- A batch is one statement: it picks up to 200 rows, locks them
+  (`FOR UPDATE SKIP LOCKED`) and clears them together. It is a transaction of
+  its own, so no lock outlives it. A run stops starting batches after 10
+  minutes and leaves the rest to the next day.
+- Two servers running the job at once share the rows between them; a row is
+  cleared by one of them. A row a consumer holds is skipped and cleared by the
+  next run. A second run finds nothing to clear and writes nothing.
+- A new delivery never waits for the job: it is a new row, received after the
+  cutoff, and its insert conflicts with nothing. A repeat of a delivery whose
+  row is in the batch being cleared right now waits for that one statement
+  (Postgres makes an insert that conflicts with a row being updated wait for the
+  updater, a few milliseconds for 200 rows) and then answers `duplicate`; a
+  repeat of any other row does not wait at all.
+
+**A new reader of these tables.** A reader of `rawBody` or `payload` reads only
+rows in a held state, as the ledger sweep and the Nuvion dispatcher do (they
+read `pending` rows, locked and re-checked as `pending`). The readers are listed
+in `WEBHOOK_TABLE_READERS`, and `webhook-retention-readers.spec.ts` fails when a
+file touches either table without being listed there. A reader that needs a
+cleared state's body changes `WEBHOOK_STATE_RULES` in its own task, on purpose.
+
 ## 22. The nightly check against the provider (MONEY-16)
 
 `src/money/check/`. No route. It reads WAWU's ledger and the provider's own
@@ -2390,3 +2582,20 @@ provider the server runs (their `provider` column).
   decimal text.
 - **Rows.** `MoneyCheckRun.report` holds the first 500 mismatches and the first 500 looks
   and counts the rest; finished runs are kept `MONEY_CHECK_KEEP_DAYS` (120).
+
+## 23. Publishing needs a tier (TIER-02)
+
+Publishing a piece, or taking a file for one, answers `402` in this one error
+shape when the person has no way to publish or has used every product they
+may have:
+
+| `reason.code` | HTTP | When | Extra fields |
+|---|---|---|---|
+| `tier_required` | 402 | no running tier and no verification tick that has not ended | `tierState` (`none` or `ended`), `productsUsed`, `productsAllowed`, `currency`, `tiers`, `extraProducts` |
+| `product_limit_reached` | 402 | every product the person may have is published | the same fields |
+| `draft_limit_reached` | 409 | a person already keeps `PRODUCT_DRAFTS_MAX` drafts (`POST /product-drafts`) | `draftsKept`, `draftsAllowed` |
+| `draft_incomplete` | 400 | a draft being published still lacks details | `missing` |
+
+The offers inside `reason` are `GET /plans`' figures in the person's billing
+currency only (`priceMinor` in the minor unit of `currency`). The rules, the
+routes that ask and the drafts are in [`PLANS.md`](PLANS.md) section 6.
