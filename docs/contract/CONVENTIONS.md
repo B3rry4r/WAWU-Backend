@@ -247,9 +247,9 @@ Every refusal is the envelope this backend already answers with
 | `statement_rate_limited` | 429 | the person has asked for 5 statements in the last minute or 30 in the last hour (`STATEMENT_RATE_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-27) | `retryAfterSeconds` |
 | `statement_busy` | 503 | two statements are already being built and no place came free within 5 s (`STATEMENT_CONCURRENCY`, PROVISIONAL) (WALLET-27) | `retryAfterSeconds` |
 | `email_not_verified` | 409 | the account has no email address that WAWU ID says is confirmed (the token's `emailVerified` is not `true`, or its `email` is empty or not an address), so a statement is not emailed (WALLET-35); never counted against the statement limit | |
-| `statement_email_failed` | 503 | the mail could not be handed to WAWU ID's sender (it was unreachable, busy, over its day's cap or refused it, or is not set up on this server); nothing was sent and asking again is right (WALLET-35). The answer never names the address or WAWU ID's reason | |
+| `statement_email_failed` | 503 | the mail could not be handed to WAWU ID's sender (it was unreachable, busy, over its day's cap or refused it, or is not set up on this server), or WAWU ID did not say it took the file (its answer carries `attachments`, the number of files taken, and it must equal the one sent; a relay from before WALLET-35 answers none); asking again is right once WAWU ID is current (WALLET-35). The answer never names the address or WAWU ID's reason | |
 | `recipient_search_rate_limited` | 429 | the person has searched for recipients 20 times in the last minute, 120 in the last hour or 500 in the last day (`RECIPIENT_SEARCH_PERSON_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-08); also sent as the `Retry-After` header | `retryAfterSeconds` |
-| `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
+| `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27). Also on `POST /money/statements/email`: the file is over 12 MiB (`STATEMENT_EMAIL_MAX_BYTES`, WAWU ID's cap), measured before anything is sent; it can never succeed on a retry (WALLET-35) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 | `fees_not_set` | 503 | the running wallet provider's fees are settings not filled in yet (Nuvion's `NUVION_FEE_*`, R-42): every fee quote and every money-moving route answers it before anything is sent to the provider; the balance, the history and the account number are unaffected (NUV-07, section 11) | |
 | `limit_reached` | 403 | the movement passes a limit: WAWU's own setting for its kind (`WAWU_LIMIT_<KIND>_<LIMIT>_KOBO`), checked before anything is sent, or the provider's own (Nuvion's per-transaction, daily or monthly refusal); the same answer either way (NUV-07, section 11) | `limit`: `per_transaction`, `daily` or `monthly` |
@@ -1314,14 +1314,19 @@ this applies and every answer is as in section 9.
   - calls `MoneyLimits.assertMayMove({ wawuUserId, kind, amountKobo }, { tx
     })` in the transaction that writes the movement's pending ledger row,
     before the provider is called: `fees_not_set`, then `403 limit_reached`
-    with `limit` (per transaction, then today, then this month). With `tx`
-    it takes a per-person lock first, so two movements by one person are
-    checked one after the other. That transaction stays at READ COMMITTED
-    (Prisma's default: no `isolationLevel`): the lock orders the reads only
-    there, so with `tx` the check first reads `transaction_isolation` and
-    refuses any other level with an `IsolationLevelError` naming it, a
-    programming error answered as a 500 (FIX-21,
-    `src/money/limits/read-committed.ts`);
+    with `limit` (per transaction, then today, then this month). `tx` is
+    required: the check takes a per-person lock for that transaction, so two
+    movements by one person are checked one after the other. It is the `tx`
+    of `prisma.$transaction(async (tx) => ...)`, never the service's own
+    client: the types refuse the root client, and a check given nothing, the
+    service's own client or any root client throws a `NotInTransactionError`
+    before anything is locked, read or written (FIX-26,
+    `src/money/limits/movement-tx.ts`). That transaction stays at READ
+    COMMITTED (Prisma's default: no `isolationLevel`): the lock orders the
+    reads only there, so the check first reads `transaction_isolation` and
+    refuses any other level with an `IsolationLevelError` naming it (FIX-21,
+    `src/money/limits/read-committed.ts`). Both are programming errors,
+    answered as a 500;
   - answers a provider failure with `error.toHttpException()`: the
     provider's own limit refusal (a `WalletProviderLimitError`; Nuvion's
     `error_transfer_transaction_limit_exceeded`,
@@ -1437,8 +1442,14 @@ this applies and every answer is as in section 9.
     email_not_verified`. The Hub holds no address of its own.
   - Order of answers: the route's own 400s (the period, the body), then the
     409, then the person is counted, then the file is built, then the mail is
-    handed over. `400 statement_too_large` gives the place back; a mail that
-    could not be handed over is `503 statement_email_failed` and counts.
+    handed over. `400 statement_too_large` gives the place back (a file over
+    12 MiB is measured before the mail is built, and is that 400, not a 503);
+    a mail that could not be handed over is `503 statement_email_failed` and
+    counts. WAWU ID answers `200 { id, attachments }` for a mail that carried
+    files, `attachments` being how many it took; the Hub calls the mail sent
+    only when that number is the one it sent (a relay from before WALLET-35
+    drops the file and answers `{ id }`, which is a failure here). A mail with
+    no files (a campaign, the money check's report) is judged as before.
   - `200` answers `StatementEmailView`: `sentTo` (the address masked,
     `a***@example.com`), `from`, `to`, `format`, `fileName`, `rowCount`,
     `sentAt`. `no-store`. An optional `Idempotency-Key` (8 to 128 of

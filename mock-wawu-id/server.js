@@ -424,7 +424,9 @@ app.post("/internal/users/:userId/pin-reset-code", requireServiceKey, (req, res)
 // WAWU ID's mail relay (EMAIL-02, WALLET-35 adds `attachments`):
 // POST /internal/mail/send { to, subject, html, text, headers?, tag?,
 // attachments?: [{ filename, content (base64), contentType? }] } with an
-// optional Idempotency-Key (the same key answers with the first mail). The
+// optional Idempotency-Key (the same key answers with the first mail). It
+// answers { id } and, when the body had an `attachments` list, { id,
+// attachments: <how many it took> }, as the real relay does. The
 // mock sends nothing: it records the mail, each attachment decoded, in the
 // outbox the contract suite reads. A bad body is a 400, as on the real one.
 const RELAYED_BY_KEY = new Map();
@@ -451,7 +453,9 @@ app.post("/internal/mail/send", requireServiceKey, (req, res) => {
     }
   }
   const key = req.header("Idempotency-Key");
-  if (key && RELAYED_BY_KEY.has(key)) return res.json({ id: RELAYED_BY_KEY.get(key) });
+  // Like the real relay, a mail that carried a list of files is answered with how many it took.
+  const answer = (id) => (body.attachments === undefined ? { id } : { id, attachments: attachments.length });
+  if (key && RELAYED_BY_KEY.has(key)) return res.json(answer(RELAYED_BY_KEY.get(key)));
   const id = `mock-mail-${MAIL_OUTBOX.length + 1}`;
   if (key) RELAYED_BY_KEY.set(key, id);
   MAIL_OUTBOX.push({
@@ -464,7 +468,7 @@ app.post("/internal/mail/send", requireServiceKey, (req, res) => {
     attachments,
     sentAt: new Date().toISOString(),
   });
-  res.json({ id });
+  res.json(answer(id));
 });
 // The nightly money check's report email (MONEY-16). Mirrors the route WAWU ID
 // builds (BACKEND_GAPS G-690, wawu-id wmt/MONEY-16):

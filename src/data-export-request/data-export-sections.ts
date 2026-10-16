@@ -381,6 +381,18 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // SCHOOLS-10: the school sites this person opened from "Apply on their
+    // site" (SC9): which school and course, and when.
+    key: 'schoolLinkClicks',
+    models: ['SchoolLinkClick'],
+    load: (prisma, me) =>
+      prisma.schoolLinkClick.findMany({
+        where: { userWawuId: me },
+        select: { schoolId: true, courseId: true, clickedAt: true },
+        orderBy: { clickedAt: 'desc' },
+      }),
+  },
+  {
     // ME-10: the creators this person saved (M30).
     key: 'savedCreators',
     models: ['SavedCreator'],

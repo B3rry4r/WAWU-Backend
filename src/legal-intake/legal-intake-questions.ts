@@ -236,11 +236,11 @@ const COMMON_QUESTIONS: IntakeQuestion[] = [
     kind: 'single',
     level: 'required',
     options: [
-      { value: 'no_rush', label: 'No rush — 2 to 4 weeks' },
-      { value: 'soon', label: 'Soon — 1 to 2 weeks' },
-      { value: 'urgent', label: 'Urgent — 3 to 7 days' },
-      { value: 'very_urgent', label: 'Very urgent — within 48 hours' },
-      { value: 'immediate', label: 'Immediate — today' },
+      { value: 'no_rush', label: 'No rush (2 to 4 weeks)' },
+      { value: 'soon', label: 'Soon (1 to 2 weeks)' },
+      { value: 'urgent', label: 'Urgent (3 to 7 days)' },
+      { value: 'very_urgent', label: 'Very urgent (within 48 hours)' },
+      { value: 'immediate', label: 'Immediate (today)' },
       { value: 'unsure', label: 'Not sure' },
     ],
   },
@@ -422,7 +422,7 @@ const COMMON_QUESTIONS: IntakeQuestion[] = [
     // A band rather than a figure. It gives the consultant the scale they
     // need without making somebody state an exact sum they may not know, or
     // may not want on file before they have spoken to anybody.
-    helper: 'A range is fine — your consultant only needs the scale.',
+    helper: 'A range is fine. Your consultant only needs the scale.',
     showIf: { questionId: 'involves_money', includes: ['yes'] },
     options: [
       { value: 'under_100k', label: 'Under ₦100,000' },
@@ -514,7 +514,7 @@ const MATTER_QUESTIONS: Partial<Record<LegalMatter, IntakeQuestion[]>> = {
       options: [
         { value: 'yes', label: 'Yes' },
         { value: 'no', label: 'No, it was verbal' },
-        { value: 'partial', label: 'Partly — messages or emails only' },
+        { value: 'partial', label: 'Partly (messages or emails only)' },
       ],
     },
     {

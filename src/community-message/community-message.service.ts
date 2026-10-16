@@ -495,7 +495,7 @@ export class CommunityMessageService {
     const imageUrl = dto.imageUrl ?? null;
     if (!text && !imageUrl) {
       throw new BadRequestException(
-        'A message needs something in it — write something, attach a photo, or both.',
+        'A message needs something in it. Write something, attach a photo, or both.',
       );
     }
 

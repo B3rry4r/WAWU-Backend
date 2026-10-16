@@ -173,7 +173,7 @@ export class RealFlutterwaveAdapter implements FlutterwaveClient {
           status: 'failed',
           reference: null,
           message:
-            'Flutterwave returned an unreadable response to a refund that may have succeeded — check their dashboard before retrying',
+            'Flutterwave returned an unreadable response to a refund that may have succeeded. Check their dashboard before retrying',
           permanent: true,
         };
       }

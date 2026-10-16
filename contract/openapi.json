@@ -473,6 +473,107 @@
         ]
       }
     },
+    "/api/hub/paid-dm/settings": {
+      "get": {
+        "operationId": "PaidDmController_getSettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmSettings"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller is not a creator account."
+          }
+        },
+        "summary": "The creator's paid message settings with everything I21 to I23 draw (price, reply window, share, standing).",
+        "tags": [
+          "PaidDm"
+        ]
+      },
+      "put": {
+        "operationId": "PaidDmController_saveSettings",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePaidDmSettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The price is not a whole number of naira, no price is set, or the reply time is not on offer."
+          },
+          "403": {
+            "description": "The caller is not a creator account, or paid messages are paused (reason.code paid_messages_paused)."
+          }
+        },
+        "summary": "Saves the creator's paid message settings. Refused while paid messages are paused (R-13).",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
+    "/api/hub/paid-dm/settings/earn": {
+      "get": {
+        "operationId": "PaidDmController_earn",
+        "parameters": [
+          {
+            "name": "priceKobo",
+            "required": true,
+            "in": "query",
+            "description": "The price to price a message at, in kobo.",
+            "schema": {
+              "minimum": 5000,
+              "maximum": 1000000000,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidDmEarn"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The price is missing, not an integer, outside the bounds, or not a whole number of naira."
+          },
+          "403": {
+            "description": "The caller is not a creator account."
+          }
+        },
+        "summary": "What the creator keeps of one message at a price they are typing (I21, R-21). Read only; saves nothing.",
+        "tags": [
+          "PaidDm"
+        ]
+      }
+    },
     "/api/hub/paid-dm/creators/{wawuId}/availability": {
       "get": {
         "operationId": "PaidDmController_availability",
@@ -1093,6 +1194,55 @@
             }
           }
         },
+        "tags": [
+          "Storage"
+        ]
+      }
+    },
+    "/api/hub/uploads/confirm": {
+      "post": {
+        "operationId": "StorageController_confirm",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "confirmed",
+                        "abandoned"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "status"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "POST /uploads/confirm: the app has finished sending the file it got a URL\nfor, taken or turned away by the storage host. The server asks the bucket\nand answers `confirmed` (the file is there and counts against the person's\nstorage), `pending` (it is not there yet and the URL could still be used,\nso nothing changes and the sweep settles it) or `abandoned` (it is not\nthere and the URL is spent, so the space it held goes back at once instead\nof when the sweep settles it). A file that lands after it was given up on\nand no longer fits the person's storage is removed and answers 413. The\napp's word decides nothing; only the person's own upload can be settled. A\nbucket that cannot be asked answers 503 and changes nothing.",
         "tags": [
           "Storage"
         ]
@@ -16209,7 +16359,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Email a statement (W38 \"Send statement\"). The same period rules and the\nsame file as `GET /money/statements`, attached to a mail sent to the\nperson's own confirmed address: the request carries none, so a statement\ncannot be sent to anyone else. No confirmed email is `409\nemail_not_verified`; a mail that could not be handed to WAWU ID's sender\nis `503 statement_email_failed`. The limits of `GET /money/statements`\napply and are shared with it: an emailed statement is one statement.\nAn optional `Idempotency-Key` makes a repeat answer the first mail\ninstead of sending a second.",
+        "summary": "Email a statement (W38 \"Send statement\"). The same period rules and the\nsame file as `GET /money/statements`, attached to a mail sent to the\nperson's own confirmed address: the request carries none, so a statement\ncannot be sent to anyone else. No confirmed email is `409\nemail_not_verified`; a mail that could not be handed to WAWU ID's sender\n(or whose file WAWU ID did not confirm taking) is `503\nstatement_email_failed`; a file over 12 MiB, WAWU ID's cap, is `400\nstatement_too_large` before anything is sent. The limits of `GET /money/statements`\napply and are shared with it: an emailed statement is one statement.\nAn optional `Idempotency-Key` makes a repeat answer the first mail\ninstead of sending a second.",
         "tags": [
           "MoneyStatement"
         ],
@@ -25884,6 +26034,68 @@
         ]
       }
     },
+    "/api/hub/schools/courses/{id}/apply-link": {
+      "get": {
+        "operationId": "SchoolLinkController_link",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolApplyLinkView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The link SC9 prints. Records nothing.",
+        "tags": [
+          "SchoolLink"
+        ]
+      }
+    },
+    "/api/hub/schools/courses/{id}/apply-click": {
+      "post": {
+        "operationId": "SchoolLinkController_click",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolApplyLinkView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One tap on \"Continue to their site\": records one click, answers with the link to open.",
+        "tags": [
+          "SchoolLink"
+        ]
+      }
+    },
     "/api/hub/communities/mine": {
       "get": {
         "operationId": "CommunityRoomsController_mine",
@@ -30906,6 +31118,30 @@
           "text"
         ]
       },
+      "UpdatePaidDmSettingsDto": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer",
+            "description": "Price per message in kobo. Required when `enabled` is true and none is saved yet.",
+            "minimum": 5000,
+            "maximum": 1000000000
+          },
+          "responseHours": {
+            "type": "integer",
+            "description": "Hours the creator has to reply. Left out means unchanged.",
+            "minimum": 1,
+            "maximum": 336
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether fans may send paid messages."
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
       "PaidDmReplyDto": {
         "type": "object",
         "properties": {
@@ -31111,6 +31347,19 @@
           "data",
           "reason",
           "message"
+        ]
+      },
+      "ConfirmUploadDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The `key` or the `fileUrl` POST /uploads/presign returned for this file.",
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "key"
         ]
       },
       "ValidateCustomerDto": {
@@ -32842,7 +33091,11 @@
           },
           "remainingTodayKobo": {
             "type": "integer",
-            "description": "daily_limit_exceeded: what is left of today's limit."
+            "description": "daily_limit_exceeded, limit_reached: what is left of today's limit."
+          },
+          "limitKobo": {
+            "type": "integer",
+            "description": "limit_reached on the account's daily limit (WALLET-23): the limit itself, in kobo."
           },
           "minimumKobo": {
             "type": "integer",
@@ -41472,6 +41725,107 @@
           "pausedUntil"
         ]
       },
+      "PaidDmPricePreset": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceKobo"
+        ]
+      },
+      "PaidDmSettingsOptions": {
+        "type": "object",
+        "properties": {
+          "minPriceKobo": {
+            "type": "integer"
+          },
+          "maxPriceKobo": {
+            "type": "integer"
+          },
+          "pricePresets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaidDmPricePreset"
+            }
+          },
+          "responseWindowHours": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "minPriceKobo",
+          "maxPriceKobo",
+          "pricePresets",
+          "responseWindowHours"
+        ]
+      },
+      "PaidDmSettings": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "responseHours": {
+            "type": "number"
+          },
+          "creatorSharePct": {
+            "type": "number"
+          },
+          "earnPerMessageKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "raiseToKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "options": {
+            "$ref": "#/components/schemas/PaidDmSettingsOptions"
+          },
+          "standing": {
+            "$ref": "#/components/schemas/PaidDmStanding"
+          }
+        },
+        "required": [
+          "enabled",
+          "priceKobo",
+          "responseHours",
+          "creatorSharePct",
+          "earnPerMessageKobo",
+          "raiseToKobo",
+          "options",
+          "standing"
+        ]
+      },
+      "PaidDmEarn": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer"
+          },
+          "creatorSharePct": {
+            "type": "number"
+          },
+          "earnPerMessageKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceKobo",
+          "creatorSharePct",
+          "earnPerMessageKobo"
+        ]
+      },
       "PaidDmAvailability": {
         "type": "object",
         "properties": {
@@ -48999,6 +49353,25 @@
         },
         "required": [
           "cleared"
+        ]
+      },
+      "SchoolApplyLinkView": {
+        "type": "object",
+        "properties": {
+          "courseId": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "courseId",
+          "code",
+          "url"
         ]
       },
       "PublicSchoolCard": {

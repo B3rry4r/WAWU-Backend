@@ -40,11 +40,24 @@ export interface GeminiChatRequest {
   instruction: string;
   /** Oldest first. `role` is 'user' for the client, 'model' for the AI. */
   history: Array<{ role: 'user' | 'model'; text: string }>;
+  /**
+   * Optional (FIX-22, LEGAL-01 #3). A Gemini response schema (the OpenAPI
+   * subset `generateBrief()` already uses). When present, `chat()` asks for
+   * `responseMimeType: "application/json"` with this schema in
+   * `generationConfig`, so the provider constrains the shape of the answer
+   * itself; the returned string is that JSON text. When absent the request is
+   * exactly what it was before this field existed.
+   */
+  responseSchema?: object;
 }
 
 export interface GeminiClient {
   generateBrief(request: GeminiBriefRequest): Promise<GeminiBrief>;
-  /** Plain text — this one is a conversation, not a structured document. */
+  /**
+   * Plain text by default, since this one is a conversation. With a
+   * `responseSchema` on the request it is the JSON text of one object in that
+   * shape (the caller still parses defensively: a model is not a contract).
+   */
   chat(request: GeminiChatRequest): Promise<string>;
 }
 

@@ -4017,6 +4017,16 @@ model FintavaWallet {
   /// only on rows of the provider it runs, so after a rollback one
   /// provider's ids are never sent to the other (MONEY-20 finding 2).
   provider      String?  @default("fintava")
+  /// The provider's own name for the account's level (`TIER_2`), as its last
+  /// balance read said it (WALLET-23). For ops only: the app is never shown it.
+  accountTier   String?
+  /// What the account may send in a Lagos day, in kobo, as of `limitsReadAt`
+  /// (WALLET-23); null when the provider named no limit. A copy for the
+  /// limit check and the W35 row, refreshed on every balance read; the
+  /// provider stays the one that enforces it.
+  dailyLimitKobo BigInt?
+  /// When `accountTier` and `dailyLimitKobo` were last read. Null: never read.
+  limitsReadAt  DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -5081,6 +5091,10 @@ model School {
   updatedAt DateTime @updatedAt
 
   courses SchoolCourse[]
+  /// SCHOOLS-10: the code this school's apply link carries. Made the first
+  /// time the link is asked for.
+  link    SchoolLink?
+  clicks  SchoolLinkClick[]
 
   @@index([category])
   @@index([name])
@@ -5109,6 +5123,7 @@ model SchoolCourse {
   updatedAt DateTime @updatedAt
 
   intakes CourseIntake[]
+  clicks  SchoolLinkClick[]
 
   @@index([schoolId])
 }
@@ -5137,6 +5152,39 @@ model CourseIntake {
   updatedAt DateTime @updatedAt
 
   @@index([courseId, startDate])
+}
+
+/// SCHOOLS-10: the code on a school's apply link (SC9's `?ref=wawu-7KQ2`), one
+/// per school. It names the school and nobody else: the school's own site sees
+/// this code and never a person (DATA-SAFETY AA-10). It is made the first time
+/// the link is asked for, so a school added by the dashboard needs no step.
+/// SCHOOLS-12 finds the school a sign-up came from by this code.
+model SchoolLink {
+  id        String   @id @default(uuid())
+  schoolId  String   @unique
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  /// "wawu-" and four letters or digits, upper case, no 0, O, 1 or I.
+  code      String   @unique
+  createdAt DateTime @default(now())
+}
+
+/// SCHOOLS-10: one row per tap on "Continue to their site" (SC9): who tapped,
+/// for which course, when. Kept for the commission count (SCHOOLS-12); the
+/// school never sees it. The person's own row, so the account purge deletes it
+/// and the data export lists it. A course removed later leaves the row with no
+/// course (SetNull), so the school's count stays.
+model SchoolLinkClick {
+  id         String        @id @default(uuid())
+  schoolId   String
+  school     School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  courseId   String?
+  course     SchoolCourse? @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  userWawuId String
+  clickedAt  DateTime      @default(now())
+
+  @@index([schoolId, clickedAt])
+  @@index([courseId])
+  @@index([userWawuId, clickedAt])
 }
 
 /// SETTINGS-02: the owner's legal text, one row per document ("terms",
