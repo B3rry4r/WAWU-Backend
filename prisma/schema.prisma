@@ -4748,6 +4748,83 @@ model WalletHold {
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
+/// A SEND FROM ONE WALLET TO ANOTHER (task WALLET-07)
+///
+/// One row per send of money from a person's wallet to another WAWU user's
+/// (W7 to W12): one wallet-to-wallet transfer at the wallet provider
+/// (Fintava, or Nuvion's book transfer) of `amountKobo`, under our reference
+/// `wawu-send-<id>`. The sender's balance falls by `totalKobo` (the amount
+/// plus the provider's charge and WAWU's fee, both quoted, R-10); the
+/// receiver's rises by exactly `amountKobo`. WAWU's fee is collected by the
+/// provider in the same transfer (Fintava's dashboard "Merchant charges",
+/// docs/fintava/fees.md), so there is no second transfer and no second
+/// provider charge.
+///
+/// `status` follows the provider: `pending` until the send is confirmed
+/// (the answer was lost, or the provider accepted it and has not finished:
+/// asked about by our reference, never sent again), `completed`, `failed`
+/// (no money left the wallet: the provider's own refusal or its failed
+/// record) and `reversed`. The ledger rows (FintavaLedgerEntry) carry this
+/// row's id as `transferId`: the sender's `out` row from the claim on, the
+/// receiver's `in` row once the send is confirmed. `kind` is `wawu_user`;
+/// WALLET-09's bank sends add their own columns, nullable, beside these.
+///
+/// Both people's sides are anonymised when their account is purged (the row
+/// is the other person's record too): see src/account-purge.
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletTransfer {
+  id                     String    @id @default(uuid())
+  /// wawu_user (WALLET-07); WALLET-09 adds bank_account.
+  kind                   String    @default("wawu_user")
+  /// Null once the payer's account is deleted.
+  payerWawuUserId        String?
+  /// Null once the receiver's account is deleted.
+  recipientWawuUserId    String?
+  /// The names as the people had them when the send was made (the ledger
+  /// rows' counterparty names): the receipt reads the live ones first.
+  payerName              String?
+  recipientName          String?
+  /// What the receiver gets.
+  amountKobo             BigInt
+  /// The provider's charge and WAWU's fee as quoted (R-10), and the total.
+  providerFeeKobo        BigInt
+  wawuFeeKobo            BigInt
+  totalKobo              BigInt
+  /// The sender's own note (W9).
+  note                   String?
+  /// OUR reference at the wallet provider, derived from this row's id.
+  customerReference      String    @unique
+  payerAccountNumber     String?
+  recipientAccountNumber String?
+  /// The wallet provider that took the send (WALLET_PROVIDER at the time).
+  provider               String    @default("fintava")
+  status                 String
+  /// The sweep's schedule for a `pending` send: when the provider is next
+  /// asked, how many times it has been, and when it went to manual review.
+  nextCheckAt            DateTime?
+  checks                 Int       @default(0)
+  reviewSince            DateTime?
+  failureReason          String?
+  /// The provider's record disagreed with the quote (a fee, an amount): kept
+  /// for review, as on the ledger row.
+  discrepancy            String?
+  /// The provider debited more than the quoted total (a believable charge):
+  /// the send records the real figures and is flagged for NUV-08.
+  debitReviewSince       DateTime?
+  /// When the send was first handed to the provider (the reconcile window).
+  sentAt                 DateTime?
+  completedAt            DateTime?
+  failedAt               DateTime?
+  reversedAt             DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  @@index([payerWawuUserId, createdAt])
+  @@index([recipientWawuUserId, createdAt])
+  @@index([status, reviewSince, nextCheckAt, id])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
 /// RECEIPTS (task WALLET-18)
 ///
 /// A receipt is one ledger row (FintavaLedgerEntry) its owner chose to
