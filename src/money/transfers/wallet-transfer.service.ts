@@ -5,6 +5,7 @@ import type { Prisma } from '../../../generated/prisma/client';
 import { WawuIdClient } from '../../common/auth/wawu-id.client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
+  BANK_SEND_REFERENCE_PREFIX,
   type ProviderReconciliation,
   type ProviderTransaction,
   type ProviderTransferReceipt,
@@ -30,16 +31,21 @@ import {
   LedgerService,
 } from '../ledger/ledger.service';
 import { MoneyLimits } from '../limits/money-limits.service';
+import type { MoneyLimitKind } from '../limits/money-limit-config';
 import { MoneyError } from '../money-error';
 import { loadMoneyParties } from '../money-party';
 import type {
+  BankAccountView,
   MoneyPartyView,
   TransferReversalView,
   TransferStatus,
   TransferTimelineEntry,
   TransferView,
 } from '../money-view.type';
-import type { WawuTransferDto } from '../dto/money-request.dto';
+import type {
+  BankTransferDto,
+  WawuTransferDto,
+} from '../dto/money-request.dto';
 import {
   type IdempotencyScope,
   IdempotencyService,
@@ -51,6 +57,8 @@ import {
   successBody,
 } from '../payments/wallet-payment.service';
 import { isRowOf } from '../../wallet-provider/provider-rows';
+import { SavedAccountTargetService } from '../saved-accounts/saved-account-target.service';
+import type { ResolvedBankTarget } from './bank-send-target';
 import {
   TransferRecipients,
   type TransferRecipient,
@@ -59,6 +67,8 @@ import { splitCharge } from './transfer-figures';
 
 /** The route a send's Idempotency-Key is scoped to. */
 export const TRANSFER_ROUTE = 'POST money/transfers/wawu';
+/** The same for a send to a bank account (WALLET-09). */
+export const BANK_TRANSFER_ROUTE = 'POST money/transfers/bank';
 
 /** What the provider sees on the transfer. Names nobody and nothing personal. */
 export const TRANSFER_NARRATION = 'WAWU transfer';
@@ -106,6 +116,32 @@ const RELEASED: readonly WalletProviderErrorKind[] = [
   'unavailable',
   'not_supported',
   'below_minimum',
+  // The provider will not pay out right now (a bank send): nothing was sent.
+  'payouts_blocked',
+];
+
+/**
+ * Refusals after which a send is failed at once, although the provider may
+ * have written a record under our reference (WALLET-09 round 2, verifier
+ * finding 2): the provider said no before it took the money, so no transfer
+ * exists to settle. Read from the sandbox, not guessed:
+ * - `insufficient_funds` and `wallet_inactive` (a frozen sender): "nothing
+ *   moved" and the reference was not used up (mobile repo
+ *   docs/fintava/sandbox/13- and 15-, wallet to wallet; the bank send checks
+ *   the same balance and the same wallet first);
+ * - `payouts_blocked` ("Unable to find customers"): the refused bank send
+ *   left only an orphan PENDING record that never moved a balance and was
+ *   still pending 37 minutes on (sandbox/14-, which tells the client to
+ *   treat such a row as no money moved and to retry under a new reference).
+ * The reference is burned either way; a retry is a new send under a new one.
+ * Any other refusal of a bank send keeps `recordMayExist` and waits for the
+ * reconcile: nothing recorded says it created no transfer (BACKEND_GAPS
+ * G-767 lists the kinds the sandbox still has to answer).
+ */
+const NO_TRANSFER_REFUSALS: readonly WalletProviderErrorKind[] = [
+  'insufficient_funds',
+  'wallet_inactive',
+  'payouts_blocked',
 ];
 
 /** The rest before the next check of a pending send: 1, 2, 4 ... minutes, at most an hour. */
@@ -173,25 +209,29 @@ export class WalletTransferService implements OnModuleInit {
     private readonly settings: PaymentSettings,
     private readonly limits: MoneyLimits,
     private readonly wawuId: WawuIdClient,
+    /** Keeps a bank send's payee ids on the saved place it went to (WALLET-09). */
+    private readonly saved: SavedAccountTargetService,
   ) {}
 
   onModuleInit(): void {
     // A key left `in_progress` by a request that died (a restart mid-send)
     // is answered from its send once the request can no longer be running.
-    this.keys.onStale(
-      TRANSFER_ROUTE,
-      this.provider.timings.moneyTimeoutMs + MINUTE,
-      async (row) => {
-        const t = row.resourceId
-          ? await this.prisma.walletTransfer.findUnique({
-              where: { id: row.resourceId },
-            })
-          : null;
-        return t
-          ? { status: 201, body: successBody(await this.view(t)) }
-          : null;
-      },
-    );
+    for (const route of [TRANSFER_ROUTE, BANK_TRANSFER_ROUTE]) {
+      this.keys.onStale(
+        route,
+        this.provider.timings.moneyTimeoutMs + MINUTE,
+        async (row) => {
+          const t = row.resourceId
+            ? await this.prisma.walletTransfer.findUnique({
+                where: { id: row.resourceId },
+              })
+            : null;
+          return t
+            ? { status: 201, body: successBody(await this.view(t)) }
+            : null;
+        },
+      );
+    }
     // A send's ledger row settled by anything settles the send now.
     this.ledger.onTransferSettled((e) => this.settle(e.transferId));
   }
@@ -273,6 +313,138 @@ export class WalletTransferService implements OnModuleInit {
   }
 
   /**
+   * Send money to a bank account (task WALLET-09; W8 to W14, and a
+   * withdrawal, W17 to W19, which is a bank send to the payout account). The
+   * same send as the one to a WAWU user, in the same order and with the same
+   * guarantees (see the class comment), with these differences:
+   *
+   * - **The target is decided before the PIN** (`BankSendTargetGuard`, the
+   *   name check and the saved-account gate, NUV-06's notes N3 and N5) and
+   *   arrives here resolved: the bank's code in the provider's list, its
+   *   name, the account number and the holder's name the bank gave just now.
+   * - **The quote is the bank's** (`bank_transfer`: the provider's charge for
+   *   a bank send plus WAWU's fee, R-10), checked here (`409 quote_changed`).
+   * - **The row is written first** (N6): the send, with `providerFeeKobo` and
+   *   `wawuFeeKobo` as quoted, and its pending ledger row, in the claim (the
+   *   limits are checked in the same transaction, WALLET-23), BEFORE the
+   *   provider hears of the send, so a delivery that lands first finds the
+   *   row at the quote's figures.
+   * - **Called once** (N2). A request that provably never left is failed and
+   *   the key given back; an unknown outcome (`outcome_unknown`,
+   *   `not_confirmed`, `duplicate_reference`) is `pending` and found again by
+   *   our reference (`reconcileSend` through the seam, the sweep). Nothing
+   *   here calls `bankTransfer` a second time, and the error flags are read
+   *   only for the call that failed.
+   * - **Money in at the other bank** has no `in` row: only the sender's side
+   *   is ours. The bank's answer arrives later (a delivery, or the sweep) and
+   *   the app reads it from `GET /money/transfers/{id}`.
+   */
+  async sendToBank(
+    wallet: OpenWallet,
+    dto: BankTransferDto,
+    scope: IdempotencyScope,
+    resolved: ResolvedBankTarget,
+  ): Promise<TransferView> {
+    const payer = wallet.wawuUserId;
+    const { target } = resolved;
+    // The guard resolves the target from this very body, so the account
+    // number is the one asked; anything else throws before a send is claimed.
+    if (target.accountNumber !== dto.accountNumber) {
+      throw new Error('sendToBank: the resolved target is not the one asked.');
+    }
+    const note = dto.note?.trim() ? dto.note.trim() : null;
+    const fee = this.fees.check(
+      payer,
+      { kind: 'bank_transfer', amountKobo: dto.amountKobo },
+      dto.expectedTotalKobo,
+      dto.quoteToken,
+      new Date(),
+    );
+
+    // The provider's balance, never ours: a 503 or a 423 here moves nothing.
+    const { availableKobo } = await this.balances.balance(wallet);
+    if (availableKobo < fee.totalKobo) {
+      throw insufficientFunds(availableKobo, fee.totalKobo);
+    }
+
+    const id = randomUUID();
+    const now = new Date();
+    const data: Prisma.WalletTransferCreateInput = {
+      id,
+      kind: 'bank_account',
+      payerWawuUserId: payer,
+      bankCode: target.bankCode,
+      bankName: target.bankName,
+      bankAccountNumber: target.accountNumber,
+      bankAccountName: target.accountName,
+      amountKobo: BigInt(dto.amountKobo),
+      providerFeeKobo: BigInt(fee.fee.providerFeeKobo),
+      wawuFeeKobo: BigInt(fee.fee.wawuFeeKobo),
+      totalKobo: BigInt(fee.totalKobo),
+      note,
+      customerReference: `${BANK_SEND_REFERENCE_PREFIX}${id}`,
+      payerAccountNumber: wallet.accountNumber,
+      provider: this.provider.name,
+      status: 'pending',
+      nextCheckAt: new Date(now.getTime() + MINUTE),
+      sentAt: now,
+    };
+
+    // The CLAIM, as for a send to a WAWU user: the row, its pending ledger
+    // row and the key's link to it, in one transaction, before the provider
+    // is called.
+    const transfer = await this.claim(scope, data);
+
+    let receipt: ProviderTransferReceipt;
+    try {
+      receipt = await this.provider.bankTransfer({
+        from: { kind: 'customer', customerId: wallet.customerId },
+        accountNumber: target.accountNumber,
+        accountName: target.accountName,
+        bankCode: target.bankCode,
+        amountKobo: BigInt(dto.amountKobo),
+        reference: transfer.customerReference,
+        narration: TRANSFER_NARRATION,
+        payee: target.payee,
+      });
+    } catch (e) {
+      return this.afterRefusal(transfer, scope, e, wallet);
+    }
+    const view = await this.afterReceipt(transfer, scope, receipt);
+    await this.keepPayee(payer, resolved, receipt.payee);
+    return view;
+  }
+
+  /**
+   * Keeps the payee ids a send used or made on the saved place it went to, so
+   * the next send reuses them. Never fails the send: the money has moved.
+   */
+  private async keepPayee(
+    payer: string,
+    resolved: ResolvedBankTarget,
+    payee: ProviderTransferReceipt['payee'],
+  ): Promise<void> {
+    const { place, target } = resolved;
+    if (!place || !payee) return;
+    try {
+      if (place.kind === 'beneficiary') {
+        await this.saved.rememberBeneficiaryPayee(payer, place.id, payee);
+      } else {
+        await this.saved.rememberPayoutPayee(
+          payer,
+          'person',
+          { bankCode: place.bankCode, accountNumber: target.accountNumber },
+          payee,
+        );
+      }
+    } catch (e) {
+      this.logger.warn(
+        `bank send: the payee ids could not be kept (${e instanceof Error ? e.name : 'error'})`,
+      );
+    }
+  }
+
+  /**
    * Writes the send. READ COMMITTED (Postgres's default; nothing here raises
    * it): WAWU's limits take a per-person lock for this transaction and count
    * the person's sends today and this month, so two sends by one person are
@@ -287,7 +459,9 @@ export class WalletTransferService implements OnModuleInit {
       await this.limits.assertMayMove(
         {
           wawuUserId: data.payerWawuUserId!,
-          kind: 'wawu_transfer',
+          kind: (data.kind === 'bank_account'
+            ? 'bank_transfer'
+            : 'wawu_transfer') satisfies MoneyLimitKind,
           amountKobo: koboNumber(BigInt(data.amountKobo)),
         },
         { tx },
@@ -379,7 +553,10 @@ export class WalletTransferService implements OnModuleInit {
       await this.keys.release(scope);
       throw refusal.toHttpException();
     }
-    if (!refusal || refusal.recordMayExist) {
+    if (
+      !refusal ||
+      (refusal.recordMayExist && !NO_TRANSFER_REFUSALS.includes(refusal.kind))
+    ) {
       // Money may have moved (a lost answer, or a transfer the provider
       // accepted and has not completed). Pending until the provider says;
       // nothing is sent again from here.
@@ -432,6 +609,8 @@ export class WalletTransferService implements OnModuleInit {
       );
       return this.answer(scope, row);
     }
+    // The provider took it: W19's "sent to your bank".
+    await this.markSentToBank(transfer, new Date());
     let row: TransferRow;
     try {
       row = await this.completeFromRecord(transfer, {
@@ -553,26 +732,30 @@ export class WalletTransferService implements OnModuleInit {
       );
       if (out.discrepancy) notes.push(out.discrepancy);
     }
-    const inn = await this.ledger.record(
-      sighted(
-        this.movement(
-          t,
-          'in',
-          'completed',
-          {
-            ...real,
-            feeKobo: 0,
-            totalKobo: amount,
-            providerFeeKobo: 0,
-            wawuFeeKobo: 0,
-          },
-          rec.refs,
+    // A send to a bank has no receiver's side of ours: the money is at
+    // another bank. Only a send to a WAWU user writes the receiver's row.
+    if (t.kind !== 'bank_account') {
+      const inn = await this.ledger.record(
+        sighted(
+          this.movement(
+            t,
+            'in',
+            'completed',
+            {
+              ...real,
+              feeKobo: 0,
+              totalKobo: amount,
+              providerFeeKobo: 0,
+              wawuFeeKobo: 0,
+            },
+            rec.refs,
+          ),
         ),
-      ),
-      undefined,
-      { quiet: true },
-    );
-    if (inn.discrepancy) notes.push(inn.discrepancy);
+        undefined,
+        { quiet: true },
+      );
+      if (inn.discrepancy) notes.push(inn.discrepancy);
+    }
 
     const above = figures.verdict === 'above';
     if (above) {
@@ -586,6 +769,9 @@ export class WalletTransferService implements OnModuleInit {
         completedAt: now,
         nextCheckAt: null,
         reviewSince: null,
+        ...(t.kind === 'bank_account' && t.sentToBankAt === null
+          ? { sentToBankAt: rec.occurredAt ?? now }
+          : {}),
         providerFeeKobo: BigInt(real.providerFeeKobo),
         wawuFeeKobo: BigInt(real.wawuFeeKobo),
         totalKobo: BigInt(real.totalKobo),
@@ -673,6 +859,12 @@ export class WalletTransferService implements OnModuleInit {
       where: { id: transferId },
     });
     if (!t) return null;
+    if (t.status === 'failed' && t.kind === 'bank_account') {
+      // A failed bank send arrives as the provider's reversal of the debit
+      // (MONEY-07): the sender's row became `reversed` after the send was
+      // failed, and the send follows it, once.
+      return (await this.followReversal(t)).status as TransferStatus;
+    }
     if (t.status !== 'pending') return t.status as TransferStatus;
     const row = await this.prisma.fintavaLedgerEntry.findFirst({
       where: {
@@ -725,6 +917,7 @@ export class WalletTransferService implements OnModuleInit {
     const answer = await this.askProvider(t);
     if (answer?.state === 'found') {
       const found = answer.transaction;
+      await this.markSentToBank(t, occurredOf(found) ?? now);
       if (found.outcome === 'completed') {
         if (found.amountKobo !== t.amountKobo) {
           return (
@@ -894,13 +1087,24 @@ export class WalletTransferService implements OnModuleInit {
     const status = t.status as TransferStatus;
     const providerFeeKobo = koboNumber(t.providerFeeKobo);
     const wawuFeeKobo = koboNumber(t.wawuFeeKobo);
+    const bank = t.kind === 'bank_account';
     const [party, ledgerRow] = await Promise.all([
-      this.recipientParty(t),
+      bank ? Promise.resolve(null) : this.recipientParty(t),
       this.senderRow(t),
     ]);
     const timeline: TransferTimelineEntry[] = [
       { step: 'requested', at: t.createdAt.toISOString() },
     ];
+    // A send that failed or was reversed was not "sent to the bank" as far as
+    // the person is concerned (round 2): the step is for a send the bank took.
+    if (
+      bank &&
+      t.sentToBankAt &&
+      status !== 'failed' &&
+      status !== 'reversed'
+    ) {
+      timeline.push({ step: 'sent_to_bank', at: t.sentToBankAt.toISOString() });
+    }
     if (t.completedAt) {
       timeline.push({ step: 'completed', at: t.completedAt.toISOString() });
     }
@@ -912,7 +1116,7 @@ export class WalletTransferService implements OnModuleInit {
     }
     return {
       id: t.id,
-      kind: 'wawu_user',
+      kind: bank ? 'bank_account' : 'wawu_user',
       status,
       amountKobo: koboNumber(t.amountKobo),
       fee: {
@@ -924,7 +1128,7 @@ export class WalletTransferService implements OnModuleInit {
       note: t.note,
       reference: t.customerReference,
       toWawuUser: party,
-      toBankAccount: null,
+      toBankAccount: bank ? this.bankAccountOf(t) : null,
       timeline,
       failureReason:
         status === 'failed'
@@ -938,6 +1142,24 @@ export class WalletTransferService implements OnModuleInit {
       transactionId: ledgerRow?.id ?? null,
       createdAt: t.createdAt.toISOString(),
       completedAt: t.completedAt ? t.completedAt.toISOString() : null,
+    };
+  }
+
+  /** Where a bank send went, as the bank named it; null when the row holds none. */
+  private bankAccountOf(t: TransferRow): BankAccountView | null {
+    if (
+      t.bankCode === null ||
+      t.bankName === null ||
+      t.bankAccountNumber === null ||
+      t.bankAccountName === null
+    ) {
+      return null;
+    }
+    return {
+      bankCode: t.bankCode,
+      bankName: t.bankName,
+      accountNumber: t.bankAccountNumber,
+      accountName: t.bankAccountName,
     };
   }
 
@@ -1046,12 +1268,21 @@ export class WalletTransferService implements OnModuleInit {
         totalKobo: figures?.totalKobo ?? amount + providerFee + wawuFee,
         providerFeeKobo: figures?.providerFeeKobo ?? providerFee,
         wawuFeeKobo: figures?.wawuFeeKobo ?? wawuFee,
-        counterparty: {
-          kind: 'wawu_user',
-          name: t.recipientName,
-          wawuUserId: t.recipientWawuUserId,
-          accountNumber: t.recipientAccountNumber,
-        },
+        counterparty:
+          t.kind === 'bank_account'
+            ? {
+                kind: 'bank_account',
+                name: t.bankAccountName,
+                accountNumber: t.bankAccountNumber,
+                bankCode: t.bankCode,
+                bankName: t.bankName,
+              }
+            : {
+                kind: 'wawu_user',
+                name: t.recipientName,
+                wawuUserId: t.recipientWawuUserId,
+                accountNumber: t.recipientAccountNumber,
+              },
         note: t.note,
       };
     }
@@ -1096,6 +1327,41 @@ export class WalletTransferService implements OnModuleInit {
     return this.prisma.walletTransfer.findUniqueOrThrow({
       where: { id: t.id },
     });
+  }
+
+  /** A bank send the provider took: the time W19's second step shows. Once. */
+  private async markSentToBank(t: TransferRow, at: Date): Promise<void> {
+    if (t.kind !== 'bank_account') return;
+    await this.prisma.walletTransfer.updateMany({
+      where: { id: t.id, sentToBankAt: null },
+      data: { sentToBankAt: at },
+    });
+  }
+
+  /**
+   * A failed bank send whose debit the provider has since reversed: the
+   * sender's ledger row is `reversed`, so the send is too. Only a `failed`
+   * send moves, once (`failed` to `reversed` is the one change a settled
+   * send makes).
+   */
+  private async followReversal(t: TransferRow): Promise<TransferRow> {
+    const row = await this.prisma.fintavaLedgerEntry.findFirst({
+      where: {
+        customerReference: t.customerReference,
+        direction: 'out',
+        walletKind: 'user',
+      },
+      select: { status: true, reversedAt: true },
+    });
+    if (row?.status !== 'reversed') return t;
+    await this.prisma.walletTransfer.updateMany({
+      where: { id: t.id, status: 'failed' },
+      data: {
+        status: 'reversed',
+        reversedAt: row.reversedAt ?? new Date(),
+      },
+    });
+    return this.reload(t);
   }
 
   /** Still `pending`, out of the sweep, for a person to look at. */

@@ -49,6 +49,12 @@ import { WalletHoldService } from './holds/wallet-hold.service';
 import { MoneyPaymentsController } from './payments/money-payments.controller';
 import { MoneyTransfersController } from './transfers/money-transfers.controller';
 import {
+  BankSendTargetGuard,
+  BankSendTargets,
+} from './transfers/bank-send-target';
+import { MoneyBanksController } from './saved-accounts/money-banks.controller';
+import { NameCheckTokenService } from './saved-accounts/name-check-token.service';
+import {
   TransferRecipientGuard,
   TransferRecipients,
 } from './transfers/transfer-recipient';
@@ -185,6 +191,13 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
  * answer was lost from the provider's own record (it runs where
  * ScheduleModule.forRoot() is loaded). It never sends twice.
  *
+ * WALLET-09: sending money to a bank account (`POST /money/transfers/bank`)
+ * with the bank list and the name check (`GET /money/banks`, `POST
+ * /money/banks/name-check`): the same send as WALLET-07's, to any Nigerian
+ * bank account, the account name-checked with the bank before the PIN is
+ * looked at, WAWU's limits checked in the claim (WALLET-23's included), and
+ * a pending send found again by our reference.
+ *
  * WALLET-27: statements (`/money/statements`), the caller's completed
  * movements over a period of Lagos days as a CSV file, behind the wallet
  * gate, read from the ledger only; it never calls Fintava.
@@ -228,6 +241,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyFeesController,
     MoneyPaymentsController,
     MoneyTransfersController,
+    MoneyBanksController,
     MoneyHoldsController,
     MoneyReceiptController,
     PublicReceiptController,
@@ -252,6 +266,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletOpeningSettings,
     WalletOpeningService,
     BankAccountCheckService,
+    NameCheckTokenService,
     BeneficiaryService,
     PayoutAccountService,
     SavedAccountTargetService,
@@ -271,6 +286,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletPaymentService,
     TransferRecipients,
     TransferRecipientGuard,
+    BankSendTargets,
+    BankSendTargetGuard,
     WalletTransferService,
     HoldViewService,
     WalletHoldService,

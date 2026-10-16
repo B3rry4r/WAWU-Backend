@@ -148,6 +148,8 @@ export const MONEY_ERROR_CODES = [
   'amount_out_of_range',
   'quote_changed',
   'name_check_failed',
+  // A saved bank account whose holder's name at the bank is no longer the one kept (WALLET-09).
+  'account_name_changed',
   'recipient_not_found',
   'recipient_has_no_wallet',
   'recipient_blocked',

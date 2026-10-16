@@ -423,6 +423,7 @@ describe('No wallet yet: every wallet route answers the same (MONEY-13) over HTT
       'post /api/hub/money/pin/verify',
       'post /api/hub/money/statements/email',
       'post /api/hub/money/transactions/:id/receipt',
+      'post /api/hub/money/transfers/bank',
       'post /api/hub/money/transfers/wawu',
       'put /api/hub/money/device',
       'put /api/hub/money/payout-account',

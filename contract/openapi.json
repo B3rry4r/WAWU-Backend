@@ -17004,6 +17004,145 @@
         "x-wawu-built-by": "WALLET-07"
       }
     },
+    "/api/hub/money/transfers/bank": {
+      "post": {
+        "operationId": "MoneyTransfersController_sendToBank",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BankTransferDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range, self_transfer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, account_name_changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: name_check_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Send to a bank account (W8 to W14), or withdraw to the payout account\n(W17 to W19, which is a bank send to it). Answers 201 with the send:\n`pending` until the bank's answer arrives (a delivery, or the sweep that\nasks the provider by our reference), `completed`, or `failed`; the app\nreads it from `GET /money/transfers/{id}`. The account is name-checked\nwith the bank again BEFORE the PIN is looked at and the send goes to the\nname the bank gives: the app never sends a name. A saved account whose\nholder or bank is no longer the one kept is `409 account_name_changed`,\ncarrying both names as they stand now; nothing is sent until the person\nconfirms them by saving the account again. The same Idempotency-Key and\nbody answer the first result again (`Idempotent-Replayed: true`) without\nchecking the PIN. fees_not_set comes before the wallet gate, the key and\nthe PIN; limit_reached (WAWU's limit or the provider's, WALLET-23) before\nanything is sent.",
+        "tags": [
+          "MoneyTransfers"
+        ],
+        "x-wawu-built-by": "WALLET-09"
+      }
+    },
     "/api/hub/money/transfers/{id}": {
       "get": {
         "operationId": "MoneyTransfersController_transfer",
@@ -17069,6 +17208,105 @@
           "MoneyTransfers"
         ],
         "x-wawu-built-by": "WALLET-07"
+      }
+    },
+    "/api/hub/money/banks": {
+      "get": {
+        "operationId": "MoneyBanksController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BankView"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The provider's bank list, in one unpaged array. Key on `code`: some names\nrepeat. Kept in memory for an hour (BANK_LIST_TTL_MS), so a person\nopening the picker does not wait on the provider.",
+        "tags": [
+          "MoneyBanks"
+        ],
+        "x-wawu-built-by": "WALLET-09"
+      }
+    },
+    "/api/hub/money/banks/name-check": {
+      "post": {
+        "operationId": "MoneyBanksController_nameCheck",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NameCheckDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountNameView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: name_check_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Whose account this is, from the bank (W8, A21). W8's Continue unlocks only\nafter this answers. The name is the bank's, never one the app sent. It\ncomes with a `nameToken` for this person (WALLET-09 round 2): the send to\nan account that is not saved carries it, so the money goes to the name\nthey were shown or nowhere.",
+        "tags": [
+          "MoneyBanks"
+        ],
+        "x-wawu-built-by": "WALLET-09"
       }
     },
     "/api/hub/money/holds": {
@@ -30884,240 +31122,6 @@
           "AdsEvents"
         ]
       }
-    },
-    "/api/hub/money/banks": {
-      "get": {
-        "operationId": "MoneyTransferController_banks",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/BankView"
-                  }
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Fintava's bank list, in one unpaged array. Key on `code`: some names repeat.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-09",
-        "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/banks/name-check": {
-      "post": {
-        "operationId": "MoneyTransferController_nameCheck",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NameCheckDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AccountNameView"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: name_check_failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Whose account this is, from the bank (W8, A21). W8's Continue unlocks only after this answers.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-09",
-        "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/transfers/bank": {
-      "post": {
-        "operationId": "MoneyTransferController_sendToBank",
-        "parameters": [
-          {
-            "name": "X-Transaction-Pin",
-            "in": "header",
-            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}$"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]{8,128}$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BankTransferDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransferView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: idempotency_key_required, amount_out_of_range",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "402": {
-            "description": "reason.code: insufficient_funds",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: pin_required, pin_incorrect, limit_reached, daily_limit_exceeded, bank_transfers_blocked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: name_check_failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, pin_locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable, fees_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Send to a bank account (W10 to W14), or withdraw to the payout account\n(W17 to W19). Answers pending; the bank's answer arrives later and the\napp reads it from GET /money/transfers/{id}.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-09",
-        "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
-        "x-wawu-served": false
-      }
     }
   },
   "info": {
@@ -33122,6 +33126,7 @@
               "amount_out_of_range",
               "quote_changed",
               "name_check_failed",
+              "account_name_changed",
               "recipient_not_found",
               "recipient_has_no_wallet",
               "recipient_blocked",
@@ -33257,6 +33262,13 @@
           "paymentId": {
             "type": "string",
             "description": "payment_in_progress: the payment for this item still being confirmed (MONEY-17)."
+          },
+          "accountName": {
+            "type": "string",
+            "description": "account_name_changed: the name the bank gives for the account now (the\nname to show for the person to confirm), and the bank's name for it."
+          },
+          "bankName": {
+            "type": "string"
           },
           "retryAfterSeconds": {
             "type": "number",
@@ -33570,6 +33582,10 @@
             "description": "Required when kind is bank_account.",
             "pattern": "^[0-9]{10}$"
           },
+          "confirmCurrentName": {
+            "type": "boolean",
+            "description": "bank_account only (WALLET-09): the person has seen the bank and the name\nthe bank gives for this saved account now (`409 account_name_changed`)\nand confirms them. The server asks the bank and keeps what it says, in\nplace of the name kept before. Left out, saving an account already saved\nanswers the row as it is, as it always did."
+          },
           "wawuUserId": {
             "type": "string",
             "description": "Required when kind is wawu_user.",
@@ -33716,6 +33732,71 @@
           "expectedTotalKobo",
           "recipientWawuUserId",
           "quoteToken"
+        ]
+      },
+      "BankTransferDto": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string",
+            "pattern": "^[0-9]{3,6}$"
+          },
+          "accountNumber": {
+            "type": "string",
+            "pattern": "^[0-9]{10}$"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "description": "What the bank account gets, in kobo.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`totalKobo` from the fee quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from that fee quote (`GET /money/fees/quote?kind=\nbank_transfer`; BACKEND_GAPS G-64): the server checks it is its own, for\nthis person and this amount, and not past `expiresAt`; otherwise `409\nquote_changed` with the new quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "nameToken": {
+            "type": "string",
+            "description": "`nameToken` from the name check the person saw (`POST\n/money/banks/name-check`), for an account that is not saved (WALLET-09\nround 2): the send is bound to the holder's name they were shown. If the\nbank names another holder now, the answer is `409 account_name_changed`\nand nothing is sent. The app always sends it for an account it has not\nsaved; a saved account is compared with its kept name and ignores it.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "note": {
+            "type": "string",
+            "description": "W9's optional note, 100 characters at most.",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "bankCode",
+          "accountNumber",
+          "amountKobo",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
+      "NameCheckDto": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string",
+            "pattern": "^[0-9]{3,6}$"
+          },
+          "accountNumber": {
+            "type": "string",
+            "pattern": "^[0-9]{10}$"
+          }
+        },
+        "required": [
+          "bankCode",
+          "accountNumber"
         ]
       },
       "MoneyPlainErrorEnvelope": {
@@ -36195,57 +36276,6 @@
           "type"
         ]
       },
-      "NameCheckDto": {
-        "type": "object",
-        "properties": {
-          "bankCode": {
-            "type": "string",
-            "pattern": "^[0-9]{3,6}$"
-          },
-          "accountNumber": {
-            "type": "string",
-            "pattern": "^[0-9]{10}$"
-          }
-        },
-        "required": [
-          "bankCode",
-          "accountNumber"
-        ]
-      },
-      "BankTransferDto": {
-        "type": "object",
-        "properties": {
-          "bankCode": {
-            "type": "string",
-            "pattern": "^[0-9]{3,6}$"
-          },
-          "accountNumber": {
-            "type": "string",
-            "pattern": "^[0-9]{10}$"
-          },
-          "amountKobo": {
-            "type": "integer",
-            "description": "What the bank account gets, in kobo.",
-            "minimum": 1,
-            "maximum": 9007199254740991
-          },
-          "expectedTotalKobo": {
-            "type": "integer",
-            "description": "`totalKobo` from the fee quote the person saw. A different server total is `quote_changed`.",
-            "minimum": 1
-          },
-          "note": {
-            "type": "string",
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "bankCode",
-          "accountNumber",
-          "amountKobo",
-          "expectedTotalKobo"
-        ]
-      },
       "FintavaWebhookAck": {
         "type": "object",
         "properties": {
@@ -37975,6 +38005,48 @@
           "transactionId",
           "createdAt",
           "completedAt"
+        ]
+      },
+      "BankView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name"
+        ]
+      },
+      "AccountNameView": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string"
+          },
+          "bankName": {
+            "type": "string"
+          },
+          "accountNumber": {
+            "type": "string"
+          },
+          "accountName": {
+            "type": "string"
+          },
+          "nameToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bankCode",
+          "bankName",
+          "accountNumber",
+          "accountName",
+          "nameToken"
         ]
       },
       "RecipientView": {
@@ -53680,44 +53752,6 @@
         "required": [
           "campaignId",
           "audit"
-        ]
-      },
-      "BankView": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "code",
-          "name"
-        ]
-      },
-      "AccountNameView": {
-        "type": "object",
-        "properties": {
-          "bankCode": {
-            "type": "string"
-          },
-          "bankName": {
-            "type": "string"
-          },
-          "accountNumber": {
-            "type": "string"
-          },
-          "accountName": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "bankCode",
-          "bankName",
-          "accountNumber",
-          "accountName"
         ]
       }
     }
