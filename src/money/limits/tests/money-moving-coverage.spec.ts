@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   GUARDS_METADATA,
   METHOD_METADATA,
@@ -863,6 +865,26 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
       ),
     ).toHaveLength(1);
     expect(globalGuardFailures(walk)).toEqual([]);
+  });
+
+  it('and none is registered in code either: nothing calls useGlobalGuards() (FIX-26)', () => {
+    const SRC = join(__dirname, '..', '..', '..');
+    const sources: string[] = [];
+    const visit = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.isDirectory()) visit(join(dir, e.name));
+        else if (e.name.endsWith('.ts') && !e.name.endsWith('.spec.ts')) {
+          sources.push(join(dir, e.name));
+        }
+      }
+    };
+    visit(SRC);
+    expect(sources.length).toBeGreaterThan(100);
+    expect(
+      sources.filter((f) =>
+        /\buseGlobalGuards\s*\(/.test(readFileSync(f, 'utf8')),
+      ),
+    ).toEqual([]);
   });
 
   it('every write under money/ moves money (and keeps the rules above) or is named with a reason: a debit that documents nothing and carries no PIN guard cannot hide (FIX-26)', () => {
