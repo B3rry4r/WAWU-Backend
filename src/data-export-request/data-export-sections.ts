@@ -910,6 +910,30 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // POINTS-04: each time the person turned points into cash, in kobo: how
+    // many points, how much cash, how it ended. No account number and no
+    // provider reference.
+    key: 'pointConversions',
+    models: ['PointConversion'],
+    load: async (prisma, me) => {
+      const rows = await prisma.pointConversion.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          points: true,
+          cashKobo: true,
+          status: true,
+          failureReason: true,
+          createdAt: true,
+          settledAt: true,
+        },
+        orderBy: NEWEST,
+      });
+      // A file carries numbers, not BigInt: kobo as a whole number.
+      return rows.map((r) => ({ ...r, cashKobo: Number(r.cashKobo) }));
+    },
+  },
+  {
     key: 'pointMovements',
     models: ['PointLedger'],
     load: (prisma, me) =>
@@ -1013,6 +1037,13 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     // person column (like FintavaWebhookEvent): it is Nuvion's record of
     // events, not the person's, so neither the purge map nor this list
     // names it.
+    // FIX-20. Both webhook tables keep a delivery's raw body and parsed
+    // copy, so they are not kept for ever: RETENTION covers them, not the
+    // export or the purge. A daily job (src/webhook-retention/) clears the
+    // body and the parsed copy after WEBHOOK_RETENTION_DAYS (90 by default)
+    // once a delivery is finished with (docs/contract/CONVENTIONS.md section
+    // 21). What a person is owed of their money history is the ledger
+    // (FintavaLedgerEntry below), which this list covers.
     // NUV-05. NuvionBookTransfer, the log of book transfers sent on Nuvion,
     // has no person column either: it holds account ids, an account number,
     // an amount and WAWU's reference, and the person's own transfers reach
