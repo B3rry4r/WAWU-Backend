@@ -127,3 +127,37 @@ export interface PaidDmAvailability {
   /** ISO time they come back. Null unless paused. */
   pausedUntil: string | null;
 }
+
+/** What a creator may choose on the paid messages settings (I21), from config. */
+export interface PaidDmSettingsOptions {
+  /** Lowest price a paid message may have, in kobo. */
+  minPriceKobo: number;
+  /** Highest price a paid message may have, in kobo. */
+  maxPriceKobo: number;
+  /** The quick prices to offer, in kobo, ascending. */
+  pricePresetsKobo: number[];
+  /** The reply windows to offer, in hours, ascending. */
+  responseWindowHours: number[];
+}
+
+/**
+ * GET and PUT /paid-dm/settings: the creator's paid message settings (I21 to
+ * I23), with everything the screen draws. Money is integer kobo.
+ */
+export interface PaidDmSettings {
+  /** The creator's own switch. It stays as set while paid messages are paused: the pause ends by the clock and they are back on. */
+  enabled: boolean;
+  /** Price per message in kobo. Null until one is set. */
+  priceKobo: number | null;
+  /** Hours the creator has to reply. */
+  responseHours: number;
+  /** The share of each message the creator keeps, in whole percent (R-5: 85). */
+  creatorSharePct: number;
+  /** What the creator keeps per message at the saved price, in kobo. Null with no price. */
+  earnPerMessageKobo: number | null;
+  /** The next preset price above the saved one, offered when warned. Null when none is higher. */
+  raiseToKobo: number | null;
+  options: PaidDmSettingsOptions;
+  /** Warned, paused and when paid messages come back (I22, I23). */
+  standing: PaidDmStanding;
+}
