@@ -89,7 +89,7 @@ function backfillSql(): string {
       '..',
       'prisma',
       'migrations',
-      '20261021210000_money_in_notices',
+      '20261021300000_money_in_notices',
       'migration.sql',
     ),
     'utf8',
