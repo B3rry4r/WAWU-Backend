@@ -137,7 +137,7 @@ describe('money contract (MONEY-04)', () => {
     // Every route MONEY-04 declared is served now (WALLET-09 served the last
     // three), so the module may declare nothing: the loop below then has
     // nothing to compare and the module check above still holds.
-    expect(declared.size).toBeGreaterThanOrEqual(0);
+    expect(declared.size).toBe(0);
     for (const mod of mounted) {
       const controllers = (Reflect.getMetadata(
         MODULE_METADATA.CONTROLLERS,

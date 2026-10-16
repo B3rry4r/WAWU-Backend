@@ -325,6 +325,12 @@ export interface AccountNameView {
   bankName: string;
   accountNumber: string;
   accountName: string;
+  /**
+   * Binds a send to an account that is not saved to this holder's name: send
+   * it back as `nameToken` on `POST /money/transfers/bank`. Signed, for this
+   * person, short-lived (15 minutes).
+   */
+  nameToken: string;
 }
 
 /** A WAWU user who can be sent money (W7). Only people with an open wallet. */

@@ -8,11 +8,14 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
+import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import { NameCheckDto } from '../dto/money-request.dto';
 import { BuiltBy, MoneyErrors } from '../money-contract';
 import type { AccountNameView, BankView } from '../money-view.type';
 import { BankAccountCheckService } from './bank-account-check.service';
+import { NameCheckTokenService } from './name-check-token.service';
 
 /**
  * The bank list and the name check (task WALLET-09; W8, A21). Declared by
@@ -25,7 +28,10 @@ import { BankAccountCheckService } from './bank-account-check.service';
 @UseGuards(WawuAuthGuard)
 @Controller('money')
 export class MoneyBanksController {
-  constructor(private readonly banks: BankAccountCheckService) {}
+  constructor(
+    private readonly banks: BankAccountCheckService,
+    private readonly nameTokens: NameCheckTokenService,
+  ) {}
 
   /**
    * The provider's bank list, in one unpaged array. Key on `code`: some names
@@ -43,14 +49,21 @@ export class MoneyBanksController {
 
   /**
    * Whose account this is, from the bank (W8, A21). W8's Continue unlocks only
-   * after this answers. The name is the bank's, never one the app sent.
+   * after this answers. The name is the bank's, never one the app sent. It
+   * comes with a `nameToken` for this person (WALLET-09 round 2): the send to
+   * an account that is not saved carries it, so the money goes to the name
+   * they were shown or nowhere.
    */
   @Post('banks/name-check')
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-09')
   @MoneyErrors('name_check_failed', 'provider_unreachable')
-  nameCheck(@Body() dto: NameCheckDto): Promise<AccountNameView> {
-    return this.banks.check(dto.bankCode, dto.accountNumber);
+  async nameCheck(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: NameCheckDto,
+  ): Promise<AccountNameView> {
+    const shown = await this.banks.check(dto.bankCode, dto.accountNumber);
+    return { ...shown, nameToken: this.nameTokens.issue(user.sub, shown) };
   }
 }

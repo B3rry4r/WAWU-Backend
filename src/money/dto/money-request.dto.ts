@@ -50,10 +50,14 @@ const PIN_MESSAGE = 'A PIN is four digits.';
  * A bank code: 3 to 6 digits, as the Flutterwave wallet already accepts.
  * Fintava's are 4 to 6 and are never left-padded (sandbox/01-bank-list.md).
  */
-const BANK_CODE_PATTERN = /^[0-9]{3,6}$/;
+export const BANK_CODE_PATTERN = /^[0-9]{3,6}$/;
 
 /** NUBAN: ten digits, never anything but digits. */
-const NUBAN_PATTERN = /^[0-9]{10}$/;
+export const NUBAN_PATTERN = /^[0-9]{10}$/;
+
+/** The sentences the ValidationPipe answers with for these two fields; the bank send's guard answers the same ones. */
+export const BANK_CODE_MESSAGE = 'bankCode must be a numeric bank code';
+export const NUBAN_MESSAGE = 'accountNumber must be 10 digits';
 
 /**
  * The largest amount validation lets through: the largest integer a JSON
@@ -153,13 +157,11 @@ export class RegisterApprovalDeviceDto {
  */
 export class NameCheckDto {
   @ApiProperty({ pattern: BANK_CODE_PATTERN.source })
-  @Matches(BANK_CODE_PATTERN, {
-    message: 'bankCode must be a numeric bank code',
-  })
+  @Matches(BANK_CODE_PATTERN, { message: BANK_CODE_MESSAGE })
   bankCode!: string;
 
   @ApiProperty({ pattern: NUBAN_PATTERN.source })
-  @Matches(NUBAN_PATTERN, { message: 'accountNumber must be 10 digits' })
+  @Matches(NUBAN_PATTERN, { message: NUBAN_MESSAGE })
   accountNumber!: string;
 }
 
@@ -199,15 +201,13 @@ export class CreateBeneficiaryDto {
   /** Required when kind is bank_account. */
   @ApiPropertyOptional({ pattern: BANK_CODE_PATTERN.source })
   @ValidateIf((o: CreateBeneficiaryDto) => o.kind === 'bank_account')
-  @Matches(BANK_CODE_PATTERN, {
-    message: 'bankCode must be a numeric bank code',
-  })
+  @Matches(BANK_CODE_PATTERN, { message: BANK_CODE_MESSAGE })
   bankCode?: string;
 
   /** Required when kind is bank_account. */
   @ApiPropertyOptional({ pattern: NUBAN_PATTERN.source })
   @ValidateIf((o: CreateBeneficiaryDto) => o.kind === 'bank_account')
-  @Matches(NUBAN_PATTERN, { message: 'accountNumber must be 10 digits' })
+  @Matches(NUBAN_PATTERN, { message: NUBAN_MESSAGE })
   accountNumber?: string;
 
   /**
@@ -226,13 +226,11 @@ export class CreateBeneficiaryDto {
 /** PUT /money/payout-account (A21). The server name-checks it and compares the name with the BVN name. */
 export class PayoutAccountDto {
   @ApiProperty({ pattern: BANK_CODE_PATTERN.source })
-  @Matches(BANK_CODE_PATTERN, {
-    message: 'bankCode must be a numeric bank code',
-  })
+  @Matches(BANK_CODE_PATTERN, { message: BANK_CODE_MESSAGE })
   bankCode!: string;
 
   @ApiProperty({ pattern: NUBAN_PATTERN.source })
-  @Matches(NUBAN_PATTERN, { message: 'accountNumber must be 10 digits' })
+  @Matches(NUBAN_PATTERN, { message: NUBAN_MESSAGE })
   accountNumber!: string;
 }
 
@@ -320,13 +318,11 @@ export class WawuTransferDto {
  */
 export class BankTransferDto {
   @ApiProperty({ pattern: BANK_CODE_PATTERN.source })
-  @Matches(BANK_CODE_PATTERN, {
-    message: 'bankCode must be a numeric bank code',
-  })
+  @Matches(BANK_CODE_PATTERN, { message: BANK_CODE_MESSAGE })
   bankCode!: string;
 
   @ApiProperty({ pattern: NUBAN_PATTERN.source })
-  @Matches(NUBAN_PATTERN, { message: 'accountNumber must be 10 digits' })
+  @Matches(NUBAN_PATTERN, { message: NUBAN_MESSAGE })
   accountNumber!: string;
 
   /** What the bank account gets, in kobo. */
@@ -352,6 +348,20 @@ export class BankTransferDto {
   @Length(1, 1024)
   @IsStorableText()
   quoteToken!: string;
+
+  /**
+   * `nameToken` from the name check the person saw (`POST
+   * /money/banks/name-check`), for an account that is not saved (WALLET-09
+   * round 2): the send is bound to the holder's name they were shown. If the
+   * bank names another holder now, the answer is `409 account_name_changed`
+   * and nothing is sent. The app always sends it for an account it has not
+   * saved; a saved account is compared with its kept name and ignores it.
+   */
+  @IsOptional()
+  @IsString()
+  @Length(1, 1024)
+  @IsStorableText()
+  nameToken?: string;
 
   /** W9's optional note, 100 characters at most. */
   @IsOptional()

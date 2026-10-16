@@ -17240,7 +17240,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Whose account this is, from the bank (W8, A21). W8's Continue unlocks only\nafter this answers. The name is the bank's, never one the app sent.",
+        "summary": "Whose account this is, from the bank (W8, A21). W8's Continue unlocks only\nafter this answers. The name is the bank's, never one the app sent. It\ncomes with a `nameToken` for this person (WALLET-09 round 2): the send to\nan account that is not saved carries it, so the money goes to the name\nthey were shown or nowhere.",
         "tags": [
           "MoneyBanks"
         ],
@@ -33675,6 +33675,12 @@
             "minLength": 1,
             "maxLength": 1024
           },
+          "nameToken": {
+            "type": "string",
+            "description": "`nameToken` from the name check the person saw (`POST\n/money/banks/name-check`), for an account that is not saved (WALLET-09\nround 2): the send is bound to the holder's name they were shown. If the\nbank names another holder now, the answer is `409 account_name_changed`\nand nothing is sent. The app always sends it for an account it has not\nsaved; a saved account is compared with its kept name and ignores it.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
           "note": {
             "type": "string",
             "description": "W9's optional note, 100 characters at most.",
@@ -37943,13 +37949,17 @@
           },
           "accountName": {
             "type": "string"
+          },
+          "nameToken": {
+            "type": "string"
           }
         },
         "required": [
           "bankCode",
           "bankName",
           "accountNumber",
-          "accountName"
+          "accountName",
+          "nameToken"
         ]
       },
       "RecipientView": {

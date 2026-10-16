@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   type CanActivate,
   createParamDecorator,
   type ExecutionContext,
@@ -12,6 +13,12 @@ import {
   WALLET_PROVIDER,
   type WalletProvider,
 } from '../../wallet-provider/wallet-provider.interface';
+import {
+  BANK_CODE_MESSAGE,
+  BANK_CODE_PATTERN,
+  NUBAN_MESSAGE,
+  NUBAN_PATTERN,
+} from '../dto/money-request.dto';
 import { dropTransactionPin } from '../gate/wallet-gate';
 import { MoneyError } from '../money-error';
 import {
@@ -20,6 +27,7 @@ import {
   NAME_CHECK_ANSWERS,
   NAME_CHECK_FAILED_MESSAGE,
 } from '../saved-accounts/bank-account-check.service';
+import { NameCheckTokenService } from '../saved-accounts/name-check-token.service';
 import {
   type BankSendTarget,
   normalizeBankName,
@@ -52,9 +60,6 @@ export interface ResolvedBankTarget {
   /** The saved place this account is (a beneficiary of the sender's, or their payout account), if any. */
   place: BankSendPlace;
 }
-
-const BANK_CODE = /^\d{2,10}$/;
-const NUBAN = /^\d{10}$/;
 
 /** Where the guard leaves what it resolved, for `@CurrentBankTarget()`. */
 const BANK_TARGET_KEY = 'wawuBankSendTarget';
@@ -225,14 +230,29 @@ export class BankSendTargets {
  * PIN try and gives the key back. It leaves what it resolved on the request,
  * so the send does not ask the bank a second time.
  *
- * The body has not been validated yet (guards run before pipes), so a value
- * that is not a bank code or an account number is left to the validation
- * pipe. A refusal here drops any PIN or biometric header unread, as the
- * wallet gate does.
+ * - **A bank code or account number that is not one is the route's own 400**
+ *   (the sentence the ValidationPipe gives for the field), answered here
+ *   before the bank is asked or the PIN looked at: guards run before pipes,
+ *   so the body is read raw, and the handler's `@CurrentBankTarget()` could
+ *   not run without a target (round 2, verifier finding 1). The rest of the
+ *   body is the pipe's, after the PIN.
+ * - **An account that is not saved is bound to the name the person saw**
+ *   (round 2, finding 7): the send carries the `nameToken` of the name check;
+ *   when the bank names another holder now (or the token is not this
+ *   person's, this account's, or is old), it is `409 account_name_changed`
+ *   with the names as they stand, and nothing is sent. A send without a
+ *   token keeps its current behaviour: it goes to the name the bank gives.
+ *   A saved account is compared with the name kept for it, as before.
+ *
+ * A refusal here drops any PIN or biometric header unread, as the wallet gate
+ * does.
  */
 @Injectable()
 export class BankSendTargetGuard implements CanActivate {
-  constructor(private readonly targets: BankSendTargets) {}
+  constructor(
+    private readonly targets: BankSendTargets,
+    private readonly nameTokens: NameCheckTokenService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<TargetRequest>();
@@ -243,22 +263,41 @@ export class BankSendTargetGuard implements CanActivate {
       );
     }
     const body = req.body as
-      { bankCode?: unknown; accountNumber?: unknown } | undefined;
-    const { bankCode, accountNumber } = body ?? {};
-    if (
-      typeof bankCode !== 'string' ||
-      typeof accountNumber !== 'string' ||
-      !BANK_CODE.test(bankCode) ||
-      !NUBAN.test(accountNumber)
-    ) {
-      return true;
-    }
+      | { bankCode?: unknown; accountNumber?: unknown; nameToken?: unknown }
+      | undefined;
+    const { bankCode, accountNumber, nameToken } = body ?? {};
     try {
-      req[BANK_TARGET_KEY] = await this.targets.resolve(
+      if (typeof bankCode !== 'string' || !BANK_CODE_PATTERN.test(bankCode)) {
+        throw new BadRequestException(BANK_CODE_MESSAGE);
+      }
+      if (
+        typeof accountNumber !== 'string' ||
+        !NUBAN_PATTERN.test(accountNumber)
+      ) {
+        throw new BadRequestException(NUBAN_MESSAGE);
+      }
+      if (nameToken !== undefined && typeof nameToken !== 'string') {
+        throw new BadRequestException('nameToken must be a string');
+      }
+      const resolved = await this.targets.resolve(
         owner,
         bankCode,
         accountNumber,
       );
+      if (resolved.place === null && nameToken !== undefined) {
+        const now = resolved.target;
+        if (!this.nameTokens.matches(nameToken, owner, now)) {
+          throw new MoneyError(
+            'account_name_changed',
+            ACCOUNT_CHANGED_MESSAGE,
+            {
+              accountName: now.accountName,
+              bankName: now.bankName,
+            },
+          );
+        }
+      }
+      req[BANK_TARGET_KEY] = resolved;
       return true;
     } catch (e) {
       dropTransactionPin(req);
@@ -275,7 +314,7 @@ export const CurrentBankTarget = createParamDecorator(
     ];
     if (!target) {
       throw new Error(
-        '@CurrentBankTarget() on a route without BankSendTargetGuard, or with a body the guard left to the validation pipe.',
+        '@CurrentBankTarget() on a route without BankSendTargetGuard.',
       );
     }
     return target;

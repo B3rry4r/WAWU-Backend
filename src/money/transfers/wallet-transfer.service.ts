@@ -120,6 +120,30 @@ const RELEASED: readonly WalletProviderErrorKind[] = [
   'payouts_blocked',
 ];
 
+/**
+ * Refusals after which a send is failed at once, although the provider may
+ * have written a record under our reference (WALLET-09 round 2, verifier
+ * finding 2): the provider said no before it took the money, so no transfer
+ * exists to settle. Read from the sandbox, not guessed:
+ * - `insufficient_funds` and `wallet_inactive` (a frozen sender): "nothing
+ *   moved" and the reference was not used up (mobile repo
+ *   docs/fintava/sandbox/13- and 15-, wallet to wallet; the bank send checks
+ *   the same balance and the same wallet first);
+ * - `payouts_blocked` ("Unable to find customers"): the refused bank send
+ *   left only an orphan PENDING record that never moved a balance and was
+ *   still pending 37 minutes on (sandbox/14-, which tells the client to
+ *   treat such a row as no money moved and to retry under a new reference).
+ * The reference is burned either way; a retry is a new send under a new one.
+ * Any other refusal of a bank send keeps `recordMayExist` and waits for the
+ * reconcile: nothing recorded says it created no transfer (BACKEND_GAPS
+ * G-767 lists the kinds the sandbox still has to answer).
+ */
+const NO_TRANSFER_REFUSALS: readonly WalletProviderErrorKind[] = [
+  'insufficient_funds',
+  'wallet_inactive',
+  'payouts_blocked',
+];
+
 /** The rest before the next check of a pending send: 1, 2, 4 ... minutes, at most an hour. */
 export const nextSendCheckDelayMs = nextCheckDelayMs;
 
@@ -529,7 +553,10 @@ export class WalletTransferService implements OnModuleInit {
       await this.keys.release(scope);
       throw refusal.toHttpException();
     }
-    if (!refusal || refusal.recordMayExist) {
+    if (
+      !refusal ||
+      (refusal.recordMayExist && !NO_TRANSFER_REFUSALS.includes(refusal.kind))
+    ) {
       // Money may have moved (a lost answer, or a transfer the provider
       // accepted and has not completed). Pending until the provider says;
       // nothing is sent again from here.
@@ -1068,7 +1095,14 @@ export class WalletTransferService implements OnModuleInit {
     const timeline: TransferTimelineEntry[] = [
       { step: 'requested', at: t.createdAt.toISOString() },
     ];
-    if (bank && t.sentToBankAt) {
+    // A send that failed or was reversed was not "sent to the bank" as far as
+    // the person is concerned (round 2): the step is for a send the bank took.
+    if (
+      bank &&
+      t.sentToBankAt &&
+      status !== 'failed' &&
+      status !== 'reversed'
+    ) {
       timeline.push({ step: 'sent_to_bank', at: t.sentToBankAt.toISOString() });
     }
     if (t.completedAt) {

@@ -262,7 +262,11 @@ export class FeeSettings {
     }
   }
 
-  /** The key quotes are signed under. Only fee-quote.service.ts reads it. */
+  /**
+   * The key quotes are signed under. fee-quote.service.ts reads it, and
+   * saved-accounts/name-check-token.service.ts signs its name tokens with it
+   * under its own context string.
+   */
   quoteKey(): Buffer {
     return this.#quoteKey;
   }

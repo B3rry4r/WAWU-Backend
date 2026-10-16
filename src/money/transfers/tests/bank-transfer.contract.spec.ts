@@ -7,6 +7,7 @@ import * as argon2 from 'argon2';
 import request, { type Response } from 'supertest';
 import type { App } from 'supertest/types';
 import {
+  barrier,
   body,
   mintToken,
   PIN,
@@ -41,6 +42,7 @@ import type {
   PinStateView,
   TransferView,
 } from '../../money-view.type';
+import { NameCheckTokenService } from '../../saved-accounts/name-check-token.service';
 import { ACCOUNT_CHANGED_MESSAGE } from '../bank-send-target';
 import {
   SEND_STILL_CONFIRMING_MESSAGE,
@@ -96,6 +98,8 @@ class Bank {
   readonly failures = new Set<string>();
   readonly hidden = new Set<string>();
   mode: 'live' | 'timeout' | 'refuse' = 'live';
+  /** Fintava's refusal text for every send, when set (a business 400). */
+  refuseWith: string | null = null;
 }
 
 describe('Send to a bank account (WALLET-09) over HTTP', () => {
@@ -351,9 +355,23 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
           body: fintavaError(400, 'Transfer could not be processed'),
         };
       }
+      if (bank.refuseWith !== null) {
+        return { status: 400, body: fintavaError(400, bank.refuseWith) };
+      }
       const from = bank.byCustomer.get(b.sourceId)!;
       const amountKobo = Math.round(b.amount * 100);
       const have = bank.kobo.get(from) ?? 0;
+      // Fintava refuses a send the wallet cannot cover (sandbox/13-, for a
+      // wallet send; the bank send reads the same balance first).
+      if (have < amountKobo + FEE) {
+        return {
+          status: 400,
+          body: fintavaError(
+            400,
+            'Insufficient balance on source wallet to complete this transfer.',
+          ),
+        };
+      }
       // The money leaves when Fintava takes the request, whether or not the
       // answer reaches the caller in time.
       bank.references.add(b.CustomerReference);
@@ -498,6 +516,7 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
 
   beforeEach(() => {
     bank.mode = 'live';
+    bank.refuseWith = null;
     double.seen.length = 0;
     jest.restoreAllMocks();
   });
@@ -525,12 +544,21 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
       .set('Authorization', me.auth)
       .send({ bankCode: GTB.code, accountNumber: number });
     expect(checked.status).toBe(200);
-    expect(body<AccountNameView>(checked).data).toEqual({
+    const shown = body<AccountNameView>(checked).data!;
+    expect(shown).toMatchObject({
       bankCode: GTB.code,
       bankName: GTB.name,
       accountNumber: number,
       accountName: 'SIMI MICHELLE',
     });
+    expect(Object.keys(shown).sort()).toEqual([
+      'accountName',
+      'accountNumber',
+      'bankCode',
+      'bankName',
+      'nameToken',
+    ]);
+    expect(typeof shown.nameToken).toBe('string');
 
     // An account the bank does not know: 422 with the contract's code; and
     // no sign-in is no answer at all.
@@ -699,6 +727,8 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
     await transfers.sweep(new Date(Date.now() + 3_600_000));
     const failed = body<TransferView>(await read(me, pending.id)).data!;
     expect(failed).toMatchObject({ status: 'failed', reversal: null });
+    // WALLET-09 round 2: a send that failed was never "sent to the bank".
+    expect(failed.timeline.map((t) => t.step)).toEqual(['requested', 'failed']);
 
     // The reversal arrives: the debit is returned in full, the send follows
     // the ledger to `reversed`, and a second report changes nothing.
@@ -722,7 +752,10 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
       returnedKobo: 100_000 + FEE,
       keptKobo: 0,
     });
-    expect(reversed.timeline.map((t) => t.step)).toContain('reversed');
+    expect(reversed.timeline.map((t) => t.step)).toEqual([
+      'requested',
+      'reversed',
+    ]);
     const again = await ledger.applyReversal(reversal);
     expect(again).toMatchObject({ state: 'applied', changed: false });
     expect(await ledgerRows(pending.reference)).toHaveLength(1);
@@ -941,5 +974,293 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
       'completed',
     ]);
     expect(creditCalls()).toHaveLength(1);
+  });
+  // -------------------------------------------------------------------------
+  // Round 2 (the verifier's findings 1, 2, 3 and 6)
+  // -------------------------------------------------------------------------
+
+  const nameCheck = (p: Person, bankCode: string, accountNumber: string) =>
+    request(app.getHttpServer())
+      .post(`${BASE}/banks/name-check`)
+      .set('Authorization', p.auth)
+      .send({ bankCode, accountNumber });
+  const providerCalls = () =>
+    double.seen.filter(
+      (r) => r.path === '/bank/credit' || r.path === '/name/enquiry',
+    );
+
+  it('finding 1: a malformed account number or bank code is the route 400 before anything runs: nothing sent, no PIN try used, the key given back', async () => {
+    const me = await person(5_000_000);
+    const number = account('MALFORMED');
+    const good = await ready(me, { number }, 100_000);
+    const key = randomUUID();
+    const tries = await triesLeft(me);
+    const forms: Array<[string, Record<string, unknown>, string[]?]> = [
+      ['9 digits', { accountNumber: '123456789' }],
+      ['11 digits', { accountNumber: '12345678901' }],
+      ['letters', { accountNumber: '12345abcde' }],
+      ['digits and a space', { accountNumber: '1234 56789' }],
+      ['a number, not text', { accountNumber: 2212345678 }],
+      ['null account', { accountNumber: null }],
+      ['a list', { accountNumber: [number] }],
+      ['an object', { accountNumber: { n: number } }],
+      ['an empty bank code', { bankCode: '' }],
+      ['an odd bank code', { bankCode: "000013' OR 1=1" }],
+      ['a one digit bank code', { bankCode: '1' }],
+      ['a bank code that is a number', { bankCode: 13 }],
+      ['a null bank code', { bankCode: null }],
+      ['a bank code object', { bankCode: {} }],
+      ['no account number', {}, ['accountNumber']],
+      ['no bank code', {}, ['bankCode']],
+      ['neither', {}, ['bankCode', 'accountNumber']],
+    ];
+    for (const [label, patch, drop] of forms) {
+      const payload: Record<string, unknown> = { ...good, ...patch };
+      for (const k of drop ?? []) delete payload[k];
+      // A wrong PIN: if the PIN guard ran, a try would be used.
+      const res = await send(me, payload, key, WRONG_PIN);
+      expect([label, res.status]).toEqual([label, 400]);
+      expect(body(res).reason).toBeUndefined();
+      expect(typeof body(res).message).toBe('string');
+      expect(
+        res.headers[IDEMPOTENT_REPLAYED_HEADER.toLowerCase()],
+      ).toBeUndefined();
+    }
+    expect(providerCalls()).toHaveLength(0);
+    expect(await triesLeft(me)).toBe(tries);
+    expect(
+      await prisma.walletTransfer.count({ where: { payerWawuUserId: me.id } }),
+    ).toBe(0);
+    // The key was given back every time: the good body under it is a send.
+    const ok = await send(me, good, key);
+    expect(ok.status).toBe(201);
+    expect(
+      ok.headers[IDEMPOTENT_REPLAYED_HEADER.toLowerCase()],
+    ).toBeUndefined();
+    expect(creditCalls()).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      'insufficient funds',
+      'Insufficient balance on source wallet to complete this transfer.',
+      402,
+      'insufficient_funds',
+    ],
+    [
+      'a frozen wallet',
+      'Kindly confirm both customer accounts are active',
+      423,
+      'wallet_frozen',
+    ],
+    [
+      'payouts blocked',
+      'Unable to find customers',
+      503,
+      'provider_unreachable',
+    ],
+  ])(
+    'finding 2: a refusal Fintava makes before any transfer exists (%s) fails the send, voids the pending ledger row, gives the key back and answers its own error',
+    async (label, text, status, code) => {
+      const me = await person(5_000_000);
+      const number = account(`REFUSED ${label}`);
+      const b = await ready(me, { number }, 100_000);
+      const key = randomUUID();
+      bank.refuseWith = text;
+      const res = await send(me, b, key);
+      expect([label, res.status, body(res).reason?.code]).toEqual([
+        label,
+        status,
+        code,
+      ]);
+      expect(creditCalls()).toHaveLength(1);
+      const rows = await prisma.walletTransfer.findMany({
+        where: { payerWawuUserId: me.id },
+      });
+      expect(rows.map((r) => r.status)).toEqual(['failed']);
+      expect(
+        (await ledgerRows(rows[0].customerReference)).map(
+          (r) => `${r.direction}:${r.status}`,
+        ),
+      ).toEqual(['out:failed']);
+      // Nothing waits: the sweep a week on changes nothing.
+      await transfers.sweep(new Date(Date.now() + 7 * 24 * 3_600_000));
+      expect(
+        (
+          await prisma.walletTransfer.findMany({
+            where: { payerWawuUserId: me.id },
+          })
+        ).map((r) => `${r.status}:${r.reviewSince === null}`),
+      ).toEqual(['failed:true']);
+      // The key was given back: the same request is a new send, under a new reference.
+      bank.refuseWith = null;
+      const again = await send(me, b, key);
+      expect(again.status).toBe(201);
+      expect(
+        again.headers[IDEMPOTENT_REPLAYED_HEADER.toLowerCase()],
+      ).toBeUndefined();
+      const sent = body<TransferView>(again).data!;
+      expect(sent.status).toBe('completed');
+      expect(sent.reference).not.toBe(rows[0].customerReference);
+    },
+  );
+
+  it('finding 2: two sends under two keys with a balance for one: the second ends failed with 402 and nothing is left pending', async () => {
+    const me = await person(1_000_000);
+    const number = account('NOT ENOUGH FOR TWO');
+    const b = await ready(me, { number }, 900_000);
+    // Both balance reads happen before either send reaches Fintava.
+    const together = barrier(2);
+    double.on('GET', /^\/customer\/wallet\/balance\//, async (req) => {
+      const held = bank.byId.get(req.path.split('/').pop()!)!;
+      const naira = (bank.kobo.get(held) ?? 0) / 100;
+      await together();
+      return {
+        status: 200,
+        body: {
+          data: {
+            balance: { bookedBalance: naira, availableBalance: naira },
+            tier: 'TIER_2',
+          },
+          status: 200,
+          message: 'Wallet details fetched',
+        },
+      };
+    });
+    try {
+      const [one, two] = await Promise.all([
+        send(me, b, randomUUID()),
+        send(me, b, randomUUID()),
+      ]);
+      const outcomes = [one, two].map((r) => r.status).sort();
+      expect(outcomes).toEqual([201, 402]);
+      const refused = [one, two].find((r) => r.status === 402)!;
+      expect(body(refused).reason?.code).toBe('insufficient_funds');
+      const rows = await prisma.walletTransfer.findMany({
+        where: { payerWawuUserId: me.id },
+      });
+      expect(rows.map((r) => r.status).sort()).toEqual(['completed', 'failed']);
+      const history = await request(app.getHttpServer())
+        .get(`${BASE}/transactions`)
+        .set('Authorization', me.auth);
+      const items = body<{ items: Array<{ status: string }> }>(history).data!
+        .items;
+      expect(items.filter((i) => i.status === 'pending')).toEqual([]);
+      expect(balance(me)).toBe(1_000_000 - 900_000 - FEE);
+    } finally {
+      installFintava();
+    }
+  });
+
+  it('finding 2: a refusal that may have created a transfer (an unknown one) stays pending for the reconcile', async () => {
+    const me = await person(5_000_000);
+    const number = account('MAY EXIST');
+    const b = await ready(me, { number }, 100_000);
+    bank.refuseWith = 'Something else went wrong';
+    const res = await send(me, b);
+    expect(res.status).toBe(201);
+    expect(body<TransferView>(res).data?.status).toBe('pending');
+    const rows = await prisma.walletTransfer.findMany({
+      where: { payerWawuUserId: me.id },
+    });
+    expect(rows.map((r) => r.status)).toEqual(['pending']);
+  });
+
+  it('finding 3: an unsaved account is bound to the name the person saw: a name that changed since the check is account_name_changed, nothing is sent and no PIN try is used', async () => {
+    const me = await person(5_000_000);
+    const number = account('FIRST HOLDER');
+    const checked = await nameCheck(me, GTB.code, number);
+    expect(checked.status).toBe(200);
+    const token = body<AccountNameView>(checked).data!.nameToken;
+    expect(typeof token).toBe('string');
+    const b = await ready(me, { number }, 100_000, { nameToken: token });
+    const tries = await triesLeft(me);
+    const key = randomUUID();
+
+    bank.holders.set(holderKey(GTB.code, number), 'SECOND HOLDER');
+    const res = await send(me, b, key, WRONG_PIN);
+    expect(res.status).toBe(409);
+    expect(body(res).reason).toMatchObject({
+      code: 'account_name_changed',
+      accountName: 'SECOND HOLDER',
+      bankName: GTB.name,
+    });
+    expect(creditCalls()).toHaveLength(0);
+    expect(await triesLeft(me)).toBe(tries);
+
+    // The name the person saw is back: the same key and body send, to it.
+    bank.holders.set(holderKey(GTB.code, number), 'FIRST HOLDER');
+    const ok = await send(me, b, key);
+    expect(ok.status).toBe(201);
+    expect(
+      ok.headers[IDEMPOTENT_REPLAYED_HEADER.toLowerCase()],
+    ).toBeUndefined();
+    expect(sendsFrom(me).map((s) => s.accountName)).toEqual(['FIRST HOLDER']);
+
+    // A new check names the new holder, and a send with that token goes to it.
+    bank.holders.set(holderKey(GTB.code, number), 'SECOND HOLDER');
+    const recheck = body<AccountNameView>(
+      await nameCheck(me, GTB.code, number),
+    ).data!;
+    const q2 = await quoted(me, 100_000);
+    const next = await send(
+      me,
+      sendBody(q2, { number }, { nameToken: recheck.nameToken }),
+    );
+    expect(next.status).toBe(201);
+    expect(sendsFrom(me).map((s) => s.accountName)).toEqual([
+      'FIRST HOLDER',
+      'SECOND HOLDER',
+    ]);
+  });
+
+  it('finding 3: a name token for another account, another person, a made up one or an old one is the same account_name_changed; a send without one keeps its current behaviour', async () => {
+    const me = await person(5_000_000);
+    const other = await person(5_000_000);
+    const number = account('BOUND HOLDER');
+    const elsewhere = account('SOMEONE ELSE');
+    const tokens = moduleRef.get(NameCheckTokenService, { strict: false });
+    const view = (n: string, name: string) => ({
+      bankCode: GTB.code,
+      bankName: GTB.name,
+      accountNumber: n,
+      accountName: name,
+    });
+    const good = tokens.issue(me.id, view(number, 'BOUND HOLDER'));
+    const cases: Array<[string, string]> = [
+      ['garbage', 'abc.def'],
+      ['tampered', good + 'x'],
+      ['another person', tokens.issue(other.id, view(number, 'BOUND HOLDER'))],
+      ['another account', tokens.issue(me.id, view(elsewhere, 'SOMEONE ELSE'))],
+      [
+        'another holder',
+        tokens.issue(me.id, view(number, 'A DIFFERENT HOLDER')),
+      ],
+      [
+        'an old one',
+        tokens.issue(
+          me.id,
+          view(number, 'BOUND HOLDER'),
+          new Date(Date.now() - 24 * 3_600_000),
+        ),
+      ],
+    ];
+    const b = await ready(me, { number }, 100_000);
+    const tries = await triesLeft(me);
+    for (const [label, nameToken] of cases) {
+      const res = await send(me, { ...b, nameToken }, randomUUID(), WRONG_PIN);
+      expect([label, res.status, body(res).reason?.code]).toEqual([
+        label,
+        409,
+        'account_name_changed',
+      ]);
+    }
+    expect(creditCalls()).toHaveLength(0);
+    expect(await triesLeft(me)).toBe(tries);
+    // The good one, and none at all, send.
+    expect((await send(me, { ...b, nameToken: good })).status).toBe(201);
+    const q2 = await quoted(me, 100_000);
+    expect((await send(me, sendBody(q2, { number }))).status).toBe(201);
+    expect(creditCalls()).toHaveLength(2);
   });
 });
