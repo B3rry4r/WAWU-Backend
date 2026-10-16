@@ -4804,7 +4804,7 @@ model MoneyBeneficiary {
   accountNumber   String?
   /// The name the bank returned on the name check.
   accountName     String?
-  /// NUV-06 (migration 20261021170000): the bank's code in Nuvion's list,
+  /// NUV-06 (migration 20261021280000): the bank's code in Nuvion's list,
   /// once this account has been matched to it (by code, else by the bank's
   /// name; `bankCode` above is Fintava's when the row was saved in the
   /// Fintava days).
@@ -4836,7 +4836,7 @@ model MoneyPayoutAccount {
   bankName      String
   accountNumber String
   accountName   String
-  /// NUV-06 (migration 20261021170000): as on MoneyBeneficiary, the bank's
+  /// NUV-06 (migration 20261021280000): as on MoneyBeneficiary, the bank's
   /// code in Nuvion's list and when the name was last confirmed through
   /// Nuvion (null in the Fintava days).
   nuvionBankCode  String?
