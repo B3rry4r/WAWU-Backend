@@ -395,7 +395,18 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     model: 'WalletTransfer',
     column: 'payerWawuUserId',
     disposition: 'ANONYMISED',
-    clear: ['payerAccountNumber', 'payerName', 'note'],
+    // A send to a bank account (WALLET-09) names a third party's account and
+    // holder as the SENDER's record of where the money went, so it goes with
+    // the sender: the bank, the account number and the holder's name.
+    clear: [
+      'payerAccountNumber',
+      'payerName',
+      'note',
+      'bankCode',
+      'bankName',
+      'bankAccountNumber',
+      'bankAccountName',
+    ],
   },
   {
     model: 'WalletTransfer',

@@ -3,6 +3,7 @@ import { Transform, Type } from 'class-transformer';
 import {
   IsIn,
   IsInt,
+  IsBoolean,
   IsOptional,
   IsString,
   IsUUID,
@@ -208,6 +209,18 @@ export class CreateBeneficiaryDto {
   @ValidateIf((o: CreateBeneficiaryDto) => o.kind === 'bank_account')
   @Matches(NUBAN_PATTERN, { message: 'accountNumber must be 10 digits' })
   accountNumber?: string;
+
+  /**
+   * bank_account only (WALLET-09): the person has seen the bank and the name
+   * the bank gives for this saved account now (`409 account_name_changed`)
+   * and confirms them. The server asks the bank and keeps what it says, in
+   * place of the name kept before. Left out, saving an account already saved
+   * answers the row as it is, as it always did.
+   */
+  @ApiPropertyOptional({ type: 'boolean' })
+  @IsOptional()
+  @IsBoolean()
+  confirmCurrentName?: boolean;
 }
 
 /** PUT /money/payout-account (A21). The server name-checks it and compares the name with the BVN name. */
@@ -329,9 +342,22 @@ export class BankTransferDto {
   @Min(1)
   expectedTotalKobo!: number;
 
+  /**
+   * `quoteToken` from that fee quote (`GET /money/fees/quote?kind=
+   * bank_transfer`; BACKEND_GAPS G-64): the server checks it is its own, for
+   * this person and this amount, and not past `expiresAt`; otherwise `409
+   * quote_changed` with the new quote.
+   */
+  @IsString()
+  @Length(1, 1024)
+  @IsStorableText()
+  quoteToken!: string;
+
+  /** W9's optional note, 100 characters at most. */
   @IsOptional()
   @IsString()
   @MaxLength(100)
+  @IsStorableText(true)
   note?: string;
 }
 

@@ -181,9 +181,9 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
         'GET wallet',
       ]),
     );
-    expect(declared.map((r) => r.key)).toEqual(
-      expect.arrayContaining(['POST money/transfers/bank']),
-    );
+    // Every route MONEY-04 declared is served now (WALLET-09 served the
+    // last three): the declared module has no routes to walk.
+    expect(declared).toEqual([]);
   });
 
   it('a mounted route that documents wallet_not_open or wallet_opening runs the gate, and one that runs the gate documents both', () => {
@@ -244,6 +244,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST money/pin/verify',
       'POST money/statements/email',
       'POST money/transactions/:id/receipt',
+      'POST money/transfers/bank',
       'POST money/transfers/wawu',
       // TIER-03: the purchase of a tier pays from the wallet.
       'POST plans/purchases',
@@ -262,6 +263,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST money/approval/verify',
       'POST money/payments',
       'POST money/pin/verify',
+      'POST money/transfers/bank',
       'POST money/transfers/wawu',
       'POST plans/purchases',
       'POST points/convert',

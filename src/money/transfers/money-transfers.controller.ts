@@ -11,7 +11,7 @@ import {
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
-import { WawuTransferDto } from '../dto/money-request.dto';
+import { BankTransferDto, WawuTransferDto } from '../dto/money-request.dto';
 import { RequireFeesSet } from '../fees/fees-set.guard';
 import {
   CurrentWallet,
@@ -30,17 +30,23 @@ import {
   type IdempotencyScope,
   RequireIdempotentApproval,
 } from '../payments/idempotency';
+import {
+  BankSendTargetGuard,
+  CurrentBankTarget,
+  type ResolvedBankTarget,
+} from './bank-send-target';
 import { TransferRecipientGuard } from './transfer-recipient';
 import {
+  BANK_TRANSFER_ROUTE,
   TRANSFER_ROUTE,
   WalletTransferService,
 } from './wallet-transfer.service';
 
 /**
  * Sending money to another WAWU user (task WALLET-07; finding one is
- * WALLET-08, src/money/recipients/). Declared by MONEY-04, served here
- * (docs/contract/CONVENTIONS.md sections 0 and 19). Sending to a bank
- * account (WALLET-09) is still declared in money-transfer.controller.ts.
+ * WALLET-08, src/money/recipients/) and to a bank account (task WALLET-09),
+ * and reading one send of either kind. Declared by MONEY-04, served here
+ * (docs/contract/CONVENTIONS.md sections 0, 19 and 22).
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)
@@ -82,6 +88,43 @@ export class MoneyTransfersController {
     @Body() dto: WawuTransferDto,
   ): Promise<TransferView> {
     return this.transfers.send(wallet, dto, scope);
+  }
+
+  /**
+   * Send to a bank account (W8 to W14), or withdraw to the payout account
+   * (W17 to W19, which is a bank send to it). Answers 201 with the send:
+   * `pending` until the bank's answer arrives (a delivery, or the sweep that
+   * asks the provider by our reference), `completed`, or `failed`; the app
+   * reads it from `GET /money/transfers/{id}`. The account is name-checked
+   * with the bank again BEFORE the PIN is looked at and the send goes to the
+   * name the bank gives: the app never sends a name. A saved account whose
+   * holder or bank is no longer the one kept is `409 account_name_changed`,
+   * carrying both names as they stand now; nothing is sent until the person
+   * confirms them by saving the account again. The same Idempotency-Key and
+   * body answer the first result again (`Idempotent-Replayed: true`) without
+   * checking the PIN. fees_not_set comes before the wallet gate, the key and
+   * the PIN; limit_reached (WAWU's limit or the provider's, WALLET-23) before
+   * anything is sent.
+   */
+  @Post('transfers/bank')
+  @HttpCode(201)
+  @BuiltBy('WALLET-09')
+  @RequireIdempotentApproval(BANK_TRANSFER_ROUTE, BankSendTargetGuard)
+  @MoneyErrors(
+    ...DEBIT_GATE_ERRORS,
+    'device_approval_refused',
+    'name_check_failed',
+    'account_name_changed',
+    'self_transfer',
+  )
+  @RequireFeesSet()
+  sendToBank(
+    @CurrentWallet() wallet: OpenWallet,
+    @CurrentIdempotencyScope() scope: IdempotencyScope,
+    @CurrentBankTarget() target: ResolvedBankTarget,
+    @Body() dto: BankTransferDto,
+  ): Promise<TransferView> {
+    return this.transfers.sendToBank(wallet, dto, scope, target);
   }
 
   /**

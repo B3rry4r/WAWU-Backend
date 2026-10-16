@@ -35,8 +35,8 @@ caller from the token.
 | `DELETE /money/device` | `ApprovalDeviceView` | | MONEY-14 (served) |
 | `POST /money/device/challenge` | `ApprovalChallengeView` | | MONEY-14 (served) |
 | `POST /money/approval/verify` | `PinStateView` | `X-Transaction-Pin` or `X-Device-Approval` | MONEY-14 (served) |
-| `GET /money/banks` | `BankView[]` | | WALLET-09 |
-| `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 |
+| `GET /money/banks` | `BankView[]` | | WALLET-09 (served; CONVENTIONS.md section 24) |
+| `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 (served; CONVENTIONS.md section 24) |
 | `GET /money/recipients?q=` | `RecipientView[]` (at most 20) | | WALLET-08 (served; CONVENTIONS.md section 13) |
 | `GET /money/recipients/recent` | `RecipientView[]` (at most 10) | | WALLET-08 (served; CONVENTIONS.md section 13) |
 | `GET /money/beneficiaries` | `BeneficiaryView[]` | | WALLET-14 (served; CONVENTIONS.md section 10) |
@@ -46,7 +46,7 @@ caller from the token.
 | `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `GET /money/fees/quote?kind=&amountKobo=&billCategory=` | `FeeQuoteView` | | WALLET-15 (served; CONVENTIONS.md section 11) |
 | `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-07 (served; CONVENTIONS.md section 19) |
-| `POST /money/transfers/bank` | `TransferView` | `BankTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-09 |
+| `POST /money/transfers/bank` | `TransferView` | `BankTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-09 (served; CONVENTIONS.md section 24) |
 | `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 (served; CONVENTIONS.md section 19) |
 | `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 (served; CONVENTIONS.md section 14) |
 | `POST /money/payments` | `PaymentView` | `PaymentDto`, `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | MONEY-17 (served; CONVENTIONS.md section 14) |
@@ -385,8 +385,8 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
     The quote's `withinDailyLimit` and `remainingTodayKobo` use the tighter of
     this and WAWU's own daily limit for the kind.
   - The code stays `limit_reached` (NUV-07), not `daily_limit_exceeded`, which
-    the declared transfer routes still list for WALLET-07 and WALLET-09 to
-    decide when they serve them.
+    the send routes list (WALLET-07), and the bank send (WALLET-09, served)
+    does not.
   - Fintava's own refusal for a limit has never been seen in the sandbox
     (`limits.md`), so there is no mapping for it yet; WAWU's early refusal is
     what a person sees.
@@ -394,7 +394,7 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
   `/money/approval/verify`, the `X-Device-Approval` format: a device key's
   signature, CONVENTIONS.md section 5). The declared debits still document
   `X-Transaction-Pin` alone; the tasks that serve them (WALLET-07, served;
-  WALLET-09, MONEY-17, served) put `@RequireApproval()` on the route, which
+  WALLET-09, MONEY-17, all served) put `@RequireApproval()` on the route, which
   documents both headers.
 - **The request that opens a wallet** is served by MONEY-12: `POST
   /money/wallet/open` (CONVENTIONS.md section 9). It carries the BVN, NIN,

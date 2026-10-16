@@ -33,6 +33,7 @@ import {
   type NuvionReconcileMethods,
 } from './areas/reconcile';
 import type { NuvionClient } from './nuvion-client';
+import { reconcileBankSend } from './handlers/outflows-bank';
 
 /**
  * What Nuvion can do, said ahead (the seam's `capabilities`):
@@ -240,8 +241,27 @@ export class NuvionWalletProvider implements WalletProvider {
   listTransactions(holder: ProviderHolder, query: ProviderPageQuery) {
     return this.areas.reconcile.listTransactions(holder, query);
   }
-  reconcileSend(reference: string, holder: ProviderHolder, since?: Date) {
-    return this.areas.book.reconcileSend(reference, holder, since);
+  /**
+   * What Nuvion knows of one of our sends. A book transfer is found through
+   * the book log (NUV-05). A reference the log never held is another rail's;
+   * a bank send (NUV-06) is then asked of the payouts area by the sender's
+   * transfers (`reconcileBankSend`, WALLET-09), which never makes a transfer
+   * and never reads silence as "no money moved".
+   */
+  async reconcileSend(
+    reference: string,
+    holder: ProviderHolder,
+    since?: Date,
+  ): Promise<ProviderReconciliation> {
+    const book = await this.areas.book.reconcileSend(reference, holder, since);
+    if (
+      book.state === 'unknown' &&
+      book.why === 'unrecognised' &&
+      this.areas.payouts instanceof NuvionPayoutsArea
+    ) {
+      return reconcileBankSend(this.areas.payouts, reference, holder, since);
+    }
+    return book;
   }
   decideRetry(
     kind: ProviderSendKind,
