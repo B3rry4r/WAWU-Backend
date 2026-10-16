@@ -4,6 +4,7 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { FintavaModule } from '../fintava/fintava.module';
 import { LedgerModule } from '../money/ledger/ledger.module';
 import { MoneyModule } from '../money/money.module';
+import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
 import { WalletBillsController } from './wallet-bills.controller';
 import { WalletBillService } from './wallet-bill.service';
 
@@ -23,6 +24,7 @@ import { WalletBillService } from './wallet-bill.service';
     MoneyModule,
     LedgerModule,
     FintavaModule,
+    WalletProviderModule,
     BillsCatalogueModule,
   ],
   controllers: [WalletBillsController],

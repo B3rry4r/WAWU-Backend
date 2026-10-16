@@ -6525,4 +6525,6 @@ model WalletBill {
 
   @@index([wawuUserId, createdAt])
   @@index([status, purchaseSentAt])
+  /// FIX-42: the half-hourly late-success look reads failed bills, newest first.
+  @@index([status, failedAt])
 }

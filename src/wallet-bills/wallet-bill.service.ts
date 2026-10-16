@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   Logger,
   OnModuleInit,
@@ -10,13 +11,21 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { BillsError } from '../bills-catalogue/bills-catalogue-error';
 import { BILLS_RETRY_AFTER_SECONDS } from '../bills-catalogue/bills-catalogue-error';
 import { BillsCatalogueService } from '../bills-catalogue/bills-catalogue.service';
-import { FintavaClient } from '../fintava/fintava-client';
+import {
+  FintavaClient,
+  historyPageConsistent,
+} from '../fintava/fintava-client';
 import { FintavaError } from '../fintava/fintava-error';
 import type {
   FintavaBillReceipt,
+  FintavaPage,
   FintavaTransaction,
 } from '../fintava/fintava.interface';
 import { toLocalNigerianPhone } from '../wallet-provider/nigerian-phone';
+import {
+  WALLET_PROVIDER,
+  type WalletProvider,
+} from '../wallet-provider/wallet-provider.interface';
 import type { BillCategory } from '../money/dto/money-enums';
 import {
   BILLS_UNAVAILABLE_MESSAGE,
@@ -78,6 +87,10 @@ export const BILL_NARRATION = 'WAWU bill';
 
 /** How far back the late-success look goes, and the words it leaves on the payment. */
 const LATE_SCAN_HOURS = 48;
+/** One pass reads this many failures, and walks at most this many pages of 100 records. */
+const LATE_SCAN_BATCH = 50;
+const LATE_SCAN_HISTORY_TAKE = 100;
+const LATE_SCAN_HISTORY_PAGES = 10;
 const LATE_MARKER = 'bill delivered after the bill was refunded';
 
 /** The payment kind this feature registers. */
@@ -171,7 +184,12 @@ export class WalletBillService implements OnModuleInit {
     private readonly holdViews: HoldViewService,
     private readonly ledger: LedgerService,
     private readonly merchant: MerchantWallet,
+    @Inject(WALLET_PROVIDER)
+    private readonly provider: Pick<WalletProvider, 'name'>,
   ) {}
+
+  /** The late-success look is running in this process. */
+  private scanning = false;
 
   onModuleInit(): void {
     this.registry.register({
@@ -761,66 +779,168 @@ export class WalletBillService implements OnModuleInit {
   /**
    * Every half hour: a bill that failed and was refunded, whose purchase may
    * still have been made (a refusal that left no record is a guess, G-647),
-   * is looked for once in Fintava's merchant history. A record that shows up
-   * is a loss to WAWU and goes to review (`lateSuccess`). Only bills that
-   * failed in the last two days are looked at, and nothing is asked while
-   * there are none.
+   * is looked for in Fintava's merchant history. A record that shows up is a
+   * loss to WAWU and goes to review (`lateSuccess`). It only reads: it never
+   * buys again and never moves money.
+   *
+   * - Only bills that failed in the last two days, NEWEST first, at most
+   *   LATE_SCAN_BATCH a pass; a bill already noted is not read again.
+   * - Only bills whose payment belongs to the provider this server runs
+   *   (R-39): after a switch to Nuvion a Fintava bill left in the database
+   *   is never asked about at Fintava and gets no ledger row of the wrong
+   *   provider.
+   * - The merchant history is read back, page by page and by date, to the
+   *   oldest failure being looked at (capped at LATE_SCAN_HISTORY_PAGES).
+   * - One pass at a time: a flag for this process, and a conditional claim
+   *   on the failures read, so two servers that wake together do not both
+   *   look. Nothing is held across the call to Fintava.
    */
   @Cron(CronExpression.EVERY_30_MINUTES, { name: 'bill-late-success' })
   async scanLateSuccesses(now: Date = new Date()): Promise<void> {
-    const failed = await this.prisma.walletBill.findMany({
-      where: {
-        status: 'failed',
-        purchaseSentAt: { not: null },
-        paymentId: { not: null },
-        failedAt: { gt: new Date(now.getTime() - LATE_SCAN_HOURS * 3_600_000) },
-      },
-      orderBy: { failedAt: 'asc' },
-      take: 50,
-    });
-    if (failed.length === 0) return;
-    const noted = await this.prisma.walletPayment.findMany({
-      where: {
-        id: { in: failed.map((b) => b.paymentId!) },
-        discrepancy: { contains: LATE_MARKER },
-      },
-      select: { id: true },
-    });
-    const done = new Set(noted.map((p) => p.id));
-    const todo = failed.filter((b) => !done.has(b.paymentId!));
-    if (todo.length === 0) return;
-    let rows: readonly FintavaTransaction[];
+    if (this.scanning) return;
+    this.scanning = true;
     try {
-      const oldest = todo.reduce(
-        (t, b) => Math.min(t, b.purchaseSentAt!.getTime()),
-        Number.POSITIVE_INFINITY,
-      );
-      const page = await this.fintava.getMerchantHistory({
-        startDate: new Date(oldest - 24 * 3_600_000).toISOString().slice(0, 10),
-        order: 'DESC',
-        take: 100,
+      const todo = await this.unnotedFailures(now);
+      if (todo.length === 0) return;
+      if (!(await this.claimLatePass(todo))) return;
+      const history = await this.readLateHistory(todo);
+      if (history === null) return;
+      for (const bill of todo) {
+        const sentAt = bill.purchaseSentAt!;
+        // A history read cut short does not reach back to this bill's record.
+        if (
+          history.reachedBack !== null &&
+          sentAt.getTime() - HISTORY_SKEW_MS < history.reachedBack
+        ) {
+          continue;
+        }
+        const guard = await this.guardFor(bill, sentAt, history.rows);
+        const reading = readHistory(spec(bill), sentAt, history.rows, {
+          ...guard,
+          notAfter: new Date(
+            (bill.failedAt ?? now).getTime() + HISTORY_SKEW_MS,
+          ),
+        });
+        if (reading.state === 'delivered') {
+          await this.lateSuccess(bill, {
+            transactionId: reading.row.id,
+            fintavaReference: reading.row.fintavaReference,
+          });
+        }
+      }
+    } finally {
+      this.scanning = false;
+    }
+  }
+
+  /** Failed, refunded, not yet noted, this server's provider, newest failure first. */
+  private async unnotedFailures(now: Date): Promise<WalletBill[]> {
+    const since = new Date(now.getTime() - LATE_SCAN_HOURS * 3_600_000);
+    const ids = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT b."id" AS "id"
+        FROM "WalletBill" b
+        JOIN "WalletPayment" p ON p."id" = b."paymentId"
+       WHERE b."status" = 'failed'
+         AND b."purchaseSentAt" IS NOT NULL
+         AND b."failedAt" > ${since}
+         AND p."provider" = ${this.provider.name}
+         AND (p."discrepancy" IS NULL
+              OR position(${LATE_MARKER}::text in p."discrepancy") = 0)
+       ORDER BY b."failedAt" DESC, b."id" DESC
+       LIMIT ${LATE_SCAN_BATCH}`;
+    if (ids.length === 0) return [];
+    const rows = await this.prisma.walletBill.findMany({
+      where: { id: { in: ids.map((i) => i.id) } },
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    return ids.flatMap((i) => {
+      const bill = byId.get(i.id);
+      return bill ? [bill] : [];
+    });
+  }
+
+  /**
+   * The pass belongs to whoever moves the newest failure's `checks` (how
+   * many times Fintava has been asked about a purchase) from the value it
+   * read: a server that read the same state loses the update and skips. A
+   * short conditional write; no lock is held while Fintava is asked.
+   */
+  private async claimLatePass(todo: readonly WalletBill[]): Promise<boolean> {
+    const lead = todo[0];
+    const { count } = await this.prisma.walletBill.updateMany({
+      where: { id: lead.id, status: 'failed', checks: lead.checks },
+      data: { checks: { increment: 1 } },
+    });
+    if (count === 0) return false;
+    if (todo.length > 1) {
+      await this.prisma.walletBill.updateMany({
+        where: { id: { in: todo.slice(1).map((b) => b.id) } },
+        data: { checks: { increment: 1 } },
       });
-      rows = page.items;
+    }
+    return true;
+  }
+
+  /**
+   * Fintava's merchant history, newest first, back to the oldest failure in
+   * `todo` (a day earlier, as `reconcile` reads), a page at a time. `reachedBack`
+   * is null when the walk covers every failure; otherwise the time of the
+   * oldest record read, so bills older than it are left for a later pass.
+   * Null: nothing could be read.
+   */
+  private async readLateHistory(todo: readonly WalletBill[]): Promise<{
+    rows: FintavaTransaction[];
+    reachedBack: number | null;
+  } | null> {
+    const oldestSent = todo.reduce(
+      (t, b) => Math.min(t, b.purchaseSentAt!.getTime()),
+      Number.POSITIVE_INFINITY,
+    );
+    const startDate = new Date(oldestSent - 24 * 3_600_000)
+      .toISOString()
+      .slice(0, 10);
+    const wanted = oldestSent - HISTORY_SKEW_MS;
+    const rows: FintavaTransaction[] = [];
+    const seen = new Set<string>();
+    let first: FintavaPage<FintavaTransaction> | null = null;
+    let page = 1;
+    try {
+      for (; page <= LATE_SCAN_HISTORY_PAGES; page += 1) {
+        const got = await this.fintava.getMerchantHistory({
+          startDate,
+          order: 'DESC',
+          page,
+          take: LATE_SCAN_HISTORY_TAKE,
+        });
+        if (!historyPageConsistent(got, page, first)) break;
+        first ??= got;
+        for (const r of got.items) {
+          if (!seen.has(r.id)) {
+            seen.add(r.id);
+            rows.push(r);
+          }
+        }
+        const last = got.items[got.items.length - 1];
+        if (
+          !got.hasNextPage ||
+          (last !== undefined && Date.parse(last.createdAt) < wanted)
+        ) {
+          return { rows, reachedBack: null };
+        }
+      }
     } catch (e) {
       this.logger.warn(
         `bills: Fintava's history could not be read for the late-success look (${e instanceof FintavaError ? e.kind : 'error'})`,
       );
-      return;
     }
-    for (const bill of todo) {
-      const sentAt = bill.purchaseSentAt!;
-      const guard = await this.guardFor(bill, sentAt, rows);
-      const reading = readHistory(spec(bill), sentAt, rows, {
-        ...guard,
-        notAfter: new Date((bill.failedAt ?? now).getTime() + HISTORY_SKEW_MS),
-      });
-      if (reading.state === 'delivered') {
-        await this.lateSuccess(bill, {
-          transactionId: reading.row.id,
-          fintavaReference: reading.row.fintavaReference,
-        });
-      }
-    }
+    if (rows.length === 0) return null;
+    this.logger.warn(
+      `bills: the late-success look read ${rows.length} records and stopped before the oldest failure; the older ones wait for a later pass`,
+    );
+    return {
+      rows,
+      reachedBack: Math.min(...rows.map((r) => Date.parse(r.createdAt))),
+    };
   }
 
   /**
@@ -963,7 +1083,8 @@ export class WalletBillService implements OnModuleInit {
   /**
    * What already belongs to other bills, so one history record settles at
    * most one bill: records stored on another bill, and nothing made before
-   * the previous bill for the same meter or number and amount was delivered.
+   * the previous bill for the same meter or number and amount was delivered
+   * (plus the clock-difference allowance).
    */
   private async guardFor(
     row: WalletBill,
@@ -985,7 +1106,7 @@ export class WalletBillService implements OnModuleInit {
         },
         select: { fintavaTransactionId: true, fintavaReference: true },
       }),
-      this.prisma.walletBill.findFirst({
+      this.prisma.walletBill.findMany({
         where: {
           id: { not: row.id },
           status: 'delivered',
@@ -995,11 +1116,31 @@ export class WalletBillService implements OnModuleInit {
           deliveredAt: { not: null, lte: sentAt },
         },
         orderBy: { deliveredAt: 'desc' },
-        select: { deliveredAt: true },
+        take: 5,
+        select: {
+          deliveredAt: true,
+          fintavaTransactionId: true,
+          fintavaReference: true,
+        },
       }),
     ]);
     return {
-      notBefore: previous?.deliveredAt ?? null,
+      // The earlier bill's record may carry Fintava's clock, a little ahead
+      // of ours, and when that bill's answer carried no record id nothing
+      // else tells its record from this bill's: nothing before its delivery
+      // PLUS the skew allowance is this bill's. A real record that close is
+      // left for a person (the bill stays processing), the safe side. A bill
+      // whose record id or reference is stored is excluded by it, exactly.
+      notBefore: previous.reduce<Date | null>((latest, b) => {
+        if (b.deliveredAt === null) return latest;
+        const from = new Date(
+          b.deliveredAt.getTime() +
+            (b.fintavaTransactionId === null && b.fintavaReference === null
+              ? HISTORY_SKEW_MS
+              : 0),
+        );
+        return latest === null || from > latest ? from : latest;
+      }, null),
       takenIds: new Set(
         taken.flatMap((t) =>
           t.fintavaTransactionId === null ? [] : [t.fintavaTransactionId],
