@@ -144,7 +144,9 @@ A pack is bought with the wallet through four routes, all declared in
 `/verify` are unchanged):
 
 - `GET /credits/packs`: the server's pack table, cheapest first
-  (`{ pack, credits, priceKobo }`). Needs no wallet. Credits are a count, never
+  (`{ pack, credits, priceKobo, badge }`; `badge` is the tag I28 draws:
+  `popular` on the 120-credit pack, `best_value` on the 300-credit one, else
+  null). Needs no wallet. Credits are a count, never
   naira (R-5).
 - `GET /credits/purchase/wallet/quote?pack=`: the pack and the payment quote
   (price, the provider's charge on top, total, balance, shortfall, token).

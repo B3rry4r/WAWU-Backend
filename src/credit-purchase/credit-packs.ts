@@ -23,6 +23,19 @@ export const PACK_TABLE: Record<
   pro: { amount: 2000, credits: 300 },
 };
 
+/**
+ * The tag a pack carries on the buy sheet (I28 draws "Popular" on the
+ * 120-credit pack and "Best value" on the 300-credit one). The sheet reads it
+ * from here, so which pack is tagged never lives in the app.
+ */
+export type CreditPackBadge = 'popular' | 'best_value';
+
+export const PACK_BADGES: Record<CreditPack, CreditPackBadge | null> = {
+  starter: null,
+  popular: 'popular',
+  pro: 'best_value',
+};
+
 /** The pack a payment target names, or null when it names none. */
 export function packOf(targetId: string): CreditPack | null {
   return Object.prototype.hasOwnProperty.call(PACK_TABLE, targetId)

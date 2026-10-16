@@ -53045,12 +53045,21 @@
           },
           "priceKobo": {
             "type": "integer"
+          },
+          "badge": {
+            "type": "string",
+            "enum": [
+              "popular",
+              "best_value"
+            ],
+            "nullable": true
           }
         },
         "required": [
           "pack",
           "credits",
-          "priceKobo"
+          "priceKobo",
+          "badge"
         ]
       },
       "CreditPackListView": {
@@ -53086,13 +53095,22 @@
           },
           "priceKobo": {
             "type": "integer"
+          },
+          "badge": {
+            "type": "string",
+            "enum": [
+              "popular",
+              "best_value"
+            ],
+            "nullable": true
           }
         },
         "required": [
           "payment",
           "pack",
           "credits",
-          "priceKobo"
+          "priceKobo",
+          "badge"
         ]
       },
       "CreditWalletPurchaseView": {
@@ -53147,6 +53165,14 @@
           },
           "priceKobo": {
             "type": "integer"
+          },
+          "badge": {
+            "type": "string",
+            "enum": [
+              "popular",
+              "best_value"
+            ],
+            "nullable": true
           }
         },
         "required": [
@@ -53160,7 +53186,8 @@
           "paidAt",
           "pack",
           "credits",
-          "priceKobo"
+          "priceKobo",
+          "badge"
         ]
       },
       "PointsConvertQuoteView": {

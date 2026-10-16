@@ -34,7 +34,12 @@ jest.setTimeout(120_000);
 const reasonOf = (res: Response) => body<unknown>(res).reason!;
 const RICH = 50_000_000;
 /** The pack the capability checks name: 120 credits for ₦1,000. */
-const POPULAR = { pack: 'popular', credits: 120, priceKobo: 100_000 };
+const POPULAR = {
+  pack: 'popular',
+  credits: 120,
+  priceKobo: 100_000,
+  badge: 'popular',
+};
 
 describe('Buy WAWU Credits from the wallet (INBOX-16)', () => {
   let h: CreditHarness;
@@ -98,9 +103,9 @@ describe('Buy WAWU Credits from the wallet (INBOX-16)', () => {
     expect(res.status).toBe(200);
     const { packs } = body<CreditPackListView>(res).data!;
     expect(packs).toEqual([
-      { pack: 'starter', credits: 50, priceKobo: 50_000 },
-      { pack: 'popular', credits: 120, priceKobo: 100_000 },
-      { pack: 'pro', credits: 300, priceKobo: 200_000 },
+      { pack: 'starter', credits: 50, priceKobo: 50_000, badge: null },
+      { pack: 'popular', credits: 120, priceKobo: 100_000, badge: 'popular' },
+      { pack: 'pro', credits: 300, priceKobo: 200_000, badge: 'best_value' },
     ]);
     // Every pack of the enum is on sale, and nothing else.
     expect(packs.map((x) => x.pack).sort()).toEqual(

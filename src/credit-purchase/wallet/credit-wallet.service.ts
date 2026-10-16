@@ -13,7 +13,12 @@ import {
 } from '../../money/payments/payable-registry';
 import { WalletPaymentService } from '../../money/payments/wallet-payment.service';
 import type { CreditPack } from '../../../generated/prisma/enums';
-import { KOBO_PER_NAIRA, PACK_TABLE, packOf } from '../credit-packs';
+import {
+  KOBO_PER_NAIRA,
+  PACK_BADGES,
+  PACK_TABLE,
+  packOf,
+} from '../credit-packs';
 import type {
   CreditWalletPurchaseDto,
   CreditWalletQuoteQueryDto,
@@ -274,6 +279,7 @@ function packView(pack: CreditPack): CreditPackView {
     pack,
     credits: info.credits,
     priceKobo: info.amount * KOBO_PER_NAIRA,
+    badge: PACK_BADGES[pack],
   };
 }
 

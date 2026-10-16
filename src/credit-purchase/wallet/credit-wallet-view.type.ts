@@ -1,4 +1,5 @@
 import type { CreditPack } from '../../../generated/prisma/enums';
+import type { CreditPackBadge } from '../credit-packs';
 import type {
   PaymentQuoteView,
   PaymentView,
@@ -18,6 +19,8 @@ export interface CreditPackView {
   credits: number;
   /** The pack's price in kobo, before the provider's charge. */
   priceKobo: number;
+  /** The tag the sheet draws on the pack (`popular`, `best_value`); null: none. */
+  badge: CreditPackBadge | null;
 }
 
 /** `GET /credits/packs`. */
