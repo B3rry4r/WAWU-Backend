@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from '../../common/prisma/prisma.module';
+import { WebhookRetentionModule } from '../../webhook-retention/webhook-retention.module';
 import { NuvionAccountsHandler } from '../handlers/accounts.handler';
 import { NuvionBookHandler } from '../handlers/book.handler';
 import { NuvionDocumentsHandler } from '../handlers/documents.handler';
@@ -24,9 +25,13 @@ import { NuvionWebhookStore } from './nuvion-webhook.service';
  * Needs the app built with `rawBody: true` (src/hub-app-options.ts): the
  * signature covers the exact bytes Nuvion sent. The dispatcher's @Cron runs
  * only where ScheduleModule.forRoot() is loaded (AppModule).
+ *
+ * FIX-20: imports WebhookRetentionModule, the daily job that clears the body
+ * and the parsed copy of old deliveries (it is mounted here and by
+ * FintavaWebhookModule, not by AppModule).
  */
 @Module({
-  imports: [ConfigModule, PrismaModule],
+  imports: [ConfigModule, PrismaModule, WebhookRetentionModule],
   controllers: [NuvionWebhookController],
   providers: [
     NuvionSignatureGuard,
