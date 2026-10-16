@@ -342,6 +342,27 @@ export interface ProviderBalance {
   availableKobo: bigint;
   /** Including what is pending settlement. */
   bookedKobo: bigint;
+  /**
+   * What the provider says this account may move (WALLET-23), when the same
+   * answer says it. Absent when the provider's balance answer names no limit
+   * (Nuvion documents no account level and publishes no limit).
+   */
+  accountLimits?: ProviderAccountLimits;
+}
+
+/**
+ * An account's limit as its provider reports it (WALLET-23). The provider
+ * enforces it; WAWU reads it to refuse early, with the limit shown, and to
+ * fill W35's limits row. Never a figure of WAWU's own.
+ */
+export interface ProviderAccountLimits {
+  /**
+   * The provider's own name for the account's level ("TIER_2"). Kept for
+   * ops. The app is never shown it (BRIEF W35: the limits row names no tier).
+   */
+  tier: string | null;
+  /** The most the account may send in a day, in kobo; null when none is known. */
+  dailyKobo: bigint | null;
 }
 
 /** WAWU's own account at the provider (its merchant or operational account). */

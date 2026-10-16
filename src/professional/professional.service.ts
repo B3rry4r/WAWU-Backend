@@ -267,7 +267,7 @@ export class ProfessionalService {
 
     if (dto.credentialKind !== 'licence') {
       throw new BadRequestException(
-        `${dto.category.replace(/_/g, ' ')} is a regulated field, so a practising licence is required — a portfolio or a general qualification cannot be accepted here.`,
+        `${dto.category.replace(/_/g, ' ')} is a regulated field, so a practising licence is required. A portfolio or a general qualification cannot be accepted here.`,
       );
     }
     if (!dto.licenceNumber?.trim()) {

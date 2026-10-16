@@ -45,6 +45,27 @@ import type { ChatSummary } from '../../chat/chat-view.type';
 
 const bearer = (p: Person) => ({ Authorization: `Bearer ${p.token}` });
 
+/**
+ * A port nothing holds right now: the operating system hands one out (port 0)
+ * and the server is closed, and awaited, before the port is returned. A number
+ * picked at random from a range is not safe: 36000-38999 is inside the range
+ * Linux gives to outgoing connections, so on a busy runner another process can
+ * already hold it (EADDRINUSE, 16 Oct 2026).
+ */
+async function freePort(): Promise<number> {
+  const probe = net.createServer();
+  const port = await new Promise<number>((resolve, reject) => {
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () =>
+      resolve((probe.address() as net.AddressInfo).port),
+    );
+  });
+  await new Promise<void>((resolve, reject) =>
+    probe.close((e) => (e ? reject(e) : resolve())),
+  );
+  return port;
+}
+
 async function boot(
   withLive: boolean,
 ): Promise<{ app: INestApplication<App>; port: number }> {
@@ -370,7 +391,6 @@ describe('Live updates, hardening (contract, INBOX-02)', () => {
 
   describe('a running server told to stop', () => {
     it('tells its sockets 1001 and exits promptly on SIGTERM', async () => {
-      const fixturePort = 38000 + Math.floor(Math.random() * 1000);
       const child = spawn(
         process.execPath,
         [
@@ -382,7 +402,7 @@ describe('Live updates, hardening (contract, INBOX-02)', () => {
           cwd: path.join(__dirname, '../../..'),
           env: {
             ...process.env,
-            LIVE_FIXTURE_PORT: String(fixturePort),
+            LIVE_FIXTURE_PORT: '0',
             TS_NODE_PROJECT: path.join(__dirname, '../../../tsconfig.json'),
           },
           stdio: ['ignore', 'pipe', 'pipe'],
@@ -402,6 +422,9 @@ describe('Live updates, hardening (contract, INBOX-02)', () => {
         await settle(100);
       }
       expect(output).toContain('listening');
+      // The fixture asked for port 0 and says which port it got.
+      const fixturePort = Number(/listening on (\d+)/.exec(output)?.[1]);
+      expect(fixturePort).toBeGreaterThan(0);
       const live = await Promise.all(
         [ada, bola, ada].map((p) => Client.open(fixturePort, p.token)),
       );
@@ -475,7 +498,7 @@ describe('Live updates, hardening (contract, INBOX-02)', () => {
           mode: 0o644,
         });
         const db = new URL(process.env.DATABASE_URL!);
-        const poolPort = 36000 + Math.floor(Math.random() * 1000);
+        const poolPort = await freePort();
         writeFileSync(
           path.join(dir, 'pgbouncer.ini'),
           [

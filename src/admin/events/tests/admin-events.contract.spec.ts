@@ -650,7 +650,7 @@ describe('Admin events moderation contract', () => {
         .set(auth(reviewerToken))
         .expect(400);
       expect(res.body.message).toBe(
-        'An event can only be approved from pending — this one is published.',
+        'An event can only be approved from pending. This one is published.',
       );
       expect(
         await prisma.adminEventReview.count({
@@ -705,7 +705,7 @@ describe('Admin events moderation contract', () => {
         .send({ reason: '   ' })
         .expect(400);
       expect(res.body.message).toBe(
-        'reason is required — the host is shown it.',
+        'reason is required. The host is shown it.',
       );
 
       const row = await prisma.event.findUniqueOrThrow({
@@ -884,7 +884,7 @@ describe('Admin events moderation contract', () => {
         .send({ reason: ' ' })
         .expect(400);
       expect(res.body.message).toBe(
-        'reason is required — the host is shown it.',
+        'reason is required. The host is shown it.',
       );
 
       const row = await prisma.event.findUniqueOrThrow({

@@ -734,7 +734,7 @@ describe('Admin KYC review contract', () => {
         .set(auth(reviewerToken))
         .send({ reason: '   ' })
         .expect(400);
-      expect(res.body.message).toBe('reason is required — the creator is shown it.');
+      expect(res.body.message).toBe('reason is required. The creator is shown it.');
 
       // Nothing was written on either refusal, and the gate did not move.
       const row = await prisma.kycSubmission.findUniqueOrThrow({ where: { id: SUB_PENDING_OLD } });
