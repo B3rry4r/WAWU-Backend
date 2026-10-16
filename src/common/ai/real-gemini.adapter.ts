@@ -139,10 +139,13 @@ export class RealGeminiAdapter implements GeminiClient {
   /**
    * One conversational turn.
    *
-   * No response schema here — this is prose to a person, not a document for a
-   * dashboard to render. Temperature stays low for the same reason the brief's
-   * does: the client is asking about their own legal position, and a confident
-   * invention is worse than a plain "the consultant will confirm that".
+   * No response schema by default: that is prose to a person, not a document
+   * for a dashboard to render. A caller that needs one JSON object back (the
+   * legal assistant's profiling turn) passes `responseSchema` and the provider
+   * constrains the shape itself, as `generateBrief()` does. Temperature stays
+   * low for the same reason the brief's does: the client is asking about their
+   * own legal position, and a confident invention is worse than a plain "the
+   * consultant will confirm that".
    */
   async chat(request: GeminiChatRequest): Promise<string> {
     const key = process.env.GEMINI_API_KEY;
@@ -164,14 +167,7 @@ export class RealGeminiAdapter implements GeminiClient {
             'Content-Type': 'application/json',
             'x-goog-api-key': key,
           },
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: request.instruction }] },
-            contents: request.history.map((m) => ({
-              role: m.role,
-              parts: [{ text: m.text }],
-            })),
-            generationConfig: { temperature: 0.3, maxOutputTokens: 700 },
-          }),
+          body: JSON.stringify(buildChatBody(request)),
           signal: controller.signal,
         },
       );
@@ -198,6 +194,32 @@ export class RealGeminiAdapter implements GeminiClient {
     if (!text) throw new Error('Gemini chat returned no content');
     return text;
   }
+}
+
+/**
+ * The request body of one chat turn. Without a `responseSchema` it is the body
+ * this adapter has always sent, key for key; with one, the same body plus
+ * `responseMimeType` and the schema in `generationConfig`, in the order
+ * `generateBrief()` writes them.
+ */
+export function buildChatBody(request: GeminiChatRequest): object {
+  return {
+    systemInstruction: { parts: [{ text: request.instruction }] },
+    contents: request.history.map((m) => ({
+      role: m.role,
+      parts: [{ text: m.text }],
+    })),
+    generationConfig: {
+      temperature: 0.3,
+      maxOutputTokens: 700,
+      ...(request.responseSchema
+        ? {
+            responseMimeType: 'application/json',
+            responseSchema: request.responseSchema,
+          }
+        : {}),
+    },
+  };
 }
 
 /**

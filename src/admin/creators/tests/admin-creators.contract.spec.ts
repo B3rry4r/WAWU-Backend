@@ -584,11 +584,12 @@ describe('Admin creator lookup contract', () => {
         authority: 'wawu-id',
       });
 
-      // Slots. `slotsTotal` is derived, never stored, and flat per account.
+      // Slots. `slotsTotal` is derived, never stored: what the publishing gate
+      // allows (TIER-02). This creator holds no tier and no tick, so nothing.
       // There is no free/paid sub-split any more, so neither field is here.
       expect(data.uploads).toEqual({
         slotsUsed: 2,
-        slotsTotal: 5,
+        slotsTotal: 0,
         pendingReviewCount: 1,
         liveCount: 1,
       });
@@ -600,11 +601,12 @@ describe('Admin creator lookup contract', () => {
       expect(data.directMessages).toEqual({ enabled: true, price: 1500 });
     });
 
-    it('derives the same flat slot total for every creator, whoever they are', async () => {
+    it('derives the same slot total for every creator holding neither a tier nor a tick, whoever they are', async () => {
       const res = await detail(financeToken, CREATOR_PRO_DOWNGRADING).expect(200);
       // This creator used to be on a plan that bought more slots. There is
-      // one number now, and it is the same one the previous test asserted.
-      expect(res.body.data.uploads).toMatchObject({ slotsUsed: 4, slotsTotal: 5 });
+      // one rule now, and it gives the same number as the previous test's
+      // creator: nothing, until a tier or a tick that has not ended.
+      expect(res.body.data.uploads).toMatchObject({ slotsUsed: 4, slotsTotal: 0 });
     });
 
     it('reports the two ticks alongside the old ladder history, kept apart from kycStatus', async () => {

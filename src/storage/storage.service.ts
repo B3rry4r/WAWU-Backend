@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   Logger,
+  NotFoundException,
   PayloadTooLargeException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -20,18 +21,17 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
+import type { Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import {
   FREE_STORAGE_BYTES,
-  FREE_UPLOADS,
-  TICK_COLUMNS,
   TICK_STORAGE_BYTES,
   TICK_UPLOADS,
-  holdsTick,
-  storageAllowanceFor,
-  uploadAllowanceFor,
 } from '../common/creator-allowance';
+import { PublishingAllowanceService } from '../plans/publishing-allowance.service';
+import { PublishingGate } from '../plans/publishing-gate.service';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 /**
@@ -53,6 +53,27 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
  * reconcileStale for why this is much longer than the 300s URL expiry.
  */
 const RECONCILE_GRACE_MS = 15 * 60 * 1000;
+
+/** How long a presigned PUT URL can still start an upload. */
+const UPLOAD_URL_SECONDS = 300;
+
+/**
+ * How long after presign `POST /uploads/confirm` leaves a missing file alone:
+ * the URL's life plus a minute. Until then the PUT may still be coming (the
+ * app can confirm before it sends, or while it sends), so the row stays
+ * `pending`, counted, and the sweep settles it. Past it, a missing file is
+ * given up on at once.
+ */
+const CONFIRM_HOLD_MS = (UPLOAD_URL_SECONDS + 60) * 1000;
+
+const CHECK_LATER =
+  'Could not check that upload right now. Try again in a moment.';
+
+/** Stale reservations the sweep settles in one pass over the bucket. */
+const RECONCILE_BATCH = 50;
+
+/** Passes one usage read makes at most, so a read never runs unbounded. */
+const RECONCILE_MAX_BATCHES = 10;
 
 /**
  * The folders that hold creator content, the only ones R-7's storage
@@ -91,17 +112,21 @@ export interface UploadAllowanceView {
   /** True when the account holds either tick now. */
   tickHeld: boolean;
   uploads: {
-    /** Pieces counted against the cap (CreatorState.slotsUsed; 0 with no row). */
+    /** Products published now (CreatorState.slotsUsed; 0 with no row). */
     used: number;
-    /** The cap that applies now: `free.uploads` or `withTick.uploads`. */
+    /**
+     * What the publishing gate allows now (TIER-02): a running tier's products
+     * plus extra products bought, or `withTick.uploads` for a tick that has
+     * not ended, whichever is more; 0 with neither.
+     */
     allowed: number;
     /** `allowed - used`, never below 0. */
     remaining: number;
   };
   storage: StorageUsage;
-  /** R-7's allowance without a tick. */
+  /** With no tier and no tick: no uploads (R-43); storage is R-7's free figure. */
   free: AllowanceLevelView;
-  /** R-7's allowance with a tick. */
+  /** R-7's allowance with a tick, kept for people who paid for one before tiers. */
   withTick: AllowanceLevelView;
 }
 
@@ -319,6 +344,8 @@ export class StorageService {
   constructor(
     private readonly config: ConfigService,
     private readonly prisma: PrismaService,
+    private readonly allowance: PublishingAllowanceService,
+    private readonly gate: PublishingGate,
   ) {
     const endpoint = this.config.get<string>('STORAGE_ENDPOINT');
     const accessKeyId = this.config.get<string>('STORAGE_ACCESS_KEY_ID');
@@ -455,30 +482,21 @@ export class StorageService {
     // neither counted against it nor refused by it: R-7 sets the limit on
     // uploads, and a person over it must still be able to prove who they are.
     // Those folders keep their own per-file limit and type allowlist.
+    //
+    // TIER-02 (R-43): a file for a product needs a tier that is running (or a
+    // tick that has not ended), and a place free for one more product. Nothing
+    // is signed or recorded for a person who may not publish. The other
+    // folders are not products and are never asked: an identity document,
+    // an avatar or a chat picture must work without a tier, or nobody could
+    // open a wallet to buy one.
+    if (CONTENT_FOLDERS.includes(folder))
+      await this.gate.assertRoomForProduct(wawuId);
     const { usage, tickHeld } = await this.usageAndTick(wawuId);
     if (
       CONTENT_FOLDERS.includes(folder) &&
       usage.usedBytes + contentLength > usage.limitBytes
     ) {
-      // Says only what is true: deleting a piece frees its upload slot, never
-      // storage, so no line here promises that deleting makes room.
-      throw new PayloadTooLargeException({
-        message: `This file needs ${formatBytes(contentLength)}, but only ${formatBytes(
-          Math.max(0, usage.remainingBytes),
-        )} of your ${formatBytes(usage.limitBytes)} storage is free.${
-          tickHeld
-            ? ''
-            : ` A verification tick raises the limit to ${formatBytes(TICK_STORAGE_BYTES)}.`
-        }`,
-        reason: {
-          code: 'storage_limit_reached',
-          neededBytes: contentLength,
-          usedBytes: usage.usedBytes,
-          limitBytes: usage.limitBytes,
-          tickHeld,
-          storageBytesWithTick: TICK_STORAGE_BYTES,
-        },
-      });
+      throw this.storageFullRefusal(contentLength, usage, tickHeld);
     }
 
     await this.prisma.storageObject.create({
@@ -512,7 +530,7 @@ export class StorageService {
         // The protection it existed for now happens at READ time, where it
         // cannot be bypassed: see signedReadUrl below.
       }),
-      { expiresIn: 300 },
+      { expiresIn: UPLOAD_URL_SECONDS },
     );
 
     return { uploadUrl, key, fileUrl: await this.readUrlFor(key) };
@@ -615,26 +633,174 @@ export class StorageService {
   }): Promise<boolean> {
     if (row.status === 'confirmed') return true;
     if (row.status !== 'pending' || !this.client) return false;
-    try {
-      await this.client.send(
-        new HeadObjectCommand({ Bucket: this.bucket, Key: row.key }),
-      );
-    } catch (err) {
-      const status = (err as { $metadata?: { httpStatusCode?: number } })
-        .$metadata?.httpStatusCode;
-      if (status === 404 || status === 403) return false;
-      this.logger.warn(
-        `Could not confirm storage object ${row.key}: ${String(err)}`,
-      );
-      throw new ServiceUnavailableException(
-        'Could not check that upload right now. Try again in a moment.',
-      );
-    }
+    const held = await this.bucketHolds(row.key, 'confirm');
+    if (held === 'absent') return false;
+    if (held === 'unknown') throw new ServiceUnavailableException(CHECK_LATER);
     await this.prisma.storageObject.updateMany({
       where: { id: row.id, status: 'pending' },
       data: { status: 'confirmed', confirmedAt: new Date() },
     });
     return true;
+  }
+
+  /**
+   * POST /uploads/confirm: the app has finished sending one file to the URL
+   * presign gave it, and says so whether the storage host took it or turned
+   * it away. The bucket, not the app, decides what the reservation becomes:
+   *
+   * - the object is there: the row is `confirmed`, and counts as it always
+   *   did. A row that had been given up on comes back only if the file still
+   *   fits the person's storage (a slow upload that outlived the give-up);
+   *   if it does not, the file is removed from the bucket and the answer is
+   *   the same 413 a presign gives, so a file nobody reserved room for is
+   *   never kept.
+   * - the object is not there yet and the URL could still be used (the row is
+   *   younger than the URL's life plus a minute): `pending`. The row is left
+   *   as it is, still counted, and the sweep (reconcileStale) settles it. A
+   *   confirm sent before the PUT therefore frees nothing.
+   * - the object is not there and the URL is spent: the row is `abandoned`
+   *   now, and the space it held goes back to the person. Without this call
+   *   that happens only when the sweep settles it, a quarter of an hour on.
+   * - the bucket cannot be asked: a 503, and the row is left as it was.
+   *
+   * Only the person's own upload can be settled; another account's key answers
+   * the same as a key that never existed.
+   */
+  async settleUpload(
+    wawuId: string,
+    stored: string,
+  ): Promise<{ key: string; status: 'confirmed' | 'abandoned' | 'pending' }> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const key = objectKeyFrom(stored);
+    // A control character (a NUL above all, which the database refuses and
+    // used to turn into a 500) is in no key we wrote: the same answer as for
+    // any key that never existed.
+    // eslint-disable-next-line no-control-regex -- the NUL and other controls are what is refused
+    const row = /[\u0000-\u001f\u007f]/.test(key)
+      ? null
+      : await this.prisma.storageObject.findUnique({ where: { key } });
+    if (!row || row.wawuUserId !== wawuId) {
+      throw new NotFoundException('We could not find that upload.');
+    }
+    if (row.status === 'confirmed') return { key, status: 'confirmed' };
+
+    const held = await this.bucketHolds(key, 'settle');
+    if (held === 'unknown') throw new ServiceUnavailableException(CHECK_LATER);
+    if (held === 'present') {
+      await this.adoptArrived(wawuId, row.id, key);
+      return { key, status: 'confirmed' };
+    }
+    if (row.status !== 'pending') return { key, status: 'abandoned' };
+    if (Date.now() - row.createdAt.getTime() < CONFIRM_HOLD_MS) {
+      return { key, status: 'pending' };
+    }
+    await this.prisma.storageObject.updateMany({
+      where: { id: row.id, status: 'pending' },
+      data: { status: 'abandoned' },
+    });
+    return { key, status: 'abandoned' };
+  }
+
+  /**
+   * The file of reservation `rowId` is in the bucket: the row becomes
+   * `confirmed`. A `pending` row is counted already, so nothing else changes.
+   * An `abandoned` row is not counted, and its space may have been given to
+   * other files since, so it comes back only when it fits: usage plus its
+   * bytes within the limit, checked under a per-person lock so two files
+   * coming back at once cannot both take the last of the room. When it does
+   * not fit, the file is removed from the bucket and the person is refused as
+   * a presign refuses (413, storage_limit_reached); the row stays `abandoned`.
+   */
+  private async adoptArrived(
+    wawuId: string,
+    rowId: string,
+    key: string,
+  ): Promise<void> {
+    await this.reconcileStale(wawuId);
+    const refusal = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`storage-quota:${wawuId}`}, 0))`;
+      const row = await tx.storageObject.findUnique({ where: { id: rowId } });
+      if (!row || row.status === 'confirmed') return null;
+      if (row.status === 'abandoned' && CONTENT_FOLDERS.includes(row.folder)) {
+        const { usage, tickHeld } = await this.readUsage(wawuId, tx);
+        if (usage.usedBytes + row.bytes > usage.limitBytes) {
+          return this.storageFullRefusal(row.bytes, usage, tickHeld);
+        }
+      }
+      await tx.storageObject.update({
+        where: { id: rowId },
+        data: { status: 'confirmed', confirmedAt: new Date() },
+      });
+      return null;
+    });
+    if (!refusal) return;
+    try {
+      await this.client!.send(
+        new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+    } catch (err) {
+      this.logger.warn(
+        `Could not remove over-limit storage object ${key}: ${String(err)}`,
+      );
+    }
+    throw refusal;
+  }
+
+  /**
+   * The 413 for a file the person's storage cannot take. Says only what is
+   * true: deleting a piece frees its place, never storage, so no line here
+   * promises that deleting makes room. It does not advise buying a tick
+   * either: by here the person holds a running tier or a tick, and both give
+   * the larger limit (TIER-02).
+   */
+  private storageFullRefusal(
+    contentLength: number,
+    usage: StorageUsage,
+    tickHeld: boolean,
+  ): PayloadTooLargeException {
+    return new PayloadTooLargeException({
+      message: `This file needs ${formatBytes(contentLength)}, but only ${formatBytes(
+        Math.max(0, usage.remainingBytes),
+      )} of your ${formatBytes(usage.limitBytes)} storage is free.`,
+      reason: {
+        code: 'storage_limit_reached',
+        neededBytes: contentLength,
+        usedBytes: usage.usedBytes,
+        limitBytes: usage.limitBytes,
+        tickHeld,
+        storageBytesWithTick: TICK_STORAGE_BYTES,
+      },
+    });
+  }
+
+  /**
+   * Whether the bucket holds `key`. Only a definite 404 or 403 means
+   * `absent`; any other failure is the bucket being unreachable, which is
+   * `unknown`: nobody may conclude "not there" from an outage, because that
+   * would hand back space for files that still exist.
+   */
+  private async bucketHolds(
+    key: string,
+    doing: string,
+  ): Promise<'present' | 'absent' | 'unknown'> {
+    try {
+      await this.client!.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+      return 'present';
+    } catch (err) {
+      const status = (err as { $metadata?: { httpStatusCode?: number } })
+        .$metadata?.httpStatusCode;
+      if (status === 404 || status === 403) return 'absent';
+      this.logger.warn(
+        `Could not ${doing} storage object ${key}: ${String(err)}`,
+      );
+      return 'unknown';
+    }
   }
 
   /**
@@ -659,9 +825,15 @@ export class StorageService {
     wawuId: string,
   ): Promise<{ usage: StorageUsage; tickHeld: boolean }> {
     await this.reconcileStale(wawuId);
+    return this.readUsage(wawuId, this.prisma);
+  }
 
-    const [agg, profile] = await Promise.all([
-      this.prisma.storageObject.aggregate({
+  private async readUsage(
+    wawuId: string,
+    db: Pick<Prisma.TransactionClient, 'storageObject'>,
+  ): Promise<{ usage: StorageUsage; tickHeld: boolean }> {
+    const [agg, allowance] = await Promise.all([
+      db.storageObject.aggregate({
         _sum: { bytes: true },
         where: {
           wawuUserId: wawuId,
@@ -669,15 +841,12 @@ export class StorageService {
           folder: { in: [...CONTENT_FOLDERS] },
         },
       }),
-      this.prisma.userProfile.findUnique({
-        where: { wawuUserId: wawuId },
-        select: TICK_COLUMNS,
-      }),
+      this.allowance.of(wawuId),
     ]);
 
     const usedBytes = agg._sum.bytes ?? 0;
-    const tickHeld = holdsTick(profile);
-    const limitBytes = storageAllowanceFor(tickHeld);
+    const tickHeld = allowance.tickHeld;
+    const limitBytes = allowance.storageBytes;
     return {
       usage: {
         usedBytes,
@@ -695,20 +864,19 @@ export class StorageService {
    * from usageFor, the tick from holdsTick.
    */
   async allowanceFor(wawuId: string): Promise<UploadAllowanceView> {
-    const [{ usage, tickHeld }, state] = await Promise.all([
+    const [{ usage, tickHeld }, allowance] = await Promise.all([
       this.usageAndTick(wawuId),
-      this.prisma.creatorState.findUnique({
-        where: { wawuUserId: wawuId },
-        select: { slotsUsed: true },
-      }),
+      this.allowance.of(wawuId),
     ]);
-    const used = state?.slotsUsed ?? 0;
-    const allowed = uploadAllowanceFor(tickHeld).total;
+    const used = allowance.productsUsed;
+    const allowed = allowance.productsAllowed;
     return {
       tickHeld,
       uploads: { used, allowed, remaining: Math.max(0, allowed - used) },
       storage: usage,
-      free: { uploads: FREE_UPLOADS, storageBytes: FREE_STORAGE_BYTES },
+      // TIER-02 (R-43): with no tier and no tick, nothing may be published.
+      // Drafts with no file are free and are not uploads.
+      free: { uploads: 0, storageBytes: FREE_STORAGE_BYTES },
       withTick: { uploads: TICK_UPLOADS, storageBytes: TICK_STORAGE_BYTES },
     };
   }
@@ -730,47 +898,39 @@ export class StorageService {
     if (!this.client) return;
 
     const cutoff = new Date(Date.now() - RECONCILE_GRACE_MS);
-    const stale = await this.prisma.storageObject.findMany({
-      where: {
-        wawuUserId: wawuId,
-        status: 'pending',
-        createdAt: { lt: cutoff },
-      },
-      select: { id: true, key: true },
-      take: 50,
-    });
-    if (stale.length === 0) return;
+    // Rows the bucket could not answer for stay pending and are not asked
+    // again in this read, so the loop ends even during an outage.
+    const asked: string[] = [];
+    for (let pass = 0; pass < RECONCILE_MAX_BATCHES; pass++) {
+      const stale = await this.prisma.storageObject.findMany({
+        where: {
+          wawuUserId: wawuId,
+          status: 'pending',
+          createdAt: { lt: cutoff },
+          ...(asked.length > 0 ? { id: { notIn: asked } } : {}),
+        },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, key: true },
+        take: RECONCILE_BATCH,
+      });
+      if (stale.length === 0) return;
+      asked.push(...stale.map((row) => row.id));
 
-    await Promise.all(
-      stale.map(async (row) => {
-        let landed: boolean;
-        try {
-          await this.client!.send(
-            new HeadObjectCommand({ Bucket: this.bucket, Key: row.key }),
-          );
-          landed = true;
-        } catch (err) {
-          const status = (err as { $metadata?: { httpStatusCode?: number } })
-            .$metadata?.httpStatusCode;
-          // Only a definite 404/403 means "not there". Anything else is the
-          // bucket being unreachable, and guessing "abandoned" from an outage
-          // would silently hand back quota for files that still exist.
-          if (status !== 404 && status !== 403) {
-            this.logger.warn(
-              `Could not reconcile storage object ${row.key}: ${String(err)}`,
-            );
-            return;
-          }
-          landed = false;
-        }
-
-        await this.prisma.storageObject.update({
-          where: { id: row.id },
-          data: landed
-            ? { status: 'confirmed', confirmedAt: new Date() }
-            : { status: 'abandoned' },
-        });
-      }),
-    );
+      await Promise.all(
+        stale.map(async (row) => {
+          const held = await this.bucketHolds(row.key, 'reconcile');
+          if (held === 'unknown') return;
+          // Guarded on `pending`: a confirm that landed since the read wins.
+          await this.prisma.storageObject.updateMany({
+            where: { id: row.id, status: 'pending' },
+            data:
+              held === 'present'
+                ? { status: 'confirmed', confirmedAt: new Date() }
+                : { status: 'abandoned' },
+          });
+        }),
+      );
+      if (stale.length < RECONCILE_BATCH) return;
+    }
   }
 }

@@ -469,8 +469,7 @@ class Check {
   text(v: unknown, path: string): string {
     if (typeof v !== 'string' || v.trim() === '' || v.trim() !== v)
       this.fail(path, 'must be text, not empty, with no spaces around it');
-    if (v.includes('\u2014'))
-      this.fail(path, 'must not contain an em-dash (R-5)');
+    if (/\u2014/.test(v)) this.fail(path, 'must not contain an em-dash (R-5)');
     return v;
   }
 

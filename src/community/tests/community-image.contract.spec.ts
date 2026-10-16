@@ -501,7 +501,7 @@ describe('Community images (contract)', () => {
 
       const res = await send({}).expect(400);
       expect(res.body.message).toBe(
-        'A message needs something in it — write something, attach a photo, or both.',
+        'A message needs something in it. Write something, attach a photo, or both.',
       );
 
       // The empty message cost nobody a credit and stored nothing.

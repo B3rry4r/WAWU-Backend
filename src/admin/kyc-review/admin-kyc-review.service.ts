@@ -2,7 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StorageService } from '../../storage/storage.service';
 import { KycSubmissionService } from '../../kyc-submission/kyc-submission.service';
-import { holdsTick, uploadAllowanceFor } from '../../common/creator-allowance';
+import { PublishingAllowanceService } from '../../plans/publishing-allowance.service';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { AdminKycAuditModel, KycSubmissionModel } from '../../../generated/prisma/models';
 import type { AdminUserView } from '../auth/admin-user-view.type';
@@ -68,6 +68,7 @@ export class AdminKycReviewService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly kyc: KycSubmissionService,
+    private readonly publishing: PublishingAllowanceService,
   ) {}
 
   /**
@@ -379,10 +380,11 @@ export class AdminKycReviewService {
    * null rather than as a plausible default.
    */
   private async resolveCreator(wawuUserId: string): Promise<AdminKycCreatorView> {
-    const [profile, state, submissionCount] = await Promise.all([
+    const [profile, state, submissionCount, allowance] = await Promise.all([
       this.prisma.userProfile.findUnique({ where: { wawuUserId } }),
       this.prisma.creatorState.findUnique({ where: { wawuUserId } }),
       this.prisma.kycSubmission.count({ where: { wawuUserId } }),
+      this.publishing.of(wawuUserId),
     ]);
 
     return {
@@ -395,7 +397,7 @@ export class AdminKycReviewService {
           : state.kycStatus
         : null,
       slotsUsed: state?.slotsUsed ?? null,
-      slotsTotal: state ? uploadAllowanceFor(holdsTick(profile)).total : null,
+      slotsTotal: state ? allowance.productsAllowed : null,
     };
   }
 
