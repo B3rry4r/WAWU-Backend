@@ -28,6 +28,9 @@
 # (defaults for --id, --web, --mobile), STACK_NM_HUB, STACK_NM_ID, STACK_NM_WEB,
 # STACK_NM_MOBILE (a node_modules folder to hard-link when the lockfile is the same;
 # otherwise npm ci runs).
+# STACK_STORAGE_ENDPOINT / STACK_STORAGE_PATH_STYLE=true point the Hub's object storage at a stand-in on this
+# machine (for example http://127.0.0.1:7184), so a spec can see the Hub's own storage calls (deletes included).
+# Left unset, the endpoint is a name block-net.cjs refuses, which is what a spec that never reaches storage wants.
 #
 # It never calls a real provider, a wawuafrica.com host or the production Hub.
 set -uo pipefail
@@ -423,8 +426,9 @@ build_all() {
     WAWU_ID_INTERNAL_SERVICE_KEY="$SERVICE_KEY"
     FLUTTERWAVE_SECRET_KEY= FLUTTERWAVE_PUBLIC_KEY=FLWPUBK_TEST-placeholder FLUTTERWAVE_SECRET_HASH=stack-webhook-hash
     ADMIN_JWT_SECRET="$ADMIN_SECRET" ADMIN_JWT_REFRESH_SECRET="$ADMIN_REFRESH"
-    STORAGE_ENDPOINT=https://bucket.example-storage.dev STORAGE_ACCESS_KEY_ID=stack-key
+    STORAGE_ENDPOINT="${STACK_STORAGE_ENDPOINT:-https://bucket.example-storage.dev}" STORAGE_ACCESS_KEY_ID=stack-key
     STORAGE_SECRET_ACCESS_KEY=stack-secret STORAGE_BUCKET=stack-bucket STORAGE_REGION=auto
+    STORAGE_FORCE_PATH_STYLE="${STACK_STORAGE_PATH_STYLE:-}"
     FINTAVA_BASE_URL=http://127.0.0.1:1/api/dev FINTAVA_API_KEY=stack-key-not-real
     FINTAVA_WEBHOOK_SECRET="whsec_stack_$NAME" FEE_QUOTE_KEY="stack-fee-quote-key-$SERVICE_KEY"
     MERCHANT_MAX_PER_TXN_KOBO=1000000000 IDENTITY_HASH_KEY="$SERVICE_KEY"

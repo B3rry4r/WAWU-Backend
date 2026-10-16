@@ -1154,6 +1154,46 @@
         ]
       }
     },
+    "/api/hub/uploads/release": {
+      "post": {
+        "operationId": "StorageController_release",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "released": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "released"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "POST /uploads/release: takes back an upload the caller reserved and no\nlisting has claimed yet (a file removed or replaced in an unfinished\ndraft). Deletes the object and frees its space in one step. Only the\ncaller's own upload in content/preview or content/full; another person's\nkey, an unknown key and a key in any other folder all get the same 404,\nand a key a listing already uses gets a 409. Calling it again for a key\nalready released answers the same 200.",
+        "tags": [
+          "Storage"
+        ]
+      }
+    },
     "/api/hub/bills/categories": {
       "get": {
         "operationId": "BillPaymentController_categories",
@@ -30458,6 +30498,19 @@
           "contentType",
           "extension",
           "contentLength"
+        ]
+      },
+      "ReleaseUploadDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "key"
         ]
       },
       "ValidateCustomerDto": {

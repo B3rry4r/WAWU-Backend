@@ -15,6 +15,7 @@ import {
   type UploadFormatId,
 } from './dto/presign-upload.dto';
 import { formatFolderRule } from './upload-formats';
+import { releaseOwnUpload } from './upload-release';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import {
@@ -803,6 +804,24 @@ export class StorageService {
             : { status: 'abandoned' },
         });
       }),
+    );
+  }
+
+  /**
+   * ME-04 round 2: gives back the space of an upload the caller reserved and
+   * no listing has claimed (POST /uploads/release). See upload-release.ts.
+   */
+  releaseUpload(wawuId: string, key: string): Promise<{ released: true }> {
+    return releaseOwnUpload(
+      {
+        client: this.client,
+        bucket: this.bucket,
+        folders: CONTENT_FOLDERS,
+        prisma: this.prisma,
+        logger: this.logger,
+      },
+      wawuId,
+      key,
     );
   }
 }
