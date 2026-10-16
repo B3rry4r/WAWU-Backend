@@ -693,6 +693,29 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // The products this person was still drafting (TIER-02): what they wrote,
+  // no file. The details are the person's own words, so they all go in.
+  {
+    key: 'productDrafts',
+    models: ['ProductDraft'],
+    load: (prisma, me) =>
+      prisma.productDraft.findMany({
+        where: { wawuUserId: me },
+        select: {
+          title: true,
+          contentType: true,
+          description: true,
+          category: true,
+          specializations: true,
+          tags: true,
+          accessType: true,
+          price: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
   // An event registration this person claimed in the app (JOIN-01): what they
   // told the event page and what they paid. The reference and transaction id
   // are payment-provider references, so they stay out (rule 3).

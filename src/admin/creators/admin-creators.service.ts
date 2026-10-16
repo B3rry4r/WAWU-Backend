@@ -5,7 +5,7 @@ import {
   type VerificationColumns,
 } from '../../common/verification/verification-state';
 import { CreatorEarningsService } from '../../creator-earnings/creator-earnings.service';
-import { holdsTick, uploadAllowanceFor } from '../../common/creator-allowance';
+import { PublishingAllowanceService } from '../../plans/publishing-allowance.service';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { CreatorStateModel, UserProfileModel } from '../../../generated/prisma/models';
 import type { ReviewStatus } from '../../../generated/prisma/enums';
@@ -49,8 +49,9 @@ type KycSafeRow = {
  *    capabilities cannot disagree.
  *  - `not_started` reproduces `CreatorStateService`'s synthesis (hazard H-5)
  *    rather than inventing a fifth word for the same state.
- *  - `slotsTotal` is `uploadAllowanceFor()`, the shared helper, from the
- *    creator's tick (R-7), because it is derived and not stored.
+ *  - `slotsTotal` is the publishing gate's allowance
+ *    (PublishingAllowanceService, TIER-02), because it is derived and not
+ *    stored.
  *  - earnings come from `CreatorEarningsService` — the very service that
  *    answers the creator's own screen — and are not recomputed here.
  *  - the verification tier is reported as "the last rung THIS backend
@@ -77,6 +78,7 @@ export class AdminCreatorsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly earnings: CreatorEarningsService,
+    private readonly publishing: PublishingAllowanceService,
   ) {}
 
   /**
@@ -168,7 +170,8 @@ export class AdminCreatorsService {
     // The same aggregate the creator's own /creator-earnings returns, from the
     // same service. Never recomputed here — see the class comment.
     const earnings = await this.earnings.getForCreator(wawuUserId);
-    const allowance = state ? uploadAllowanceFor(holdsTick(profile)) : null;
+    // What the publishing gate allows now (TIER-02), not the tick-era cap.
+    const allowance = state ? await this.publishing.of(wawuUserId) : null;
 
     return {
       wawuUserId,
@@ -179,7 +182,7 @@ export class AdminCreatorsService {
       verification: toVerificationView(verifications, profile),
       uploads: {
         slotsUsed: state?.slotsUsed ?? null,
-        slotsTotal: allowance?.total ?? null,
+        slotsTotal: allowance?.productsAllowed ?? null,
         pendingReviewCount: pendingCount,
         liveCount,
       },

@@ -2,6 +2,7 @@ import { ChildProcess, spawn } from 'child_process';
 import * as path from 'path';
 import * as argon2 from 'argon2';
 import { Client } from 'pg';
+import { loadPlansConfig } from '../../src/plans/plans-config';
 import { fakeProvider, WELLAHEALTH_BASE } from './providers';
 import type { Actor } from './registry';
 
@@ -250,6 +251,45 @@ export async function createAdmins(
         `INSERT INTO "AdminUser" (id, email, "passwordHash", name, role, status, "tokenVersion", "createdAt", "updatedAt")
          VALUES (gen_random_uuid(), $1, $2, $3, $4::"AdminRole", 'active', 0, now(), now())`,
         [adminEmail(role, nonce), hash, `Protected ${role}`, role],
+      );
+    }
+  } finally {
+    await client.end();
+  }
+}
+
+// ── tiers ────────────────────────────────────────────────────────────────
+
+/**
+ * A running Verify tier for the identities that publish (TIER-02, R-43).
+ *
+ * Publishing needs a tier, so the suite's setup step "POST /content as
+ * creator2" is refused `402 tier_required` for a person with none, and with
+ * it every probe that needs that piece. The lock describes a creator who can
+ * publish, and this makes the suite's creators one: the same row the tier
+ * purchase will write (TIER-03), with the plan config's own figures for the
+ * first tier. Nothing about a route's request, its expected answer or the
+ * lock changes. It is written after the snapshot is taken, so the snapshot
+ * restore removes it with everything else the run wrote.
+ */
+export async function grantVerifyTier(
+  databaseUrl: string,
+  wawuUserIds: string[],
+): Promise<void> {
+  const verify = loadPlansConfig().tiers.find((t) => t.id === 'verify');
+  if (!verify) throw new Error('The plan config has no "verify" tier.');
+  const client = new Client({ connectionString: databaseUrl });
+  await client.connect();
+  try {
+    for (const id of wawuUserIds) {
+      await client.query(
+        `INSERT INTO "MakerTier"
+           ("wawuUserId", "tierId", "activeFrom", "activeUntil",
+            "productsIncluded", "extraProducts", "pointsIncluded",
+            "voiceIntroIncluded", "updatedAt")
+         VALUES ($1, $2, now() - interval '1 day',
+                 now() + make_interval(days => $3), $4, 0, $5, false, now())`,
+        [id, verify.id, verify.days, verify.products, verify.bonusPoints],
       );
     }
   } finally {

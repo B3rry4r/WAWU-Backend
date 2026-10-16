@@ -10,11 +10,13 @@ import { ContentDetailController } from './content-detail.controller';
 import { ContentDetailService } from './content-detail.service';
 import { ContentMediaController } from './content-media.controller';
 import { ContentMediaService } from './content-media.service';
+import { ProductDraftController } from './product-draft.controller';
+import { ProductDraftService } from './product-draft.service';
 import { FeedCardsService } from './feed-cards.service';
 import { FeedEntriesService } from './feed-entries.service';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { ContentPieceService } from './content-piece.service';
-import { CreatorAccountGuard } from './guards/creator-account-guard';
+import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
 import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
@@ -22,6 +24,7 @@ import { shouldUseMockFlutterwave } from '../common/flutterwave/require-payment-
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { NotificationModule } from '../notification/notification.module';
 import { StorageModule } from '../storage/storage.module';
+import { PlansModule } from '../plans/plans.module';
 
 /**
  * registry.json "ContentPiece" resource module. PrismaService comes from
@@ -38,6 +41,8 @@ import { StorageModule } from '../storage/storage.module';
     StorageModule,
     BlockedAccountModule,
     WawuAuthModule,
+    // The publishing gate (TIER-02): publishing needs a tier.
+    PlansModule,
   ],
   controllers: [
     ContentPieceController,
@@ -46,9 +51,12 @@ import { StorageModule } from '../storage/storage.module';
     ContentDetailController,
     FeedController,
     ContentMediaController,
+    // Draft products (TIER-02): its own first segment, `product-drafts`.
+    ProductDraftController,
   ],
   providers: [
     ContentPieceService,
+    ProductDraftService,
     ContentEngagementService,
     ContentDetailService,
     ContentMediaService,

@@ -58,6 +58,23 @@ const newTag = () =>
   );
 let TAG = newTag();
 
+/**
+ * The BVN and NIN endings the identity row holds. They are never plain
+ * digits: an answer carries random ids, and four digits such as "4321" turn
+ * up inside a random id now and then without anything leaking (it failed a CI
+ * run on 16 Oct that way). The letters q, x, w and z cannot occur in a
+ * lowercase-hex id, an ISO timestamp or a number, so these only appear in an
+ * answer if the code really returns the stored value.
+ */
+const BVN_LAST4 = 'qz4321xk';
+const NIN_LAST4 = 'wj8765zq';
+
+/** Every object key in a JSON answer, at any depth, in lower case. */
+const keysOf = (v: unknown): string[] =>
+  v && typeof v === 'object'
+    ? Object.entries(v).flatMap(([k, x]) => [k.toLowerCase(), ...keysOf(x)])
+    : [];
+
 function mintToken(sub: string): string {
   const privateKey = readFileSync(
     join(__dirname, '../../../../mock-wawu-id/private.pem'),
@@ -223,8 +240,8 @@ describe('Recipient search and recent recipients (WALLET-08) over HTTP', () => {
         data: {
           wawuUserId: who.id,
           bvnHash: randomUUID(),
-          bvnLast4: '4321',
-          ninLast4: '8765',
+          bvnLast4: BVN_LAST4,
+          ninLast4: NIN_LAST4,
           bvnVerifiedAt: new Date(),
           verifiedPhone: who.phone,
         },
@@ -939,10 +956,8 @@ describe('Recipient search and recent recipients (WALLET-08) over HTTP', () => {
           b.phone.slice(-8),
           b.account,
           b.email,
-          '4321',
-          '8765',
-          'bvn',
-          'nin',
+          BVN_LAST4,
+          NIN_LAST4,
           'verifiedPhone',
           'accountNumber',
           'accountName',
@@ -951,6 +966,15 @@ describe('Recipient search and recent recipients (WALLET-08) over HTTP', () => {
             secret,
             leaked: false,
           });
+        }
+        // The names "bvn" and "nin" are checked as field names only. As plain
+        // text they can sit inside a random handle ("xxbvnxx") by chance.
+        const keys = keysOf(JSON.parse(text));
+        for (const word of ['bvn', 'nin']) {
+          expect({
+            word,
+            leaked: keys.some((k) => k.includes(word)),
+          }).toEqual({ word, leaked: false });
         }
       }
       // Whatever was answered in this file, for any person made here.

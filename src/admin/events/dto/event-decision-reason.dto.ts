@@ -20,7 +20,7 @@ import { IsString, Matches, MaxLength } from 'class-validator';
  */
 export class EventDecisionReasonDto {
   @IsString()
-  @Matches(/\S/, { message: 'reason is required — the host is shown it.' })
+  @Matches(/\S/, { message: 'reason is required. The host is shown it.' })
   @MaxLength(1000)
   reason!: string;
 }

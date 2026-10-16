@@ -350,12 +350,15 @@ export class WalletPaymentService implements OnModuleInit {
       new Date(),
       subjectOf(q.kind, q.targetId),
     );
+    // The balance first: its answer keeps the account's limit (WALLET-23),
+    // which the standing below is read from.
+    const balanceKobo = await this.balanceOrNull(wallet);
     return this.quoteView(
       q.kind,
       q.targetId,
       target,
       await this.withStanding(wallet.wawuUserId, fee, target.priceKobo),
-      await this.balanceOrNull(wallet),
+      balanceKobo,
     );
   }
 

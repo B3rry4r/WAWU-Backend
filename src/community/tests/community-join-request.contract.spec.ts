@@ -700,7 +700,7 @@ describe('Community join requests (contract)', () => {
         .expect(409);
 
       expect(res.body.message).toBe(
-        'That request was already approved — this person is a member. Remove them instead.',
+        'That request was already approved. This person is a member. Remove them instead.',
       );
 
       const row = await prisma.communityMembership.findUnique({
