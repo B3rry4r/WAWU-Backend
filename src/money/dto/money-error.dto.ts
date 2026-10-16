@@ -91,6 +91,22 @@ export class MoneyErrorReason {
   /** limit_reached: which limit the movement passes (NUV-07), WAWU's own or the provider's. */
   @ApiPropertyOptional({ enum: MONEY_LIMIT_NAMES })
   limit?: MoneyLimitName;
+
+  /** below_minimum: the fewest points one conversion to cash takes (POINTS-04). */
+  @ApiPropertyOptional({ type: 'integer' })
+  minimumPoints?: number;
+
+  /** below_minimum, insufficient_points: the points the person has now. */
+  @ApiPropertyOptional({ type: 'integer' })
+  balancePoints?: number;
+
+  /** insufficient_points: the points asked for. */
+  @ApiPropertyOptional({ type: 'integer' })
+  neededPoints?: number;
+
+  /** insufficient_points: neededPoints minus balancePoints. */
+  @ApiPropertyOptional({ type: 'integer' })
+  shortfallPoints?: number;
 }
 
 /** The body of every refused money request. */
