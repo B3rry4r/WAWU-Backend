@@ -327,6 +327,23 @@ export interface AccountNameView {
   accountName: string;
 }
 
+/** One quick amount on W9: whole naira, in kobo. */
+export interface TransferQuickAmountView {
+  amountKobo: number;
+}
+
+/**
+ * GET /money/transfers/presets: what W9 draws that is not the person's own
+ * (task WALLET-02). The quick amounts come from settings, not from the design
+ * (PROVISIONAL(TRANSFER-PRESETS)); the note's length is the send's own limit.
+ */
+export interface TransferPresetsView {
+  /** Smallest first, at most four. */
+  quickAmounts: TransferQuickAmountView[];
+  /** The longest note a send takes, in characters. */
+  noteMaxLength: number;
+}
+
 /** A WAWU user who can be sent money (W7). Only people with an open wallet. */
 export interface RecipientView {
   wawuUserId: string;

@@ -16942,6 +16942,54 @@
         "x-wawu-built-by": "WALLET-07"
       }
     },
+    "/api/hub/money/transfers/presets": {
+      "get": {
+        "operationId": "MoneyTransfersController_presets",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferPresetsView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What W9 draws that is not the person's own: the quick amounts under the\nkeypad (settings, PROVISIONAL(TRANSFER-PRESETS)) and the note's longest\nlength. It reads settings only: no provider, no fee, no money moves.\nDeclared before `transfers/:id` so `presets` is never read as an id.",
+        "tags": [
+          "MoneyTransfers"
+        ],
+        "x-wawu-built-by": "WALLET-02"
+      }
+    },
     "/api/hub/money/transfers/{id}": {
       "get": {
         "operationId": "MoneyTransfersController_transfer",
@@ -37888,6 +37936,35 @@
           "transactionId",
           "createdAt",
           "completedAt"
+        ]
+      },
+      "TransferQuickAmountView": {
+        "type": "object",
+        "properties": {
+          "amountKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "amountKobo"
+        ]
+      },
+      "TransferPresetsView": {
+        "type": "object",
+        "properties": {
+          "quickAmounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransferQuickAmountView"
+            }
+          },
+          "noteMaxLength": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "quickAmounts",
+          "noteMaxLength"
         ]
       },
       "RecipientView": {
