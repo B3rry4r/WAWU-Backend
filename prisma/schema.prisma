@@ -5400,6 +5400,10 @@ model PushStoppedAccount {
 /// ─────────────────────────────────────────────────────────────────────────
 model AccountDeletion {
   wawuUserId      String    @id
+  /// freezing: asked, the wallet is being frozen (not in force yet; a cancel
+  /// or a retry lets the wallet go). scheduled: in force for the 30 days.
+  /// purging: the sweep took it and is deleting (no cancel any more).
+  /// cancelled, purged: the end.
   status          String    @default("scheduled")
   scheduledAt     DateTime  @default(now())
   /// The end of the 30 days: the earliest the purge runs.
@@ -5416,6 +5420,10 @@ model AccountDeletion {
   purgeBlockedAt  DateTime?
   purgeBlockedBy  String?
   purgeAttempts   Int       @default(0)
+  /// What the purge kept on purpose, once it ran: for example content that
+  /// buyers paid for, hidden and stripped of the person's words. No personal
+  /// detail. Null: nothing was kept.
+  purgeNote       String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

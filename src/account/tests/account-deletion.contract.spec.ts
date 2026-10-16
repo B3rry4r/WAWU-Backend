@@ -835,7 +835,7 @@ describe('Delete account (SETTINGS-06)', () => {
             where: { wawuUserId: id },
           })
         ).status,
-      ).toBe('scheduled');
+      ).toBe('purging'); // claimed: data is gone, so no cancel; the next pass finishes it
       const second = await sweep.runOnce();
       expect(second.purged).toBeGreaterThanOrEqual(1);
       expect(

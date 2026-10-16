@@ -21,7 +21,11 @@ export interface DeletionSweepResult {
   identityPending: number;
 }
 
-type DueDeletion = { wawuUserId: string; purgeAttempts: number };
+type DueDeletion = {
+  wawuUserId: string;
+  purgeAttempts: number;
+  status: string;
+};
 
 /**
  * The end of the 30 days (task SETTINGS-06, R-17). Hourly, it takes each
@@ -31,18 +35,28 @@ type DueDeletion = { wawuUserId: string; purgeAttempts: number };
  *     earning that appeared during the 30 days keeps the account: nothing is
  *     deleted, `purgeBlockedBy` says why, and the next pass looks again. The
  *     wallet is frozen, so little should arrive; this is the net under it.
- *  2. Releases the points still held for an AI job (a cash-out in flight is a
+ *  2. Claims the row (`scheduled` to `purging`, one conditional update). From
+ *     here a cancel is refused, because data is about to go; if a cancel got
+ *     there first, the claim finds nothing and the pass leaves the account
+ *     alone. Nothing is deleted before the claim.
+ *  3. Releases the points still held for an AI job (a cash-out in flight is a
  *     blocker above), so the points purge never meets a held hold
  *     (POINTS-01 lead note).
- *  3. Deletes the Hub's data (AccountPurgeService, which starts with the
- *     points purge).
- *  4. Asks WAWU ID to anonymise the identity. If it does not answer, the Hub's
- *     data is already gone and the next pass asks again (the purge finds
- *     nothing to delete the second time).
- *  5. Marks the row `purged`. The row stays as the record that it ran.
+ *  4. Deletes the Hub's data (AccountPurgeService, which starts with the
+ *     points purge). Content a buyer paid for cannot be deleted, so it is
+ *     hidden and stripped of the person's words, and the row's `purgeNote`
+ *     says so. If any table could not be cleared the row stays `purging`
+ *     with `purgeBlockedBy` naming it, and the next pass tries again. WAWU
+ *     ID is not told before the Hub's side is done.
+ *  5. Asks WAWU ID to anonymise the identity. If it does not answer, the row
+ *     stays `purging` and the next pass picks it up again (the purge finds
+ *     nothing to delete the second time). It is never marked cancelled.
+ *  6. Marks the row `purged`, only if it is still `purging`. The row stays as
+ *     the record that it ran.
  *
- * Every step is safe to repeat, so two servers running the pass at once, or
- * a pass that stopped halfway, do no harm.
+ * Every write to the row names the status it expects. Every step is safe to
+ * repeat, so two servers running the pass at once, or a pass that stopped
+ * halfway, do no harm.
  */
 @Injectable()
 export class AccountDeletionSweepService {
@@ -82,16 +96,23 @@ export class AccountDeletionSweepService {
       blocked: 0,
       identityPending: 0,
     };
+    // Due ones, and the ones an earlier pass claimed but could not finish
+    // (WAWU ID down, a table that would not clear): those carry on.
     const due = await this.prisma.accountDeletion.findMany({
-      where: { status: 'scheduled', purgeAfter: { lte: now } },
+      where: {
+        OR: [
+          { status: 'scheduled', purgeAfter: { lte: now } },
+          { status: 'purging' },
+        ],
+      },
       orderBy: { purgeAfter: 'asc' },
       take: limit,
-      select: { wawuUserId: true, purgeAttempts: true },
+      select: { wawuUserId: true, purgeAttempts: true, status: true },
     });
     for (const row of due) {
       try {
         const outcome = await this.purgeOne(row, now);
-        result[outcome] += 1;
+        if (outcome !== 'skipped') result[outcome] += 1;
       } catch (e) {
         // One account never stops the rest.
         result.blocked += 1;
@@ -107,22 +128,42 @@ export class AccountDeletionSweepService {
   private async purgeOne(
     row: DueDeletion,
     now: Date,
-  ): Promise<'purged' | 'blocked' | 'identityPending'> {
+  ): Promise<'purged' | 'blocked' | 'identityPending' | 'skipped'> {
     const id = row.wawuUserId;
 
-    let blockers: DeletionBlocker[];
-    try {
-      blockers = (await this.money.check(id)).blockers;
-    } catch {
-      await this.blocked(row, now, 'provider_unreachable');
-      return 'blocked';
-    }
-    if (blockers.length > 0) {
-      this.logger.warn(
-        `Deletion of ${id} is due but money is still there (${blockers.join(', ')}); kept`,
-      );
-      await this.blocked(row, now, blockers.join(','));
-      return 'blocked';
+    if (row.status === 'scheduled') {
+      let blockers: DeletionBlocker[];
+      try {
+        blockers = (await this.money.check(id)).blockers;
+      } catch {
+        await this.blocked(row, now, 'provider_unreachable');
+        return 'blocked';
+      }
+      if (blockers.length > 0) {
+        this.logger.warn(
+          `Deletion of ${id} is due but money is still there (${blockers.join(', ')}); kept`,
+        );
+        await this.blocked(row, now, blockers.join(','));
+        return 'blocked';
+      }
+      // The claim. A cancel that finished while the money was being looked at
+      // has already changed the status, so this finds nothing and the account
+      // is left exactly as the cancel made it.
+      const claimed = await this.prisma.accountDeletion.updateMany({
+        where: {
+          wawuUserId: id,
+          status: 'scheduled',
+          purgeAfter: { lte: now },
+        },
+        data: { status: 'purging' },
+      });
+      if (claimed.count !== 1) {
+        this.logger.log(
+          `Deletion of ${id} changed before the purge started (cancelled); left alone`,
+        );
+        return 'skipped';
+      }
+      row = { ...row, status: 'purging' };
     }
 
     const held = await this.prisma.pointHold.findMany({
@@ -132,11 +173,18 @@ export class AccountDeletionSweepService {
     for (const h of held) await this.points.release({ holdId: h.id });
 
     const purged = await this.purgeService.purge(id);
-    if (purged.pointsLeft) {
-      await this.blocked(row, now, 'points');
+    if (purged.pointsLeft || purged.failed.length > 0) {
+      const by = purged.pointsLeft
+        ? 'points'
+        : `purge:${purged.failed.slice(0, 5).join(',')}`;
+      this.logger.error(
+        `Purge of ${id} is not complete (${by}); the account stays in purging and the next pass tries again`,
+      );
+      await this.blocked(row, now, by);
       return 'blocked';
     }
 
+    // The Hub's side is done. Only now is WAWU ID asked to anonymise.
     try {
       await this.wawuId.finalizeAccountDeletion(id);
     } catch (e) {
@@ -147,18 +195,23 @@ export class AccountDeletionSweepService {
       return 'identityPending';
     }
 
-    await this.prisma.accountDeletion.update({
-      where: { wawuUserId: id },
+    await this.prisma.accountDeletion.updateMany({
+      where: { wawuUserId: id, status: 'purging' },
       data: {
         status: 'purged',
         purgedAt: now,
         purgeBlockedAt: null,
         purgeBlockedBy: null,
+        purgeNote:
+          purged.keptForBuyers > 0
+            ? `${purged.keptForBuyers} content piece(s) that buyers paid for were kept hidden and anonymised`
+            : null,
       },
     });
     return 'purged';
   }
 
+  /** Records why a pass left the account for later. Only while the row is still in the status the pass saw. */
   private async blocked(
     row: DueDeletion,
     now: Date,
@@ -168,8 +221,13 @@ export class AccountDeletionSweepService {
       where: { wawuUserId: row.wawuUserId },
       select: { purgeBlockedAt: true },
     });
-    await this.prisma.accountDeletion.update({
-      where: { wawuUserId: row.wawuUserId },
+    await this.prisma.accountDeletion.updateMany({
+      where: {
+        wawuUserId: row.wawuUserId,
+        status: {
+          in: row.status === 'purging' ? ['purging'] : ['scheduled', 'purging'],
+        },
+      },
       data: {
         purgeBlockedAt: current?.purgeBlockedAt ?? now,
         purgeBlockedBy: by,

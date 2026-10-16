@@ -47,7 +47,10 @@ export class AccountController {
    * Cancels a deletion that is waiting (SETTINGS-06): the wallet is
    * unfrozen, the content comes back and phone push resumes. WAWU ID calls
    * it with the person's new token when they sign in during the 30 days
-   * (SETTINGS-08). Answers 200 `cancelled: false` when nothing was waiting.
+   * (SETTINGS-08). Answers 200 `cancelled: false` when nothing was waiting,
+   * and 200 `cancelled: false, deletionInProgress: true` with a `message`
+   * once the purge has started (data may already be gone, so it is never
+   * answered as restored).
    */
   @Post('cancel-deletion')
   @HttpCode(200)

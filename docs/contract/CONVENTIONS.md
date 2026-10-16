@@ -2305,14 +2305,28 @@ days; signing in during them cancels it (WAWU ID, SETTINGS-08).
   does, G-10; a provider with no freeze leaves the wallet as it is), the
   person's content is hidden (`removed`, remembered piece by piece), phone push
   stops, and WAWU ID starts its grace period. Asking again keeps the date.
+  The money is looked at before the wallet is frozen, and the deletion is
+  recorded before the freeze call, so a freeze whose answer is lost is undone
+  by a cancel or a new request. A request that fails after the freeze lets
+  the wallet go again before it answers.
 - **`POST /account/cancel-deletion`** (the person's own token; WAWU ID sends
   the new one when they sign in) unfreezes the wallet, brings back exactly the
   hidden pieces, resumes push and answers `200 { cancelled, walletUnfrozen,
   contentRestored }`. With nothing scheduled it changes nothing and answers
   `cancelled: false`. If the provider does not answer the unfreeze it answers
-  `503` having changed nothing, and can be called again.
+  `503` having changed nothing, and can be called again. Once the purge has
+  started it answers `200 { cancelled: false, deletionInProgress: true,
+  message }` (data may already be gone, so it is never answered as restored);
+  the app shows `message` as it is.
 - **After the 30 days** an hourly sweep (`account-deletion-purge`) looks at
   the money once more (a balance, hold or earning that appeared keeps the
-  account; `AccountDeletion.purgeBlockedBy` says why), releases held points,
-  deletes the Hub's data (`AccountPurgeService`, points first), asks WAWU ID to
-  anonymise the identity, and marks the row `purged`.
+  account; `AccountDeletion.purgeBlockedBy` says why), then claims the row
+  (`purging`; no cancel from here), releases held points, deletes the Hub's
+  data (`AccountPurgeService`, points first), asks WAWU ID to anonymise the
+  identity, and marks the row `purged` only when all of that worked. A table
+  that would not clear, or WAWU ID not answering, leaves the row `purging`
+  (`purgeBlockedBy` says which) and the next pass carries on; WAWU ID is not
+  asked before the Hub's side is done. Content a buyer paid for cannot be
+  deleted (the receipt points at it): it is hidden and loses its title,
+  description, preview, files and slug, and `AccountDeletion.purgeNote` says
+  how many pieces were kept this way.

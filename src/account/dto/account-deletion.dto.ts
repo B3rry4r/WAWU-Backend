@@ -12,6 +12,16 @@ export class CancelDeletionResponseDto {
   walletUnfrozen!: boolean;
   /** How many content pieces the deletion had hidden and are back. */
   contentRestored!: number;
+  /**
+   * True only when the purge has already started: data may be gone, so
+   * nothing was restored (`cancelled` is false) and `message` says so. Absent
+   * otherwise.
+   */
+  @ApiPropertyOptional()
+  deletionInProgress?: boolean;
+  /** A sentence the app may show as it is, with `deletionInProgress`. */
+  @ApiPropertyOptional()
+  message?: string;
 }
 
 /**

@@ -3,6 +3,19 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { rowsToAnonymise, rowsToDelete } from './account-data-map';
 import { POINTS_PURGE_MODELS, purgePersonPoints } from '../points/points-purge';
 
+/** What a bought content piece is called once its creator's account is gone. */
+export const REMOVED_CONTENT_TITLE = 'Removed content';
+
+/**
+ * Rows that must outlive their owner's delete because another table points at
+ * them with `onDelete: Restrict`: only the unreferenced ones are deleted, the
+ * rest are handled on purpose (`anonymiseSoldContent`). A Purchase is what a
+ * buyer paid for (schema: Purchase.content).
+ */
+const KEPT_WHEN_REFERENCED: Record<string, Record<string, unknown>> = {
+  ContentPiece: { purchases: { none: {} } },
+};
+
 /**
  * Removes one account's data from this database, everywhere it lives.
  *
@@ -28,13 +41,24 @@ export class AccountPurgeService {
    *
    * `pointsLeft` is true when the points step failed and every points row
    * of the person is still there (POINTS-01 round 3): the caller retries.
+   *
+   * `failed` names every table (`Model.column`) that could not be cleared, so
+   * a caller that must not say "deleted" until it is true (SETTINGS-06's
+   * sweep) can tell a full purge from one that swallowed an error. Empty: all
+   * of it went. `keptForBuyers` counts content pieces a buyer paid for: a
+   * Purchase restricts their deletion (a financial record), so they are
+   * hidden and stripped of the person's words instead and the purge counts
+   * that as done.
    */
   async purge(wawuUserId: string): Promise<{
     deleted: Record<string, number>;
     total: number;
     pointsLeft: boolean;
+    failed: string[];
+    keptForBuyers: number;
   }> {
     const deleted: Record<string, number> = {};
+    const failed: string[] = [];
     let total = 0;
     let pointsLeft = false;
 
@@ -73,11 +97,15 @@ export class AccountPurgeService {
         this.logger.error(
           `No Prisma delegate for ${rule.model} — data may be left behind for ${wawuUserId}`,
         );
+        failed.push(`${rule.model}.${rule.column}`);
         continue;
       }
       try {
         const { count } = await delegate.deleteMany({
-          where: { [rule.column]: wawuUserId },
+          where: {
+            [rule.column]: wawuUserId,
+            ...(KEPT_WHEN_REFERENCED[rule.model] ?? {}),
+          },
         });
         if (count > 0) {
           deleted[`${rule.model}.${rule.column}`] = count;
@@ -90,7 +118,20 @@ export class AccountPurgeService {
         this.logger.error(
           `Purge failed on ${rule.model}.${rule.column} for ${wawuUserId}: ${(e as Error).message}`,
         );
+        failed.push(`${rule.model}.${rule.column}`);
       }
+    }
+
+    // Content a buyer paid for could not be deleted above (Purchase.content
+    // is Restrict). It goes dark and loses everything that names the person.
+    let keptForBuyers = 0;
+    try {
+      keptForBuyers = await this.anonymiseSoldContent(wawuUserId);
+    } catch (e) {
+      this.logger.error(
+        `Purge failed on ContentPiece (bought) for ${wawuUserId}: ${(e as Error).message}`,
+      );
+      failed.push('ContentPiece.creatorWawuId');
     }
 
     // Rows kept because they carry somebody else's money: the account's
@@ -108,6 +149,7 @@ export class AccountPurgeService {
         this.logger.error(
           `No Prisma delegate for ${rule.model}: data may be left behind for ${wawuUserId}`,
         );
+        failed.push(`${rule.model}.${rule.column}`);
         continue;
       }
       try {
@@ -125,15 +167,67 @@ export class AccountPurgeService {
         this.logger.error(
           `Purge failed on ${rule.model}.${rule.column} for ${wawuUserId}: ${(e as Error).message}`,
         );
+        failed.push(`${rule.model}.${rule.column}`);
       }
     }
 
     this.logger.log(
       `Purged ${total} rows for ${wawuUserId}: ${JSON.stringify(deleted)}` +
+        (keptForBuyers > 0
+          ? `; ${keptForBuyers} bought content piece(s) kept hidden and anonymised`
+          : '') +
         (pointsLeft
           ? '; points were left (the points step failed; purge again)'
+          : '') +
+        (failed.length > 0
+          ? `; could not clear ${failed.join(', ')} (purge again)`
           : ''),
     );
-    return { deleted, total, pointsLeft };
+    return { deleted, total, pointsLeft, failed, keptForBuyers };
+  }
+
+  /**
+   * The person's content pieces that are still there after the delete above
+   * and have a Purchase: kept, because a buyer's receipt points at them. Each
+   * is hidden (`removed`) and loses its title, description, preview, files,
+   * tags and slug, and its lessons, frames and preview settings go, so
+   * nothing a reader could see names the person. Idempotent.
+   */
+  private async anonymiseSoldContent(wawuUserId: string): Promise<number> {
+    const sold = await this.prisma.contentPiece.findMany({
+      where: { creatorWawuId: wawuUserId, purchases: { some: {} } },
+      select: { id: true },
+    });
+    if (sold.length === 0) return 0;
+    const ids = sold.map((p) => p.id);
+    await this.prisma.$transaction([
+      this.prisma.courseLesson.deleteMany({
+        where: { contentId: { in: ids } },
+      }),
+      this.prisma.contentFrame.deleteMany({
+        where: { contentId: { in: ids } },
+      }),
+      this.prisma.contentDetail.deleteMany({
+        where: { contentId: { in: ids } },
+      }),
+      ...ids.map((id) =>
+        this.prisma.contentPiece.update({
+          where: { id },
+          data: {
+            status: 'removed',
+            title: REMOVED_CONTENT_TITLE,
+            description: '',
+            slug: `removed-${id}`,
+            previewAssetUrl: '',
+            fullAssetUrl: null,
+            durationLabel: null,
+            pageCount: null,
+            tags: [],
+            specializations: [],
+          },
+        }),
+      ),
+    ]);
+    return ids.length;
   }
 }
