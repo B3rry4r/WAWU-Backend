@@ -85,6 +85,61 @@ every table, so check `DATABASE_URL` first. Note that re-seeding alone does
 **not** repair a mutated seed row: `prisma/seed.ts` upserts with `update: {}`,
 so an existing row is left exactly as the last test run left it.
 
+## Local test stack
+
+One command starts and stops a whole local stack, so nobody builds one by hand.
+Full suites run in GitHub (OPS-CI) on every push to `wmt/**`, not locally: use a
+stack to run a single spec, or to drive the Hub, the web or the app in a browser.
+
+```bash
+scripts/dev/stack.sh up --name <n> --ports <a>-<b> [--with id,web,mobile] \
+    [--web <path>] [--id <path>] [--mobile <path>] [--rebuild] [--scratch <dir>]
+scripts/dev/stack.sh status --name <n>
+scripts/dev/stack.sh down   --name <n>
+```
+
+| Service | Port | Always? | What it is |
+| --- | --- | --- | --- |
+| Hub | `a` | yes | built from this checkout, database `<n>_wawu_hub_test`, migrations applied |
+| wawu-id | `a+1` | `--with id` | the real identity service from `--id`, database `<n>_wawu_id_test` |
+| web | `a+2` | `--with web` | production build of `--web` (`VERCEL_ENV=production`, so `/join` only), pointed at this Hub |
+| mobile | `a+3` | `--with mobile` | web export of `--mobile` with its own Metro cache, then a grep that only this stack's ports are baked in |
+| mock WAWU ID | `b` | yes | the mock the contract suite uses (`mock-wawu-id/`), on the last port of the range |
+
+- The Hub signs people in through wawu-id when `id` is on, and through the mock
+  otherwise. Payments use the repo's own Flutterwave mock (no key is set).
+  Fintava points at a closed port on this machine. `scripts/dev/block-net.cjs`
+  is preloaded into the Hub and wawu-id and refuses any request to a host that
+  is not this machine, so nothing reaches a real provider or a wawuafrica.com host.
+- The range must hold every port asked for and end above them, for example
+  `--ports 6531-6534 --with id,web` (Hub 6531, id 6532, web 6533, mock 6534) or
+  `--ports 6537-6538` (Hub 6537, mock 6538).
+- Names are lower case letters, digits and `_` (agents use their brief's prefix,
+  for example `ostk1`). Each name has its own databases, logs and PIDs.
+- Logs go to `<scratch>/<n>/logs/`, PIDs to `<scratch>/<n>/pids`. `<scratch>` is
+  `--scratch`, else `$STACK_SCRATCH`, else `${TMPDIR:-/tmp}/wawu-stack`; give
+  `status` and `down` the same one. `up` prints one summary: each service, URL,
+  PID and `UP`, or the last 15 lines of the log that failed. Whatever started
+  stays up after a failure; `down` stops it.
+- `. <scratch>/<n>/env.sh` points one spec at the stack (`DATABASE_URL` and the
+  mock WAWU ID's URLs), e.g. `npm run test:contract -- <spec>`.
+- `up` refuses to start when `free -g` shows under 5 GB available
+  (`STACK_MIN_FREE_GB`) or when any of its ports is in use, and changes nothing.
+- `down` stops every recorded PID and its children, confirms the ports are
+  closed with a connect test and drops the databases. Running it twice is safe.
+- `--id`, `--web` and `--mobile` take a checkout of your own (a worktree): the
+  stack builds inside it (`dist/`, `.next/`), and one web checkout serves one
+  stack at a time. If a checkout has no `node_modules`, `up` links the folder in
+  `STACK_NM_HUB`, `STACK_NM_ID`, `STACK_NM_WEB` or `STACK_NM_MOBILE` when its
+  lockfile is the same, and runs `npm ci` otherwise. `dist/` is rebuilt only when
+  the source is newer (`--rebuild` forces it), so do not rebuild the Hub checkout
+  while a stack from it is running.
+
+`scripts/dev/quiet.sh <name> -- <command...>` runs any command with its full
+output in `<scratch>/logs/<name>.log`, appends `EXIT <code>`, prints the last 15
+lines and, on failure, up to 20 lines matching `FAIL`, `Error`, `✕` or `failed`.
+It exits with the command's code.
+
 ## Protected route suite (MONEY-01, V3)
 
 Nothing the live web app or the admin dashboard uses may change behaviour while
