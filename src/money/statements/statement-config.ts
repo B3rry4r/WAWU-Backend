@@ -29,6 +29,19 @@ import { PersonWindowLimiter } from '../person-window-limiter';
 export const STATEMENT_MAX_ROWS = 50_000;
 
 /**
+ * The most bytes of file an emailed statement may carry. WAWU ID's mail relay
+ * refuses more than 12 MiB of attachments in one mail (its
+ * RELAY_ATTACHMENT_MAX_BYTES, provisional there). The row cap does not
+ * guarantee it: 49,990 rows with long names come to about 12.5 MB. So the
+ * Hub measures the file before it sends anything and answers a final
+ * `400 statement_too_large` (a shorter range is the fix) instead of a
+ * retryable 503 that could never succeed. Change this and the relay's cap
+ * together. Default (agent/lead), owner may override: the lead's ruling of
+ * 16 Oct 2026.
+ */
+export const STATEMENT_EMAIL_MAX_BYTES = 12 * 1024 * 1024;
+
+/**
  * PROVISIONAL(STATEMENT-RATE-LIMITS, owner=YOU, why=no ruling names how many statements a person may ask for; the lead set 5 a minute and 30 an hour after the verifier's load run)
  *
  * Statements one person (the verified wawuUserId) may ask for: at most 5
