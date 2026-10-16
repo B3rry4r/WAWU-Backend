@@ -811,13 +811,16 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
     // TIER-03's purchase of a tier, which pays through the same service
     // (src/plans/purchases/), and POINTS-04's conversion of points to cash
     // (src/points/convert/), which moves cash from WAWU's account into the
-    // person's wallet.
+    // person's wallet. So does INBOX-16's purchase of a credit pack
+    // (src/credit-purchase/wallet/), which pays through the same service.
     expect(
       mounted
         .filter(movesMoney)
         .map((r) => r.key)
         .sort(),
     ).toEqual([
+      'POST bills/wallet/pay',
+      'POST credits/purchase/wallet',
       'POST money/payments',
       'POST money/transfers/bank',
       'POST money/transfers/wawu',

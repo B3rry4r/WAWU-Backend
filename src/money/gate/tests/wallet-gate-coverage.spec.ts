@@ -202,7 +202,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     expect(half).toEqual([]);
   });
 
-  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08), the payment quote, the payment and the poll of one payment (MONEY-17, MONEY-19), holds (MONEY-18), the send to a WAWU user and the read of one send (WALLET-07), the points-to-cash quote and conversion (POINTS-04)', () => {
+  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08), the payment quote, the payment and the poll of one payment (MONEY-17, MONEY-19), holds (MONEY-18), bills paid from the wallet (BILLS-04), the send to a WAWU user and the read of one send (WALLET-07), the points-to-cash quote and conversion (POINTS-04)', () => {
     expect(
       mounted
         .filter((r) => r.guards.includes(WalletGateGuard))
@@ -211,6 +211,9 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     ).toEqual([
       'DELETE money/beneficiaries/:id',
       'DELETE money/device',
+      'GET bills/wallet/:id/quote',
+      // INBOX-16: the pay sheet of a credit pack.
+      'GET credits/purchase/wallet/quote',
       'GET money/beneficiaries',
       'GET money/device',
       'GET money/fees/quote',
@@ -234,6 +237,10 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       // TIER-03: the pay sheet of a tier.
       'GET plans/purchases/quote',
       'GET points/convert/quote',
+      'POST bills/wallet',
+      'POST bills/wallet/pay',
+      // INBOX-16: a credit pack pays from the wallet.
+      'POST credits/purchase/wallet',
       'POST money/approval/verify',
       'POST money/beneficiaries',
       'POST money/device/challenge',
@@ -260,6 +267,8 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       r.guards.includes(TransactionPinGuard),
     );
     expect(pinRoutes.map((r) => r.key).sort()).toEqual([
+      'POST bills/wallet/pay',
+      'POST credits/purchase/wallet',
       'POST money/approval/verify',
       'POST money/payments',
       'POST money/pin/verify',

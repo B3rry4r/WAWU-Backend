@@ -29770,6 +29770,659 @@
         ]
       }
     },
+    "/api/hub/bills/wallet": {
+      "post": {
+        "operationId": "WalletBillsController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWalletBillDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletBillQuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code biller_not_found, or target_not_found for a bundle or plan that is not offered now.\n\nreason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code meter_not_found: Fintava does not know this meter."
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a bill from what S4 collected and answers S5: the bill priced by\nthe server, what it costs line by line (Fintava's bill charge, WAWU's fee\nand the balance-transfer charge), and the wallet payment's quote with the\nbalance and any shortfall (S11). Nothing is reserved and nothing is\ndebited. A bill below the company's own minimum or above its maximum is\n`400 amount_out_of_range` with both limits, a meter Fintava does not know\nis `422 meter_not_found`, a company or bundle that is gone is `404`, and\nbills that are switched off are `503 bills_unavailable` (or `503\nprovider_unreachable` with `retryAfterSeconds` when Fintava does not\nanswer; a running Fintava-less provider answers `409 target_not_payable`).\nA person with no wallet gets `409 wallet_not_open`.",
+        "tags": [
+          "WalletBills"
+        ]
+      }
+    },
+    "/api/hub/bills/wallet/pay": {
+      "post": {
+        "operationId": "WalletBillsController_pay",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayWalletBillDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletBillView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pays the bill from the wallet, once: the bill, Fintava's charge and\nWAWU's fee move into WAWU's own account, then the biller is paid out of\nit. Answers 201 with the bill. `processing` while the payment is not\nconfirmed or the biller has not answered (poll `GET /bills/wallet/{id}`;\nnothing is ever sent again), `delivered` with the token and units, or\n`failed` with the money on its way back. The same Idempotency-Key and body\nanswer the first result again (`Idempotent-Replayed: true`) without\nchecking the PIN.",
+        "tags": [
+          "WalletBills"
+        ]
+      }
+    },
+    "/api/hub/bills/wallet/{id}/quote": {
+      "get": {
+        "operationId": "WalletBillsController_quote",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletBillQuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The bill's quote again: S5 reopened, or a quote past its `expiresAt`.",
+        "tags": [
+          "WalletBills"
+        ]
+      }
+    },
+    "/api/hub/bills/wallet/{id}": {
+      "get": {
+        "operationId": "WalletBillsController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletBillView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One bill as it stands now: what the app polls after `processing`, and\nS7's receipt (token, units, reference) or S12's failure with the money\ncoming back. Only the buyer reads it; another person's bill and an id\nnobody holds are the same `404 target_not_found`. It reads our own records\nonly and never asks Fintava.",
+        "tags": [
+          "WalletBills"
+        ]
+      }
+    },
+    "/api/hub/credits/packs": {
+      "get": {
+        "operationId": "CreditWalletController_packs",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditPackListView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The packs on sale, from the server's table: how many credits each gives\nand its price in kobo. Needs no wallet, so the sheet can open before one\nexists. Credits are a count, never naira (R-5).",
+        "tags": [
+          "CreditWallet"
+        ]
+      }
+    },
+    "/api/hub/credits/purchase/wallet/quote": {
+      "get": {
+        "operationId": "CreditWalletController_quote",
+        "parameters": [
+          {
+            "name": "pack",
+            "required": true,
+            "in": "query",
+            "description": "One of the packs `GET /credits/packs` lists.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "starter",
+                "popular",
+                "pro"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditWalletQuoteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The pay sheet (I28) before the PIN: the pack's price, the wallet\nprovider's charge on top, the total, the wallet's balance and the\nshortfall, and the signed quote `POST /credits/purchase/wallet` sends\nback. Nothing is reserved.",
+        "tags": [
+          "CreditWallet"
+        ]
+      }
+    },
+    "/api/hub/credits/purchase/wallet": {
+      "post": {
+        "operationId": "CreditWalletController_buy",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreditWalletPurchaseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditWalletPurchaseView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pays for a pack from the wallet, once: the credits are added when the\npayment is confirmed. Answers 201 with the purchase: `paid`, `pending`\nwhile the provider has not confirmed the debit yet (poll\n`GET /credits/purchase/wallet/{id}`; it is never sent again), or `failed`\nwhen the provider refused it and nothing moved. The same Idempotency-Key\nand body answer the first result again (`Idempotent-Replayed: true`)\nwithout checking the PIN. Not enough money is `402 insufficient_funds`\nwith the shortfall; no wallet is `409 wallet_not_open`.",
+        "tags": [
+          "CreditWallet"
+        ]
+      }
+    },
+    "/api/hub/credits/purchase/wallet/{id}": {
+      "get": {
+        "operationId": "CreditWalletController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditWalletPurchaseView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One purchase as it stands now: what the app polls after `pending`. Only\nthe buyer reads it; another person's purchase and an id nobody holds are\nthe same `404 not_found`. It reads our own records only.",
+        "tags": [
+          "CreditWallet"
+        ]
+      }
+    },
     "/api/hub/points/convert/quote": {
       "get": {
         "operationId": "PointsConvertController_quote",
@@ -35925,6 +36578,102 @@
           "kind",
           "tierId",
           "method",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
+      "CreateWalletBillDto": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "enum": [
+              "electricity",
+              "cable",
+              "airtime",
+              "data"
+            ],
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The company, network or cable provider.",
+            "pattern": "^[A-Za-z0-9_]{1,80}$"
+          },
+          "accountNumber": {
+            "type": "string",
+            "description": "The meter, phone or smartcard number: digits, spaces and dashes taken out first.",
+            "pattern": "^[0-9]{5,20}$"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "description": "Electricity and airtime only.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "productCode": {
+            "type": "string",
+            "description": "Data and cable only: the bundle or plan code from the biller's list.",
+            "pattern": "^[A-Za-z0-9_.-]{1,80}$"
+          }
+        },
+        "required": [
+          "category",
+          "code",
+          "accountNumber"
+        ]
+      },
+      "PayWalletBillDto": {
+        "type": "object",
+        "properties": {
+          "billId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`payment.totalKobo` from the quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`payment.quoteToken` from that quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "billId",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
+      "CreditWalletPurchaseDto": {
+        "type": "object",
+        "properties": {
+          "pack": {
+            "enum": [
+              "starter",
+              "popular",
+              "pro"
+            ],
+            "type": "string"
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`payment.totalKobo` from the quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`payment.quoteToken` from that quote: the server checks it is its own, for this person and this pack, and not past its end.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "pack",
           "expectedTotalKobo",
           "quoteToken"
         ]
@@ -52369,6 +53118,347 @@
           "grant",
           "createdAt",
           "paidAt"
+        ]
+      },
+      "BillReturnView": {
+        "type": "object",
+        "properties": {
+          "holdStatus": {
+            "type": "string",
+            "enum": [
+              "held",
+              "released",
+              "refunded"
+            ]
+          },
+          "returned": {
+            "type": "boolean"
+          },
+          "returnedKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "holdStatus",
+          "returned",
+          "returnedKobo"
+        ]
+      },
+      "WalletBillView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "electricity",
+              "cable",
+              "airtime",
+              "data"
+            ]
+          },
+          "billerCode": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "planType": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid"
+            ],
+            "nullable": true
+          },
+          "productCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "productLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountName": {
+            "type": "string",
+            "nullable": true
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "billChargeKobo": {
+            "type": "integer"
+          },
+          "serviceFeeKobo": {
+            "type": "integer"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "processing",
+              "delivered",
+              "awaiting_payment"
+            ]
+          },
+          "paymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "transferFeeKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "totalKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "token": {
+            "type": "string",
+            "nullable": true
+          },
+          "units": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "returned": {
+            "$ref": "#/components/schemas/BillReturnView",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "deliveredAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "billerCode",
+          "title",
+          "planType",
+          "productCode",
+          "productLabel",
+          "accountNumber",
+          "accountName",
+          "amountKobo",
+          "billChargeKobo",
+          "serviceFeeKobo",
+          "reference",
+          "status",
+          "paymentId",
+          "transferFeeKobo",
+          "totalKobo",
+          "token",
+          "units",
+          "failureReason",
+          "returned",
+          "createdAt",
+          "paidAt",
+          "deliveredAt"
+        ]
+      },
+      "WalletBillQuoteView": {
+        "type": "object",
+        "properties": {
+          "bill": {
+            "$ref": "#/components/schemas/WalletBillView"
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeeQuotePartView"
+            }
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          }
+        },
+        "required": [
+          "bill",
+          "parts",
+          "payment"
+        ]
+      },
+      "CreditPackView": {
+        "type": "object",
+        "properties": {
+          "pack": {
+            "type": "string",
+            "enum": [
+              "starter",
+              "popular",
+              "pro"
+            ]
+          },
+          "credits": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "badge": {
+            "type": "string",
+            "enum": [
+              "popular",
+              "best_value"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "pack",
+          "credits",
+          "priceKobo",
+          "badge"
+        ]
+      },
+      "CreditPackListView": {
+        "type": "object",
+        "properties": {
+          "packs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreditPackView"
+            }
+          }
+        },
+        "required": [
+          "packs"
+        ]
+      },
+      "CreditWalletQuoteView": {
+        "type": "object",
+        "properties": {
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          },
+          "pack": {
+            "type": "string",
+            "enum": [
+              "starter",
+              "popular",
+              "pro"
+            ]
+          },
+          "credits": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "badge": {
+            "type": "string",
+            "enum": [
+              "popular",
+              "best_value"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "payment",
+          "pack",
+          "credits",
+          "priceKobo",
+          "badge"
+        ]
+      },
+      "CreditWalletPurchaseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "wallet"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "reversed",
+              "paid"
+            ]
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentView"
+          },
+          "creditBalance": {
+            "type": "number",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "pack": {
+            "type": "string",
+            "enum": [
+              "starter",
+              "popular",
+              "pro"
+            ]
+          },
+          "credits": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "badge": {
+            "type": "string",
+            "enum": [
+              "popular",
+              "best_value"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "method",
+          "status",
+          "statusMessage",
+          "payment",
+          "creditBalance",
+          "createdAt",
+          "paidAt",
+          "pack",
+          "credits",
+          "priceKobo",
+          "badge"
         ]
       },
       "PointsConvertQuoteView": {
