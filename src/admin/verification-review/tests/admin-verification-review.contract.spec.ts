@@ -592,7 +592,7 @@ describe('Admin verification review contract', () => {
         .set(auth(reviewerToken))
         .send({ reason: '   ' })
         .expect(400);
-      expect(res.body.message).toBe('reason is required — the applicant is shown it.');
+      expect(res.body.message).toBe('reason is required. The applicant is shown it.');
 
       const row = await prisma.verificationSubmission.findUniqueOrThrow({ where: { id: SUB_PENDING_OLD } });
       expect(row.status).toBe('pending');

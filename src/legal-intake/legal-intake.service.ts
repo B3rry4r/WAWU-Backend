@@ -205,13 +205,13 @@ export class LegalIntakeService {
         }`,
       );
       throw new ServiceUnavailableException(
-        'We could not prepare your summary just now. Your answers are saved — please try again in a moment.',
+        'We could not prepare your summary just now. Your answers are saved. Please try again in a moment.',
       );
     }
 
     if (!analysis.summary) {
       throw new ServiceUnavailableException(
-        'We could not prepare your summary just now. Your answers are saved — please try again in a moment.',
+        'We could not prepare your summary just now. Your answers are saved. Please try again in a moment.',
       );
     }
 
@@ -250,7 +250,7 @@ export class LegalIntakeService {
         `Matter ${intake.matter} maps to unknown service ${serviceCode}`,
       );
       throw new ServiceUnavailableException(
-        'We could not open your matter just now. Your answers are saved — please try again in a moment.',
+        'We could not open your matter just now. Your answers are saved. Please try again in a moment.',
       );
     }
 

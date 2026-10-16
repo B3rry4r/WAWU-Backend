@@ -180,7 +180,7 @@ export class WalletGateGuard implements CanActivate {
  * Removes `X-Transaction-Pin`, and a biometric approval's `X-Device-Approval`
  * (MONEY-14), from `headers` and `rawHeaders` without reading them.
  */
-function dropTransactionPin(req: Request): void {
+export function dropTransactionPin(req: Request): void {
   const names = ['x-transaction-pin', 'x-device-approval'];
   for (const name of names) delete req.headers[name];
   const raw = req.rawHeaders;

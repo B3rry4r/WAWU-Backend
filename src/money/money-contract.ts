@@ -79,6 +79,12 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // The per-person statement limit and the two-at-once cap (WALLET-27 round 3).
   statement_rate_limited: 429,
   statement_busy: 503,
+  // WALLET-35. Default (agent), owner may override: 409, as wallet_opening:
+  // the request is understood, the person's email is not confirmed yet.
+  email_not_verified: 409,
+  // WALLET-35. Default (agent), owner may override: 503, as statement_busy:
+  // nothing was sent, trying again is right.
+  statement_email_failed: 503,
   recipient_search_rate_limited: 429,
   // NUV-07 (R-42): the running provider's fees are settings not filled in
   // yet; nothing is quoted or moved until they are. Not a provider failure.
@@ -96,6 +102,14 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // NUV-02 round 3. Default (lead), owner may override: 429, as
   // identity_checks_exhausted, with retryAfterSeconds.
   open_address_limited: 429,
+  // POINTS-04. Default (agent), owner may override: 422 for fewer points than
+  // the minimum (the request is understood, the amount is the problem); 402
+  // for more points than the person has, as insufficient_funds and as
+  // PointsError's own insufficient_points (one code, one status); 409 for a
+  // dollar-billed person, as wallet_already_open (this account cannot do it).
+  below_minimum: 422,
+  insufficient_points: 402,
+  currency_not_supported: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

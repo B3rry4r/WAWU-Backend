@@ -18,6 +18,15 @@ export interface ProviderMessage {
   idempotencyKey: string;
   /** The campaign id, kept on the provider's record of the mail (relay only). */
   tag?: string;
+  /**
+   * Files that travel with the mail, `content` as base64 (a statement,
+   * WALLET-35). Sent by the relay and by Resend; a campaign has none.
+   */
+  attachments?: Array<{
+    filename: string;
+    content: string;
+    contentType: string;
+  }>;
 }
 
 export type ProviderResult =
@@ -66,6 +75,14 @@ export class ResendClient implements EmailTransport {
           html: message.html,
           text: message.text,
           headers: message.headers,
+          ...(message.attachments
+            ? {
+                attachments: message.attachments.map((a) => ({
+                  filename: a.filename,
+                  content: a.content,
+                })),
+              }
+            : {}),
         }),
         signal: AbortSignal.timeout(20_000),
       });
@@ -154,6 +171,7 @@ export class WawuIdMailRelay implements EmailTransport {
           text: message.text,
           headers: message.headers,
           ...(message.tag ? { tag: message.tag } : {}),
+          ...(message.attachments ? { attachments: message.attachments } : {}),
         }),
         signal: AbortSignal.timeout(RELAY_TIMEOUT_MS),
       });

@@ -68,3 +68,15 @@ export function lagosMonthStart(now: Date): Date {
   const c = lagosClock(now);
   return lagosMidnight(c.year, c.month, 1);
 }
+
+/** When tomorrow, in Lagos, begins: when today's limit starts counting again. */
+export function lagosNextDayStart(now: Date): Date {
+  const c = lagosClock(now);
+  // Date.UTC carries a day past the end of the month into the next month.
+  const next = new Date(Date.UTC(c.year, c.month - 1, c.day + 1));
+  return lagosMidnight(
+    next.getUTCFullYear(),
+    next.getUTCMonth() + 1,
+    next.getUTCDate(),
+  );
+}
