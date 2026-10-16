@@ -399,7 +399,10 @@ describe('SCHOOLS-07 enrol in a course and pay from the wallet', () => {
     it('a payment that has started keeps the seat whatever the clock says', async () => {
       const c = await h.seed({
         priceKobo: PRICE,
-        intakes: [{ capacity: 1, startDate: NOV }],
+        intakes: [
+          { capacity: 1, startDate: NOV },
+          { capacity: 3, startDate: JAN },
+        ],
       });
       const p = await h.buyer(START);
       const e = await enrol(p, c.intakeIds[0]);
@@ -419,9 +422,17 @@ describe('SCHOOLS-07 enrol in a course and pay from the wallet', () => {
       await r
         .enrol(await h.buyer(START), { intakeId: c.intakeIds[0] })
         .expect(409);
-      // Moving the place is refused while its payment is open.
-      const res = await r.enrol(p, { intakeId: c.intakeIds[0] }).expect(201);
-      expect(view(res).id).toBe(e.id);
+      // The same request again is the same order.
+      const same = await r.enrol(p, { intakeId: c.intakeIds[0] }).expect(201);
+      expect(view(same).id).toBe(e.id);
+      // Moving the place is refused while its payment is open, and nothing moves.
+      const move = await r.enrol(p, { intakeId: c.intakeIds[1] }).expect(409);
+      expect(body<unknown>(move).reason).toMatchObject({
+        code: 'payment_in_progress',
+        paymentId: pending.id,
+      });
+      expect(await seats(c.intakeIds[0])).toBe(1);
+      expect(await seats(c.intakeIds[1])).toBe(0);
       // The payment settles and the student is enrolled.
       h.wallets.mode = 'live';
       await until(async () => {
@@ -429,6 +440,7 @@ describe('SCHOOLS-07 enrol in a course and pay from the wallet', () => {
         return view(await r.read(p, e.id).expect(200)).status === 'enrolled';
       }, 'the pending payment to settle into an enrolment');
       expect(await seats(c.intakeIds[0])).toBe(1);
+      expect(balance(p)).toBe(START - TOTAL);
     });
   });
 
