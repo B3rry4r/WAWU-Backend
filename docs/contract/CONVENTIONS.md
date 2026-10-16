@@ -2038,7 +2038,10 @@ added up into one.
     (section 14) read the flag nowhere: they keep treating a lost write as an
     unknown outcome.
   - `refused`: the provider refused and nothing moved; retried under the same
-    reference, and a person looks past the review bound.
+    reference, and a person looks past the review bound (`PAYMENT_REVIEW_AFTER_HOURS`,
+    counted from when the release or refund was asked for): the first refusal
+    at or after it sends the hold to review. A frozen wallet, a missing wallet
+    and an unreachable provider have no such bound.
   Nothing is refunded because a release is stuck, or the other way round.
 - **Limits.** A move above the cap on one move through WAWU's account
   (`MERCHANT_MAX_PER_TXN_KOBO`, Fintava) is refused, never split: review. The
@@ -2229,8 +2232,11 @@ balance (MONEY-11): nothing here is added up into one, and the routes say
   - `not_supported`: the running provider has no way to make this move yet
     (a Nuvion adapter without its book transfers, NUV-05). An error in the log on every
     try saying so; the earning waits and lands once the provider can.
-  - `refused`: the provider refused and nothing moved; a person looks past the
-    review bound.
+  - `refused`: the provider refused and nothing moved; retried under the same
+    reference, and a person looks past the review bound
+    (`PAYMENT_REVIEW_AFTER_HOURS`, counted from when the earning was made): the
+    first refusal at or after it sends the earning to review. A frozen wallet, a
+    missing wallet and an unreachable provider have no such bound.
 - **The sweep** (`EarningSettlementService.sweep`, every minute, where
   ScheduleModule.forRoot() is loaded) first makes the earning of every finished
   ordinary sale of the running provider that has none, then walks every due

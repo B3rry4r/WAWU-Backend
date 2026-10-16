@@ -526,7 +526,24 @@ export class EarningSettlementService {
         nextAttemptAt: new Date(now.getTime() + restMs(s.attempts + 1)),
       },
     });
+    // The review bound applies to a refusal with nothing moved (a person has
+    // to look at why), CONVENTIONS section 19. The lease is already given
+    // back above, so the earning goes to review with nothing handed over.
+    if (waiting === 'refused' && this.refusedTooLong(s, now)) {
+      return this.toReview(
+        s,
+        `the earning has been refused for ${this.settings.reviewAfterHours} hours`,
+      );
+    }
     return this.resultOf(await this.load(s.id));
+  }
+
+  /** Whether an earning has been refused for as long as the review bound, counted from the day it was made. */
+  private refusedTooLong(s: SettlementRow, now: Date): boolean {
+    return (
+      now.getTime() - s.createdAt.getTime() >=
+      this.settings.reviewAfterHours * 3_600_000
+    );
   }
 
   /** The provider confirmed the move in its answer. */
@@ -860,18 +877,9 @@ export class EarningSettlementService {
         `earning ${s.id}: it waits (${waiting}); the money stays in WAWU's account`,
       );
     }
-    // The review bound applies to a refusal with nothing moved (a person has
-    // to look at why); a missing wallet waits for as long as it takes (R-11).
-    if (
-      waiting === 'refused' &&
-      now.getTime() - s.createdAt.getTime() >=
-        this.settings.reviewAfterHours * 3_600_000
-    ) {
-      return this.toReview(
-        s,
-        `the earning has been refused for ${this.settings.reviewAfterHours} hours`,
-      );
-    }
+    // No review bound here: a missing wallet waits for as long as it takes
+    // (R-11), and the provider being away is transient. The bound is for a
+    // refusal with nothing moved, and is read where the refusal is (afterRefusal).
     await this.prisma.earningSettlement.updateMany({
       where: { id: s.id, status: 'owed', sentAt: null },
       data: {
