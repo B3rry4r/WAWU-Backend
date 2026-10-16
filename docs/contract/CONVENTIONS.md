@@ -246,6 +246,8 @@ Every refusal is the envelope this backend already answers with
 | `payment_in_progress` | 409 | a payment for this item by this person is still being confirmed (or is under review); a second one is not taken, under any Idempotency-Key (MONEY-17) | `paymentId` |
 | `statement_rate_limited` | 429 | the person has asked for 5 statements in the last minute or 30 in the last hour (`STATEMENT_RATE_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-27) | `retryAfterSeconds` |
 | `statement_busy` | 503 | two statements are already being built and no place came free within 5 s (`STATEMENT_CONCURRENCY`, PROVISIONAL) (WALLET-27) | `retryAfterSeconds` |
+| `email_not_verified` | 409 | the account has no email address that WAWU ID says is confirmed (the token's `emailVerified` is not `true`, or its `email` is empty or not an address), so a statement is not emailed (WALLET-35); never counted against the statement limit | |
+| `statement_email_failed` | 503 | the mail could not be handed to WAWU ID's sender (it was unreachable, busy, over its day's cap or refused it, or is not set up on this server); nothing was sent and asking again is right (WALLET-35). The answer never names the address or WAWU ID's reason | |
 | `recipient_search_rate_limited` | 429 | the person has searched for recipients 20 times in the last minute, 120 in the last hour or 500 in the last day (`RECIPIENT_SEARCH_PERSON_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-08); also sent as the `Retry-After` header | `retryAfterSeconds` |
 | `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
@@ -1415,8 +1417,35 @@ this applies and every answer is as in section 9.
   shows as `'@handle`). Only the last four digits of a bank account ever
   reach the history; the statement shows none.
 - **Not served:** a stamped PDF (Fintava issues no statement; mobile repo
-  BACKEND_GAPS G-68) and sending it by email (the backend has no email
-  sender; G-69).
+  BACKEND_GAPS G-68).
+- **By email** (WALLET-35, W38 "Send to"; `src/money/statements/statement-email*.ts`).
+  - `POST /money/statements/email` takes the same `from`, `to` and `format` as
+    the download, in the body, and nothing else: an `email`, a `to` or any
+    other field is a 400. It builds the file exactly as `GET /money/statements`
+    does (same period rules, same rows, same limits, shared with it: an
+    emailed statement is one statement, `429 statement_rate_limited`), then
+    hands it to WAWU ID's mail relay (`POST /internal/mail/send`, EMAIL-02,
+    now with `attachments`) as one attachment named `fileName`.
+  - **The address is the person's own, from their token, and confirmed.** It is
+    the token's `email` and only when its `emailVerified` is `true` (WAWU ID
+    holds mail back from an unconfirmed mobile sign-up for the same reason).
+    A statement lists every movement and counterparty name, so it never goes to
+    an address the person types. No confirmed address is `409
+    email_not_verified`. The Hub holds no address of its own.
+  - Order of answers: the route's own 400s (the period, the body), then the
+    409, then the person is counted, then the file is built, then the mail is
+    handed over. `400 statement_too_large` gives the place back; a mail that
+    could not be handed over is `503 statement_email_failed` and counts.
+  - `200` answers `StatementEmailView`: `sentTo` (the address masked,
+    `a***@example.com`), `from`, `to`, `format`, `fileName`, `rowCount`,
+    `sentAt`. `no-store`. An optional `Idempotency-Key` (8 to 128 of
+    `A-Za-z0-9_-`) for the same person makes WAWU ID's sender answer a repeat
+    with the first mail; the key sent on is a hash of the person's id and the
+    key, and a request without one is its own mail.
+  - `GET /money/statements/delivery` answers `StatementDeliveryView` from the
+    token alone: `email` (masked, or null), `canEmail`, and `formats` (what
+    `format` accepts today: `csv`). W38 reads it for its "Send to" row and its
+    format choice, so a format Fintava adds later reaches the screen from here.
 
 ---
 

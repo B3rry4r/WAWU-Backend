@@ -8,7 +8,9 @@ import {
   StatementRateLimiter,
   StatementSlots,
 } from './statements/statement-config';
+import { StatementEmailService } from './statements/statement-email.service';
 import { StatementService } from './statements/statement.service';
+import { WawuIdMailRelay } from '../admin/notifications/email/email-provider';
 import { LedgerModule } from './ledger/ledger.module';
 import { MoneyInNoticeModule } from './money-in-notice/money-in-notice.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
@@ -250,6 +252,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     SavedAccountTargetService,
     TransactionHistoryService,
     StatementService,
+    StatementEmailService,
+    WawuIdMailRelay,
     StatementRateLimiter,
     StatementSlots,
     FeeSettings,

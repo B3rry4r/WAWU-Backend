@@ -223,6 +223,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET money/recipients',
       'GET money/recipients/recent',
       'GET money/statements',
+      'GET money/statements/delivery',
       'GET money/transactions',
       'GET money/transactions/:id',
       'GET money/transactions/:id/receipt/image',
@@ -240,6 +241,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST money/pin/reset',
       'POST money/pin/reset/confirm',
       'POST money/pin/verify',
+      'POST money/statements/email',
       'POST money/transactions/:id/receipt',
       'POST money/transfers/wawu',
       // TIER-03: the purchase of a tier pays from the wallet.
