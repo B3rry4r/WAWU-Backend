@@ -7,6 +7,7 @@ import { CommunityRoomsService } from './rooms/community-rooms.service';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { NotificationModule } from '../notification/notification.module';
 import { CommunityMessageModule } from '../community-message/community-message.module';
+import { CommunityPassAccessModule } from './pass/community-pass-access.module';
 
 /**
  * Community resource module. PrismaService comes from the globally-registered
@@ -24,7 +25,12 @@ import { CommunityMessageModule } from '../community-message/community-message.m
  * lookup for each room's last message.
  */
 @Module({
-  imports: [NotificationModule, CommunityMessageModule, BlockedAccountModule],
+  imports: [
+    NotificationModule,
+    CommunityMessageModule,
+    BlockedAccountModule,
+    CommunityPassAccessModule,
+  ],
   controllers: [CommunityRoomsController, CommunityController],
   providers: [CommunityService, CommunityRoomsService, CreatorAccountGuard],
 })

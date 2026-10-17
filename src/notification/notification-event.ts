@@ -61,7 +61,10 @@ type CoreNotificationKind =
   | 'legal_delivered'
   // HOME-16 (R-59): TGIF reaches Home as a daily notification.
   /** The day's TGIF is ready. Recipient: each person who keeps "TGIF each morning" on. */
-  | 'tgif_daily';
+  | 'tgif_daily'
+  // INBOX-24 (R-63): a private community's monthly pass is about to end.
+  /** The pass ends in 3 days. Recipient: the member. The tap opens the renew sheet. */
+  | 'community_pass_ending';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -209,7 +212,32 @@ type NotificationEventCore =
       day: string;
       series: string;
       verseReference: string;
+    }
+  /**
+   * INBOX-24 (R-63). The member's monthly pass for a private community ends
+   * in 3 days. Made once per pass by the reminder sweep. Recipient: the
+   * member. `endsAt` is the pass's last moment; the tap opens the renew sheet
+   * for the room (`/communities/<id>/renew`, built from the id and never from
+   * input). Nothing is debited by itself: renewing is a payment the person
+   * confirms with their PIN.
+   */
+  | {
+      kind: 'community_pass_ending';
+      userWawuId: string;
+      communityId: string;
+      communityName: string;
+      endsAt: Date;
     };
+
+/** A pass's last day as the reminder writes it: "12 Nov 2026", Lagos time. */
+function passEndDay(endsAt: Date): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Lagos',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(endsAt);
+}
 
 /** The row `emit()` will write, before it reaches Prisma. */
 export interface NotificationDraft {
@@ -658,6 +686,25 @@ export function composeNotification(
         creditsCount: null,
         actionLabel: 'Read TGIF',
         ...NO_RICH_MEDIA,
+      };
+
+    /**
+     * INBOX-24 (R-63). The reminder 3 days before a pass ends. It says the
+     * day and offers the renew tap; it never says money moves by itself,
+     * because none does.
+     */
+    case 'community_pass_ending':
+      return {
+        ...base,
+        title: 'Your pass is ending soon',
+        body: `Your pass for “${event.communityName}” ends on ${passEndDay(event.endsAt)}. Renew it to stay in.`,
+        tone: 'warning',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'Renew',
+        imageUrl: null,
+        actionHref: `/communities/${event.communityId}/renew`,
+        campaignId: null,
       };
 
     /**
@@ -1148,6 +1195,9 @@ export const NOTIFICATION_CATEGORY: Record<
   money_in: 'money',
   money_in_reversed: 'money',
   tgif_daily: 'other',
+  // INBOX-24. Default (agent), owner may override: under "Messages", beside
+  // the room it belongs to.
+  community_pass_ending: 'messages',
   // WALLET-40. Default (agent), owner may override: under "Money", beside the
   // wallet it opens.
   wallet_ready: 'money',
@@ -1172,7 +1222,8 @@ export function targetFor(
 ): NotificationTargetDraft | null {
   const target =
     event.about?.target ??
-    (event.kind === 'community_join_approved'
+    (event.kind === 'community_join_approved' ||
+    event.kind === 'community_pass_ending'
       ? { kind: 'community' as const, id: event.communityId }
       : event.kind === 'tgif_daily'
         ? { kind: 'tgif_day' as const, id: event.day }

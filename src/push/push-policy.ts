@@ -55,6 +55,11 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   // themselves and no switch covers them (G-32).
   community_join_approved: 'send',
   community_join_declined: 'send',
+  // INBOX-24 (R-63). The reminder 3 days before a pass ends, with the renew
+  // tap. It is the one thing the task asks to reach the phone; no Z3 switch
+  // covers it (it is about money the person already paid), so like the join
+  // decisions it is always sent.
+  community_pass_ending: 'send',
   // The state of the person's own account or a marketing send, with no switch
   // that is agreed to cover them. Held until the owner answers (G-265).
   paid_dm_warning: 'hold',

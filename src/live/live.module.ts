@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ChatModule } from '../chat/chat.module';
 import { CommunityMessageModule } from '../community-message/community-message.module';
+import { CommunityPassAccessModule } from '../community/pass/community-pass-access.module';
 import { LivePublisherModule } from './live-publisher.module';
 import { LiveCatchUpService } from './live-catch-up.service';
 import { LiveConnections } from './live-connections.service';
@@ -23,6 +24,7 @@ import { LiveGateway } from './live.gateway';
     ConfigModule,
     ChatModule,
     CommunityMessageModule,
+    CommunityPassAccessModule,
     LivePublisherModule,
   ],
   controllers: [LiveController],

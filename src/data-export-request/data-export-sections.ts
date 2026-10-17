@@ -1326,6 +1326,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     { model: 'ChatParticipant', reason: 'A read position, not content.' },
     { model: 'CommunityReadMarker', reason: 'A read position, not content.' },
     {
+      model: 'CommunityPass',
+      reason:
+        'A pass is 30 days of a room, paid from the wallet; what was paid is exported with the payments, and the end date is on the membership.',
+    },
+    {
       model: 'CommunityMessageKey',
       reason:
         'The key one community message was sent under, so a repeat is not stored twice; the message itself is exported under communityMessages.',

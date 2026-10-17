@@ -131,6 +131,7 @@ payment onto the wallet.
 | `content_unlock` | HOME-15 | the content piece id (`POST /content/:id/unlock`) | no | no |
 | `tip` | HOME-14 | the creator's wawuUserId (`POST /tips` takes `creatorWawuId`); `note` is the tip's message | yes, `amountKobo` | no |
 | `credit_pack` | INBOX-16 | the pack: `starter`, `popular` or `pro` (`GET /credits/packs` lists them; `POST /credits/purchase` is the web's Flutterwave route and stays as it is) | no | no (WAWU's own sale: the price stays in WAWU's account and the 85/15 split is applied per spent credit, as for a Flutterwave pack) |
+| `community_pass` | INBOX-24 | the community's id (`POST /communities/{id}/pass`); the price is the host's monthly price for that private room | no | no (WAWU's account holds it, the host's 85% is an earning in their one move a day, R-55; a pass that cannot be given is paid back in full, the charge included) |
 | `verification` | ME-18 | the tick: `creator` or `professional` | no | no |
 | `legal_fee` | LEGAL-05 | the legal request id | no | no |
 | `school_fee` | SCHOOLS-07 | the enrolment order id `POST /schools/enrolments` returns; the price is the course fee quoted when the place was held, and the 85/15 split (R-12) is recorded with the payment and its hold although the school is not on WAWU | no | until the intake starts |
@@ -195,6 +196,41 @@ is gone, or they blocked the payer since) is paid back through MONEY-18's
 refund: the price and everything the payment took return, the provider's
 charge included, and WAWU bears the refund's own charge (lead ruling 17 Oct
 2026, as Q-03 and EVENTS-10; the payer did not cause it).
+
+#### A private community's monthly pass (INBOX-24, R-63)
+
+A private room whose host set a price sells 30 days at a time, paid from the
+wallet with the PIN. The kind is `community_pass`; the target is the community
+id; the price is the host's, in kobo, set when the room is made
+(`POST /communities/rooms` takes `passPriceKobo`, private rooms only, between
+`COMMUNITY_PASS_MIN_KOBO` and `COMMUNITY_PASS_MAX_KOBO`). A private room with no
+price keeps the older join requests. There is no host approval step and no
+automatic debit anywhere: renewing is a new payment the person confirms.
+
+- `GET /communities/{id}/pass`: `{ communityId, sellsPass, priceKobo,
+  periodDays, passUntil, active, canRenew, canBuy, isHost }`. Needs no wallet.
+- `GET /communities/{id}/pass/quote`: `{ communityId, title, host, priceKobo,
+  periodDays, passUntil, newPassUntil, payment }`.
+- `POST /communities/{id}/pass` `{ expectedTotalKobo, quoteToken }` with
+  `Idempotency-Key` and the PIN: 201 with the purchase (`status` `pending`,
+  `paid`, `failed`, `reversed` or `refunded`; `passUntil` once paid; `payment`).
+- `GET /communities/{id}/pass/{paymentId}`: the same purchase, for the payer.
+- `GET /communities/{id}/membership` additionally returns `passUntil` (ISO 8601
+  or null) and `canRenew` (boolean), in a room that sells a pass only; any
+  other room answers exactly as before.
+
+A pass runs 30 days from the later of today and the current end date. A member
+whose pass has ended keeps their membership row and loses the room, reading and
+posting (`403`), until they renew; `GET /communities/{id}/room` shows them as
+`none`, `GET /communities/mine` still lists the room with no message and no
+unread count. `POST /communities/{id}/join` in a room that sells a pass is
+`409` without a running pass, and joins without paying for someone who left
+with time on theirs. The reminder 3 days before the end is the notification
+kind `community_pass_ending` (in-app and pushed), whose `actionHref` is
+`/communities/{id}/renew`. The host's 85% is an earning (kind `community_pass`
+in `GET /money/earnings`) and travels in their one move a day. A pass that
+cannot be given (the room stopped selling, or the host and the person can no
+longer deal) is paid back in full, the provider's charge included.
 
 #### Unlocks from the wallet (HOME-15)
 

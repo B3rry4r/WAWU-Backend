@@ -38,6 +38,9 @@ describe('which notifications reach a phone', () => {
     expect(ungatedButSent.sort()).toEqual([
       'community_join_approved',
       'community_join_declined',
+      // INBOX-24 (R-63): the owner ruled "a reminder comes 3 days before the
+      // pass ends" and the task names the phone push through INBOX-03.
+      'community_pass_ending',
       // WALLET-40 (owner answer 31): the owner asked for this alert.
       'wallet_ready',
     ]);
@@ -134,6 +137,13 @@ const EVENTS: NotificationEvent[] = [
     kind: 'community_join_declined',
     userWawuId: 'u',
     communityName: 'Lagos Makers',
+  },
+  {
+    kind: 'community_pass_ending',
+    userWawuId: 'u',
+    communityId: 'c',
+    communityName: 'Lagos Makers',
+    endsAt: new Date('2026-11-30T12:00:00.000Z'),
   },
 ];
 

@@ -1232,9 +1232,48 @@ model Community {
   /// INBOX-01. Relation fields only: no column is added to Community.
   link         CommunityLink?
   readMarkers  CommunityReadMarker[]
+  /// INBOX-24 (R-63). Relation fields only: no column is added to Community.
+  passPrice    CommunityPassPrice?
+  passes       CommunityPass[]
 
   @@index([hostWawuId])
   @@index([kind])
+}
+
+/// INBOX-24 (R-63). The monthly price a private community sells its pass at,
+/// set by the host when the room is made. A side table, not a column on
+/// Community, because every Community response is the model spread (locked
+/// response shape H-1). A private room with no row here has no pass: it keeps
+/// the older join request flow. Kobo, the host's own figure; the 85/15 split is
+/// taken from it when a pass is bought (R-5).
+model CommunityPassPrice {
+  communityId String    @id
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  priceKobo   BigInt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+/// INBOX-24 (R-63). One paid pass: 30 days of a private room, bought from the
+/// wallet. One row per wallet payment (`walletPaymentId` is unique, so a
+/// payment confirmed twice, by the request and by the sweep, on any server,
+/// grants once). A person's pass runs to the latest `endsAt` of their rows; a
+/// new pass starts at the later of today and that date. `reminderSentAt` is
+/// set once, when the 3 day reminder for this pass was claimed.
+model CommunityPass {
+  id              String    @id @default(uuid())
+  communityId     String
+  community       Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  userWawuId      String
+  walletPaymentId String    @unique
+  startsAt        DateTime
+  endsAt          DateTime
+  priceKobo       BigInt
+  reminderSentAt  DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([communityId, userWawuId, endsAt])
+  @@index([endsAt])
 }
 
 /// INBOX-01. A community's share link, written `wawu/c/<slug>`.

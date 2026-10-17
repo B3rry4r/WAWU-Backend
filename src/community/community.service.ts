@@ -15,6 +15,8 @@ import type {
   CommunityMembership,
   CommunityResponse,
 } from '../common/types';
+import { CommunityPassAccess } from './pass/community-pass-access.service';
+import { passIsActive } from './pass/community-pass-rules';
 import type { CreateCommunityDto } from './dto/create-community.dto';
 import type { UpdateCommunityDto } from './dto/update-community.dto';
 
@@ -52,6 +54,18 @@ import type { UpdateCommunityDto } from './dto/update-community.dto';
  * so it is kept as it is; INBOX-01 reuses it for a decline that loses a race
  * to an approval.
  */
+/** Joining a room that sells a pass without one (INBOX-24, R-63). No em-dash: a person reads it. */
+export const PASS_REQUIRED_MESSAGE =
+  'This private room is joined with a monthly pass. Buy a pass to come in.';
+
+/** What `GET /communities/:id/membership` adds in a room that sells a pass (INBOX-24). */
+export interface MembershipPass {
+  /** When the person's pass ends (ISO 8601), or null when they never had one. */
+  passUntil: string | null;
+  /** True when the person has held a pass here and can pay for the next one. */
+  canRenew: boolean;
+}
+
 const ALREADY_APPROVED =
   'That request was already approved. This person is a member. Remove them instead.';
 
@@ -61,6 +75,7 @@ export class CommunityService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly passAccess: CommunityPassAccess,
   ) {}
 
   /** Start of "today" in UTC, per the task brief's derivation rule for `messagesToday`. */
@@ -175,6 +190,7 @@ export class CommunityService {
   async create(
     hostWawuId: string,
     dto: CreateCommunityDto,
+    passPriceKobo?: number,
   ): Promise<CommunityResponse> {
     // Hosting used to need a live subscription, and a PRIVATE community used
     // to need a paid tier above Basic. Both were subscription entitlements and
@@ -192,6 +208,11 @@ export class CommunityService {
         // existed before the column has none — and clients keep their
         // placeholder tile for exactly that case.
         imageUrl: dto.imageUrl ?? null,
+        // INBOX-24 (R-63). The monthly price of a private room's pass, written
+        // with the room. Only POST /communities/rooms passes one.
+        ...(passPriceKobo !== undefined
+          ? { passPrice: { create: { priceKobo: BigInt(passPriceKobo) } } }
+          : {}),
       },
     });
 
@@ -282,10 +303,21 @@ export class CommunityService {
   async myMembership(
     id: string,
     userWawuId: string,
-  ): Promise<CommunityMembership | null> {
-    return this.prisma.communityMembership.findUnique({
+  ): Promise<(CommunityMembership & Partial<MembershipPass>) | null> {
+    const membership = await this.prisma.communityMembership.findUnique({
       where: { userWawuId_communityId: { userWawuId, communityId: id } },
     });
+    if (!membership) return null;
+    // INBOX-24 (R-63). In a private room that sells a pass the answer also
+    // says when the pass ends and whether it can be renewed. Any other room
+    // answers exactly what it always did, so the web's response is unchanged.
+    if (!(await this.passAccess.roomsWithPass([id])).has(id)) return membership;
+    const until = await this.passAccess.passUntil(id, userWawuId);
+    return {
+      ...membership,
+      passUntil: until ? until.toISOString() : null,
+      canRenew: until !== null,
+    };
   }
 
   /** Leaves a community. Idempotent: leaving one you are not in is a no-op. */
@@ -294,6 +326,11 @@ export class CommunityService {
       where: { userWawuId, communityId: id },
     });
     return { joined: false };
+  }
+
+  /** True when the room sells a monthly pass (INBOX-24, R-63). */
+  private async sellsPass(id: string): Promise<boolean> {
+    return (await this.passAccess.roomsWithPass([id])).has(id);
   }
 
   async join(id: string, userWawuId: string): Promise<CommunityMembership> {
@@ -313,6 +350,32 @@ export class CommunityService {
     const existing = await this.prisma.communityMembership.findUnique({
       where: { userWawuId_communityId: { userWawuId, communityId: id } },
     });
+
+    // INBOX-24 (R-63). A private room that sells a pass has no request and no
+    // host approval: a person is in while their pass runs. Joining here is
+    // only for someone whose pass is still running and who has no row (they
+    // left); everyone else buys a pass. A row that exists is returned as it
+    // is: `pending` is a member the host removed, and only the host lets them
+    // back.
+    if (await this.sellsPass(id)) {
+      if (existing) return existing;
+      const until = await this.passAccess.passUntil(id, userWawuId);
+      if (!passIsActive(until, new Date())) {
+        throw new ConflictException(PASS_REQUIRED_MESSAGE);
+      }
+      return this.prisma.communityMembership.upsert({
+        where: { userWawuId_communityId: { userWawuId, communityId: id } },
+        create: {
+          userWawuId,
+          communityId: id,
+          status: 'joined',
+          joinedAt: new Date(),
+        },
+        // A row that appeared in between is left exactly as it is.
+        update: {},
+      });
+    }
+
     if (existing) {
       return existing;
     }
@@ -578,6 +641,12 @@ export class CommunityService {
     if (membership?.status === 'joined') {
       throw new ConflictException(ALREADY_APPROVED);
     }
+    if (membership && (await this.sellsPass(id))) {
+      // INBOX-24 round 2. In a room that sells a pass a pending row is a
+      // member the host removed, and declining keeps them out: deleting the
+      // row would let them join again while their pass runs.
+      return { declined: true };
+    }
     if (membership) {
       // INBOX-01: delete only while still pending, so a decline racing an
       // approval cannot remove someone the approval just let in, and of
@@ -642,6 +711,19 @@ export class CommunityService {
       throw new BadRequestException(
         'The host cannot be removed from their own community.',
       );
+    }
+
+    if (await this.sellsPass(id)) {
+      // INBOX-24 round 2 (R-63). In a room that sells a pass the person may
+      // hold days they paid for, and a deleted row would let them join again
+      // at once. They go back to a pending request instead: out of the room
+      // until the host approves them, the way a room already lets someone in.
+      // Money is untouched (a refund on removal is Q-43, the owner's).
+      await this.prisma.communityMembership.updateMany({
+        where: { communityId: id, userWawuId, status: 'joined' },
+        data: { status: 'pending', joinedAt: null },
+      });
+      return { removed: true };
     }
 
     await this.prisma.communityMembership.deleteMany({
