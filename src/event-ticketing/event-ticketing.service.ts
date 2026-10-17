@@ -21,6 +21,7 @@ import type { BuyTicketsDto, VerifyOrderDto } from './dto/event-ticketing.dto';
 import { ticketTotals } from './ticket-counts';
 import type { TicketTier } from '../../generated/prisma/enums';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
+import { EventCancelHooks } from './event-cancel-hooks';
 
 /**
  * A ticket code, and why it looks like this.
@@ -81,6 +82,7 @@ export class EventTicketingService {
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly cancelHooks: EventCancelHooks,
   ) {}
 
   /* ------------------------------------------------------------------ *
@@ -735,6 +737,11 @@ export class EventTicketingService {
    * Each order is refunded independently: one failure does not stop the rest,
    * and what could not be sent is recorded on the order for a human to
    * settle rather than lost to a log line.
+   *
+   * EVENTS-10: an order paid from the wallet (EVENTS-07) is a held price, not a
+   * Flutterwave charge. Its buyer gets back everything they paid through the
+   * hold's own refund (the wallet module's step, run below); the counts it
+   * reports are added to the two the web already reads.
    */
   async cancel(organiserWawuId: string, eventId: string, reason: string) {
     const event = await this.prisma.event.findUnique({
@@ -766,9 +773,11 @@ export class EventTicketingService {
     ]);
 
     // EVENTS-07: orders paid from the wallet are not Flutterwave charges. Their
-    // price sits in a hold, and EVENTS-10 refunds them through it, so the
-    // Flutterwave loop below leaves them alone (it would otherwise record
-    // that they need the Flutterwave dashboard).
+    // price sits in a hold, and EVENTS-10 refunds them through it (the step
+    // below), so the Flutterwave loop leaves them alone (it would otherwise
+    // record that they need the Flutterwave dashboard). Run first: it holds
+    // nothing across the provider and stops at its own time limit.
+    const wallet = await this.cancelHooks.afterCalledOff(eventId);
     const orders = await this.prisma.eventOrder.findMany({
       where: {
         eventId,
@@ -778,8 +787,8 @@ export class EventTicketingService {
       },
     });
 
-    let refunded = 0;
-    let failed = 0;
+    let refunded = wallet.refunded;
+    let failed = wallet.needAttention;
     for (const order of orders) {
       if (!order.flutterwaveTxId) {
         await this.prisma.eventOrder.update({

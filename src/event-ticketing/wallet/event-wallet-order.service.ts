@@ -115,6 +115,13 @@ class SoldOut extends Error {
   }
 }
 
+/** Thrown inside the issuing transaction before anything is written: the host called the event off (EVENTS-10). */
+class CalledOff extends Error {
+  constructor() {
+    super('the event was called off');
+  }
+}
+
 /**
  * Event tickets paid from the wallet (task EVENTS-07, E2 to E5 and E10).
  *
@@ -686,8 +693,9 @@ export class EventWalletOrderService implements OnModuleInit {
         }
         reason = 'the order was already settled another way';
       } catch (e) {
-        if (!(e instanceof SoldOut)) throw e;
-        reason = `${e.tierName} sold out`;
+        if (e instanceof CalledOff) reason = 'the event was called off';
+        else if (e instanceof SoldOut) reason = `${e.tierName} sold out`;
+        else throw e;
       }
     }
     this.logger.warn(
@@ -721,6 +729,20 @@ export class EventWalletOrderService implements OnModuleInit {
     payment: CompletedPayment,
   ): Promise<boolean> {
     return this.prisma.$transaction(async (tx) => {
+      // EVENTS-10: a host's cancel updates the event row, so it waits for this
+      // share lock (and this waits for it): either the cancel comes after and
+      // voids these tickets and refunds this order, or it came first and no
+      // ticket is made for a called-off event.
+      const [event] = await tx.$queryRaw<
+        Array<{ cancelledAt: Date | null; status: string }>
+      >`SELECT "cancelledAt", "status"::text AS "status" FROM "Event" WHERE "id" = ${order.eventId} FOR SHARE`;
+      if (
+        !event ||
+        event.cancelledAt !== null ||
+        event.status !== 'published'
+      ) {
+        throw new CalledOff();
+      }
       const flipped = await tx.eventOrder.updateMany({
         where: { id: order.id, status: 'pending' },
         data: {

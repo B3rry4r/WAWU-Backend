@@ -40,6 +40,15 @@ export const ORDER_REFUNDED_RETURNED_REASON =
   'This event can no longer take place. Your money is back in your wallet.';
 export const ORDER_REFUNDED_RETURNING_REASON =
   'This event can no longer take place. Your money is on its way back to your wallet.';
+/** Written on a wallet order whose event the host called off (EVENTS-10). */
+export const CALLED_OFF_REASON = 'The host called the event off.';
+/** What the hold's refund is asked for: its narration in the ledger. */
+export const CALLED_OFF_REFUND_REASON = 'the host called the event off';
+/** Written on a wallet order whose price cannot go back by itself, for the person who settles it. */
+export const CALLED_OFF_PAID_OUT_NOTE =
+  "The event was called off after the host's share of this order was paid out, so the price cannot be sent back by itself. A person settles it.";
+export const CALLED_OFF_NO_PAYMENT_NOTE =
+  'The event was called off, but this paid order has no payment or held price on record. A person settles it.';
 export const KEY_REUSED_MESSAGE =
   'That Idempotency-Key was used for different tickets. Use a new key for a new order.';
 export const KEY_MALFORMED_MESSAGE =
