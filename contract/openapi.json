@@ -30729,6 +30729,63 @@
         ]
       }
     },
+    "/api/hub/me/purchases/all": {
+      "get": {
+        "operationId": "MeController_paidPurchaseList",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "q",
+            "required": false,
+            "in": "query",
+            "description": "\"Search what you've bought\": trimmed, then 2 to 60 characters. Matches\npart of a piece's title or its creator's handle, ignoring case.",
+            "schema": {
+              "minLength": 2,
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidPurchasePage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "My purchases across every paid kind (M29, FIX-59): unlocks, tickets,\ncredit packs, school fees and community passes, newest first, searchable\nby title, paid-back ones marked `refunded`. A separate route so\n`GET /me/purchases` above answers exactly as it always has.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
     "/api/hub/me/lessons/{lessonId}/done": {
       "put": {
         "operationId": "MeController_lessonDone",
@@ -59017,6 +59074,100 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/PurchaseEntryView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "PaidPurchaseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "content_unlock",
+              "credit_pack",
+              "school_fee",
+              "event_ticket",
+              "community_pass"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "totalKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "purchasedAt": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "refunded",
+              "paid"
+            ]
+          },
+          "openId": {
+            "type": "string",
+            "nullable": true
+          },
+          "content": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PurchasedPieceView"
+              }
+            ],
+            "nullable": true
+          },
+          "lessons": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LessonProgressView"
+              }
+            ],
+            "nullable": true
+          },
+          "credits": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "amountKobo",
+          "totalKobo",
+          "purchasedAt",
+          "status",
+          "openId",
+          "content",
+          "lessons",
+          "credits"
+        ]
+      },
+      "PaidPurchasePage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PaidPurchaseView"
             }
           },
           "nextCursor": {

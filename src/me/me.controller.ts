@@ -21,6 +21,7 @@ import {
 } from './dto/me-query.dto';
 import { MeSavedService } from './me-saved.service';
 import { MePurchasesService } from './me-purchases.service';
+import { MePaidPurchasesService } from './me-paid-purchases.service';
 import { MeNotificationsService } from './me-notifications.service';
 import { MeEarningsService } from './me-earnings.service';
 import type {
@@ -29,6 +30,7 @@ import type {
   MeCountsView,
   MyEarningsView,
   NotificationFeedPage,
+  PaidPurchasePage,
   PurchasePage,
   SavedCreatorState,
   SavedPage,
@@ -49,6 +51,7 @@ export class MeController {
   constructor(
     private readonly saved: MeSavedService,
     private readonly purchases: MePurchasesService,
+    private readonly paidPurchases: MePaidPurchasesService,
     private readonly notifications: MeNotificationsService,
     private readonly earnings: MeEarningsService,
   ) {}
@@ -105,6 +108,25 @@ export class MeController {
     @Query() query: PurchasesQueryDto,
   ): Promise<PurchasePage> {
     return this.purchases.list(
+      user.sub,
+      query.q,
+      query.cursor,
+      query.limit ?? 20,
+    );
+  }
+
+  /**
+   * My purchases across every paid kind (M29, FIX-59): unlocks, tickets,
+   * credit packs, school fees and community passes, newest first, searchable
+   * by title, paid-back ones marked `refunded`. A separate route so
+   * `GET /me/purchases` above answers exactly as it always has.
+   */
+  @Get('purchases/all')
+  paidPurchaseList(
+    @CurrentUser() user: WawuJwtClaims,
+    @Query() query: PurchasesQueryDto,
+  ): Promise<PaidPurchasePage> {
+    return this.paidPurchases.list(
       user.sub,
       query.q,
       query.cursor,
