@@ -1,37 +1,77 @@
 import { NotFoundException } from '@nestjs/common';
+import type { ContentPiece } from '../../generated/prisma/client';
 import type { PrismaService } from '../common/prisma/prisma.service';
 import { DELETED_CREATOR_ID } from './deleted-creator';
 
-type Db = Pick<PrismaService, 'accountDeletionContent' | 'purchase'>;
+type Db = Pick<
+  PrismaService,
+  'accountDeletionContent' | 'purchase' | 'contentPiece'
+>;
+
+/** What the three checks below need to know about a piece. */
+type PieceRef = { id: string; status: string; creatorWawuId: string };
 
 /**
- * SETTINGS-06 round 8 (lead ruling, 17 Oct 2026): "buyers keep what they paid
- * for" holds from the moment of DELETE, not only after the purge. A piece "a
- * deletion hid" is a piece with status `removed` that either
- *   - has the deleted-account id as its creator (`DELETED_CREATOR_ID`: the
- *     purge ran), or
- *   - is named by an `AccountDeletionContent` row (the deletion hid it, and a
- *     cancel would put it back; the purge clears these rows only after it has
- *     re-keyed the sold pieces, so there is no gap between the two).
- * Any other removed piece (taken down by its creator or an admin) is not one:
- * it stays gone for everyone, as it always was.
+ * SETTINGS-06 rounds 8 and 9 (lead rulings, 17 Oct 2026). "Buyers keep what
+ * they paid for" holds from the moment of DELETE, not only after the purge,
+ * and only for a piece that was LIVE when the deletion started. A piece "a
+ * deletion hid" (and that its buyers may therefore still open) is a piece with
+ * status `removed` that is named by an `AccountDeletionContent` row whose
+ * `priorStatus` is `live`.
+ *
+ * The row is looked up by the piece alone, never under the creator id the
+ * caller read: the purge re-keys the piece to the deleted account and a cancel
+ * restores it, both while a request may be half way through (round 9, R8-1).
+ * The purge moves the row to the deleted account in the same transaction that
+ * re-keys the piece, so the row is always there to find. A request that still
+ * misses it (a cancel took it, or a purge from before this fix) reads the
+ * piece again and decides on what it is now:
+ *   - gone, or no longer `removed` (a cancel restored it): not hidden, and the
+ *     caller carries on with the piece as it is now;
+ *   - `removed` and already re-keyed to the deleted account: the purge ran,
+ *     and it is the buyers' (a piece the purge stripped always keeps a row
+ *     with a status other than `live`, so it never gets here);
+ *   - anything else: a piece taken down by its creator or an admin, which
+ *     stays gone for everyone, as it always was.
+ * A piece that was removed, rejected or pending before the deletion has a row
+ * (or none) whose `priorStatus` is not `live`: a deletion never undoes a
+ * takedown.
  */
+export async function readHidden(
+  db: Db,
+  piece: ContentPiece,
+): Promise<{ piece: ContentPiece | null; hidden: boolean }> {
+  if (piece.status !== 'removed') return { piece, hidden: false };
+  const marker = await db.accountDeletionContent.findFirst({
+    where: { contentPieceId: piece.id },
+    select: { priorStatus: true },
+  });
+  if (marker) return { piece, hidden: marker.priorStatus === 'live' };
+  const now = await db.contentPiece.findUnique({ where: { id: piece.id } });
+  if (!now || now.status !== 'removed') return { piece: now, hidden: false };
+  return { piece: now, hidden: now.creatorWawuId === DELETED_CREATOR_ID };
+}
+
+/** The same question for a caller that holds only a few columns and needs a yes or no. */
 export async function hiddenByDeletion(
   db: Db,
-  piece: { id: string; status: string; creatorWawuId: string },
+  piece: PieceRef,
 ): Promise<boolean> {
   if (piece.status !== 'removed') return false;
-  if (piece.creatorWawuId === DELETED_CREATOR_ID) return true;
-  const marker = await db.accountDeletionContent.findUnique({
-    where: {
-      wawuUserId_contentPieceId: {
-        wawuUserId: piece.creatorWawuId,
-        contentPieceId: piece.id,
-      },
-    },
-    select: { id: true },
+  const marker = await db.accountDeletionContent.findFirst({
+    where: { contentPieceId: piece.id },
+    select: { priorStatus: true },
   });
-  return marker !== null;
+  if (marker) return marker.priorStatus === 'live';
+  const now = await db.contentPiece.findUnique({
+    where: { id: piece.id },
+    select: { status: true, creatorWawuId: true },
+  });
+  return (
+    now !== null &&
+    now.status === 'removed' &&
+    now.creatorWawuId === DELETED_CREATOR_ID
+  );
 }
 
 /** True when this person has a completed paid purchase of the piece. */
@@ -61,7 +101,7 @@ export async function hasBoughtContent(
  */
 export async function assertBuyerOnlyIfHidden(
   db: Db,
-  piece: { id: string; status: string; creatorWawuId: string },
+  piece: PieceRef,
   viewerWawuId: string | undefined,
   message: string,
 ): Promise<void> {

@@ -10,7 +10,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { NotificationService } from '../notification/notification.service';
 import type { SetPreviewDto } from './dto/set-preview.dto';
-import { hiddenByDeletion } from './deletion-hid';
+import { readHidden } from './deletion-hid';
 
 /** The one wording for a piece that is missing, hidden or not the caller's. */
 const NOT_FOUND = 'Content not found';
@@ -146,18 +146,20 @@ export class ContentDetailService {
 
   /** GET /content/:id/detail. */
   async detail(contentId: string, viewer: string): Promise<ContentDetail> {
-    const piece = await this.prisma.contentPiece.findUnique({
+    const first = await this.prisma.contentPiece.findUnique({
       where: { id: contentId },
     });
+    if (!first) throw new NotFoundException(NOT_FOUND);
     // A sold piece its creator's account deletion hid stays readable to the
     // people who paid for it, from the moment of DELETE (owner ruling, 16 Oct
     // 2026, SETTINGS-06; lead ruling 17 Oct 2026): hidden (`removed`), opened
     // only with a completed purchase. Every other removed piece is gone for
-    // everyone.
-    const keptForBuyers =
-      !!piece &&
-      piece.status === 'removed' &&
-      (await hiddenByDeletion(this.prisma, piece));
+    // everyone. `piece` is the row as it is when that is decided: a purge or
+    // a cancel that lands between the read and the check is not a 404 (round 9).
+    const { piece, hidden: keptForBuyers } = await readHidden(
+      this.prisma,
+      first,
+    );
     if (!piece || (piece.status === 'removed' && !keptForBuyers)) {
       throw new NotFoundException(NOT_FOUND);
     }

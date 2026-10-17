@@ -38,7 +38,7 @@ import type { MyContentCounts, MyContentItem } from './dto/my-content.view';
 import {
   assertBuyerOnlyIfHidden,
   hasBoughtContent,
-  hiddenByDeletion,
+  readHidden,
 } from './deletion-hid';
 
 /**
@@ -211,10 +211,10 @@ export class ContentPieceService {
     id: string,
     requesterWawuId: string | undefined,
   ): Promise<ContentPieceResponse> {
-    const content = await this.prisma.contentPiece.findUnique({
+    const first = await this.prisma.contentPiece.findUnique({
       where: { id },
     });
-    if (!content) {
+    if (!first) {
       throw new NotFoundException('Content not found');
     }
     // Removed is gone for everyone, owner included — there is no undelete,
@@ -224,10 +224,13 @@ export class ContentPieceService {
     // 2026, SETTINGS-06; from the moment of DELETE, lead ruling 17 Oct 2026).
     // Only a completed purchase opens it, never ownership: the creator who
     // asked for the deletion is not let back in.
-    const keptForBuyers =
-      content.status === 'removed' &&
-      (await hiddenByDeletion(this.prisma, content));
-    if (content.status === 'removed' && !keptForBuyers) {
+    // `content` is the piece as it is when that is decided: a purge or a cancel
+    // that lands between the read and the check is not a 404 (round 9).
+    const { piece: content, hidden: keptForBuyers } = await readHidden(
+      this.prisma,
+      first,
+    );
+    if (!content || (content.status === 'removed' && !keptForBuyers)) {
       throw new NotFoundException('Content not found');
     }
     if (

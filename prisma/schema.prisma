@@ -5767,7 +5767,11 @@ model AccountDeletion {
 /// The content pieces a scheduled deletion hid, with the status each had, so
 /// a cancelled deletion puts back exactly those pieces and no others (a piece
 /// the person had already removed is not listed, so it stays removed). Deleted
-/// when the deletion is cancelled or the account is purged.
+/// when the deletion is cancelled or the account is purged, except the rows of
+/// pieces the purge keeps for their buyers or strips (round 9): those move to
+/// the deleted account (`wawuUserId` = 'deleted-account') with the piece, and
+/// stay, so a reader always finds what the piece was. Only `priorStatus` =
+/// 'live' lets a buyer open a hidden piece.
 model AccountDeletionContent {
   id             String   @id @default(uuid())
   wawuUserId     String
@@ -5778,6 +5782,7 @@ model AccountDeletionContent {
 
   @@unique([wawuUserId, contentPieceId])
   @@index([wawuUserId])
+  @@index([contentPieceId])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
