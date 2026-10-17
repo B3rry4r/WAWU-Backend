@@ -536,7 +536,9 @@ describe('Delete account (SETTINGS-06)', () => {
       expect(
         await prisma.pushStoppedAccount.count({ where: { userWawuId: id } }),
       ).toBe(1);
-      expect(scheduleCalls()).toContainEqual([id]);
+      // SETTINGS-08 (ruling-driven, SHARED-CHANGES SETTINGS-08): the call
+      // also carries the Hub's purgeAfter.
+      expect(scheduleCalls()).toContainEqual([id, expect.any(Date)]);
     });
 
     it('asked again, keeps its date, freezes the wallet again (round 4) and tells WAWU ID again', async () => {

@@ -135,8 +135,11 @@ describe('Account (contract)', () => {
       expect(scheduledAt).toBeGreaterThan(before + expectedMs - 60_000);
       expect(scheduledAt).toBeLessThan(before + expectedMs + 60_000);
 
+      // SETTINGS-08 (ruling-driven, SHARED-CHANGES SETTINGS-08): the call also
+      // carries the Hub's own end of the 30 days, equal to the date answered.
       expect(mockGateway.scheduleAccountDeletion).toHaveBeenCalledWith(
         PLAIN_USER_SUB,
+        new Date(res.body.data.deletionScheduledAt),
       );
     });
 

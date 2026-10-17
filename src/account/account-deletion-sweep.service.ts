@@ -10,6 +10,7 @@ import {
   PASS_CLAIM_LEASE_MS,
   PASS_OUTAGE_FAILURES,
 } from './account-deletion-config';
+import { AccountDeletionIdentityService } from './account-deletion-identity.service';
 import {
   AccountDeletionMoneyService,
   type DeletionBlocker,
@@ -26,6 +27,14 @@ export interface DeletionSweepResult {
   blocked: number;
   /** The Hub's data is gone but WAWU ID did not answer; asked again next pass. */
   identityPending: number;
+  /**
+   * Due, but WAWU ID has not confirmed the deletion started (SETTINGS-08,
+   * G-SETTINGS-08-1): nothing is purged, `purgeBlockedBy` says
+   * `identity_unconfirmed`, and the next pass asks WAWU ID again.
+   */
+  identityUnconfirmed: number;
+  /** Deletions WAWU ID confirmed this pass (it had not before). */
+  identityConfirmed: number;
   /** A stranded `freezing` row: the wallet was let go and the row removed. */
   unfrozen: number;
   /** Rows in force, or cancelled and not yet confirmed, whose wallet the provider confirmed. */
@@ -76,7 +85,12 @@ type DueDeletion = {
   wawuUserId: string;
   purgeAttempts: number;
   status: string;
+  /** Null: WAWU ID has not confirmed the deletion started; no purge (SETTINGS-08). */
+  identityMarkedAt: Date | null;
 };
+
+type PurgeOutcome =
+  'purged' | 'blocked' | 'identityPending' | 'identityUnconfirmed' | 'skipped';
 
 /**
  * The end of the 30 days (task SETTINGS-06, R-17). Hourly, it takes each
@@ -104,6 +118,15 @@ type DueDeletion = {
  *     nothing to delete the second time). It is never marked cancelled.
  *  6. Marks the row `purged`, only if it is still `purging`. The row stays as
  *     the record that it ran.
+ *
+ * SETTINGS-08 (G-SETTINGS-08-1): WAWU ID cancels a deletion when the person
+ * signs in during the 30 days, so it must know the deletion started. Before
+ * any row is taken, the pass asks WAWU ID again about every deletion it has
+ * not confirmed (AccountDeletionIdentityService, with a wait that grows after
+ * each failure). A due row WAWU ID has not confirmed is never purged: it waits,
+ * `purgeBlockedBy` is `identity_unconfirmed`, the pass logs a warning and
+ * counts it in `identityUnconfirmed`. The claim to `purging` also names it, so
+ * a row cannot be claimed without the confirmation.
  *
  * Before those, one more step (round 3): a `freezing` row older than
  * FREEZING_STALE_MS belongs to a request that died (its freeze answer was
@@ -142,6 +165,7 @@ export class AccountDeletionSweepService {
     private readonly money: AccountDeletionMoneyService,
     private readonly points: PointsService,
     private readonly purgeService: AccountPurgeService,
+    private readonly identity: AccountDeletionIdentityService,
     @Inject(WAWU_ID_ACCOUNT_GATEWAY)
     private readonly wawuId: WawuIdAccountGateway,
   ) {}
@@ -160,9 +184,17 @@ export class AccountDeletionSweepService {
     this.running = true;
     try {
       const r = await this.runOnce();
-      if (r.purged + r.blocked + r.identityPending + r.unfrozen > 0) {
+      if (
+        r.purged +
+          r.blocked +
+          r.identityPending +
+          r.identityUnconfirmed +
+          r.identityConfirmed +
+          r.unfrozen >
+        0
+      ) {
         this.logger.log(
-          `Account deletions: ${r.purged} purged, ${r.blocked} kept for money or points, ${r.identityPending} waiting for WAWU ID, ${r.unfrozen} wallets let go, ${r.reconciled} wallets checked against their row`,
+          `Account deletions: ${r.purged} purged, ${r.blocked} kept for money or points, ${r.identityPending} waiting for WAWU ID to anonymise, ${r.identityUnconfirmed} due but not yet confirmed started by WAWU ID, ${r.identityConfirmed} confirmed started by WAWU ID, ${r.unfrozen} wallets let go, ${r.reconciled} wallets checked against their row`,
         );
       }
       if (r.stopped) {
@@ -190,6 +222,8 @@ export class AccountDeletionSweepService {
       purged: 0,
       blocked: 0,
       identityPending: 0,
+      identityUnconfirmed: 0,
+      identityConfirmed: 0,
       unfrozen: 0,
       reconciled: 0,
       stopped: null,
@@ -216,6 +250,22 @@ export class AccountDeletionSweepService {
     } catch (e) {
       this.logger.error(
         `Letting go of stranded wallets stopped: ${(e as Error).message}`,
+      );
+    }
+    // SETTINGS-08: WAWU ID is asked again about every deletion it has not
+    // confirmed, before any row is taken, so a due row it now confirms is
+    // purged in this same pass. Never stops the purge below.
+    try {
+      const asked = await this.identity.retryDue(now, Math.max(limit, batch));
+      result.identityConfirmed = asked.confirmed;
+      if (asked.outage) {
+        this.logger.warn(
+          'WAWU ID failed several times in a row; the deletions it has not confirmed wait for the next pass',
+        );
+      }
+    } catch (e) {
+      this.logger.error(
+        `Asking WAWU ID about unconfirmed deletions stopped: ${(e as Error).message}`,
       );
     }
     // Due ones, and the ones an earlier pass claimed but could not finish
@@ -300,7 +350,7 @@ export class AccountDeletionSweepService {
       )
       UPDATE "AccountDeletion" a SET "reconcileClaimedUntil" = ${lease}
       FROM picked p WHERE a."wawuUserId" = p."wawuUserId"
-      RETURNING a."wawuUserId", a."purgeAttempts", a."status", a."purgeAfter", p."prev"`;
+      RETURNING a."wawuUserId", a."purgeAttempts", a."status", a."purgeAfter", a."identityMarkedAt", p."prev"`;
     // RETURNING has no order of its own: oldest check first, then oldest due.
     return rows.sort(
       (x, y) =>
@@ -539,7 +589,7 @@ export class AccountDeletionSweepService {
     row: DueDeletion,
     now: Date,
     guard: PassGuard,
-  ): Promise<'purged' | 'blocked' | 'identityPending' | 'skipped'> {
+  ): Promise<PurgeOutcome> {
     try {
       return await this.purgeSteps(row, now, guard);
     } finally {
@@ -555,8 +605,20 @@ export class AccountDeletionSweepService {
     row: DueDeletion,
     now: Date,
     guard: PassGuard,
-  ): Promise<'purged' | 'blocked' | 'identityPending' | 'skipped'> {
+  ): Promise<PurgeOutcome> {
     const id = row.wawuUserId;
+
+    // SETTINGS-08 (G-SETTINGS-08-1): never purge an account whose deletion
+    // WAWU ID has not confirmed started. Without it a sign-in in WAWU ID would
+    // cancel nothing while the Hub deleted the data. The Hub waits and says so;
+    // the pass above has just asked WAWU ID again, and the next pass will.
+    if (row.identityMarkedAt === null) {
+      this.logger.warn(
+        `Deletion of ${id} is due but WAWU ID has not confirmed it started; nothing is purged until it does`,
+      );
+      await this.blocked(row, now, 'identity_unconfirmed');
+      return 'identityUnconfirmed';
+    }
 
     if (row.status === 'scheduled') {
       // Freeze first, then read the balance (round 5, R4-2): a wallet that is
@@ -591,6 +653,9 @@ export class AccountDeletionSweepService {
           wawuUserId: id,
           status: 'scheduled',
           purgeAfter: { lte: now },
+          // The confirmation is part of the claim (SETTINGS-08): a row cannot
+          // become `purging` without it, whatever read it earlier.
+          identityMarkedAt: { not: null },
         },
         data: { status: 'purging' },
       });
