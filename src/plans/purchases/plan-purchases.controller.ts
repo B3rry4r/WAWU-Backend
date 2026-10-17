@@ -132,8 +132,8 @@ export class PlanPurchasesController {
    * The purchase still going through for the caller, or `purchase: null`
    * (ME-13, M15): a payment still confirming, or confirmed and not yet
    * opened, the same ones that make a second purchase `payment_in_progress`.
-   * Declared before the id so `pending` is never read as one. Needs no
-   * wallet: a person with none has nothing going through.
+   * Declared before the id, so the word `pending` is not taken for an id. It
+   * needs no wallet: a person with none has nothing going through.
    */
   @Get('pending')
   @Header('Cache-Control', 'no-store')
