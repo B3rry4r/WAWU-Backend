@@ -72,6 +72,13 @@ describe('a private community pass: the rules (INBOX-24, R-63)', () => {
         COMMUNITY_PASS_MAX_KOBO: '1000',
       }).maxKobo,
     ).toBe(90_000);
+    // A person reads these: the naira sign, never the letter N (INBOX-24 round 2).
+    expect(passPriceProblem(DEFAULT_PASS_MIN_KOBO - 1, b)).toBe(
+      'The monthly price must be at least ₦100.',
+    );
+    expect(passPriceProblem(DEFAULT_PASS_MAX_KOBO + 1, b)).toBe(
+      'The monthly price can be at most ₦500,000.',
+    );
     for (const m of [
       passPriceProblem(0, b),
       passPriceProblem(1, b),

@@ -32,6 +32,7 @@ import { WalletPaymentService } from '../../../money/payments/wallet-payment.ser
 import { isPushed } from '../../../push/push-policy';
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
 import { CommunityModule } from '../../community.module';
+import { CommunityService } from '../../community.service';
 import { CommunityRoomsService } from '../../rooms/community-rooms.service';
 import { CommunityPassModule } from '../community-pass.module';
 import { CommunityPassReminderService } from '../community-pass-reminder.service';
@@ -118,6 +119,7 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
   let holds: WalletHoldService;
   let reminders: CommunityPassReminderService;
   let rooms: CommunityRoomsService;
+  let communities: CommunityService;
   const nuvion = new NuvionSeamStandIn();
   const logger = new QuietLogger();
   const users: string[] = [];
@@ -345,6 +347,7 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
     holds = moduleRef.get(WalletHoldService);
     reminders = moduleRef.get(CommunityPassReminderService);
     rooms = moduleRef.get(CommunityRoomsService);
+    communities = moduleRef.get(CommunityService);
     // WAWU's own money beyond what is held (its shares and fees).
     nuvion.operational.availableKobo = 5_000_000n;
   });
@@ -827,6 +830,103 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
     ).toBe(0);
     expect((await messages(member, id)).status).toBe(403);
     await expectLedgerMatchesNuvion([member]);
+  });
+
+  it('a member the host removed cannot come back on their own, by joining or by paying; the host lets them back by approving (Q-43 untouched)', async () => {
+    const host = await person(0, false);
+    const member = await person(5_000_000);
+    const id = await room(host);
+    await pay(member, id);
+    expect((await messages(member, id)).status).toBe(200);
+    const debitsBefore = sendsFrom(member).length;
+    const balanceBefore = available(member);
+    // A quote taken before the removal.
+    const staleQuote = await quoteOf(member, id);
+
+    // The host's routes sit behind the creator-account guard; the service is
+    // what they call.
+    await communities.removeMember(id, host.id, member.id);
+    expect((await messages(member, id)).status).toBe(403);
+
+    // Joining again does not put them back, however many days are left.
+    for (let i = 0; i < 2; i += 1) {
+      const back = await request(app.getHttpServer())
+        .post(`${API}/communities/${id}/join`)
+        .set('Authorization', member.auth);
+      expect(back.status).toBe(200);
+      expect(body<{ status: string }>(back).data!.status).toBe('pending');
+    }
+    expect((await messages(member, id)).status).toBe(403);
+    expect(
+      body<{ role: string }>(await get(member, `/communities/${id}/room`)).data!
+        .role,
+    ).toBe('pending');
+    // Paying again does not put them back either, and takes nothing.
+    const noQuote = await get(member, `/communities/${id}/pass/quote`);
+    expect(noQuote.status).toBe(409);
+    expect(reasonOf(noQuote)).toBe('target_not_payable');
+    const noPay = await buy(member, id, staleQuote);
+    expect(noPay.status).toBe(409);
+    expect(reasonOf(noPay)).toBe('target_not_payable');
+    expect(String(body<unknown>(noPay).message)).not.toContain('—');
+    expect(sendsFrom(member)).toHaveLength(debitsBefore);
+    expect(available(member)).toBe(balanceBefore);
+    expect(await passRows(id, member)).toHaveLength(1);
+    expect(
+      body<CommunityPassView>(await get(member, `/communities/${id}/pass`))
+        .data,
+    ).toMatchObject({ canBuy: false, canRenew: false });
+
+    // The host sees the request and may keep them out: declining changes nothing.
+    const queue = await communities.listJoinRequests(id, host.id, 1, 20);
+    expect(queue.items.map((r) => r.userWawuId)).toEqual([member.id]);
+    expect(
+      await communities.declineJoinRequest(id, host.id, member.id),
+    ).toEqual({ declined: true });
+    const stillOut = await request(app.getHttpServer())
+      .post(`${API}/communities/${id}/join`)
+      .set('Authorization', member.auth);
+    expect(body<{ status: string }>(stillOut).data!.status).toBe('pending');
+    expect((await messages(member, id)).status).toBe(403);
+
+    // The host lets them back the way a room already allows: approve.
+    const approved = await communities.approveJoinRequest(
+      id,
+      host.id,
+      member.id,
+    );
+    expect(approved.status).toBe('joined');
+    expect((await messages(member, id)).status).toBe(200);
+    // Nothing was refunded or charged along the way.
+    expect(sendsFrom(member)).toHaveLength(debitsBefore);
+    expect(available(member)).toBe(balanceBefore);
+    expect(await passRows(id, member)).toHaveLength(1);
+  });
+
+  it('removing someone from an open room or an older private room is exactly what it was: the row goes, and they can ask again', async () => {
+    const host = await person(0, false);
+    const member = await person(0, false);
+    const noPrice = await room(host, null);
+    await prisma.communityMembership.create({
+      data: {
+        userWawuId: member.id,
+        communityId: noPrice,
+        status: 'joined',
+        joinedAt: new Date(),
+      },
+    });
+    expect(await communities.removeMember(noPrice, host.id, member.id)).toEqual(
+      { removed: true },
+    );
+    expect(
+      await prisma.communityMembership.count({
+        where: { communityId: noPrice, userWawuId: member.id },
+      }),
+    ).toBe(0);
+    const ask = await request(app.getHttpServer())
+      .post(`${API}/communities/${noPrice}/join`)
+      .set('Authorization', member.auth);
+    expect(body<{ status: string }>(ask).data!.status).toBe('pending');
   });
 
   it('the host types the price when the room is made: private only, inside the bounds, stored with the room', async () => {

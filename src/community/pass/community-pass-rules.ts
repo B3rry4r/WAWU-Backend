@@ -65,9 +65,9 @@ export function passPriceProblem(
   if (!Number.isSafeInteger(priceKobo) || priceKobo <= 0)
     return 'Set a monthly price above zero.';
   if (priceKobo < bounds.minKobo)
-    return `The monthly price must be at least N${(bounds.minKobo / 100).toLocaleString('en-NG')}.`;
+    return `The monthly price must be at least ₦${(bounds.minKobo / 100).toLocaleString('en-NG')}.`;
   if (priceKobo > bounds.maxKobo)
-    return `The monthly price can be at most N${(bounds.maxKobo / 100).toLocaleString('en-NG')}.`;
+    return `The monthly price can be at most ₦${(bounds.maxKobo / 100).toLocaleString('en-NG')}.`;
   return null;
 }
 

@@ -328,6 +328,11 @@ export class CommunityService {
     return { joined: false };
   }
 
+  /** True when the room sells a monthly pass (INBOX-24, R-63). */
+  private async sellsPass(id: string): Promise<boolean> {
+    return (await this.passAccess.roomsWithPass([id])).has(id);
+  }
+
   async join(id: string, userWawuId: string): Promise<CommunityMembership> {
     const community = await this.prisma.community.findUnique({
       where: { id },
@@ -348,10 +353,12 @@ export class CommunityService {
 
     // INBOX-24 (R-63). A private room that sells a pass has no request and no
     // host approval: a person is in while their pass runs. Joining here is
-    // only for someone whose pass is still running (they left, or an older
-    // request is still pending); everyone else buys a pass.
-    if ((await this.passAccess.roomsWithPass([id])).has(id)) {
-      if (existing?.status === 'joined') return existing;
+    // only for someone whose pass is still running and who has no row (they
+    // left); everyone else buys a pass. A row that exists is returned as it
+    // is: `pending` is a member the host removed, and only the host lets them
+    // back.
+    if (await this.sellsPass(id)) {
+      if (existing) return existing;
       const until = await this.passAccess.passUntil(id, userWawuId);
       if (!passIsActive(until, new Date())) {
         throw new ConflictException(PASS_REQUIRED_MESSAGE);
@@ -364,7 +371,8 @@ export class CommunityService {
           status: 'joined',
           joinedAt: new Date(),
         },
-        update: { status: 'joined', joinedAt: new Date() },
+        // A row that appeared in between is left exactly as it is.
+        update: {},
       });
     }
 
@@ -633,6 +641,12 @@ export class CommunityService {
     if (membership?.status === 'joined') {
       throw new ConflictException(ALREADY_APPROVED);
     }
+    if (membership && (await this.sellsPass(id))) {
+      // INBOX-24 round 2. In a room that sells a pass a pending row is a
+      // member the host removed, and declining keeps them out: deleting the
+      // row would let them join again while their pass runs.
+      return { declined: true };
+    }
     if (membership) {
       // INBOX-01: delete only while still pending, so a decline racing an
       // approval cannot remove someone the approval just let in, and of
@@ -697,6 +711,19 @@ export class CommunityService {
       throw new BadRequestException(
         'The host cannot be removed from their own community.',
       );
+    }
+
+    if (await this.sellsPass(id)) {
+      // INBOX-24 round 2 (R-63). In a room that sells a pass the person may
+      // hold days they paid for, and a deleted row would let them join again
+      // at once. They go back to a pending request instead: out of the room
+      // until the host approves them, the way a room already lets someone in.
+      // Money is untouched (a refund on removal is Q-43, the owner's).
+      await this.prisma.communityMembership.updateMany({
+        where: { communityId: id, userWawuId, status: 'joined' },
+        data: { status: 'pending', joinedAt: null },
+      });
+      return { removed: true };
     }
 
     await this.prisma.communityMembership.deleteMany({

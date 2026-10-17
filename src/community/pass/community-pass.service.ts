@@ -47,6 +47,9 @@ export const PASS_REFUND_CONDITION = 'pass_granted';
 export const PASS_ROOM_NOT_FOUND = 'We could not find that room.';
 export const PASS_NOT_SOLD = 'This room does not sell a pass.';
 export const PASS_OWN_ROOM = 'You host this room, so you do not need a pass.';
+/** A removed member cannot buy their way back; the host lets them in. No em-dash: a person reads it. */
+export const PASS_REMOVED =
+  'The host has removed you from this room. Ask the host to let you back in.';
 export const PASS_PAYMENT_NOT_FOUND = 'We could not find that payment.';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -132,6 +135,8 @@ export class CommunityPassService implements OnModuleInit {
       ? null
       : await this.access.passUntil(communityId, viewerWawuId);
     const sellsPass = community.passPrice !== null;
+    const removed =
+      !isHost && sellsPass && (await this.isRemoved(viewerWawuId, communityId));
     return {
       communityId,
       sellsPass,
@@ -141,8 +146,8 @@ export class CommunityPassService implements OnModuleInit {
       periodDays: PASS_PERIOD_DAYS,
       passUntil: until ? until.toISOString() : null,
       active: passIsActive(until, new Date()),
-      canRenew: sellsPass && !isHost && until !== null,
-      canBuy: sellsPass && !isHost,
+      canRenew: sellsPass && !isHost && !removed && until !== null,
+      canBuy: sellsPass && !isHost && !removed,
       isHost,
     };
   }
@@ -219,6 +224,20 @@ export class CommunityPassService implements OnModuleInit {
   // The payment's side: what is priced, and what is delivered
   // -------------------------------------------------------------------------
 
+  /** True when the host removed the person from this pass room (their row is pending). */
+  private async isRemoved(
+    wawuUserId: string,
+    communityId: string,
+  ): Promise<boolean> {
+    const row = await this.prisma.communityMembership.findUnique({
+      where: {
+        userWawuId_communityId: { userWawuId: wawuUserId, communityId },
+      },
+      select: { status: true },
+    });
+    return row?.status === 'pending';
+  }
+
   /** Prices the pass in the target. Moves nothing. */
   private async resolve(lookup: PayableLookup): Promise<PayableTarget> {
     if (!UUID.test(lookup.targetId))
@@ -245,6 +264,10 @@ export class CommunityPassService implements OnModuleInit {
       throw new MoneyError('target_not_found', PASS_ROOM_NOT_FOUND);
     if (!community.passPrice)
       throw new MoneyError('target_not_payable', PASS_NOT_SOLD);
+    // A pending row in a pass room is a member the host removed. Paying does
+    // not undo that, and nothing is taken from someone who would not get in.
+    if (await this.isRemoved(lookup.payerWawuUserId, community.id))
+      throw new MoneyError('target_not_payable', PASS_REMOVED);
     const party = (
       await loadMoneyParties(this.prisma, this.wawuId, [community.hostWawuId])
     ).get(community.hostWawuId);
