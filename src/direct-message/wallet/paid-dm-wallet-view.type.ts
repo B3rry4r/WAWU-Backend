@@ -21,6 +21,13 @@ export interface PaidQuestionDraftView {
   priceKobo: number;
   /** How long the creator has to reply once the question is sent. */
   replyWindowHours: number;
+  /**
+   * "Usually replies in": the median minutes this creator took to answer
+   * their last answered paid questions (G-146). Null until they have answered
+   * enough of them for a figure to mean anything, so the sheet leaves the
+   * line out rather than say a number that is mostly chance.
+   */
+  usualReplyMinutes: number | null;
 }
 
 /** `POST /dm/{creatorWawuId}/send/wallet` and `GET /dm/send/wallet/{id}/quote`: the pay sheet. */

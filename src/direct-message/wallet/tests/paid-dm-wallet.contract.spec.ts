@@ -797,4 +797,40 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
     ).toBe(1);
     expect(PAY_PIN).toHaveLength(4);
   });
+
+  it('I3 "Usually replies in": the quote carries the creator\'s usual reply time, and nothing until they have answered enough (G-146)', async () => {
+    const fan = await h.person(RICH);
+    const c = await creator();
+    const first = await quoted(fan, c);
+    expect(first.question.usualReplyMinutes).toBeNull();
+    // Three answered questions, 30, 60 and 90 minutes to answer: the median is 60.
+    for (const minutes of [30, 60, 90]) {
+      const respondedAt = new Date(Date.now() - 5 * 60_000);
+      const sentAt = new Date(respondedAt.getTime() - minutes * 60_000);
+      await h.prisma.directMessage.create({
+        data: {
+          creatorWawuId: c.id,
+          senderWawuId: fan.id,
+          text: 'Earlier question',
+          amount: PRICE / 100,
+          status: 'responded',
+          sentAt,
+          deadlineAt: new Date(sentAt.getTime() + 24 * HOUR),
+          respondedAt,
+          responseText: 'Answered.',
+          flutterwaveTxRef: `i17-usual-${randomUUID()}`,
+        },
+      });
+    }
+    const again = await quoted(fan, c);
+    expect(again.question.usualReplyMinutes).toBe(60);
+    // The reopened sheet reads the same figure.
+    const reopened = await h.get(
+      fan,
+      `/dm/send/wallet/${again.question.id}/quote`,
+    );
+    expect(
+      body<PaidQuestionQuoteView>(reopened).data!.question.usualReplyMinutes,
+    ).toBe(60);
+  });
 });
