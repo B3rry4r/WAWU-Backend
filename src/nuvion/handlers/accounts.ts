@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import type { PrismaService } from '../../common/prisma/prisma.service';
+import type { WalletReadyTeller } from '../../money/opening/wallet-ready-notice';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import {
   isNuvionId,
@@ -90,6 +91,13 @@ export class NuvionAccountRecorder {
       moneyTimeoutMs: number;
       resendSafetyMs: number;
     },
+    /**
+     * WALLET-40: writes the person's "your account number is ready" notice in
+     * the transaction that records their wallet (provider-neutral:
+     * src/money/opening/wallet-ready-notice.ts). Left out, no notice is
+     * written (a spec that does not care).
+     */
+    private readonly tellReady?: WalletReadyTeller,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -414,6 +422,12 @@ export class NuvionAccountRecorder {
           },
           data: { state: 'open', failure: null },
         });
+        // WALLET-40: the number reaches the person here, after the opening
+        // began, so they are told once. This is the only place a Nuvion
+        // wallet row is created, inside the transaction that holds the
+        // entity's row: a repeated or racing delivery finds the wallet and
+        // returns above, so it never writes a second notice.
+        if (this.tellReady) await this.tellReady(tx, entity.wawuUserId);
         return done('the account number is active; the wallet is recorded');
       });
     } catch (e) {

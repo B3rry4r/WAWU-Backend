@@ -682,6 +682,22 @@ export function composeNotification(
     /** WALLET-39. The correction of a `money_in` notice. */
     case 'money_in_reversed':
       return composeMoneyInReversed(event);
+
+    /**
+     * WALLET-40 (owner answer 31). Fixed words: no account number, name or
+     * bank on a lock screen. Routed by `kind` (a tap opens Wallet).
+     */
+    case 'wallet_ready':
+      return {
+        ...base,
+        title: 'Your account number is ready',
+        body: 'Tap to see it in your wallet.',
+        tone: 'success',
+        amount: null,
+        creditsCount: null,
+        actionLabel: null,
+        ...NO_RICH_MEDIA,
+      };
   }
 }
 
@@ -965,7 +981,9 @@ export type NotificationKind =
   // WALLET-39: and from another person, as earnings, as a refund.
   | 'money_in'
   // WALLET-39: a credit the person was told about was taken back.
-  | 'money_in_reversed';
+  | 'money_in_reversed'
+  // WALLET-40: the person's account number is ready, after opening began.
+  | 'wallet_ready';
 
 /**
  * ME-10. Somebody rated a piece for the first time (a changed rating is not
@@ -1040,6 +1058,20 @@ interface MoneyInReversedEvent {
 }
 
 /**
+ * WALLET-40 (owner answer 31, 17 Oct 2026; BACKEND_GAPS G-823). The person's
+ * account number became ready after their wallet opening had started: A28
+ * promises "This usually takes a few minutes" and this is the alert. Recipient:
+ * the person. Written once per wallet, in the transaction that records the
+ * wallet (src/money/opening/wallet-ready-notice.ts), and never for a number
+ * that was ready in the request that opened the wallet. It carries no number,
+ * name or target: a lock screen shows it, and the tap opens Wallet by `kind`.
+ */
+interface WalletReadyEvent {
+  kind: 'wallet_ready';
+  userWawuId: string;
+}
+
+/**
  * ME-10. What a notification can be about: the thing opening it opens (M31).
  * `content` a piece, `paid_question` a paid question (DirectMessage),
  * `community` a room, `profile` a person, `tgif_day` (HOME-16) a day of TGIF
@@ -1080,6 +1112,7 @@ export type NotificationEvent = (
   | IdentityReviewEvent
   | MoneyInEvent
   | MoneyInReversedEvent
+  | WalletReadyEvent
 ) & {
   about?: NotificationAbout;
 };
@@ -1115,6 +1148,9 @@ export const NOTIFICATION_CATEGORY: Record<
   money_in: 'money',
   money_in_reversed: 'money',
   tgif_daily: 'other',
+  // WALLET-40. Default (agent), owner may override: under "Money", beside the
+  // wallet it opens.
+  wallet_ready: 'money',
 };
 
 /** The NotificationTarget row emit() writes beside a notification, minus its id. */
