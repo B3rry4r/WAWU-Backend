@@ -523,7 +523,11 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       opts.email === undefined ? `nuv02-${id}@example.com` : opts.email;
     const bvn = opts.bvn ?? digits(11);
     const nin = digits(11);
-    const idNumber = `A${digits(8)}`;
+    // FIX-58: `Q`, not `A`. The stand-in's ids are 5 prefix characters and 21
+    // uppercase hex digits, which hold `A` + 8 digits now and then, and the
+    // stored-column scan below would find such a run inside an id. `Q` is
+    // not a hex digit and starts no id prefix, so no stored id can hold it.
+    const idNumber = `Q${digits(8)}`;
     secrets.push(bvn, nin, idNumber);
     const b: Body = {
       bvn,
@@ -4106,6 +4110,35 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       }
     });
 
+    /**
+     * FIX-58: a table the scan found a secret in, named by column and by the
+     * SHAPE of the secret (digits shown as 9: `A99999999` is an ID number,
+     * `99999999999` a BVN or NIN), never the secret. Only runs when the scan
+     * has already failed, so a flake says where it matched. (A match that
+     * spans two columns of the row names the table alone.)
+     */
+    async function whichColumns(
+      table: string,
+      patterns: string[],
+    ): Promise<string[]> {
+      const columns = await prisma.$queryRaw<Array<{ column_name: string }>>`
+        SELECT column_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = ${table}`;
+      const found: string[] = [];
+      for (const { column_name } of columns) {
+        const matched = await prisma.$queryRawUnsafe<Array<{ p: string }>>(
+          `SELECT p FROM unnest($1::text[]) AS p WHERE EXISTS (SELECT 1 FROM "${table}" t WHERE t."${column_name}"::text LIKE p)`,
+          patterns,
+        );
+        for (const shape of new Set(
+          matched.map(({ p }) => p.replace(/%/g, '').replace(/\d/g, '9')),
+        )) {
+          found.push(`${table}.${column_name} (secret shaped ${shape})`);
+        }
+      }
+      return found.length > 0 ? found : [table];
+    }
+
     it('in no stored column of any table', async () => {
       const tables = await prisma.$queryRaw<Array<{ table_name: string }>>`
         SELECT table_name FROM information_schema.tables
@@ -4117,7 +4150,8 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
           `SELECT count(*) AS n FROM "${table_name}" t WHERE row_to_json(t)::text LIKE ANY($1::text[])`,
           patterns,
         );
-        if (Number(r.n) > 0) hits.push(table_name);
+        if (Number(r.n) > 0)
+          hits.push(...(await whichColumns(table_name, patterns)));
       }
       expect(hits).toEqual([]);
     });

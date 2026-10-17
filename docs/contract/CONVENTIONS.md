@@ -1725,7 +1725,19 @@ Fintava or on Nuvion, whichever the server runs.
   paid for is delivered (the feature's record that the buyer owns it is then
   in place), never at the moment the provider confirms. The claim is taken before
   the feature's "already owned" rule is read for the last time, and given
-  back (nothing sent, failed, the key freed) when that now refuses.
+  back (nothing sent, failed, the key freed) when that now refuses. The
+  quote (`GET /money/payments/quote`) of a SCHOOL FEE answers the same `409
+  payment_in_progress` with `reason.paymentId` when the SAME payer holds the
+  open payment for the SAME target (FIX-58), so a second phone is never
+  shown a Pay the PIN tap would refuse; it is read after the item (an item
+  gone or not payable is that answer first) and before anything is priced.
+  Every other kind is quoted as before, open payment or not (the 409 meets
+  the payer at the PIN tap); a kind joins `QUOTE_REFUSES_OPEN_KINDS`
+  (`src/money/payments/wallet-payment.service.ts`) when its app caller reads
+  the 409 at the quote. Another person's open payment, or this payer's for
+  another item, changes nothing. The routes of the features that quote
+  through the same service (plans, points packs, bills, credit packs, event
+  orders) are unchanged.
 - **Before money moves**, in order, none of which stores anything: the
   wallet gate, the Idempotency-Key, the PIN, the body, the target, the
   quote, the merchant cap (`amount_out_of_range`), an open payment for the
