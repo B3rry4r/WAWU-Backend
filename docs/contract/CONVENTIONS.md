@@ -1212,9 +1212,10 @@ this applies and every answer is as in section 9.
   rule can read `false`. With `null` there is no BVN name, and the
   verified name is the wallet's own account name as the provider gave it (a
   wallet opened under Nuvion keeps no BVN name; the provider verified the
-  identity when it opened it): the account is saved when every word of that
-  name is a word of the bank's account name, in any order, and refused with
-  the same code otherwise; with no wallet account name either it is refused
+  identity when it opened it): the account is saved when every word of the
+  bank's account name is a word of that name, in any order, and at least two
+  words match (a bank often leaves a middle name out; one word alone does
+  not match), and refused with the same code otherwise (round 3); with no wallet account name either it is refused
   with a plain reason (WALLET-37 round 2). The flag itself stays `null`.
   `null` when there is no BVN name to compare with: no passed check, no name kept, `IDENTITY_HASH_KEY` unset, the
   wallet opened under a different BVN check (`FintavaWalletOpening.bvnHash`)
