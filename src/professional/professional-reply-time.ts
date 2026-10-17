@@ -1,3 +1,7 @@
+import { Prisma } from '../../generated/prisma/client';
+import { DmStatus } from '../../generated/prisma/enums';
+import type { PrismaService } from '../common/prisma/prisma.service';
+
 /**
  * "Usually replies in" on a professional's card (H10, "~3h usual reply") and
  * in the directory (PROS-02).
@@ -52,4 +56,51 @@ export function toReplyStats(
     usualReplyMinutes: Math.max(1, Math.ceil(medianSeconds / 60)),
     answeredCount,
   };
+}
+
+/**
+ * Median reply time over each professional's most recent answered paid
+ * messages, one query for the whole page. Per PERSON, not per listing: a paid
+ * message goes to the person, and the same person answers it whichever field
+ * they were found in. The directory (PROS-02) and the feed's professional
+ * card (HOME-07, H10) read it through here, so the two can never disagree.
+ */
+export async function replyTimesFor(
+  prisma: Pick<PrismaService, '$queryRaw'>,
+  wawuUserIds: string[],
+): Promise<Map<string, ReplyTimeStats>> {
+  if (wawuUserIds.length === 0) return new Map();
+  const rows = await prisma.$queryRaw<
+    Array<{
+      creatorWawuId: string;
+      medianSeconds: number | null;
+      answered: number;
+    }>
+  >`
+    SELECT "creatorWawuId",
+           percentile_cont(0.5) WITHIN GROUP (ORDER BY "seconds") AS "medianSeconds",
+           COUNT(*)::int AS "answered"
+    FROM (
+      SELECT "creatorWawuId",
+             EXTRACT(EPOCH FROM ("respondedAt" - "sentAt"))::double precision AS "seconds",
+             ROW_NUMBER() OVER (
+               PARTITION BY "creatorWawuId" ORDER BY "respondedAt" DESC, "id"
+             ) AS "rank"
+      FROM "DirectMessage"
+      WHERE "creatorWawuId" IN (${Prisma.join(wawuUserIds)})
+        AND "status" = ${DmStatus.responded}::"DmStatus"
+        AND "respondedAt" IS NOT NULL
+        AND "respondedAt" >= "sentAt"
+    ) AS "answered"
+    WHERE "rank" <= ${REPLY_TIME_DEFAULTS.sample}
+    GROUP BY "creatorWawuId"`;
+  return new Map(
+    rows.map((r) => [
+      r.creatorWawuId,
+      toReplyStats(
+        r.medianSeconds === null ? null : Number(r.medianSeconds),
+        Number(r.answered),
+      ),
+    ]),
+  );
 }

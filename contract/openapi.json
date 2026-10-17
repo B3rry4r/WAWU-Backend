@@ -47290,6 +47290,14 @@
           },
           "dmResponseHours": {
             "type": "number"
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "usualReplyMinutes": {
+            "type": "number",
+            "nullable": true
           }
         },
         "required": [
@@ -47307,7 +47315,9 @@
           "ratingAvg",
           "reviewCount",
           "dmPrice",
-          "dmResponseHours"
+          "dmResponseHours",
+          "city",
+          "usualReplyMinutes"
         ]
       },
       "FollowingCount": {
@@ -47405,6 +47415,45 @@
           "cannotRateReason"
         ]
       },
+      "DetailCreator": {
+        "type": "object",
+        "properties": {
+          "headline": {
+            "type": "string",
+            "nullable": true
+          },
+          "followerCount": {
+            "type": "number"
+          },
+          "wawuId": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          }
+        },
+        "required": [
+          "headline",
+          "followerCount",
+          "wawuId",
+          "displayName",
+          "handle",
+          "avatarUrl",
+          "verification"
+        ]
+      },
       "ContentDetail": {
         "type": "object",
         "properties": {
@@ -47439,6 +47488,9 @@
           },
           "rating": {
             "$ref": "#/components/schemas/RatingState"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/DetailCreator"
           }
         },
         "required": [
@@ -47450,7 +47502,8 @@
           "studentCount",
           "freePreview",
           "lessons",
-          "rating"
+          "rating",
+          "creator"
         ]
       },
       "ProductDraftView": {
