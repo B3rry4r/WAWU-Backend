@@ -1119,6 +1119,34 @@ model DirectMessage {
   @@index([refundStatus, refundLockedAt])
 }
 
+/// A PAID QUESTION NOT PAID FOR YET (task INBOX-17, R-19).
+///
+/// A fan writes a question, the server prices it (the creator's price, the
+/// provider's charge on top) and the fan pays it from the wallet. The words
+/// have to wait somewhere in between, and the creator's inbox must not show a
+/// question nobody paid for, so they wait here and not in `DirectMessage`.
+/// `id` is the id of the `DirectMessage` the payment will make and the
+/// payment's `targetId` (kind `paid_dm`). The row is never changed; the
+/// creator's price and window are read again when the payment is claimed, the
+/// window snapshotted here is the one the fan was shown. An abandoned draft
+/// (no payment ever made for it) is removed by the sweep after a fortnight.
+model PaidDmDraft {
+  id                  String   @id @default(uuid())
+  senderWawuId        String
+  creatorWawuId       String
+  text                String
+  /// How long the creator has to reply, in hours, as the fan was shown it.
+  responseWindowHours Int
+  /// The optional Idempotency-Key of the request that made the draft: one
+  /// tap, one draft.
+  requestKey          String?
+  createdAt           DateTime @default(now())
+
+  @@unique([senderWawuId, requestKey])
+  @@index([senderWawuId, creatorWawuId])
+  @@index([createdAt])
+}
+
 /// One creator reply bubble on a paid question (task INBOX-08). A question
 /// may carry several while its window is open. The first is also written to
 /// DirectMessage.responseText so the web's reading of that column is unchanged.

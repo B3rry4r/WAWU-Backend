@@ -9,6 +9,7 @@ import type {
   DmReplyModel as DmReply,
 } from '../../generated/prisma/models';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { DmAnsweredHooks } from './dm-answered-hooks';
 
 /** `first`: the legacy route, which answers a question once. `any`: INBOX-08, which adds bubbles while the window is open. */
 export type ReplyMode = 'first' | 'any';
@@ -31,9 +32,31 @@ export interface PostedReply {
  */
 @Injectable()
 export class DmReplyWriter {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly answered: DmAnsweredHooks,
+  ) {}
 
   async post(
+    creatorWawuId: string,
+    messageId: string,
+    text: string,
+    mode: ReplyMode,
+  ): Promise<PostedReply> {
+    const posted = await this.write(creatorWawuId, messageId, text, mode);
+    // The answer is committed. A question paid from the wallet now has its
+    // held price released to the creator (INBOX-17); a failure there never
+    // undoes the answer, and the hold sweep asks again.
+    if (posted.message.flutterwaveTxRef.startsWith('wallet:')) {
+      await this.answered.afterAnswered({
+        id: posted.message.id,
+        flutterwaveTxRef: posted.message.flutterwaveTxRef,
+      });
+    }
+    return posted;
+  }
+
+  private async write(
     creatorWawuId: string,
     messageId: string,
     text: string,

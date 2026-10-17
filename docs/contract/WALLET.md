@@ -134,7 +134,7 @@ payment onto the wallet.
 | `verification` | ME-18 | the tick: `creator` or `professional` | no | no |
 | `legal_fee` | LEGAL-05 | the legal request id | no | no |
 | `school_fee` | SCHOOLS-07 | the enrolment order id `POST /schools/enrolments` returns; the price is the course fee quoted when the place was held, and the 85/15 split (R-12) is recorded with the payment and its hold although the school is not on WAWU | no | until the intake starts |
-| `paid_dm` | INBOX-17 | the message id `POST /dm/:creatorWawuId/send` returns | no | until the creator answers |
+| `paid_dm` | INBOX-17 | the question id `POST /dm/{creatorWawuId}/send/wallet` returns (`POST /dm/:creatorWawuId/send` is the web's Flutterwave route and stays as it is); it is also the id of the message once it is sent | no | until the creator answers |
 | `event_ticket` | EVENTS-07 | the order id `POST /events/:id/orders/wallet` returns (`POST /events/:id/orders` is the web's Flutterwave route and stays as it is); one order holds a line per ticket type; a basket that costs nothing is issued with no payment (R-8) | no | until the event takes place |
 | `bill` | BILLS-04 | the bill id `POST /bills/wallet` returns (`POST /bills/init` is the web's Flutterwave route and stays as it is); the price moved is the bill, Fintava's bill charge and WAWU's bill fee, in one transfer (R-31) | no | until the biller delivers |
 | `tier`, `tier_bump` | TIER-03 | the terms: `tier-<tierId>`, `renew-<tierId>` or `upgrade-<fromTierId>-<tierId>` (`GET /plans/purchases/quote` builds it; `tier_bump` adds the checkout bump) | no | no (WAWU's own sale, no seller split; a payment whose plan cannot be granted when it confirms is refunded in full, docs/contract/PLANS.md section 8) |
@@ -239,6 +239,63 @@ Paying marks the stage paid with one conditional write and records
 `wallet:<payment id>` as the request's `consultationTxRef` or `serviceTxRef`.
 A fee that cannot be applied (the request was cancelled while the debit was
 confirming, the hour was given up, or it was paid another way) is paid back.
+
+#### Paid questions from the wallet (INBOX-17)
+
+A paid question is drafted, priced and paid with four new routes (the web's
+`POST /dm/{creatorWawuId}/send` and `POST /dm/{messageId}/send/verify` are
+unchanged). The kind is `paid_dm`; the target is the question id; the payee is
+the creator; the price is the creator's own (`CreatorState.dmPrice`), never the
+app's. The price is held (R-19) until the creator answers.
+
+- `POST /dm/{creatorWawuId}/send/wallet` `{ text }` (optional
+  `Idempotency-Key`): drafts the question and answers the pay sheet (I3):
+  `{ question: { id, creator, text, priceKobo, replyWindowHours }, payment }`
+  where `payment` is the wallet payment's quote (₦1,500 plus the provider's
+  charge is the total; `willBeHeld` is true). Nothing is reserved or debited,
+  and the creator's inbox does not show the question yet. The same key and
+  question answer the same draft; another question under that key is `409
+  idempotency_key_reused`. A creator who has not switched paid messages on,
+  one paused by the no-reply rule (INBOX-09), a block between the two and your
+  own account are `409 target_not_payable`; no creator is `404
+  target_not_found`; a question to this creator still waiting is `409
+  question_already_waiting` (G-75).
+- `GET /dm/send/wallet/{questionId}/quote`: the same answer again (I3
+  reopened, or a quote past its `expiresAt`).
+- `POST /dm/send/wallet/pay` `{ questionId, expectedTotalKobo, quoteToken }`
+  with `Idempotency-Key` and the PIN: 201 with the question (`status`
+  `pending`, `asked`, `failed`, `refunding` or `refunded`; `payment`; `sentAt`
+  and `deadlineAt` once it is sent). The same key and body answer the first
+  result again and charge once; two taps with two keys are `409
+  payment_in_progress`; two drafts to one creator paid at once are `409
+  question_already_waiting` on the second, decided in the payment's claim
+  under a lock.
+- `GET /dm/send/wallet/{questionId}`: the question as it stands, for the asker
+  only (`unpaid`, `pending`, `asked`, `answered`, `refunding`, `refunded`,
+  `failed`, `reversed`); what the app polls after `pending` and for I4 and I5.
+
+Paying holds the price in WAWU's own account. The question reaches the
+creator's inbox once, when the debit is confirmed: a `DirectMessage` row with
+`flutterwaveTxRef` `wallet:<payment id>`, the amount of the price in naira,
+and a deadline of the creator's reply window from that moment.
+
+- **The creator answers** (either reply route): the answer flips the question
+  `awaiting_response` to `responded` with one conditional write, and then the
+  hold is released: the creator's 85% (R-5) lands in their wallet, or waits for
+  the wallet they have not opened (R-11); WAWU keeps 15%. Further reply bubbles
+  ask nothing more.
+- **The window passes** with no answer: the question is flipped to `refunded`
+  by one conditional write and the hold is refunded: the fan gets the price
+  back, never the provider's charge on the payment (R-10). `dm_refunded` is
+  sent once, when the provider has confirmed the refund.
+- **Never both.** The two writes cannot both match one question, and the hold
+  refuses the second outcome after the first (`other_action_chosen`). A
+  minute sweep asks again for anything a request did not finish.
+- **A question that cannot be sent** (the creator went, switched paid
+  messages off, was paused or blocked the payer between the quote and the
+  confirmed debit) is paid back whole: the price and everything the payment
+  took return, and WAWU carries the charge.
+- The web's Flutterwave refund sweep leaves a wallet question alone.
 
 ## 2. The named schemas (G-1)
 

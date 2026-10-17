@@ -78,6 +78,8 @@ export class DmRefundService {
       where: {
         refundStatus: 'owed',
         refundAttempts: { lt: MAX_REFUND_ATTEMPTS },
+        // A question paid from the wallet is paid back through its hold (INBOX-17).
+        NOT: { flutterwaveTxRef: { startsWith: 'wallet:' } },
         OR: [{ refundLockedAt: null }, { refundLockedAt: { lt: staleBefore } }],
       },
       select: { id: true, refundLockedAt: true },

@@ -231,6 +231,9 @@ export const MONEY_ERROR_CODES = [
   // Buying event tickets (EVENTS-13): the buyer already holds the most open
   // paid ticket orders one event allows (an admin setting).
   'event_order_limit',
+  // Paying a question from the wallet (INBOX-17, G-75): the fan already has a
+  // question waiting on this creator, so another is not taken until it is answered or refunded.
+  'question_already_waiting',
   // Spending points on AI tools (POINTS-03): a cap stops the job; the person
   // has enough points, so there is no shortfall to buy.
   'points_cap_reached',

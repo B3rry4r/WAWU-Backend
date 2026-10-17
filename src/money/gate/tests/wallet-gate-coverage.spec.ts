@@ -223,6 +223,8 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET content/:id/unlock/wallet/quote',
       // INBOX-16: the pay sheet of a credit pack.
       'GET credits/purchase/wallet/quote',
+      // INBOX-17: the pay sheet of a paid question.
+      'GET dm/send/wallet/:questionId/quote',
       'GET events/orders/wallet/:orderId/quote',
       // LEGAL-05: the pay sheet of a legal fee.
       'GET legal/requests/:id/pay/wallet/quote',
@@ -258,6 +260,9 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST content/:id/unlock/wallet',
       // INBOX-16: a credit pack pays from the wallet.
       'POST credits/purchase/wallet',
+      // INBOX-17: a paid question is drafted and priced, then pays from the wallet.
+      'POST dm/:creatorWawuId/send/wallet',
+      'POST dm/send/wallet/pay',
       'POST events/orders/wallet/pay',
       // LEGAL-05: a legal fee pays from the wallet.
       'POST legal/requests/:id/pay/wallet',
@@ -293,6 +298,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST bills/wallet/pay',
       'POST content/:id/unlock/wallet',
       'POST credits/purchase/wallet',
+      'POST dm/send/wallet/pay',
       'POST events/orders/wallet/pay',
       'POST legal/requests/:id/pay/wallet',
       'POST money/approval/verify',

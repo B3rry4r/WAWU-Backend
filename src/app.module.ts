@@ -90,6 +90,7 @@ import { UnlockWalletModule } from './content-piece/wallet/unlock-wallet.module'
 import { LegalFeeWalletModule } from './legal/wallet/legal-fee-wallet.module';
 import { TipWalletModule } from './purchase/wallet/tip-wallet.module';
 import { EventWalletOrdersModule } from './event-ticketing/wallet/event-wallet-orders.module';
+import { PaidDmWalletModule } from './direct-message/wallet/paid-dm-wallet.module';
 import { PointsConvertModule } from './points/convert/points-convert.module';
 import { PointsSpendModule } from './points/spend/points-spend.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
@@ -439,6 +440,13 @@ import { PushModule } from './push/push.module';
     // deeper than EventController's `GET :id` and none matches a route of the web's
     // ticketing; listed after MoneyModule so no route registered before it moves.
     EventWalletOrdersModule,
+    // Ask a creator a paid question from the wallet (task INBOX-17): `dm/:creatorWawuId/send/wallet`
+    // (POST), `dm/send/wallet/pay`, `dm/send/wallet/:questionId/quote` and
+    // `dm/send/wallet/:questionId`, and the `paid_dm` payment kind. Every path is a longer
+    // literal than the web's `dm/:creatorWawuId/send` and `dm/:messageId/send/verify`, and none
+    // can be taken for `GET dm/:messageId`; listed after MoneyModule so no route registered
+    // before it moves.
+    PaidDmWalletModule,
     // Convert points to cash (task POINTS-04): `points/convert/quote`,
     // `points/convert` (POST) and `points/convert/{id}`, and the sweep that
     // finishes a conversion whose answer was lost. `points` is a first segment

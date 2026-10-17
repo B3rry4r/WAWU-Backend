@@ -267,6 +267,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'Community', column: 'hostWawuId', disposition: 'OWNED' },
   { model: 'Event', column: 'hostWawuId', disposition: 'OWNED' },
   { model: 'DirectMessage', column: 'senderWawuId', disposition: 'OWNED' },
+  // An unpaid paid question waits here for its payment (INBOX-17): the asker's, gone with them.
+  { model: 'PaidDmDraft', column: 'senderWawuId', disposition: 'OWNED' },
   { model: 'BillPayment', column: 'buyerWawuId', disposition: 'OWNED' },
   { model: 'ShopOrder', column: 'buyerWawuId', disposition: 'OWNED' },
   { model: 'EventOrder', column: 'buyerWawuId', disposition: 'OWNED' },
@@ -567,6 +569,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   },
   {
     model: 'DirectMessage',
+    column: 'creatorWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  {
+    model: 'PaidDmDraft',
     column: 'creatorWawuId',
     disposition: 'COUNTERPARTY',
   },
