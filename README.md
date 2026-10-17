@@ -343,7 +343,7 @@ writes to `superadmin` and `reviewer`.
 | `GET /admin/ads/:id/report` | Window, how much of it has run, what was done to it, and `delivery` plus `days` (`{ day, views, taps, skips }`, oldest first, empty days omitted) over `from` and `to`; `range` echoes what they became. |
 | `PATCH /admin/ads/:id` | Edit a draft or a paused campaign; the audit row records each changed field's before and after. A save that would leave the campaign with no artwork (clearing it, or a campaign saved before ADS-07 that still has none) is the same 422. |
 | `DELETE /admin/ads/:id` | A draft only. Its audit rows stay. |
-| `POST /admin/ads/:id/schedule`, `/pause`, `/resume`, `/end` | The state machine in `src/admin/ads/ad-campaign-state.ts`. An illegal move, or a repeat, is a 409 whose `reason` names the code and the statuses allowed. |
+| `POST /admin/ads/:id/schedule`, `/pause`, `/resume`, `/end` | The state machine in `src/admin/ads/ad-campaign-state.ts`. An illegal move, or a repeat, is a 409 whose `reason` names the code and the statuses allowed. `schedule` and `resume` refuse a campaign with no artwork (R-59): the same 422 "Add artwork before you save this campaign" (`reason.code` `artwork_required`), nothing changed; `pause` and `end` are never refused for it. |
 
 `GET /ads?placement=` serves a campaign only when it has artwork. `tgif_card` and
 `today_slot` answer one card (or `data: null`); `explore_slider` (ADS-07)

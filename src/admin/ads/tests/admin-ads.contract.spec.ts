@@ -1270,6 +1270,58 @@ describe('Admin ads contract (ADS-06)', () => {
       expect((await serveFor('tgif_card')) as Json).toMatchObject({ id: c.id });
     });
 
+    it('schedule refuses a campaign with no artwork (422, the same sentence) and changes nothing; with artwork it goes on', async () => {
+      const c = await legacy('draft', { startsAt: iso(hoursFromNow(-1)) });
+      const audits = (await auditOf(c.id)).length;
+      const refused = await act(c.id, 'schedule');
+      expect(refused.status).toBe(422);
+      expect(refused.body.message).toBe(NO_ARTWORK);
+      expect(refused.body.reason).toEqual({ code: 'artwork_required' });
+      expect((await rowOf(c.id))?.status).toBe('draft');
+      expect(await auditOf(c.id)).toHaveLength(audits);
+      expect(await serveFor('tgif_card')).toBeNull();
+
+      const fixed = await http()
+        .patch(`${BASE}/${c.id}`)
+        .set(asSuper())
+        .send({
+          creative: { artworkUrl: 'https://cdn.example.com/ads/fixed.png' },
+        });
+      expect(fixed.status).toBe(200);
+      expect((await act(c.id, 'schedule')).status).toBe(200);
+      expect((await serveFor('tgif_card')) as Json).toMatchObject({ id: c.id });
+    });
+
+    it('resume refuses a campaign with no artwork (422, the same sentence) and changes nothing; with artwork it goes back on air', async () => {
+      const c = await legacy('paused');
+      const audits = (await auditOf(c.id)).length;
+      const refused = await act(c.id, 'resume');
+      expect(refused.status).toBe(422);
+      expect(refused.body.message).toBe(NO_ARTWORK);
+      expect(refused.body.reason).toEqual({ code: 'artwork_required' });
+      expect((await rowOf(c.id))?.status).toBe('paused');
+      expect(await auditOf(c.id)).toHaveLength(audits);
+      expect(await serveFor('tgif_card')).toBeNull();
+
+      const fixed = await http()
+        .patch(`${BASE}/${c.id}`)
+        .set(asSuper())
+        .send({
+          creative: { artworkUrl: 'https://cdn.example.com/ads/fixed.png' },
+        });
+      expect(fixed.status).toBe(200);
+      expect((await act(c.id, 'resume')).status).toBe(200);
+      expect((await rowOf(c.id))?.status).toBe('live');
+    });
+
+    it('pause and end still work on a campaign with no artwork (taking it off air is never refused)', async () => {
+      const live = await legacy('live');
+      expect((await act(live.id, 'pause')).status).toBe(200);
+      expect((await act(live.id, 'end')).status).toBe(200);
+      const draft = await legacy('draft');
+      expect((await act(draft.id, 'end')).status).toBe(200);
+    });
+
     it('campaigns saved without artwork are not served, and are listed for fixing', async () => {
       const bare = await legacy('live', { placement: 'today_slot' });
       const ok = await inStatus('live', { placement: 'tgif_card' });

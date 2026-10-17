@@ -637,6 +637,9 @@ export class AdminAdsService {
         if (!row.creative) {
           throw conflict('no_creative', 'This campaign has no card.');
         }
+        // R-59 (G-761): a campaign saved before the rule, with no picture,
+        // does not go on air either. Pausing and ending are never refused.
+        if (!row.creative.artworkUrl) throw artworkRequired();
         if (row.endsAt.getTime() <= now.getTime()) {
           throw conflict(
             'window_over',
