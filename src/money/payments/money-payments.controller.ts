@@ -53,7 +53,9 @@ export class MoneyPaymentsController {
    * wallet yet, or an item not priced in naira, is target_not_payable.
    * While the running provider's fees are not set, fees_not_set before
    * anything else (NUV-07); `withinDailyLimit` and `remainingTodayKobo` say
-   * where today's purchase limit stands.
+   * where today's purchase limit stands. When the payer already has an open
+   * payment for the item (a second phone, FIX-58), `payment_in_progress` with
+   * `reason.paymentId`, as the payment itself answers it: no live Pay is drawn.
    */
   @Get('payments/quote')
   @Header('Cache-Control', 'no-store')
@@ -65,13 +67,14 @@ export class MoneyPaymentsController {
     'target_not_payable',
     'amount_out_of_range',
     'fees_not_set',
+    'payment_in_progress',
   )
   @RequireFeesSet()
   quote(
     @CurrentWallet() wallet: OpenWallet,
     @Query() query: PaymentQuoteQueryDto,
   ): Promise<PaymentQuoteView> {
-    return this.payments.quote(wallet, query);
+    return this.payments.quote(wallet, query, { refuseIfOpen: true });
   }
 
   /**

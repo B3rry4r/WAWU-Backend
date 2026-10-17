@@ -16662,7 +16662,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable, payment_in_progress",
             "content": {
               "application/json": {
                 "schema": {
@@ -16697,7 +16697,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "What the pay sheet shows before the PIN (H14, H17): the price from the\nserver's own record of the item, the wallet provider's charge, the\ntotal, the balance and the shortfall, and a signed quote the payment\nsends back. Nothing is reserved. A total above MERCHANT_MAX_PER_TXN_KOBO\nis amount_out_of_range. A kind whose feature has not moved onto the\nwallet yet, or an item not priced in naira, is target_not_payable.\nWhile the running provider's fees are not set, fees_not_set before\nanything else (NUV-07); `withinDailyLimit` and `remainingTodayKobo` say\nwhere today's purchase limit stands.",
+        "summary": "What the pay sheet shows before the PIN (H14, H17): the price from the\nserver's own record of the item, the wallet provider's charge, the\ntotal, the balance and the shortfall, and a signed quote the payment\nsends back. Nothing is reserved. A total above MERCHANT_MAX_PER_TXN_KOBO\nis amount_out_of_range. A kind whose feature has not moved onto the\nwallet yet, or an item not priced in naira, is target_not_payable.\nWhile the running provider's fees are not set, fees_not_set before\nanything else (NUV-07); `withinDailyLimit` and `remainingTodayKobo` say\nwhere today's purchase limit stands. When the payer already has an open\npayment for the item (a second phone, FIX-58), `payment_in_progress` with\n`reason.paymentId`, as the payment itself answers it: no live Pay is drawn.",
         "tags": [
           "MoneyPayments"
         ],

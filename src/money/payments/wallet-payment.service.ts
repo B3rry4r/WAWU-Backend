@@ -349,10 +349,22 @@ export class WalletPaymentService implements OnModuleInit {
   // The quote (H14, W10, H17)
   // -------------------------------------------------------------------------
 
-  /** What the pay sheet shows before the PIN. Nothing is reserved. */
+  /**
+   * What the pay sheet shows before the PIN. Nothing is reserved.
+   *
+   * `refuseIfOpen` (the `GET /money/payments/quote` route sets it, FIX-58):
+   * when this payer already has an open payment for this item, the quote is
+   * `409 payment_in_progress` with that payment's id, the answer `pay` gives,
+   * so a second phone is never shown a Pay the PIN tap would refuse. It is
+   * read after the item (an item gone or not payable is that answer first,
+   * as for `pay`) and before anything is priced. Another person's open
+   * payment for the item is not this payer's: their quote is unchanged. The
+   * features that quote through here for their own routes do not set it.
+   */
   async quote(
     wallet: OpenWallet,
     q: PaymentQuoteQueryDto,
+    options: { refuseIfOpen?: boolean } = {},
   ): Promise<PaymentQuoteView> {
     const { target } = await this.target(
       wallet.wawuUserId,
@@ -360,6 +372,9 @@ export class WalletPaymentService implements OnModuleInit {
       q.targetId,
       q.amountKobo,
     );
+    if (options.refuseIfOpen) {
+      await this.refuseIfOpen(openKeyOf(wallet.wawuUserId, q.kind, q.targetId));
+    }
     const fee = this.fees.quote(
       wallet.wawuUserId,
       { kind: 'purchase', amountKobo: target.priceKobo },
