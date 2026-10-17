@@ -13,6 +13,7 @@ import { StatementService } from './statements/statement.service';
 import { WawuIdMailRelay } from '../admin/notifications/email/email-provider';
 import { LedgerModule } from './ledger/ledger.module';
 import { MoneyInNoticeModule } from './money-in-notice/money-in-notice.module';
+import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { FeeSettings } from './fees/fee-config';
 import { FeeQuoteService } from './fees/fee-quote.service';
@@ -229,6 +230,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     NuvionDocumentsModule,
     // Money in, told once (task WALLET-10): the sweep over credited ledger rows.
     MoneyInNoticeModule,
+    // The admin settings (task HOME-17): the name checks an hour are read live.
+    PlanSettingsModule,
   ],
   controllers: [
     MoneyPinController,

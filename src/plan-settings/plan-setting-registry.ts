@@ -48,8 +48,10 @@ const LIMIT = {
   maxMonths: 120,
   /** One hundred percent. */
   percent: 100,
-  /** Most people in any count of members or checks. */
+  /** Most people in any count of members. */
   maxPeople: 1_000_000,
+  /** Most bank name checks one person may make in an hour (WALLET-37's limit on the old key). */
+  maxNameChecks: 1000,
 } as const;
 
 const DAYS_PER_YEAR = 365;
@@ -637,7 +639,7 @@ export function buildRegistry(
     'Account name checks one person can make in an hour',
     'count',
     ['POST /money/banks/name-check (R-51, WALLET-37)'],
-    whole(1, LIMIT.maxPeople),
+    whole(1, LIMIT.maxNameChecks),
   );
   other(
     'popular_community_min_members',
@@ -671,9 +673,15 @@ export function buildRegistry(
     'tgif_notification_time',
     'Morning time of the TGIF notification (Africa/Lagos)',
     'time',
-    ['HOME-16'],
+    ['HOME-16 (R-59, owner answer 32)'],
     time,
-    'TGIF-NOTIFICATION-TIME',
+  );
+  other(
+    'tgif_notice_retention_days',
+    'Days a daily TGIF notice is kept before it is cleared',
+    'days',
+    ['the daily TGIF notice clean-up (HOME-17)'],
+    days,
   );
   other(
     'earnings.daily_move_floor_kobo',
