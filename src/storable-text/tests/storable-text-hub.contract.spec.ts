@@ -1,9 +1,4 @@
-import {
-  INestApplication,
-  RequestMethod,
-  Type,
-  ValidationPipe,
-} from '@nestjs/common';
+import { INestApplication, RequestMethod, Type } from '@nestjs/common';
 import {
   GUARDS_METADATA,
   METHOD_METADATA,
@@ -12,6 +7,7 @@ import {
 } from '@nestjs/common/constants';
 import { MetadataScanner, ModulesContainer } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
+import * as ts from 'typescript';
 import { ThrottlerGuard } from '@nestjs/throttler';
 import { getMetadataStorage } from 'class-validator';
 import { readFileSync } from 'node:fs';
@@ -19,9 +15,7 @@ import type { Server } from 'node:http';
 import { join } from 'node:path';
 import request from 'supertest';
 import { AppModule } from '../../app.module';
-import { applyHubHttpSettings } from '../../hub-app-options';
-import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
-import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
+import { configureHubApp } from '../../hub-app-config';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   adminFixtures,
@@ -34,10 +28,7 @@ import {
   startTestJwksServer,
   type TestJwksServer,
 } from '../../evg-score/tests/test-jwks-server';
-import {
-  checkStorableTextOnEveryRoute,
-  STORABLE_TEXT_PIPE,
-} from '../storable-text.pipe';
+import { STORABLE_TEXT_PIPE } from '../storable-text.pipe';
 
 /**
  * FIX-17, on the Hub itself: the FULL AppModule, composed as src/main.ts
@@ -183,20 +174,12 @@ describe('Text Postgres cannot take, on every Hub route (FIX-17)', () => {
       .useValue({ canActivate: () => true })
       .compile();
     app = moduleRef.createNestApplication();
-    // trust proxy as on the Hub, so each request below is its own caller
+    // The Hub's own configuration (src/hub-app-config.ts: trust proxy,
+    // prefix, ValidationPipe, the storable-text check, filter, interceptor),
+    // the function src/main.ts calls, so this app cannot differ from the Hub's.
+    // Trust proxy is in it, so each request below is its own caller
     // (X-Forwarded-For) and no limit is reached.
-    applyHubHttpSettings(app);
-    app.setGlobalPrefix('api/hub');
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-      }),
-    );
-    checkStorableTextOnEveryRoute(app);
-    app.useGlobalFilters(new AllExceptionsFilter());
-    app.useGlobalInterceptors(new ResponseInterceptor());
+    configureHubApp(app);
     await app.init();
     routes = mountedRoutes(app);
 
@@ -237,18 +220,40 @@ describe('Text Postgres cannot take, on every Hub route (FIX-17)', () => {
     return token ? r.set('Authorization', `Bearer ${token}`) : r;
   };
 
-  it('src/main.ts installs the check after the ValidationPipe and before the Hub listens', () => {
-    // This file builds its app as main.ts does; the built Hub itself is
-    // checked by the recorded sweep. This pins the one line that wires it.
-    const main = readFileSync(join(__dirname, '../../main.ts'), 'utf8');
+  /** A source file as the compiler reads it, comments gone: a comment never counts. */
+  const code = (file: string): string => {
+    const text = readFileSync(join(__dirname, file), 'utf8');
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    return ts.createPrinter({ removeComments: true }).printFile(sf);
+  };
+
+  it('src/main.ts configures the Hub through configureHubApp, right after creating it, and never inits the app itself (FIX-17 D1)', () => {
+    // Nest reads each route's arguments at init(), so the storable-text check
+    // has to be in before it. This file's app is built by configureHubApp, the
+    // function main.ts calls, so the check is exercised below; this pins the
+    // call and its place in main.ts, ignoring comments.
+    const main = code('../../main.ts');
     const at = (s: string) => main.indexOf(s);
-    expect(at('checkStorableTextOnEveryRoute(app);')).toBeGreaterThan(
-      at('app.useGlobalPipes('),
+    expect(at('configureHubApp(app)')).toBeGreaterThan(-1);
+    expect(main.match(/configureHubApp\(app\)/g)).toHaveLength(1);
+    expect(at('app.listen(')).toBeGreaterThan(at('configureHubApp(app)'));
+    // Nothing between creating the app and configuring it, and no init() anywhere.
+    const created = main.slice(
+      at('NestFactory.create('),
+      at('configureHubApp(app)'),
     );
-    expect(at('app.useGlobalPipes(')).toBeGreaterThan(-1);
-    expect(at('await app.listen(')).toBeGreaterThan(
-      at('checkStorableTextOnEveryRoute(app);'),
+    expect(created).not.toMatch(/\binit\(|\blisten\(|\buse\(|await app/);
+    expect(main).not.toMatch(/\.init\(/);
+  });
+
+  it('configureHubApp installs the check once and never inits or listens (FIX-17 D1)', () => {
+    const config = code('../../hub-app-config.ts');
+    expect(config.match(/checkStorableTextOnEveryRoute\(app\)/g)).toHaveLength(
+      1,
     );
+    expect(config).not.toMatch(/\.init\(|\.listen\(/);
+    expect(config).toMatch(/app\.useGlobalFilters\(/);
+    expect(config).toMatch(/app\.useGlobalInterceptors\(/);
   });
 
   it('puts the check last, once, on every argument of every route the Hub mounts', () => {
@@ -345,9 +350,10 @@ describe('Text Postgres cannot take, on every Hub route (FIX-17)', () => {
           const res = await get(path, token);
           seen.push(`${res.status} GET ${path}`);
           // 400 is a value check (this task's or an earlier one); 401, 403,
-          // 409 and 423 are a guard or the wallet gate, before any value is read.
+          // 409 and 423 are a guard or the wallet gate, before any value is read;
+          // 410 is a retired route (OPS-08's shop), which reads no value (D3).
           const allowed = text
-            ? [400, 401, 403, 409, 423].includes(res.status)
+            ? [400, 401, 403, 409, 410, 423].includes(res.status)
             : res.status < 500;
           expect([`GET ${path}`, res.status, allowed]).toEqual([
             `GET ${path}`,
