@@ -12,8 +12,10 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { deriveVerificationState } from '../common/verification/verification-state';
 import type { DmOtherParty } from '../common/types';
 import { DirectMessageService } from './direct-message.service';
+import { DmCreatorEarningHooks } from './dm-creator-earning-hooks';
 import { DmReplyWriter } from './dm-reply-writer';
 import type {
+  PaidDmCreatorEarning,
   PaidDmQuestion,
   PaidDmQueueItem,
   PaidDmQueuePage,
@@ -21,6 +23,7 @@ import type {
   PaidDmThread,
   PaidDmThreadDetail,
   PaidDmThreadPage,
+  PaidDmWaiting,
 } from './paid-dm-view.type';
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -90,7 +93,25 @@ export class PaidDmService {
     private readonly prisma: PrismaService,
     private readonly dms: DirectMessageService,
     private readonly replyWriter: DmReplyWriter,
+    private readonly earnings: DmCreatorEarningHooks,
   ) {}
+
+  /** How many questions wait on the creator and what they were paid (I9): over all of them, whatever the page. */
+  async waiting(creatorWawuId: string): Promise<PaidDmWaiting> {
+    const sum = await this.prisma.directMessage.aggregate({
+      where: {
+        creatorWawuId,
+        status: 'awaiting_response',
+        deadlineAt: { gt: new Date() },
+      },
+      _count: { _all: true },
+      _sum: { amount: true },
+    });
+    return {
+      count: sum._count._all,
+      amountKobo: toKobo(sum._sum.amount ?? 0),
+    };
+  }
 
   /** The creator's own waiting list: soonest deadline first, with the total. */
   async queue(
@@ -200,7 +221,7 @@ export class PaidDmService {
     const [thread] = await this.toThreads(me, side, [agg]);
     return {
       thread,
-      questions: page.map((r) => this.toQuestion(me, r, r.replies)),
+      questions: await this.toQuestions(me, page),
       nextCursor:
         rows.length > limit && last ? encodeCursor(last.sentAt, last.id) : null,
     };
@@ -217,7 +238,8 @@ export class PaidDmService {
       where: { id: messageId },
       include: { replies: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
     });
-    return this.toQuestion(creatorWawuId, row, row.replies);
+    const [question] = await this.toQuestions(creatorWawuId, [row]);
+    return question;
   }
 
   // ── internals ────────────────────────────────────────────────────────────
@@ -232,10 +254,30 @@ export class PaidDmService {
       : { creatorWawuId: me, senderWawuId: other };
   }
 
+  /** The questions as the caller reads them; a creator's reads carry what they earn by each (INBOX-18). */
+  private async toQuestions(
+    me: string,
+    rows: Array<DirectMessageRow & { replies: DmReplyRow[] }>,
+  ): Promise<PaidDmQuestion[]> {
+    const mine = rows.filter((r) => r.creatorWawuId === me);
+    const earning = await this.earnings.resolve(
+      me,
+      mine.map((r) => ({
+        id: r.id,
+        flutterwaveTxRef: r.flutterwaveTxRef,
+        status: r.status,
+      })),
+    );
+    return rows.map((r) =>
+      this.toQuestion(me, r, r.replies, earning.get(r.id) ?? null),
+    );
+  }
+
   private toQuestion(
     me: string,
     r: DirectMessageRow,
     replies: DmReplyRow[],
+    creatorEarning: PaidDmCreatorEarning | null,
   ): PaidDmQuestion {
     return {
       id: r.id,
@@ -251,6 +293,7 @@ export class PaidDmService {
         text: x.text,
         createdAt: x.createdAt.toISOString(),
       })),
+      creatorEarning,
     };
   }
 

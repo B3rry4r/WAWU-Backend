@@ -35,6 +35,7 @@ import type {
   PaidDmStanding,
   PaidDmThreadDetail,
   PaidDmThreadPage,
+  PaidDmWaiting,
 } from './paid-dm-view.type';
 
 /**
@@ -59,6 +60,13 @@ export class PaidDmController {
     @Query() query: PaidDmPageQueryDto,
   ): Promise<PaidDmQueuePage> {
     return this.paidDm.queue(user.sub, query.cursor, query.limit);
+  }
+
+  /** How many questions wait on the creator and what they were paid (I9), over every one of them. */
+  @Get('waiting')
+  @UseGuards(CreatorAccountGuard)
+  waiting(@CurrentUser() user: WawuJwtClaims): Promise<PaidDmWaiting> {
+    return this.paidDm.waiting(user.sub);
   }
 
   /** The creator's own standing on unanswered paid questions: warned, paused, and when it ends (R-13). */
