@@ -329,6 +329,11 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletHoldService,
     HoldViewService,
     MoneyCheckService,
+    // INBOX-15: paying a money request is a send to the requester, made by
+    // the same service (WALLET-07) with a hook that ties the request to the
+    // send inside the send's claim; the recipient check answers before the PIN.
+    WalletTransferService,
+    TransferRecipients,
   ],
 })
 export class MoneyModule {}

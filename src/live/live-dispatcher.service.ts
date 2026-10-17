@@ -70,6 +70,8 @@ export class LiveDispatcher {
         return this.chatMessage(signal.chatId, signal.messageId);
       case 'chat.read':
         return this.chatRead(signal.chatId, signal.readerWawuId);
+      case 'money_request.updated':
+        return this.moneyRequestUpdated(signal.chatId, signal.requestId);
       case 'community.message':
         return this.communityMessage(signal.communityId, signal.messageId);
       case 'legal.thread':
@@ -98,6 +100,47 @@ export class LiveDispatcher {
         const event: LiveEvent = {
           type: 'chat.message',
           cursor: encodeLiveCursor(row.createdAt),
+          message,
+        };
+        this.connections.send(wawuId, event);
+      }),
+    );
+  }
+
+  /**
+   * A request was paid, declined or cancelled: both people in the chat get
+   * the bubble as they see it now, and nobody once either has blocked the
+   * other (as for a message).
+   */
+  private async moneyRequestUpdated(
+    chatId: string,
+    requestId: string,
+  ): Promise<void> {
+    const [request, chat] = await Promise.all([
+      this.prisma.moneyRequest.findUnique({ where: { id: requestId } }),
+      this.prisma.chatConversation.findUnique({ where: { id: chatId } }),
+    ]);
+    if (!request || !chat || !request.messageId || !request.changedAt) return;
+    const here = [chat.userAWawuId, chat.userBWawuId].filter((id) =>
+      this.connections.has(id),
+    );
+    if (here.length === 0) return;
+    if (
+      await this.blocks.isBlockedEitherWay(chat.userAWawuId, chat.userBWawuId)
+    )
+      return;
+    const row = await this.prisma.chatMessage.findUnique({
+      where: { id: request.messageId },
+    });
+    if (!row) return;
+    await Promise.all(
+      here.map(async (wawuId) => {
+        const [message] = await this.chats.viewMessages(wawuId, [row]);
+        if (!message) return;
+        const event: LiveEvent = {
+          type: 'money_request.updated',
+          cursor: encodeLiveCursor(request.changedAt as Date),
+          chatId,
           message,
         };
         this.connections.send(wawuId, event);
