@@ -28461,6 +28461,58 @@
         ]
       }
     },
+    "/api/hub/admin/plan-settings": {
+      "get": {
+        "operationId": "AdminPlanSettingsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanSettingsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every setting with its value, its default and the screens that print it.",
+        "tags": [
+          "AdminPlanSettings"
+        ]
+      },
+      "patch": {
+        "operationId": "AdminPlanSettingsController_update",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePlanSettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanSettingsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Changes one or more settings. A null value puts a setting back to its\ndefault. All or nothing: one bad value refuses the request. Writes one\naudit row per setting that changed, and the next quote uses the new figure\nwith no restart. `@HttpCode(200)`: nothing is created, and the\nResponseInterceptor stamps `statusCode: 200` into the body regardless.",
+        "tags": [
+          "AdminPlanSettings"
+        ]
+      }
+    },
     "/api/hub/admin/featured-creators/{wawuId}": {
       "put": {
         "operationId": "AdminFeaturedCreatorsController_put",
@@ -36621,6 +36673,22 @@
           }
         }
       },
+      "UpdatePlanSettingsDto": {
+        "type": "object",
+        "properties": {
+          "settings": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Setting key to its new value; null puts the setting back to its default.",
+            "example": {
+              "plan.extra_products.price_kobo": 150000
+            }
+          }
+        },
+        "required": [
+          "settings"
+        ]
+      },
       "PutFeaturedCreatorDto": {
         "type": "object",
         "properties": {
@@ -39572,6 +39640,17 @@
           },
           "name": {
             "type": "string"
+          },
+          "benefits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "eventDate": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -48523,6 +48602,184 @@
           "courses",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "MultiplierLevel": {
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "number"
+          },
+          "x": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "min",
+          "x"
+        ]
+      },
+      "MilestoneStep": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "points": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "count",
+          "points"
+        ]
+      },
+      "PlanSettingView": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "date",
+              "kobo",
+              "count",
+              "points",
+              "percent",
+              "days",
+              "months",
+              "hours",
+              "time",
+              "lines",
+              "levels",
+              "milestones"
+            ]
+          },
+          "usedBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MultiplierLevel"
+                }
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MilestoneStep"
+                }
+              }
+            ],
+            "nullable": true
+          },
+          "default": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MultiplierLevel"
+                }
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MilestoneStep"
+                }
+              }
+            ],
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "default",
+              "set"
+            ]
+          },
+          "provisional": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "why"
+            ],
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "key",
+          "group",
+          "label",
+          "unit",
+          "usedBy",
+          "value",
+          "default",
+          "source",
+          "provisional",
+          "updatedAt"
+        ]
+      },
+      "PlanSettingsView": {
+        "type": "object",
+        "properties": {
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanSettingView"
+            }
+          }
+        },
+        "required": [
+          "settings"
         ]
       },
       "AdCardView": {

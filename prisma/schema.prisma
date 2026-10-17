@@ -2381,6 +2381,8 @@ enum AdminOpsResource {
   health_subscription
   /// A person's hold on a BVN during a Nuvion wallet opening (NUV-02 round 3).
   wallet_identity_hold
+  /// A launch figure set in admin settings (TIER-06, R-65).
+  plan_setting
 }
 
 /// Every consequential ops action that used to be anonymous behind
@@ -2412,6 +2414,9 @@ enum AdminOpsAction {
   /// Support released one person's BVN hold at once (NUV-02 round 3). `detail`
   /// carries the opening's state before and after, never a BVN or its hash.
   wallet_identity_hold_released
+  /// One or more launch figures were set, or put back to their default
+  /// (TIER-06, R-65). `detail` carries each key with its old and new value.
+  plan_setting_set
 }
 
 /// Attribution for the operator surfaces that moved from AdminKeyGuard onto
@@ -3784,6 +3789,25 @@ model PlatformSettings {
   professionalVerificationPriceNgn Int @default(2000)
 
   updatedAt DateTime @updatedAt
+}
+
+/// A launch figure an admin has set (TIER-06, R-65): one row per setting key,
+/// holding only the keys somebody changed. A key with no row reads its default
+/// from the seed (`plans.config.json` and `plan-settings.seed.json`).
+///
+/// Key and value are checked by the registry in src/plan-settings before they
+/// are written and again when they are read, so the JSON column is not a
+/// free-form bag: an unknown key or a value of the wrong kind never reaches
+/// a reader. Deleting the row puts the setting back to its default.
+model PlanSetting {
+  key   String @id
+  value Json
+
+  /// Snapshot of the admin who last set it (no foreign key, as AdminOpsAudit).
+  updatedByAdminId String?
+  updatedAt        DateTime @updatedAt
+
+  @@index([updatedAt])
 }
 
 /// The code somebody arrived with, remembered against their account.

@@ -17,7 +17,7 @@
       "days": 30,
       "products": 3,
       "bonus_points": 100,
-      "bonus_expiry_days": 90,
+      "bonus_expiry_days": 365,
       "price": { "kobo": 100000, "cents": 300 },
       "event_pass": "watch_apply",
       "badge": { "id": "verified", "numbered": false },
@@ -30,7 +30,7 @@
       "days": 180,
       "products": 6,
       "bonus_points": 300,
-      "bonus_expiry_days": 180,
+      "bonus_expiry_days": 365,
       "price": { "kobo": 300000, "cents": 900 },
       "event_pass": "maker_pass",
       "badge": { "id": "verified", "numbered": false },
@@ -93,7 +93,7 @@
     "receptionist_voice_per_min": { "points": 400, "per": "minute" }
   },
   "caps": {
-    "daily_points_per_user": 10000,
+    "daily_points_per_user": 5000,
     "max_chars_per_job": 5000,
     "max_audio_min_per_job": 10
   },
