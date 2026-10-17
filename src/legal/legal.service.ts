@@ -65,18 +65,23 @@ const REQUOTE_SIGNED =
   'The client has already signed the engagement letter at the current price, so the quote can no longer be changed.';
 const REQUOTE_PAID =
   'This work is already paid for, so its quote can no longer be changed.';
+const REQUOTE_CANCELLED = 'This request is cancelled, so it cannot be quoted.';
 const REQUOTE_CHANGED =
   'This request changed while the quote was being saved, so the quote was not changed. Open it again to see where it stands.';
+const SIGN_CHANGED =
+  'This request changed while you were signing, so nothing was signed. Open the engagement letter again to see where it stands.';
 
 /**
- * Why a request can no longer be re-quoted, or null when it still can: the
- * letter is signed, or the work is paid or under way (LEGAL-06 F1).
+ * Why a request can no longer be re-quoted, or null when it still can: it is
+ * cancelled (a closed request is not reopened by a quote), the letter is
+ * signed, or the work is paid or under way (LEGAL-06 F1).
  */
 function requoteRefusal(r: {
   status: string;
   contractSignedAt: Date | null;
   servicePaidAt: Date | null;
 }): string | null {
+  if (r.status === 'cancelled') return REQUOTE_CANCELLED;
   if (
     r.servicePaidAt ||
     r.status === 'in_progress' ||
@@ -551,7 +556,7 @@ export class LegalRequestsService {
         id,
         contractSignedAt: null,
         servicePaidAt: null,
-        status: { notIn: [...REQUOTE_LOCKED_STATUSES] },
+        status: { notIn: [...REQUOTE_LOCKED_STATUSES, 'cancelled'] },
       },
       data: {
         quoteAmount: dto.amountNaira,
@@ -797,8 +802,20 @@ export class LegalRequestsService {
       requestId: record.id,
     });
 
-    const updated = await this.prisma.legalRequest.update({
-      where: { id: record.id },
+    // The letter above was written from the quote and status just read. The
+    // signature goes down only if the matter is still exactly that (LEGAL-06
+    // round 3): a re-quote, a cancel or another signature that committed
+    // since the read would otherwise leave a letter at one price on a matter
+    // priced, and charged, at another. Nothing is held across the two steps;
+    // the write itself decides.
+    const { count } = await this.prisma.legalRequest.updateMany({
+      where: {
+        id: record.id,
+        contractSignedAt: null,
+        status: record.status,
+        quoteAmount: record.quoteAmount,
+        quoteNote: record.quoteNote,
+      },
       data: {
         contractText,
         contractSignedAs: fullName,
@@ -806,6 +823,20 @@ export class LegalRequestsService {
         contractSignedIp: ip ?? null,
         status: 'contract_signed',
       },
+    });
+    if (count === 0) {
+      const now = await this.prisma.legalRequest.findUnique({
+        where: { id: record.id },
+        select: { contractSignedAt: true },
+      });
+      throw new ConflictException(
+        now?.contractSignedAt
+          ? 'This contract has already been signed.'
+          : SIGN_CHANGED,
+      );
+    }
+    const updated = await this.prisma.legalRequest.findUniqueOrThrow({
+      where: { id: record.id },
     });
     return this.toResponse(updated);
   }

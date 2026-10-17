@@ -2821,7 +2821,8 @@ days; signing in during them cancels it (WAWU ID, SETTINGS-08).
   - `open_hold`: a held payment (paid DM, ticket, bill) where the person is
     the payer or the payee (R-19). `reason.openHolds` counts them.
   - `waiting_earnings`: a completed sale whose 85% has not reached their
-    wallet (R-11, `WalletPayment.payeeSettledAt` unset, no hold).
+    wallet (R-11, `WalletPayment.payeeSettledAt` unset, no open hold), or a
+    community host's share of spent credits still owed (WALLET-17).
     `reason.waitingEarnings` counts them. A person with no wallet can have
     these.
   - `payment_in_progress`: a payment of theirs with no final answer.
