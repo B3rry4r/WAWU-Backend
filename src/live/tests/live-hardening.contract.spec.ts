@@ -408,38 +408,45 @@ describe('Live updates, hardening (contract, INBOX-02)', () => {
           stdio: ['ignore', 'pipe', 'pipe'],
         },
       );
-      let output = '';
-      child.stdout.on('data', (d: Buffer) => (output += d.toString()));
-      child.stderr.on('data', (d: Buffer) => (output += d.toString()));
-      const exited = new Promise<{
-        code: number | null;
-        signal: string | null;
-      }>((resolve) =>
-        child.on('exit', (code, signal) => resolve({ code, signal })),
-      );
-      const started = Date.now();
-      while (!output.includes('listening') && Date.now() - started < 60000) {
-        await settle(100);
+      try {
+        let output = '';
+        child.stdout.on('data', (d: Buffer) => (output += d.toString()));
+        child.stderr.on('data', (d: Buffer) => (output += d.toString()));
+        const exited = new Promise<{
+          code: number | null;
+          signal: string | null;
+        }>((resolve) =>
+          child.on('exit', (code, signal) => resolve({ code, signal })),
+        );
+        const started = Date.now();
+        while (!output.includes('listening') && Date.now() - started < 60000) {
+          await settle(100);
+        }
+        expect(output).toContain('listening');
+        // The fixture asked for port 0 and says which port it got.
+        const fixturePort = Number(/listening on (\d+)/.exec(output)?.[1]);
+        expect(fixturePort).toBeGreaterThan(0);
+        const live = await Promise.all(
+          [ada, bola, ada].map((p) => Client.open(fixturePort, p.token)),
+        );
+        sockets.push(...live);
+        const sentAt = Date.now();
+        child.kill('SIGTERM');
+        const closes = await Promise.all(live.map((c) => c.closedWith(5000)));
+        for (const c of closes) expect(c.code).toBe(1001);
+        const result = await Promise.race([
+          exited,
+          settle(5000).then(() => 'hung' as const),
+        ]);
+        expect(result).not.toBe('hung');
+        expect(Date.now() - sentAt).toBeLessThan(5000);
+        expect(result).toEqual(expect.objectContaining({ signal: 'SIGTERM' }));
+      } finally {
+        // a failure before the SIGTERM above must not leave a listening fixture behind (SWEEP-APP-1, FIX-37 L3)
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL');
+        }
       }
-      expect(output).toContain('listening');
-      // The fixture asked for port 0 and says which port it got.
-      const fixturePort = Number(/listening on (\d+)/.exec(output)?.[1]);
-      expect(fixturePort).toBeGreaterThan(0);
-      const live = await Promise.all(
-        [ada, bola, ada].map((p) => Client.open(fixturePort, p.token)),
-      );
-      sockets.push(...live);
-      const sentAt = Date.now();
-      child.kill('SIGTERM');
-      const closes = await Promise.all(live.map((c) => c.closedWith(5000)));
-      for (const c of closes) expect(c.code).toBe(1001);
-      const result = await Promise.race([
-        exited,
-        settle(5000).then(() => 'hung' as const),
-      ]);
-      expect(result).not.toBe('hung');
-      expect(Date.now() - sentAt).toBeLessThan(5000);
-      expect(result).toEqual(expect.objectContaining({ signal: 'SIGTERM' }));
     }, 90000);
   });
 

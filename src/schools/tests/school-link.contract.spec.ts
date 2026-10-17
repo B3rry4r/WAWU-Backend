@@ -10,7 +10,12 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { EXPORT_SECTIONS } from '../../data-export-request/data-export-sections';
 import * as linkHelpers from '../school-link';
-import { LINK_CODE_ALPHABET, newLinkCode, trackedUrl } from '../school-link';
+import {
+  isWebAddress,
+  LINK_CODE_ALPHABET,
+  newLinkCode,
+  trackedUrl,
+} from '../school-link';
 import { SchoolsPublicModule } from '../schools-public.module';
 
 /**
@@ -151,6 +156,32 @@ describe('Apply on their site: the link and the recorded click (SCHOOLS-10)', ()
       expect(trackedUrl('http://greenfield.ng', 'wawu-7KQ2')).toBe(
         'http://greenfield.ng/?ref=wawu-7KQ2',
       );
+    });
+
+    it("keeps the school's query exactly as written, and drops only the pairs named ref (SWEEP-APP-1 SCHOOLS-10 L1)", () => {
+      expect(
+        trackedUrl('https://greenfield.ng/apply?name=Jos%E9&flag', 'wawu-7KQ2'),
+      ).toBe('https://greenfield.ng/apply?name=Jos%E9&flag&ref=wawu-7KQ2');
+      expect(
+        trackedUrl(
+          'https://greenfield.ng/apply?a=1&ref=x&sig=ab%2Bc%3D&%72ef=y&b=ref',
+          'wawu-7KQ2',
+        ),
+      ).toBe(
+        'https://greenfield.ng/apply?a=1&sig=ab%2Bc%3D&b=ref&ref=wawu-7KQ2',
+      );
+    });
+
+    it('refuses an address with a username or a password in it (SWEEP-APP-1 SCHOOLS-10 L2)', () => {
+      for (const bad of [
+        'https://user:secret@greenfield.ng/apply',
+        'https://user@greenfield.ng/apply',
+        'http://:secret@greenfield.ng',
+      ]) {
+        expect(isWebAddress(bad)).toBe(false);
+        expect(trackedUrl(bad, 'wawu-7KQ2')).toBeNull();
+      }
+      expect(isWebAddress('https://greenfield.ng/apply')).toBe(true);
     });
 
     it('refuses an address that is not a web address', () => {

@@ -138,7 +138,8 @@ function digits(n: number): string {
 /**
  * Every client address this file draws differs from every other it has drawn
  * in the run. The opening routes count tries per address per hour in the
- * database, so two equal draws (about 1 run in 70) turned a test into a 429
+ * database, so two equal draws (any two of the five old draws met in about 1
+ * run in 25, and only some pairs failed a test) turned a test into a 429
  * (FIX-29). A pick already used is dropped and drawn again; the ranges the
  * callers pass in are unchanged.
  */
@@ -654,6 +655,15 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     await app.init();
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
+    // Tries an earlier run left in an hour's window (it died before its afterAll)
+    // would count against a fresh draw; the keys are hashes, so every recent
+    // address-keyed try goes. A test database only (SWEEP-APP-1, FIX-33 L3).
+    await prisma.bvnCheckAttempt.deleteMany({
+      where: {
+        addressKey: { not: null },
+        createdAt: { gt: new Date(Date.now() - 3_600_000) },
+      },
+    });
     handler = moduleRef.get(NuvionOpeningHandler);
   });
 

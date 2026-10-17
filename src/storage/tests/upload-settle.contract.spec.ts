@@ -586,9 +586,9 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
         where: { key },
         data: { createdAt: new Date(Date.now() - 3_600_000) },
       });
-      const service = app.get(StorageService) as unknown as {
+      const service = app.get<{
         bucketHolds: (key: string, why: string) => Promise<string>;
-      };
+      }>(StorageService);
       const asked = jest
         .spyOn(service, 'bucketHolds')
         .mockImplementationOnce(async () => {
