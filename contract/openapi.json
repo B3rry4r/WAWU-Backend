@@ -28985,11 +28985,11 @@
             "in": "path",
             "schema": {
               "enum": [
-                "verse",
                 "reality",
                 "remember",
                 "prayer",
-                "takeaway"
+                "takeaway",
+                "verse"
               ],
               "type": "string"
             }
@@ -35390,7 +35390,7 @@
         "properties": {
           "show": {
             "type": "boolean",
-            "description": "false hides TGIF on Today for this account; true shows it again."
+            "description": "false stops the daily TGIF notification for this account; true sends one each morning (HOME-16, R-59)."
           }
         },
         "required": [

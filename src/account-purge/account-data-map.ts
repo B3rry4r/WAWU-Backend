@@ -145,6 +145,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PrivacySettings', column: 'userWawuId', disposition: 'OWNED' },
   // Whether this person wants TGIF on Today (HOME-11): theirs alone.
   { model: 'TgifPreference', column: 'userWawuId', disposition: 'OWNED' },
+  // HOME-16: the marker that today's TGIF notice was made. Goes with the account.
+  { model: 'TgifDailyNotice', column: 'userWawuId', disposition: 'OWNED' },
   // What this person searched, kept for Recent on the Search landing (EXPLORE-05): theirs alone.
   { model: 'SearchHistory', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'DataExportRequest', column: 'userWawuId', disposition: 'OWNED' },

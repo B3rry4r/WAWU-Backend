@@ -58,7 +58,10 @@ type CoreNotificationKind =
   | 'paid_dm_paused'
   // LEGAL-03: documents WAWU delivered on a legal request.
   /** Documents were delivered on a legal request. Recipient: the client. */
-  | 'legal_delivered';
+  | 'legal_delivered'
+  // HOME-16 (R-59): TGIF reaches Home as a daily notification.
+  /** The day's TGIF is ready. Recipient: each person who keeps "TGIF each morning" on. */
+  | 'tgif_daily';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -192,6 +195,20 @@ type NotificationEventCore =
       requestId: string;
       serviceName: string;
       fileCount: number;
+    }
+  /**
+   * HOME-16 (R-59). The day's TGIF is ready: the daily notice, made once per
+   * person per day by the TGIF job (src/scheduler/tgif-daily-notice.service.ts).
+   * Recipient: the person. `day` is the Lagos calendar day (YYYY-MM-DD) and is
+   * what a tap opens; `series` is the day's title as the book writes it and
+   * `verseReference` its verse.
+   */
+  | {
+      kind: 'tgif_daily';
+      userWawuId: string;
+      day: string;
+      series: string;
+      verseReference: string;
     };
 
 /** The row `emit()` will write, before it reaches Prisma. */
@@ -278,6 +295,45 @@ const MONTHS = [
 
 function formatDate(date: Date): string {
   return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+}
+
+/** Words a title keeps in lower case (unless first): "What You Have in Christ". */
+const TITLE_SMALL_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'as',
+  'at',
+  'but',
+  'by',
+  'for',
+  'from',
+  'in',
+  'of',
+  'on',
+  'or',
+  'the',
+  'to',
+  'with',
+]);
+
+/**
+ * A TGIF series as the book writes it ("SONS, NOT SLAVES") in title case
+ * ("Sons, Not Slaves"; "WHAT YOU HAVE IN CHRIST" becomes "What You Have in
+ * Christ"). Pure, so the same day reads the same on every server.
+ */
+export function tgifSeriesTitle(series: string): string {
+  return series
+    .trim()
+    .split(/\s+/)
+    .map((word, i) => {
+      const lower = word.toLowerCase();
+      if (i > 0 && TITLE_SMALL_WORDS.has(lower.replace(/[^\p{L}]+$/u, ''))) {
+        return lower;
+      }
+      return lower.replace(/\p{L}/u, (c) => c.toUpperCase());
+    })
+    .join(' ');
 }
 
 /**
@@ -586,6 +642,25 @@ export function composeNotification(
     }
 
     /**
+     * HOME-16 (R-59). The title is the day's TGIF title (the series, as the
+     * book writes it in capitals, set in title case); the body says it is
+     * ready and names the day's verse. Nothing personal rides on a lock
+     * screen: no name, no reading. Routed by `kind`: the day it opens is the
+     * notification's target (`targetFor`), never a path.
+     */
+    case 'tgif_daily':
+      return {
+        ...base,
+        title: `TGIF: ${tgifSeriesTitle(event.series)}`,
+        body: `Today's TGIF is ready. ${event.verseReference}.`,
+        tone: 'accent',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'Read TGIF',
+        ...NO_RICH_MEDIA,
+      };
+
+    /**
      * NUV-02 round 2 (D6). No matter, name or number in the copy: a lock
      * screen shows it. The fixes are fixed sentences of ours.
      */
@@ -823,10 +898,11 @@ interface MoneyInEvent {
 /**
  * ME-10. What a notification can be about: the thing opening it opens (M31).
  * `content` a piece, `paid_question` a paid question (DirectMessage),
- * `community` a room, `profile` a person.
+ * `community` a room, `profile` a person, `tgif_day` (HOME-16) a day of TGIF
+ * whose id is the day, YYYY-MM-DD.
  */
 export type NotificationTargetKind =
-  'content' | 'paid_question' | 'community' | 'profile';
+  'content' | 'paid_question' | 'community' | 'profile' | 'tgif_day';
 
 /**
  * ME-10. Optional on every event: the thing it is about and the other person
@@ -884,6 +960,7 @@ export const NOTIFICATION_CATEGORY: Record<
   legal_delivered: 'other',
   identity_review: 'other',
   money_in: 'money',
+  tgif_daily: 'other',
 };
 
 /** The NotificationTarget row emit() writes beside a notification, minus its id. */
@@ -895,7 +972,8 @@ export interface NotificationTargetDraft {
 
 /**
  * ME-10. What a notification is about, from its event. A join approval names
- * its room by itself; every other kind says so through `about`. An actor who
+ * its room by itself, and a daily TGIF notice its day (HOME-16); every other
+ * kind says so through `about`. An actor who
  * is the recipient is dropped (nobody is "the other person" to themselves).
  * Null when the event names nothing, which leaves the row routed by `kind`.
  */
@@ -906,7 +984,9 @@ export function targetFor(
     event.about?.target ??
     (event.kind === 'community_join_approved'
       ? { kind: 'community' as const, id: event.communityId }
-      : null);
+      : event.kind === 'tgif_daily'
+        ? { kind: 'tgif_day' as const, id: event.day }
+        : null);
   if (!target || !target.id) return null;
   const actor = event.about?.actorWawuId ?? null;
   return {

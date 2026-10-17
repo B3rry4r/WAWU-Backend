@@ -5354,9 +5354,25 @@ model TgifShare {
 /// else references it.
 model TgifPreference {
   userWawuId String   @id
-  /// false = the person turned TGIF off on Today.
+  /// false = the person turned TGIF off. HOME-16 (R-59): the switch now means
+  /// "send me TGIF each morning" (Z2); the column and the values are kept.
   show       Boolean  @default(true)
   updatedAt  DateTime @updatedAt
+}
+
+/// HOME-16: the marker that today's TGIF notice was made for this person. One
+/// row per person per day (the primary key), made in the same transaction as the
+/// notification, so a notice is made once per person per day however many hub
+/// instances run the job or however often it runs. `day` is the Lagos calendar
+/// day. Rows older than a few days are deleted by the job itself. Holds no
+/// words: the notice is the Notification row (kind `tgif_daily`).
+model TgifDailyNotice {
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@id([userWawuId, day])
+  @@index([day])
 }
 
 /// EXPLORE-03: a creator an admin has chosen to show in Explore's "Featured

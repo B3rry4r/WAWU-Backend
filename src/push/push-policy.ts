@@ -1,6 +1,9 @@
 import type { NotificationSettings } from '../common/types';
 import type { NotificationKind } from '../notification/notification-event';
-import { SETTINGS_GATE } from '../notification/notification.service';
+import {
+  SETTINGS_GATE,
+  type SwitchName,
+} from '../notification/notification.service';
 
 /**
  * Which notifications reach a phone, decided once per kind (INBOX-03).
@@ -30,6 +33,8 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   dm_refunded: 'send',
   new_follower: 'send',
   dm_deadline: 'send',
+  // HOME-16 (R-59). The morning TGIF notice; the TGIF switch (Z2) mutes it.
+  tgif_daily: 'send',
   content_published: 'send',
   content_rejected: 'send',
   review_received: 'send',
@@ -72,9 +77,7 @@ export const PUSH_ONLY_GATE: Partial<
 };
 
 /** The Z3 switch that mutes `kind` on a phone, if any. */
-export function pushGateFor(
-  kind: string,
-): keyof NotificationSettings | undefined {
+export function pushGateFor(kind: string): SwitchName | undefined {
   const k = kind as NotificationKind;
   return PUSH_ONLY_GATE[k] ?? SETTINGS_GATE[k];
 }
