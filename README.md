@@ -155,6 +155,22 @@ scripts/dev/stack.sh down   --name <n>
   is a stand-in for it that records each mail it is given. Left unset, wawu-id has
   no transport and an email route answers 503 (FIX-53, the data-export email).
 
+### AI voice and storage on the stack (AITOOLS-01)
+
+The AI voice tools call a voice provider whose key is the owner's and is on no
+build machine, so a stack runs them against a local stand-in. `stack.sh` does
+not start it: run `node scripts/dev/voice-standin.cjs <port>` (it answers the
+provider's one call, `POST /v1/text-to-speech/<voice>`; a script containing
+`[[fail]]`, `[[reject]]`, `[[html]]` or `[[slow:1500]]` makes it fail, refuse,
+answer with a web page or wait) and export `AI_VOICE_BASE_URL=http://127.0.0.1:<port>`,
+`AI_VOICE_API_KEY=standin-key` and `AI_VOICE_VOICES` (a JSON list of `{ id, name,
+description, providerVoiceId }` with provider voice ids `stand-in-ada` and
+`stand-in-tunde`) in the shell that runs `stack.sh up`. A finished job stores its
+audio, so also run `node scripts/dev/storage-standin.cjs <port> stack-bucket` and
+set `STACK_STORAGE_ENDPOINT=http://127.0.0.1:<port>` with
+`STACK_STORAGE_PATH_STYLE=true`. Keep both ports outside the stack's range.
+Without these the tool is listed `enabled: false` and a job is refused.
+
 ### Nuvion on the stack (STACK-NUV)
 
 The Hub's Nuvion adapter accepts only Nuvion's two real hosts, so the stack gives

@@ -16,6 +16,7 @@ import {
   type UploadFormatId,
 } from './dto/presign-upload.dto';
 import { formatFolderRule } from './upload-formats';
+import { deleteFromBucket } from './bucket-delete';
 import { releaseOwnUpload } from './upload-release';
 import { LOCKED_TX, inPersonsTurn, lockStorageQuota } from './storage-lock';
 import { sweepLateFiles, type LateSweepResult } from './late-file-sweep';
@@ -674,6 +675,81 @@ export class StorageService {
         `Could not refresh storage URL for ${key}: ${String(e)}`,
       );
       return stored;
+    }
+  }
+
+  /**
+   * Stores a file the Hub made itself for a person (an AI tool's audio,
+   * AITOOLS-01), at `<folder>/<wawuId>/<name>.<ext>`: the extension comes from
+   * `contentType`, which must be one the Hub serves. The object is recorded as
+   * a confirmed `StorageObject` of that person, so deleting their account
+   * removes the file with the rest. It is not creator content (its folder is
+   * not in CONTENT_FOLDERS), so it is never counted against the R-7 allowance.
+   * A network call: the caller holds no transaction and no lock. Writing the
+   * same name again replaces the file.
+   */
+  async putGenerated(
+    wawuId: string,
+    folder: string,
+    name: string,
+    body: Buffer,
+    contentType: string,
+  ): Promise<string> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const ext = EXTENSION_FOR_CONTENT_TYPE[contentType];
+    if (!ext || !/^[A-Za-z0-9._~-]+$/.test(name) || /^\.+$/.test(name))
+      throw new Error(
+        'putGenerated: a file type or name the Hub does not serve',
+      );
+    const key = `${folder}/${wawuId}/${name}.${ext}`;
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        ContentLength: body.length,
+      }),
+    );
+    const now = new Date();
+    await this.prisma.storageObject.upsert({
+      where: { key },
+      create: {
+        wawuUserId: wawuId,
+        key,
+        bytes: body.length,
+        contentType,
+        folder,
+        status: 'confirmed',
+        confirmedAt: now,
+      },
+      update: {
+        bytes: body.length,
+        contentType,
+        status: 'confirmed',
+        confirmedAt: now,
+        releasedAt: null,
+      },
+    });
+    return key;
+  }
+
+  /**
+   * Takes a file `putGenerated` stored out of the bucket and drops its row.
+   * Never throws: a bucket that cannot be reached leaves the row (the file is
+   * still the person's, and goes with their account).
+   */
+  async removeGenerated(key: string): Promise<void> {
+    if (!this.client) return;
+    const out = await deleteFromBucket(this.client, this.bucket, key);
+    if (out.result === 'gone') {
+      await this.prisma.storageObject.deleteMany({ where: { key } });
+    } else {
+      this.logger.warn(`Could not remove generated file ${key}: ${out.result}`);
     }
   }
 

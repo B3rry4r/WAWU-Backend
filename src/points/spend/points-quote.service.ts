@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { PointsJobQuoteToken } from './points-job-quote-token';
 import { PointsShortfallService } from './points-shortfall.service';
 import { PointsSpendService } from './points-spend.service';
 import type { PointsQuoteDto } from './points-spend.dto';
@@ -18,6 +19,7 @@ export class PointsQuoteService {
   constructor(
     private readonly spend: PointsSpendService,
     private readonly shortfall: PointsShortfallService,
+    private readonly tokens: PointsJobQuoteToken,
   ) {}
 
   async quote(
@@ -44,6 +46,7 @@ export class PointsQuoteService {
       balancePoints: a.balancePoints,
       shortfallPoints: a.shortfallPoints,
       useWallet,
+      quoteToken: this.tokens.issue(wawuUserId, a.job.action, a.job.costPoints),
       canRun: a.shortfallPoints === 0 && a.cap === null,
       cap: a.cap,
       wallet,

@@ -1,0 +1,65 @@
+/** What the AI tools routes answer (AITOOLS-01, PT1 and PT2). Points are a count, never naira. */
+
+export interface AiVoiceView {
+  id: string;
+  name: string;
+  description: string;
+}
+
+/** `GET /ai-tools`: one tool the Hub can run. The app draws only the tools listed here. */
+export interface AiToolView {
+  /** The tool's id in the routes (`POST /ai-tools/voiceover/jobs`). */
+  id: 'voiceover';
+  /** The plan's action id: what `POST /points/quote` takes as `action`. */
+  action: string;
+  name: string;
+  /** One line under the name. */
+  description: string;
+  /** What `costPointsPerUnit` is counted per. */
+  unit: 'minute';
+  /** Points for one unit, from the settings. */
+  costPointsPerUnit: number;
+  /** False until the voice provider is set up on the Hub: listed, but a job is refused. */
+  enabled: boolean;
+  /** What a job takes in. */
+  input: {
+    /** The longest text one job takes (a setting). */
+    maxCharacters: number;
+    /** Characters that make one unit (a setting): `units` of a job is its characters over this, rounded up, at least 1. */
+    charactersPerUnit: number;
+  };
+  voices: AiVoiceView[];
+}
+
+/** The caps that stop a job (the same figures `GET /plans` serves as `caps`). */
+export interface AiToolCapsView {
+  dailyPoints: number;
+  maxCharactersPerJob: number;
+  maxAudioMinutesPerJob: number;
+}
+
+export interface AiToolsView {
+  tools: AiToolView[];
+  caps: AiToolCapsView;
+}
+
+export type AiJobStateView = 'working' | 'done' | 'failed';
+
+/** `POST /ai-tools/voiceover/jobs` and `GET /ai-tools/jobs/{id}`. */
+export interface AiJobView {
+  id: string;
+  tool: 'voiceover';
+  state: AiJobStateView;
+  voiceId: string;
+  characters: number;
+  /** The minutes the job was priced in. */
+  units: number;
+  /** What the job costs: held while working, kept when done, given back when failed. */
+  costPoints: number;
+  /** The audio to play, once the job is done. */
+  audioUrl: string | null;
+  /** A failed job's words ("No points were taken"); null otherwise. */
+  message: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}

@@ -5,6 +5,7 @@ import { PlansModule } from '../../plans/plans.module';
 import { WalletProviderModule } from '../../wallet-provider/wallet-provider.module';
 import { PointsModule } from '../points.module';
 import { PointsHoldSweepService } from './points-hold-sweep.service';
+import { PointsJobQuoteToken } from './points-job-quote-token';
 import { PointsQuoteService } from './points-quote.service';
 import { PointsShortfallService } from './points-shortfall.service';
 import {
@@ -39,7 +40,8 @@ import { PointsSpendService } from './points-spend.service';
     PointsQuoteService,
     PointsShortfallService,
     PointsHoldSweepService,
+    PointsJobQuoteToken,
   ],
-  exports: [PointsSpendService],
+  exports: [PointsSpendService, PointsJobQuoteToken],
 })
 export class PointsSpendModule {}

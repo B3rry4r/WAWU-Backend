@@ -97,6 +97,7 @@ import { EventWalletOrdersModule } from './event-ticketing/wallet/event-wallet-o
 import { PaidDmWalletModule } from './direct-message/wallet/paid-dm-wallet.module';
 import { PointsConvertModule } from './points/convert/points-convert.module';
 import { PointsSpendModule } from './points/spend/points-spend.module';
+import { AiToolsModule } from './ai-tools/ai-tools.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { NuvionWebhookModule } from './nuvion/webhook/nuvion-webhook.module';
@@ -473,6 +474,10 @@ import { PushModule } from './push/push.module';
     // stale AI holds. After PointsConvertModule; `quote` and `shortfall` are
     // segments of `points` no other controller declares.
     PointsSpendModule,
+    // The AI tools catalogue and VoiceOver (task AITOOLS-01, SHARED-CHANGES
+    // AITOOLS-01 #1): `ai-tools`, `ai-tools/voiceover/jobs`, `ai-tools/jobs/:id`.
+    // `ai-tools` is a segment no other controller declares.
+    AiToolsModule,
     // The event registration link (task JOIN-01): `waitlist/offers/current`,
     // `waitlist/registrations` (register, verify, status) and the team's
     // `admin/waitlist/registrations` (list, export). `waitlist` and

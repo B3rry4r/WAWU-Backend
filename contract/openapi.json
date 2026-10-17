@@ -34407,6 +34407,119 @@
         "x-wawu-built-by": "POINTS-03"
       }
     },
+    "/api/hub/ai-tools": {
+      "get": {
+        "operationId": "AiToolsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiToolsView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The tools the Hub can run, each with its points per unit, whether it is\non, its limits and its voices, and the caps that stop a job (PT1, PT7).\nCosts and caps are settings. Read-only.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-01"
+      }
+    },
+    "/api/hub/ai-tools/voiceover/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createVoiceover",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVoiceoverJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a VoiceOver job (PT2): `text`, a `voiceId` from the list and the\n`quoteToken` of the `POST /points/quote` the person saw. Holds the job's\npoints, answers `202` with the job `working` and makes the audio after the\nanswer; `GET /ai-tools/jobs/{id}` is what the app polls. The points are\nkept only when the audio is made and given back when it is not.\n\nNeeds an `Idempotency-Key` (8 to 128 of `[A-Za-z0-9_-]`): the same key and\nwords again answer the first job (`200`, `Idempotent-Replayed: true`)\nand hold nothing more; the same key with other words is `409\nidempotency_key_reused`. Refused with nothing held: `422\npoints_cap_reached` naming the cap (characters, minutes or the day's\npoints), `402 insufficient_points`, `409 quote_changed` (the cost is not\nwhat the quote showed), `400 ai_voice_unknown`, `503 ai_tool_unavailable`.\nA refusal leaves the key free to use once the cause is fixed.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-01"
+      }
+    },
+    "/api/hub/ai-tools/jobs/{id}": {
+      "get": {
+        "operationId": "AiToolsController_readJob",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One job as it stands now: `working`, `done` with `audioUrl`, or `failed`\nwith the words \"No points were taken\" (PT2c). Only the person who ran it\nreads it; another person's job and one that is not there are the same\n`404 not_found`.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-01"
+      }
+    },
     "/api/hub/waitlist/offers/current": {
       "get": {
         "operationId": "WaitlistPublicController_currentOffer",
@@ -41257,6 +41370,33 @@
         },
         "required": [
           "useWallet"
+        ]
+      },
+      "CreateVoiceoverJobDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The words to speak. Never stored: the job keeps only how long it was.",
+            "minLength": 1,
+            "maxLength": 200000
+          },
+          "voiceId": {
+            "type": "string",
+            "description": "A voice id from `GET /ai-tools`.",
+            "pattern": "^[a-z0-9_-]{1,40}$"
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw. A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "text",
+          "voiceId",
+          "quoteToken"
         ]
       },
       "CreateWaitlistRegistrationDto": {
@@ -61239,6 +61379,9 @@
           "useWallet": {
             "type": "boolean"
           },
+          "quoteToken": {
+            "type": "string"
+          },
           "canRun": {
             "type": "boolean"
           },
@@ -61274,6 +61417,7 @@
           "balancePoints",
           "shortfallPoints",
           "useWallet",
+          "quoteToken",
           "canRun",
           "cap",
           "wallet",
@@ -61360,6 +61504,188 @@
         },
         "required": [
           "useWallet"
+        ]
+      },
+      "AiVoiceView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description"
+        ]
+      },
+      "AiToolView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "voiceover"
+            ]
+          },
+          "action": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "minute"
+            ]
+          },
+          "costPointsPerUnit": {
+            "type": "number"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "input": {
+            "type": "object",
+            "properties": {
+              "maxCharacters": {
+                "type": "number"
+              },
+              "charactersPerUnit": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "maxCharacters",
+              "charactersPerUnit"
+            ]
+          },
+          "voices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiVoiceView"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "name",
+          "description",
+          "unit",
+          "costPointsPerUnit",
+          "enabled",
+          "input",
+          "voices"
+        ]
+      },
+      "AiToolCapsView": {
+        "type": "object",
+        "properties": {
+          "dailyPoints": {
+            "type": "number"
+          },
+          "maxCharactersPerJob": {
+            "type": "number"
+          },
+          "maxAudioMinutesPerJob": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "dailyPoints",
+          "maxCharactersPerJob",
+          "maxAudioMinutesPerJob"
+        ]
+      },
+      "AiToolsView": {
+        "type": "object",
+        "properties": {
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiToolView"
+            }
+          },
+          "caps": {
+            "$ref": "#/components/schemas/AiToolCapsView"
+          }
+        },
+        "required": [
+          "tools",
+          "caps"
+        ]
+      },
+      "AiJobView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string",
+            "enum": [
+              "voiceover"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "done",
+              "working"
+            ]
+          },
+          "voiceId": {
+            "type": "string"
+          },
+          "characters": {
+            "type": "number"
+          },
+          "units": {
+            "type": "number"
+          },
+          "costPoints": {
+            "type": "number"
+          },
+          "audioUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "finishedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "tool",
+          "state",
+          "voiceId",
+          "characters",
+          "units",
+          "costPoints",
+          "audioUrl",
+          "message",
+          "createdAt",
+          "finishedAt"
         ]
       },
       "AdminWaitlistRegistrationView": {
