@@ -3,6 +3,7 @@ import { Transform, Type } from 'class-transformer';
 import {
   IsIn,
   IsInt,
+  IsBoolean,
   IsOptional,
   IsString,
   IsUUID,
@@ -49,10 +50,14 @@ const PIN_MESSAGE = 'A PIN is four digits.';
  * A bank code: 3 to 6 digits, as the Flutterwave wallet already accepts.
  * Fintava's are 4 to 6 and are never left-padded (sandbox/01-bank-list.md).
  */
-const BANK_CODE_PATTERN = /^[0-9]{3,6}$/;
+export const BANK_CODE_PATTERN = /^[0-9]{3,6}$/;
 
 /** NUBAN: ten digits, never anything but digits. */
-const NUBAN_PATTERN = /^[0-9]{10}$/;
+export const NUBAN_PATTERN = /^[0-9]{10}$/;
+
+/** The sentences the ValidationPipe answers with for these two fields; the bank send's guard answers the same ones. */
+export const BANK_CODE_MESSAGE = 'bankCode must be a numeric bank code';
+export const NUBAN_MESSAGE = 'accountNumber must be 10 digits';
 
 /**
  * The largest amount validation lets through: the largest integer a JSON
@@ -152,13 +157,11 @@ export class RegisterApprovalDeviceDto {
  */
 export class NameCheckDto {
   @ApiProperty({ pattern: BANK_CODE_PATTERN.source })
-  @Matches(BANK_CODE_PATTERN, {
-    message: 'bankCode must be a numeric bank code',
-  })
+  @Matches(BANK_CODE_PATTERN, { message: BANK_CODE_MESSAGE })
   bankCode!: string;
 
   @ApiProperty({ pattern: NUBAN_PATTERN.source })
-  @Matches(NUBAN_PATTERN, { message: 'accountNumber must be 10 digits' })
+  @Matches(NUBAN_PATTERN, { message: NUBAN_MESSAGE })
   accountNumber!: string;
 }
 
@@ -198,28 +201,36 @@ export class CreateBeneficiaryDto {
   /** Required when kind is bank_account. */
   @ApiPropertyOptional({ pattern: BANK_CODE_PATTERN.source })
   @ValidateIf((o: CreateBeneficiaryDto) => o.kind === 'bank_account')
-  @Matches(BANK_CODE_PATTERN, {
-    message: 'bankCode must be a numeric bank code',
-  })
+  @Matches(BANK_CODE_PATTERN, { message: BANK_CODE_MESSAGE })
   bankCode?: string;
 
   /** Required when kind is bank_account. */
   @ApiPropertyOptional({ pattern: NUBAN_PATTERN.source })
   @ValidateIf((o: CreateBeneficiaryDto) => o.kind === 'bank_account')
-  @Matches(NUBAN_PATTERN, { message: 'accountNumber must be 10 digits' })
+  @Matches(NUBAN_PATTERN, { message: NUBAN_MESSAGE })
   accountNumber?: string;
+
+  /**
+   * bank_account only (WALLET-09): the person has seen the bank and the name
+   * the bank gives for this saved account now (`409 account_name_changed`)
+   * and confirms them. The server asks the bank and keeps what it says, in
+   * place of the name kept before. Left out, saving an account already saved
+   * answers the row as it is, as it always did.
+   */
+  @ApiPropertyOptional({ type: 'boolean' })
+  @IsOptional()
+  @IsBoolean()
+  confirmCurrentName?: boolean;
 }
 
 /** PUT /money/payout-account (A21). The server name-checks it and compares the name with the BVN name. */
 export class PayoutAccountDto {
   @ApiProperty({ pattern: BANK_CODE_PATTERN.source })
-  @Matches(BANK_CODE_PATTERN, {
-    message: 'bankCode must be a numeric bank code',
-  })
+  @Matches(BANK_CODE_PATTERN, { message: BANK_CODE_MESSAGE })
   bankCode!: string;
 
   @ApiProperty({ pattern: NUBAN_PATTERN.source })
-  @Matches(NUBAN_PATTERN, { message: 'accountNumber must be 10 digits' })
+  @Matches(NUBAN_PATTERN, { message: NUBAN_MESSAGE })
   accountNumber!: string;
 }
 
@@ -307,13 +318,11 @@ export class WawuTransferDto {
  */
 export class BankTransferDto {
   @ApiProperty({ pattern: BANK_CODE_PATTERN.source })
-  @Matches(BANK_CODE_PATTERN, {
-    message: 'bankCode must be a numeric bank code',
-  })
+  @Matches(BANK_CODE_PATTERN, { message: BANK_CODE_MESSAGE })
   bankCode!: string;
 
   @ApiProperty({ pattern: NUBAN_PATTERN.source })
-  @Matches(NUBAN_PATTERN, { message: 'accountNumber must be 10 digits' })
+  @Matches(NUBAN_PATTERN, { message: NUBAN_MESSAGE })
   accountNumber!: string;
 
   /** What the bank account gets, in kobo. */
@@ -329,9 +338,37 @@ export class BankTransferDto {
   @Min(1)
   expectedTotalKobo!: number;
 
+  /**
+   * `quoteToken` from that fee quote (`GET /money/fees/quote?kind=
+   * bank_transfer`; BACKEND_GAPS G-64): the server checks it is its own, for
+   * this person and this amount, and not past `expiresAt`; otherwise `409
+   * quote_changed` with the new quote.
+   */
+  @IsString()
+  @Length(1, 1024)
+  @IsStorableText()
+  quoteToken!: string;
+
+  /**
+   * `nameToken` from the name check the person saw (`POST
+   * /money/banks/name-check`). Required for an account that is not saved
+   * (WALLET-09 round 2, FIX-41): the send is bound to the holder's name they
+   * were shown, and a send without it is a `400` with nothing sent. If the
+   * bank names another holder now, the answer is `409 account_name_changed`
+   * and nothing is sent. A saved account (a beneficiary, or the payout
+   * account) is compared with its kept name and ignores it.
+   */
+  @IsOptional()
+  @IsString()
+  @Length(1, 1024)
+  @IsStorableText()
+  nameToken?: string;
+
+  /** W9's optional note, 100 characters at most. */
   @IsOptional()
   @IsString()
   @MaxLength(100)
+  @IsStorableText(true)
   note?: string;
 }
 

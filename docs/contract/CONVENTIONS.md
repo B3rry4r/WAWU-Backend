@@ -220,6 +220,7 @@ Every refusal is the envelope this backend already answers with
 | `amount_out_of_range` | 400 | below the minimum, or above `MERCHANT_MAX_PER_TXN_KOBO` on money through WAWU's merchant wallet | `minimumKobo`, `maximumKobo` |
 | `quote_changed` | 409 | `expectedTotalKobo` differs from the server's total | `feeQuote` or `paymentQuote` |
 | `name_check_failed` | 422 | the bank did not confirm the account | |
+| `account_name_changed` | 409 | a saved bank account whose holder's name, or whose bank's name, at the bank is no longer the one kept, or an account that is not saved whose holder at the bank is no longer the one the name check showed (WALLET-09, section 24): `accountName` and `bankName` as they stand now; nothing was sent. A saved account is confirmed by saving it again with `confirmCurrentName: true`; an unsaved one by a new name check |
 | `recipient_not_found` | 404 | no such WAWU user | |
 | `recipient_has_no_wallet` | 409 | they have not opened a wallet | |
 | `recipient_blocked` | 403 | a block between the two people | |
@@ -2024,7 +2025,8 @@ added up into one.
   (`status: held`), `GET /money/payments/quote` says `willBeHeld: true`, and
   the feature's `onCompleted` is told its id (`CompletedPayment.holdId`).
   What releases each kind is fixed: `paid_dm` `dm_answered`, `event_ticket`
-  `event_took_place`, `bill` `bill_delivered` (`holds/hold-rules.ts`). The
+  `event_took_place`, `bill` `bill_delivered`, `school_fee` `intake_started`
+  (`holds/hold-rules.ts`). The
   buyer's ledger row stays a `purchase`; they paid the price and the
   provider's charge (R-10) and the price is not spendable: it is already in
   WAWU's account.
@@ -2200,8 +2202,8 @@ completed payment).
 ## 19. Send to a WAWU user (WALLET-07)
 
 `POST /money/transfers/wawu` and `GET /money/transfers/{id}`
-(`src/money/transfers/`), served; sending to a bank account (WALLET-09) is
-still declared. Finding the person is WALLET-08.
+(`src/money/transfers/`), served; sending to a bank account is section 24
+(WALLET-09). Finding the person is WALLET-08.
 
 - **The request.** Headers `Idempotency-Key` (required, section 4) and
   `X-Transaction-Pin` or `X-Device-Approval` (section 5). Body
@@ -2606,7 +2608,95 @@ The offers inside `reason` are `GET /plans`' figures in the person's billing
 currency only (`priceMinor` in the minor unit of `currency`). The rules, the
 routes that ask and the drafts are in [`PLANS.md`](PLANS.md) section 6.
 
-## 24. Delete account: money first, 30 days, cancel (SETTINGS-06)
+## 24. Send to a bank account (WALLET-09)
+
+`GET /money/banks`, `POST /money/banks/name-check` and `POST
+/money/transfers/bank` (`src/money/transfers/`, `src/money/saved-accounts/`),
+served. A withdrawal (W17) is a bank send to the payout account; it has no
+route of its own. Reading one send, of either kind, is `GET
+/money/transfers/{id}` (section 19).
+
+- **The bank list and the name check** read no wallet and move no money. `GET
+  /money/banks` is the provider's list in one unpaged array (`code`, `name`;
+  key on `code`), kept in memory for an hour. `POST /money/banks/name-check`
+  answers `AccountNameView` with the holder's name AS THE BANK GIVES IT, or
+  `422 name_check_failed` with the sentence that says why (CONVENTIONS
+  section 10), or `503 provider_unreachable`. W8's Continue unlocks only after
+  it answers. The answer carries `nameToken`, signed for this person and good
+  for 15 minutes: the send to an account that is not saved sends it back.
+- **The request.** Headers `Idempotency-Key` (required, section 4) and
+  `X-Transaction-Pin` or `X-Device-Approval` (section 5). Body
+  `BankTransferDto`: `bankCode`, `accountNumber` (ten digits), `amountKobo`
+  (what the account gets), `expectedTotalKobo` and `quoteToken` (both from
+  `GET /money/fees/quote?kind=bank_transfer`, BACKEND_GAPS G-64), an
+  optional `note` (trimmed, at most 100 characters) and, for an account that
+  is not saved, the `nameToken` of the name check the person saw (required
+  for such an account: without it the answer is `400`, FIX-41). The app
+  never sends a name: the server asks the bank again, just before the send, and sends to
+  the name it gets. Answers `201` with `TransferView` (`kind: bank_account`,
+  `toBankAccount`: the bank's code and name, the account number and the
+  holder's name as the bank gave it, `timeline`: `requested`, `sent_to_bank`
+  once the provider has taken it, then `completed`; a send that `failed` or
+  was `reversed` shows `requested` and that outcome only).
+- **What it costs.** The amount, the provider's charge for a bank send and
+  WAWU's fee on top (R-10, from the fee settings; with Fintava's dashboard
+  rates, ₦40 + ₦25 = ₦65, so a ₦25,000 send debits ₦25,065). The provider
+  collects both in the one transfer; what its own record says it took is the
+  record, as for a send to a WAWU user (section 19). A send has no receiver's
+  ledger row: the money is at another bank.
+- **Before money moves**, in order: `fees_not_set`, the wallet, the key, the
+  ACCOUNT (below), the PIN, the body, the quote (`409 quote_changed`), the
+  provider's available balance (`402 insufficient_funds` with `balanceKobo`,
+  `totalKobo`, `shortfallKobo`), WAWU's limits and the provider's daily limit
+  inside the claim (`403 limit_reached`, WALLET-23's check, section 3). A
+  refusal at any step before the PIN uses no PIN try and gives the key back.
+- **The account, answered before the PIN.** A `bankCode` or `accountNumber`
+  that is not a bank code or ten digits (missing, the wrong type, or the
+  wrong shape) is the route's `400` with the validation sentence for that
+  field, before the bank is asked. Your own wallet at the provider's own
+  bank is `400 self_transfer`. The bank is asked; an account it does not
+  confirm is `422 name_check_failed`. A SAVED account (one of your
+  beneficiaries, or your payout account) goes through the saved-account gate
+  (NUV-06): the bank code the provider knows the bank by, and the payee ids
+  kept after the first send. The kept holder name, and the kept bank name
+  against the provider's name for the code, are compared with the answer of
+  the bank just now; any difference is `409 account_name_changed`, with
+  `reason.accountName` and `reason.bankName` as they stand now, and NOTHING
+  is sent. The person is shown both and confirms them by saving the account
+  again with `confirmCurrentName: true` (`POST /money/beneficiaries`; a
+  payout account is confirmed by `PUT /money/payout-account`, which takes no
+  flag: a plain PUT keeps what the bank says now). Saving without the flag
+  answers the row as it is, as before. An account that is NOT saved is bound
+  to the name the person was shown: with `nameToken` on the send, a holder
+  or bank that the bank names differently now, or a token that is not this
+  person's, this account's, or is past its 15 minutes, is the same
+  `409 account_name_changed` and nothing is sent; the app shows the names
+  and runs the name check again. A send to an account that is not saved with
+  no token is `400` with one plain sentence, before the PIN: nothing is sent,
+  no PIN try is used and the key is given back (FIX-41). A saved account and
+  a withdrawal to the payout account need no token.
+- **Once per key, written first.** The send, its pending ledger row (with the
+  quoted `providerFeeKobo` and `wawuFeeKobo`) and the key's link to it are
+  written in one transaction BEFORE the provider hears of the send. The
+  provider is called once. A request that provably never left is failed and
+  the key given back; an unknown outcome (a lost answer, a 5xx, a transfer
+  accepted and not finished, a repeated reference, or any refusal that may
+  have created a transfer) is `pending` with the
+  same `statusMessage` as section 19, and is found again by OUR reference
+  (the sweep asks the provider; under Nuvion the sender's transfers are
+  walked, never read as "no money moved"). Nothing sends it a second time.
+  A refusal the provider makes before it takes the money (not enough in the
+  wallet, a frozen wallet, payouts not available) fails the send at once,
+  voids its pending ledger row and gives the key back: `402
+  insufficient_funds` with the figures, `423 wallet_frozen`, `503
+  provider_unreachable`. The same request again is a new send under a new
+  reference.
+- **A failed send is reversed once.** A send the provider reports as failed is
+  `failed`; the provider's reversal of the debit (`debit_transfer_reversal`)
+  then moves it to `reversed`, with `reversal.returnedKobo` and `keptKobo`
+  from the provider's own report, once however often it is reported.
+
+## 25. Delete account: money first, 30 days, cancel (SETTINGS-06)
 
 `DELETE /account` (R-17) asks to delete the signed-in account. It waits 30
 days; signing in during them cancels it (WAWU ID, SETTINGS-08).

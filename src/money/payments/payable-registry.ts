@@ -22,6 +22,23 @@ export interface PayableTarget {
    * it (NUV-09), so cents are never charged as kobo.
    */
   currency?: string;
+  /**
+   * The part of `priceKobo` that is WAWU's own fee (R-10), when the price
+   * carries one (a bill: the amount, Fintava's bill charge and WAWU's fee all
+   * move into WAWU's account in one transfer). It is recorded as the
+   * payment's `wawuFeeKobo` so fee reports see it; it changes no figure the
+   * person pays. Unset: none.
+   */
+  wawuFeeKobo?: number;
+  /**
+   * True when the price has a payee who is not on WAWU (a school, paid by
+   * bank transfer out of WAWU's account: SCHOOLS-07, SCHOOLS-11). `payee`
+   * stays null, because there is no WAWU wallet to pay, but the 85/15 split
+   * (R-5, R-12) is recorded with the payment and its hold all the same, so
+   * the hold says how much of the price is owed to the payee. Unset: the
+   * split follows `payee` as it always has.
+   */
+  payeeOutsideWawu?: boolean;
 }
 
 /** What a feature is asked to price. */

@@ -1199,6 +1199,28 @@
         ]
       }
     },
+    "/api/hub/uploads/formats": {
+      "get": {
+        "operationId": "StorageController_formats",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadFormatsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "GET /uploads/formats: what each content format may upload (M20 to M22):\nthe file types and the most bytes for the full file, and the same for the\nseparate public preview, with how that preview is shown and, for a clip,\nhow long it is asked to be. Any signed-in account. The same table\n`POST /uploads/presign` applies when it is given a `format`.",
+        "tags": [
+          "Storage"
+        ]
+      }
+    },
     "/api/hub/uploads/confirm": {
       "post": {
         "operationId": "StorageController_confirm",
@@ -1287,6 +1309,46 @@
           }
         },
         "summary": "GET /uploads/allowance: the upload count and the storage this account\nmay use, what it has used, and both of R-7's levels (free and with a\ntick). Any signed-in account: an account with no CreatorState row has\nused 0 uploads.",
+        "tags": [
+          "Storage"
+        ]
+      }
+    },
+    "/api/hub/uploads/release": {
+      "post": {
+        "operationId": "StorageController_release",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "released": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "released"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "POST /uploads/release: takes back an upload the caller reserved and no\nlisting has claimed yet (a file removed or replaced in an unfinished\ndraft). Deletes the object and frees its space in one step. Only the\ncaller's own upload in content/preview or content/full; another person's\nkey, an unknown key and a key in any other folder all get the same 404,\nand a key a listing already uses gets a 409. Calling it again for a key\nalready released answers the same 200.",
         "tags": [
           "Storage"
         ]
@@ -16942,6 +17004,193 @@
         "x-wawu-built-by": "WALLET-07"
       }
     },
+    "/api/hub/money/transfers/bank": {
+      "post": {
+        "operationId": "MoneyTransfersController_sendToBank",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BankTransferDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range, self_transfer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, account_name_changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: name_check_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Send to a bank account (W8 to W14), or withdraw to the payout account\n(W17 to W19, which is a bank send to it). Answers 201 with the send:\n`pending` until the bank's answer arrives (a delivery, or the sweep that\nasks the provider by our reference), `completed`, or `failed`; the app\nreads it from `GET /money/transfers/{id}`. The account is name-checked\nwith the bank again BEFORE the PIN is looked at and the send goes to the\nname the bank gives: the app never sends a name. A saved account whose\nholder or bank is no longer the one kept is `409 account_name_changed`,\ncarrying both names as they stand now; nothing is sent until the person\nconfirms them by saving the account again. The same Idempotency-Key and\nbody answer the first result again (`Idempotent-Replayed: true`) without\nchecking the PIN. fees_not_set comes before the wallet gate, the key and\nthe PIN; limit_reached (WAWU's limit or the provider's, WALLET-23) before\nanything is sent.",
+        "tags": [
+          "MoneyTransfers"
+        ],
+        "x-wawu-built-by": "WALLET-09"
+      }
+    },
+    "/api/hub/money/transfers/presets": {
+      "get": {
+        "operationId": "MoneyTransfersController_presets",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferPresetsView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What W9 draws that is not the person's own: the quick amounts under the\nkeypad (settings, documented in transfer-presets.ts) and the note's\nlongest length. It reads settings only: no provider, no fee, no money\nmoves. It sits above the read of one send so the word presets is not\ntaken for an id.",
+        "tags": [
+          "MoneyTransfers"
+        ],
+        "x-wawu-built-by": "WALLET-02"
+      }
+    },
     "/api/hub/money/transfers/{id}": {
       "get": {
         "operationId": "MoneyTransfersController_transfer",
@@ -17007,6 +17256,105 @@
           "MoneyTransfers"
         ],
         "x-wawu-built-by": "WALLET-07"
+      }
+    },
+    "/api/hub/money/banks": {
+      "get": {
+        "operationId": "MoneyBanksController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/BankView"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The provider's bank list, in one unpaged array. Key on `code`: some names\nrepeat. Kept in memory for an hour (BANK_LIST_TTL_MS), so a person\nopening the picker does not wait on the provider.",
+        "tags": [
+          "MoneyBanks"
+        ],
+        "x-wawu-built-by": "WALLET-09"
+      }
+    },
+    "/api/hub/money/banks/name-check": {
+      "post": {
+        "operationId": "MoneyBanksController_nameCheck",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NameCheckDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountNameView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: name_check_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Whose account this is, from the bank (W8, A21). W8's Continue unlocks only\nafter this answers. The name is the bank's, never one the app sent. It\ncomes with a `nameToken` for this person (WALLET-09 round 2): the send to\nan account that is not saved carries it, so the money goes to the name\nthey were shown or nowhere.",
+        "tags": [
+          "MoneyBanks"
+        ],
+        "x-wawu-built-by": "WALLET-09"
       }
     },
     "/api/hub/money/holds": {
@@ -26129,6 +26477,89 @@
         ]
       }
     },
+    "/api/hub/schools/enrolments": {
+      "post": {
+        "operationId": "SchoolEnrolmentsController_enrol",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrolDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolEnrolmentView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code class_full (reason.nextIntake), intake_closed, already_enrolled (reason.enrolmentId), reservation_limit, or payment_in_progress (reason.paymentId) when the place being moved already has a payment started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolEnrolmentErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "SC4 Continue: holds a place in the class the student picked and answers\nthe order (the course, school and class, the fee that will be asked for,\nand `reservedUntil`, when the place goes back to the class if it is not\npaid). Pay it with `POST /money/payments`. The same request again answers\nthe same order and keeps the place a while longer; asking for another\nclass of the same course moves the place. A class with no seat left is\n`409 reason.code class_full` with `reason.nextIntake`, the soonest other\nclass of the course that has a seat (SC11), or null; a class that has\nstarted is `409 intake_closed`; a student already enrolled in the course\nis `409 already_enrolled` with `reason.enrolmentId`; a student holding\ntoo many unpaid places is `409 reservation_limit`. An unknown or hidden\nclass is 404. A course with no fee enrols at once (`status enrolled`,\nnothing to pay).",
+        "tags": [
+          "SchoolEnrolments"
+        ]
+      }
+    },
+    "/api/hub/schools/enrolments/{id}": {
+      "get": {
+        "operationId": "SchoolEnrolmentsController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolEnrolmentView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One enrolment as it stands now: what the app polls after a payment, and\nSC7's receipt (the course, class, fee and what the wallet was actually\ndebited). Only its student reads it; another person's and an id nobody\nholds are the same 404. It reads our own records only.",
+        "tags": [
+          "SchoolEnrolments"
+        ]
+      }
+    },
     "/api/hub/communities/mine": {
       "get": {
         "operationId": "CommunityRoomsController_mine",
@@ -29503,6 +29934,659 @@
         ]
       }
     },
+    "/api/hub/bills/wallet": {
+      "post": {
+        "operationId": "WalletBillsController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWalletBillDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletBillQuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code biller_not_found, or target_not_found for a bundle or plan that is not offered now.\n\nreason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code meter_not_found: Fintava does not know this meter."
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a bill from what S4 collected and answers S5: the bill priced by\nthe server, what it costs line by line (Fintava's bill charge, WAWU's fee\nand the balance-transfer charge), and the wallet payment's quote with the\nbalance and any shortfall (S11). Nothing is reserved and nothing is\ndebited. A bill below the company's own minimum or above its maximum is\n`400 amount_out_of_range` with both limits, a meter Fintava does not know\nis `422 meter_not_found`, a company or bundle that is gone is `404`, and\nbills that are switched off are `503 bills_unavailable` (or `503\nprovider_unreachable` with `retryAfterSeconds` when Fintava does not\nanswer; a running Fintava-less provider answers `409 target_not_payable`).\nA person with no wallet gets `409 wallet_not_open`.",
+        "tags": [
+          "WalletBills"
+        ]
+      }
+    },
+    "/api/hub/bills/wallet/pay": {
+      "post": {
+        "operationId": "WalletBillsController_pay",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayWalletBillDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletBillView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pays the bill from the wallet, once: the bill, Fintava's charge and\nWAWU's fee move into WAWU's own account, then the biller is paid out of\nit. Answers 201 with the bill. `processing` while the payment is not\nconfirmed or the biller has not answered (poll `GET /bills/wallet/{id}`;\nnothing is ever sent again), `delivered` with the token and units, or\n`failed` with the money on its way back. The same Idempotency-Key and body\nanswer the first result again (`Idempotent-Replayed: true`) without\nchecking the PIN.",
+        "tags": [
+          "WalletBills"
+        ]
+      }
+    },
+    "/api/hub/bills/wallet/{id}/quote": {
+      "get": {
+        "operationId": "WalletBillsController_quote",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletBillQuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The bill's quote again: S5 reopened, or a quote past its `expiresAt`.",
+        "tags": [
+          "WalletBills"
+        ]
+      }
+    },
+    "/api/hub/bills/wallet/{id}": {
+      "get": {
+        "operationId": "WalletBillsController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletBillView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One bill as it stands now: what the app polls after `processing`, and\nS7's receipt (token, units, reference) or S12's failure with the money\ncoming back. Only the buyer reads it; another person's bill and an id\nnobody holds are the same `404 target_not_found`. It reads our own records\nonly and never asks Fintava.",
+        "tags": [
+          "WalletBills"
+        ]
+      }
+    },
+    "/api/hub/credits/packs": {
+      "get": {
+        "operationId": "CreditWalletController_packs",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditPackListView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The packs on sale, from the server's table: how many credits each gives\nand its price in kobo. Needs no wallet, so the sheet can open before one\nexists. Credits are a count, never naira (R-5).",
+        "tags": [
+          "CreditWallet"
+        ]
+      }
+    },
+    "/api/hub/credits/purchase/wallet/quote": {
+      "get": {
+        "operationId": "CreditWalletController_quote",
+        "parameters": [
+          {
+            "name": "pack",
+            "required": true,
+            "in": "query",
+            "description": "One of the packs `GET /credits/packs` lists.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "starter",
+                "popular",
+                "pro"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditWalletQuoteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The pay sheet (I28) before the PIN: the pack's price, the wallet\nprovider's charge on top, the total, the wallet's balance and the\nshortfall, and the signed quote `POST /credits/purchase/wallet` sends\nback. Nothing is reserved.",
+        "tags": [
+          "CreditWallet"
+        ]
+      }
+    },
+    "/api/hub/credits/purchase/wallet": {
+      "post": {
+        "operationId": "CreditWalletController_buy",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreditWalletPurchaseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditWalletPurchaseView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pays for a pack from the wallet, once: the credits are added when the\npayment is confirmed. Answers 201 with the purchase: `paid`, `pending`\nwhile the provider has not confirmed the debit yet (poll\n`GET /credits/purchase/wallet/{id}`; it is never sent again), or `failed`\nwhen the provider refused it and nothing moved. The same Idempotency-Key\nand body answer the first result again (`Idempotent-Replayed: true`)\nwithout checking the PIN. Not enough money is `402 insufficient_funds`\nwith the shortfall; no wallet is `409 wallet_not_open`.",
+        "tags": [
+          "CreditWallet"
+        ]
+      }
+    },
+    "/api/hub/credits/purchase/wallet/{id}": {
+      "get": {
+        "operationId": "CreditWalletController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditWalletPurchaseView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One purchase as it stands now: what the app polls after `pending`. Only\nthe buyer reads it; another person's purchase and an id nobody holds are\nthe same `404 not_found`. It reads our own records only.",
+        "tags": [
+          "CreditWallet"
+        ]
+      }
+    },
     "/api/hub/points/convert/quote": {
       "get": {
         "operationId": "PointsConvertController_quote",
@@ -30855,240 +31939,6 @@
           "AdsEvents"
         ]
       }
-    },
-    "/api/hub/money/banks": {
-      "get": {
-        "operationId": "MoneyTransferController_banks",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/BankView"
-                  }
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Fintava's bank list, in one unpaged array. Key on `code`: some names repeat.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-09",
-        "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/banks/name-check": {
-      "post": {
-        "operationId": "MoneyTransferController_nameCheck",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/NameCheckDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AccountNameView"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: name_check_failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Whose account this is, from the bank (W8, A21). W8's Continue unlocks only after this answers.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-09",
-        "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
-        "x-wawu-served": false
-      }
-    },
-    "/api/hub/money/transfers/bank": {
-      "post": {
-        "operationId": "MoneyTransferController_sendToBank",
-        "parameters": [
-          {
-            "name": "X-Transaction-Pin",
-            "in": "header",
-            "description": "The four-digit transaction PIN. Only ever in this header: never in a URL, a body or a log.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}$"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]{8,128}$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BankTransferDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TransferView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: idempotency_key_required, amount_out_of_range",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "402": {
-            "description": "reason.code: insufficient_funds",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: pin_required, pin_incorrect, limit_reached, daily_limit_exceeded, bank_transfers_blocked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: name_check_failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, pin_locked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable, fees_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Send to a bank account (W10 to W14), or withdraw to the payout account\n(W17 to W19). Answers pending; the bank's answer arrives later and the\napp reads it from GET /money/transfers/{id}.",
-        "tags": [
-          "MoneyTransfer"
-        ],
-        "x-wawu-built-by": "WALLET-09",
-        "description": "Declared by MONEY-04, not served yet: WALLET-09 serves it.",
-        "x-wawu-served": false
-      }
     }
   },
   "info": {
@@ -31279,6 +32129,18 @@
             "description": "Exact byte length of the file. The presigned URL is signed FOR this\nlength, so storage rejects an upload of any other size — previously the\nonly cap was client-side and trivially bypassed by calling the presigned\nURL directly.",
             "minimum": 1,
             "maximum": 536870912
+          },
+          "format": {
+            "type": "string",
+            "description": "Optional, ME-04: the content format the file is for (`video`, `pdf`...).\nOnly for `content/full` and `content/preview`. Naming one adds that\nformat's rules (GET /uploads/formats) to the checks below: the types it\ntakes in that folder and its own size cap. Left out, the call is checked\nexactly as before.",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
           }
         },
         "required": [
@@ -31389,6 +32251,19 @@
             "type": "string",
             "description": "The `key` or the `fileUrl` POST /uploads/presign returned for this file.",
             "maxLength": 2048
+          }
+        },
+        "required": [
+          "key"
+        ]
+      },
+      "ReleaseUploadDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
           }
         },
         "required": [
@@ -33068,6 +33943,7 @@
               "amount_out_of_range",
               "quote_changed",
               "name_check_failed",
+              "account_name_changed",
               "recipient_not_found",
               "recipient_has_no_wallet",
               "recipient_blocked",
@@ -33203,6 +34079,13 @@
           "paymentId": {
             "type": "string",
             "description": "payment_in_progress: the payment for this item still being confirmed (MONEY-17)."
+          },
+          "accountName": {
+            "type": "string",
+            "description": "account_name_changed: the name the bank gives for the account now (the\nname to show for the person to confirm), and the bank's name for it."
+          },
+          "bankName": {
+            "type": "string"
           },
           "retryAfterSeconds": {
             "type": "number",
@@ -33516,6 +34399,10 @@
             "description": "Required when kind is bank_account.",
             "pattern": "^[0-9]{10}$"
           },
+          "confirmCurrentName": {
+            "type": "boolean",
+            "description": "bank_account only (WALLET-09): the person has seen the bank and the name\nthe bank gives for this saved account now (`409 account_name_changed`)\nand confirms them. The server asks the bank and keeps what it says, in\nplace of the name kept before. Left out, saving an account already saved\nanswers the row as it is, as it always did."
+          },
           "wawuUserId": {
             "type": "string",
             "description": "Required when kind is wawu_user.",
@@ -33662,6 +34549,71 @@
           "expectedTotalKobo",
           "recipientWawuUserId",
           "quoteToken"
+        ]
+      },
+      "BankTransferDto": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string",
+            "pattern": "^[0-9]{3,6}$"
+          },
+          "accountNumber": {
+            "type": "string",
+            "pattern": "^[0-9]{10}$"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "description": "What the bank account gets, in kobo.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`totalKobo` from the fee quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from that fee quote (`GET /money/fees/quote?kind=\nbank_transfer`; BACKEND_GAPS G-64): the server checks it is its own, for\nthis person and this amount, and not past `expiresAt`; otherwise `409\nquote_changed` with the new quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "nameToken": {
+            "type": "string",
+            "description": "`nameToken` from the name check the person saw (`POST\n/money/banks/name-check`). Required for an account that is not saved\n(WALLET-09 round 2, FIX-41): the send is bound to the holder's name they\nwere shown, and a send without it is a `400` with nothing sent. If the\nbank names another holder now, the answer is `409 account_name_changed`\nand nothing is sent. A saved account (a beneficiary, or the payout\naccount) is compared with its kept name and ignores it.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "note": {
+            "type": "string",
+            "description": "W9's optional note, 100 characters at most.",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "bankCode",
+          "accountNumber",
+          "amountKobo",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
+      "NameCheckDto": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string",
+            "pattern": "^[0-9]{3,6}$"
+          },
+          "accountNumber": {
+            "type": "string",
+            "pattern": "^[0-9]{10}$"
+          }
+        },
+        "required": [
+          "bankCode",
+          "accountNumber"
         ]
       },
       "MoneyPlainErrorEnvelope": {
@@ -34980,6 +35932,83 @@
           "q"
         ]
       },
+      "EnrolDto": {
+        "type": "object",
+        "properties": {
+          "intakeId": {
+            "type": "string",
+            "description": "The intake to hold a place in. The course and school come from it.",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "intakeId"
+        ]
+      },
+      "SchoolEnrolmentErrorReason": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "enum": [
+              "class_full",
+              "intake_closed",
+              "already_enrolled",
+              "reservation_limit"
+            ],
+            "type": "string"
+          },
+          "nextIntake": {
+            "nullable": true,
+            "description": "class_full: the soonest other class of the course that has a seat and has not started; null when there is none (SC11).",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PublicIntakeView"
+              }
+            ]
+          },
+          "enrolmentId": {
+            "type": "string",
+            "description": "already_enrolled: the enrolment the student already has in this course.",
+            "format": "uuid"
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence the app may show as it is."
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "SchoolEnrolmentErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "description": "Always null on an error.",
+            "type": "object",
+            "nullable": true,
+            "example": null
+          },
+          "statusCode": {
+            "type": "number",
+            "description": "The HTTP status again."
+          },
+          "message": {
+            "type": "string",
+            "description": "Same as reason.message."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/SchoolEnrolmentErrorReason"
+          }
+        },
+        "required": [
+          "data",
+          "statusCode",
+          "message",
+          "reason"
+        ]
+      },
       "CreateCommunityDto": {
         "type": "object",
         "properties": {
@@ -35894,6 +36923,102 @@
           "quoteToken"
         ]
       },
+      "CreateWalletBillDto": {
+        "type": "object",
+        "properties": {
+          "category": {
+            "enum": [
+              "electricity",
+              "cable",
+              "airtime",
+              "data"
+            ],
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The company, network or cable provider.",
+            "pattern": "^[A-Za-z0-9_]{1,80}$"
+          },
+          "accountNumber": {
+            "type": "string",
+            "description": "The meter, phone or smartcard number: digits, spaces and dashes taken out first.",
+            "pattern": "^[0-9]{5,20}$"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "description": "Electricity and airtime only.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "productCode": {
+            "type": "string",
+            "description": "Data and cable only: the bundle or plan code from the biller's list.",
+            "pattern": "^[A-Za-z0-9_.-]{1,80}$"
+          }
+        },
+        "required": [
+          "category",
+          "code",
+          "accountNumber"
+        ]
+      },
+      "PayWalletBillDto": {
+        "type": "object",
+        "properties": {
+          "billId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`payment.totalKobo` from the quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`payment.quoteToken` from that quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "billId",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
+      "CreditWalletPurchaseDto": {
+        "type": "object",
+        "properties": {
+          "pack": {
+            "enum": [
+              "starter",
+              "popular",
+              "pro"
+            ],
+            "type": "string"
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`payment.totalKobo` from the quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`payment.quoteToken` from that quote: the server checks it is its own, for this person and this pack, and not past its end.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "pack",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
       "PointsConvertDto": {
         "type": "object",
         "properties": {
@@ -36239,57 +37364,6 @@
         },
         "required": [
           "type"
-        ]
-      },
-      "NameCheckDto": {
-        "type": "object",
-        "properties": {
-          "bankCode": {
-            "type": "string",
-            "pattern": "^[0-9]{3,6}$"
-          },
-          "accountNumber": {
-            "type": "string",
-            "pattern": "^[0-9]{10}$"
-          }
-        },
-        "required": [
-          "bankCode",
-          "accountNumber"
-        ]
-      },
-      "BankTransferDto": {
-        "type": "object",
-        "properties": {
-          "bankCode": {
-            "type": "string",
-            "pattern": "^[0-9]{3,6}$"
-          },
-          "accountNumber": {
-            "type": "string",
-            "pattern": "^[0-9]{10}$"
-          },
-          "amountKobo": {
-            "type": "integer",
-            "description": "What the bank account gets, in kobo.",
-            "minimum": 1,
-            "maximum": 9007199254740991
-          },
-          "expectedTotalKobo": {
-            "type": "integer",
-            "description": "`totalKobo` from the fee quote the person saw. A different server total is `quote_changed`.",
-            "minimum": 1
-          },
-          "note": {
-            "type": "string",
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "bankCode",
-          "accountNumber",
-          "amountKobo",
-          "expectedTotalKobo"
         ]
       },
       "FintavaWebhookAck": {
@@ -37639,6 +38713,7 @@
               "dm_answered",
               "event_took_place",
               "bill_delivered",
+              "intake_started",
               "plan_granted"
             ]
           },
@@ -38021,6 +39096,77 @@
           "transactionId",
           "createdAt",
           "completedAt"
+        ]
+      },
+      "TransferQuickAmountView": {
+        "type": "object",
+        "properties": {
+          "amountKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "amountKobo"
+        ]
+      },
+      "TransferPresetsView": {
+        "type": "object",
+        "properties": {
+          "quickAmounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TransferQuickAmountView"
+            }
+          },
+          "noteMaxLength": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "quickAmounts",
+          "noteMaxLength"
+        ]
+      },
+      "BankView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name"
+        ]
+      },
+      "AccountNameView": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string"
+          },
+          "bankName": {
+            "type": "string"
+          },
+          "accountNumber": {
+            "type": "string"
+          },
+          "accountName": {
+            "type": "string"
+          },
+          "nameToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bankCode",
+          "bankName",
+          "accountNumber",
+          "accountName",
+          "nameToken"
         ]
       },
       "RecipientView": {
@@ -38830,6 +39976,118 @@
           "checkoutBump",
           "actions",
           "caps"
+        ]
+      },
+      "UploadFormatView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "video",
+              "course",
+              "audio",
+              "pdf",
+              "image",
+              "template"
+            ]
+          },
+          "full": {
+            "type": "object",
+            "properties": {
+              "contentTypes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "extensions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxBytes": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "contentTypes",
+              "extensions",
+              "maxBytes"
+            ]
+          },
+          "preview": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "clip",
+                  "lesson",
+                  "extract",
+                  "cover"
+                ]
+              },
+              "contentTypes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "extensions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxBytes": {
+                "type": "number"
+              },
+              "seconds": {
+                "type": "object",
+                "properties": {
+                  "min": {
+                    "type": "number"
+                  },
+                  "max": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "min",
+                  "max"
+                ],
+                "nullable": true
+              }
+            },
+            "required": [
+              "kind",
+              "contentTypes",
+              "extensions",
+              "maxBytes",
+              "seconds"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "full",
+          "preview"
+        ]
+      },
+      "UploadFormatsView": {
+        "type": "object",
+        "properties": {
+          "formats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UploadFormatView"
+            }
+          }
+        },
+        "required": [
+          "formats"
         ]
       },
       "StorageUsage": {
@@ -48880,10 +50138,10 @@
             "items": {
               "type": "string",
               "enum": [
+                "cover",
                 "handle",
                 "bio",
                 "avatar",
-                "cover",
                 "links"
               ]
             }
@@ -49486,6 +50744,151 @@
         },
         "required": [
           "cleared"
+        ]
+      },
+      "EnrolmentReturnView": {
+        "type": "object",
+        "properties": {
+          "holdStatus": {
+            "type": "string",
+            "enum": [
+              "held",
+              "released",
+              "refunded"
+            ]
+          },
+          "returned": {
+            "type": "boolean"
+          },
+          "returnedKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "holdStatus",
+          "returned",
+          "returnedKobo"
+        ]
+      },
+      "SchoolEnrolmentView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "released",
+              "refunded",
+              "reserved",
+              "enrolled"
+            ]
+          },
+          "reference": {
+            "type": "string"
+          },
+          "course": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ]
+          },
+          "school": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          },
+          "intake": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "startDate": {
+                "type": "string"
+              },
+              "schedule": {
+                "type": "string"
+              },
+              "location": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "id",
+              "startDate",
+              "schedule",
+              "location"
+            ]
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "paymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "providerFeeKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "totalKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "reservedUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "enrolledAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "returned": {
+            "$ref": "#/components/schemas/EnrolmentReturnView",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "reference",
+          "course",
+          "school",
+          "intake",
+          "priceKobo",
+          "paymentId",
+          "providerFeeKobo",
+          "totalKobo",
+          "reservedUntil",
+          "createdAt",
+          "enrolledAt",
+          "returned"
         ]
       },
       "SchoolApplyLinkView": {
@@ -51574,8 +52977,8 @@
             "type": "string",
             "enum": [
               "creator",
-              "content",
-              "event"
+              "event",
+              "content"
             ]
           },
           "savedAt": {
@@ -51776,8 +53179,8 @@
           "kind": {
             "type": "string",
             "enum": [
-              "content",
               "community",
+              "content",
               "paid_question",
               "profile"
             ]
@@ -52231,6 +53634,347 @@
           "grant",
           "createdAt",
           "paidAt"
+        ]
+      },
+      "BillReturnView": {
+        "type": "object",
+        "properties": {
+          "holdStatus": {
+            "type": "string",
+            "enum": [
+              "held",
+              "released",
+              "refunded"
+            ]
+          },
+          "returned": {
+            "type": "boolean"
+          },
+          "returnedKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "holdStatus",
+          "returned",
+          "returnedKobo"
+        ]
+      },
+      "WalletBillView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "electricity",
+              "cable",
+              "airtime",
+              "data"
+            ]
+          },
+          "billerCode": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "planType": {
+            "type": "string",
+            "enum": [
+              "prepaid",
+              "postpaid"
+            ],
+            "nullable": true
+          },
+          "productCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "productLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountName": {
+            "type": "string",
+            "nullable": true
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "billChargeKobo": {
+            "type": "integer"
+          },
+          "serviceFeeKobo": {
+            "type": "integer"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "processing",
+              "delivered",
+              "awaiting_payment"
+            ]
+          },
+          "paymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "transferFeeKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "totalKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "token": {
+            "type": "string",
+            "nullable": true
+          },
+          "units": {
+            "type": "string",
+            "nullable": true
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "returned": {
+            "$ref": "#/components/schemas/BillReturnView",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "deliveredAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "category",
+          "billerCode",
+          "title",
+          "planType",
+          "productCode",
+          "productLabel",
+          "accountNumber",
+          "accountName",
+          "amountKobo",
+          "billChargeKobo",
+          "serviceFeeKobo",
+          "reference",
+          "status",
+          "paymentId",
+          "transferFeeKobo",
+          "totalKobo",
+          "token",
+          "units",
+          "failureReason",
+          "returned",
+          "createdAt",
+          "paidAt",
+          "deliveredAt"
+        ]
+      },
+      "WalletBillQuoteView": {
+        "type": "object",
+        "properties": {
+          "bill": {
+            "$ref": "#/components/schemas/WalletBillView"
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeeQuotePartView"
+            }
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          }
+        },
+        "required": [
+          "bill",
+          "parts",
+          "payment"
+        ]
+      },
+      "CreditPackView": {
+        "type": "object",
+        "properties": {
+          "pack": {
+            "type": "string",
+            "enum": [
+              "starter",
+              "popular",
+              "pro"
+            ]
+          },
+          "credits": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "badge": {
+            "type": "string",
+            "enum": [
+              "popular",
+              "best_value"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "pack",
+          "credits",
+          "priceKobo",
+          "badge"
+        ]
+      },
+      "CreditPackListView": {
+        "type": "object",
+        "properties": {
+          "packs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CreditPackView"
+            }
+          }
+        },
+        "required": [
+          "packs"
+        ]
+      },
+      "CreditWalletQuoteView": {
+        "type": "object",
+        "properties": {
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          },
+          "pack": {
+            "type": "string",
+            "enum": [
+              "starter",
+              "popular",
+              "pro"
+            ]
+          },
+          "credits": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "badge": {
+            "type": "string",
+            "enum": [
+              "popular",
+              "best_value"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "payment",
+          "pack",
+          "credits",
+          "priceKobo",
+          "badge"
+        ]
+      },
+      "CreditWalletPurchaseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "wallet"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "reversed",
+              "paid"
+            ]
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentView"
+          },
+          "creditBalance": {
+            "type": "number",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "pack": {
+            "type": "string",
+            "enum": [
+              "starter",
+              "popular",
+              "pro"
+            ]
+          },
+          "credits": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "badge": {
+            "type": "string",
+            "enum": [
+              "popular",
+              "best_value"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "method",
+          "status",
+          "statusMessage",
+          "payment",
+          "creditBalance",
+          "createdAt",
+          "paidAt",
+          "pack",
+          "credits",
+          "priceKobo",
+          "badge"
         ]
       },
       "PointsConvertQuoteView": {
@@ -53614,44 +55358,6 @@
         "required": [
           "campaignId",
           "audit"
-        ]
-      },
-      "BankView": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "code",
-          "name"
-        ]
-      },
-      "AccountNameView": {
-        "type": "object",
-        "properties": {
-          "bankCode": {
-            "type": "string"
-          },
-          "bankName": {
-            "type": "string"
-          },
-          "accountNumber": {
-            "type": "string"
-          },
-          "accountName": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "bankCode",
-          "bankName",
-          "accountNumber",
-          "accountName"
         ]
       }
     }

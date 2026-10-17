@@ -393,6 +393,30 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // SCHOOLS-07: the places this person held or paid for in a school's
+    // classes (SC4 to SC7): the course, school and class as they were, the
+    // fee, and the reference on the receipt.
+    key: 'schoolEnrolments',
+    models: ['SchoolEnrolment'],
+    load: (prisma, me) =>
+      prisma.schoolEnrolment.findMany({
+        where: { wawuUserId: me },
+        select: {
+          reference: true,
+          status: true,
+          courseTitle: true,
+          schoolName: true,
+          intakeStartDate: true,
+          intakeSchedule: true,
+          intakeLocation: true,
+          priceKobo: true,
+          createdAt: true,
+          enrolledAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+  },
+  {
     // ME-10: the creators this person saved (M30).
     key: 'savedCreators',
     models: ['SavedCreator'],

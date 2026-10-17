@@ -104,6 +104,12 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     files: ['key'],
     why: 'settles an upload the gated presign already signed (confirmed, still pending or given up); it signs no file and publishes nothing, and the space it gives back must be reachable after a tier ends',
   },
+  // ME-04: gives back the space of a file the person was signed for and has
+  // let go of. Same reasoning as confirm: it must work after a tier ends.
+  'POST uploads/release': {
+    files: ['key'],
+    why: 'gives back the space of an upload the gated presign already signed and no listing uses; it signs no file and publishes nothing, and the space it gives back must be reachable after a tier ends',
+  },
   // Links to files the person already uploaded through a presign that was asked: not a new file.
   'PUT content/:id/media': {
     files: ['frames'],
