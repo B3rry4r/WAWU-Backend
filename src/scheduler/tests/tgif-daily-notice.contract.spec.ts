@@ -248,6 +248,35 @@ describe('The daily TGIF notice (HOME-16)', () => {
       ).toBe(1);
     });
 
+    it('reaches the person in GET /notifications, unread, and marks read like any other', async () => {
+      await job.run(AT_0700);
+      const listed = await request(app.getHttpServer())
+        .get('/api/hub/notifications')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect(200);
+      const body = listed.body as {
+        data?: { items?: { data?: Array<Record<string, unknown>> } };
+        items?: { data?: Array<Record<string, unknown>> };
+      };
+      const items = (body.data?.items ?? body.items)?.data ?? [];
+      const mine = items.filter((n) => n.kind === 'tgif_daily');
+      expect(mine).toHaveLength(1);
+      expect(mine[0]).toMatchObject({
+        read: false,
+        tone: 'accent',
+        actionLabel: 'Read TGIF',
+        actionHref: null,
+      });
+      await request(app.getHttpServer())
+        .post(`/api/hub/notifications/${String(mine[0].id)}/read`)
+        .set('Authorization', `Bearer ${tokenA}`)
+        .expect((res) => {
+          expect(res.status).toBeLessThan(300);
+        });
+      const [row] = await noticesOf(SIGNED_IN_A);
+      expect(row.read).toBe(true);
+    });
+
     it('writes a new one the next day', async () => {
       await job.run(AT_0700);
       const next = await job.run(NEXT_0700);
