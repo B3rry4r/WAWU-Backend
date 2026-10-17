@@ -371,6 +371,25 @@ page calls `GET /admin/ads/:id/report?from=&to=` and draws `delivery` and
 the overview calls `GET /admin/ads/report`. Counts survive a pause or an end.
 A counted campaign cannot be deleted (end it instead).
 
+### Plan settings (`/api/hub/admin/plan-settings`, task TIER-06)
+
+The launch figures (tier prices and lengths, the add-5-products price, the
+points cash rate, expiry and daily cap, packs, AI tool costs, the referral
+ladder, the event pass lines and date, and a few figures from other rulings)
+are admin settings, not code (R-65). `GET` lists every setting with its value,
+its default, the screens that print it and a provisional note where the owner
+did not name the figure. `PATCH` takes `{ "settings": { "<key>": <value> } }`:
+a `null` puts a setting back to its default, zero and negative figures are
+refused, a request is all or nothing, and each setting that changed writes one
+`AdminOpsAudit` row (superadmin and finance change; support reads).
+
+`PLANS_CONFIG` is the live plan: the defaults (`src/plans/plans.config.json`
+and `src/plan-settings/plan-settings.defaults.json`) with the saved rows
+(`PlanSetting`) laid over them, kept in memory. The saving process reloads at
+once; another Hub process picks the change up within 15 seconds. A task that
+needs a setting reads it with `PlanSettingsService.number(key)`, `.text(key)`
+or `.value(key)`. 85/15 is not a setting. Dollar prices are not settings yet.
+
 ### Environment
 
 | Variable | Required | Notes |
