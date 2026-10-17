@@ -102,7 +102,7 @@ export const WEBHOOK_STATE_RULES: {
     },
     failed: {
       clear: false,
-      why: 'The consumer could not use it, which is a stop for review (a reversal with no debit). The body is the evidence, and nothing marks a review closed. A delivery that disagrees with the ledger is `processed`: its evidence is the ledger row's discrepancy, not the body.',
+      why: 'The consumer could not use it, which is a stop for review (a reversal with no debit). The body is the evidence, and nothing marks a review closed. A delivery that disagrees with the ledger is `processed`: its evidence is the discrepancy on the ledger row, not the body.',
     },
     unrecognised: {
       clear: false,

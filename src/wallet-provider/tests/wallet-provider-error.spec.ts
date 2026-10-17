@@ -5,7 +5,10 @@ const STILL_CONFIRMING =
 const NOT_AVAILABLE =
   'Payments are not available right now. Try again in a moment.';
 
-const error = (requestNotSent: boolean, kind = 'outcome_unknown' as const) =>
+const error = (
+  requestNotSent: boolean,
+  kind: 'outcome_unknown' | 'not_confirmed' = 'outcome_unknown',
+) =>
   new WalletProviderError({
     kind,
     provider: 'nuvion',
