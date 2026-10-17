@@ -775,6 +775,8 @@ describe('EVENTS-07 buy event tickets from the wallet', () => {
 
     it('lets the host replace the tiers over an unpaid quote, and waits for one whose payment is being confirmed', async () => {
       const e = await summit();
+      // EVENTS-11 (R-40): setting tickets needs a verified host. Setup only.
+      await h.tick(e.hostId);
       const p = await h.buyer(START);
       const host = `Bearer ${mintToken(e.hostId, 'events07')}`;
       const put = () =>
@@ -807,6 +809,7 @@ describe('EVENTS-07 buy event tickets from the wallet', () => {
       expect((await put()).status).toBe(409);
 
       const fresh = await summit();
+      await h.tick(fresh.hostId);
       const q = await start(p, fresh);
       const swap = await request(h.app.getHttpServer())
         .put(`/api/hub/events/${fresh.id}/tickets`)
