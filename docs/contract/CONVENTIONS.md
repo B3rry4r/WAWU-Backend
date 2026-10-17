@@ -2678,6 +2678,14 @@ The offers inside `reason` are `GET /plans`' figures in the person's billing
 currency only (`priceMinor` in the minor unit of `currency`). The rules, the
 routes that ask and the drafts are in [`PLANS.md`](PLANS.md) section 6.
 
+`tier_required` is also a money error code (TIER-04): `GET
+/plans/purchases/quote` and `POST /plans/purchases` answer `402 tier_required`
+in the money error shape (`reason.code` and `reason.message` only) when the
+person asks to add more products without a tier that is running. The status is
+the same 402, so one handler covers both. Nothing is taken, and a bank-transfer
+purchase waiting for its money when the tier ends is closed with nothing taken
+([`PLANS.md`](PLANS.md) section 11).
+
 ## 24. Send to a bank account (WALLET-09)
 
 `GET /money/banks`, `POST /money/banks/name-check` and `POST

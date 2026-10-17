@@ -64,6 +64,7 @@ import {
   type PurchasePlan,
 } from './plan-purchase-rules';
 import {
+  EXTRA_PRODUCTS_KIND,
   PLAN_PAYMENT_KINDS,
   PLAN_PURCHASE_ROUTE,
   paymentKindOf,
@@ -91,6 +92,11 @@ import {
   SETTLING_MESSAGE,
 } from './plan-transfer-order';
 import { PlanTransferService } from './plan-transfer.service';
+import { ExtraProductsService } from './extra-products.service';
+import type {
+  ExtraProductsPurchaseView,
+  ExtraProductsQuoteView,
+} from './extra-products-view.type';
 import { PointsPackService } from './points-pack.service';
 import type {
   PointsPackPurchaseView,
@@ -194,12 +200,14 @@ export class PlanPurchaseService implements OnModuleInit {
     private readonly transfers: PlanTransferService,
     private readonly opening: WalletOpeningService,
     private readonly packs: PointsPackService,
+    private readonly extras: ExtraProductsService,
   ) {}
 
   onModuleInit(): void {
     this.assertTargetsFit();
-    // The tier kinds are registered here; `points_pack` registers itself
-    // (PointsPackService), and both are answered by `present` below.
+    // The tier kinds are registered here; `points_pack` and `extra_products`
+    // register themselves (PointsPackService, ExtraProductsService), and all
+    // are answered by `present` below.
     for (const kind of PLAN_PAYMENT_KINDS)
       this.registry.register(this.handlerFor(kind));
     this.payments.presentRoute(PLAN_PURCHASE_ROUTE, (view) =>
@@ -240,9 +248,12 @@ export class PlanPurchaseService implements OnModuleInit {
   async quote(
     wallet: OpenWallet,
     q: PlanPurchaseQuoteQueryDto,
-  ): Promise<PlanPurchaseQuoteView | PointsPackQuoteView> {
+  ): Promise<
+    PlanPurchaseQuoteView | PointsPackQuoteView | ExtraProductsQuoteView
+  > {
     refuseMixedRequest(q);
     if (q.kind === POINTS_PACK_KIND) return this.packs.quote(wallet, q);
+    if (q.kind === EXTRA_PRODUCTS_KIND) return this.extras.quote(wallet);
     const terms = await this.termsFor(wallet.wawuUserId, q);
     const targetId = this.targetOf(terms);
     const plan = await this.priced(wallet.wawuUserId, terms);
@@ -311,6 +322,8 @@ export class PlanPurchaseService implements OnModuleInit {
         kind: POINTS_PACK_KIND,
         targetId: this.packs.targetOf(dto.packId),
       };
+    if (dto.kind === EXTRA_PRODUCTS_KIND)
+      return { kind: EXTRA_PRODUCTS_KIND, targetId: this.extras.targetOf() };
     const terms = await this.termsFor(wawuUserId, dto);
     return { kind: paymentKindOf(terms.bump), targetId: this.targetOf(terms) };
   }
@@ -327,7 +340,7 @@ export class PlanPurchaseService implements OnModuleInit {
     dto: PlanPurchaseDto,
     kind: PurchasePaymentKind,
     targetId: string,
-  ): Promise<PlanTransferOrderView | PointsPackPurchaseView> {
+  ): Promise<PurchaseAnswer> {
     const { target, fee, availableKobo } = await this.payments.vouch(wallet, {
       kind,
       targetId,
@@ -344,7 +357,7 @@ export class PlanPurchaseService implements OnModuleInit {
     });
     const view = await this.presentOrder(order, availableKobo);
     await this.transfers.answer(scope, view);
-    return view as PlanTransferOrderView | PointsPackPurchaseView;
+    return view;
   }
 
   /** One purchase as it stands now. Only the buyer reads it. */
@@ -379,14 +392,15 @@ export class PlanPurchaseService implements OnModuleInit {
       });
       if (payment) return this.present(this.payments.view(payment, null));
     }
-    if (kind === POINTS_PACK_KIND) {
+    if (kind === POINTS_PACK_KIND || kind === EXTRA_PRODUCTS_KIND) {
       const waiting =
         order.status === ORDER_STATUS.awaiting && !lapsed(order, new Date());
-      return this.packs.presentOrder(
-        order,
-        waiting,
-        waiting ? await this.transferView(order, knownAvailableKobo) : null,
-      );
+      const transfer = waiting
+        ? await this.transferView(order, knownAvailableKobo)
+        : null;
+      return kind === POINTS_PACK_KIND
+        ? this.packs.presentOrder(order, waiting, transfer)
+        : this.extras.presentOrder(order, waiting, transfer);
     }
     const terms = termsOf(kind, order.targetId);
     if (terms === null)
@@ -774,6 +788,8 @@ export class PlanPurchaseService implements OnModuleInit {
   async present(view: PaymentView): Promise<PurchaseAnswer> {
     if (view.kind === POINTS_PACK_KIND)
       return this.packs.present(view, await this.transfers.byPayment(view.id));
+    if (view.kind === EXTRA_PRODUCTS_KIND)
+      return this.extras.present(view, await this.transfers.byPayment(view.id));
     const terms = termsOf(view.kind, view.targetId);
     if (terms === null)
       throw new Error(`Payment ${view.id} is not a tier payment.`);
@@ -878,7 +894,11 @@ export class PlanPurchaseService implements OnModuleInit {
   ): Promise<PurchaseTerms> {
     const bump = req.bump === true;
     const tierId = req.tierId;
-    if (req.kind === POINTS_PACK_KIND || tierId === undefined)
+    if (
+      req.kind === POINTS_PACK_KIND ||
+      req.kind === EXTRA_PRODUCTS_KIND ||
+      tierId === undefined
+    )
       throw new BadRequestException('tierId is not a valid tier id');
     if (req.kind !== 'upgrade')
       return { kind: req.kind, tierId, fromTierId: null, bump };
@@ -901,14 +921,21 @@ export class PlanPurchaseService implements OnModuleInit {
   }
 }
 
-/** What `POST /plans/purchases` and `GET /plans/purchases/{id}` answer: a tier purchase or a points pack's. */
+/**
+ * What `POST /plans/purchases` and `GET /plans/purchases/{id}` answer: a tier
+ * purchase, a points pack's or the extra products'.
+ */
 export type PurchaseAnswer =
-  PlanPurchaseView | PlanTransferOrderView | PointsPackPurchaseView;
+  | PlanPurchaseView
+  | PlanTransferOrderView
+  | PointsPackPurchaseView
+  | ExtraProductsPurchaseView;
 
 /**
  * A request names what it buys with the field of its own kind: a `tierId` for
- * a plan, a `packId` for a points pack. A body that mixes them is refused, so
- * nothing is bought that the person did not mean to.
+ * a plan, a `packId` for a points pack, none for the extra products. A body
+ * that mixes them is refused, so nothing is bought that the person did not
+ * mean to.
  */
 function refuseMixedRequest(req: {
   kind: string;
@@ -920,6 +947,15 @@ function refuseMixedRequest(req: {
     if (req.tierId !== undefined || req.bump === true)
       throw new BadRequestException(
         'A points pack is bought with a packId only. Do not send a tierId or bump.',
+      );
+  } else if (req.kind === EXTRA_PRODUCTS_KIND) {
+    if (
+      req.tierId !== undefined ||
+      req.packId !== undefined ||
+      req.bump === true
+    )
+      throw new BadRequestException(
+        'Extra products are bought with the kind alone. Do not send a tierId, packId or bump.',
       );
   } else if (req.packId !== undefined) {
     throw new BadRequestException(

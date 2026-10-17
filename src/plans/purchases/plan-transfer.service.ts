@@ -98,6 +98,8 @@ const CLOSING_CODES = new Set<string>([
   'target_not_payable',
   'target_not_found',
   'amount_out_of_range',
+  // The tier an extra products order was placed on ended while it waited.
+  'tier_required',
 ]);
 
 /**
