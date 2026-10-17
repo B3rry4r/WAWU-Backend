@@ -660,6 +660,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'payeeWawuUserId',
     disposition: 'COUNTERPARTY',
   },
+  // The creator's move of the day (WALLET-16, R-55): the same record of what
+  // is owed to this account, one transfer for several sales. It survives for
+  // the same reason.
+  {
+    model: 'EarningMove',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
 
   // ── admin audit trail, kept on purpose ──────────────────────────────────
   // The record that this account's deletion was scheduled and ran (SETTINGS-06):

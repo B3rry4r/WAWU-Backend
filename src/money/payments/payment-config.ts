@@ -31,7 +31,18 @@ export const PAYMENT_CONFIG_KEYS = {
   reviewAfterHours: 'PAYMENT_REVIEW_AFTER_HOURS',
   chargeReviewAboveKobo: 'PAYMENT_CHARGE_REVIEW_ABOVE_KOBO',
   earningsSweepStart: 'EARNINGS_SWEEP_START',
+  earningsMoveMinKobo: 'EARNINGS_MOVE_MIN_KOBO',
+  earningsRefusedReviewAfterHours: 'EARNINGS_REFUSED_REVIEW_AFTER_HOURS',
 } as const;
+
+/**
+ * R-55 (owner, 16 Oct 2026): a creator's earnings go to their wallet once a
+ * day in one transfer; a total under N200 waits for the next day. Both
+ * figures are settings (not provisional: the owner ruled them).
+ */
+export const DEFAULT_EARNINGS_MOVE_MIN_KOBO = 20_000;
+/** R-55: an earning the wallet refuses goes to a person 72 hours after its FIRST refusal. */
+export const DEFAULT_EARNINGS_REFUSED_REVIEW_AFTER_HOURS = 72;
 
 /**
  * A moment with its zone, as an operator writes it: `2026-10-25T09:00:00Z` or
@@ -96,6 +107,18 @@ export class PaymentSettings {
    * time, or to hold the sweep back to a later one.
    */
   readonly earningsSweepStart: Date | null;
+  /**
+   * The least a creator's day total may be for the day's move to be made
+   * (R-55), in kobo: 20000 (N200). A total under it waits and is added to the
+   * next day's. EARNINGS_MOVE_MIN_KOBO, 0 to 100000000.
+   */
+  readonly earningsMoveMinKobo: number;
+  /**
+   * Hours from the FIRST refusal of a creator's move by the wallet to a
+   * person looking at it (R-55): 72. Later refusals do not restart the count.
+   * EARNINGS_REFUSED_REVIEW_AFTER_HOURS, 1 to 720.
+   */
+  readonly earningsRefusedReviewAfterHours: number;
 
   constructor(config: ConfigService) {
     const startKey = PAYMENT_CONFIG_KEYS.earningsSweepStart;
@@ -110,6 +133,40 @@ export class PaymentSettings {
       this.earningsSweepStart = at;
     } else {
       this.earningsSweepStart = null;
+    }
+    const floor = PAYMENT_CONFIG_KEYS.earningsMoveMinKobo;
+    try {
+      this.earningsMoveMinKobo = koboSetting(
+        config.get<string>(floor),
+        floor,
+        DEFAULT_EARNINGS_MOVE_MIN_KOBO,
+        0,
+        100_000_000,
+      );
+    } catch (e) {
+      if (e instanceof FeeConfigError) {
+        throw new FeeConfigError(
+          `${floor} must be a whole number of kobo from 0 to 100000000.`,
+        );
+      }
+      throw e;
+    }
+    const refused = PAYMENT_CONFIG_KEYS.earningsRefusedReviewAfterHours;
+    try {
+      this.earningsRefusedReviewAfterHours = koboSetting(
+        config.get<string>(refused),
+        refused,
+        DEFAULT_EARNINGS_REFUSED_REVIEW_AFTER_HOURS,
+        1,
+        720,
+      );
+    } catch (e) {
+      if (e instanceof FeeConfigError) {
+        throw new FeeConfigError(
+          `${refused} must be a whole number of hours from 1 to 720.`,
+        );
+      }
+      throw e;
     }
     const review = PAYMENT_CONFIG_KEYS.reviewAfterHours;
     try {

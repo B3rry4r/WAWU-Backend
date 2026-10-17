@@ -32,7 +32,7 @@ import { ResponseInterceptor } from '../../common/interceptors/response.intercep
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../hub-app-options';
-import { earningReference } from '../../money/earnings/earning-rules';
+import { moveReference } from '../../money/earnings/earning-rules';
 import { EarningSettlementService } from '../../money/earnings/earning-settlement.service';
 import { MoneyError } from '../../money/money-error';
 import { MoneyModule } from '../../money/money.module';
@@ -243,6 +243,12 @@ describe('WALLET-16 end to end: a sale lands in the payee’s wallet over Nuvion
 
   const settlementOrThrow = (paymentId: string) =>
     prisma.earningSettlement.findUniqueOrThrow({ where: { paymentId } });
+  /** The creator's move of the day (R-55): the one book transfer their earnings travel in. */
+  const moveOf = (p: Person) =>
+    prisma.earningMove.findFirstOrThrow({
+      where: { payeeWawuUserId: p.id },
+      orderBy: { createdAt: 'asc' },
+    });
   const earningsOf = (p: Person) =>
     request(app.getHttpServer())
       .get(`${BASE}/earnings`)
@@ -402,6 +408,9 @@ describe('WALLET-16 end to end: a sale lands in the payee’s wallet over Nuvion
       await prisma.earningSettlement.deleteMany({
         where: { createdAt: { gte: startedAt } },
       });
+      await prisma.earningMove.deleteMany({
+        where: { createdAt: { gte: startedAt } },
+      });
       const pays = await prisma.walletPayment.findMany({
         where: {
           OR: [
@@ -470,7 +479,7 @@ describe('WALLET-16 end to end: a sale lands in the payee’s wallet over Nuvion
     book.createRequests.length = 0;
   });
 
-  it('check 1: three sales land as three book transfers of the 85% shares, each once, and the creator is shown exactly their sum', async () => {
+  it('check 1: three sales land as one book transfer of the 85% shares, once, and the creator is shown exactly their sum', async () => {
     const creator = await person(0, false);
     const buyer = await person(2_000_000);
     const prices = [200_001, 99_999, 12_345];
@@ -482,60 +491,58 @@ describe('WALLET-16 end to end: a sale lands in the payee’s wallet over Nuvion
     const opBefore = book.availableOf(book.operational.id);
     book.createRequests.length = 0;
 
-    // Nuvion takes each book transfer and answers `pending`.
+    // R-55: one book transfer for the creator's day, of the three shares.
+    // Nuvion takes it and answers `pending`.
     await pass();
-    expect(book.createRequests).toHaveLength(3);
-    for (const [i, p] of pays.entries()) {
-      const ref = earningReference(p.id, 1);
-      // The sweep takes the sales in the order it made their earnings; the
-      // requests are found by their reference, not by their place.
-      expect(
-        book.createRequests.find((r) => r.unique_reference === ref),
-      ).toMatchObject({
-        account_id: book.operational.id,
-        amount: shareOf(prices[i]),
-        payment_type: 'book-transfer',
-        nuvion_ban: creator.account!.nuvion_ban,
-        unique_reference: ref,
-      });
-      expect((await settlementOrThrow(p.id)).status).toBe('owed');
+    expect(book.createRequests).toHaveLength(1);
+    const move = await moveOf(creator);
+    const ref = move.customerReference;
+    expect(ref).toBe(moveReference(creator.id, move.dayKey, 1));
+    expect(book.createRequests[0]).toMatchObject({
+      account_id: book.operational.id,
+      amount: expected,
+      payment_type: 'book-transfer',
+      nuvion_ban: creator.account!.nuvion_ban,
+      unique_reference: ref,
+    });
+    for (const p of pays) {
+      const e = await settlementOrThrow(p.id);
+      expect(e.status).toBe('owed');
+      expect(e.moveId).toBe(move.id);
     }
     expect(book.availableOf(creator.account!.id)).toBe(0);
-    // A replay while Nuvion still has them pending sends nothing.
+    // A replay while Nuvion still has it pending sends nothing.
     await pass(10 * 60_000);
-    expect(book.createRequests).toHaveLength(3);
+    expect(book.createRequests).toHaveLength(1);
 
-    // Nuvion finishes them and says so (one by its signed delivery, the others
-    // found by the next question).
-    const first = book.settle(earningReference(pays[0].id, 1), 'successful');
-    await deliverAndDispatch('outflows.completed', first);
-    book.settle(earningReference(pays[1].id, 1), 'successful');
-    book.settle(earningReference(pays[2].id, 1), 'successful');
+    // Nuvion finishes it and says so (by its signed delivery).
+    const done = book.settle(ref, 'successful');
+    await deliverAndDispatch('outflows.completed', done);
     await pass(10 * 60_000);
 
     expect(book.availableOf(creator.account!.id)).toBe(expected);
-    const fees = prices.reduce((sum, p) => sum + bandFee(shareOf(p)), 0);
+    // WAWU's account paid the shares and Nuvion's charge, once.
     expect(opBefore - book.availableOf(book.operational.id)).toBe(
-      expected + fees,
+      expected + bandFee(expected),
     );
-    for (const [i, p] of pays.entries()) {
-      const ref = earningReference(p.id, 1);
-      expect(book.byReference(ref)).toHaveLength(1);
-      const done = await settlementOrThrow(p.id);
-      expect(done.status).toBe('landed');
-      expect(done.providerFeeKobo).toBe(BigInt(bandFee(shareOf(prices[i]))));
-      const rows = await rowsOf(ref);
-      expect(rows).toHaveLength(2);
-      for (const r of rows) {
-        expect(r.status).toBe('completed');
-        expect(r.category).toBe('earning');
-        expect(r.provider).toBe('nuvion');
-      }
+    expect(book.byReference(ref)).toHaveLength(1);
+    const landed = await moveOf(creator);
+    expect(landed.status).toBe('landed');
+    expect(landed.providerFeeKobo).toBe(BigInt(bandFee(expected)));
+    for (const p of pays) {
+      expect((await settlementOrThrow(p.id)).status).toBe('landed');
+    }
+    const rows = await rowsOf(ref);
+    expect(rows).toHaveLength(2);
+    for (const r of rows) {
+      expect(r.status).toBe('completed');
+      expect(r.category).toBe('earning');
+      expect(r.provider).toBe('nuvion');
     }
     const view = body<EarningsView>(await earningsOf(creator)).data!;
     expect(view.allTime.earnedKobo).toBe(expected);
     expect(view.waiting).toEqual({ count: 0, amountKobo: 0 });
-    expect(book.createRequests).toHaveLength(3);
+    expect(book.createRequests).toHaveLength(1);
     expect(fintavaHits).toEqual([]);
   });
 
@@ -543,11 +550,10 @@ describe('WALLET-16 end to end: a sale lands in the payee’s wallet over Nuvion
     const creator = mint();
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, item(creator, 250_000));
-    const ref = earningReference(paid.id, 1);
     book.createRequests.length = 0;
     await pass();
     expect((await settlementOrThrow(paid.id)).waiting).toBe('payee_wallet');
-    expect(book.byReference(ref)).toHaveLength(0);
+    expect(book.createRequests).toHaveLength(0);
     expect(body<EarningsView>(await earningsOf(creator)).data!.waiting).toEqual(
       { count: 1, amountKobo: shareOf(250_000) },
     );
@@ -557,6 +563,7 @@ describe('WALLET-16 end to end: a sale lands in the payee’s wallet over Nuvion
     await openFor(creator, 0);
     book.mode = 'successful';
     await earnings.sweep(new Date(Date.now() + 1_000));
+    const ref = (await moveOf(creator)).customerReference;
     expect(book.byReference(ref)).toHaveLength(1);
     expect(book.availableOf(creator.account!.id)).toBe(shareOf(250_000));
     expect((await settlementOrThrow(paid.id)).status).toBe('landed');
@@ -570,7 +577,6 @@ describe('WALLET-16 end to end: a sale lands in the payee’s wallet over Nuvion
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, item(creator, 120_000));
-    const ref = earningReference(paid.id, 1);
     const other = new EarningSettlementService(
       prisma,
       // the same provider the module uses
@@ -583,6 +589,7 @@ describe('WALLET-16 end to end: a sale lands in the payee’s wallet over Nuvion
     const now = later();
     await Promise.all([earnings.sweep(now), other.sweep(now)]);
     const row = await settlementOrThrow(paid.id);
+    const ref = (await moveOf(creator)).customerReference;
     await Promise.all([
       earnings.drive(row.id, later()),
       other.drive(row.id, later()),
@@ -596,30 +603,42 @@ describe('WALLET-16 end to end: a sale lands in the payee’s wallet over Nuvion
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const failed = await sale(buyer, item(creator, 100_000));
-    const first = earningReference(failed.id, 1);
     await pass();
+    const move = await moveOf(creator);
+    const first = move.customerReference;
     expect(book.byReference(first)).toHaveLength(1);
     book.settle(first, 'failed');
     await pass(10 * 60_000);
-    const retry = await settlementOrThrow(failed.id);
+    const retry = await moveOf(creator);
     expect(retry.attempt).toBe(2);
+    expect(retry.customerReference).toBe(
+      moveReference(creator.id, retry.dayKey, 2),
+    );
     book.mode = 'successful';
     await pass(2 * 60 * 60_000);
     expect((await settlementOrThrow(failed.id)).status).toBe('landed');
-    expect(book.byReference(earningReference(failed.id, 2))).toHaveLength(1);
+    expect(
+      book.byReference(moveReference(creator.id, retry.dayKey, 2)),
+    ).toHaveLength(1);
     expect(book.availableOf(creator.account!.id)).toBe(85_000);
 
+    // Another creator: a creator has one transfer a day, and this one is theirs.
     book.mode = 'pending';
-    const reversed = await sale(buyer, item(creator, 100_000));
-    const ref = earningReference(reversed.id, 1);
+    const other = await person(0, false);
+    const reversed = await sale(buyer, item(other, 100_000));
     await pass();
+    const reversedMove = await moveOf(other);
+    const ref = reversedMove.customerReference;
     book.settle(ref, 'successful');
     book.settle(ref, 'reversed');
     await pass(10 * 60_000);
-    const row = await settlementOrThrow(reversed.id);
+    const row = await moveOf(other);
     expect(row.reviewSince).not.toBeNull();
+    expect((await settlementOrThrow(reversed.id)).status).toBe('owed');
     await pass(2 * 60 * 60_000);
     expect(book.byReference(ref)).toHaveLength(1);
-    expect(book.byReference(earningReference(reversed.id, 2))).toHaveLength(0);
+    expect(
+      book.byReference(moveReference(other.id, reversedMove.dayKey, 2)),
+    ).toHaveLength(0);
   });
 });

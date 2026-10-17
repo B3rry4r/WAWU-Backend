@@ -5186,11 +5186,76 @@ model EarningSettlement {
   /// an amount that is not the share). Out of the sweep; the money stays put.
   reviewSince              DateTime?
   discrepancy              String?
+  /// The daily move this earning travels in (R-55): null until the creator's
+  /// move for the day takes it. The transfer, its reference and its state are
+  /// the move's; this row keeps what was earned, and lands with the move.
+  moveId                   String?
+  move                     EarningMove?  @relation(fields: [moveId], references: [id])
   createdAt                DateTime      @default(now())
   updatedAt                DateTime      @updatedAt
 
   @@index([status, reviewSince, nextAttemptAt])
   @@index([payeeWawuUserId, earnedAt])
+  @@index([moveId])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// ONE MOVE A DAY PER CREATOR (task WALLET-16 round 3, R-55, owner 16 Oct 2026)
+///
+/// A creator's earnings go to their wallet once a day, in ONE transfer. The
+/// move takes every earning of the creator that is owed and not yet in a move
+/// (`EarningSettlement.moveId` null) when the day's move is made, if their
+/// total is at least the floor (EARNINGS_MOVE_MIN_KOBO, 20000 kobo = N200);
+/// under it they wait and are added to the next day's. `dayKey` is the
+/// Africa/Lagos date the move was made on; (payee, dayKey) is unique, so two
+/// servers on one day make one move, and its reference names the creator and
+/// the day, so the provider sees it once. The earnings in a move never change
+/// after it is made, except that an earning whose sale stopped being a
+/// finished one leaves it before anything is sent (the amount and the
+/// reference then change with it).
+///
+/// An earning the wallet REFUSES (waiting `refused`) is put in front of a
+/// person 72 hours after the FIRST refusal (`firstRefusedAt`, EARNINGS_
+/// REFUSED_REVIEW_AFTER_HOURS): later refusals do not move that time, and the
+/// review (`reviewSince`) is set once.
+model EarningMove {
+  id                       String              @id @default(uuid())
+  payeeWawuUserId          String
+  /// YYYY-MM-DD in Africa/Lagos: the day this move was made on.
+  dayKey                   String
+  /// The wallet provider that took the sales (their own).
+  provider                 String              @default("fintava")
+  /// WAWU's own account at the provider the sales were paid into.
+  merchantAccountNumber    String
+  /// The sum of the earnings in it, in kobo. Positive.
+  amountKobo               BigInt
+  /// How many earnings it holds.
+  earnings                 Int
+  /// owed or landed.
+  status                   String              @default("owed")
+  settledAt                DateTime?
+  /// OUR reference at the provider: names the creator and the day, with the
+  /// try's number added after a proven failure.
+  customerReference        String              @unique
+  attempt                  Int                 @default(1)
+  destinationAccountNumber String?
+  sentAt                   DateTime?
+  providerFeeKobo          BigInt?
+  nextAttemptAt            DateTime?
+  attempts                 Int                 @default(0)
+  checks                   Int                 @default(0)
+  waiting                  String?
+  /// When the wallet FIRST refused this move. Set once; never moved.
+  firstRefusedAt           DateTime?
+  /// A person has to look. Set once.
+  reviewSince              DateTime?
+  discrepancy              String?
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+  members                  EarningSettlement[]
+
+  @@unique([payeeWawuUserId, dayKey])
+  @@index([status, reviewSince, nextAttemptAt])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────

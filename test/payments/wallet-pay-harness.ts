@@ -282,12 +282,19 @@ export async function bootPayApp(
         where: { paymentId: { in: ids } },
         select: { customerReference: true },
       });
+      // The creator's move of the day (R-55) is the transfer the provider
+      // and the ledger know; its earnings are the rows above.
+      const moveRows = await prisma.earningMove.findMany({
+        where: { payeeWawuUserId: { in: users } },
+        select: { customerReference: true },
+      });
       const refs = [
         ...payRows.map((r) => r.customerReference),
         ...holdRows.flatMap((r) =>
           r.customerReference ? [r.customerReference] : [],
         ),
         ...earningRows.map((r) => r.customerReference),
+        ...moveRows.map((r) => r.customerReference),
       ];
       await prisma.fintavaLedgerEntry.deleteMany({
         where: {
@@ -299,6 +306,9 @@ export async function bootPayApp(
       });
       await prisma.earningSettlement.deleteMany({
         where: { paymentId: { in: ids } },
+      });
+      await prisma.earningMove.deleteMany({
+        where: { payeeWawuUserId: { in: users } },
       });
       await prisma.walletHold.deleteMany({ where: { paymentId: { in: ids } } });
       if (opts.cleanup) await opts.cleanup(prisma, users);

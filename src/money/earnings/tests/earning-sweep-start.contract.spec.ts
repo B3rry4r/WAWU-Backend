@@ -143,13 +143,13 @@ describe('The earnings sweep starts at a time (WALLET-16)', () => {
     const landed = await earningOf(after.paymentId);
     expect(landed).toMatchObject({ status: 'landed' });
     expect(Number(landed!.amountKobo)).toBe(SHARE);
-    expect(
-      h.nuvion.transfers.filter(
-        (t) =>
-          t.request.unique_reference === `wawu-earn-${after.paymentId}` ||
-          t.request.unique_reference === `wawu-earn-${before.paymentId}`,
-      ),
-    ).toHaveLength(1);
+    // The creator's one move of the day carries the later sale's share alone.
+    const toCreator = h.nuvion.transfers.filter(
+      (t) => t.toAccountId === creator.account!.accountId,
+    );
+    expect(toCreator).toHaveLength(1);
+    expect(toCreator[0].amountKobo).toBe(BigInt(SHARE));
+    expect(landed!.moveId).not.toBeNull();
     expect(creator.account!.availableKobo).toBe(BigInt(SHARE));
 
     // The earlier sale is listed for an admin, with what it would have paid.

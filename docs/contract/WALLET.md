@@ -342,7 +342,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | W37 PIN reset | code to the phone on file, resend timer | `POST /money/pin/reset` → `sentTo` (last 4 digits), `resendAvailableAt`, `expiresAt`; `429 reset_codes_exhausted`, `503 provider_unreachable` (MONEY-14) |
 | | code check, then W36 | `POST /money/pin/reset/confirm` (`code`, `newPin`, `newPinConfirmation`) |
 | W39 Earnings | earned all time and this month, by stream (Unlocks, Tips, Paid DMs), by content | `GET /money/earnings` → `allTime`, `thisMonth` (`earnedKobo`, `streams`), `GET /money/earnings/content?month=` → `EarningContentPage` (WALLET-16). The web's `GET /content/mine/earnings` is unchanged |
-| | no "Ready to move", no button; the money lands by itself (R-11) | nothing to call: `EarningSettlementService` moves each sale's 85% |
+| | no "Ready to move", no button; the money lands by itself (R-11) | nothing to call: `EarningSettlementService` moves a creator's earnings once a day in one transfer (R-55) |
 | | a creator with no wallet: the money is waiting, "Open your wallet" | `EarningsView.waiting` (`count`, `amountKobo`) and `walletOpen: false`; both routes work without a wallet |
 | | paid DM money still held for the creator | `GET /money/holds?role=payee` (behind the wallet gate, G-449) or `EarningsView.held` (not gated) |
 | A21 Payout bank | bank list, name check | `GET /money/banks`, `POST /money/banks/name-check` |

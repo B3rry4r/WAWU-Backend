@@ -1,15 +1,19 @@
+import { createHash } from 'node:crypto';
 import { HELD_PAYMENT_KINDS } from '../dto/money-enums';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import { WalletProviderLimitError } from '../../wallet-provider/wallet-provider-limit';
 
 /**
  * The rules of an earning's landing that need no database (task WALLET-16,
- * R-11).
+ * R-11, R-55).
  *
  * An ordinary sale (not a held kind) is paid into WAWU's own account at the
  * wallet provider; the payee's 85% then has to move into the payee's wallet.
- * `EarningSettlement` is that move, one row per sale. The machinery is the
- * hold's release (MONEY-18) with nothing to decide: the sale is the decision.
+ * `EarningSettlement` is what the sale earned, one row per sale. The move
+ * itself is `EarningMove`: ONE transfer per creator per day (R-55), taking
+ * every earning the creator has that no move has taken yet, if their total is
+ * at least the floor. The machinery is the hold's release (MONEY-18) with
+ * nothing to decide: the sale is the decision.
  */
 
 /** Where an earning stands: owed until the provider confirmed the move. */
@@ -29,8 +33,8 @@ export type EarningStatus = (typeof EARNING_STATUSES)[number];
  * - `not_supported`: the running provider has no way to make this move yet
  *   (a Nuvion adapter without its book transfers). Logged as an error on every
  *   try; the earning waits and lands once the provider can.
- * - `refused`: the provider refused and nothing moved; a person looks past the
- *   review bound.
+ * - `refused`: the provider refused and nothing moved; a person looks 72 hours
+ *   after the FIRST refusal (R-55), however many times it refused since.
  */
 export const EARNING_WAITING = [
   'payee_wallet',
@@ -61,6 +65,76 @@ export interface EarningSettlementResult {
   status: EarningStatus;
 }
 
+/** Where a creator's move of the day stands, as a caller is told. */
+export interface EarningMoveResult {
+  moveId: string;
+  payeeWawuUserId: string;
+  state: EarningSettlementState;
+  waiting: EarningWaiting | null;
+  status: EarningStatus;
+  /** What the move carries, in kobo. */
+  amountKobo: bigint;
+  /** How many earnings it carries. */
+  earnings: number;
+}
+
+/**
+ * The most earnings one move takes: a creator with more than this in a day
+ * has the rest moved the next day (the move is one transfer; its earnings
+ * are locked and listed in one transaction).
+ */
+export const EARNING_MOVE_MAX_EARNINGS = 1000;
+
+/** Creators the planner looks at in one query. */
+export const EARNING_PLAN_PAGE = 50;
+
+/**
+ * A day, as the money moves by it (R-55): the Africa/Lagos calendar day, the
+ * one the app and the month of an earning already use (Lagos has no summer
+ * time, so a day is always 24 hours from +01:00 midnight).
+ */
+export interface EarningDay {
+  /** YYYY-MM-DD. */
+  key: string;
+  /** Midnight, the first instant of the day. */
+  start: Date;
+  /** Midnight after it: the first instant of the next day. */
+  end: Date;
+}
+
+export function lagosDay(now: Date): EarningDay {
+  const key = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Lagos',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+  const start = new Date(`${key}T00:00:00+01:00`);
+  return { key, start, end: new Date(start.getTime() + 86_400_000) };
+}
+
+/**
+ * Our reference at the provider for one try of one creator's move of one day
+ * (R-55): `wawu-earn-d-<YYYYMMDD>-<24 hex of the creator's id>`, 45
+ * characters, inside Nuvion's 64. Built from the creator and the day alone,
+ * so any server builds the same one; a later try, after the provider's own
+ * record proved the earlier one failed (or after an earning left the move
+ * before anything was sent), adds its number. It can never equal a sale's
+ * reference (`wawu-earn-<payment id>`).
+ */
+export function moveReference(
+  payeeWawuUserId: string,
+  dayKey: string,
+  attempt: number,
+): string {
+  const who = createHash('sha256')
+    .update(payeeWawuUserId)
+    .digest('hex')
+    .slice(0, 24);
+  const base = `wawu-earn-d-${dayKey.replaceAll('-', '')}-${who}`;
+  return attempt <= 1 ? base : `${base}-${attempt}`;
+}
+
 /** Where a pass of the sweep stopped, in the order (createdAt, id). */
 export interface EarningSweepCursor {
   at: Date;
@@ -82,7 +156,9 @@ export const EARNING_ADOPT_PAGE = 200;
 export const EARNING_ADOPT_MAX_PAGES = 10;
 
 /**
- * Our reference at the provider for one try of one earning. The first try is
+ * The reference an earning (one sale) carries in our table: `wawu-earn-<payment
+ * id>`. Since R-55 the provider sees the creator's move, not this one
+ * (`moveReference`); this stays the earning's own unique name. The first try is
  * `wawu-earn-<payment id>` (46 characters, inside Nuvion's 64
  * `unique_reference`); a later try, after the provider's own record proved
  * the earlier one failed, adds its number. The payment id names the earning,

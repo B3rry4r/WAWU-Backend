@@ -175,9 +175,10 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
  * kind that is not held (an unlock, a tip, a legal fee, school fees) is paid
  * into WAWU's own account; when it is finished, `EarningSettlementService`
  * (exported; a sweep every minute, where ScheduleModule.forRoot() is loaded)
- * moves the payee's 85% from there into the payee's wallet. A payee with no
- * wallet keeps earning: the share waits and lands within a minute of the
- * wallet opening. `GET /money/earnings` and `/money/earnings/content` read
+ * moves the payee's 85% from there into the payee's wallet: ONCE A DAY, in
+ * one transfer per creator (R-55), and a day's total under N200 waits for
+ * the next. A payee with no wallet keeps earning: the shares wait and are
+ * moved the day the wallet opens. `GET /money/earnings` and `/money/earnings/content` read
  * what was earned from our records of the sales (not behind the wallet gate,
  * never a balance).
  * WALLET-18: receipts. The owner's routes (`/money/transactions/{id}/receipt`,
