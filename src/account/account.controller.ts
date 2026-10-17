@@ -25,7 +25,9 @@ export class AccountController {
   constructor(private readonly accountService: AccountService) {}
 
   /**
-   * Asks to delete the account (R-17: it waits 30 days). Refused with
+   * Asks to delete the account (R-17: it waits 30 days). The body may carry
+   * `reason`, why the person is leaving (Z7, SETTINGS-05), kept on the
+   * deletion row. Refused with
    * `409 account_deletion_blocked` while the wallet holds money, a hold is
    * open or earnings are waiting (SETTINGS-06). `503 provider_unreachable`
    * when the wallet provider does not answer, so "empty" is never guessed.
@@ -38,9 +40,9 @@ export class AccountController {
   })
   async deleteAccount(
     @CurrentUser() user: WawuJwtClaims,
-    @Body() _body: DeleteAccountDto,
+    @Body() body: DeleteAccountDto,
   ): Promise<AccountDeletionResponse> {
-    return this.accountService.deleteAccount(user.sub);
+    return this.accountService.deleteAccount(user.sub, body?.reason);
   }
 
   /**
