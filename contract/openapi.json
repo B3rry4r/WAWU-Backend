@@ -1192,6 +1192,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "reason.code: identity_paused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityPausedErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "tags": [
@@ -8020,6 +8030,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "reason.code: identity_paused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityPausedErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "summary": "Publishes a piece. Needs a running tier or a tick that has not ended, and\na free place for one more product: otherwise 402 `tier_required` or\n`product_limit_reached` with the offers (TIER-02).",
@@ -8329,6 +8349,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "reason.code: identity_paused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityPausedErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "summary": "Edit the details or the file of a piece that is pending or rejected.\nSending a file needs a way to publish (402 `tier_required`, TIER-02).",
@@ -8367,6 +8397,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: identity_paused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityPausedErrorEnvelope"
                 }
               }
             }
@@ -9425,6 +9465,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: identity_paused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityPausedErrorEnvelope"
                 }
               }
             }
@@ -33940,6 +33990,65 @@
           },
           "reason": {
             "$ref": "#/components/schemas/TierGateReasonDto"
+          },
+          "message": {
+            "type": "string",
+            "description": "Same as reason.message."
+          }
+        },
+        "required": [
+          "statusCode",
+          "data",
+          "reason",
+          "message"
+        ]
+      },
+      "IdentityPausedReasonDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "identity_paused"
+            ]
+          },
+          "stage": {
+            "description": "Where the check stands: `needs_documents` (the documents the bank asked\nfor are still needed), `rejected`, `stopped` (for good) or `expired`\n(left unfinished too long). The same words as `review.stage` on\n`GET /money/wallet`.",
+            "enum": [
+              "needs_documents",
+              "rejected",
+              "stopped",
+              "expired"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "type": "string",
+            "description": "The Hub's sentence: what is paused, why, and what to do. The app shows it as it is. No em-dash."
+          }
+        },
+        "required": [
+          "code",
+          "stage",
+          "message"
+        ]
+      },
+      "IdentityPausedErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "integer",
+            "description": "403.",
+            "example": 403
+          },
+          "data": {
+            "description": "Always null on an error.",
+            "type": "object",
+            "nullable": true,
+            "example": null
+          },
+          "reason": {
+            "$ref": "#/components/schemas/IdentityPausedReasonDto"
           },
           "message": {
             "type": "string",

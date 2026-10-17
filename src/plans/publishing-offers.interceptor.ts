@@ -10,6 +10,7 @@ import { ApiResponse } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { Observable, catchError, from, mergeMap, throwError } from 'rxjs';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
+import { IdentityPausedErrorEnvelope } from './dto/identity-paused-error.dto';
 import { TierGateErrorEnvelope } from './dto/tier-gate-error.dto';
 import { limitOffers, tierRequiredOffers } from './limit-offers';
 import { PlansService } from './plans.service';
@@ -105,6 +106,9 @@ export class PublishingOffersInterceptor implements NestInterceptor {
  * On every route that publishes a piece of content or accepts a file for one:
  * the 402 answers carry the offers, and the contract documents the body.
  * `publishing-gate-coverage.spec.ts` lists the routes that carry it.
+ *
+ * The same routes answer 403 `identity_paused` while the person's identity
+ * check is paused (S7 round 2, F3); it carries no offers.
  */
 export function GatesPublishing(): MethodDecorator {
   return applyDecorators(
@@ -113,6 +117,11 @@ export function GatesPublishing(): MethodDecorator {
       status: 402,
       description: 'reason.code: tier_required, product_limit_reached',
       type: TierGateErrorEnvelope,
+    }),
+    ApiResponse({
+      status: 403,
+      description: 'reason.code: identity_paused',
+      type: IdentityPausedErrorEnvelope,
     }),
   );
 }
