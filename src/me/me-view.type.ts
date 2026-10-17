@@ -135,10 +135,11 @@ export type NotificationCategory = 'money' | 'messages' | 'content' | 'other';
 
 /**
  * What opening the notification opens. `id` is the thing's id: a piece, a
- * paid question (DirectMessage), a room, or a person's wawuId.
+ * paid question (DirectMessage), a room, a person's wawuId, or (WALLET-39) a
+ * wallet transaction: the id `GET /money/transactions/{id}` answers.
  */
 export interface NotificationTargetView {
-  kind: 'content' | 'paid_question' | 'community' | 'profile';
+  kind: 'content' | 'paid_question' | 'community' | 'profile' | 'transaction';
   id: string;
   /** The piece's title or the room's name, as it is now; null for a question or a person. */
   title: string | null;

@@ -61,7 +61,12 @@ describe('which notifications reach a phone', () => {
         PUSH_ONLY_GATE[kind] ?? SETTINGS_GATE[kind],
       );
     }
-    expect(PUSH_ONLY_GATE).toEqual({ dm_received: 'dmReminders' });
+    // WALLET-39: the correction of a money-in notice is never hidden from the
+    // list; "Money in" mutes only its push.
+    expect(PUSH_ONLY_GATE).toEqual({
+      dm_received: 'dmReminders',
+      money_in_reversed: 'moneyIn',
+    });
     expect(SETTINGS_GATE.dm_received).toBeUndefined(); // the list is unchanged for the web
   });
 });
@@ -81,6 +86,14 @@ const EVENTS: NotificationEvent[] = [
     amountKobo: 250_050n,
     senderName: 'Ada Obi',
     senderAccountNumber: '0865231291',
+  },
+  // WALLET-39: a credit the person was told about was taken back.
+  {
+    kind: 'money_in_reversed',
+    userWawuId: 'u',
+    amountKobo: 250_050n,
+    source: 'transfer',
+    senderName: 'Tolu Bakare',
   },
   { kind: 'dm_received', userWawuId: 'u', amount: 2000 },
   { kind: 'dm_deadline', userWawuId: 'u', hoursLeft: 3 },
