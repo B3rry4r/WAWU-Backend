@@ -222,7 +222,7 @@ Every refusal is the envelope this backend already answers with
 | `name_check_failed` | 422 | the bank did not confirm the account | |
 | `account_name_changed` | 409 | a saved bank account whose holder's name, or whose bank's name, at the bank is no longer the one kept, or an account that is not saved whose holder at the bank is no longer the one the name check showed (WALLET-09, section 24): `accountName` and `bankName` as they stand now; nothing was sent. A saved account is confirmed by saving it again with `confirmCurrentName: true`; an unsaved one by a new name check |
 | `account_not_in_your_name` | 409 | a payout account whose holder at the bank is not the person's verified name (the BVN name kept by the check, else the wallet's own account name; with neither, the answer is the same code with a plain reason and no `verifiedName`), on `PUT /money/payout-account`; or a withdrawal (a bank send to the saved payout account) while its holder is not, on `POST /money/transfers/bank`, answered before the PIN (no try used, the Idempotency-Key given back). Nothing is saved or sent. `accountName` and `bankName` are the bank's; `verifiedName` is the name on the person's wallet, left out when the wallet holds none. Sends to anyone else's account are unchanged (WALLET-37, R-51, G-765) | `accountName`, `bankName`, `verifiedName` |
-| `name_check_rate_limited` | 429 | the person has run `name_check_per_hour` (launch value 30; config key `NAME_CHECK_PER_HOUR` until the admin-settings registry lands) bank name checks in the hour, counted per signed-in person and never per address: `POST /money/banks/name-check`, `PUT /money/payout-account` and `POST /money/beneficiaries` for a bank account share the count. No check is made. The message gives the minutes left in plain words; also sent as the `Retry-After` header (WALLET-37, R-51, G-764) | `retryAfterSeconds` |
+| `name_check_rate_limited` | 429 | the person has run `name_check_per_hour` (launch value 30; config key `NAME_CHECK_PER_HOUR` until the admin-settings registry lands) bank name checks in the hour, counted per signed-in person and never per address: `POST /money/banks/name-check`, `PUT /money/payout-account` and `POST /money/beneficiaries` for a bank account share the count, and so does `POST /money/transfers/bank` to an account that is not saved when its `nameToken` is not one this person got for that bank and account number (or is old, or missing). No check is made. The message gives the minutes left in plain words; also sent as the `Retry-After` header (WALLET-37, R-51, G-764) | `retryAfterSeconds` |
 | `recipient_not_found` | 404 | no such WAWU user | |
 | `recipient_has_no_wallet` | 409 | they have not opened a wallet | |
 | `recipient_blocked` | 403 | a block between the two people | |
@@ -2644,7 +2644,13 @@ route of its own. Reading one send, of either kind, is `GET
   the 31st is `429 name_check_rate_limited` with the minutes left, no check
   made. It is per person, never per address: two people on one address each
   have their own count. A check the bank could not answer (`503`) is not
-  counted. A bank send's own check just before the money goes is not counted.
+  counted. A bank send's own check just before the money goes is not
+  counted when it is the person's own: a send to a saved account, or to an
+  account that is not saved with a `nameToken` this person got for that bank
+  code and account number (not older than 15 minutes). Any other send to an
+  account that is not saved is a name check (round 5, G-764): it spends one of
+  the 30, and past them it is `429 name_check_rate_limited` before the PIN,
+  the key given back, the bank not asked, no holder name in the answer.
 - **A withdrawal goes only to the person's own name** (WALLET-37, R-51,
   G-765). A withdrawal is a bank send to the saved payout account. The bank
   is asked as for any send; when the holder it gives is not the person's

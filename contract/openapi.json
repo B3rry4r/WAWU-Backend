@@ -17140,6 +17140,16 @@
               }
             }
           },
+          "429": {
+            "description": "reason.code: name_check_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "description": "reason.code: provider_unreachable, fees_not_set",
             "content": {
@@ -17156,7 +17166,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Send to a bank account (W8 to W14), or withdraw to the payout account\n(W17 to W19, which is a bank send to it). Answers 201 with the send:\n`pending` until the bank's answer arrives (a delivery, or the sweep that\nasks the provider by our reference), `completed`, or `failed`; the app\nreads it from `GET /money/transfers/{id}`. The account is name-checked\nwith the bank again BEFORE the PIN is looked at and the send goes to the\nname the bank gives: the app never sends a name. A saved account whose\nholder or bank is no longer the one kept is `409 account_name_changed`,\ncarrying both names as they stand now; nothing is sent until the person\nconfirms them by saving the account again. A withdrawal to the payout\naccount while its holder is not the person's verified name is `409\naccount_not_in_your_name`, also before the PIN (WALLET-37, R-51); a send\nto anyone else's account is unchanged. The same Idempotency-Key and\nbody answer the first result again (`Idempotent-Replayed: true`) without\nchecking the PIN. fees_not_set comes before the wallet gate, the key and\nthe PIN; limit_reached (WAWU's limit or the provider's, WALLET-23) before\nanything is sent.",
+        "summary": "Send to a bank account (W8 to W14), or withdraw to the payout account\n(W17 to W19, which is a bank send to it). Answers 201 with the send:\n`pending` until the bank's answer arrives (a delivery, or the sweep that\nasks the provider by our reference), `completed`, or `failed`; the app\nreads it from `GET /money/transfers/{id}`. The account is name-checked\nwith the bank again BEFORE the PIN is looked at and the send goes to the\nname the bank gives: the app never sends a name. A saved account whose\nholder or bank is no longer the one kept is `409 account_name_changed`,\ncarrying both names as they stand now; nothing is sent until the person\nconfirms them by saving the account again. A withdrawal to the payout\naccount while its holder is not the person's verified name is `409\naccount_not_in_your_name`, also before the PIN (WALLET-37, R-51); a send\nto anyone else's account is unchanged. Asking the bank about an account\nthat is not saved, with a name token the person did not get for it, is a\nname check: it spends one of the 30 an hour (`429 name_check_rate_limited`\npast them, before the PIN, the bank not asked). The same Idempotency-Key and\nbody answer the first result again (`Idempotent-Replayed: true`) without\nchecking the PIN. fees_not_set comes before the wallet gate, the key and\nthe PIN; limit_reached (WAWU's limit or the provider's, WALLET-23) before\nanything is sent.",
         "tags": [
           "MoneyTransfers"
         ],

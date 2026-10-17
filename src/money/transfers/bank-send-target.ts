@@ -6,7 +6,7 @@ import {
   Inject,
   Injectable,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
@@ -27,6 +27,7 @@ import {
   NAME_CHECK_ANSWERS,
   NAME_CHECK_FAILED_MESSAGE,
 } from '../saved-accounts/bank-account-check.service';
+import { NameCheckBudget } from '../saved-accounts/name-check-budget';
 import { NameCheckTokenService } from '../saved-accounts/name-check-token.service';
 import {
   type BankSendTarget,
@@ -54,6 +55,13 @@ export const ACCOUNT_CHANGED_MESSAGE =
  */
 export const NAME_TOKEN_REQUIRED_MESSAGE =
   'Check the name on this account first, then send again.';
+
+/**
+ * How the bank is asked about an account that is not saved: the check is
+ * handed in, and the caller decides whether it spends one of the person's
+ * hourly name checks (WALLET-37 round 5). Saved accounts do not use it.
+ */
+export type UnsavedEnquiry = <T>(ask: () => Promise<T>) => Promise<T>;
 
 /** Where the bank send found its place: a saved place, so its payee ids are kept after the send. */
 export type BankSendPlace =
@@ -116,6 +124,7 @@ export class BankSendTargets {
     owner: string,
     bankCode: string,
     accountNumber: string,
+    unsavedEnquiry?: UnsavedEnquiry,
   ): Promise<ResolvedBankTarget> {
     await this.assertNotOwnWallet(owner, bankCode, accountNumber);
 
@@ -145,11 +154,14 @@ export class BankSendTargets {
       (prepared.state === 'ready' || prepared.state === 'name_changed')
         ? prepared.target
         : null;
-    // The bank, asked now, with the code the provider knows the bank by.
-    const live = await this.banks.check(
-      kept?.bankCode ?? bankCode,
-      accountNumber,
-    );
+    // The bank, asked now, with the code the provider knows the bank by. An
+    // account that is not saved is asked through `unsavedEnquiry`, which may
+    // count the enquiry or refuse it before the bank is reached.
+    const ask = () =>
+      this.banks.check(kept?.bankCode ?? bankCode, accountNumber);
+    const live = await (place === null && unsavedEnquiry
+      ? unsavedEnquiry(ask)
+      : ask());
 
     if (kept && prepared) {
       const holderChanged =
@@ -254,6 +266,13 @@ export class BankSendTargets {
  *   the payout account a withdrawal goes to) is compared with the name kept
  *   for it, as before, and needs no token.
  *
+ * - **Asking the bank about an account that is not saved is a name check**
+ *   (WALLET-37 round 5; R-51, G-764): unless the send carries a token this
+ *   person got for this bank code and account number (and it is not old), it
+ *   spends one of their 30 an hour like `POST /money/banks/name-check`, and
+ *   past them the answer is `429 name_check_rate_limited` with the bank not
+ *   asked, so no holder name comes back. A saved account is never counted.
+ *
  * A refusal here drops any PIN or biometric header unread, as the wallet gate
  * does.
  */
@@ -262,6 +281,7 @@ export class BankSendTargetGuard implements CanActivate {
   constructor(
     private readonly targets: BankSendTargets,
     private readonly nameTokens: NameCheckTokenService,
+    private readonly budget: NameCheckBudget,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -289,10 +309,23 @@ export class BankSendTargetGuard implements CanActivate {
       if (nameToken !== undefined && typeof nameToken !== 'string') {
         throw new BadRequestException('nameToken must be a string');
       }
+      // Asking the bank for an account that is not saved, with a name token
+      // the person did not get for this account (or none), is a name check
+      // like any other: it spends one of their 30 an hour, and past them the
+      // bank is not asked and no name comes back (WALLET-37 round 5, G-764).
+      // A send with a token this person got for this account, or to a saved
+      // account, is the send's own check and is not counted. A bank that
+      // cannot answer gives the place back.
+      const res = context.switchToHttp().getResponse<Response>();
+      const unsavedEnquiry: UnsavedEnquiry = (ask) =>
+        this.nameTokens.issuedFor(nameToken, owner, bankCode, accountNumber)
+          ? ask()
+          : this.budget.run(owner, res, ask);
       const resolved = await this.targets.resolve(
         owner,
         bankCode,
         accountNumber,
+        unsavedEnquiry,
       );
       if (resolved.place === null) {
         // An account that is not saved is sent to only under the name the

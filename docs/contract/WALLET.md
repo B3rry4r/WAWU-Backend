@@ -46,7 +46,7 @@ caller from the token.
 | `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10); only an account in the person's own name, else `409 account_not_in_your_name` (WALLET-37) |
 | `GET /money/fees/quote?kind=&amountKobo=&billCategory=` | `FeeQuoteView` | | WALLET-15 (served; CONVENTIONS.md section 11) |
 | `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-07 (served; CONVENTIONS.md section 19) |
-| `POST /money/transfers/bank` | `TransferView` | `BankTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-09 (served; CONVENTIONS.md section 24) |
+| `POST /money/transfers/bank` | `TransferView` | `BankTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-09 (served; CONVENTIONS.md section 24); `429 name_check_rate_limited` for an unsaved account whose name token is not the person's own (WALLET-37) |
 | `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 (served; CONVENTIONS.md section 19) |
 | `GET /money/transfers/presets` | `TransferPresetsView` | | WALLET-02 (served; the quick amounts under W9's keypad from `TRANSFER_AMOUNT_PRESETS_KOBO`, a provisional setting owned by YOU, and the note's longest length) |
 | `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 (served; CONVENTIONS.md section 14) |

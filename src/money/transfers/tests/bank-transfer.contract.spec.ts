@@ -50,7 +50,10 @@ import type {
 } from '../../money-view.type';
 import { bvnNameKeys } from '../../identity/bvn-name';
 import { IdentityHasher } from '../../identity/identity-config';
+import { BankAccountCheckService } from '../../saved-accounts/bank-account-check.service';
+import { NameCheckBudget } from '../../saved-accounts/name-check-budget';
 import { NameCheckTokenService } from '../../saved-accounts/name-check-token.service';
+import { MoneyError } from '../../money-error';
 import { ACCOUNT_CHANGED_MESSAGE } from '../bank-send-target';
 import {
   SEND_STILL_CONFIRMING_MESSAGE,
@@ -1714,6 +1717,224 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
     expect(nameEnquiries()).toBe(asked);
     // Another person, from the same address, has all of their own.
     expect((await check(b)).status).toBe(200);
+  });
+
+  // ---- Round 5 (verifier finding 1): a bank send is not a way round the name
+  // check limit. The send asks the bank for the holder of the typed account
+  // before the PIN and, when the name token does not fit, answers with the
+  // name. That enquiry is a name check: it spends the same 30 an hour, and
+  // past them nothing is asked. A send with a token the person got for this
+  // account, or to a saved account, is the send's own check and is not counted.
+
+  const nameEnquiries = () =>
+    double.seen.filter((r) => r.path === '/name/enquiry').length;
+  let probeSeq = 0;
+  /** A ten digit account number of its own, known to the bank under `name`. */
+  function holder(name: string): string {
+    probeSeq += 1;
+    const number = `3${String(Date.now()).slice(-6)}${String(probeSeq).padStart(3, '0')}`;
+    bank.holders.set(holderKey(GTB.code, number), name);
+    return number;
+  }
+  const nameCheckOf = (p: Person, number: string) =>
+    request(app.getHttpServer())
+      .post(`${BASE}/banks/name-check`)
+      .set('Authorization', p.auth)
+      .send({ bankCode: GTB.code, accountNumber: number });
+  async function spendChecks(p: Person, count: number): Promise<void> {
+    const number = holder('SPENT ON CHECKS');
+    for (let i = 0; i < count; i += 1) {
+      expect((await nameCheckOf(p, number)).status).toBe(200);
+    }
+  }
+  async function tokenFor(p: Person, number: string): Promise<string> {
+    const checked = await nameCheckOf(p, number);
+    expect(checked.status).toBe(200);
+    return body<AccountNameView>(checked).data!.nameToken;
+  }
+
+  it('WALLET-37 round 5: at the limit, 40 sends with a name token that does not fit answer 429, ask the bank nothing and name no holder', async () => {
+    const me = await person(5_000_000);
+    await spendChecks(me, 30);
+    expect((await nameCheckOf(me, holder('ONE MORE'))).status).toBe(429);
+    const q = await quoted(me, 100_000);
+    const targets = Array.from({ length: 40 }, (_, i) =>
+      holder(`SECRET HOLDER ${i}`),
+    );
+    const asked = nameEnquiries();
+    const tries = await triesLeft(me);
+    const answers = await Promise.all(
+      targets.map((number) =>
+        send(me, sendBody(q, { number }, { nameToken: 'x' })),
+      ),
+    );
+    for (const r of answers) {
+      expect(r.status).toBe(429);
+      expect(body(r).reason).toMatchObject({
+        code: 'name_check_rate_limited',
+        retryAfterSeconds: expect.any(Number) as number,
+      });
+      expect(body(r).reason?.message).toMatch(/Try again in \d+ minutes?\.$/);
+      expect(r.headers['retry-after']).toBe(
+        String(body(r).reason?.retryAfterSeconds),
+      );
+      expect(JSON.stringify(r.body)).not.toMatch(/SECRET HOLDER/);
+    }
+    expect(nameEnquiries()).toBe(asked);
+    expect(sendsFrom(me)).toHaveLength(0);
+    expect(await triesLeft(me)).toBe(tries);
+  });
+
+  it('WALLET-37 round 5: below the limit a send with a name token that does not fit is a name check: it spends one of the 30', async () => {
+    const me = await person(5_000_000);
+    await spendChecks(me, 28);
+    const q = await quoted(me, 100_000);
+    const target = holder('SOMEONE ELSE');
+    const asked = nameEnquiries();
+    const miss = await send(
+      me,
+      sendBody(q, { number: target }, { nameToken: 'x' }),
+    );
+    expect(miss.status).toBe(409);
+    expect(body(miss).reason).toMatchObject({
+      code: 'account_name_changed',
+      accountName: 'SOMEONE ELSE',
+    });
+    expect(nameEnquiries()).toBe(asked + 1);
+    // 29 used; a send with no token at all is also an enquiry (it answers 400 with no name).
+    const none = await send(
+      me,
+      sendBody(q, { number: holder('NO TOKEN') }, { nameToken: undefined }),
+    );
+    expect(none.status).toBe(400);
+    // That was the 30th: the next enquiry of any kind is refused.
+    expect((await nameCheckOf(me, holder('LAST'))).status).toBe(429);
+    const again = await send(
+      me,
+      sendBody(q, { number: holder('AGAIN') }, { nameToken: 'x' }),
+    );
+    expect(again.status).toBe(429);
+  });
+
+  it('WALLET-37 round 5: at the limit a send with the token of this person for this account, or to a saved account, is not counted and still goes', async () => {
+    const me = await person(5_000_000);
+    const friend = holder('CHIDI OKORO');
+    const savedNumber = holder('SAVED FRIEND');
+    const saved = await request(app.getHttpServer())
+      .post(`${BASE}/beneficiaries`)
+      .set('Authorization', me.auth)
+      .send({
+        kind: 'bank_account',
+        bankCode: GTB.code,
+        accountNumber: savedNumber,
+      });
+    expect(saved.status).toBe(201);
+    const token = await tokenFor(me, friend);
+    await spendChecks(me, 28);
+    expect((await nameCheckOf(me, holder('PAST'))).status).toBe(429);
+
+    const asked = nameEnquiries();
+    const q = await quoted(me, 100_000);
+    const toFriend = await send(
+      me,
+      sendBody(q, { number: friend }, { nameToken: token }),
+    );
+    expect(toFriend.status).toBe(201);
+    expect(sendsFrom(me)[0].accountName).toBe('CHIDI OKORO');
+    const toSaved = await send(
+      me,
+      sendBody(q, { number: savedNumber }, { nameToken: undefined }),
+    );
+    expect(toSaved.status).toBe(201);
+    // Each send made its own check of the bank, and none of them was counted.
+    expect(nameEnquiries()).toBe(asked + 2);
+
+    // The bank renames the holder after the person saw the name: still the
+    // send's own check (the person did check this account), so 409, not 429.
+    bank.holders.set(holderKey(GTB.code, friend), 'CHIDI RENAMED');
+    const renamed = await send(
+      me,
+      sendBody(q, { number: friend }, { nameToken: token }),
+    );
+    expect(renamed.status).toBe(409);
+    expect(body(renamed).reason?.code).toBe('account_name_changed');
+    expect((await nameCheckOf(me, holder('STILL PAST'))).status).toBe(429);
+  });
+
+  it("WALLET-37 round 5: a token that is another person's, for another account, or none is not this person's check: at the limit it is 429 and nothing is asked", async () => {
+    const me = await person(5_000_000);
+    const other = await person(0);
+    const friend = holder('CHIDI OKORO');
+    const stranger = holder('STRANGER HOLDER');
+    const othersToken = await tokenFor(other, friend);
+    const mineForFriend = await tokenFor(me, friend);
+    await spendChecks(me, 29);
+    expect((await nameCheckOf(me, holder('PAST'))).status).toBe(429);
+    const q = await quoted(me, 100_000);
+    const asked = nameEnquiries();
+    const cases: Array<[string, string, Record<string, unknown>]> = [
+      ["another person's token", friend, { nameToken: othersToken }],
+      ['a token for another account', stranger, { nameToken: mineForFriend }],
+      [
+        'a token for another bank',
+        friend,
+        { nameToken: mineForFriend, bankCode: ACCESS.code },
+      ],
+      ['no token', stranger, { nameToken: undefined }],
+      ['text that is not a token', stranger, { nameToken: 'a.b' }],
+    ];
+    for (const [label, number, extra] of cases) {
+      const r = await send(me, sendBody(q, { number }, extra));
+      expect([label, r.status]).toEqual([label, 429]);
+      expect(JSON.stringify(r.body)).not.toMatch(/STRANGER HOLDER|CHIDI/);
+    }
+    expect(nameEnquiries()).toBe(asked);
+  });
+
+  it('WALLET-37 round 5: a bank that cannot answer gives the place back, and a send refused for the limit gives its key and PIN try back', async () => {
+    const me = await person(5_000_000);
+    await spendChecks(me, 29);
+    const q = await quoted(me, 100_000);
+    const target = holder('NOT ASKED');
+    const budget = moduleRef.get(NameCheckBudget, { strict: false });
+    jest
+      .spyOn(moduleRef.get(BankAccountCheckService, { strict: false }), 'check')
+      .mockRejectedValueOnce(
+        new MoneyError('provider_unreachable', 'The bank is not answering.'),
+      );
+    const down = await send(
+      me,
+      sendBody(q, { number: target }, { nameToken: 'x' }),
+    );
+    expect(down.status).toBe(503);
+    // The place came back: this is the 30th, and the one after is refused.
+    expect((await nameCheckOf(me, holder('THIRTIETH'))).status).toBe(200);
+
+    const key = randomUUID();
+    const tries = await triesLeft(me);
+    const refused = await send(
+      me,
+      sendBody(q, { number: target }, { nameToken: 'x' }),
+      key,
+      WRONG_PIN,
+    );
+    expect(refused.status).toBe(429);
+    expect(await triesLeft(me)).toBe(tries);
+    // An hour on, the same key sends: it was given back, not kept as an answer.
+    const friend = holder('CHIDI OKORO');
+    budget.now = () => Date.now() + 61 * 60_000;
+    try {
+      const token = await tokenFor(me, friend);
+      const sent = await send(
+        me,
+        sendBody(q, { number: friend }, { nameToken: token }),
+        key,
+      );
+      expect(sent.status).toBe(201);
+      expect(sent.headers['idempotent-replayed']).toBeUndefined();
+    } finally {
+      budget.now = () => Date.now();
+    }
   });
 
   // ---- A success seen after the send was failed (SWEEP-MONEY F8) ----------
