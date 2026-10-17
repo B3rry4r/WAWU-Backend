@@ -35,6 +35,7 @@ import { AdminSupportModule } from '../../admin/support/admin-support.module';
 import { AdminTokenService } from '../../admin/auth/admin-token.service';
 import { BlockedAccountModule } from '../../blocked-account/blocked-account.module';
 import { ChatModule } from '../../chat/chat.module';
+import { CHAT_LIMITS } from '../../chat/chat-limits';
 import { ChatService } from '../../chat/chat.service';
 import type {
   ChatMessage,
@@ -548,6 +549,29 @@ describe('Support chat (contract, SUPPORT-01)', () => {
           .expect(200),
       );
       expect(list.items.find((i) => i.id === chatId)?.unreadCount).toBe(0);
+    });
+
+    it('a reply is text only: an attachment key, no text or a blank one is 400, and nothing is written', async () => {
+      const before = await prisma.chatMessage.count({
+        where: { conversationId: chatId },
+      });
+      const url = `/admin/support/threads/${chatId}/messages`;
+      const bodies: object[] = [
+        { text: 'See this.', attachment: { key: 'chat/x/photo.png' } },
+        { attachment: { key: 'chat/x/photo.png' } },
+        { text: 'See this.', extra: 'no' },
+        {},
+        { text: '   ' },
+        { text: 'a'.repeat(CHAT_LIMITS.textMaxLength + 1) },
+      ];
+      for (const role of [AdminRole.support, AdminRole.superadmin]) {
+        for (const body of bodies) {
+          await staff(role).post(url, body).expect(400);
+        }
+      }
+      expect(
+        await prisma.chatMessage.count({ where: { conversationId: chatId } }),
+      ).toBe(before);
     });
 
     it("the person answers in the same thread, and staff read the thread's messages", async () => {

@@ -18331,7 +18331,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ChatSendMessageDto"
+                "$ref": "#/components/schemas/AdminSupportReplyDto"
               }
             }
           }
@@ -18348,7 +18348,7 @@
             }
           }
         },
-        "summary": "Reply in a thread. The person sees it in their chat from \"Who Made\nThis?\". The same `clientMessageId` sent again returns the first reply\ninstead of posting it twice.",
+        "summary": "Reply in a thread. The person sees it in their chat from \"Who Made\nThis?\". Text only: a body with an attachment is 400. The same\n`clientMessageId` sent again returns the first reply instead of posting\nit twice.",
         "tags": [
           "AdminSupport"
         ]
@@ -36599,6 +36599,37 @@
           }
         }
       },
+      "AdminSupportReplyDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "\\S"
+          },
+          "clientMessageId": {
+            "type": "string",
+            "description": "The dashboard's own id for this reply. Sending the same one again returns\nthe reply already stored instead of posting it twice.",
+            "pattern": "^[A-Za-z0-9_-]{8,64}$"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "OpenChatDto": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string",
+            "description": "The other person's WAWU ID (uuid).",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "wawuId"
+        ]
+      },
       "ChatAttachmentDto": {
         "type": "object",
         "properties": {
@@ -36634,19 +36665,6 @@
             "pattern": "^[A-Za-z0-9_-]{8,64}$"
           }
         }
-      },
-      "OpenChatDto": {
-        "type": "object",
-        "properties": {
-          "wawuId": {
-            "type": "string",
-            "description": "The other person's WAWU ID (uuid).",
-            "format": "uuid"
-          }
-        },
-        "required": [
-          "wawuId"
-        ]
       },
       "MarkChatReadDto": {
         "type": "object",

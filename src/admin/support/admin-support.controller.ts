@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { AdminRole } from '../../../generated/prisma/enums';
 import { ChatService } from '../../chat/chat.service';
-import { ChatPageQueryDto, ChatSendMessageDto } from '../../chat/dto/chat.dto';
+import { ChatPageQueryDto } from '../../chat/dto/chat.dto';
 import type {
   ChatMessage,
   ChatMessagePage,
@@ -20,6 +20,7 @@ import { SUPPORT_WAWU_ID } from '../../support/support-account';
 import { AdminRoles } from '../auth/decorators/admin-roles.decorator';
 import { AdminAuthGuard } from '../auth/guards/admin-auth.guard';
 import { AdminRolesGuard } from '../auth/guards/admin-roles.guard';
+import { AdminSupportReplyDto } from './dto/admin-support-reply.dto';
 
 /**
  * How staff read and answer support threads (task SUPPORT-01, DECISIONS
@@ -73,14 +74,15 @@ export class AdminSupportController {
 
   /**
    * Reply in a thread. The person sees it in their chat from "Who Made
-   * This?". The same `clientMessageId` sent again returns the first reply
-   * instead of posting it twice.
+   * This?". Text only: a body with an attachment is 400. The same
+   * `clientMessageId` sent again returns the first reply instead of posting
+   * it twice.
    */
   @AdminRoles(AdminRole.superadmin, AdminRole.support)
   @Post('threads/:chatId/messages')
   reply(
     @Param('chatId', ParseUUIDPipe) chatId: string,
-    @Body() dto: ChatSendMessageDto,
+    @Body() dto: AdminSupportReplyDto,
   ): Promise<ChatMessage> {
     return this.chats.send(SUPPORT_WAWU_ID, chatId, dto);
   }
