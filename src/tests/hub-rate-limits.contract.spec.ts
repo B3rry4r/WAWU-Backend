@@ -635,11 +635,19 @@ describe('Rate limits behind nginx (OPS-11)', () => {
   });
 
   it('src/main.ts applies the same settings to the live app', () => {
+    // FIX-17 moved main.ts's setup into src/hub-app-config.ts: main.ts creates
+    // the app with HUB_APP_OPTIONS and calls configureHubApp, which applies
+    // the settings this spec's apps apply.
     const main = readFileSync(join(__dirname, '../main.ts'), 'utf8');
+    const config = readFileSync(
+      join(__dirname, '../hub-app-config.ts'),
+      'utf8',
+    );
     expect(main).toMatch(
       /NestFactory\.create\(\s*AppModule,\s*HUB_APP_OPTIONS\s*\)/,
     );
-    expect(main).toMatch(/applyHubHttpSettings\(app\)/);
+    expect(main).toMatch(/configureHubApp\(app\)/);
+    expect(config).toMatch(/applyHubHttpSettings\(app\)/);
   });
 });
 
