@@ -6,6 +6,7 @@ import type {
 } from '../../money/ledger/ledger.interface';
 import {
   LEDGER_BANK_SEND_FAILURE,
+  LedgerProviderConflictError,
   type LedgerService,
 } from '../../money/ledger/ledger.service';
 import type { TransferStatus } from '../../money/money-view.type';
@@ -395,13 +396,22 @@ export class NuvionBankOutflowRecorder {
         `Nuvion's record of the ${t.status} transfer states no fee; nothing recorded until it does`,
       );
     }
-    const r = await this.recordOutflow(
-      t,
-      side.wallet,
-      status,
-      d?.id ?? null,
-      await this.placeOf(side.entityId, t),
-    );
+    let r: LedgerRecordResult;
+    try {
+      r = await this.recordOutflow(
+        t,
+        side.wallet,
+        status,
+        d?.id ?? null,
+        await this.placeOf(side.entityId, t),
+      );
+    } catch (e) {
+      // A row of another provider holds this reference: a stop kept for
+      // review, as NUV-05's handler does, never a delivery that waits for
+      // ever (SWEEP-MONEY NUV-06 F3).
+      if (e instanceof LedgerProviderConflictError) return failed(e.message);
+      throw e;
+    }
     if (status === 'reversed' && reversal !== null) {
       // The row says what Nuvion gave back, once; a replay writes nothing.
       await this.ledger.noteReversalFigures(r.entryId, {

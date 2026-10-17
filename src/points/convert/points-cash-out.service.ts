@@ -191,7 +191,20 @@ export class PointsCashOutService implements OnModuleInit {
       );
     }
     // WAWU's own account, as the provider names it; read once per process.
-    const merchantAccount = await this.merchant.account();
+    // Nothing is written yet, so it is the person's points that are safe
+    // (SWEEP-MONEY POINTS-04 L3), not their money.
+    const merchantAccount = await this.merchant
+      .account()
+      .catch((e: unknown) => {
+        if (e instanceof MoneyError && e.code === 'provider_unreachable') {
+          throw new MoneyError(
+            'provider_unreachable',
+            'Payments are not available right now. Your points are safe. Try again in a moment.',
+            { retryAfterSeconds: this.provider.timings.retryAfterSeconds },
+          );
+        }
+        throw e;
+      });
 
     const id = randomUUID();
     const data: Prisma.PointConversionUncheckedCreateInput = {

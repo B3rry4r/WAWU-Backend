@@ -44,6 +44,7 @@ import {
   mailOf,
   MoneyCheckMailer,
   MoneyCheckMailRefused,
+  plainRef,
 } from './money-check-mailer';
 import { MoneyCheckScope } from './money-check-scope';
 import { FindingSink } from './money-check-sink';
@@ -51,6 +52,7 @@ import { isNight, lagosMinuteOfDay, lagosNight } from './money-check-time';
 import {
   CHECK_IDS,
   type CheckId,
+  type Finding,
   type MoneyCheckReport,
   type Verdict,
   type WalletSkip,
@@ -668,10 +670,7 @@ export class MoneyCheckService {
     }
     this.logger.error(line);
     for (const f of [...report.mismatches, ...report.look].slice(0, 50)) {
-      this.logger.error(
-        `money check ${report.night}: ${f.severity} ${f.kind} ${f.ref}` +
-          (f.amountKobo === undefined ? '' : ` ${f.amountKobo} kobo`),
-      );
+      this.logger.error(findingLogLine(report.night, f));
     }
   }
 
@@ -1520,6 +1519,21 @@ export function storedFailure(text: string | null): RunFailure {
 }
 
 /** What an error is called in the Hub's own log (never stored, never mailed). */
+/**
+ * One finding as a single log line. A reference can come from the provider,
+ * so it is cut to the characters of `plainRef` (no newline or control
+ * character), or a reference could forge a log line (SWEEP-MONEY RF-5).
+ */
+export function findingLogLine(
+  night: string,
+  f: Pick<Finding, 'severity' | 'kind' | 'ref' | 'amountKobo'>,
+): string {
+  return (
+    `money check ${night}: ${f.severity} ${f.kind} ${plainRef(f.ref)}` +
+    (f.amountKobo === undefined ? '' : ` ${f.amountKobo} kobo`)
+  );
+}
+
 function logReason(e: unknown): string {
   if (e instanceof MoneyCheckMailRefused) return e.message;
   if (e instanceof WalletProviderError) return `provider ${e.kind}`;

@@ -31,7 +31,10 @@ import { ResponseInterceptor } from '../../common/interceptors/response.intercep
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../hub-app-options';
-import { LedgerService } from '../../money/ledger/ledger.service';
+import {
+  LedgerProviderConflictError,
+  LedgerService,
+} from '../../money/ledger/ledger.service';
 import { MoneyError } from '../../money/money-error';
 import { MoneyModule } from '../../money/money.module';
 import {
@@ -377,6 +380,28 @@ describe('NUV-06: sending to a bank and paying out', () => {
         failureReason: null,
         source: 'webhook',
       });
+    });
+
+    it('NUV-06 F3: a row of another provider on the send reference is a stop kept for review, not a delivery that waits', async () => {
+      const p = await person();
+      const { id } = await sendFrom(p);
+      pay.settle(id, 'successful');
+      // The ledger refuses to fold into another provider's row (a rollback).
+      const record = jest
+        .spyOn(moduleRef.get(LedgerService), 'record')
+        .mockRejectedValueOnce(new LedgerProviderConflictError(['row-1']));
+      try {
+        const d = await deliverAndDispatch(
+          'outflows.completed',
+          pay.delivery(id),
+        );
+        expect([d.processingStatus, d.note]).toEqual([
+          'failed',
+          expect.stringMatching(/held by another provider/),
+        ]);
+      } finally {
+        record.mockRestore();
+      }
     });
 
     it('a replay, the same send under another event id, and two at once are still one row', async () => {

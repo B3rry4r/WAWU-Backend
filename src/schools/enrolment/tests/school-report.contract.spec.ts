@@ -182,7 +182,14 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      // `attempts` is raised by the claim, before the relay answers;
+      // `nextAttemptAt` is written after it answers (SWEEP-MONEY SCHOOLS-09 L1).
+      await until(async () => {
+        const r = await reportOf(id);
+        return (
+          r.attempts >= 1 && r.nextAttemptAt !== null && r.lastError !== null
+        );
+      });
       const first = await reportOf(id);
       expect(first.nextAttemptAt!.getTime()).toBeGreaterThan(Date.now());
       // Resting: a sweep now does not try it.

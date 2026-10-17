@@ -4,6 +4,11 @@ import {
   NuvionCashOut,
   type Person,
 } from '../../../../test/points/cash-out-harness';
+import { MoneyError } from '../../../money/money-error';
+import {
+  MerchantWallet,
+  PAYMENTS_UNAVAILABLE_MESSAGE,
+} from '../../../money/payments/merchant-wallet';
 import { loadPlansConfig } from '../../../plans/plans-config';
 import type {
   PointsConversionView,
@@ -274,6 +279,29 @@ describe('Convert points to cash (POINTS-04) on the provider seam, Nuvion stood 
     expect(
       await h.prisma.moneyIdempotencyKey.count({ where: { wawuUserId: p.id } }),
     ).toBe(0);
+  });
+
+  it("POINTS-04 L3: WAWU's account unreadable before anything is written says the points are safe, and holds nothing", async () => {
+    const p = await funded(2500);
+    const merchant = h.moduleRef.get(MerchantWallet);
+    const spy = jest
+      .spyOn(merchant, 'account')
+      .mockRejectedValueOnce(
+        new MoneyError('provider_unreachable', PAYMENTS_UNAVAILABLE_MESSAGE),
+      );
+    try {
+      const res = await h.convert(p, 1000);
+      expect(res.status).toBe(503);
+      expect(body<unknown>(res).reason).toMatchObject({
+        code: 'provider_unreachable',
+        message:
+          'Payments are not available right now. Your points are safe. Try again in a moment.',
+      });
+      expect(JSON.stringify(res.body)).not.toContain('Your money is safe');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await h.points.balanceOf(p.id)).toBe(2500);
   });
 
   it('quotes the same figures on Nuvion', async () => {

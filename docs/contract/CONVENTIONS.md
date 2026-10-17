@@ -2597,7 +2597,7 @@ new state does not compile until it is classified.
 | `processed` | cleared | cleared | Every consumer is finished with it. The ledger keeps the references and the figures; each Nuvion handler re-fetches from Nuvion before it acts on money. |
 | `test` | no such state | cleared | Nuvion's own test delivery: no data, nothing acts on it. |
 | `pending` | held | held | A consumer has not used it yet: the ledger sweep and the Nuvion dispatcher read its payload. It may be resting after a wait, held by a worker, waiting for a consumer that is not built yet (Fintava cards, an event no Nuvion handler lists), or left for a rollback to the other provider. |
-| `failed` | held | held | The consumer could not use it. That is a stop for review (a reversal with no debit, a disagreement), and the body is the evidence. |
+| `failed` | held | held | The consumer could not use it. That is a stop for review (a reversal with no debit), and the body is the evidence. A delivery that disagrees with the ledger is `processed`; its evidence is the discrepancy on the ledger row, not the body. |
 | `unrecognised` | held | held | Kept for review: an event nobody documents is how a real payload format is learned. |
 
 Nothing marks a review closed, so a held row stays until a person or a
