@@ -15,6 +15,7 @@ import { ProfileWorkService } from './profile-work.service';
 import { ProfileEducationService } from './profile-education.service';
 import { SignupProfileService } from './signup-profile.service';
 import { ProfileAudienceService } from './profile-audience.service';
+import { VisitorProfileService } from './visitor-profile.service';
 
 /**
  * registry.json "UserProfile" resource module. PrismaService comes from the
@@ -57,6 +58,7 @@ import { ProfileAudienceService } from './profile-audience.service';
     ProfileEducationService,
     ProfileAudienceService,
     SignupProfileService,
+    VisitorProfileService,
   ],
 })
 export class UserProfileModule {}

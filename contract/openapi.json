@@ -26400,6 +26400,37 @@
         ]
       }
     },
+    "/api/hub/users/{wawuId}/visitor-profile": {
+      "get": {
+        "operationId": "UserProfileController_getVisitorProfile",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitorProfileView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "ME-02: everything M5, M6 and M33 draw about somebody else, in one answer\n(the public profile, the profile fields, the person's name, whether the\ncaller follows them, their live listings). A person the public profile\nhides is a 404 here as well.",
+        "tags": [
+          "UserProfile"
+        ]
+      }
+    },
     "/api/hub/users/{wawuId}/profile-fields": {
       "get": {
         "operationId": "UserProfileController_getProfileFields",
@@ -56131,6 +56162,60 @@
           "followerCount",
           "followingCount",
           "communityCount"
+        ]
+      },
+      "VisitorListingView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "headline": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "headline",
+          "category"
+        ]
+      },
+      "VisitorProfileView": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "own": {
+            "type": "boolean"
+          },
+          "following": {
+            "type": "boolean"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/CreatorProfile"
+          },
+          "fields": {
+            "$ref": "#/components/schemas/ProfileFieldsView"
+          },
+          "listings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VisitorListingView"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "own",
+          "following",
+          "profile",
+          "fields",
+          "listings"
         ]
       },
       "ProfileWorkOwnerView": {
