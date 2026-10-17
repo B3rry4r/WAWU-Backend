@@ -73,6 +73,12 @@ export type FeePartCode = (typeof FEE_PART_CODES)[number];
  * debit into WAWU's own account with no seller split, not held. Its `targetId`
  * is `pack-<packId>` (docs/contract/PLANS.md section 9).
  *
+ * `points_shortfall` (POINTS-03) is WAWU's own sale of the points an AI job is
+ * short of (PT3), bought from the wallet at the pack rate on the person's
+ * confirmation: one debit into WAWU's own account with no seller split, not
+ * held. Its `targetId` is `shortfall-<points>` (docs/contract/CONVENTIONS.md
+ * section 16a).
+ *
  * `points_cash_out` (POINTS-04) is not a payment anyone makes from the wallet:
  * it is the link kind of the ledger rows of points turned into cash, WAWU's
  * own movement from its account into the person's wallet (R-43, R-31). It is
@@ -92,6 +98,7 @@ export const PAYMENT_KINDS = [
   'tier',
   'tier_bump',
   'points_pack',
+  'points_shortfall',
   'points_cash_out',
 ] as const;
 export type PaymentKind = (typeof PAYMENT_KINDS)[number];
@@ -216,5 +223,9 @@ export const MONEY_ERROR_CODES = [
   'below_minimum',
   'insufficient_points',
   'currency_not_supported',
+  // Spending points on AI tools (POINTS-03): a cap stops the job; the person
+  // has enough points, so there is no shortfall to buy.
+  'points_cap_reached',
+  'points_not_short',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

@@ -4,6 +4,7 @@
     "REF-CLAIM-DAYS": "R-65: no board or ruling gives the number of days after sign-up in which a person can claim a referral code. 7 matches the 7-day reward hold the RF boards draw.",
     "W44-PASS-LINES": "G-804: the lines under a pass on W44 (the board draws three under the Maker Pass, priority: Entry to the event and the maker area; A table to show your work; Priority when places are given out). No pass has lines until the owner confirms them; an admin sets them here, and a pass with none shows none.",
     "PLAN-TRANSFER-WINDOW": "TIER-05: no ruling says how long a person has to send the money for a purchase they chose to pay by bank transfer. 24 hours covers an evening's delay and a bank's slow day; nothing is taken when it lapses, and any money sent stays in the wallet.",
+    "POINTS-JOB-MAX-RUN": "POINTS-03: no ruling says how long an AI job may run before the points held for it are given back. 30 minutes is longer than any one job the plan prices (the longest audio is 10 minutes) and short enough that a dead job does not keep a person's points for long.",
     "TGIF-NOTIFICATION-TIME": "HOME-16: the morning time of the TGIF notification, in Africa/Lagos time. 07:00 is the task's default until the owner sets it."
   },
   "values": {
@@ -18,6 +19,7 @@
     "tgif_notification_time": "07:00",
     "earnings.daily_move_floor_kobo": 20000,
     "earnings.refused_review_hours": 72,
-    "plan.transfer_window_hours": 24
+    "plan.transfer_window_hours": 24,
+    "points.job_max_run_minutes": 30
   }
 }

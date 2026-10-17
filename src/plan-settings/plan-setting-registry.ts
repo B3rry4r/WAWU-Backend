@@ -42,6 +42,8 @@ const LIMIT = {
   maxMultiplier: 10,
   /** A year of hours. */
   maxHours: 8760,
+  /** A week of minutes (the longest an AI job may run before its points are given back). */
+  maxMinutes: 10_080,
   /** Three years of days. */
   maxDays: 1095,
   /** Ten years of months. */
@@ -82,6 +84,7 @@ const percent = whole(0, LIMIT.percent);
 const days = whole(1, LIMIT.maxDays);
 const months = whole(1, LIMIT.maxMonths);
 const hours = whole(1, LIMIT.maxHours);
+const minutes = whole(1, LIMIT.maxMinutes);
 const people = whole(1, LIMIT.maxPeople);
 
 /** An en dash or an em dash, written by code so no source line carries one (R-5). */
@@ -532,6 +535,30 @@ export function buildRegistry(
       d.caps.dailyPointsPerUser = v as number;
     },
   });
+  add({
+    key: 'points.max_chars_per_job',
+    group: 'Points',
+    label: 'Characters one AI job can take',
+    unit: 'count',
+    usedBy: ['PT7', 'points_cap_reached (POINTS-03)', 'GET /plans'],
+    default: plans.caps.maxCharsPerJob,
+    parse: count,
+    apply: (d, v) => {
+      d.caps.maxCharsPerJob = v as number;
+    },
+  });
+  add({
+    key: 'points.max_audio_min_per_job',
+    group: 'Points',
+    label: 'Minutes of audio one AI job can run',
+    unit: 'count',
+    usedBy: ['PT7', 'points_cap_reached (POINTS-03)', 'GET /plans'],
+    default: plans.caps.maxAudioMinPerJob,
+    parse: count,
+    apply: (d, v) => {
+      d.caps.maxAudioMinPerJob = v as number;
+    },
+  });
   for (const a of plans.actions) {
     add({
       key: `points.action.${a.id}`,
@@ -670,6 +697,14 @@ export function buildRegistry(
     'count',
     ['I24 to I28, I38 (R-62, INBOX-22)'],
     count,
+  );
+  other(
+    'points.job_max_run_minutes',
+    'Minutes an AI job can run before its held points are given back',
+    'count',
+    ['The sweep of stale AI holds (POINTS-03)'],
+    minutes,
+    'POINTS-JOB-MAX-RUN',
   );
   other(
     'tgif_notification_time',

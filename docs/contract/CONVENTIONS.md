@@ -1888,6 +1888,62 @@ written here because the tasks that sell, spend and cash them out
   lock: this service's own transactions use Prisma's 5 s default, so a
   points call for that person would fail meanwhile.
 
+### 16a. Spending points on AI tools (POINTS-03)
+
+Every cost, cap and rate is an admin setting (R-65), read from the live plan on
+each call: `points.action.<id>` (points for one unit), `points.daily_cap`,
+`points.max_chars_per_job`, `points.max_audio_min_per_job`,
+`points.price_kobo_per_1000` (the pack rate a shortfall is sold at) and
+`points.job_max_run_minutes` (how long an AI job may hold points). Points are
+a count, never naira; money fields end in `Kobo`.
+
+- **The internal service.** `PointsSpendService` (`src/points/spend/`,
+  exported by `PointsSpendModule`) is what the AI tools' server code calls:
+  `hold(input)` before the job, `commit(holdId)` when it worked,
+  `release(holdId)` when it did not. `hold` prices the job (`action`,
+  `units`, `languages` for dubbing, `characters`), checks the caps, and takes
+  the points, all under the person's points lock in ONE database-only
+  transaction with the hold as its last write: two jobs at once never pass
+  the daily cap together and never take the balance below zero. A call that
+  waits on an AI provider must do it OUTSIDE `hold`, holding nothing. Every
+  attempt needs its own `reference` (`jobHoldReference(jobId, attempt)`): a
+  reference that was spent or given back is `409 points_hold_settled`, never
+  returned as a hold. `commit` and `release` settle `ai_job` holds only.
+- **`POST /points/quote`** (PT1 to PT3, PT7), body `{ action, units,
+  languages?, characters? }`: `costPoints`, `balancePoints`, `shortfallPoints`,
+  `canRun`, `useWallet`, `cap` (the cap that stops the job, or null) and
+  `wallet` (with a shortfall and "Use wallet" on: the wallet money for exactly
+  the shortfall at the pack rate, with the wallet payment's own signed quote)
+  or `walletNote` (why not: no wallet yet, a dollar-billed person, fees not
+  set). Always 200; it holds and takes nothing. A cap that stops the job
+  shows no wallet money.
+- **A cap names itself.** `cap` is `daily` (points of AI jobs held or spent
+  since the Lagos day began; a given-back job does not count; `resetsAt` is the
+  next Lagos midnight), `characters_per_job` or `minutes_per_job` (`resetsAt`
+  null). Held, the answer is `422 points_cap_reached` with `cap`, `capLimit`,
+  `capUnit` and, for the day's, `usedPoints`, `remainingPoints`, `resetsAt`;
+  nothing is held.
+- **`POST /points/shortfall`** (PIN, `Idempotency-Key`), body = the quote's
+  job + `expectedTotalKobo` (`wallet.payment.totalKobo`) + `quoteToken`
+  (`wallet.payment.quoteToken`): buys exactly the shortfall from the wallet as
+  a wallet payment of kind `points_shortfall` (target `shortfall-<points>`, the
+  provider's charge on top, WAWU's own sale, not held) and adds one lot
+  (source `shortfall`, keyed by the payment) once, last in a database-only
+  transaction; nothing is held across the provider call. `201` with a
+  `PointsShortfallView` (`paid`, `pending`, `failed`); poll
+  `GET /points/shortfall/{id}`. Points, rate and expiry are the payment's terms:
+  a balance, rate or expiry that changed since the quote is `409 quote_changed`
+  with the new quote, nothing moved. Not short any more (including the same
+  quote sent again under another key) is `409 points_not_short`; a cap is `422
+  points_cap_reached`. "Use wallet" only decides whether the quote offers the
+  money; the PIN is the confirmation. Naira only (R-16): a dollar-billed
+  person is `409 target_not_payable`.
+- **`GET` and `PUT /me/points/settings`**: `{ useWallet }`, off by default, each
+  person's own.
+- **The sweep.** Every five minutes, `ai_job` holds still `held` after
+  `points.job_max_run_minutes` are given back by id. A late commit and the
+  sweep cannot both win: the second is `points_hold_settled` and is skipped.
+
 ---
 
 ## 17. Documents and the hosted selfie (NUV-03)

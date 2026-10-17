@@ -1,5 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { type INestApplication, ValidationPipe } from '@nestjs/common';
+import {
+  type INestApplication,
+  type Type,
+  ValidationPipe,
+} from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { PassportModule } from '@nestjs/passport';
 import { Test } from '@nestjs/testing';
@@ -212,6 +216,8 @@ export interface BootOptions {
   nuvion?: NuvionSeamStandIn;
   /** The fee Nuvion's settings charge on a book transfer, in kobo (a spec value). */
   nuvionFeeKobo?: number;
+  /** More modules to boot beside the money, plans and purchase modules (POINTS-03 boots its spend module). */
+  modules?: Type<unknown>[];
 }
 
 export interface TierHarness {
@@ -282,6 +288,7 @@ export async function bootTierApp(
       MoneyModule,
       PlansModule,
       PlanPurchasesModule,
+      ...(opts.modules ?? []),
     ],
     providers: [WawuJwtStrategy, WawuIdClient],
   });

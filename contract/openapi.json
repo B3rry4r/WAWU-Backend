@@ -16560,6 +16560,7 @@
                 "tier",
                 "tier_bump",
                 "points_pack",
+                "points_shortfall",
                 "points_cash_out"
               ]
             }
@@ -31238,6 +31239,294 @@
         "x-wawu-built-by": "POINTS-04"
       }
     },
+    "/api/hub/points/quote": {
+      "post": {
+        "operationId": "PointsSpendController_quote",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointsQuoteDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What an AI job costs before it runs (PT1, PT2): the points from the\nsettings, the balance, the shortfall, the cap that stops it (PT7: `cap`\nnames itself and, for the day's, when it resets) and, with a shortfall and\n\"Use wallet\" on, the wallet money for exactly the shortfall (PT3) with\nthe signed quote `POST /points/shortfall` sends back. Holds nothing and\ntakes nothing: a 200, whatever it says. A tool that is not in the plan,\nor a count that is not a whole number above zero, is a 400.",
+        "tags": [
+          "PointsSpend"
+        ],
+        "x-wawu-built-by": "POINTS-03"
+      }
+    },
+    "/api/hub/points/shortfall": {
+      "post": {
+        "operationId": "PointsSpendController_buyShortfall",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointsShortfallDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsShortfallView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress, points_not_short",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: points_cap_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Buys exactly the shortfall of one job from the wallet, once (PT3). The\nbody is the job as it was quoted plus `wallet.payment.totalKobo` and\n`wallet.payment.quoteToken`; the PIN is in `X-Transaction-Pin`. One\nlot of the shortfall's points is added when the provider confirms the\ndebit, ending after the bought-points expiry. Answers 201 with the\npurchase: `paid`, `pending` while the provider has not confirmed (poll\n`GET /points/shortfall/{id}`; it is never sent again) or `failed` when\nnothing moved. The same Idempotency-Key and body answer the first result\nagain (`Idempotent-Replayed: true`) without checking the PIN. Refused with\nnothing taken and the key given back: `422 points_cap_reached` (buying points would not\nlet the job run), `409 points_not_short` (the person has enough now),\n`409 quote_changed` with the new quote (the balance, the rate or the\nexpiry moved), `409 wallet_not_open`.",
+        "tags": [
+          "PointsSpend"
+        ],
+        "x-wawu-built-by": "POINTS-03"
+      }
+    },
+    "/api/hub/points/shortfall/{id}": {
+      "get": {
+        "operationId": "PointsSpendController_readShortfall",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsShortfallView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One shortfall purchase as it stands now: what the app polls after\n`pending`. Only the buyer reads it; another person's and an id nobody\nholds are the same `404 not_found`.",
+        "tags": [
+          "PointsSpend"
+        ],
+        "x-wawu-built-by": "POINTS-03"
+      }
+    },
+    "/api/hub/me/points/settings": {
+      "get": {
+        "operationId": "PointsSettingsController_read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsSettingsView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "\"Use wallet\", off until the person turns it on.",
+        "tags": [
+          "PointsSettings"
+        ],
+        "x-wawu-built-by": "POINTS-03"
+      },
+      "put": {
+        "operationId": "PointsSettingsController_set",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PointsSettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsSettingsView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Turns \"Use wallet\" on or off. Moves nothing: it only decides whether a\npoints quote shows the wallet money for a shortfall.",
+        "tags": [
+          "PointsSettings"
+        ],
+        "x-wawu-built-by": "POINTS-03"
+      }
+    },
     "/api/hub/waitlist/offers/current": {
       "get": {
         "operationId": "WaitlistPublicController_currentOffer",
@@ -34377,7 +34666,9 @@
               "open_address_limited",
               "below_minimum",
               "insufficient_points",
-              "currency_not_supported"
+              "currency_not_supported",
+              "points_cap_reached",
+              "points_not_short"
             ],
             "type": "string"
           },
@@ -34466,6 +34757,41 @@
           "shortfallPoints": {
             "type": "integer",
             "description": "insufficient_points: neededPoints minus balancePoints."
+          },
+          "cap": {
+            "description": "points_cap_reached (POINTS-03): which cap stopped the job.",
+            "enum": [
+              "daily",
+              "characters_per_job",
+              "minutes_per_job"
+            ],
+            "type": "string"
+          },
+          "capLimit": {
+            "type": "integer",
+            "description": "points_cap_reached: the cap's size, in `capUnit`."
+          },
+          "capUnit": {
+            "description": "points_cap_reached: what the cap counts.",
+            "enum": [
+              "points",
+              "characters",
+              "minutes"
+            ],
+            "type": "string"
+          },
+          "usedPoints": {
+            "type": "integer",
+            "description": "points_cap_reached, daily cap: points of AI jobs held or spent today."
+          },
+          "remainingPoints": {
+            "type": "integer",
+            "description": "points_cap_reached, daily cap: points still free today."
+          },
+          "resetsAt": {
+            "type": "string",
+            "nullable": true,
+            "description": "points_cap_reached, daily cap: when the day's count starts again (ISO 8601)."
           },
           "message": {
             "type": "string",
@@ -34879,6 +35205,7 @@
               "tier",
               "tier_bump",
               "points_pack",
+              "points_shortfall",
               "points_cash_out"
             ],
             "type": "string"
@@ -37430,6 +37757,122 @@
           "quoteToken"
         ]
       },
+      "PointsQuoteDto": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "The AI tool, by the plan's id (`GET /plans` `actions` lists them with their cost).",
+            "enum": [
+              "say_my_name",
+              "voice_intro",
+              "voiceover_per_min",
+              "quick_voice_per_min",
+              "captions_per_min",
+              "clean_audio_per_min",
+              "music_per_track",
+              "sfx",
+              "dub_standard_per_min_lang",
+              "dub_premium_per_min_lang",
+              "receptionist_message",
+              "receptionist_voice_per_min"
+            ]
+          },
+          "units": {
+            "type": "integer",
+            "description": "How many of the action's unit: minutes, tracks, messages or uses (`GET /plans` says which).",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "languages": {
+            "type": "integer",
+            "description": "Dubbing only: how many languages (1 when left out). Any other action refuses more than 1.",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "characters": {
+            "type": "integer",
+            "description": "The text's length in characters, for a job that takes text; checked against the per-job cap.",
+            "minimum": 0,
+            "maximum": 100000000
+          }
+        },
+        "required": [
+          "action",
+          "units"
+        ]
+      },
+      "PointsShortfallDto": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "The AI tool, by the plan's id (`GET /plans` `actions` lists them with their cost).",
+            "enum": [
+              "say_my_name",
+              "voice_intro",
+              "voiceover_per_min",
+              "quick_voice_per_min",
+              "captions_per_min",
+              "clean_audio_per_min",
+              "music_per_track",
+              "sfx",
+              "dub_standard_per_min_lang",
+              "dub_premium_per_min_lang",
+              "receptionist_message",
+              "receptionist_voice_per_min"
+            ]
+          },
+          "units": {
+            "type": "integer",
+            "description": "How many of the action's unit: minutes, tracks, messages or uses (`GET /plans` says which).",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "languages": {
+            "type": "integer",
+            "description": "Dubbing only: how many languages (1 when left out). Any other action refuses more than 1.",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "characters": {
+            "type": "integer",
+            "description": "The text's length in characters, for a job that takes text; checked against the per-job cap.",
+            "minimum": 0,
+            "maximum": 100000000
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`wallet.payment.totalKobo` from the points quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`wallet.payment.quoteToken` from that quote: the server checks it is its own, for this person and this shortfall, and not past its end.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "action",
+          "units",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
+      "PointsSettingsDto": {
+        "type": "object",
+        "properties": {
+          "useWallet": {
+            "type": "boolean",
+            "description": "\"Use wallet\": when points run short, the quote shows the wallet money for the shortfall. Off by default."
+          }
+        },
+        "required": [
+          "useWallet"
+        ]
+      },
       "CreateWaitlistRegistrationDto": {
         "type": "object",
         "properties": {
@@ -37877,6 +38320,7 @@
               "tier",
               "tier_bump",
               "points_pack",
+              "points_shortfall",
               "points_cash_out"
             ]
           },
@@ -39093,6 +39537,7 @@
               "tier",
               "tier_bump",
               "points_pack",
+              "points_shortfall",
               "points_cash_out"
             ]
           },
@@ -39191,6 +39636,7 @@
               "tier",
               "tier_bump",
               "points_pack",
+              "points_shortfall",
               "points_cash_out"
             ]
           },
@@ -39280,6 +39726,7 @@
               "tier",
               "tier_bump",
               "points_pack",
+              "points_shortfall",
               "points_cash_out"
             ]
           },
@@ -55378,6 +55825,247 @@
           "failureReason",
           "createdAt",
           "completedAt"
+        ]
+      },
+      "PointsCapView": {
+        "type": "object",
+        "properties": {
+          "cap": {
+            "type": "string",
+            "enum": [
+              "daily",
+              "characters_per_job",
+              "minutes_per_job"
+            ]
+          },
+          "limit": {
+            "type": "number"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "points",
+              "characters",
+              "minutes"
+            ]
+          },
+          "usedPoints": {
+            "type": "number",
+            "nullable": true
+          },
+          "remainingPoints": {
+            "type": "number",
+            "nullable": true
+          },
+          "resetsAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "cap",
+          "limit",
+          "unit",
+          "usedPoints",
+          "remainingPoints",
+          "resetsAt",
+          "message"
+        ]
+      },
+      "PointsShortfallOfferView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "points": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "per1000PointsKobo": {
+            "type": "integer"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          }
+        },
+        "required": [
+          "currency",
+          "points",
+          "priceKobo",
+          "per1000PointsKobo",
+          "payment"
+        ]
+      },
+      "PointsQuoteView": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "per": {
+            "type": "string",
+            "enum": [
+              "use",
+              "minute",
+              "track",
+              "message",
+              "minute_per_language"
+            ]
+          },
+          "units": {
+            "type": "number"
+          },
+          "languages": {
+            "type": "number"
+          },
+          "perUnitPoints": {
+            "type": "number"
+          },
+          "costPoints": {
+            "type": "number"
+          },
+          "balancePoints": {
+            "type": "number"
+          },
+          "shortfallPoints": {
+            "type": "number"
+          },
+          "useWallet": {
+            "type": "boolean"
+          },
+          "canRun": {
+            "type": "boolean"
+          },
+          "cap": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PointsCapView"
+              }
+            ],
+            "nullable": true
+          },
+          "wallet": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PointsShortfallOfferView"
+              }
+            ],
+            "nullable": true
+          },
+          "walletNote": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "action",
+          "title",
+          "per",
+          "units",
+          "languages",
+          "perUnitPoints",
+          "costPoints",
+          "balancePoints",
+          "shortfallPoints",
+          "useWallet",
+          "canRun",
+          "cap",
+          "wallet",
+          "walletNote"
+        ]
+      },
+      "PointsShortfallView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "reversed",
+              "paid"
+            ]
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "points": {
+            "type": "number"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentView"
+          },
+          "grant": {
+            "type": "object",
+            "properties": {
+              "points": {
+                "type": "number"
+              },
+              "expiresAt": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "points",
+              "expiresAt"
+            ],
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "currency",
+          "status",
+          "statusMessage",
+          "points",
+          "amountKobo",
+          "payment",
+          "grant",
+          "createdAt",
+          "paidAt"
+        ]
+      },
+      "PointsSettingsView": {
+        "type": "object",
+        "properties": {
+          "useWallet": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "useWallet"
         ]
       },
       "AdminWaitlistRegistrationView": {

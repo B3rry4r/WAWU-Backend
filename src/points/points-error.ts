@@ -20,7 +20,11 @@ export type PointsErrorCode =
   /** The hold already ended the other way (spent, or given back). */
   | 'points_hold_settled'
   /** Points that are not a whole number above zero, an end in the past, a bad reference. */
-  | 'points_invalid';
+  | 'points_invalid'
+  /** A cap stops the job (POINTS-03, PT7): the day's limit, or too long a job. Nothing is held. */
+  | 'points_cap_reached'
+  /** The person has enough points for the job, so there is no shortfall to buy (POINTS-03). */
+  | 'points_not_short';
 
 export const POINTS_ERROR_STATUS: Record<PointsErrorCode, HttpStatus> = {
   insufficient_points: HttpStatus.PAYMENT_REQUIRED,
@@ -29,6 +33,8 @@ export const POINTS_ERROR_STATUS: Record<PointsErrorCode, HttpStatus> = {
   points_hold_not_found: HttpStatus.NOT_FOUND,
   points_hold_settled: HttpStatus.CONFLICT,
   points_invalid: HttpStatus.BAD_REQUEST,
+  points_cap_reached: HttpStatus.UNPROCESSABLE_ENTITY,
+  points_not_short: HttpStatus.CONFLICT,
 };
 
 /**
@@ -40,6 +46,18 @@ export interface PointsErrorDetail {
   balancePoints?: number;
   neededPoints?: number;
   shortfallPoints?: number;
+  /** `points_cap_reached`: which cap stopped the job (`daily`, `characters_per_job`, `minutes_per_job`). */
+  cap?: string;
+  /** `points_cap_reached`: the cap's size, in the unit it counts (points, characters or minutes). */
+  capLimit?: number;
+  /** `points_cap_reached`: what the cap counts (`points`, `characters` or `minutes`). */
+  capUnit?: string;
+  /** `points_cap_reached`, daily cap: points already spent or held today. */
+  usedPoints?: number;
+  /** `points_cap_reached`, daily cap: points still free today (0 or more). */
+  remainingPoints?: number;
+  /** `points_cap_reached`, daily cap: when the day's count starts again (ISO time); null for a cap that never resets. */
+  resetsAt?: string | null;
 }
 
 export class PointsError extends HttpException {
