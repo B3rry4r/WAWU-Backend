@@ -19,8 +19,15 @@ import {
 } from './event-ticketing.constants';
 import type { BuyTicketsDto, VerifyOrderDto } from './dto/event-ticketing.dto';
 import { ticketTotals } from './ticket-counts';
-import type { TicketTier } from '../../generated/prisma/enums';
+import type { EventStatus, TicketTier } from '../../generated/prisma/enums';
+import type { Prisma } from '../../generated/prisma/client';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
+import {
+  BACK_TO_REVIEW,
+  EventService,
+  TAKEN_DOWN_MESSAGE,
+} from '../event/event.service';
+import { EventCancelHooks } from './event-cancel-hooks';
 
 /**
  * A ticket code, and why it looks like this.
@@ -37,6 +44,23 @@ export function ticketCode(): string {
   let out = '';
   for (const b of bytes) out += CODE_ALPHABET[b % CODE_ALPHABET.length];
   return `${out.slice(0, 4)}-${out.slice(4, 8)}-${out.slice(8, 12)}-${out.slice(12, 16)}`;
+}
+
+/** The call-off answer the web was built against (the counts of Flutterwave refunds, plus the wallet ones). */
+export interface CancelEventAnswer {
+  cancelled: boolean;
+  ordersRefunded: number;
+  refundsNeedingAttention: number;
+}
+
+/**
+ * The same answer when wallet refunds are left for the minute sweep (EVENTS-13).
+ * It is its own shape, not an optional field, because the server leaves the key
+ * out when there are none and never sends null: a contract that says "optional"
+ * is read as "number or null" by every generated client.
+ */
+export interface CancelEventAnswerWithSweep extends CancelEventAnswer {
+  ordersLeftToSweep: number;
 }
 
 export type ScanOutcome = 'valid' | 'already_used' | 'invalid';
@@ -81,6 +105,8 @@ export class EventTicketingService {
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly events: EventService,
+    private readonly cancelHooks: EventCancelHooks,
   ) {}
 
   /* ------------------------------------------------------------------ *
@@ -94,6 +120,16 @@ export class EventTicketingService {
    * snapshotted on each order, so an edit would not change what anybody paid
    * — but it would change what the ticket they are holding claims to be, and
    * silently deleting a tier somebody bought would orphan their seat.
+   *
+   * R-40 (owner, 7 Oct 2026): this is a host's edit like PATCH /events/:id,
+   * so it follows the same two rules. The host must still hold a current
+   * tick (EventService.assertMayHost, the gate POST and PATCH use, with the
+   * same 403s), and a tier change sends the event back to review
+   * (BACK_TO_REVIEW, the data PATCH writes). Without them, a host could get
+   * an event approved at one price and then reprice it, or keep repricing it
+   * after their tick lapsed, with nobody looking again. The existing checks,
+   * the 409 for sold tickets included, run first and answer exactly as
+   * before. Sending the tiers the event already has writes nothing.
    */
   async setTicketTypes(
     organiserWawuId: string,
@@ -107,17 +143,7 @@ export class EventTicketingService {
       salesEndAt?: string;
     }>,
   ) {
-    const event = await this.prisma.event.findUnique({
-      where: { id: eventId },
-      select: { hostWawuId: true, cancelledAt: true },
-    });
-    if (!event) throw new NotFoundException('Event not found');
-    if (event.hostWawuId !== organiserWawuId) {
-      throw new ForbiddenException('This event is not yours.');
-    }
-    if (event.cancelledAt) {
-      throw new ConflictException('This event has been cancelled.');
-    }
+    await editableEvent(this.prisma, eventId, organiserWawuId);
 
     for (const t of types) {
       // A paid tier at ₦0 is a mistake nobody notices until it sells out.
@@ -131,97 +157,139 @@ export class EventTicketingService {
       }
     }
 
-    const sold = await this.prisma.eventTicketType.findMany({
-      where: { eventId, sold: { gt: 0 } },
-      select: { id: true, name: true, sold: true },
-    });
-    if (sold.length > 0) {
-      throw new ConflictException(
-        `Tickets have already sold for ${sold.map((s) => `"${s.name}"`).join(', ')}. Add a new tier instead of editing one people have bought.`,
-      );
-    }
+    await assertNoneSold(this.prisma, eventId);
 
-    // EVENTS-07: a quote someone opened from the wallet is an unpaid order that
-    // names these tiers, and would stop them being replaced. An unpaid order
-    // with no payment started goes with them (the buyer asks again); one whose
-    // payment is still being confirmed is waited for, never deleted.
-    const unpaid = await this.prisma.eventOrder.findMany({
-      where: { eventId, status: 'pending', paymentProvider: 'wallet' },
-      select: { id: true },
-    });
-    if (unpaid.length > 0) {
-      const inFlight = await this.prisma.walletPayment.count({
-        where: {
-          kind: 'event_ticket',
-          targetId: { in: unpaid.map((o) => o.id) },
-          status: { in: ['pending', 'completed'] },
+    // R-40: hosting is verified-only, and repricing is hosting. Before any
+    // write, and before the no-change answer below, so a host without a
+    // current tick gets the same 403 here as on POST and PATCH /events.
+    await this.events.assertMayHost(organiserWawuId);
+
+    const rows = types.map((t) => ({
+      eventId,
+      tier: t.tier,
+      name: t.name,
+      priceNaira: t.priceNaira,
+      quantity: t.quantity,
+      salesStartAt: t.salesStartAt ? new Date(t.salesStartAt) : null,
+      salesEndAt: t.salesEndAt ? new Date(t.salesEndAt) : null,
+    }));
+
+    // Everything that depends on the event's state is decided again here,
+    // under locks, and written in the same transaction (EVENTS-11 D1). An
+    // admin's remove, approve or cancel that lands between the checks above
+    // and this write either commits first, and this request then answers as
+    // it would for that state, or waits for this one and finds the state it
+    // changed. Two PUTs to one event run one after the other, so their tier
+    // rows never mix.
+    //
+    // The locks, and why they cannot deadlock with a purchase (EVENTS-11
+    // D2). First the event row, FOR NO KEY UPDATE: it serialises this edit
+    // against an admin's decision and another edit, but not against the FOR
+    // KEY SHARE lock a purchase takes on the event when it inserts its order
+    // and tickets. Then the event's tier rows, FOR UPDATE, before reading
+    // `sold`: a purchase (issueOrder) locks its tier row first by
+    // incrementing `sold`. The tier rows are the only locks the two
+    // contend for and each takes them once, so one simply waits for the
+    // other. A purchase that got there first has committed its `sold` by
+    // the time this reads it (the sold 409); one that comes second finds its
+    // tier changed and is refused (409), never sold a seat on a tier that is
+    // no longer on sale. Opening a paid checkout locks its tier row FOR
+    // SHARE first (buy), so it too waits for this edit or this edit waits
+    // for it, and an order that got in first makes its tier retired below
+    // rather than deleted.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Event" WHERE "id" = ${eventId} FOR NO KEY UPDATE`;
+      await tx.$queryRaw`SELECT "id" FROM "EventTicketType" WHERE "eventId" = ${eventId} ORDER BY "id" FOR UPDATE`;
+      const event = await editableEvent(tx, eventId, organiserWawuId);
+      await assertNoneSold(tx, eventId);
+
+      // The tiers on sale now, matched against what was sent. A tier sent
+      // exactly as it is stays as it is (same row); the rest of the current
+      // ones are dropped, the rest of the sent ones created. Nothing to drop
+      // and nothing to create is "no change": nothing written, and the
+      // event is not sent back to review for an edit that did not happen.
+      const current = await tx.eventTicketType.findMany({
+        where: { eventId, retiredAt: null },
+        select: {
+          id: true,
+          tier: true,
+          name: true,
+          priceNaira: true,
+          quantity: true,
+          salesStartAt: true,
+          salesEndAt: true,
         },
       });
-      if (inFlight > 0) {
-        throw new ConflictException(
-          'A payment for these tickets is still being confirmed. Try again in a minute.',
-        );
-      }
-    }
+      const plan = planTiers(current, rows);
+      if (plan.drop.length === 0 && plan.create.length === 0) return;
 
-    // A wallet order that failed or was refunded (EVENTS-07 round 2) names
-    // these tiers too, with nothing sold, and its foreign key would stop them
-    // being replaced. Its money is in the buyer's history, not in the order, so
-    // it goes with the tiers once the price is back with the buyer; while a
-    // refund is still on its way the host waits.
-    const settled = await this.prisma.eventOrder.findMany({
-      where: {
-        eventId,
-        paymentProvider: 'wallet',
-        status: { in: ['failed', 'refunded'] },
-      },
-      select: { id: true },
+      // EVENTS-07: a wallet order on a tier that is being dropped is settled
+      // first (an unpaid quote goes, an unconfirmed payment is waited for).
+      // What is left that points at a dropped tier is retired below.
+      await clearWalletOrdersOn(tx, plan.drop);
+
+      // A dropped tier that any order points at (paid or still pending) is
+      // RETIRED, never deleted (EVENTS-11 round 5 ruling, D3): it leaves
+      // every public and admin read and cannot be bought, and a pending
+      // order on it can still settle at the price its buyer saw. Deleting it
+      // was a foreign-key 500 on main, and refusing the edit instead (round
+      // 4) let an abandoned checkout freeze the host's prices for good. A
+      // dropped tier no order points at is deleted, as before.
+      // An order points at a tier through its own `ticketTypeId` and, for a
+      // basket (EVENTS-07), through its lines; deleting a tier would cascade
+      // away a line, so both count.
+      const referenced = new Set([
+        ...(
+          await tx.eventOrder.findMany({
+            where: { ticketTypeId: { in: plan.drop } },
+            select: { ticketTypeId: true },
+            distinct: ['ticketTypeId'],
+          })
+        ).map((o) => o.ticketTypeId),
+        ...(
+          await tx.eventOrderLine.findMany({
+            where: { ticketTypeId: { in: plan.drop } },
+            select: { ticketTypeId: true },
+            distinct: ['ticketTypeId'],
+          })
+        ).map((l) => l.ticketTypeId),
+      ]);
+      const retire = plan.drop.filter((id) => referenced.has(id));
+      const remove = plan.drop.filter((id) => !referenced.has(id));
+      if (retire.length > 0) {
+        await tx.eventTicketType.updateMany({
+          where: { id: { in: retire } },
+          data: { retiredAt: new Date() },
+        });
+      }
+      if (remove.length > 0) {
+        await tx.eventTicketType.deleteMany({
+          where: { id: { in: remove }, sold: 0 },
+        });
+      }
+      if (plan.create.length > 0) {
+        await tx.eventTicketType.createMany({ data: plan.create });
+      }
+
+      // A change to a published (or rejected, or still pending) event puts
+      // it in the queue, exactly as PATCH does. A `removed` event never gets
+      // here (editableEvent's 403). The write is also conditional on the
+      // status it was decided from.
+      if (
+        event.status === 'published' ||
+        event.status === 'rejected' ||
+        event.status === 'pending'
+      ) {
+        await tx.event.updateMany({
+          where: { id: eventId, status: event.status },
+          data: BACK_TO_REVIEW,
+        });
+      }
     });
-    if (settled.length > 0) {
-      const returning = await this.prisma.walletHold.count({
-        where: {
-          kind: 'event_ticket',
-          status: 'held',
-          targetId: { in: settled.map((o) => o.id) },
-        },
-      });
-      if (returning > 0) {
-        throw new ConflictException(
-          'Money for an order that could not be finished is still on its way back to the buyer. Try again in a minute.',
-        );
-      }
-    }
 
-    await this.prisma.$transaction([
-      this.prisma.eventOrder.deleteMany({
-        where: {
-          id: { in: unpaid.map((o) => o.id) },
-          status: 'pending',
-          paymentProvider: 'wallet',
-        },
-      }),
-      this.prisma.eventOrder.deleteMany({
-        where: {
-          id: { in: settled.map((o) => o.id) },
-          status: { in: ['failed', 'refunded'] },
-          paymentProvider: 'wallet',
-        },
-      }),
-      this.prisma.eventTicketType.deleteMany({ where: { eventId, sold: 0 } }),
-      this.prisma.eventTicketType.createMany({
-        data: types.map((t) => ({
-          eventId,
-          tier: t.tier,
-          name: t.name,
-          priceNaira: t.priceNaira,
-          quantity: t.quantity,
-          salesStartAt: t.salesStartAt ? new Date(t.salesStartAt) : null,
-          salesEndAt: t.salesEndAt ? new Date(t.salesEndAt) : null,
-        })),
-      }),
-    ]);
-
-    return this.listTicketTypes(eventId);
+    // The host's own read: the event may be `pending` now, and the host
+    // still sees what they just saved.
+    return this.listTicketTypes(eventId, organiserWawuId);
   }
 
   /** The tiers on sale, with what is left of each. */
@@ -230,9 +298,17 @@ export class EventTicketingService {
     // 404, like the event. A signed-out reader cannot be blocked.
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
-      select: { hostWawuId: true },
+      select: { hostWawuId: true, status: true },
     });
     if (event) {
+      // R-42 (F3): the tiers of an event that is not `published` are a 404
+      // to everyone but its host, exactly as GET /events/:id answers for the
+      // event itself. Prices waiting for review, or rejected, or taken down,
+      // are not public before the event is. Admins read them on the admin
+      // routes, which do not come through here.
+      if (event.status !== 'published' && event.hostWawuId !== viewerWawuId) {
+        throw new NotFoundException('Event not found.');
+      }
       await this.blockedAccounts.assertVisible(
         viewerWawuId,
         event.hostWawuId,
@@ -243,8 +319,9 @@ export class EventTicketingService {
       // hidden one. The signed-out public page keeps its empty list.
       throw new NotFoundException('Event not found.');
     }
+    // A retired tier (round 5) is not on sale and is not listed.
     const types = await this.prisma.eventTicketType.findMany({
-      where: { eventId },
+      where: { eventId, retiredAt: null },
       orderBy: { priceNaira: 'asc' },
     });
     return types.map((t) => ({
@@ -292,6 +369,9 @@ export class EventTicketingService {
       event.hostWawuId,
       'Ticket type not found',
     );
+    if (ticketType.retiredAt) {
+      throw new ConflictException(TIER_CHANGED);
+    }
     if (event.status !== 'published') {
       throw new ConflictException('Tickets are not on sale for this event.');
     }
@@ -355,18 +435,28 @@ export class EventTicketingService {
     // The pending order holds the price the SERVER calculated. Verification
     // compares against this, so a client that edits the amount it sends to
     // the inline SDK buys nothing.
-    const order = await this.prisma.eventOrder.create({
-      data: {
-        eventId: event.id,
-        ticketTypeId: ticketType.id,
-        buyerWawuId,
-        quantity: dto.quantity,
-        amountNaira: amount,
-        commissionRate,
-        status: 'pending',
-        flutterwaveTxRef: charge.txRef,
-        referralCode: dto.referralCode ?? null,
-      },
+    //
+    // Written with its tier row locked FOR SHARE and the tier and event
+    // checked again under that lock (EVENTS-11 O5): a host's PUT that is
+    // replacing the tier either finishes first, and this is refused with a
+    // plain 409, or waits for this order and then retires the tier instead
+    // of deleting it. Inserting against a tier the PUT had just deleted was
+    // a foreign-key 500.
+    const order = await this.prisma.$transaction(async (tx) => {
+      await assertStillOnSale(tx, ticketType.id, event.id);
+      return tx.eventOrder.create({
+        data: {
+          eventId: event.id,
+          ticketTypeId: ticketType.id,
+          buyerWawuId,
+          quantity: dto.quantity,
+          amountNaira: amount,
+          commissionRate,
+          status: 'pending',
+          flutterwaveTxRef: charge.txRef,
+          referralCode: dto.referralCode ?? null,
+        },
+      });
     });
 
     return {
@@ -463,16 +553,46 @@ export class EventTicketingService {
     txId: string | null;
     referralCode: string | null;
   }) {
+    const newOrder = !input.existingOrderId;
     return this.prisma.$transaction(async (tx) => {
       const claimed = await tx.eventTicketType.updateMany({
         where: {
           id: input.ticketTypeId,
           sold: { lte: 2_147_483_647 - input.quantity },
+          // A new order cannot claim a retired tier. A paid order settling
+          // (existingOrderId) can: its buyer paid the price they saw, and the
+          // seat is theirs whatever the host changed since (round 5).
+          ...(newOrder ? { retiredAt: null } : {}),
         },
         data: { sold: { increment: input.quantity } },
       });
       if (claimed.count === 0) {
-        throw new ConflictException('This ticket is sold out.');
+        const tier = await tx.eventTicketType.findUnique({
+          where: { id: input.ticketTypeId },
+          select: { retiredAt: true },
+        });
+        // Replaced or retired by the host since the buyer chose it (O6):
+        // say so, rather than "sold out".
+        throw new ConflictException(
+          !tier || tier.retiredAt ? TIER_CHANGED : 'This ticket is sold out.',
+        );
+      }
+      if (newOrder) {
+        // Read after the tier lock: an edit that sent the event back to
+        // review has committed by now, and a new seat is not sold on an
+        // event under review. Settling a paid order is not refused here.
+        const event = await tx.event.findUniqueOrThrow({
+          where: { id: input.eventId },
+          select: { status: true, cancelledAt: true },
+        });
+        if (event.status !== 'published') {
+          throw new ConflictException(
+            'Tickets are not on sale for this event.',
+          );
+        }
+        if (event.cancelledAt) {
+          throw new ConflictException('This event has been cancelled.');
+        }
       }
 
       const type = await tx.eventTicketType.findUniqueOrThrow({
@@ -735,8 +855,17 @@ export class EventTicketingService {
    * Each order is refunded independently: one failure does not stop the rest,
    * and what could not be sent is recorded on the order for a human to
    * settle rather than lost to a log line.
+   *
+   * EVENTS-10: an order paid from the wallet (EVENTS-07) is a held price, not a
+   * Flutterwave charge. Its buyer gets back everything they paid through the
+   * hold's own refund (the wallet module's step, run below); the counts it
+   * reports are added to the two the web already reads.
    */
-  async cancel(organiserWawuId: string, eventId: string, reason: string) {
+  async cancel(
+    organiserWawuId: string,
+    eventId: string,
+    reason: string,
+  ): Promise<CancelEventAnswer | CancelEventAnswerWithSweep> {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
     });
@@ -748,27 +877,38 @@ export class EventTicketingService {
       throw new ConflictException('This event is already cancelled.');
     }
 
-    await this.prisma.$transaction([
-      this.prisma.event.update({
-        where: { id: eventId },
+    // EVENTS-13: the update is conditional on the event not being cancelled
+    // yet, so two cancels at once cannot both win (the check above reads the
+    // row before either has written it). The loser waits for the winner's
+    // row lock, finds `cancelledAt` set, changes nothing and gets the answer
+    // a later cancel gets: 409. Only the winner voids the tickets and runs
+    // the refunds.
+    const won = await this.prisma.$transaction(async (tx) => {
+      const cancelled = await tx.event.updateMany({
+        where: { id: eventId, cancelledAt: null },
         data: {
           status: 'cancelled',
           cancelledAt: new Date(),
           cancelReason: reason,
         },
-      }),
+      });
+      if (cancelled.count === 0) return false;
       // Void first. A ticket for a cancelled event must not scan in, even if
       // its refund has not gone through yet.
-      this.prisma.eventTicket.updateMany({
+      await tx.eventTicket.updateMany({
         where: { eventId, status: { in: ['valid', 'checked_in'] } },
         data: { status: 'void' },
-      }),
-    ]);
+      });
+      return true;
+    });
+    if (!won) throw new ConflictException('This event is already cancelled.');
 
     // EVENTS-07: orders paid from the wallet are not Flutterwave charges. Their
-    // price sits in a hold, and EVENTS-10 refunds them through it, so the
-    // Flutterwave loop below leaves them alone (it would otherwise record
-    // that they need the Flutterwave dashboard).
+    // price sits in a hold, and EVENTS-10 refunds them through it (the step
+    // below), so the Flutterwave loop leaves them alone (it would otherwise
+    // record that they need the Flutterwave dashboard). Run first: it holds
+    // nothing across the provider and stops at its own time limit.
+    const wallet = await this.cancelHooks.afterCalledOff(eventId);
     const orders = await this.prisma.eventOrder.findMany({
       where: {
         eventId,
@@ -778,8 +918,8 @@ export class EventTicketingService {
       },
     });
 
-    let refunded = 0;
-    let failed = 0;
+    let refunded = wallet.refunded;
+    let failed = wallet.needAttention;
     for (const order of orders) {
       if (!order.flutterwaveTxId) {
         await this.prisma.eventOrder.update({
@@ -834,10 +974,220 @@ export class EventTicketingService {
         `Event ${eventId} cancelled: ${refunded} refunded, ${failed} need a human`,
       );
     }
-    return {
+    const answer: CancelEventAnswer = {
       cancelled: true,
       ordersRefunded: refunded,
       refundsNeedingAttention: failed,
     };
+    // EVENTS-13: wallet refunds the request ran out of time for; the minute
+    // sweep sends them. Present only when there are some, so the answer of
+    // an event without any keeps the shape the web was built against.
+    return wallet.leftToSweep
+      ? { ...answer, ordersLeftToSweep: wallet.leftToSweep }
+      : answer;
+  }
+}
+
+/** One tier as compared for "did anything change" (R-40). */
+interface TierKey {
+  tier: TicketTier;
+  name: string;
+  priceNaira: number;
+  quantity: number;
+  salesStartAt: Date | null;
+  salesEndAt: Date | null;
+}
+
+/**
+ * Matches the tiers sent against the tiers on sale, as two multisets: a sent
+ * tier identical in every field a host can send (tier, name, price,
+ * capacity, sales window) to one on sale keeps that row. Whatever is left on
+ * sale is dropped; whatever is left of what was sent is created. Nothing in
+ * either is "no change".
+ */
+function planTiers<C extends TierKey & { id: string }, N extends TierKey>(
+  current: C[],
+  incoming: N[],
+): { drop: string[]; create: N[] } {
+  // An unparseable date never matches, so it reaches the write as before.
+  const at = (d: Date | null) =>
+    d ? (Number.isNaN(d.getTime()) ? 'invalid' : d.getTime()) : null;
+  const key = (t: TierKey) =>
+    JSON.stringify([
+      t.tier,
+      t.name,
+      t.priceNaira,
+      t.quantity,
+      at(t.salesStartAt),
+      at(t.salesEndAt),
+    ]);
+  const onSale = new Map<string, string[]>();
+  for (const c of current) {
+    const k = key(c);
+    onSale.set(k, [...(onSale.get(k) ?? []), c.id]);
+  }
+  const create: N[] = [];
+  for (const n of incoming) {
+    const ids = onSale.get(key(n));
+    if (ids && ids.length > 0) ids.shift();
+    else create.push(n);
+  }
+  return { drop: [...onSale.values()].flat(), create };
+}
+
+/** The refusal for buying a tier the host has changed since it was chosen. */
+export const TIER_CHANGED = 'This ticket has changed. Please choose again.';
+
+/**
+ * EVENTS-07 (wallet orders) under EVENTS-11 (retired tiers), for the tiers a
+ * host's PUT is dropping. Run under the PUT's locks, database only.
+ *
+ * - A quote someone opened from the wallet is an unpaid order that names the
+ *   tier. With no payment started it goes with the tier (the buyer asks
+ *   again). One whose payment is still being confirmed is waited for, never
+ *   deleted: the PUT answers 409.
+ * - A wallet order that failed or was refunded (EVENTS-07 round 2) names the
+ *   tier too, with nothing sold. Its money is in the buyer's history, not in
+ *   the order, so it goes once the price is back with the buyer; while a
+ *   refund is still on its way the host waits (409).
+ *
+ * Orders of other payment routes are not touched here: a tier one of them
+ * points at is retired, never deleted (EVENTS-11 round 5).
+ */
+async function clearWalletOrdersOn(
+  tx: Prisma.TransactionClient,
+  tierIds: string[],
+): Promise<void> {
+  if (tierIds.length === 0) return;
+  const onDropped = {
+    paymentProvider: 'wallet',
+    OR: [
+      { ticketTypeId: { in: tierIds } },
+      { lines: { some: { ticketTypeId: { in: tierIds } } } },
+    ],
+  } satisfies Prisma.EventOrderWhereInput;
+
+  const unpaid = await tx.eventOrder.findMany({
+    where: { ...onDropped, status: 'pending' },
+    select: { id: true },
+  });
+  if (unpaid.length > 0) {
+    const inFlight = await tx.walletPayment.count({
+      where: {
+        kind: 'event_ticket',
+        targetId: { in: unpaid.map((o) => o.id) },
+        status: { in: ['pending', 'completed'] },
+      },
+    });
+    if (inFlight > 0) {
+      throw new ConflictException(
+        'A payment for these tickets is still being confirmed. Try again in a minute.',
+      );
+    }
+  }
+
+  const settled = await tx.eventOrder.findMany({
+    where: { ...onDropped, status: { in: ['failed', 'refunded'] } },
+    select: { id: true },
+  });
+  if (settled.length > 0) {
+    const returning = await tx.walletHold.count({
+      where: {
+        kind: 'event_ticket',
+        status: 'held',
+        targetId: { in: settled.map((o) => o.id) },
+      },
+    });
+    if (returning > 0) {
+      throw new ConflictException(
+        'Money for an order that could not be finished is still on its way back to the buyer. Try again in a minute.',
+      );
+    }
+  }
+
+  await tx.eventOrder.deleteMany({
+    where: {
+      id: { in: unpaid.map((o) => o.id) },
+      status: 'pending',
+      paymentProvider: 'wallet',
+    },
+  });
+  await tx.eventOrder.deleteMany({
+    where: {
+      id: { in: settled.map((o) => o.id) },
+      status: { in: ['failed', 'refunded'] },
+      paymentProvider: 'wallet',
+    },
+  });
+}
+
+/**
+ * Locks a tier row FOR SHARE and checks, under the lock, that it and its
+ * event are still on sale: the tier exists and is not retired (409, "has
+ * changed"), the event is published and not cancelled (the answers buy
+ * already gives). Used before a new order is written.
+ */
+async function assertStillOnSale(
+  tx: Prisma.TransactionClient,
+  ticketTypeId: string,
+  eventId: string,
+): Promise<void> {
+  const [tier] = await tx.$queryRaw<
+    { retiredAt: Date | null }[]
+  >`SELECT "retiredAt" FROM "EventTicketType" WHERE "id" = ${ticketTypeId} FOR SHARE`;
+  if (!tier || tier.retiredAt) throw new ConflictException(TIER_CHANGED);
+  const event = await tx.event.findUnique({
+    where: { id: eventId },
+    select: { status: true, cancelledAt: true },
+  });
+  if (!event || event.status !== 'published') {
+    throw new ConflictException('Tickets are not on sale for this event.');
+  }
+  if (event.cancelledAt) {
+    throw new ConflictException('This event has been cancelled.');
+  }
+}
+
+type Db = PrismaService | Prisma.TransactionClient;
+
+/**
+ * The event a host may set tiers on: it exists (404), it is theirs (403),
+ * an admin has not taken it down (403, PATCH's takedown answer: round 4
+ * ruling, so a restore never publishes tiers changed after a takedown) and
+ * it is not cancelled (409). Run once before the gate and again under the
+ * locks, with the same answers.
+ */
+async function editableEvent(
+  db: Db,
+  eventId: string,
+  organiserWawuId: string,
+): Promise<{ status: EventStatus }> {
+  const event = await db.event.findUnique({
+    where: { id: eventId },
+    select: { hostWawuId: true, cancelledAt: true, status: true },
+  });
+  if (!event) throw new NotFoundException('Event not found');
+  if (event.hostWawuId !== organiserWawuId) {
+    throw new ForbiddenException('This event is not yours.');
+  }
+  if (event.status === 'removed') {
+    throw new ForbiddenException(TAKEN_DOWN_MESSAGE);
+  }
+  if (event.cancelledAt) {
+    throw new ConflictException('This event has been cancelled.');
+  }
+  return { status: event.status };
+}
+
+/** Once a ticket is sold the tiers are locked: 409, naming the sold tiers. */
+async function assertNoneSold(db: Db, eventId: string): Promise<void> {
+  const sold = await db.eventTicketType.findMany({
+    where: { eventId, sold: { gt: 0 } },
+    select: { id: true, name: true, sold: true },
+  });
+  if (sold.length > 0) {
+    throw new ConflictException(
+      `Tickets have already sold for ${sold.map((s) => `"${s.name}"`).join(', ')}. Add a new tier instead of editing one people have bought.`,
+    );
   }
 }

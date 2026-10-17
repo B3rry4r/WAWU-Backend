@@ -38,6 +38,8 @@ describe('which notifications reach a phone', () => {
     expect(ungatedButSent.sort()).toEqual([
       'community_join_approved',
       'community_join_declined',
+      // WALLET-40 (owner answer 31): the owner asked for this alert.
+      'wallet_ready',
     ]);
   });
 
@@ -107,6 +109,8 @@ const EVENTS: NotificationEvent[] = [
     series: 'SONS, NOT SLAVES',
     verseReference: 'Romans 8:15 (NIV)',
   },
+  // WALLET-40: the account number is ready (added with the kind: this list must name every pushed kind).
+  { kind: 'wallet_ready', userWawuId: 'u' },
   { kind: 'content_published', userWawuId: 'u', contentTitle: 'Night shoot' },
   {
     kind: 'content_rejected',

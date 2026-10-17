@@ -8,6 +8,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { WawuIdClient } from '../../src/common/auth/wawu-id.client';
 import { AccountPurgeService } from '../../src/account-purge/account-purge.service';
+import { EventCallOffRefundService } from '../../src/event-ticketing/wallet/event-call-off-refund.service';
 import { EventHostErasureService } from '../../src/event-ticketing/wallet/event-host-erasure.service';
 import { WawuJwtStrategy } from '../../src/common/auth/wawu-jwt.strategy';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
@@ -17,16 +18,24 @@ import { PrismaService } from '../../src/common/prisma/prisma.service';
 import { EventTicketingModule } from '../../src/event-ticketing/event-ticketing.module';
 import { EventWalletOrdersModule } from '../../src/event-ticketing/wallet/event-wallet-orders.module';
 import { HUB_APP_OPTIONS } from '../../src/hub-app-options';
+import { WALLET_PROVIDER } from '../../src/wallet-provider/wallet-provider.interface';
 import { WalletHoldService } from '../../src/money/holds/wallet-hold.service';
 import { MoneyModule } from '../../src/money/money.module';
 import { WalletPaymentService } from '../../src/money/payments/wallet-payment.service';
 import { FintavaDouble, MERCHANT_ACCOUNT } from '../fintava/fintava-double';
+import {
+  NuvionHarnessRig,
+  runsOnFintavaDouble,
+} from '../nuvion/harness-wallets';
 import { mintToken, QuietLogger } from '../payments/poll-helpers';
 import { installFintava, PIN, Wallets } from '../plans/tier-purchase-harness';
 
 /**
  * EVENTS-07's stand-ins: the real Hub modules for money and event ticketing, a
- * real database, real RS256 tokens for the stand-in WAWU ID, and the real
+ * real database, real RS256 tokens for the stand-in WAWU ID, and
+ * WALLET_PROVIDER=nuvion with Nuvion stood in at the seam (HARNESS-NUV, 17 Oct
+ * 2026; `test/nuvion/harness-wallets.ts` says how `h.wallets` and `h.double`
+ * are served). A spec listed in FINTAVA_BOUND_SPECS there still gets the real
  * Fintava client over a socket to FintavaDouble with the tier harness's small
  * book of wallets behind it. No provider is called.
  */
@@ -62,6 +71,7 @@ export interface EventHarness {
   holds: WalletHoldService;
   purge: AccountPurgeService;
   erasure: EventHostErasureService;
+  callOff: EventCallOffRefundService;
   double: FintavaDouble;
   wallets: Wallets;
   logger: QuietLogger;
@@ -74,6 +84,12 @@ export interface EventHarness {
     startsInDays?: number;
     hostId?: string;
   }): Promise<SeededEvent>;
+  /**
+   * Gives a host a current tick on a real profile (setup only). Since
+   * EVENTS-11 (R-40) setting tickets needs a verified host; the profile is
+   * removed with the harness.
+   */
+  tick(hostId: string): Promise<void>;
   /** Runs the payment sweep as if `ms` more had passed since the last call. */
   sweepLater(ms?: number): ReturnType<WalletPaymentService['sweep']>;
   close(): Promise<void>;
@@ -89,17 +105,23 @@ export async function bootEventApp(
     memoryCost: 1024,
     parallelism: 1,
   });
-  const double = new FintavaDouble();
-  await double.start();
+  const nuv = runsOnFintavaDouble() ? null : new NuvionHarnessRig();
+  const fintava = nuv ? null : new FintavaDouble();
+  if (fintava) await fintava.start();
+  const double = nuv ? nuv.double : fintava!;
   const logger = new QuietLogger();
-  const wallets = new Wallets();
+  const wallets = nuv ? nuv.wallets : new Wallets();
   const previous: Record<string, string | undefined> = {};
   const env: Record<string, string> = {
-    FINTAVA_BASE_URL: double.baseUrl,
-    FINTAVA_API_KEY: `live_test_${tag}_0123456789FAKEKEY`,
-    FINTAVA_TIMEOUT_MS: '120000',
-    FINTAVA_MONEY_TIMEOUT_MS: '120000',
-    FINTAVA_CHECK_TIMEOUT_MS: '120000',
+    ...(fintava
+      ? {
+          FINTAVA_BASE_URL: fintava.baseUrl,
+          FINTAVA_API_KEY: `live_test_${tag}_0123456789FAKEKEY`,
+          FINTAVA_TIMEOUT_MS: '120000',
+          FINTAVA_MONEY_TIMEOUT_MS: '120000',
+          FINTAVA_CHECK_TIMEOUT_MS: '120000',
+        }
+      : nuv!.env),
     FEE_QUOTE_KEY: `${tag}-test-fee-quote-key-0123456789abcdef0123`,
     MERCHANT_MAX_PER_TXN_KOBO: '1000000000',
     PIN_LOCK_MINUTES: '',
@@ -110,9 +132,9 @@ export async function bootEventApp(
     previous[k] = process.env[k];
     process.env[k] = v;
   }
-  installFintava(double, wallets);
+  if (fintava) installFintava(fintava, wallets);
   wallets.kobo.set(MERCHANT_ACCOUNT, 5_000_000_000);
-  const moduleRef = await Test.createTestingModule({
+  let builder = Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
       PassportModule.register({ defaultStrategy: 'wawu-jwt' }),
@@ -122,9 +144,10 @@ export async function bootEventApp(
       EventWalletOrdersModule,
     ],
     providers: [WawuJwtStrategy, WawuIdClient],
-  })
-    .setLogger(logger)
-    .compile();
+  });
+  if (nuv)
+    builder = builder.overrideProvider(WALLET_PROVIDER).useValue(nuv.standin);
+  const moduleRef = await builder.setLogger(logger).compile();
   const app = moduleRef.createNestApplication<INestApplication<App>>({
     ...HUB_APP_OPTIONS,
     logger,
@@ -156,6 +179,7 @@ export async function bootEventApp(
     holds: moduleRef.get(WalletHoldService),
     purge: moduleRef.get(AccountPurgeService, { strict: false }),
     erasure: moduleRef.get(EventHostErasureService, { strict: false }),
+    callOff: moduleRef.get(EventCallOffRefundService, { strict: false }),
     double,
     wallets,
     logger,
@@ -165,6 +189,28 @@ export async function bootEventApp(
       users.push(id);
       accountSeq += 1;
       const accountNumber = `42${String(Date.now()).slice(-6)}${String(accountSeq).padStart(2, '0')}`;
+      if (nuv) {
+        // An approved Nuvion account holding `kobo`, as NUV-04 records it.
+        const account = nuv.openAccount(kobo, accountNumber);
+        await prisma.fintavaWallet.create({
+          data: {
+            wawuUserId: id,
+            customerId: account.entityId,
+            walletId: account.accountId,
+            accountNumber,
+            provider: 'nuvion',
+          },
+        });
+        await prisma.transactionPin.create({
+          data: { wawuUserId: id, pinHash: cheapPinHash },
+        });
+        return {
+          id,
+          auth: `Bearer ${mintToken(id, tag)}`,
+          walletId: account.accountId,
+          accountNumber,
+        };
+      }
       const walletId = randomUUID();
       await prisma.fintavaWallet.create({
         data: {
@@ -236,6 +282,18 @@ export async function bootEventApp(
         }),
       };
     },
+    async tick(hostId) {
+      users.push(hostId);
+      const ticks = {
+        creatorVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+        creatorVerifiedUntil: new Date('2099-01-01T00:00:00.000Z'),
+      };
+      await prisma.userProfile.upsert({
+        where: { wawuUserId: hostId },
+        create: { wawuUserId: hostId, accountType: 'creator', ...ticks },
+        update: ticks,
+      });
+    },
     sweepLater(ms = 2 * 60_000) {
       clock = Math.max(clock, Date.now()) + ms;
       return payments.sweep(new Date(clock));
@@ -277,8 +335,11 @@ export async function bootEventApp(
       await prisma.fintavaWallet.deleteMany({
         where: { wawuUserId: { in: users } },
       });
+      await prisma.userProfile.deleteMany({
+        where: { wawuUserId: { in: users } },
+      });
       await app.close();
-      await double.stop();
+      await fintava?.stop();
       for (const [k, v] of Object.entries(previous)) {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;

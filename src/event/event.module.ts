@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
 import { VerificationStateModule } from '../common/verification/verification-state.module';
 import { EventController } from './event.controller';
-import { EventService } from './event.service';
+import { EventServiceModule } from './event-service.module';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 
 /**
@@ -19,14 +19,17 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
  * rather than at the first submission. It declares no controller, so this
  * costs no route order.
  *
+ * EventService itself is provided by EventServiceModule (no controller), so
+ * EventTicketingModule can use the hosting gate without importing this
+ * module's controller (R-40).
+ *
  * The admin half is a separate module (src/admin/events/) under the `admin/`
  * prefix, so the moderation surface and the surface it moderates never share a
  * controller, a guard, or a role assumption.
  */
 @Module({
-  imports: [VerificationStateModule, BlockedAccountModule],
+  imports: [VerificationStateModule, BlockedAccountModule, EventServiceModule],
   controllers: [EventController],
-  providers: [EventService],
-  exports: [EventService],
+  exports: [EventServiceModule],
 })
 export class EventModule {}

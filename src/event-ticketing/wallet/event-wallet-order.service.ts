@@ -9,6 +9,7 @@ import {
 import type { Prisma } from '../../../generated/prisma/client';
 import { WawuIdClient } from '../../common/auth/wawu-id.client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import { BlockedAccountService } from '../../blocked-account/blocked-account.service';
 import { WalletGate, type OpenWallet } from '../../money/gate/wallet-gate';
 import { WalletHoldService } from '../../money/holds/wallet-hold.service';
@@ -38,7 +39,7 @@ import {
   MAX_TICKETS_PER_ORDER,
   commissionRate,
 } from '../event-ticketing.constants';
-import { ticketCode } from '../event-ticketing.service';
+import { ticketCode, TIER_CHANGED } from '../event-ticketing.service';
 import type { CreateEventWalletOrderDto } from './event-wallet-order.dto';
 import {
   type BasketAsk,
@@ -47,15 +48,18 @@ import {
   distinctLines,
   EVENT_NOT_FOUND_MESSAGE,
   EVENT_ORDER_PAY_ROUTE,
+  CANCELLED_MESSAGE,
   EVENT_TICKET_PAYMENT_KIND,
   KEY_MALFORMED_MESSAGE,
   KEY_PATTERN,
   KEY_REUSED_MESSAGE,
   newOrderReference,
+  OPEN_ORDERS_SETTING,
   ORDER_CHANGED_MESSAGE,
   ORDER_FAILED_MESSAGE,
   ORDER_FAILED_RETURNED_REASON,
   ORDER_FAILED_RETURNING_REASON,
+  ORDER_LIMIT_MESSAGE,
   ORDER_PAID_MESSAGE,
   ORDER_REFUNDED_RETURNED_REASON,
   ORDER_REFUNDED_RETURNING_REASON,
@@ -115,6 +119,13 @@ class SoldOut extends Error {
   }
 }
 
+/** Thrown inside the issuing transaction before anything is written: the host called the event off (EVENTS-10). */
+class CalledOff extends Error {
+  constructor() {
+    super('the event was called off');
+  }
+}
+
 /**
  * Event tickets paid from the wallet (task EVENTS-07, E2 to E5 and E10).
  *
@@ -159,12 +170,14 @@ export class EventWalletOrderService implements OnModuleInit {
     private readonly gate: WalletGate,
     private readonly blocked: BlockedAccountService,
     private readonly wawuId: WawuIdClient,
+    private readonly settings: PlanSettingsService,
   ) {}
 
   onModuleInit(): void {
     this.registry.register({
       kind: EVENT_TICKET_PAYMENT_KIND,
       resolve: (lookup) => this.resolve(lookup),
+      beforeClaim: (lookup, tx) => this.assertUnderLimit(lookup, tx),
       onCompleted: (payment) => this.onCompleted(payment),
     });
     this.payments.presentRoute(EVENT_ORDER_PAY_ROUTE, (view) =>
@@ -229,6 +242,16 @@ export class EventWalletOrderService implements OnModuleInit {
         quantity: b.quantity,
       })),
     );
+    // The most open paid orders one buyer holds on one event (EVENTS-13). A
+    // free basket costs nothing to refund and is never counted. This is the
+    // early, plain refusal; the payment's claim checks it again, under a lock,
+    // which is what holds when orders are paid at once.
+    if (totalNaira > 0) {
+      const open = await this.openOrders(this.prisma, buyerWawuId, event.id);
+      if (open >= this.openOrderLimit()) {
+        throw new MoneyError('event_order_limit', ORDER_LIMIT_MESSAGE);
+      }
+    }
     // A basket that costs nothing needs no wallet (R-8). A priced one needs
     // an open wallet before an order is made: 409 wallet_not_open or
     // wallet_opening, and the app leads to Open your wallet.
@@ -253,6 +276,9 @@ export class EventWalletOrderService implements OnModuleInit {
           'target_not_payable',
           `${e.tierName} just sold out.`,
         );
+      }
+      if (e instanceof CalledOff) {
+        throw new MoneyError('target_not_payable', CANCELLED_MESSAGE);
       }
       throw e;
     }
@@ -346,6 +372,7 @@ export class EventWalletOrderService implements OnModuleInit {
         sold: true,
         salesStartAt: true,
         salesEndAt: true,
+        retiredAt: true,
       },
     });
     const byId = new Map(tiers.map((t) => [t.id, t]));
@@ -354,6 +381,12 @@ export class EventWalletOrderService implements OnModuleInit {
       const tier = byId.get(ask.ticketTypeId);
       if (!tier) {
         throw new MoneyError('target_not_found', TICKET_NOT_FOUND_MESSAGE);
+      }
+      // EVENTS-11: a tier the host replaced while orders pointed at it is
+      // retired, not on sale. It cannot be bought again, whoever picked it
+      // before the host changed it.
+      if (tier.retiredAt) {
+        throw new MoneyError('target_not_payable', TIER_CHANGED);
       }
       basket.push({ tier, quantity: ask.quantity });
     }
@@ -392,7 +425,15 @@ export class EventWalletOrderService implements OnModuleInit {
       const id = randomUUID();
       try {
         return await this.prisma.$transaction(async (tx) => {
-          if (opts.free) await this.takeSeats(tx, basket);
+          if (!opts.free) await this.assertTiersOnSale(tx, basket);
+          if (opts.free) {
+            // EVENTS-13: the same share lock on the event row as `issue`, so
+            // a host's cancel and a free order take turns: either the cancel
+            // comes second and voids these tickets, or it came first and no
+            // order is made for a called-off event.
+            await this.assertNotCalledOff(tx, eventId);
+            await this.takeSeats(tx, basket);
+          }
           const created = await tx.eventOrder.create({
             data: {
               id,
@@ -446,6 +487,124 @@ export class EventWalletOrderService implements OnModuleInit {
       }
     }
     throw new Error('EventOrder: no free reference after three tries.');
+  }
+
+  /**
+   * EVENTS-11: before a priced order is written, locks its tier rows FOR SHARE
+   * (in id order, the order the host's tier edit and the seat taking use) and
+   * checks, under the lock, that each is still there and not retired. A host's
+   * edit that replaces a tier either commits first, and this order is refused
+   * (409 target_not_payable, "has changed"), or waits for this one and then
+   * sees an order that names the tier. An order is never written against a
+   * tier row that is going away. A free basket does not need it: it takes the
+   * event row's share lock and its seats in this same transaction.
+   */
+  private async assertTiersOnSale(
+    tx: Prisma.TransactionClient,
+    basket: readonly BasketEntry[],
+  ): Promise<void> {
+    const ids = basket.map((b) => b.tier.id);
+    const rows = await tx.$queryRaw<
+      Array<{ id: string; retiredAt: Date | null }>
+    >`SELECT "id", "retiredAt" FROM "EventTicketType" WHERE "id" = ANY(${ids}::text[]) ORDER BY "id" FOR SHARE`;
+    if (rows.length !== ids.length || rows.some((r) => r.retiredAt)) {
+      throw new MoneyError('target_not_payable', TIER_CHANGED);
+    }
+  }
+
+  /**
+   * Reads the event row under a share lock (a cancel's update waits for it,
+   * and it waits for a cancel's) and throws `CalledOff` when the host has
+   * called the event off, or it is not on sale. Database only.
+   */
+  private async assertNotCalledOff(
+    tx: Prisma.TransactionClient,
+    eventId: string,
+  ): Promise<void> {
+    const [event] = await tx.$queryRaw<
+      Array<{ cancelledAt: Date | null; status: string }>
+    >`SELECT "cancelledAt", "status"::text AS "status" FROM "Event" WHERE "id" = ${eventId} FOR SHARE`;
+    if (!event || event.cancelledAt !== null || event.status !== 'published') {
+      throw new CalledOff();
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // The order limit (EVENTS-13)
+  // -------------------------------------------------------------------------
+
+  /** The most open paid orders one buyer may hold on one event: the admin setting, read with no restart. */
+  private openOrderLimit(): number {
+    return this.settings.number(OPEN_ORDERS_SETTING);
+  }
+
+  /**
+   * How many paid wallet orders the buyer holds on the event: the ones paid
+   * and not refunded or failed, plus the ones whose payment is claimed and
+   * not yet delivered (the debit may be in flight). A free order is not a
+   * wallet order. `exceptOrderId` leaves out the order being paid now.
+   */
+  private async openOrders(
+    db: Prisma.TransactionClient,
+    buyerWawuId: string,
+    eventId: string,
+    exceptOrderId?: string,
+  ): Promise<number> {
+    const claimed = await db.walletPayment.findMany({
+      where: {
+        payerWawuUserId: buyerWawuId,
+        kind: EVENT_TICKET_PAYMENT_KIND,
+        openKey: { not: null },
+      },
+      select: { targetId: true },
+    });
+    return db.eventOrder.count({
+      where: {
+        buyerWawuId,
+        eventId,
+        paymentProvider: 'wallet',
+        ...(exceptOrderId ? { id: { not: exceptOrderId } } : {}),
+        OR: [
+          { status: 'paid' },
+          { status: 'pending', id: { in: claimed.map((c) => c.targetId) } },
+        ],
+      },
+    });
+  }
+
+  /**
+   * Inside the payment's claim (PayableKindHandler.beforeClaim): takes one
+   * short advisory lock for this buyer and this event, counts, and refuses
+   * the order that would be one too many. Two orders of one buyer claimed at
+   * once take turns on the lock, and the second counts the first's claim
+   * (committed with its transaction), so a buyer never holds more than the
+   * setting. Nothing is recorded when it refuses and nothing is sent: the
+   * transaction is database only.
+   */
+  private async assertUnderLimit(
+    lookup: PayableLookup,
+    tx: Prisma.TransactionClient,
+  ): Promise<void> {
+    const order = await tx.eventOrder.findFirst({
+      where: {
+        id: lookup.targetId,
+        buyerWawuId: lookup.payerWawuUserId,
+        paymentProvider: 'wallet',
+      },
+      select: { id: true, eventId: true },
+    });
+    // No such order: `resolve` has already refused it, or is about to.
+    if (!order) return;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`event-orders:${lookup.payerWawuUserId}:${order.eventId}`}, 0))`;
+    const open = await this.openOrders(
+      tx,
+      lookup.payerWawuUserId,
+      order.eventId,
+      order.id,
+    );
+    if (open >= this.openOrderLimit()) {
+      throw new MoneyError('event_order_limit', ORDER_LIMIT_MESSAGE);
+    }
   }
 
   /**
@@ -686,8 +845,9 @@ export class EventWalletOrderService implements OnModuleInit {
         }
         reason = 'the order was already settled another way';
       } catch (e) {
-        if (!(e instanceof SoldOut)) throw e;
-        reason = `${e.tierName} sold out`;
+        if (e instanceof CalledOff) reason = 'the event was called off';
+        else if (e instanceof SoldOut) reason = `${e.tierName} sold out`;
+        else throw e;
       }
     }
     this.logger.warn(
@@ -721,6 +881,11 @@ export class EventWalletOrderService implements OnModuleInit {
     payment: CompletedPayment,
   ): Promise<boolean> {
     return this.prisma.$transaction(async (tx) => {
+      // EVENTS-10: a host's cancel updates the event row, so it waits for this
+      // share lock (and this waits for it): either the cancel comes after and
+      // voids these tickets and refunds this order, or it came first and no
+      // ticket is made for a called-off event.
+      await this.assertNotCalledOff(tx, order.eventId);
       const flipped = await tx.eventOrder.updateMany({
         where: { id: order.id, status: 'pending' },
         data: {

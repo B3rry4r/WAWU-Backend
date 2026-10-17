@@ -251,6 +251,16 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // POINTS-03: the person's "Use wallet" choice for points (PT3).
+    key: 'pointsSettings',
+    models: ['PointsSetting'],
+    load: (prisma, me) =>
+      prisma.pointsSetting.findUnique({
+        where: { wawuUserId: me },
+        select: { useWallet: true, updatedAt: true },
+      }),
+  },
+  {
     key: 'notificationSettings',
     models: ['NotificationSettings'],
     load: (prisma, me) =>
@@ -718,6 +728,27 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // What this person chose to pay for by bank transfer (TIER-05) and where it
+  // stands. The payment that paid it is a payment id, so it stays out (rule 3).
+  {
+    key: 'tierTransferPurchases',
+    models: ['PlanTransferOrder'],
+    load: (prisma, me) =>
+      prisma.planTransferOrder.findMany({
+        where: { wawuUserId: me },
+        select: {
+          targetId: true,
+          priceKobo: true,
+          providerFeeKobo: true,
+          totalKobo: true,
+          status: true,
+          statusMessage: true,
+          expiresAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
   {
     key: 'eventPasses',
     models: ['EventPass'],
@@ -980,6 +1011,56 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // REF-02: the person's own referral code, and the code they used. Only
+    // their own code and the day they used someone's: no one else's name.
+    key: 'referralCode',
+    models: ['PersonReferralCode', 'PersonReferral'],
+    load: async (prisma, me) => {
+      const [mine, used] = await Promise.all([
+        prisma.personReferralCode.findUnique({
+          where: { wawuUserId: me },
+          select: { code: true, createdAt: true },
+        }),
+        prisma.personReferral.findUnique({
+          where: { referredWawuUserId: me },
+          select: { code: true, claimedAt: true },
+        }),
+      ]);
+      return { mine, used };
+    },
+  },
+  {
+    // REF-02: the points each person they invited earned them, and the
+    // milestones. Points and dates only; the invited person is not named.
+    key: 'referralRewards',
+    models: ['ReferralReward', 'ReferralMilestone'],
+    load: async (prisma, me) => {
+      const [rewards, milestones] = await Promise.all([
+        prisma.referralReward.findMany({
+          where: { referrerWawuUserId: me },
+          select: {
+            id: true,
+            tierId: true,
+            basePoints: true,
+            multiplierMilli: true,
+            points: true,
+            state: true,
+            availableAt: true,
+            createdAt: true,
+            settledAt: true,
+          },
+          orderBy: NEWEST,
+        }),
+        prisma.referralMilestone.findMany({
+          where: { referrerWawuUserId: me },
+          select: { count: true, points: true, grantedAt: true },
+          orderBy: { count: 'asc' },
+        }),
+      ]);
+      return { rewards, milestones };
+    },
+  },
+  {
     // POINTS-04: each time the person turned points into cash, in kobo: how
     // many points, how much cash, how it ended. No account number and no
     // provider reference.
@@ -1075,6 +1156,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'PushStoppedAccount',
       reason:
         'A switch the server keeps after the person asked to delete the account: it holds nothing but the time of that request.',
+    },
+    {
+      model: 'AccountDeletionContent',
+      reason:
+        'Bookkeeping for a deletion that is waiting: the ids of the pieces it hid and the status each had. The pieces themselves are exported in their own section.',
     },
     { model: 'TransactionPin', reason: 'A PIN hash is a secret.' },
     { model: 'TransactionPinReset', reason: 'A reset code hash is a secret.' },

@@ -14,6 +14,7 @@ import {
   SearchHistoryService,
 } from '../search-history.service';
 import { REFUSED_BY_CHARACTER_RULE } from './popular-forms';
+import { joinMembers } from './popular-members';
 
 /**
  * EXPLORE-05 round 3. GET /search/popular shows an entry only when its text
@@ -53,6 +54,8 @@ describe('GET /search/popular: only the names of public things (EXPLORE-05 round
       data: { name, hostWawuId: HOST, kind: 'open', description: 'x' },
     });
     roomIds.push(r.id);
+    // R-57: a room is a popular name once it has enough members.
+    await joinMembers(prisma, r.id, MARK);
     return r.id;
   };
   const piece = (

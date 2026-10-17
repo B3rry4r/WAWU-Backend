@@ -69,6 +69,26 @@ const EVENT_SELECT = {
 } as const;
 
 /**
+ * The orders a person's tickets are read from: a paid one, and a refunded one
+ * whose event was called off (EVENTS-10: the order reads `refunded` and its
+ * tickets are void, and the buyer still sees the ticket, marked called off,
+ * beside the order that says where their money is). A refunded order of an
+ * event that is merely off sale (a host who left) stays out of the list.
+ */
+function heldOrders(buyerWawuId: string) {
+  return {
+    buyerWawuId,
+    OR: [
+      { status: 'paid' as const },
+      {
+        status: 'refunded' as const,
+        event: { cancelledAt: { not: null } },
+      },
+    ],
+  };
+}
+
+/**
  * "Past" is the event's own end (`endsAt ?? startsAt`) having gone by, the
  * same rule the public calendar uses, or the event having been called off.
  */
@@ -103,7 +123,7 @@ export class EventHeldTicketsService {
     query: HeldTicketsQueryDto,
   ): Promise<Paginated<HeldTicketGroup>> {
     const rows = await this.prisma.eventTicket.findMany({
-      where: { order: { buyerWawuId, status: 'paid' } },
+      where: { order: heldOrders(buyerWawuId) },
       select: {
         id: true,
         orderId: true,
@@ -163,7 +183,7 @@ export class EventHeldTicketsService {
     // Someone else's ticket, an unpaid order's and an unknown id all read the
     // same: not found. Nothing says whether a ticket exists for another person.
     const ticket = await this.prisma.eventTicket.findFirst({
-      where: { id: ticketId, order: { buyerWawuId, status: 'paid' } },
+      where: { id: ticketId, order: heldOrders(buyerWawuId) },
       select: {
         id: true,
         orderId: true,

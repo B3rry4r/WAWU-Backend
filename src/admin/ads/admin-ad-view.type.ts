@@ -60,8 +60,16 @@ export interface AdCampaignView {
   creative: AdCreativeView | null;
   event: AdEventView | null;
   /**
+   * True when this campaign has no artwork and is not ended: it was saved
+   * before artwork became required (R-59), it is not served, and it needs a
+   * picture before it can be (pause it if it is on air, then edit it). The
+   * list filter `artwork=missing` returns exactly these.
+   */
+  needsArtwork: boolean;
+  /**
    * True when serving would show this card to a person right now: status
-   * scheduled or live, the window holds now, and its event is open.
+   * scheduled or live, the window holds now, it has artwork, and its event is
+   * open.
    */
   servingNow: boolean;
   /**
@@ -159,6 +167,7 @@ export interface AdSummaryReportView {
     placement: AdPlacement | null;
     status: AdCampaignStatus | null;
     phase: AdPhase | null;
+    artwork: 'missing' | null;
     from: Date | null;
     to: Date | null;
   };
@@ -172,6 +181,8 @@ export interface AdSummaryReportView {
   byPhase: Record<AdPhase, number>;
   /** Campaigns serving would show right now, over everything (not only the filter). */
   servingNow: Record<AdPlacement, number>;
+  /** Campaigns with no artwork that are not ended, over everything (not only the filter): what the team still has to fix (R-59). */
+  needingArtwork: number;
 }
 
 export function toAdAuditEntryView(row: AdminAdAuditModel): AdAuditEntryView {

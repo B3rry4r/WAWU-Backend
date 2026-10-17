@@ -17,7 +17,7 @@ import {
   MERCHANT_ACCOUNT,
   PIN,
 } from '../../../test/points/cash-out-harness';
-import { loadPlansConfig } from '../../plans/plans-config';
+import { loadPlansConfig, percentOf } from '../../plans/plans-config';
 import { TierGrantService } from '../../plans/tier-grant.service';
 import type { PlanPurchaseQuoteView } from '../../plans/purchases/plan-purchase-view.type';
 import type {
@@ -424,11 +424,17 @@ describe('the cash rate can never be set above what points are sold for (finding
   let h: TierHarness;
   let settings: PlanSettingsService;
   const CASH = 'points.cash_rate_kobo_per_1000';
-  // What 1,000 points sell for, the cheapest first, as the seed has it.
+  // What 1,000 points sell for, the cheapest first, as the seed has it. A pack
+  // counts the Founding bonus (POINTS-02): its buyer gets the largest extra
+  // percent of any tier on top of the pack's points.
+  const bonusPct = Math.max(...seed.tiers.map((t) => t.packBonusPct));
   const sales = [
     ...seed.packs.map((p) => ({
       key: `plan.pack.${p.id}.price_kobo`,
-      per1000: Math.floor((p.price.kobo * 1000) / p.points.NGN),
+      per1000: Math.floor(
+        (p.price.kobo * 1000) /
+          (p.points.NGN + percentOf(p.points.NGN, bonusPct)),
+      ),
     })),
     {
       key: 'plan.checkout_bump.price_kobo',
@@ -485,7 +491,7 @@ describe('the cash rate can never be set above what points are sold for (finding
   });
 
   it('the other order: a sale price cut below the cash rate in force is refused, naming both', async () => {
-    await settings.set(admin, { settings: { [CASH]: 79_000 } });
+    await settings.set(admin, { settings: { [CASH]: 70_000 } });
     const said = await refused({ 'plan.pack.l.price_kobo': 400_000 });
     expect(said).toContain(CASH);
     expect(said).toContain('plan.pack.l.price_kobo');
@@ -501,12 +507,11 @@ describe('the cash rate can never be set above what points are sold for (finding
   it('one request that moves both to a consistent pair is allowed', async () => {
     await settings.set(admin, {
       settings: {
-        [CASH]: 85_000,
-        'plan.checkout_bump.price_kobo': 90_000,
-        'plan.pack.l.price_kobo': 520_000,
+        [CASH]: 80_000,
+        'plan.pack.l.price_kobo': 530_000,
       },
     });
-    expect(settings.current().cashOut.per1000Points.kobo).toBe(85_000);
+    expect(settings.current().cashOut.per1000Points.kobo).toBe(80_000);
   });
 
   it('putting the cash rate back to its default is always allowed', async () => {

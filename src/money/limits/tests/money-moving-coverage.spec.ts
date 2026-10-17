@@ -827,6 +827,7 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
       'POST money/transfers/wawu',
       'POST plans/purchases',
       'POST points/convert',
+      'POST points/shortfall',
     ]);
     expect(mounted.map((r) => r.key)).toContain('GET money/payments/quote');
     // No declared route is left to move money: WALLET-09 served the last one.

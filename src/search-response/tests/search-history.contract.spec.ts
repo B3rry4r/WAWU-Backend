@@ -18,6 +18,7 @@ import {
   normaliseSearch,
   SearchHistoryService,
 } from '../search-history.service';
+import { joinMembers } from './popular-members';
 
 /**
  * EXPLORE-05: Recent (and Clear), People are searching, communities by name,
@@ -265,8 +266,8 @@ describe('Search: recent, popular, communities, ticks (EXPLORE-05)', () => {
     // Round 3: a popular search is the name of a public thing, so the texts
     // below are each the exact name of a public room.
     beforeAll(async () => {
-      for (const name of [`${MARK} Alpha`, `${MARK} Gamma`])
-        await prisma.community.create({
+      for (const name of [`${MARK} Alpha`, `${MARK} Gamma`]) {
+        const r = await prisma.community.create({
           data: {
             name,
             hostWawuId: USER_BASIC,
@@ -274,6 +275,9 @@ describe('Search: recent, popular, communities, ticks (EXPLORE-05)', () => {
             description: 'x',
           },
         });
+        // R-57: a room is a popular name once it has enough members.
+        await joinMembers(prisma, r.id, MARK);
+      }
     });
 
     const seed = (key: string, query: string, people: number, ageDays = 0) =>

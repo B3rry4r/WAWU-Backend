@@ -36,17 +36,17 @@ caller from the token.
 | `POST /money/device/challenge` | `ApprovalChallengeView` | | MONEY-14 (served) |
 | `POST /money/approval/verify` | `PinStateView` | `X-Transaction-Pin` or `X-Device-Approval` | MONEY-14 (served) |
 | `GET /money/banks` | `BankView[]` | | WALLET-09 (served; CONVENTIONS.md section 24) |
-| `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 (served; CONVENTIONS.md section 24) |
+| `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 (served; CONVENTIONS.md section 24); 30 an hour per person, `429 name_check_rate_limited` (WALLET-37) |
 | `GET /money/recipients?q=` | `RecipientView[]` (at most 20) | | WALLET-08 (served; CONVENTIONS.md section 13) |
 | `GET /money/recipients/recent` | `RecipientView[]` (at most 10) | | WALLET-08 (served; CONVENTIONS.md section 13) |
 | `GET /money/beneficiaries` | `BeneficiaryView[]` | | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `POST /money/beneficiaries` | `BeneficiaryView` | `CreateBeneficiaryDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `DELETE /money/beneficiaries/{id}` | `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `GET /money/payout-account` | `PayoutAccountView` or `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
-| `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
+| `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10); only an account in the person's own name, else `409 account_not_in_your_name` (WALLET-37) |
 | `GET /money/fees/quote?kind=&amountKobo=&billCategory=` | `FeeQuoteView` | | WALLET-15 (served; CONVENTIONS.md section 11) |
 | `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-07 (served; CONVENTIONS.md section 19) |
-| `POST /money/transfers/bank` | `TransferView` | `BankTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-09 (served; CONVENTIONS.md section 24) |
+| `POST /money/transfers/bank` | `TransferView` | `BankTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-09 (served; CONVENTIONS.md section 24); `429 name_check_rate_limited` for an unsaved account whose name token is not the person's own (WALLET-37) |
 | `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 (served; CONVENTIONS.md section 19) |
 | `GET /money/transfers/presets` | `TransferPresetsView` | | WALLET-02 (served; the quick amounts under W9's keypad from `TRANSFER_AMOUNT_PRESETS_KOBO`, a provisional setting owned by YOU, and the note's longest length) |
 | `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 (served; CONVENTIONS.md section 14) |
@@ -136,6 +136,8 @@ payment onto the wallet.
 | `event_ticket` | EVENTS-07 | the order id `POST /events/:id/orders/wallet` returns (`POST /events/:id/orders` is the web's Flutterwave route and stays as it is); one order holds a line per ticket type; a basket that costs nothing is issued with no payment (R-8) | no | until the event takes place |
 | `bill` | BILLS-04 | the bill id `POST /bills/wallet` returns (`POST /bills/init` is the web's Flutterwave route and stays as it is); the price moved is the bill, Fintava's bill charge and WAWU's bill fee, in one transfer (R-31) | no | until the biller delivers |
 | `tier`, `tier_bump` | TIER-03 | the terms: `tier-<tierId>`, `renew-<tierId>` or `upgrade-<fromTierId>-<tierId>` (`GET /plans/purchases/quote` builds it; `tier_bump` adds the checkout bump) | no | no (WAWU's own sale, no seller split; a payment whose plan cannot be granted when it confirms is refunded in full, docs/contract/PLANS.md section 8) |
+| `points_pack` | POINTS-02 | the pack: `pack-<packId>` (`GET /plans` `packs` lists the ids; `GET /plans/purchases/quote?kind=points_pack&packId=` builds it). The pack's points, the Founding Maker's bonus and the expiry are the quote's terms (a change since the quote is `409 quote_changed`) | no | no (WAWU's own sale, no seller split; one lot of points is added once, docs/contract/PLANS.md section 10) |
+| `points_shortfall` | POINTS-03 | the points: `shortfall-<points>` (`POST /points/quote` builds the quote; `POST /points/shortfall` buys). The points, the pack rate and the expiry are the quote's terms (a change since the quote is `409 quote_changed`) | no | no (WAWU's own sale at the pack rate, no seller split; one lot of points is added once, docs/contract/CONVENTIONS.md section 16a) |
 | `points_cash_out` | POINTS-04 | the conversion id `POST /points/convert` returns | no | no (never paid by a person: it is the ledger link of WAWU's cash paid into the wallet for points, docs/contract/CONVENTIONS.md section 20; a payment for it is `target_not_payable`) |
 
 #### Credits from the wallet (INBOX-16)

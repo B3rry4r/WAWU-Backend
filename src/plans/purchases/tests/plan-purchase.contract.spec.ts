@@ -922,7 +922,7 @@ describe('Buy, renew or upgrade a tier from the wallet (TIER-03)', () => {
     const swapped = await call.buy(p, bodyFor(t, other));
     expect(swapped.status).toBe(409);
     expect(reasonOf(swapped).code).toBe('quote_changed');
-    const method = await call.buy(p, bodyFor(t, q, { method: 'transfer' }));
+    const method = await call.buy(p, bodyFor(t, q, { method: 'card' }));
     expect(method.status).toBe(400);
     const unknownField = await call.buy(p, bodyFor(t, q, { price: 1 }));
     expect(unknownField.status).toBe(400);

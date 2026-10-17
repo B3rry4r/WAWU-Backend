@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { LedgerService } from '../../money/ledger/ledger.service';
+import { tellWalletReady } from '../../money/opening/wallet-ready-notice';
+import { NotificationService } from '../../notification/notification.service';
 import {
   WALLET_PROVIDER,
   type WalletProvider,
@@ -73,18 +75,31 @@ export class NuvionAccountsHandler implements NuvionEventHandler {
     const settings = provider.client.settings;
     switch (d.event) {
       case 'accounts.created':
-        return new NuvionAccountRecorder(
-          this.prisma,
-          area,
-          settings,
-        ).onAccountCreated(d);
       case 'account_details.created':
-      case 'account_details.updated':
-        return new NuvionAccountRecorder(
+      case 'account_details.updated': {
+        // WALLET-40: the recorder writes the person's "account number is
+        // ready" notice with the wallet row, whichever of these events is
+        // the one that finds the number active. Without the notification
+        // service the delivery waits: a wallet is never recorded without
+        // its notice (the service is global in the app).
+        const notifications =
+          this.find<NotificationService>(NotificationService);
+        if (!notifications) {
+          return {
+            outcome: 'wait',
+            note: 'the notification service is not mounted',
+          };
+        }
+        const recorder = new NuvionAccountRecorder(
           this.prisma,
           area,
           settings,
-        ).onAccountDetails(d);
+          (tx, wawuUserId) => tellWalletReady(notifications, tx, wawuUserId),
+        );
+        return d.event === 'accounts.created'
+          ? recorder.onAccountCreated(d)
+          : recorder.onAccountDetails(d);
+      }
       case 'inflows.completed':
       case 'inflows.failed': {
         const ledger = this.find<LedgerService>(LedgerService);

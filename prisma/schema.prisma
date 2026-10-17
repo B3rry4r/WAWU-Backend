@@ -427,6 +427,48 @@ model MakerPurchase {
   @@index([wawuUserId, createdAt])
 }
 
+/// A tier purchase to be paid by bank transfer (TIER-05, VF6 "transfer details
+/// shown"). The person confirmed it with their PIN at checkout, at one quote
+/// (`priceKobo`, `totalKobo` with the Bank charge, and the `terms` of the goods);
+/// it waits as `awaiting` for the money to land in their own wallet, then is paid
+/// from the wallet exactly once (`settling`, then `settled` with the wallet
+/// payment's id), or closes: `expired` (the window lapsed) or `closed` (the item
+/// is no longer payable, the quote changed, or the person paid it another way).
+/// Nothing here is a balance: the provider's available balance decides.
+/// `openKey` is `<person>:<payment kind>:<target>` while `awaiting`, null after,
+/// so a person has one waiting order per item.
+model PlanTransferOrder {
+  id              String    @id @default(uuid())
+  wawuUserId      String
+  /// `tier` or `tier_bump`: the wallet payment kind it settles as.
+  paymentKind     String
+  /// The payment's target (`tier-founding`, `renew-verify`, `upgrade-verify-founding`).
+  targetId        String
+  priceKobo       Int
+  providerFeeKobo Int
+  totalKobo       Int
+  /// What the quote promised beyond its price (the goods), bound to the quote.
+  terms           Json?
+  status          String    @default("awaiting")
+  statusMessage   String?
+  openKey         String?   @unique
+  expiresAt       DateTime
+  /// The wallet payment that paid it; set once, never changed.
+  paymentId       String?   @unique
+  /// When the sweep took it to pay it; null unless `settling`.
+  settlingSince   DateTime?
+  /// The newest money-in row the sweep had looked at when it last checked.
+  creditsSeenAt   DateTime?
+  /// When the balance is next read although no new money-in row came.
+  nextCheckAt     DateTime?
+  checks          Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([wawuUserId, status, createdAt])
+}
+
 /// A pass to the Christmas event, issued with a tier (W44). One row per
 /// purchase that issued one: `purchaseRef` is unique, so a repeated payment
 /// confirmation issues it once. `type` names an event pass in
@@ -3322,6 +3364,12 @@ model EventTicketType {
   /// null end means "until the event begins".
   salesStartAt DateTime?
   salesEndAt   DateTime?
+  /// EVENTS-11 (R-40, round 5 ruling): set when a host's PUT
+  /// /events/:id/tickets drops or changes a tier that an order points at.
+  /// Such a tier is never deleted (the order keeps its row and a pending
+  /// one can still settle at the price its buyer saw); it is hidden from
+  /// every public and admin read and cannot be bought. Null is on sale.
+  retiredAt    DateTime?
 
   event      Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
   orders     EventOrder[]
@@ -5522,11 +5570,13 @@ model FeaturedCreator {
 // -----------------------------------------------------------------------------
 
 /// Where a sponsored card shows: inside the TGIF reader before the takeaway
-/// (`tgif_card`), or in TGIF's place on Today when the person has TGIF off
-/// (`today_slot`). Adding a placement is an `ALTER TYPE ... ADD VALUE`.
+/// (`tgif_card`), in TGIF's place on Today (`today_slot`), or as a slide in
+/// the Explore slider, which takes turns with events (`explore_slider`, ADS-07,
+/// R-59). Adding a placement is an `ALTER TYPE ... ADD VALUE`.
 enum AdPlacement {
   tgif_card
   today_slot
+  explore_slider
 }
 
 /// Where the team has put a campaign. The window (`startsAt`, `endsAt`) decides
@@ -5612,8 +5662,11 @@ model AdCreative {
   ctaDestinationId String
 
   /// The picture. An http(s) URL from POST /uploads/presign, the same as
-  /// Event.bannerUrl and NotificationCampaign.imageUrl. Null: the card is drawn
-  /// without a picture.
+  /// Event.bannerUrl and NotificationCampaign.imageUrl. REQUIRED for every
+  /// campaign saved from ADS-07 on (R-59): POST and PATCH /admin/ads refuse a
+  /// campaign without it. The column stays nullable for the campaigns saved
+  /// before that; serving skips a campaign whose artwork is null, so no card
+  /// is ever drawn without a picture, and the admin list shows those for fixing.
   artworkUrl String?
 
   createdAt DateTime @default(now())
@@ -5823,6 +5876,91 @@ model PushDelivery {
 model PushStoppedAccount {
   userWawuId String   @id
   createdAt  DateTime @default(now())
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// A DELETION THAT WAITS 30 DAYS (task SETTINGS-06, R-17)
+///
+/// One row per account that asked to be deleted (`DELETE /account`). The
+/// request is refused while money is in the person's wallet, a hold is open or
+/// earnings are waiting (Z6, R-11, R-19); otherwise the person's Naira wallet
+/// is frozen at the provider (it can neither send nor receive, so nothing new
+/// reaches it), their content is hidden, and `purgeAfter` is 30 days out.
+/// `POST /account/cancel-deletion` (WAWU ID calls it when the person signs in
+/// during the 30 days, SETTINGS-08) unfreezes the wallet, brings the content
+/// back and sets `status` to cancelled. After `purgeAfter` the purge sweep
+/// looks at the money once more (a balance, a hold or an earning that
+/// appeared keeps the account, `purgeBlockedBy` says why), releases any held
+/// points, deletes the Hub's data (AccountPurgeService), asks WAWU ID to
+/// anonymise the identity and sets `status` to purged. The row is kept after
+/// the purge as the record that it ran (it holds no personal detail).
+///
+/// `status`: scheduled, cancelled or purged. No balance is stored here: the
+/// provider's balance is the only balance (R-1).
+/// ─────────────────────────────────────────────────────────────────────────
+model AccountDeletion {
+  wawuUserId      String    @id
+  /// freezing: asked, the wallet is being frozen (not in force yet; a cancel
+  /// or a retry lets the wallet go). scheduled: in force for the 30 days.
+  /// purging: the sweep took it and is deleting (no cancel any more).
+  /// cancelled, purged: the end.
+  status          String    @default("scheduled")
+  scheduledAt     DateTime  @default(now())
+  /// The end of the 30 days: the earliest the purge runs.
+  purgeAfter      DateTime
+  /// The wallet frozen for the 30 days, and who froze it. Null: the person had
+  /// no wallet, or the provider cannot freeze (nothing was frozen).
+  walletId        String?
+  walletProvider  String?
+  walletFrozenAt  DateTime?
+  cancelledAt     DateTime?
+  purgedAt        DateTime?
+  /// The purge sweep's last look found money (or the provider unreachable):
+  /// when it first did, what it found, how many looks have been made.
+  purgeBlockedAt  DateTime?
+  purgeBlockedBy  String?
+  purgeAttempts   Int       @default(0)
+  /// What the purge kept on purpose, once it ran: for example content that
+  /// buyers paid for, hidden and stripped of the person's words. No personal
+  /// detail. Null: nothing was kept.
+  purgeNote       String?
+  /// SETTINGS-06 round 6. Set on a cancelled row when a reconcile confirmed the
+  /// person's wallet is unfrozen, so the hourly pass does not ask the provider
+  /// about it again. Null: a confirmation is still owed (a cancelled row is
+  /// checked every hour until it is set; a row in force is checked every hour
+  /// whatever this says). Cleared when a request takes the row over or a
+  /// reconcile of a cancelled row could not be confirmed.
+  walletSyncedAt  DateTime?
+  /// SETTINGS-06 round 7. The hourly pass claims a row before it asks the
+  /// provider about it. Future: a pass holds it until then (a second server
+  /// leaves it alone). Past: when the last pass finished with it, so the pass
+  /// takes the rows checked longest ago first. Null: never claimed.
+  reconcileClaimedUntil DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status, purgeAfter])
+}
+
+/// The content pieces a scheduled deletion hid, with the status each had, so
+/// a cancelled deletion puts back exactly those pieces and no others (a piece
+/// the person had already removed is not listed, so it stays removed). Deleted
+/// when the deletion is cancelled or the account is purged, except the rows of
+/// pieces the purge keeps for their buyers or strips (round 9): those move to
+/// the deleted account (`wawuUserId` = 'deleted-account') with the piece, and
+/// stay, so a reader always finds what the piece was. Only `priorStatus` =
+/// 'live' lets a buyer open a hidden piece.
+model AccountDeletionContent {
+  id             String   @id @default(uuid())
+  wawuUserId     String
+  contentPieceId String
+  /// The piece's `status` before the deletion hid it.
+  priorStatus    String
+  createdAt      DateTime @default(now())
+
+  @@unique([wawuUserId, contentPieceId])
+  @@index([wawuUserId])
+  @@index([contentPieceId])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
@@ -6280,6 +6418,20 @@ model PointHold {
 
   @@unique([purpose, reference])
   @@index([wawuUserId, createdAt])
+  /// POINTS-03's sweep of stale AI holds: the `held` ones older than the job's
+  /// longest run time, oldest first.
+  @@index([state, createdAt])
+}
+
+/// One person's choices about points (task POINTS-03, PT3). A row exists only
+/// once the person has chosen; no row reads as the defaults (`useWallet` off).
+model PointsSetting {
+  wawuUserId String   @id
+  /// "Use wallet": when points run short, the quote shows the wallet money
+  /// that would buy the shortfall. It never spends anything by itself; the
+  /// money moves only on `POST /points/shortfall` with the PIN.
+  useWallet  Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
 }
 
 /// Append-only: one row per change to one lot's points. Never updated; a
@@ -6757,4 +6909,101 @@ model WalletBill {
   @@index([status, purchaseSentAt])
   /// FIX-42: the half-hourly late-success look reads failed bills, newest first.
   @@index([status, failedAt])
+}
+
+// ---------------------------------------------------------------------------
+// REFERRAL POINTS (task REF-02, R-43, R-65)
+//
+// A person has one code and shares it; a new person claims it once; when that
+// person's first paid tier is granted, the person who invited them earns
+// points (never cash) after a hold. Nothing here is money and none of it is
+// the points balance: the points are lots in POINTS-01 (source `referral`),
+// these tables only say who invited whom and what each reward is waiting for.
+//
+// The names start with Person or Referral because ReferralCode is REF-01's
+// table for the /join registration link (a different thing: a price for a
+// community, not a person's own code). The two never share a row.
+// ---------------------------------------------------------------------------
+
+/// Where a reward is: `pending` through the hold, `granted` once its points
+/// are a lot, `cancelled` when it will never be (a refund inside the hold, a
+/// referrer without a tier). Granted and cancelled are final.
+enum ReferralRewardState {
+  pending
+  granted
+  cancelled
+}
+
+/// A person's own code, made the first time they ask for it. One per person.
+/// Upper case letters and digits, 3 to 20; the link is `wawu/r/<code>`.
+model PersonReferralCode {
+  id         String   @id @default(uuid())
+  wawuUserId String   @unique
+  code       String   @unique
+  createdAt  DateTime @default(now())
+}
+
+/// One person who claimed another's code. One row per invited person, so a
+/// person claims once (unique `referredWawuUserId`), and never their own.
+model PersonReferral {
+  id                 String   @id @default(uuid())
+  referrerWawuUserId String
+  referredWawuUserId String   @unique
+  /// The code as it was claimed (upper case).
+  code               String
+  claimedAt          DateTime @default(now())
+
+  reward ReferralReward?
+
+  /// The referrer's list and counts.
+  @@index([referrerWawuUserId, claimedAt])
+}
+
+/// What one invited person's first paid tier earns the person who invited
+/// them. At most one row per referral (unique `referralId`), whatever number
+/// of tier payments or repeated confirmations arrive: the first insert wins.
+/// The figures are copied here when the reward is made, so a setting changed
+/// during the hold changes nothing already pending. The multiplier is kept in
+/// thousandths (1.25 is 1250), points are whole, never money.
+///
+/// `pending` until `availableAt` (the hold), then the sweep makes it
+/// `granted` (a POINTS-01 lot, `sourceRef` = `reward:<id>`) or `cancelled`.
+model ReferralReward {
+  id                 String              @id @default(uuid())
+  referralId         String              @unique
+  referral           PersonReferral      @relation(fields: [referralId], references: [id], onDelete: Restrict)
+  referrerWawuUserId String
+  referredWawuUserId String
+  /// The tier payment this rests on (MakerPurchase.paymentRef).
+  paymentRef         String
+  tierId             String
+  basePoints         Int
+  multiplierMilli    Int
+  points             Int
+  state              ReferralRewardState @default(pending)
+  availableAt        DateTime
+  createdAt          DateTime            @default(now())
+  /// When it became granted or cancelled.
+  settledAt          DateTime?
+  /// Why it was cancelled: `purchase_refunded`, `referrer_no_tier`, `no_points`.
+  cancelReason       String?
+
+  /// The sweep: pending rewards that are due.
+  @@index([state, availableAt])
+  /// The referrer's counts and list.
+  @@index([referrerWawuUserId, state])
+}
+
+/// A milestone a person reached (5 verified, and so on): points granted once
+/// per person and count (unique), as a POINTS-01 lot with `sourceRef` =
+/// `milestone:<referrer>:<count>`.
+model ReferralMilestone {
+  id                 String   @id @default(uuid())
+  referrerWawuUserId String
+  /// Verified referrals the milestone is for.
+  count              Int
+  points             Int
+  grantedAt          DateTime @default(now())
+
+  @@unique([referrerWawuUserId, count])
 }

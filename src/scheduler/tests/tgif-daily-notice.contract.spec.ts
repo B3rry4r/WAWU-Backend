@@ -9,7 +9,7 @@ process.env.DATABASE_URL =
   'postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public';
 
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ConfigModule } from '@nestjs/config';
 import { PassportModule } from '@nestjs/passport';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
@@ -20,6 +20,8 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationModule } from '../../notification/notification.module';
 import { NotificationService } from '../../notification/notification.service';
+import { PlanSettingsModule } from '../../plan-settings/plan-settings.module';
+import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import { tgifSeriesTitle } from '../../notification/notification-event';
 import { PushModule } from '../../push/push.module';
 import { PushSenderService } from '../../push/push-sender.service';
@@ -154,6 +156,7 @@ describe('The daily TGIF notice (HOME-16)', () => {
         NotificationModule,
         TgifPreferenceModule,
         PushModule,
+        PlanSettingsModule,
       ],
       providers: [TgifContentService, TgifDailyNoticeService],
     }).compile();
@@ -301,11 +304,11 @@ describe('The daily TGIF notice (HOME-16)', () => {
     });
 
     it('follows a set time other than the default', async () => {
-      const config = moduleRef.get(ConfigService);
+      const settings = moduleRef.get(PlanSettingsService);
       const spy = jest
-        .spyOn(config, 'get')
+        .spyOn(settings, 'text')
         .mockImplementation((key: string) =>
-          key === 'TGIF_NOTIFICATION_TIME' ? '09:30' : undefined,
+          key === 'tgif_notification_time' ? '09:30' : '07:00',
         );
       try {
         expect(await job.run(AT_0730)).toMatchObject({ state: 'early' });
@@ -397,7 +400,7 @@ describe('The daily TGIF notice (HOME-16)', () => {
             throw new Error('TGIF book 03.json is not month 3 in full');
           },
         } as unknown as TgifContentService,
-        moduleRef.get(ConfigService),
+        moduleRef.get(PlanSettingsService),
       );
       expect(await broken.run(AT_0700)).toEqual({
         day: D1,
@@ -417,7 +420,7 @@ describe('The daily TGIF notice (HOME-16)', () => {
         prisma,
         notifications,
         content,
-        moduleRef.get(ConfigService),
+        moduleRef.get(PlanSettingsService),
       );
       const [a, b] = await Promise.all([job.run(AT_0700), other.run(AT_0700)]);
       expect(a.written + b.written).toBe(await owed());
