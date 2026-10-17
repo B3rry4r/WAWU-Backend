@@ -1627,6 +1627,18 @@ model Notification {
   @@index([userWawuId, kind, createdAt])
 }
 
+/// FIX-64. The body of each Notification that migration
+/// 20261026090000_no_em_dash_stored_refund_notice rewrote, as it was before, so
+/// that migration's rollback.sql can put it back. Written by that migration
+/// only; nothing in the code reads or writes it. No foreign key: a notification
+/// deleted later does not touch its backup. Holds an amount, no person's id.
+/// To be dropped, as its own task, after two weeks with no rollback.
+model NotificationRefundNoticeBackup {
+  notificationId String   @id
+  body           String
+  savedAt        DateTime @default(now())
+}
+
 /// ME-10. What one notification is about, so opening it opens that thing
 /// (M31: Reply, See why, a piece, a person). Written by NotificationService.emit()
 /// in the same insert as its notification, from the event that caused it;
