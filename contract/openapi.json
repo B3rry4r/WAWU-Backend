@@ -23458,6 +23458,76 @@
         ]
       }
     },
+    "/api/hub/explore/suggested-creators": {
+      "get": {
+        "operationId": "ExploreController_suggested",
+        "parameters": [
+          {
+            "name": "interests",
+            "required": false,
+            "in": "query",
+            "description": "The categories a person picked, as ids from GET /explore/categories, comma\nseparated (`music_audio,film_video`) or repeated. Left out, it is every\ncreator Explore may show.",
+            "schema": {
+              "uniqueItems": true,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "music_audio",
+                  "film_video",
+                  "photography",
+                  "fashion_beauty",
+                  "business_finance",
+                  "technology",
+                  "food_lifestyle",
+                  "faith_spirituality",
+                  "art_design",
+                  "writing_publishing",
+                  "sports_fitness",
+                  "gaming_esports"
+                ]
+              }
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ExploreCreatorCard"
+                      }
+                    }
+                  },
+                  "required": [
+                    "items"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Explore"
+        ]
+      }
+    },
     "/api/hub/professionals/applications": {
       "post": {
         "operationId": "ProfessionalController_apply",
@@ -25358,6 +25428,99 @@
                     "professionalVerifiedAt",
                     "professionalVerifiedUntil"
                   ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "UserProfile"
+        ]
+      }
+    },
+    "/api/hub/users/me/account-type": {
+      "put": {
+        "operationId": "UserProfileController_setAccountType",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAccountTypeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "accountType": {
+                      "type": "string",
+                      "enum": [
+                        "creator",
+                        "user"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "accountType"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "UserProfile"
+        ]
+      }
+    },
+    "/api/hub/users/me/interests": {
+      "get": {
+        "operationId": "UserProfileController_getMyInterests",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InterestsView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "UserProfile"
+        ]
+      },
+      "put": {
+        "operationId": "UserProfileController_saveMyInterests",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveInterestsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InterestsView"
                 }
               }
             }
@@ -36616,6 +36779,50 @@
             "format": "uri"
           }
         }
+      },
+      "SetAccountTypeDto": {
+        "type": "object",
+        "properties": {
+          "accountType": {
+            "type": "string",
+            "enum": [
+              "user",
+              "creator"
+            ]
+          }
+        },
+        "required": [
+          "accountType"
+        ]
+      },
+      "SaveInterestsDto": {
+        "type": "object",
+        "properties": {
+          "interests": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "music_audio",
+                "film_video",
+                "photography",
+                "fashion_beauty",
+                "business_finance",
+                "technology",
+                "food_lifestyle",
+                "faith_spirituality",
+                "art_design",
+                "writing_publishing",
+                "sports_fitness",
+                "gaming_esports"
+              ]
+            }
+          }
+        },
+        "required": [
+          "interests"
+        ]
       },
       "UpdateProfileFieldsDto": {
         "type": "object",
@@ -51627,6 +51834,46 @@
           "exp",
           "verification",
           "experience"
+        ]
+      },
+      "InterestOption": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label"
+        ]
+      },
+      "InterestsView": {
+        "type": "object",
+        "properties": {
+          "minimum": {
+            "type": "number"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InterestOption"
+            }
+          },
+          "selected": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "minimum",
+          "options",
+          "selected"
         ]
       },
       "ProfileStatsView": {
