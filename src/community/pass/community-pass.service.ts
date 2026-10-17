@@ -313,6 +313,17 @@ export class CommunityPassService implements OnModuleInit {
         if (room.hostWawuId !== hostId) return 'the room has another host';
         if (!room.passPrice) return 'the room no longer sells a pass';
         if (dealingStopped) return 'the host and the person can no longer deal';
+        // A pending row in a pass room is a member the host removed (round 3).
+        // A payment that was in flight when the host removed them must not put
+        // them back: nothing is given and every naira is paid back. The row is
+        // locked, so a removal that lands after this read waits for the grant
+        // and the person ends removed, never admitted by the payment.
+        const rows = await tx.$queryRaw<{ status: string }[]>`
+          SELECT "status"::text AS "status" FROM "CommunityMembership"
+          WHERE "userWawuId" = ${userId} AND "communityId" = ${communityId}
+          FOR UPDATE`;
+        if (rows[0]?.status === 'pending')
+          return 'the host removed the person from the room';
         return null;
       },
       grant: async (tx) => {
@@ -343,7 +354,9 @@ export class CommunityPassService implements OnModuleInit {
           skipDuplicates: true,
         });
         if (count === 0) return false;
-        // The person is in: a new member, or a request that was pending.
+        // The person is in: a new member, or one already in. A pending row is
+        // a removed member (the refusal above sent that payment back), so the
+        // grant never flips one to joined.
         await tx.communityMembership.createMany({
           data: [
             {
@@ -354,10 +367,6 @@ export class CommunityPassService implements OnModuleInit {
             },
           ],
           skipDuplicates: true,
-        });
-        await tx.communityMembership.updateMany({
-          where: { userWawuId: userId, communityId, status: 'pending' },
-          data: { status: 'joined', joinedAt: now },
         });
         return true;
       },
