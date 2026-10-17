@@ -6848,3 +6848,100 @@ model WalletBill {
   /// FIX-42: the half-hourly late-success look reads failed bills, newest first.
   @@index([status, failedAt])
 }
+
+// ---------------------------------------------------------------------------
+// REFERRAL POINTS (task REF-02, R-43, R-65)
+//
+// A person has one code and shares it; a new person claims it once; when that
+// person's first paid tier is granted, the person who invited them earns
+// points (never cash) after a hold. Nothing here is money and none of it is
+// the points balance: the points are lots in POINTS-01 (source `referral`),
+// these tables only say who invited whom and what each reward is waiting for.
+//
+// The names start with Person or Referral because ReferralCode is REF-01's
+// table for the /join registration link (a different thing: a price for a
+// community, not a person's own code). The two never share a row.
+// ---------------------------------------------------------------------------
+
+/// Where a reward is: `pending` through the hold, `granted` once its points
+/// are a lot, `cancelled` when it will never be (a refund inside the hold, a
+/// referrer without a tier). Granted and cancelled are final.
+enum ReferralRewardState {
+  pending
+  granted
+  cancelled
+}
+
+/// A person's own code, made the first time they ask for it. One per person.
+/// Upper case letters and digits, 3 to 20; the link is `wawu/r/<code>`.
+model PersonReferralCode {
+  id         String   @id @default(uuid())
+  wawuUserId String   @unique
+  code       String   @unique
+  createdAt  DateTime @default(now())
+}
+
+/// One person who claimed another's code. One row per invited person, so a
+/// person claims once (unique `referredWawuUserId`), and never their own.
+model PersonReferral {
+  id                 String   @id @default(uuid())
+  referrerWawuUserId String
+  referredWawuUserId String   @unique
+  /// The code as it was claimed (upper case).
+  code               String
+  claimedAt          DateTime @default(now())
+
+  reward ReferralReward?
+
+  /// The referrer's list and counts.
+  @@index([referrerWawuUserId, claimedAt])
+}
+
+/// What one invited person's first paid tier earns the person who invited
+/// them. At most one row per referral (unique `referralId`), whatever number
+/// of tier payments or repeated confirmations arrive: the first insert wins.
+/// The figures are copied here when the reward is made, so a setting changed
+/// during the hold changes nothing already pending. The multiplier is kept in
+/// thousandths (1.25 is 1250), points are whole, never money.
+///
+/// `pending` until `availableAt` (the hold), then the sweep makes it
+/// `granted` (a POINTS-01 lot, `sourceRef` = `reward:<id>`) or `cancelled`.
+model ReferralReward {
+  id                 String              @id @default(uuid())
+  referralId         String              @unique
+  referral           PersonReferral      @relation(fields: [referralId], references: [id], onDelete: Restrict)
+  referrerWawuUserId String
+  referredWawuUserId String
+  /// The tier payment this rests on (MakerPurchase.paymentRef).
+  paymentRef         String
+  tierId             String
+  basePoints         Int
+  multiplierMilli    Int
+  points             Int
+  state              ReferralRewardState @default(pending)
+  availableAt        DateTime
+  createdAt          DateTime            @default(now())
+  /// When it became granted or cancelled.
+  settledAt          DateTime?
+  /// Why it was cancelled: `purchase_refunded`, `referrer_no_tier`, `no_points`.
+  cancelReason       String?
+
+  /// The sweep: pending rewards that are due.
+  @@index([state, availableAt])
+  /// The referrer's counts and list.
+  @@index([referrerWawuUserId, state])
+}
+
+/// A milestone a person reached (5 verified, and so on): points granted once
+/// per person and count (unique), as a POINTS-01 lot with `sourceRef` =
+/// `milestone:<referrer>:<count>`.
+model ReferralMilestone {
+  id                 String   @id @default(uuid())
+  referrerWawuUserId String
+  /// Verified referrals the milestone is for.
+  count              Int
+  points             Int
+  grantedAt          DateTime @default(now())
+
+  @@unique([referrerWawuUserId, count])
+}

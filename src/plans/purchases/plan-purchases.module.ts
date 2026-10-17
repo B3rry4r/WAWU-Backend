@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { MoneyModule } from '../../money/money.module';
 import { PointsModule } from '../../points/points.module';
+import { ReferralsModule } from '../../referrals/referrals.module';
 import { PlansModule } from '../plans.module';
 import { PlanPurchasesController } from './plan-purchases.controller';
 import { PlanPurchaseService } from './plan-purchase.service';
@@ -18,7 +19,13 @@ import { PlanPurchaseService } from './plan-purchase.service';
  * entry, after PlansModule).
  */
 @Module({
-  imports: [WawuAuthModule, MoneyModule, PlansModule, PointsModule],
+  imports: [
+    WawuAuthModule,
+    MoneyModule,
+    PlansModule,
+    PointsModule,
+    ReferralsModule,
+  ],
   controllers: [PlanPurchasesController],
   providers: [PlanPurchaseService],
 })

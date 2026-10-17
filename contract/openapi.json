@@ -29742,6 +29742,60 @@
         ]
       }
     },
+    "/api/hub/me/referrals": {
+      "get": {
+        "operationId": "ReferralsController_mine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyReferralsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The link and code, brought, verified, points earned and pending, the level and the next milestone.",
+        "tags": [
+          "Referrals"
+        ]
+      }
+    },
+    "/api/hub/me/referrals/claim": {
+      "post": {
+        "operationId": "ReferralsController_claim",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClaimReferralDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClaimReferralView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Uses someone's code: once, in your first days, never your own.",
+        "tags": [
+          "Referrals"
+        ]
+      }
+    },
     "/api/hub/plans/purchases/quote": {
       "get": {
         "operationId": "PlanPurchasesController_quote",
@@ -37370,6 +37424,20 @@
         },
         "required": [
           "card"
+        ]
+      },
+      "ClaimReferralDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The code to use, or the link it came in (`wawu/r/lennox`). Any case.",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "code"
         ]
       },
       "PlanPurchaseDto": {
@@ -53688,6 +53756,213 @@
           "chats",
           "paidDms",
           "communities"
+        ]
+      },
+      "ReferralLadderStepView": {
+        "type": "object",
+        "properties": {
+          "verified": {
+            "type": "number"
+          },
+          "multiplier": {
+            "type": "number"
+          },
+          "reached": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "verified",
+          "multiplier",
+          "reached"
+        ]
+      },
+      "ReferralNextMilestoneView": {
+        "type": "object",
+        "properties": {
+          "verified": {
+            "type": "number"
+          },
+          "points": {
+            "type": "number"
+          },
+          "remaining": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "verified",
+          "points",
+          "remaining"
+        ]
+      },
+      "ReferralMilestoneView": {
+        "type": "object",
+        "properties": {
+          "verified": {
+            "type": "number"
+          },
+          "points": {
+            "type": "number"
+          },
+          "reached": {
+            "type": "boolean"
+          },
+          "grantedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "verified",
+          "points",
+          "reached",
+          "grantedAt"
+        ]
+      },
+      "ReferralRewardView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tierId": {
+            "type": "string"
+          },
+          "tierName": {
+            "type": "string"
+          },
+          "basePoints": {
+            "type": "number"
+          },
+          "multiplier": {
+            "type": "number"
+          },
+          "points": {
+            "type": "number"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "cancelled",
+              "available"
+            ]
+          },
+          "availableAt": {
+            "type": "string"
+          },
+          "settledAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "tierId",
+          "tierName",
+          "basePoints",
+          "multiplier",
+          "points",
+          "state",
+          "availableAt",
+          "settledAt"
+        ]
+      },
+      "MyReferralsView": {
+        "type": "object",
+        "properties": {
+          "link": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "brought": {
+            "type": "number"
+          },
+          "verified": {
+            "type": "number"
+          },
+          "pending": {
+            "type": "number"
+          },
+          "pointsEarned": {
+            "type": "number"
+          },
+          "pendingPoints": {
+            "type": "number"
+          },
+          "multiplier": {
+            "type": "number"
+          },
+          "level": {
+            "type": "number"
+          },
+          "ladder": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReferralLadderStepView"
+            }
+          },
+          "nextMilestone": {
+            "$ref": "#/components/schemas/ReferralNextMilestoneView",
+            "nullable": true
+          },
+          "milestones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReferralMilestoneView"
+            }
+          },
+          "holdDays": {
+            "type": "number"
+          },
+          "claimDays": {
+            "type": "number"
+          },
+          "rewards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReferralRewardView"
+            }
+          }
+        },
+        "required": [
+          "link",
+          "code",
+          "brought",
+          "verified",
+          "pending",
+          "pointsEarned",
+          "pendingPoints",
+          "multiplier",
+          "level",
+          "ladder",
+          "nextMilestone",
+          "milestones",
+          "holdDays",
+          "claimDays",
+          "rewards"
+        ]
+      },
+      "ClaimReferralView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "claimedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "claimedAt"
         ]
       },
       "MeCountsView": {

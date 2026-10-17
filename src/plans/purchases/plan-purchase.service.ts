@@ -20,6 +20,7 @@ import {
   WalletPaymentService,
 } from '../../money/payments/wallet-payment.service';
 import { PointsService } from '../../points/points.service';
+import { ReferralRewardService } from '../../referrals/referral-reward.service';
 import { BillingCurrencyService } from '../billing-currency.service';
 import { MakerTierService } from '../maker-tier.service';
 import {
@@ -162,6 +163,7 @@ export class PlanPurchaseService implements OnModuleInit {
     private readonly payments: WalletPaymentService,
     private readonly registry: PayableRegistry,
     private readonly holds: WalletHoldService,
+    private readonly referrals: ReferralRewardService,
   ) {}
 
   onModuleInit(): void {
@@ -375,6 +377,25 @@ export class PlanPurchaseService implements OnModuleInit {
     const goods = goodsFromTerms(payment.terms);
     const refusal = await this.grantOnce(payment, terms, goods);
     if (refusal !== null) await this.refund(payment, refusal);
+    else await this.rewardInviter(payment.payerWawuUserId);
+  }
+
+  /**
+   * The tier is granted, so if this person was invited, their first paid tier
+   * makes the reward for the person who invited them (REF-02). Made after the
+   * commit and never allowed to fail the delivery: a failure is logged, and
+   * the referral job makes the reward on its next pass.
+   */
+  private async rewardInviter(wawuUserId: string): Promise<void> {
+    try {
+      await this.referrals.onTierPaid(wawuUserId);
+    } catch (e) {
+      this.logger.warn(
+        `referral reward for ${wawuUserId} left to the referral job: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
   }
 
   /**

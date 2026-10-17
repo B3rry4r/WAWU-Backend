@@ -460,3 +460,61 @@ Paying by bank transfer at checkout (TIER-05), extra products (TIER-04),
 points packs (POINTS-02), the Voice Intro itself, the Founding Maker's badge
 number (BACKEND_GAPS G-421) and the dollar wallet path (NUV-09).
 
+
+---
+
+## 9. Referral points: invite, claim and earn (REF-02)
+
+A person shares `wawu/r/<code>`; someone new uses it; when that person's first
+paid tier is granted, the person who invited them earns points (never cash)
+after a hold. Code: `src/referrals/`, mounted through `MeModule` (as
+`me/points`) and imported by `PlanPurchasesModule` for the hook. Not to be
+confused with REF-01's `ReferralCode` (the `/join` registration link, a price
+for a community): the two tables never share a row, and a person's code is
+never one a `/join` code already uses.
+
+- **`GET /me/referrals`** (RF1, RF3, RF4; `no-store`; the token is the person):
+  `link`, `code` (made the first time, from the first name), `brought`,
+  `verified` (rewards past the hold), `pending` and `pendingPoints` (in the
+  hold), `pointsEarned` (rewards plus milestones; not the balance),
+  `multiplier` (what a new reward earns now), `level` (levels reached, 0 before
+  the first), `ladder` (`verified`, `multiplier`, `reached` per level),
+  `nextMilestone` (`verified`, `points`, `remaining`, or null), `milestones`
+  (all, with `reached`, `grantedAt`), `holdDays`, `claimDays`, and the newest
+  20 `rewards` (`name`, `tierName`, `basePoints`, `multiplier`, `points`,
+  `state` `pending|available|cancelled`, `availableAt`, `settledAt`). The
+  reward becoming `available` is how the Hub says points arrived (RF3, RF3a).
+- **`POST /me/referrals/claim`** `{ code }` (the code or the link, any case):
+  200 `{ code, claimedAt }`. Once per person (the same code again answers the
+  first claim; another is `409 referral_already_claimed`), within
+  `referral.claim_days` of sign-up (`409 referral_claim_closed` with
+  `claimDays`), before any tier was paid (`409 referral_not_new`), never your
+  own (`400 referral_own_code`), never the code of someone you invited
+  (`409 referral_loop`), `404 referral_code_unknown`. One level only: only the
+  person whose code was used can earn from the claim.
+- **The reward** (`ReferralReward`, at most one per referral, enforced by a
+  unique key): made by `ReferralRewardService.onTierPaid` after the purchase
+  commits (and by the job's catch-up for one it missed), for the invited
+  person's earliest paid tier: base points of that tier times the multiplier at
+  the referrer's `verified` count then, whole points. The figures are copied
+  onto the row, so a setting changed during the hold changes nothing pending.
+  A referrer with no running tier gets a row already `cancelled`
+  (`referrer_no_tier`): "only a referrer with an active tier earns".
+- **Paid after the hold** by the minute job (`ReferralSweepService`): under the
+  referrer's lock, a reward is `cancelled` when the tier payment was refunded
+  (a refund hold written for it, the payment `reversed`, the purchase row gone,
+  or `cancelForPurchase(paymentRef)` called by a refund path) or the referrer
+  held no tier when the hold ended; otherwise `granted` with a POINTS-01 lot
+  (`source` `referral`, `sourceRef` `reward:<id>`, ends after
+  `points.expiry_months`), then the milestones the new `verified` count
+  reaches, each once per person (`sourceRef` `milestone:<referrer>:<count>`).
+  The points are the last writes of the transaction. Nothing waits on a
+  provider or any network while a transaction or lock is held.
+- **Settings** (TIER-06, `/admin/plan-settings`, read live): `referral.multipliers`,
+  `referral.milestones` (launch: 5 verified +500, 10 verified +1,500; the
+  25-verified step is off), `referral.hold_days`, `referral.claim_days`,
+  `referral.base_points.<tier>`, `points.expiry_months`.
+- **Default (agent), owner may override:** `verified` counts rewards past the
+  hold (RF1 draws Verified and Pending apart); a code is refused to someone who
+  already paid for a tier; a referrer whose tier ended before the hold did
+  loses the reward; the claim window runs from the profile's creation.
