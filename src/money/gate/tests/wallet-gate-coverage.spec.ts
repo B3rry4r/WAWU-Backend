@@ -219,6 +219,8 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'DELETE money/beneficiaries/:id',
       'DELETE money/device',
       'GET bills/wallet/:id/quote',
+      // INBOX-24: the pay sheet of a community's monthly pass.
+      'GET communities/:id/pass/quote',
       // HOME-15: the pay sheet of an unlock.
       'GET content/:id/unlock/wallet/quote',
       // INBOX-16: the pay sheet of a credit pack.
@@ -256,6 +258,8 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET tips/wallet/quote',
       'POST bills/wallet',
       'POST bills/wallet/pay',
+      // INBOX-24: a community's monthly pass pays from the wallet.
+      'POST communities/:id/pass',
       // HOME-15: an unlock pays from the wallet.
       'POST content/:id/unlock/wallet',
       // INBOX-16: a credit pack pays from the wallet.
@@ -296,6 +300,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     );
     expect(pinRoutes.map((r) => r.key).sort()).toEqual([
       'POST bills/wallet/pay',
+      'POST communities/:id/pass',
       'POST content/:id/unlock/wallet',
       'POST credits/purchase/wallet',
       'POST dm/send/wallet/pay',

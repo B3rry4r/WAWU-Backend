@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ChatService } from '../chat/chat.service';
 import { CommunityMessageService } from '../community-message/community-message.service';
+import { CommunityPassAccess } from '../community/pass/community-pass-access.service';
 import {
   decodeLiveCursor,
   encodeLiveCursor,
@@ -38,6 +39,7 @@ export class LiveCatchUpService {
     private readonly prisma: PrismaService,
     private readonly chats: ChatService,
     private readonly communityMessages: CommunityMessageService,
+    private readonly passAccess: CommunityPassAccess,
   ) {}
 
   async catchUp(
@@ -103,9 +105,16 @@ export class LiveCatchUpService {
           !blockedIds.has(c.userAWawuId === me ? c.userBWawuId : c.userAWawuId),
       )
       .map((c) => c.id);
+    // INBOX-24 (R-63): a room whose pass has ended sends nothing to catch up on.
+    const lapsedRooms = await this.passAccess.lapsedRooms(
+      me,
+      memberships.map((m) => m.communityId),
+    );
     const communityIds = [
       ...new Set([
-        ...memberships.map((m) => m.communityId),
+        ...memberships
+          .map((m) => m.communityId)
+          .filter((id) => !lapsedRooms.has(id)),
         ...hosted.map((c) => c.id),
       ]),
     ];

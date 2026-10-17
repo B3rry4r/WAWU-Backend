@@ -105,6 +105,14 @@ export function feedCtes(me: string, now: Date): Prisma.Sql {
       JOIN "Community" c ON c."id" = ms."communityId"
       WHERE ms."userWawuId" = ${me} AND ms."status" = 'joined'
         AND c."hostWawuId" <> ${me}
+        -- INBOX-24 (R-63): a room that sells a pass is listed only while the
+        -- person's pass runs; its preview and unread count are reading.
+        AND (NOT EXISTS (SELECT 1 FROM "CommunityPassPrice" pp
+                          WHERE pp."communityId" = c."id")
+             OR EXISTS (SELECT 1 FROM "CommunityPass" cp
+                         WHERE cp."communityId" = c."id"
+                           AND cp."userWawuId" = ${me}
+                           AND cp."endsAt" > ${nowTs}))
     ),
     communities AS (
       SELECT 'community'::text AS kind,

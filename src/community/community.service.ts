@@ -15,6 +15,8 @@ import type {
   CommunityMembership,
   CommunityResponse,
 } from '../common/types';
+import { CommunityPassAccess } from './pass/community-pass-access.service';
+import { passIsActive } from './pass/community-pass-rules';
 import type { CreateCommunityDto } from './dto/create-community.dto';
 import type { UpdateCommunityDto } from './dto/update-community.dto';
 
@@ -52,6 +54,18 @@ import type { UpdateCommunityDto } from './dto/update-community.dto';
  * so it is kept as it is; INBOX-01 reuses it for a decline that loses a race
  * to an approval.
  */
+/** Joining a room that sells a pass without one (INBOX-24, R-63). No em-dash: a person reads it. */
+export const PASS_REQUIRED_MESSAGE =
+  'This private room is joined with a monthly pass. Buy a pass to come in.';
+
+/** What `GET /communities/:id/membership` adds in a room that sells a pass (INBOX-24). */
+export interface MembershipPass {
+  /** When the person's pass ends (ISO 8601), or null when they never had one. */
+  passUntil: string | null;
+  /** True when the person has held a pass here and can pay for the next one. */
+  canRenew: boolean;
+}
+
 const ALREADY_APPROVED =
   'That request was already approved. This person is a member. Remove them instead.';
 
@@ -61,6 +75,7 @@ export class CommunityService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly passAccess: CommunityPassAccess,
   ) {}
 
   /** Start of "today" in UTC, per the task brief's derivation rule for `messagesToday`. */
@@ -175,6 +190,7 @@ export class CommunityService {
   async create(
     hostWawuId: string,
     dto: CreateCommunityDto,
+    passPriceKobo?: number,
   ): Promise<CommunityResponse> {
     // Hosting used to need a live subscription, and a PRIVATE community used
     // to need a paid tier above Basic. Both were subscription entitlements and
@@ -192,6 +208,11 @@ export class CommunityService {
         // existed before the column has none — and clients keep their
         // placeholder tile for exactly that case.
         imageUrl: dto.imageUrl ?? null,
+        // INBOX-24 (R-63). The monthly price of a private room's pass, written
+        // with the room. Only POST /communities/rooms passes one.
+        ...(passPriceKobo !== undefined
+          ? { passPrice: { create: { priceKobo: BigInt(passPriceKobo) } } }
+          : {}),
       },
     });
 
@@ -282,10 +303,21 @@ export class CommunityService {
   async myMembership(
     id: string,
     userWawuId: string,
-  ): Promise<CommunityMembership | null> {
-    return this.prisma.communityMembership.findUnique({
+  ): Promise<(CommunityMembership & Partial<MembershipPass>) | null> {
+    const membership = await this.prisma.communityMembership.findUnique({
       where: { userWawuId_communityId: { userWawuId, communityId: id } },
     });
+    if (!membership) return null;
+    // INBOX-24 (R-63). In a private room that sells a pass the answer also
+    // says when the pass ends and whether it can be renewed. Any other room
+    // answers exactly what it always did, so the web's response is unchanged.
+    if (!(await this.passAccess.roomsWithPass([id])).has(id)) return membership;
+    const until = await this.passAccess.passUntil(id, userWawuId);
+    return {
+      ...membership,
+      passUntil: until ? until.toISOString() : null,
+      canRenew: until !== null,
+    };
   }
 
   /** Leaves a community. Idempotent: leaving one you are not in is a no-op. */
@@ -313,6 +345,29 @@ export class CommunityService {
     const existing = await this.prisma.communityMembership.findUnique({
       where: { userWawuId_communityId: { userWawuId, communityId: id } },
     });
+
+    // INBOX-24 (R-63). A private room that sells a pass has no request and no
+    // host approval: a person is in while their pass runs. Joining here is
+    // only for someone whose pass is still running (they left, or an older
+    // request is still pending); everyone else buys a pass.
+    if ((await this.passAccess.roomsWithPass([id])).has(id)) {
+      if (existing?.status === 'joined') return existing;
+      const until = await this.passAccess.passUntil(id, userWawuId);
+      if (!passIsActive(until, new Date())) {
+        throw new ConflictException(PASS_REQUIRED_MESSAGE);
+      }
+      return this.prisma.communityMembership.upsert({
+        where: { userWawuId_communityId: { userWawuId, communityId: id } },
+        create: {
+          userWawuId,
+          communityId: id,
+          status: 'joined',
+          joinedAt: new Date(),
+        },
+        update: { status: 'joined', joinedAt: new Date() },
+      });
+    }
+
     if (existing) {
       return existing;
     }

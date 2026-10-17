@@ -79,6 +79,12 @@ export type FeePartCode = (typeof FEE_PART_CODES)[number];
  * held. Its `targetId` is `shortfall-<points>` (docs/contract/CONVENTIONS.md
  * section 16a).
  *
+ * `community_pass` (INBOX-24, R-63) is 30 days in a private community, bought
+ * from the wallet with the PIN. Its `targetId` is the community's id. The host
+ * is the payee (85%, R-5); it is not held: the host's share is an earning
+ * like any sale, paid in their one move a day (R-55), and a pass that cannot
+ * be granted is paid back in full, the charge included.
+ *
  * `points_cash_out` (POINTS-04) is not a payment anyone makes from the wallet:
  * it is the link kind of the ledger rows of points turned into cash, WAWU's
  * own movement from its account into the person's wallet (R-43, R-31). It is
@@ -100,6 +106,7 @@ export const PAYMENT_KINDS = [
   'points_pack',
   'points_shortfall',
   'points_cash_out',
+  'community_pass',
 ] as const;
 export type PaymentKind = (typeof PAYMENT_KINDS)[number];
 

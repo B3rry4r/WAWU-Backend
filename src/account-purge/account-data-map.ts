@@ -138,6 +138,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'ProfileEducation', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CourseEnrollment', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CommunityMembership', column: 'userWawuId', disposition: 'OWNED' },
+  // The passes this person bought for private communities (INBOX-24, R-63):
+  // OWNED, like VerificationPurchase. The row exists only because this account
+  // paid and names no counterparty; the money's record is the payment, which
+  // stays and is anonymised below.
+  { model: 'CommunityPass', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person has read in each community (INBOX-01).
   { model: 'CommunityReadMarker', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'Notification', column: 'userWawuId', disposition: 'OWNED' },

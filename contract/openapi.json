@@ -16572,7 +16572,8 @@
                 "tier_bump",
                 "points_pack",
                 "points_shortfall",
-                "points_cash_out"
+                "points_cash_out",
+                "community_pass"
               ]
             }
           },
@@ -26916,7 +26917,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateCommunityDto"
+                "$ref": "#/components/schemas/CreateRoomDto"
               }
             }
           }
@@ -27222,6 +27223,14 @@
                     "joinedAt": {
                       "type": "string",
                       "format": "date-time",
+                      "nullable": true
+                    },
+                    "passUntil": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "canRenew": {
+                      "type": "boolean",
                       "nullable": true
                     }
                   },
@@ -30937,6 +30946,316 @@
         "summary": "One purchase as it stands now: what the app polls after `pending`. Only\nthe buyer reads it; another person's purchase and an id nobody holds are\nthe same `404 not_found`. It reads our own records only.",
         "tags": [
           "CreditWallet"
+        ]
+      }
+    },
+    "/api/hub/communities/{id}/pass": {
+      "get": {
+        "operationId": "CommunityPassController_pass",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityPassView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Where the caller stands with this room's pass: the host's price, when\ntheir pass ends, and whether they can buy or renew. Needs no wallet, so\nthe landing (I30) can open before one exists.",
+        "tags": [
+          "CommunityPass"
+        ]
+      },
+      "post": {
+        "operationId": "CommunityPassController_buy",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommunityPassDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityPassPurchaseView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pays for 30 days from the wallet, once: the person is in when the payment\nis confirmed. Paying before the end extends from the current end date.\nAnswers 201 with the purchase: `paid`, `pending` while the provider has\nnot confirmed the debit yet (poll `GET /communities/{id}/pass/{paymentId}`;\nit is never sent again), `failed` when the provider refused it and nothing\nmoved, or `refunded` when the pass could not be given and everything paid\nis going back. The same Idempotency-Key and body answer the first result\nagain (`Idempotent-Replayed: true`) without checking the PIN. Not enough\nmoney is `402 insufficient_funds` with the shortfall; no wallet is `409\nwallet_not_open`. Nothing is ever debited without this request.",
+        "tags": [
+          "CommunityPass"
+        ]
+      }
+    },
+    "/api/hub/communities/{id}/pass/quote": {
+      "get": {
+        "operationId": "CommunityPassController_quote",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityPassQuoteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The pay sheet before the PIN: the host's price, the wallet provider's\ncharge and WAWU's fee on top, the total, the wallet's balance and the\nshortfall, when the pass would end, and the signed quote\n`POST /communities/{id}/pass` sends back. Nothing is reserved.",
+        "tags": [
+          "CommunityPass"
+        ]
+      }
+    },
+    "/api/hub/communities/{id}/pass/{paymentId}": {
+      "get": {
+        "operationId": "CommunityPassController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "paymentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityPassPurchaseView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One purchase as it stands now: what the app polls after `pending`. Only\nthe payer reads it, for the room in the path; another person's purchase\nand an id nobody holds are the same `404 not_found`.",
+        "tags": [
+          "CommunityPass"
         ]
       }
     },
@@ -36725,7 +37044,8 @@
               "tier_bump",
               "points_pack",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ],
             "type": "string"
           },
@@ -38259,6 +38579,47 @@
           "reason"
         ]
       },
+      "CreateRoomDto": {
+        "type": "object",
+        "properties": {
+          "passPriceKobo": {
+            "type": "integer",
+            "description": "What a member pays for 30 days, in kobo, set by the host (I32). Private\nrooms only. The bounds are checked by the service (a figure of the\nlaunch settings, COMMUNITY_PASS_MIN_KOBO and COMMUNITY_PASS_MAX_KOBO).\nOmitted, a private room has no pass and keeps the older join request flow.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string",
+            "description": "Bound: 3-80 characters. A community name is a list-row heading on both\nthe mobile and desktop community surfaces, so it is deliberately far\nshorter than ContentPiece.title (200) — anything longer is a\ndescription, not a name. `\\S` rejects an all-whitespace name, which\n@IsNotEmpty alone lets through and which renders as a blank, unclickable\nrow.",
+            "minLength": 3,
+            "maxLength": 80,
+            "pattern": "\\S"
+          },
+          "description": {
+            "type": "string",
+            "description": "Bound: 1-500 characters. This is the \"what this community is for\" blurb\nshown on the community card / join screen, not long-form content — an\norder of magnitude shorter than ContentPiece.description (5000), which\nbacks a full detail page. Required, because `Community.description` is\na non-nullable column and a community with no stated purpose is the\nthing nobody joins.",
+            "maxLength": 500,
+            "pattern": "\\S"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "open",
+              "private"
+            ]
+          },
+          "imageUrl": {
+            "type": "string",
+            "description": "The room's cover image, as the `fileUrl` handed back by\n`POST /uploads/presign` for the `community/image` folder. Optional — a\ncommunity without one is normal and the client falls back to its\nplaceholder tile, so hosting is never blocked on finding a picture.\n\nNo `@MaxLength` here, matching every other asset-URL field in this\nbackend (CreateContentDto's previewAssetUrl/fullAssetUrl, CreateEventDto's\nbannerUrl — neither caps length). A presigned S3 GET URL carries the\nbucket, region, path and a full signed query string, routinely well past\n500 characters; a cap this field alone had meant every community created\nwith a picture 400'd against this backend's own presign output.",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "kind"
+        ]
+      },
       "CreateCommunityDto": {
         "type": "object",
         "properties": {
@@ -38276,11 +38637,11 @@
             "pattern": "\\S"
           },
           "kind": {
+            "type": "string",
             "enum": [
               "open",
               "private"
-            ],
-            "type": "string"
+            ]
           },
           "imageUrl": {
             "type": "string",
@@ -39306,6 +39667,27 @@
           "quoteToken"
         ]
       },
+      "CommunityPassDto": {
+        "type": "object",
+        "properties": {
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`payment.totalKobo` from the quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`payment.quoteToken` from that quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
       "TipWalletDto": {
         "type": "object",
         "properties": {
@@ -40076,7 +40458,8 @@
               "tier_bump",
               "points_pack",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ]
           },
           "targetId": {
@@ -41293,7 +41676,8 @@
               "tier_bump",
               "points_pack",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ]
           },
           "status": {
@@ -41533,7 +41917,8 @@
               "tier_bump",
               "points_pack",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ]
           },
           "earnedKobo": {
@@ -41636,7 +42021,8 @@
               "tier_bump",
               "points_pack",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ]
           },
           "targetId": {
@@ -41706,7 +42092,8 @@
               "tier_bump",
               "points_pack",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ]
           },
           "targetId": {
@@ -41796,7 +42183,8 @@
               "tier_bump",
               "points_pack",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ]
           },
           "targetId": {
@@ -57678,6 +58066,156 @@
           "credits",
           "priceKobo",
           "badge"
+        ]
+      },
+      "CommunityPassView": {
+        "type": "object",
+        "properties": {
+          "communityId": {
+            "type": "string"
+          },
+          "sellsPass": {
+            "type": "boolean"
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "periodDays": {
+            "type": "number"
+          },
+          "passUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "canRenew": {
+            "type": "boolean"
+          },
+          "canBuy": {
+            "type": "boolean"
+          },
+          "isHost": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "communityId",
+          "sellsPass",
+          "priceKobo",
+          "periodDays",
+          "passUntil",
+          "active",
+          "canRenew",
+          "canBuy",
+          "isHost"
+        ]
+      },
+      "CommunityPassQuoteView": {
+        "type": "object",
+        "properties": {
+          "communityId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "host": {
+            "$ref": "#/components/schemas/MoneyPartyView",
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "periodDays": {
+            "type": "number"
+          },
+          "passUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "newPassUntil": {
+            "type": "string"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          }
+        },
+        "required": [
+          "communityId",
+          "title",
+          "host",
+          "priceKobo",
+          "periodDays",
+          "passUntil",
+          "newPassUntil",
+          "payment"
+        ]
+      },
+      "CommunityPassPurchaseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "wallet"
+            ]
+          },
+          "communityId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "reversed",
+              "refunded",
+              "paid"
+            ]
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "passUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentView"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "method",
+          "communityId",
+          "title",
+          "status",
+          "statusMessage",
+          "priceKobo",
+          "passUntil",
+          "payment",
+          "createdAt",
+          "paidAt"
         ]
       },
       "UnlockWalletQuoteView": {

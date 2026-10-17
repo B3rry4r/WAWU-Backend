@@ -47,6 +47,7 @@ export const LINK_KIND_LABELS: Record<PaymentKind, string> = {
   points_pack: `Bought ${POINTS_WORD}`,
   points_shortfall: `Topped up ${POINTS_WORD}`,
   points_cash_out: `${POINTS_WORD_TITLE} to cash`,
+  community_pass: 'Room pass',
 };
 
 /** Between the parts of a description. */
