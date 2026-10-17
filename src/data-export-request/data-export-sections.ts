@@ -692,6 +692,7 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           extraProducts: true,
           pointsIncluded: true,
           voiceIntroIncluded: true,
+          badgeNumber: true,
         },
       }),
   },

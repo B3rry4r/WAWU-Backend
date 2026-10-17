@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { Prisma } from '../../generated/prisma/client';
 import { PointsService } from '../points/points.service';
 import { PLANS_CONFIG, tierById, type PlansConfig } from './plans-config';
+import { ensureBadgeNumber } from './tier-badge/badge-number';
 
 type Tx = Prisma.TransactionClient;
 
@@ -220,6 +221,13 @@ export class TierGrantService {
         pointsExpireAt = lot.expiresAt;
       }
     }
+    // A numbered badge's number is taken after the points (TIER-07): the
+    // points lock is this person's alone, the counter's row is every buyer's,
+    // so it is the one to hold for the shortest time. A renewal of a numbered
+    // tier whose holder has none yet (held before numbers existed) gets one
+    // here too.
+    if (tierById(this.config, outcome.tierId)?.badge.numbered === true)
+      await ensureBadgeNumber(tx, input.wawuUserId);
     return {
       granted: true,
       ...outcome,
@@ -326,6 +334,7 @@ export class TierGrantService {
         pointsExpireAt = lot.expiresAt;
       }
     }
+    if (tier.badge.numbered) await ensureBadgeNumber(tx, input.wawuUserId);
     return {
       granted: true,
       tierId: tier.id,

@@ -42262,6 +42262,30 @@
           "media"
         ]
       },
+      "PersonBadgeView": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "numbered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "number",
+          "id",
+          "numbered"
+        ]
+      },
       "KnownFollower": {
         "type": "object",
         "properties": {
@@ -42366,6 +42390,14 @@
           "verification": {
             "$ref": "#/components/schemas/VerificationState"
           },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PersonBadgeView"
+              }
+            ],
+            "nullable": true
+          },
           "followers": {
             "type": "number"
           },
@@ -42412,6 +42444,7 @@
           "avatarUrl",
           "coverUrl",
           "verification",
+          "badge",
           "followers",
           "posts",
           "rating",
@@ -42451,6 +42484,14 @@
           "verification": {
             "$ref": "#/components/schemas/VerificationState"
           },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PersonBadgeView"
+              }
+            ],
+            "nullable": true
+          },
           "category": {
             "type": "string"
           },
@@ -42483,6 +42524,7 @@
           "avatarUrl",
           "coverUrl",
           "verification",
+          "badge",
           "category",
           "services",
           "ratingAvg",
@@ -48172,6 +48214,14 @@
           "verification": {
             "$ref": "#/components/schemas/VerificationState"
           },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PersonBadgeView"
+              }
+            ],
+            "nullable": true
+          },
           "following": {
             "type": "boolean"
           }
@@ -48184,6 +48234,7 @@
           "field",
           "pieceCount",
           "verification",
+          "badge",
           "following"
         ]
       },
@@ -49365,6 +49416,14 @@
           "reviewCount": {
             "type": "number"
           },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PersonBadgeView"
+              }
+            ],
+            "nullable": true
+          },
           "field": {
             "$ref": "#/components/schemas/ProfessionalFieldRef",
             "nullable": true
@@ -49400,6 +49459,7 @@
           "pieceCount",
           "ratingAvg",
           "reviewCount",
+          "badge",
           "field",
           "city",
           "usualReplyMinutes",
@@ -49494,6 +49554,14 @@
           "reviewCount": {
             "type": "number"
           },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PersonBadgeView"
+              }
+            ],
+            "nullable": true
+          },
           "field": {
             "$ref": "#/components/schemas/ProfessionalFieldRef",
             "nullable": true
@@ -49532,6 +49600,7 @@
           "pieceCount",
           "ratingAvg",
           "reviewCount",
+          "badge",
           "field",
           "city",
           "usualReplyMinutes",
@@ -50061,6 +50130,14 @@
           "memberSince": {
             "type": "string",
             "nullable": true
+          },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PersonBadgeView"
+              }
+            ],
+            "nullable": true
           }
         },
         "required": [
@@ -50070,7 +50147,8 @@
           "openTo",
           "threadsHandle",
           "socialOrder",
-          "memberSince"
+          "memberSince",
+          "badge"
         ]
       },
       "CreatorProfile": {

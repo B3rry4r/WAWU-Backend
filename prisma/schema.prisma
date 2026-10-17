@@ -372,8 +372,24 @@ model MakerTier {
   pointsIncluded     Int
   /// The tier includes the first Voice Intro, not yet used.
   voiceIntroIncluded Boolean  @default(false)
+  /// The number on a numbered badge ("Founding Maker #128", TIER-07, G-421).
+  /// Allocated once, the first time the person holds a tier whose badge is
+  /// numbered, from BadgeNumberCounter, and never changed or given to anyone
+  /// else, so it survives an ended tier, a renewal and a change to another
+  /// tier (it is only shown while a numbered tier runs). Null until then.
+  badgeNumber        Int?     @unique
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+}
+
+/// The last number given to a numbered badge (TIER-07). One row, `name` is
+/// `numbered_badge`. A number is taken by one UPDATE inside the grant's own
+/// transaction, so two buyers never get the same one, a grant that rolls back
+/// gives its number back (no gaps), and a number of a deleted account is not
+/// handed out again. Holds no person's id.
+model BadgeNumberCounter {
+  name String @id
+  last Int
 }
 
 /// A tier bought, renewed or upgraded from the wallet (TIER-03), written once
