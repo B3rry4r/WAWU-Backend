@@ -42,8 +42,6 @@ import {
 import type {
   PendingPlanPurchaseView,
   PlanPurchaseQuoteView,
-  PlanPurchaseView,
-  PlanTransferOrderView,
 } from './plan-purchase-view.type';
 import type { ExtraProductsQuoteView } from './extra-products-view.type';
 import type { PointsPackQuoteView } from './points-pack-view.type';
