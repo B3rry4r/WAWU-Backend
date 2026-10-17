@@ -39,6 +39,12 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   dm_deadline: 'send',
   // HOME-16 (R-59). The morning TGIF notice; the TGIF switch (Z2) mutes it.
   tgif_daily: 'send',
+  // WALLET-40 (owner answer 31, 17 Oct 2026: "the person gets an alert when
+  // the account number is ready"). Pushed, once per wallet. No Z3 switch
+  // covers it, and the owner asked for the alert, so the G-265 hold below does
+  // not apply to it; it stays the one push the person cannot mute in
+  // Settings (the phone's own notification setting still can).
+  wallet_ready: 'send',
   content_published: 'send',
   content_rejected: 'send',
   review_received: 'send',
