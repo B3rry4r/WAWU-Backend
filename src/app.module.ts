@@ -11,6 +11,7 @@ import { AdminPaymentsModule } from './admin/payments/admin-payments.module';
 import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
 import { AdminFinanceModule } from './admin/finance/admin-finance.module';
 import { AdminIdentityHoldsModule } from './admin/identity-holds/admin-identity-holds.module';
+import { AdminSupportModule } from './admin/support/admin-support.module';
 import { AdminEventsModule } from './admin/events/admin-events.module';
 import { AdminNotificationsModule } from './admin/notifications/admin-notifications.module';
 import { AdminFeaturedCreatorsModule } from './admin/featured-creators/admin-featured-creators.module';
@@ -78,6 +79,7 @@ import { AccountPurgeModule } from './account-purge/account-purge.module';
 import { WalletModule } from './wallet/wallet.module';
 import { MoneyModule } from './money/money.module';
 import { ChatModule } from './chat/chat.module';
+import { SupportModule } from './support/support.module';
 import { MoneyRequestModule } from './money-request/money-request.module';
 import { TgifModule } from './tgif/tgif.module';
 import { LiveModule } from './live/live.module';
@@ -265,6 +267,8 @@ import { PushModule } from './push/push.module';
     // `admin/identity-holds`, a first segment after `admin` that nothing else
     // declares, so it can neither shadow nor be shadowed (SHARED-CHANGES row).
     AdminIdentityHoldsModule,
+    // Staff replies to support threads (SUPPORT-01): /admin/support/*.
+    AdminSupportModule,
     // Admin event moderation, for the Events feature reinstated 22 Aug 2026 by
     // product-owner decision (see src/event/ for the app-facing half and
     // prisma/schema.prisma for the three new tables). Registered alongside the
@@ -391,6 +395,9 @@ import { PushModule } from './push/push.module';
     // Free chat between two users (task INBOX-06). `@Controller('chats')` is a
     // first segment nothing else declares, so it cannot shadow or be shadowed.
     ChatModule,
+    // Support chat (SUPPORT-01, R-30): POST /support/thread opens the person's
+    // thread with a payment already attached. After ChatModule.
+    SupportModule,
     // Money requests written into a chat (task INBOX-15): routes under
     // `chats/:chatId/money-requests`, deeper than every route ChatController
     // serves, so none is shadowed or shadows another.

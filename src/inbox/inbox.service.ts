@@ -13,6 +13,7 @@ import {
   type MoneyRequestRow,
   type MoneyRequestStatus,
 } from '../money-request/money-request-view.type';
+import { isSupportAccount, supportPerson } from '../support/support-account';
 import { feedCtes, utc } from './inbox-feed.sql';
 import type {
   InboxCommunity,
@@ -197,14 +198,19 @@ export class InboxService {
       ...[...rooms.last.values()].map((l) => l.sender),
       ...paid.others,
     ]);
-    const person = (id: string): InboxPerson =>
-      people.get(id) ?? {
-        wawuId: id,
-        name: '',
-        handle: null,
-        avatarUrl: null,
-        verification: deriveVerificationState(null),
-      };
+    const person = (id: string): InboxPerson => {
+      // The support side of a support thread has no WAWU ID (SUPPORT-01).
+      if (isSupportAccount(id)) return supportPerson();
+      return (
+        people.get(id) ?? {
+          wawuId: id,
+          name: '',
+          handle: null,
+          avatarUrl: null,
+          verification: deriveVerificationState(null),
+        }
+      );
+    };
     const hiddenSet = new Set(hidden);
 
     // A chat or room deleted between the ranking and this read has nothing

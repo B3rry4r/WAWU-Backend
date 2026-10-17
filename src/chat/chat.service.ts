@@ -16,6 +16,7 @@ import {
   MONEY_REQUEST_MESSAGE_KIND,
   toMoneyRequestView,
 } from '../money-request/money-request-view.type';
+import { isSupportAccount, supportPerson } from '../support/support-account';
 import type { Prisma } from '../../generated/prisma/client';
 import {
   CHAT_LIMITS,
@@ -43,7 +44,7 @@ const DEFAULT_PAGE_SIZE = 20;
 /** The message every block refusal carries. It never says who blocked whom. */
 const BLOCKED_MESSAGE = 'You can no longer message this person.';
 
-interface ConversationRow {
+export interface ConversationRow {
   id: string;
   userAWawuId: string;
   userBWawuId: string;
@@ -153,7 +154,20 @@ export class ChatService {
     }
     await this.assertPersonExists(otherId);
     await this.assertCanMessage(me, otherId);
+    const row = await this.ensureConversation(me, otherId);
+    const [summary] = await this.summaries(me, [row]);
+    return summary;
+  }
 
+  /**
+   * The one conversation between two accounts, made now if there is none.
+   * Checks nothing about either account: `open` checks the other person, and
+   * the support thread (SUPPORT-01) is with an account that has no profile.
+   */
+  async ensureConversation(
+    me: string,
+    otherId: string,
+  ): Promise<ConversationRow> {
     const [userAWawuId, userBWawuId] = [me, otherId].sort();
     let row = await this.prisma.chatConversation.findUnique({
       where: { userAWawuId_userBWawuId: { userAWawuId, userBWawuId } },
@@ -181,8 +195,7 @@ export class ChatService {
         });
       }
     }
-    const [summary] = await this.summaries(me, [row]);
-    return summary;
+    return row;
   }
 
   /** GET /chats: the caller's chats, newest activity first. */
@@ -239,7 +252,17 @@ export class ChatService {
   ): Promise<string> {
     const chat = await this.conversationFor(me, chatId);
     const other = this.otherOf(chat, me);
-    if (forSending) await this.assertCanMessage(me, other);
+    if (forSending) {
+      // A support thread carries no money: nothing is asked of, or sent to,
+      // the support side (SUPPORT-01).
+      if (isSupportAccount(other) || isSupportAccount(me)) {
+        throw new ForbiddenException({
+          message: 'Money cannot be requested in a support chat.',
+          reason: { code: 'chat_support_no_money' },
+        });
+      }
+      await this.assertCanMessage(me, other);
+    }
     return other;
   }
 
@@ -255,9 +278,16 @@ export class ChatService {
     chatId: string,
     kind: string,
     text: string | null,
+    clientMessageId: string | null = null,
   ): Promise<MessageRow> {
     const created = await tx.chatMessage.create({
-      data: { conversationId: chatId, senderWawuId: me, kind, text },
+      data: {
+        conversationId: chatId,
+        senderWawuId: me,
+        kind,
+        text,
+        clientMessageId,
+      },
     });
     await tx.chatConversation.update({
       where: { id: chatId },
@@ -692,8 +722,8 @@ export class ChatService {
    * chats: one WAWU ID call and one profile query per page, the same way the
    * blocked list and community messages read people.
    */
-  private async people(ids: string[]): Promise<Map<string, ChatPerson>> {
-    const unique = [...new Set(ids)];
+  async people(ids: string[]): Promise<Map<string, ChatPerson>> {
+    const unique = [...new Set(ids)].filter((id) => !isSupportAccount(id));
     const [identities, profiles] = await Promise.all([
       this.wawuId.lookupPublicIdentities(unique),
       this.prisma.userProfile.findMany({
@@ -725,6 +755,10 @@ export class ChatService {
         avatarUrl: profile?.avatarUrl ?? null,
         verification: deriveVerificationState(profile ?? null),
       });
+    }
+    // The support side of a support thread has no WAWU ID and no profile.
+    for (const id of ids) {
+      if (isSupportAccount(id)) out.set(id, supportPerson());
     }
     return out;
   }

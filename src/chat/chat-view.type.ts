@@ -28,6 +28,12 @@ export interface ChatPerson {
   handle: string | null;
   avatarUrl: string | null;
   verification: VerificationState;
+  /**
+   * True only for the support side of a support thread (SUPPORT-01): the
+   * app draws its own mark for it and offers no money actions in that chat.
+   * Left out for every ordinary person.
+   */
+  support?: boolean;
 }
 
 export interface ChatAttachment {
