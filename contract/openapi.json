@@ -13338,6 +13338,9 @@
                     "netNaira": {
                       "type": "number"
                     },
+                    "buyersToRefund": {
+                      "type": "number"
+                    },
                     "referrals": {
                       "type": "array",
                       "items": {
@@ -13370,6 +13373,7 @@
                     "attendees",
                     "grossNaira",
                     "netNaira",
+                    "buyersToRefund",
                     "referrals"
                   ]
                 }

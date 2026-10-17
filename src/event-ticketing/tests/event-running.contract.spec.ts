@@ -324,6 +324,24 @@ describe('Running an event: organiser numbers and door staff (EVENTS-05)', () =>
       );
     });
 
+    it('the dashboard counts the people calling the event off would refund, not the tickets', async () => {
+      // Three paid tickets in one order and three free ones: one person has
+      // money to get back, so the sheet says one buyer, not six tickets.
+      const dash = await http()
+        .get(`/api/hub/events/${EV_MAIN}/dashboard`)
+        .set(auth(hostToken))
+        .expect(200);
+      const body = data<{ ticketsSold: number; buyersToRefund: number }>(dash);
+      expect(body.ticketsSold).toBe(6);
+      expect(body.buyersToRefund).toBe(1);
+
+      const empty = await http()
+        .get(`/api/hub/events/${EV_EMPTY}/dashboard`)
+        .set(auth(hostToken))
+        .expect(200);
+      expect(data<{ buyersToRefund: number }>(empty).buyersToRefund).toBe(0);
+    });
+
     it("My events sold counts are the caller's own: another account sees none of these events", async () => {
       const res = await http()
         .get('/api/hub/events/mine/sold')
