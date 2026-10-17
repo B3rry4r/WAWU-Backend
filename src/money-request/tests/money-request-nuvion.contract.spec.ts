@@ -828,16 +828,28 @@ describe('Money requests in chat (INBOX-15) on Nuvion', () => {
     const payer = await person(50_000_000);
     const open = await made(asker, payer, 111_000);
     const paid = await made(asker, payer, 222_000, open.chatId);
+    const paidQuote = await quoted(payer, 222_000);
+    const paidKey = randomUUID();
+    const first = await pay(
+      payer,
+      paid.chatId,
+      paid.requestId,
+      paidQuote,
+      paidKey,
+    );
+    expect(first.status).toBe(201);
+    expect((body<TransferView>(first).data as TransferView).note).toBe(MEMO);
+    // The words also sit on the send's ledger rows and in the payer's list.
+    const sendId = (await row(paid.requestId)).transferId!;
+    const ledgerNotes = () =>
+      prisma.fintavaLedgerEntry.findMany({
+        where: { transferId: sendId },
+        select: { note: true },
+      });
+    expect((await ledgerNotes()).map((l) => l.note)).toContain(MEMO);
     expect(
-      (
-        await pay(
-          payer,
-          paid.chatId,
-          paid.requestId,
-          await quoted(payer, 222_000),
-        )
-      ).status,
-    ).toBe(201);
+      JSON.stringify(body(await get(payer, '/money/transactions')).data),
+    ).toContain(MEMO);
     const sentNote = async () =>
       (
         await prisma.walletTransfer.findFirstOrThrow({
@@ -869,6 +881,33 @@ describe('Money requests in chat (INBOX-15) on Nuvion', () => {
       }),
     ).toBe(0);
     expect(await sentNote()).toBeNull();
+    // Nor does the ledger keep them, so the payer's list has none; a repeat of
+    // the paid key replays the receipt without them.
+    const ledgerAfter = await ledgerNotes();
+    expect(ledgerAfter.length).toBeGreaterThan(0);
+    expect(ledgerAfter.every((l) => l.note === null)).toBe(true);
+    const list = await get(payer, '/money/transactions');
+    expect(list.status).toBe(200);
+    expect(JSON.stringify(body(list).data)).not.toContain(MEMO);
+    const replay = await pay(
+      payer,
+      paid.chatId,
+      paid.requestId,
+      paidQuote,
+      paidKey,
+    );
+    expect(replay.status).toBe(201);
+    expect(replay.headers['idempotent-replayed']).toBe('true');
+    expect(JSON.stringify(body(replay))).not.toContain(MEMO);
+    expect(body<TransferView>(replay).data).toEqual({
+      ...(body<TransferView>(first).data as TransferView),
+      note: null,
+    });
+    expect(
+      await prisma.moneyIdempotencyKey.count({
+        where: { resourceId: sendId, responseBody: { contains: MEMO } },
+      }),
+    ).toBe(0);
     expect(available(asker)).toBe(222_000n);
     const after = body<InboxPage>(
       await get(payer, '/inbox?kind=money_request'),
@@ -893,6 +932,8 @@ describe('Money requests in chat (INBOX-15) on Nuvion', () => {
       closed: 0,
       memosCleared: 0,
       notesCleared: 0,
+      ledgerNotesCleared: 0,
+      answersBlanked: 0,
     });
   });
 
@@ -939,11 +980,46 @@ describe('Money requests in chat (INBOX-15) on Nuvion', () => {
         where: { payerWawuUserId: payer.id, note: { not: null } },
       }),
     ).toBe(0);
+    // The sends' ledger rows and the answers stored for their keys are clean
+    // too, while the sends are still in flight.
+    const inFlight = (
+      await prisma.walletTransfer.findMany({
+        where: { payerWawuUserId: payer.id },
+        select: { id: true },
+      })
+    ).map((t) => t.id);
+    expect(inFlight).toHaveLength(2);
+    expect(
+      await prisma.fintavaLedgerEntry.count({
+        where: { transferId: { in: inFlight } },
+      }),
+    ).toBeGreaterThan(0);
+    expect(
+      await prisma.fintavaLedgerEntry.count({
+        where: { transferId: { in: inFlight }, note: { not: null } },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.moneyIdempotencyKey.count({
+        where: { resourceId: { in: inFlight }, responseBody: { not: null } },
+      }),
+    ).toBe(2);
+    expect(
+      await prisma.moneyIdempotencyKey.count({
+        where: {
+          resourceId: { in: inFlight },
+          responseBody: { contains: MEMO },
+        },
+      }),
+    ).toBe(0);
 
     nuvion.settle(winRef, 'successful');
     nuvion.settle(loseRef, 'failed');
     await sweepLater();
     await Promise.all([requests.sweep(), requests2.sweep()]);
+    expect(
+      JSON.stringify(body(await get(payer, '/money/transactions')).data),
+    ).not.toContain(MEMO);
     expect((await row(win.requestId)).status).toBe('paid');
     expect(await row(lose.requestId)).toMatchObject({
       status: 'cancelled',
