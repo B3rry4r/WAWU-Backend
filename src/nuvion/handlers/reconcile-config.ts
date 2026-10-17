@@ -8,14 +8,14 @@
  * PROVISIONAL(NUVION-SWEEP-LOOKBACK-HOURS, owner=YOU, why=the task reads the last day's statement lines; a server that was down longer than this leaves the older ones to the nightly check)
  * PROVISIONAL(NUVION-SWEEP-MAX-ACCOUNTS, owner=YOU, why=Nuvion states no rate limit for statements, so one pass reads at most this many accounts and rotates through the rest across passes)
  * PROVISIONAL(NUVION-WEBHOOK-RENEW-HOURS, owner=YOU, why=Nuvion's docs give a webhook an expiry but no advice on when to renew; three days leaves time to notice a failed renewal)
- * PROVISIONAL(NUVION-FEE-CHECK-HOURS, owner=YOU, why=a fee simulation is a call to Nuvion for each kind and band, and a fee changes rarely, so once a day)
+ * PROVISIONAL(NUVION-SIMULATE-FEES-HOURS, owner=YOU, why=a fee simulation is a call to Nuvion for each kind and band, and a fee changes rarely, so once a day)
  */
 export const NUVION_RECONCILE_CONFIG_KEYS = {
   sweepMinutes: 'NUVION_SWEEP_MINUTES',
   lookbackHours: 'NUVION_SWEEP_LOOKBACK_HOURS',
   maxAccounts: 'NUVION_SWEEP_MAX_ACCOUNTS',
   renewHours: 'NUVION_WEBHOOK_RENEW_HOURS',
-  feeCheckHours: 'NUVION_FEE_CHECK_HOURS',
+  feeCheckHours: 'NUVION_SIMULATE_FEES_HOURS',
 } as const;
 
 export interface NuvionReconcileSettings {

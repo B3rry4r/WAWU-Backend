@@ -40,7 +40,7 @@ const HOUR = 3_600_000;
  * It lists no event, so no delivery reaches `handle`: Nuvion's deliveries
  * are another task's. What it does is on a clock. Every minute `tick` looks
  * at what is due: the sweep and the subscription check every
- * NUVION_SWEEP_MINUTES, the fee comparison every NUVION_FEE_CHECK_HOURS
+ * NUVION_SWEEP_MINUTES, the fee comparison every NUVION_SIMULATE_FEES_HOURS
  * (reconcile-config.ts). Only under `WALLET_PROVIDER=nuvion`: a server
  * switched back to Fintava does nothing here (NUV-01's rollback rule). A
  * pass that throws is logged and tried again next time; one at a time per

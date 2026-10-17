@@ -228,17 +228,17 @@ NUVION_FEE_INFLOW=
 # NUVION_SWEEP_MAX_ACCOUNTS how many accounts one pass reads at most (300; the
 # rest are rotated through across passes). NUVION_WEBHOOK_RENEW_HOURS is how
 # long before it expires the webhook subscription is renewed (72), and
-# NUVION_FEE_CHECK_HOURS how often Nuvion's fee simulations are compared with
+# NUVION_SIMULATE_FEES_HOURS how often Nuvion's fee simulations are compared with
 # the three fee settings above (24; a difference is reported with both
 # figures and the settings are never changed). See the NuvionReconcileFinding
 # table for what was reported. (PROVISIONAL(NUVION-SWEEP-MINUTES),
 # PROVISIONAL(NUVION-SWEEP-LOOKBACK-HOURS), PROVISIONAL(NUVION-SWEEP-MAX-ACCOUNTS),
-# PROVISIONAL(NUVION-WEBHOOK-RENEW-HOURS), PROVISIONAL(NUVION-FEE-CHECK-HOURS)).
+# PROVISIONAL(NUVION-WEBHOOK-RENEW-HOURS), PROVISIONAL(NUVION-SIMULATE-FEES-HOURS)).
 NUVION_SWEEP_MINUTES=
 NUVION_SWEEP_LOOKBACK_HOURS=
 NUVION_SWEEP_MAX_ACCOUNTS=
 NUVION_WEBHOOK_RENEW_HOURS=
-NUVION_FEE_CHECK_HOURS=
+NUVION_SIMULATE_FEES_HOURS=
 # WAWU's own limits on moving money (NUV-07), per person and per kind, under
 # either provider. Whole kobo, 1 or more; empty = no WAWU limit. Above one,
 # 403 limit_reached naming the limit, before anything is sent. The owner sets
