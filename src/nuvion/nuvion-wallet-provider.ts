@@ -109,6 +109,11 @@ export class NuvionWalletProvider implements WalletProvider {
   readonly label = 'Nuvion';
   /** Built only with every Nuvion setting present (nuvion-config.ts). */
   readonly configured = true;
+  /**
+   * Nuvion's transfer has no field for a fee of ours, so WAWU's fee on a send
+   * is its own book transfer to the operational account (FIX-52).
+   */
+  readonly wawuFeeLeg = true;
   /** NUVION_CAPABILITIES, with the hosted selfie as the documents area says now (NUV-03). */
   get capabilities(): WalletProviderCapabilities {
     return {
