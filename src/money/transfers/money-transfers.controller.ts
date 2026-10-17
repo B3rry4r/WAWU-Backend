@@ -36,6 +36,7 @@ import {
   CurrentBankTarget,
   type ResolvedBankTarget,
 } from './bank-send-target';
+import { PayoutOwnNameGuard } from './payout-own-name.guard';
 import { TransferRecipientGuard } from './transfer-recipient';
 import {
   readTransferPresets,
@@ -113,7 +114,10 @@ export class MoneyTransfersController {
    * name the bank gives: the app never sends a name. A saved account whose
    * holder or bank is no longer the one kept is `409 account_name_changed`,
    * carrying both names as they stand now; nothing is sent until the person
-   * confirms them by saving the account again. The same Idempotency-Key and
+   * confirms them by saving the account again. A withdrawal to the payout
+   * account while its holder is not the person's verified name is `409
+   * account_not_in_your_name`, also before the PIN (WALLET-37, R-51); a send
+   * to anyone else's account is unchanged. The same Idempotency-Key and
    * body answer the first result again (`Idempotent-Replayed: true`) without
    * checking the PIN. fees_not_set comes before the wallet gate, the key and
    * the PIN; limit_reached (WAWU's limit or the provider's, WALLET-23) before
@@ -122,12 +126,17 @@ export class MoneyTransfersController {
   @Post('transfers/bank')
   @HttpCode(201)
   @BuiltBy('WALLET-09')
-  @RequireIdempotentApproval(BANK_TRANSFER_ROUTE, BankSendTargetGuard)
+  @RequireIdempotentApproval(
+    BANK_TRANSFER_ROUTE,
+    BankSendTargetGuard,
+    PayoutOwnNameGuard,
+  )
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',
     'name_check_failed',
     'account_name_changed',
+    'account_not_in_your_name',
     'self_transfer',
   )
   @RequireFeesSet()

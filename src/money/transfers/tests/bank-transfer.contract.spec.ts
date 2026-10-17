@@ -48,6 +48,8 @@ import type {
   PinStateView,
   TransferView,
 } from '../../money-view.type';
+import { bvnNameKeys } from '../../identity/bvn-name';
+import { IdentityHasher } from '../../identity/identity-config';
 import { NameCheckTokenService } from '../../saved-accounts/name-check-token.service';
 import { ACCOUNT_CHANGED_MESSAGE } from '../bank-send-target';
 import {
@@ -465,6 +467,8 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
       FINTAVA_MONEY_TIMEOUT_MS: String(MONEY_TIMEOUT_MS),
       FINTAVA_CHECK_TIMEOUT_MS: String(MONEY_TIMEOUT_MS),
       FEE_QUOTE_KEY: 'w09-test-fee-quote-key-0123456789abcdef0123',
+      // WALLET-37: a person's BVN name is compared as keyed hashes.
+      IDENTITY_HASH_KEY: 'w37-test-identity-hash-key-0123456789abcdef',
       WAWU_LIMIT_BANK_TRANSFER_PER_TRANSACTION_KOBO: String(PER_TXN_LIMIT_KOBO),
       // The provider's daily limit for the wallet's tier, a spec value (₦40,000).
       FINTAVA_TIER_DAILY_LIMITS_KOBO: `TIER_2:${DAILY_LIMIT_KOBO}`,
@@ -1387,6 +1391,230 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
       'SAVED ONE',
       'PAYOUT ONE',
     ]);
+  });
+
+  // -------------------------------------------------------------------------
+  // WALLET-37 (R-51, G-765): a withdrawal goes only to the person's own name
+  // -------------------------------------------------------------------------
+
+  /** The BVN name of a person, kept as the real BVN check keeps it: keyed hashes only. */
+  async function withBvnName(p: Person, first: string, last: string) {
+    const hasher = app.get(IdentityHasher, { strict: false });
+    const verifiedAt = new Date();
+    const keys = bvnNameKeys(
+      { firstName: first, lastName: last },
+      (v) => hasher.hash('name', v),
+      { wawuUserId: p.id, verifiedAt },
+    );
+    await prisma.walletIdentity.create({
+      data: {
+        wawuUserId: p.id,
+        bvnHash: randomUUID().replace(/-/g, '').padEnd(64, '0'),
+        bvnLast4: '1234',
+        bvnVerifiedAt: verifiedAt,
+        bvnNameKeys: { ...keys! },
+      },
+    });
+  }
+
+  const putPayoutTo = (p: Person, number: string) =>
+    request(app.getHttpServer())
+      .put(`${BASE}/payout-account`)
+      .set('Authorization', p.auth)
+      .send({ bankCode: GTB.code, accountNumber: number });
+
+  it('WALLET-37: a payout account is saved only in the verified name: another name is 409 with both names and nothing is stored', async () => {
+    const me = await person(5_000_000);
+    await withBvnName(me, 'Ada', 'Sandbox');
+    const own = account('SANDBOX ADA');
+    const saved = await putPayoutTo(me, own);
+    expect(saved.status).toBe(200);
+    expect(body<{ matchesBvnName: boolean }>(saved).data?.matchesBvnName).toBe(
+      true,
+    );
+
+    const other = account('MALLORY NEW');
+    const refused = await putPayoutTo(me, other);
+    expect(refused.status).toBe(409);
+    const reason = body(refused).reason!;
+    expect(reason).toMatchObject({
+      code: 'account_not_in_your_name',
+      accountName: 'MALLORY NEW',
+      bankName: GTB.name,
+      verifiedName: expect.stringMatching(/^Sender \d+$/) as string,
+    });
+    expect(reason.message).toContain('MALLORY NEW');
+    expect(reason.message).toContain(reason.verifiedName!);
+    expect(reason.message).not.toContain('—');
+    // Nothing was stored: the earlier account is still the payout account.
+    const row = await prisma.moneyPayoutAccount.findUniqueOrThrow({
+      where: { wawuUserId: me.id },
+    });
+    expect(row.accountNumber).toBe(own);
+    expect(row.accountName).toBe('SANDBOX ADA');
+  });
+
+  it('WALLET-37: a withdrawal to a payout account that is no longer in the verified name is refused before the PIN, and the key comes back', async () => {
+    const me = await person(5_000_000);
+    await withBvnName(me, 'Ada', 'Sandbox');
+    const number = account('SANDBOX ADA');
+    expect((await putPayoutTo(me, number)).status).toBe(200);
+
+    // The account as it was saved before the rule: another person's name,
+    // kept and still what the bank says.
+    bank.holders.set(holderKey(GTB.code, number), 'MALLORY NEW');
+    await prisma.moneyPayoutAccount.update({
+      where: { wawuUserId: me.id },
+      data: { accountName: 'MALLORY NEW' },
+    });
+    const triesBefore = await triesLeft(me);
+    const key = randomUUID();
+    const body0 = await ready(me, { number }, 100_000, {
+      nameToken: undefined,
+    });
+    const refused = await send(me, body0, key, WRONG_PIN);
+    expect(refused.status).toBe(409);
+    expect(body(refused).reason).toMatchObject({
+      code: 'account_not_in_your_name',
+      accountName: 'MALLORY NEW',
+      bankName: GTB.name,
+    });
+    // No PIN try was used, nothing was sent, nothing was taken.
+    expect(await triesLeft(me)).toBe(triesBefore);
+    expect(sendsFrom(me)).toHaveLength(0);
+    expect(balance(me)).toBe(5_000_000);
+    expect(
+      await prisma.walletTransfer.count({ where: { payerWawuUserId: me.id } }),
+    ).toBe(0);
+
+    // The same account typed in full while also saved as a beneficiary is
+    // still the person's payout account: the same refusal.
+    await prisma.moneyBeneficiary.create({
+      data: {
+        ownerWawuId: me.id,
+        kind: 'bank_account',
+        bankCode: GTB.code,
+        bankName: GTB.name,
+        accountNumber: number,
+        accountName: 'MALLORY NEW',
+      },
+    });
+    const viaBeneficiary = await send(me, body0, randomUUID(), WRONG_PIN);
+    expect(viaBeneficiary.status).toBe(409);
+    expect(body(viaBeneficiary).reason?.code).toBe('account_not_in_your_name');
+    await prisma.moneyBeneficiary.deleteMany({
+      where: { ownerWawuId: me.id },
+    });
+
+    // The bank names the person again: the key that was refused sends it.
+    bank.holders.set(holderKey(GTB.code, number), 'SANDBOX ADA');
+    await prisma.moneyPayoutAccount.update({
+      where: { wawuUserId: me.id },
+      data: { accountName: 'SANDBOX ADA' },
+    });
+    const ok = await send(me, body0, key);
+    expect(ok.status).toBe(201);
+    expect(sendsFrom(me)).toHaveLength(1);
+    expect(sendsFrom(me)[0].accountName).toBe('SANDBOX ADA');
+  });
+
+  it('WALLET-37: a payout account the bank now names differently is refused before the PIN with the key given back', async () => {
+    const me = await person(5_000_000);
+    await withBvnName(me, 'Ada', 'Sandbox');
+    const number = account('SANDBOX ADA');
+    expect((await putPayoutTo(me, number)).status).toBe(200);
+
+    bank.holders.set(holderKey(GTB.code, number), 'MALLORY NEW');
+    const triesBefore = await triesLeft(me);
+    const key = randomUUID();
+    const body0 = await ready(me, { number }, 100_000, {
+      nameToken: undefined,
+    });
+    const refused = await send(me, body0, key, WRONG_PIN);
+    expect(refused.status).toBe(409);
+    expect(body(refused).reason).toMatchObject({
+      code: 'account_name_changed',
+      accountName: 'MALLORY NEW',
+    });
+    expect(await triesLeft(me)).toBe(triesBefore);
+    expect(sendsFrom(me)).toHaveLength(0);
+
+    // Saving it again is the person's confirmation, and it is refused as
+    // not theirs: nothing changes, and the key still works once the bank
+    // names them again.
+    const resave = await putPayoutTo(me, number);
+    expect(resave.status).toBe(409);
+    expect(body(resave).reason?.code).toBe('account_not_in_your_name');
+    bank.holders.set(holderKey(GTB.code, number), 'SANDBOX ADA');
+    expect((await send(me, body0, key)).status).toBe(201);
+  });
+
+  it('WALLET-37: a bank send to someone else still works and still confirms the name; a person with no BVN name to compare with is not refused', async () => {
+    const me = await person(5_000_000);
+    await withBvnName(me, 'Ada', 'Sandbox');
+    const own = account('SANDBOX ADA');
+    expect((await putPayoutTo(me, own)).status).toBe(200);
+
+    // A friend's account, typed: needs the name check, sends to the name shown.
+    const friend = account('CHIDI OKORO');
+    const q = await quoted(me, 100_000);
+    const ok = await send(me, sendBody(q, { number: friend }));
+    expect(ok.status).toBe(201);
+    expect(sendsFrom(me)[0].accountName).toBe('CHIDI OKORO');
+    // Without the name token it is still refused, as before.
+    const q2 = await quoted(me, 100_000);
+    const noToken = await send(
+      me,
+      sendBody(q2, { number: account('CHIDI TWO') }, { nameToken: undefined }),
+    );
+    expect(noToken.status).toBe(400);
+
+    // Nobody to compare with (no passed BVN check on record): the account
+    // is saved and withdrawn to, as before.
+    const noName = await person(5_000_000);
+    const theirs = account('ANY NAME AT ALL');
+    expect((await putPayoutTo(noName, theirs)).status).toBe(200);
+    const w = await send(
+      noName,
+      await ready(noName, { number: theirs }, 100_000, {
+        nameToken: undefined,
+      }),
+    );
+    expect(w.status).toBe(201);
+  });
+
+  it('WALLET-37: the name check answers 429 after 30 an hour for one person with the minutes left, and a second person is not blocked', async () => {
+    const a = await person(1_000_000);
+    const b = await person(1_000_000);
+    const number = account('SANDBOX ADA');
+    const check = (p: Person) =>
+      request(app.getHttpServer())
+        .post(`${BASE}/banks/name-check`)
+        .set('Authorization', p.auth)
+        .send({ bankCode: GTB.code, accountNumber: number });
+    for (let i = 0; i < 30; i += 1) {
+      expect((await check(a)).status).toBe(200);
+    }
+    const nameEnquiries = () =>
+      double.seen.filter((r) => r.path === '/name/enquiry').length;
+    const asked = nameEnquiries();
+    const over = await check(a);
+    expect(over.status).toBe(429);
+    expect(body(over).reason).toMatchObject({
+      code: 'name_check_rate_limited',
+      retryAfterSeconds: expect.any(Number) as number,
+    });
+    expect(body(over).reason?.message).toMatch(/Try again in \d+ minutes?\.$/);
+    expect(over.headers['retry-after']).toBe(
+      String(body(over).reason?.retryAfterSeconds),
+    );
+    // No check was made for the 31st.
+    expect(nameEnquiries()).toBe(asked);
+    // A payout save by the same person spends the same budget.
+    expect((await putPayoutTo(a, number)).status).toBe(429);
+    expect(nameEnquiries()).toBe(asked);
+    // Another person, from the same address, has all of their own.
+    expect((await check(b)).status).toBe(200);
   });
 
   // ---- A success seen after the send was failed (SWEEP-MONEY F8) ----------

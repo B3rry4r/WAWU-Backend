@@ -70,9 +70,9 @@ export interface ResolvedBankTarget {
 }
 
 /** Where the guard leaves what it resolved, for `@CurrentBankTarget()`. */
-const BANK_TARGET_KEY = 'wawuBankSendTarget';
+export const BANK_TARGET_KEY = 'wawuBankSendTarget';
 
-type TargetRequest = Request & {
+export type TargetRequest = Request & {
   user?: WawuJwtClaims;
   [BANK_TARGET_KEY]?: ResolvedBankTarget;
 };

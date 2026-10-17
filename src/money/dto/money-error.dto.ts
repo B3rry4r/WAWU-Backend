@@ -88,13 +88,21 @@ export class MoneyErrorReason {
 
   bankName?: string;
 
+  /**
+   * account_not_in_your_name: the name on the person's wallet, set beside
+   * `accountName` (the bank's name for the account) and `bankName`. Left out
+   * when the wallet holds no name to show. The comparison itself is made on
+   * the verified name's keyed hashes, never on this text (WALLET-37).
+   */
+  verifiedName?: string;
+
   /** bank_transfers_blocked: why (W18). */
   @ApiPropertyOptional({
     enum: ['kyc_pending', 'kyc_rejected', 'kyc_not_submitted'],
   })
   blockedBy?: BankTransferBlock;
 
-  /** provider_unreachable, idempotency_in_progress, identity_checks_exhausted, open_address_limited, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited: seconds to wait before trying again. */
+  /** provider_unreachable, idempotency_in_progress, identity_checks_exhausted, open_address_limited, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited, name_check_rate_limited: seconds to wait before trying again. */
   retryAfterSeconds?: number;
 
   /** bvn_not_confirmed, bvn_phone_mismatch: BVN checks left in the current 24 hours. selfie_not_matched: selfie matches left in the current 24 hours. */

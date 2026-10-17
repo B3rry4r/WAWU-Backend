@@ -570,8 +570,12 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
       expect(again.data).toEqual(view);
     });
 
-    it('flags an account whose name is not the BVN name, and saves it in place of the last one', async () => {
+    it('refuses an account whose name is not the BVN name (WALLET-37, R-51): 409 with both names, nothing saved, the last account kept', async () => {
       const who = await verified();
+      await prisma.fintavaWallet.update({
+        where: { wawuUserId: who.id },
+        data: { accountName: 'Ada Sandbox' },
+      });
       bank({ status: 200, body: nameAnswer('SANDBOX ADA') });
       await putPayout(who, {
         bankCode: GTB,
@@ -588,20 +592,46 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
       const res = await putPayout(who, {
         bankCode: '000014',
         accountNumber: '0690000031',
-      }).expect(200);
-      const view = body<PayoutAccountView>(res).data!;
-      expect(view.accountName).toBe('SIMI MICHELLE');
-      expect(view.bankName).toBe('ACCESS BANK');
-      expect(view.matchesBvnName).toBe(false);
+      });
+      expectRefusal(res, 409, 'account_not_in_your_name');
+      expect(body<unknown>(res).reason).toMatchObject({
+        accountName: 'SIMI MICHELLE',
+        bankName: 'ACCESS BANK',
+        verifiedName: 'Ada Sandbox',
+        message:
+          'This account is in the name SIMI MICHELLE, but your wallet is in the name Ada Sandbox. You can only be paid to an account in your own name.',
+      });
 
+      // Nothing was stored: the earlier account is still the one.
       const read = body<PayoutAccountView>(await getPayout(who).expect(200));
-      expect(read.data?.accountNumber).toBe('0690000031');
-      expect(read.data?.matchesBvnName).toBe(false);
+      expect(read.data?.accountNumber).toBe(STUB_ACCOUNT);
+      expect(read.data?.accountName).toBe('SANDBOX ADA');
+      expect(read.data?.matchesBvnName).toBe(true);
       expect(
         await prisma.moneyPayoutAccount.count({
           where: { wawuUserId: who.id },
         }),
       ).toBe(1);
+    });
+
+    it('refuses a first account in another name too, and says so without a wallet name when the wallet holds none', async () => {
+      const who = await verified();
+      bank({ status: 200, body: nameAnswer('SIMI MICHELLE') });
+      const res = await putPayout(who, {
+        bankCode: GTB,
+        accountNumber: STUB_ACCOUNT,
+      });
+      expectRefusal(res, 409, 'account_not_in_your_name');
+      const reason = body<unknown>(res).reason!;
+      expect(reason.verifiedName).toBeUndefined();
+      expect(reason.message).toBe(
+        'This account is in the name SIMI MICHELLE, which is not your name. You can only be paid to an account in your own name.',
+      );
+      expect(
+        await prisma.moneyPayoutAccount.count({
+          where: { wawuUserId: who.id },
+        }),
+      ).toBe(0);
     });
 
     it('never takes a name from the app: a body carrying one is refused and the bank is not asked', async () => {

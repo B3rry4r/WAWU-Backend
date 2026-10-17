@@ -151,6 +151,11 @@ export const MONEY_ERROR_CODES = [
   'name_check_failed',
   // A saved bank account whose holder's name at the bank is no longer the one kept (WALLET-09).
   'account_name_changed',
+  // A payout account, or a withdrawal to one, whose holder at the bank is not
+  // the person's verified name (WALLET-37, R-51); and the 30-an-hour limit on
+  // bank name checks, per person (WALLET-37, R-51).
+  'account_not_in_your_name',
+  'name_check_rate_limited',
   'recipient_not_found',
   'recipient_has_no_wallet',
   'recipient_blocked',

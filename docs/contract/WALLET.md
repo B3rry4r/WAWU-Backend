@@ -36,14 +36,14 @@ caller from the token.
 | `POST /money/device/challenge` | `ApprovalChallengeView` | | MONEY-14 (served) |
 | `POST /money/approval/verify` | `PinStateView` | `X-Transaction-Pin` or `X-Device-Approval` | MONEY-14 (served) |
 | `GET /money/banks` | `BankView[]` | | WALLET-09 (served; CONVENTIONS.md section 24) |
-| `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 (served; CONVENTIONS.md section 24) |
+| `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 (served; CONVENTIONS.md section 24); 30 an hour per person, `429 name_check_rate_limited` (WALLET-37) |
 | `GET /money/recipients?q=` | `RecipientView[]` (at most 20) | | WALLET-08 (served; CONVENTIONS.md section 13) |
 | `GET /money/recipients/recent` | `RecipientView[]` (at most 10) | | WALLET-08 (served; CONVENTIONS.md section 13) |
 | `GET /money/beneficiaries` | `BeneficiaryView[]` | | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `POST /money/beneficiaries` | `BeneficiaryView` | `CreateBeneficiaryDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `DELETE /money/beneficiaries/{id}` | `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `GET /money/payout-account` | `PayoutAccountView` or `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
-| `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
+| `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10); only an account in the person's own name, else `409 account_not_in_your_name` (WALLET-37) |
 | `GET /money/fees/quote?kind=&amountKobo=&billCategory=` | `FeeQuoteView` | | WALLET-15 (served; CONVENTIONS.md section 11) |
 | `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-07 (served; CONVENTIONS.md section 19) |
 | `POST /money/transfers/bank` | `TransferView` | `BankTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-09 (served; CONVENTIONS.md section 24) |

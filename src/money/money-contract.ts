@@ -43,6 +43,11 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   quote_changed: 409,
   name_check_failed: 422,
   account_name_changed: 409,
+  // WALLET-37 (R-51). Default (agent), owner may override: 409, the request is
+  // understood and the account is the problem; and 429 for the per-person
+  // limit on bank name checks, as recipient_search_rate_limited.
+  account_not_in_your_name: 409,
+  name_check_rate_limited: 429,
   recipient_not_found: 404,
   recipient_has_no_wallet: 409,
   recipient_blocked: 403,

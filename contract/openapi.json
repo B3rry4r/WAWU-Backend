@@ -15721,6 +15721,16 @@
               }
             }
           },
+          "429": {
+            "description": "reason.code: name_check_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "description": "reason.code: provider_unreachable",
             "content": {
@@ -15871,7 +15881,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
+            "description": "reason.code: wallet_not_open, wallet_opening, account_not_in_your_name",
             "content": {
               "application/json": {
                 "schema": {
@@ -15900,6 +15910,16 @@
               }
             }
           },
+          "429": {
+            "description": "reason.code: name_check_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "description": "reason.code: provider_unreachable",
             "content": {
@@ -15916,7 +15936,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Save or replace the payout account. The server name-checks it with the\nbank and compares the bank's name with the BVN name: an account in\nanother name is saved and flagged (`matchesBvnName: false`).",
+        "summary": "Save or replace the payout account. The server name-checks it with the\nbank and compares the bank's name with the BVN name: an account in\nanother name is refused, `409 account_not_in_your_name`, with the bank's\nname beside the name on the wallet, and nothing is saved (WALLET-37,\nR-51). The check spends the hourly name check budget (`429\nname_check_rate_limited`).",
         "tags": [
           "MoneySavedAccounts"
         ],
@@ -17091,7 +17111,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, account_name_changed",
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, account_name_changed, account_not_in_your_name",
             "content": {
               "application/json": {
                 "schema": {
@@ -17136,7 +17156,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Send to a bank account (W8 to W14), or withdraw to the payout account\n(W17 to W19, which is a bank send to it). Answers 201 with the send:\n`pending` until the bank's answer arrives (a delivery, or the sweep that\nasks the provider by our reference), `completed`, or `failed`; the app\nreads it from `GET /money/transfers/{id}`. The account is name-checked\nwith the bank again BEFORE the PIN is looked at and the send goes to the\nname the bank gives: the app never sends a name. A saved account whose\nholder or bank is no longer the one kept is `409 account_name_changed`,\ncarrying both names as they stand now; nothing is sent until the person\nconfirms them by saving the account again. The same Idempotency-Key and\nbody answer the first result again (`Idempotent-Replayed: true`) without\nchecking the PIN. fees_not_set comes before the wallet gate, the key and\nthe PIN; limit_reached (WAWU's limit or the provider's, WALLET-23) before\nanything is sent.",
+        "summary": "Send to a bank account (W8 to W14), or withdraw to the payout account\n(W17 to W19, which is a bank send to it). Answers 201 with the send:\n`pending` until the bank's answer arrives (a delivery, or the sweep that\nasks the provider by our reference), `completed`, or `failed`; the app\nreads it from `GET /money/transfers/{id}`. The account is name-checked\nwith the bank again BEFORE the PIN is looked at and the send goes to the\nname the bank gives: the app never sends a name. A saved account whose\nholder or bank is no longer the one kept is `409 account_name_changed`,\ncarrying both names as they stand now; nothing is sent until the person\nconfirms them by saving the account again. A withdrawal to the payout\naccount while its holder is not the person's verified name is `409\naccount_not_in_your_name`, also before the PIN (WALLET-37, R-51); a send\nto anyone else's account is unchanged. The same Idempotency-Key and\nbody answer the first result again (`Idempotent-Replayed: true`) without\nchecking the PIN. fees_not_set comes before the wallet gate, the key and\nthe PIN; limit_reached (WAWU's limit or the provider's, WALLET-23) before\nanything is sent.",
         "tags": [
           "MoneyTransfers"
         ],
@@ -17334,6 +17354,16 @@
               }
             }
           },
+          "429": {
+            "description": "reason.code: name_check_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "description": "reason.code: provider_unreachable",
             "content": {
@@ -17350,7 +17380,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Whose account this is, from the bank (W8, A21). W8's Continue unlocks only\nafter this answers. The name is the bank's, never one the app sent. It\ncomes with a `nameToken` for this person (WALLET-09 round 2): the send to\nan account that is not saved carries it, so the money goes to the name\nthey were shown or nowhere.",
+        "summary": "Whose account this is, from the bank (W8, A21). W8's Continue unlocks only\nafter this answers. The name is the bank's, never one the app sent. It\ncomes with a `nameToken` for this person (WALLET-09 round 2): the send to\nan account that is not saved carries it, so the money goes to the name\nthey were shown or nowhere. At most `name_check_per_hour` (30) checks an\nhour per signed-in person, never per address (WALLET-37, R-51): past it\nis `429 name_check_rate_limited` with the minutes left, no check made.",
         "tags": [
           "MoneyBanks"
         ],
@@ -33911,6 +33941,8 @@
               "quote_changed",
               "name_check_failed",
               "account_name_changed",
+              "account_not_in_your_name",
+              "name_check_rate_limited",
               "recipient_not_found",
               "recipient_has_no_wallet",
               "recipient_blocked",
@@ -34054,9 +34086,13 @@
           "bankName": {
             "type": "string"
           },
+          "verifiedName": {
+            "type": "string",
+            "description": "account_not_in_your_name: the name on the person's wallet, set beside\n`accountName` (the bank's name for the account) and `bankName`. Left out\nwhen the wallet holds no name to show. The comparison itself is made on\nthe verified name's keyed hashes, never on this text (WALLET-37)."
+          },
           "retryAfterSeconds": {
             "type": "number",
-            "description": "provider_unreachable, idempotency_in_progress, identity_checks_exhausted, open_address_limited, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited: seconds to wait before trying again."
+            "description": "provider_unreachable, idempotency_in_progress, identity_checks_exhausted, open_address_limited, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited, name_check_rate_limited: seconds to wait before trying again."
           },
           "checksLeft": {
             "type": "number",
