@@ -49065,6 +49065,7 @@
           "unit": {
             "type": "string",
             "enum": [
+              "lines",
               "date",
               "kobo",
               "count",
@@ -49074,7 +49075,6 @@
               "months",
               "hours",
               "time",
-              "lines",
               "levels",
               "milestones"
             ]
