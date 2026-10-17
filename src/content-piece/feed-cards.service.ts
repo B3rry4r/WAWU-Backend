@@ -8,6 +8,7 @@ import {
 import { StorageService } from '../storage/storage.service';
 import type { PersonBadgeView } from '../plans/tier-badge/person-badge-view.type';
 import { TierBadgeService } from '../plans/tier-badge/tier-badge.service';
+import { replyTimesFor } from '../professional/professional-reply-time';
 import { DELETED_CREATOR_ID, DELETED_CREATOR_NAME } from './deleted-creator';
 
 /**
@@ -116,6 +117,19 @@ export interface ProfessionalCard {
   dmPrice: number;
   /** Hours they have to reply before the payer's money is returned. */
   dmResponseHours: number;
+  /**
+   * The city they wrote on their listing (`PUT /professionals/location`),
+   * else null: the line under the name is "headline · city" (H10). Never a
+   * guessed place.
+   */
+  city: string | null;
+  /**
+   * Median minutes they took to answer their latest paid messages (the same
+   * figure `GET /professionals/directory` serves), null until there are enough
+   * answered messages: H10's "usual reply". Their promise is
+   * `dmResponseHours`, which is a different thing.
+   */
+  usualReplyMinutes: number | null;
 }
 
 /** One entry of GET /feed/entries. */
@@ -510,23 +524,30 @@ export class FeedCardsService {
       where: { id: { in: listingIds } },
     });
     const people = listings.map((l) => l.wawuUserId);
-    const [creators, profiles, states, ratings] = await Promise.all([
-      this.creatorsFor(people),
-      this.prisma.userProfile.findMany({
-        where: { wawuUserId: { in: people } },
-        select: { wawuUserId: true, coverUrl: true },
-      }),
-      this.prisma.creatorState.findMany({
-        where: { wawuUserId: { in: people } },
-        select: { wawuUserId: true, dmPrice: true, dmResponseHours: true },
-      }),
-      this.prisma.professionalReview.groupBy({
-        by: ['professionalId'],
-        where: { professionalId: { in: listingIds } },
-        _avg: { stars: true },
-        _count: { _all: true },
-      }),
-    ]);
+    const [creators, profiles, states, ratings, locations, replies] =
+      await Promise.all([
+        this.creatorsFor(people),
+        this.prisma.userProfile.findMany({
+          where: { wawuUserId: { in: people } },
+          select: { wawuUserId: true, coverUrl: true },
+        }),
+        this.prisma.creatorState.findMany({
+          where: { wawuUserId: { in: people } },
+          select: { wawuUserId: true, dmPrice: true, dmResponseHours: true },
+        }),
+        this.prisma.professionalReview.groupBy({
+          by: ['professionalId'],
+          where: { professionalId: { in: listingIds } },
+          _avg: { stars: true },
+          _count: { _all: true },
+        }),
+        this.prisma.professionalLocation.findMany({
+          where: { wawuUserId: { in: people } },
+          select: { wawuUserId: true, city: true },
+        }),
+        replyTimesFor(this.prisma, people),
+      ]);
+    const cityBy = new Map(locations.map((l) => [l.wawuUserId, l.city]));
     const coverBy = new Map(profiles.map((p) => [p.wawuUserId, p.coverUrl]));
     const stateBy = new Map(states.map((s) => [s.wawuUserId, s]));
     const ratingBy = new Map(
@@ -560,6 +581,8 @@ export class FeedCardsService {
         reviewCount: ratingBy.get(l.id)?.count ?? 0,
         dmPrice: state.dmPrice,
         dmResponseHours: state.dmResponseHours,
+        city: cityBy.get(l.wawuUserId) ?? null,
+        usualReplyMinutes: replies.get(l.wawuUserId)?.usualReplyMinutes ?? null,
       });
     }
     return out;
