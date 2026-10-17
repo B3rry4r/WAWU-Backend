@@ -704,3 +704,75 @@ the extras bought on the account, as they stand now) and `productsAllowed`
   person has published (the gate's offers leave it out then, section 6; a
   direct call is not refused, and the places count when more is allowed).
 
+
+## 12. The AI tools catalogue and VoiceOver (AITOOLS-01)
+
+Task AITOOLS-01, R-43, R-61, R-65, R-68. Studio (PT1) lists the AI tools the
+Hub can run, each with its points cost before use. VoiceOver (PT2) turns text
+into audio. A job costs points (a count, never naira): POINTS-03 holds them
+before the voice provider is asked, keeps them when the audio is made and gives
+them back when it is not. No route here moves naira. The app draws only the
+tools `GET /ai-tools` lists (R-47); each later tool is added to that list with
+the code that runs it, one task each.
+
+| Route | Does |
+|---|---|
+| `GET /ai-tools` | `{ tools, caps }`. A tool: `id` (`voiceover`), `action` (the plan's action id, what `POST /points/quote` takes), `name`, `description`, `unit` (`minute`), `costPointsPerUnit`, `enabled`, `input` (`maxCharacters`, `charactersPerUnit`) and `voices` (`id`, `name`, `description`). `caps` is `GET /plans`'s `caps`: `dailyPoints`, `maxCharactersPerJob`, `maxAudioMinutesPerJob`. Every figure is read from the live settings on each call (R-65). `enabled` is false until a voice provider is set up on the Hub: the tool is listed, and a job is refused. |
+| `POST /points/quote` | Unchanged except that the answer now carries `quoteToken`: a signed token for the cost the quote showed (same key as the fee quotes). |
+| `POST /ai-tools/voiceover/jobs` | Body `{ text, voiceId, quoteToken }` and an `Idempotency-Key` header (required, 8 to 128 of `[A-Za-z0-9_-]`). Answers `202` with the job `working`. |
+| `GET /ai-tools/jobs/{id}` | The job as it stands: `working`, `done` with `audioUrl`, or `failed` with the words "No points were taken" (PT2c). Only the person who ran it reads it; another person's job and one that is not there are the same `404 not_found`. |
+
+`AiJobView`: `id`, `tool`, `state`, `voiceId`, `characters`, `units` (the
+minutes it was priced in), `costPoints`, `audioUrl`, `message`, `createdAt`,
+`finishedAt`.
+
+- **Minutes from the text.** `units` is the text's characters over
+  `charactersPerUnit` (the setting `ai.voiceover_chars_per_minute`,
+  PROVISIONAL `AITOOLS-CHARS-PER-MINUTE`, 900), rounded up, at least 1. The cost
+  is `costPointsPerUnit` times `units`. The text is trimmed and counted in
+  characters (code points).
+- **The quote the person saw.** The job runs only when its cost now is exactly
+  the cost in `quoteToken` (for this person, this tool, not past the fee
+  quotes' time). Anything else is `409 quote_changed` with `costPoints` (what
+  it costs now) and nothing held, so a person is never charged a price they
+  were not shown.
+- **Refused with nothing held.** `422 points_cap_reached` naming the cap
+  (`characters_per_job`, `minutes_per_job` or `daily`, with `capLimit`,
+  `capUnit`, and for the day's `usedPoints`, `remainingPoints`, `resetsAt`),
+  `402 insufficient_points`, `409 quote_changed`, `400 ai_voice_unknown`, `400
+  ai_text_empty`, `400 idempotency_key_required`, `503 ai_tool_unavailable`
+  ("AI voice tools are not available right now. No points were taken."). A
+  refusal leaves the key free to use once the cause is fixed.
+- **Idempotency.** The job's id comes from the person and the key, so a retry
+  after a lost answer, and two requests at once with one key, share one hold,
+  one row and one provider call. The repeat answers the job as it stands, `200`
+  with `Idempotent-Replayed: true`; the same key with other words or another
+  voice is `409 idempotency_key_reused`. A failed job stays failed under its
+  key: "Try again" is a new key and a new job.
+- **The points.** The hold is the job's reference `<id>:1` (`purpose
+  ai_job`, titled "VoiceOver"). Audio made: the file is stored, then the hold
+  is COMMITTED (the deciding step), then the job is `done`. The provider down,
+  refusing the text or answering with anything but audio, or the file not
+  stored: the hold is RELEASED and the job is `failed`. A late finish and the
+  stale-hold sweep (`points.job_max_run_minutes`) cannot both win: the points
+  service lets one settle the hold, and the job follows whichever did (a read
+  of a `working` job also repairs one whose server died). Two jobs at once
+  never take points below zero (the points lock decides).
+- **No transaction, connection or lock is held across the provider call.** The
+  hold is a short database-only transaction; the provider is asked after the
+  answer went out; the commit or release is a second short one.
+- **No text is kept.** The job row holds the characters, minutes, cost, state
+  and a SHA-256 of the request (salted with the person and key); the words live
+  only in the request that runs the job. The audio is a confirmed
+  `StorageObject` of the person's (folder `ai/voiceover`, not creator content,
+  never counted against the R-7 allowance), removed with their account. The data
+  export lists their jobs under `aiToolJobs`.
+- **The voice provider** is reached only through `AI_VOICE_PROVIDER`
+  (`src/ai-tools/voice/`). Its settings are the owner's and are set on the Hub:
+  `AI_VOICE_BASE_URL`, `AI_VOICE_API_KEY`, `AI_VOICE_VOICES` (a JSON list of
+  `{ id, name, description, providerVoiceId }`), `AI_VOICE_MODEL` (optional)
+  and `AI_VOICE_TIMEOUT_MS` (optional). No host is built in, and a provider's
+  name or voice id never reaches a string a person sees (R-68: "AI voice
+  tools"). **NOT RUN against the real provider**; built and run against
+  `scripts/dev/voice-standin.cjs`, a local stand-in with the same wire shape.
+  The fact that unblocks the real run: a provider key set on the Hub.
