@@ -437,7 +437,7 @@ build_all() {
     LENV=(DATABASE_URL="$ID_DB_URL" PORT="$ID_PORT" NODE_ENV=development
       RS256_PRIVATE_KEY="$(cat "$STATE/keys/private.pem")" RS256_PUBLIC_KEY="$(cat "$STATE/keys/public.pem")"
       JWT_EXPIRES_IN=15m REFRESH_EXPIRES_IN=30d INTERNAL_SERVICE_KEY="$SERVICE_KEY"
-      RESEND_API_KEY= APP_URL="http://localhost:$ID_PORT" ALLOWED_ORIGINS=
+      RESEND_API_KEY="${STACK_RESEND_API_KEY:-}" APP_URL="http://localhost:$ID_PORT" ALLOWED_ORIGINS=
       WAWUAFRICA_API_URL="http://127.0.0.1:$HUB_PORT" NODE_OPTIONS="$BLOCK_NET --max-old-space-size=1024")
     service wawu-id "$ID_PORT" "$ID_DIR" "http://127.0.0.1:$ID_PORT/health" 60 node dist/main.js || return 1
   fi

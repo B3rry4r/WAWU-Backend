@@ -5,17 +5,16 @@ process.env.DATABASE_URL =
 
 import { ChildProcess, spawn } from 'child_process';
 import * as path from 'path';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { INestApplication } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AdminAuthModule } from '../../admin/auth/admin-auth.module';
 import { AdminFeaturedCreatorsModule } from '../../admin/featured-creators/admin-featured-creators.module';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
-import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
-import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { configureHubApp } from '../../hub-app-config';
 import { ExploreModule } from '../explore.module';
 import { StorageService } from '../../storage/storage.service';
 
@@ -137,16 +136,9 @@ describe('Explore categories and featured creators (contract)', () => {
       .useValue(storageStub)
       .compile();
     app = moduleRef.createNestApplication();
-    app.setGlobalPrefix('api/hub');
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-      }),
-    );
-    app.useGlobalFilters(new AllExceptionsFilter());
-    app.useGlobalInterceptors(new ResponseInterceptor());
+    // Built as the Hub is (FIX-17 D2): prefix, pipe, the storable-text check,
+    // filter and interceptor all come from src/hub-app-config.ts.
+    configureHubApp(app);
     await app.listen(0);
     prisma = app.get(PrismaService);
 
@@ -383,7 +375,8 @@ describe('Explore categories and featured creators (contract)', () => {
     await http().delete(url).expect(401);
     await feature(PLAIN).expect(404); // an account that is not a creator
     await feature('00000000-0000-4000-8000-0000000000ff').expect(404);
-    await feature('%00').expect(404);
+    // A NUL in a path value is the Hub's own 400 on every route (FIX-17).
+    await feature('%00').expect(400);
     await feature('a'.repeat(200)).expect(404);
     for (const body of [
       { position: -1 },
