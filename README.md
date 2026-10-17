@@ -371,6 +371,37 @@ page calls `GET /admin/ads/:id/report?from=&to=` and draws `delivery` and
 the overview calls `GET /admin/ads/report`. Counts survive a pause or an end.
 A counted campaign cannot be deleted (end it instead).
 
+### Plan settings (`/api/hub/admin/plan-settings`, task TIER-06)
+
+The launch figures (tier prices and lengths, the add-5-products price, the
+points cash rate, expiry and daily cap, packs, AI tool costs, the referral
+ladder, the event pass lines and date, and a few figures from other rulings)
+are admin settings, not code (R-65). `GET` lists every setting with its value,
+its default, the screens that print it and a provisional note where the owner
+did not name the figure. `PATCH` takes `{ "settings": { "<key>": <value> } }`:
+a `null` puts a setting back to its default, zero and negative figures are
+refused, a request is all or nothing, and each setting that changed writes one
+`AdminOpsAudit` row (superadmin and finance change; support reads).
+
+`PLANS_CONFIG` is the live plan: the defaults (`src/plans/plans.config.json`
+and `src/plan-settings/plan-settings.defaults.json`) with the saved rows
+(`PlanSetting`) laid over them, kept in memory. The saving process reloads at
+once; another Hub process picks the change up within 15 seconds. A task that
+needs a setting reads it with `PlanSettingsService.number(key)`, `.text(key)`
+or `.value(key)`. 85/15 is not a setting. Dollar prices are not settings yet.
+
+What a person is shown is what they get. A points cash-out carries the
+`quoteToken` of its quote (`GET /points/convert/quote`) in the body and is paid
+at that quote or not at all: a changed rate, minimum, cap or cash is `409
+quote_changed` with the new quote in `reason.pointsQuote`. A tier purchase's
+goods (products, bonus points, days, bump points, expiry) are the payment's
+`terms`: the quote token is bound to them and the payment keeps them from the
+claim, so a plan changed while a payment confirms changes nothing already
+bought. The cash rate may never exceed the price per point of any way points
+are sold (a pack, the checkout offer, the shortfall rate): a change that would
+is a 400 naming both settings, whichever of them is changed. Saves take turns
+(one advisory lock), so each audit row's old value is true.
+
 ### Environment
 
 | Variable | Required | Notes |
@@ -640,15 +671,26 @@ project with enhanced push security) and `EXPO_PUSH_BASE_URL` (default
 `https://exp.host`) are optional; both are listed in `deploy/README.md` and
 `.env.example`. Android needs the owner's FCM credentials uploaded to Expo.
 
-## Money in (WALLET-10)
+## Money in (WALLET-10, WALLET-39)
 
-A bank transfer into a person's account is a completed `in` row of category
-`top_up` in the ledger (`src/money/ledger/`; Fintava's `account_funded` through
-the ledger sweep, Nuvion's `inflows.completed` through NUV-04's handler). A
-sweep in every Hub (`src/money/money-in-notice/`, every 10 seconds) turns each
-such row into one `money_in` notification, which the push sender above then
-sends to the person's phones. It reads the ledger, never the webhook event, and
-never calls the provider; a server tells only the rows of the provider it runs.
+Every credit to a person's wallet is a completed `in` row in the ledger
+(`src/money/ledger/`) of one of four categories: a bank transfer in (`top_up`;
+Fintava's `account_funded` through the ledger sweep, Nuvion's
+`inflows.completed` through NUV-04's handler), money from another person
+(`transfer`), earnings landing (`earning`: WALLET-16's settlement, a released
+hold, a points cash-out) and a refund (`refund`). A sweep in every Hub
+(`src/money/money-in-notice/`, every 10 seconds) turns each such row into one
+`money_in` notification ("You received ₦5,000 from Tolu B.", "in earnings", "a
+refund of ...", "by bank transfer"), which the push sender above then sends to
+the person's phones. It reads the ledger, never the webhook event, and never
+calls the provider; a server tells only the rows of the provider it runs. A
+writer of a new `in` row needs no hook: its category is in
+`MONEY_IN_CATEGORIES` and its words in `money-in-sources.ts`.
+
+The notification carries the ledger row's id as its `transaction` target (the
+id `GET /money/transactions/{id}` answers), in `GET /me/notifications` and in
+the push's `data`. Its text names the amount and where it came from, never a
+whole account number.
 
 Exactly once: the notification and its mark (`MoneyInNotice`, primary key the
 ledger row) are written in one transaction with the row locked, so a replayed
@@ -657,6 +699,13 @@ between the row and the push all end in one notification. With the person's
 "Money in" switch (Z3) off, only the mark is written (`muted`): nothing is
 sent and nothing waits. `MONEY_IN_NOTICE_WINDOW_HOURS` (default 72, in
 `.env.example`) bounds how far back a pass reads.
+
+A credit that was told and is then reversed in the ledger (`reversed`) is
+followed by one `money_in_reversed` notification ("The ₦5,000 you received
+from Tolu B. was reversed."), written with the mark's `correctedAt` in one
+transaction, up to 30 days after the credit. A credit nobody was told about
+(`muted`, `before`) is not corrected. The list always carries the correction;
+"Money in" off silences only its push.
 
 ## Blocking and data export (SETTINGS-04)
 

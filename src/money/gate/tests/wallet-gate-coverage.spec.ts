@@ -214,6 +214,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET bills/wallet/:id/quote',
       // INBOX-16: the pay sheet of a credit pack.
       'GET credits/purchase/wallet/quote',
+      'GET events/orders/wallet/:orderId/quote',
       'GET money/beneficiaries',
       'GET money/device',
       'GET money/fees/quote',
@@ -242,6 +243,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST bills/wallet/pay',
       // INBOX-16: a credit pack pays from the wallet.
       'POST credits/purchase/wallet',
+      'POST events/orders/wallet/pay',
       'POST money/approval/verify',
       'POST money/beneficiaries',
       'POST money/device/challenge',
@@ -270,6 +272,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     expect(pinRoutes.map((r) => r.key).sort()).toEqual([
       'POST bills/wallet/pay',
       'POST credits/purchase/wallet',
+      'POST events/orders/wallet/pay',
       'POST money/approval/verify',
       'POST money/payments',
       'POST money/pin/verify',

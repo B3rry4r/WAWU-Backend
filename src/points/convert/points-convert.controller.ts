@@ -89,10 +89,16 @@ export class PointsConvertController {
    * it is never sent again), or `failed` when the cash did not move and the
    * points are back. The same Idempotency-Key and body answer the first
    * result again (`Idempotent-Replayed: true`) without checking the PIN.
+   * The body carries the `quoteToken` of the quote the person was shown: the
+   * conversion is paid at that quote or not at all. If the rate, the
+   * minimum, the cap or the cash changed since (or the token is not this
+   * person's, not for these points, or past its end), it is `409
+   * quote_changed` with the new quote in `reason.pointsQuote`, and nothing
+   * is paid. A body with no token is a plain 400.
    * Before the PIN, and changing nothing: `422 below_minimum`, `402
    * insufficient_points`, `400 amount_out_of_range` (more than one move
-   * carries), `409 currency_not_supported`, `409 wallet_not_open`, `503
-   * fees_not_set`.
+   * carries), `409 quote_changed`, `409 currency_not_supported`, `409
+   * wallet_not_open`, `503 fees_not_set`.
    */
   @Post()
   @HttpCode(201)
@@ -103,6 +109,7 @@ export class PointsConvertController {
     'device_approval_refused',
     'below_minimum',
     'insufficient_points',
+    'quote_changed',
     'currency_not_supported',
   )
   @RequireFeesSet()
@@ -115,6 +122,7 @@ export class PointsConvertController {
       user.sub,
       { phone: user.phone, country: user.country },
       dto.points,
+      dto.quoteToken,
       scope,
     );
   }

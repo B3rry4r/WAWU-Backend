@@ -13,6 +13,7 @@ import type {
   FeeQuoteView,
   PaymentQuoteView,
 } from '../money-view.type';
+import type { PointsConvertQuoteView } from '../../points/convert/points-convert-view.type';
 
 /**
  * The one error shape of the Naira wallet contract (task MONEY-04).
@@ -76,6 +77,12 @@ export class MoneyErrorReason {
   /** quote_changed on a payment: the quote as it stands now. */
   @ApiPropertyOptional({ allOf: [{ $ref: getSchemaPath('PaymentQuoteView') }] })
   paymentQuote?: PaymentQuoteView;
+
+  /** quote_changed on a points conversion: the quote as it stands now, with a new token. */
+  @ApiPropertyOptional({
+    allOf: [{ $ref: getSchemaPath('PointsConvertQuoteView') }],
+  })
+  pointsQuote?: PointsConvertQuoteView;
 
   /** payment_in_progress: the payment for this item still being confirmed (MONEY-17). */
   paymentId?: string;

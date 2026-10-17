@@ -1,6 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { rowsToAnonymise, rowsToDelete } from './account-data-map';
+import { AccountPurgeHooks } from './purge-hooks';
 import { POINTS_PURGE_MODELS, purgePersonPoints } from '../points/points-purge';
 
 /**
@@ -13,7 +14,10 @@ import { POINTS_PURGE_MODELS, purgePersonPoints } from '../points/points-purge';
 export class AccountPurgeService {
   private readonly logger = new Logger(AccountPurgeService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly hooks?: AccountPurgeHooks,
+  ) {}
 
   /**
    * Deletes every row the account owns or authored. Returns what it removed,
@@ -34,6 +38,9 @@ export class AccountPurgeService {
     total: number;
     pointsLeft: boolean;
   }> {
+    // EVENTS-07: money held for this person's events goes back before any row goes.
+    await this.hooks?.beforeErase(wawuUserId);
+
     const deleted: Record<string, number> = {};
     let total = 0;
     let pointsLeft = false;

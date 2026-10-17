@@ -5,6 +5,7 @@ import type { UpdateProfileFieldsDto } from './dto/update-profile-fields.dto';
 import { normaliseHandle } from './social-handles';
 import { memberSinceOf, normaliseChips, normaliseText } from './profile-fields';
 import type { ProfileFieldsView } from './profile-fields.type';
+import { TierBadgeService } from '../plans/tier-badge/tier-badge.service';
 
 /**
  * The ME-05 profile fields: location, skills, "open to", Threads and the
@@ -19,6 +20,7 @@ export class ProfileDetailsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly badges: TierBadgeService,
   ) {}
 
   /** The caller's own fields. Never 404s: no row means nothing set yet. */
@@ -93,12 +95,13 @@ export class ProfileDetailsService {
   }
 
   private async view(wawuUserId: string): Promise<ProfileFieldsView> {
-    const [details, profile] = await Promise.all([
+    const [details, profile, badge] = await Promise.all([
       this.prisma.profileDetails.findUnique({ where: { wawuUserId } }),
       this.prisma.userProfile.findUnique({
         where: { wawuUserId },
         select: { createdAt: true },
       }),
+      this.badges.forOne(wawuUserId),
     ]);
     return {
       wawuUserId,
@@ -108,6 +111,7 @@ export class ProfileDetailsService {
       threadsHandle: details?.threadsHandle ?? null,
       socialOrder: details?.socialOrder ?? [],
       memberSince: memberSinceOf(profile?.createdAt),
+      badge,
     };
   }
 }

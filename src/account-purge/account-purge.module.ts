@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { AccountPurgeHooks } from './purge-hooks';
 import { AccountPurgeService } from './account-purge.service';
 import { WawuIdAccountClient } from '../account/wawu-id-account.client';
 import { WAWU_ID_ACCOUNT_GATEWAY } from '../account/wawu-id-account.gateway';
@@ -16,9 +17,10 @@ import { WAWU_ID_ACCOUNT_GATEWAY } from '../account/wawu-id-account.gateway';
 @Module({
   imports: [ConfigModule],
   providers: [
+    AccountPurgeHooks,
     AccountPurgeService,
     { provide: WAWU_ID_ACCOUNT_GATEWAY, useClass: WawuIdAccountClient },
   ],
-  exports: [AccountPurgeService],
+  exports: [AccountPurgeService, AccountPurgeHooks],
 })
 export class AccountPurgeModule {}

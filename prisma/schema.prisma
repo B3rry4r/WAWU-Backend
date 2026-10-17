@@ -372,8 +372,24 @@ model MakerTier {
   pointsIncluded     Int
   /// The tier includes the first Voice Intro, not yet used.
   voiceIntroIncluded Boolean  @default(false)
+  /// The number on a numbered badge ("Founding Maker #128", TIER-07, G-421).
+  /// Allocated once, the first time the person holds a tier whose badge is
+  /// numbered, from BadgeNumberCounter, and never changed or given to anyone
+  /// else, so it survives an ended tier, a renewal and a change to another
+  /// tier (it is only shown while a numbered tier runs). Null until then.
+  badgeNumber        Int?     @unique
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+}
+
+/// The last number given to a numbered badge (TIER-07). One row, `name` is
+/// `numbered_badge`. A number is taken by one statement inside the grant's own
+/// transaction, so two buyers never get the same one, a grant that rolls back
+/// gives its number back (no gaps), and a number of a deleted account is not
+/// handed out again. Holds no person's id.
+model BadgeNumberCounter {
+  name String @id
+  last Int
 }
 
 /// A tier bought, renewed or upgraded from the wallet (TIER-03), written once
@@ -2381,6 +2397,8 @@ enum AdminOpsResource {
   health_subscription
   /// A person's hold on a BVN during a Nuvion wallet opening (NUV-02 round 3).
   wallet_identity_hold
+  /// A launch figure set in admin settings (TIER-06, R-65).
+  plan_setting
 }
 
 /// Every consequential ops action that used to be anonymous behind
@@ -2412,6 +2430,9 @@ enum AdminOpsAction {
   /// Support released one person's BVN hold at once (NUV-02 round 3). `detail`
   /// carries the opening's state before and after, never a BVN or its hash.
   wallet_identity_hold_released
+  /// One or more launch figures were set, or put back to their default
+  /// (TIER-06, R-65). `detail` carries each key with its old and new value.
+  plan_setting_set
 }
 
 /// Attribution for the operator surfaces that moved from AdminKeyGuard onto
@@ -3302,9 +3323,10 @@ model EventTicketType {
   salesStartAt DateTime?
   salesEndAt   DateTime?
 
-  event   Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  orders  EventOrder[]
-  tickets EventTicket[]
+  event      Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  orders     EventOrder[]
+  tickets    EventTicket[]
+  orderLines EventOrderLine[]
 
   @@index([eventId])
 }
@@ -3341,13 +3363,63 @@ model EventOrder {
 
   createdAt DateTime @default(now())
 
+  /// EVENTS-07: the order paid from the buyer's WAWU wallet. All of these are
+  /// null on an order the web paid through Flutterwave, whose reference stays
+  /// `flutterwaveTxRef` above until the web follows (after launch). A wallet
+  /// order still fills `flutterwaveTxRef` (the column is required and unique)
+  /// with `wawu-event-wallet-<id>`, which no Flutterwave charge can match.
+  ///
+  /// `paymentProvider` is `wallet` for a wallet order, null for the web's.
+  paymentProvider  String?
+  /// The reference a person quotes, provider-neutral: WAW-EVT- and eight
+  /// characters. Null on the web's orders.
+  paymentReference String?  @unique
+  /// The wallet payment (WalletPayment.id) that paid the order and the hold
+  /// its price sits in until the event (R-19). Set when the payment is
+  /// delivered; EVENTS-10 refunds, WALLET-17 releases, through the hold.
+  walletPaymentId  String?  @unique
+  holdId           String?
+  paidAt           DateTime?
+  /// Why a paid order could not be given its tickets (sold out in between,
+  /// the event called off); the hold is refunded and the order is `failed`.
+  failureReason    String?
+  /// The buyer's optional Idempotency-Key on the order's creation: the same
+  /// key for the same basket answers the same order, never a second one.
+  requestKey       String?
+
   event      Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
   ticketType EventTicketType @relation(fields: [ticketTypeId], references: [id])
   tickets    EventTicket[]
+  /// EVENTS-07: the basket. Empty on the web's orders, which hold one tier in
+  /// `ticketTypeId` and `quantity` above. On a wallet order `ticketTypeId` is
+  /// the first line's tier and `quantity` the tickets in all; the lines are
+  /// the truth of what was bought.
+  lines      EventOrderLine[]
 
+  @@unique([buyerWawuId, requestKey])
   @@index([eventId, status])
   @@index([buyerWawuId])
   @@index([referralCode])
+}
+
+/// EVENTS-07: one tier of a basket order (E2: Regular and VIP in one payment).
+/// The name and the price are snapshotted, like the order's total.
+model EventOrderLine {
+  id             String   @id @default(uuid())
+  orderId        String
+  ticketTypeId   String
+  /// The tier's name when it was bought ("VIP").
+  tierName       String
+  /// Naira for one ticket when it was bought; 0 for a free tier.
+  unitPriceNaira Int
+  quantity       Int
+  createdAt      DateTime @default(now())
+
+  order      EventOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  ticketType EventTicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, ticketTypeId])
+  @@index([ticketTypeId])
 }
 
 /// One admittance. One row per seat, not per order, because each is scanned
@@ -3784,6 +3856,25 @@ model PlatformSettings {
   professionalVerificationPriceNgn Int @default(2000)
 
   updatedAt DateTime @updatedAt
+}
+
+/// A launch figure an admin has set (TIER-06, R-65): one row per setting key,
+/// holding only the keys somebody changed. A key with no row reads its default
+/// from the seed (`plans.config.json` and `plan-settings.defaults.json`).
+///
+/// Key and value are checked by the registry in src/plan-settings before they
+/// are written and again when they are read, so the JSON column is not a
+/// free-form bag: an unknown key or a value of the wrong kind never reaches
+/// a reader. Deleting the row puts the setting back to its default.
+model PlanSetting {
+  key   String @id
+  value Json
+
+  /// Snapshot of the admin who last set it (no foreign key, as AdminOpsAudit).
+  updatedByAdminId String?
+  updatedAt        DateTime @updatedAt
+
+  @@index([updatedAt])
 }
 
 /// The code somebody arrived with, remembered against their account.
@@ -4567,7 +4658,9 @@ model FintavaLedgerEntry {
 
   /// WALLET-10: the answer to "was the person told about this credit": one
   /// row once the money-in notice sweep has dealt with it. Only `in` rows of
-  /// category `top_up` on a person's wallet ever get one.
+  /// a person's wallet ever get one: a bank transfer in (`top_up`), money from
+  /// another person (`transfer`), earnings landed (`earning`) and refunds
+  /// (`refund`), since WALLET-39.
   moneyInNotice MoneyInNotice?
 
   @@index([wawuUserId, occurredAt])
@@ -4583,8 +4676,9 @@ model FintavaLedgerEntry {
 /// ─────────────────────────────────────────────────────────────────────────
 /// MONEY IN, TOLD ONCE (task WALLET-10, BACKEND_GAPS G-33)
 ///
-/// One row per credited ledger row (`direction` in, `category` top_up, on a
-/// person's wallet) that the money-in notice sweep has dealt with: the
+/// One row per credited ledger row (`direction` in, `category` top_up, transfer,
+/// earning or refund since WALLET-39, on a person's wallet) that the money-in
+/// notice sweep has dealt with: the
 /// primary key is the exactly-once rule. The row is written in the same
 /// transaction as the Notification it answers (NotificationService.emit takes
 /// the transaction), so there is never a notification without its row here,
@@ -4621,6 +4715,16 @@ model MoneyInNotice {
   outcome        MoneyInNoticeOutcome
   notificationId String?
   createdAt      DateTime             @default(now())
+
+  /// WALLET-39: when the person was told the credit was taken back (the
+  /// ledger row went `reversed` after a `sent` notice). Null until then, and
+  /// always null on a `muted` or `before` mark: nothing was said, so nothing
+  /// needs correcting. The mark and the correction notification are written in
+  /// one transaction, so a reversal is corrected once.
+  correctedAt              DateTime?
+  /// The correction notification written then; null when `correctedAt` was
+  /// set by the migration for a reversal that was already in the ledger.
+  correctionNotificationId String?
 }
 
 /// Every reference one ledger row is known by. The primary key is the
@@ -4762,6 +4866,11 @@ model WalletPayment {
   chargeReviewSince     DateTime?
   /// A tip's message.
   note                  String?
+  /// What the item was quoted with, kept from the claim for the delivery
+  /// (TIER-06 round 2): a tier purchase's goods. A flat JSON object the kind
+  /// wrote (`PayableTarget.terms`); null for a kind that sets none and for
+  /// payments claimed before this column.
+  terms                 Json?
   /// When the debit was first sent to Fintava (the reconcile window).
   sentAt                DateTime?
   completedAt           DateTime?
@@ -5354,9 +5463,25 @@ model TgifShare {
 /// else references it.
 model TgifPreference {
   userWawuId String   @id
-  /// false = the person turned TGIF off on Today.
+  /// false = the person turned TGIF off. HOME-16 (R-59): the switch now means
+  /// "send me TGIF each morning" (Z2); the column and the values are kept.
   show       Boolean  @default(true)
   updatedAt  DateTime @updatedAt
+}
+
+/// HOME-16: the marker that today's TGIF notice was made for this person. One
+/// row per person per day (the primary key), made in the same transaction as the
+/// notification, so a notice is made once per person per day however many hub
+/// instances run the job or however often it runs. `day` is the Lagos calendar
+/// day. Rows older than a few days are deleted by the job itself. Holds no
+/// words: the notice is the Notification row (kind `tgif_daily`).
+model TgifDailyNotice {
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@id([userWawuId, day])
+  @@index([day])
 }
 
 /// EXPLORE-03: a creator an admin has chosen to show in Explore's "Featured

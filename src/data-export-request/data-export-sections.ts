@@ -692,6 +692,7 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           extraProducts: true,
           pointsIncluded: true,
           voiceIntroIncluded: true,
+          badgeNumber: true,
         },
       }),
   },
@@ -1064,6 +1065,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'PushDelivery',
       reason:
         'A send log: every notification it names is already in the Notifications section.',
+    },
+    {
+      model: 'TgifDailyNotice',
+      reason:
+        'A marker that the TGIF notice of a day was made, kept a few days: the notice itself is in the Notifications section.',
     },
     {
       model: 'PushStoppedAccount',

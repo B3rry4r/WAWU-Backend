@@ -1,6 +1,9 @@
 import type { NotificationSettings } from '../common/types';
 import type { NotificationKind } from '../notification/notification-event';
-import { SETTINGS_GATE } from '../notification/notification.service';
+import {
+  SETTINGS_GATE,
+  type SwitchName,
+} from '../notification/notification.service';
 
 /**
  * Which notifications reach a phone, decided once per kind (INBOX-03).
@@ -27,9 +30,15 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   tip_received: 'send',
   // WALLET-10. A bank transfer into the account: "Money in" (Z3) mutes it.
   money_in: 'send',
+  // WALLET-39. A credit the person was told about was taken back. Pushed, so
+  // a phone that showed "You received" is corrected; "Money in" mutes the push
+  // (PUSH_ONLY_GATE), but the list always carries the correction.
+  money_in_reversed: 'send',
   dm_refunded: 'send',
   new_follower: 'send',
   dm_deadline: 'send',
+  // HOME-16 (R-59). The morning TGIF notice; the TGIF switch (Z2) mutes it.
+  tgif_daily: 'send',
   content_published: 'send',
   content_rejected: 'send',
   review_received: 'send',
@@ -69,12 +78,14 @@ export const PUSH_ONLY_GATE: Partial<
   Record<NotificationKind, keyof NotificationSettings>
 > = {
   dm_received: 'dmReminders',
+  // WALLET-39. A "received" notice that stands in the list must always be
+  // followed by its correction, so the list is not gated; the phone does not
+  // buzz for it when "Money in" is off.
+  money_in_reversed: 'moneyIn',
 };
 
 /** The Z3 switch that mutes `kind` on a phone, if any. */
-export function pushGateFor(
-  kind: string,
-): keyof NotificationSettings | undefined {
+export function pushGateFor(kind: string): SwitchName | undefined {
   const k = kind as NotificationKind;
   return PUSH_ONLY_GATE[k] ?? SETTINGS_GATE[k];
 }

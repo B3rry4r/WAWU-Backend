@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ContentPieceModule } from '../content-piece/content-piece.module';
-import { loadPlansConfig, PLANS_CONFIG } from '../plans/plans-config';
+import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import {
   FlutterwaveReferenceLookup,
   WAITLIST_PAYMENT_LOOKUP,
@@ -21,16 +21,15 @@ import { WaitlistService } from './waitlist.service';
  * the route order. This module declares no controller, so importing it moves
  * nothing.
  *
- * The plans file is read here again rather than by importing PlansModule
- * (which declares `GET /plans` and `GET /me/tier`): the same file, checked by
- * the same schema check, and one provider token, so a spec that overrides
- * PLANS_CONFIG overrides both. ContentPieceModule is already early in
+ * The plan comes from PlanSettingsModule rather than from importing
+ * PlansModule (which declares `GET /plans` and `GET /me/tier`): the same live
+ * plan under one provider token (TIER-06), so a spec that overrides
+ * PLANS_CONFIG overrides both. PlanSettingsModule declares no controller. ContentPieceModule is already early in
  * AppModule, so importing it here moves nothing either.
  */
 @Module({
-  imports: [ContentPieceModule],
+  imports: [ContentPieceModule, PlanSettingsModule],
   providers: [
-    { provide: PLANS_CONFIG, useFactory: () => loadPlansConfig() },
     { provide: WAITLIST_RANDOM, useValue: systemRandom },
     ReferralService,
     WaitlistService,

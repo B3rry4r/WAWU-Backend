@@ -28461,6 +28461,58 @@
         ]
       }
     },
+    "/api/hub/admin/plan-settings": {
+      "get": {
+        "operationId": "AdminPlanSettingsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanSettingsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every setting with its value, its default and the screens that print it.",
+        "tags": [
+          "AdminPlanSettings"
+        ]
+      },
+      "patch": {
+        "operationId": "AdminPlanSettingsController_update",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePlanSettingsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanSettingsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Changes one or more settings. A null value puts a setting back to its\ndefault. All or nothing: one bad value refuses the request. Writes one\naudit row per setting that changed, and the next quote uses the new figure\nwith no restart. `@HttpCode(200)`: nothing is created, and the\nResponseInterceptor stamps `statusCode: 200` into the body regardless.",
+        "tags": [
+          "AdminPlanSettings"
+        ]
+      }
+    },
     "/api/hub/admin/featured-creators/{wawuId}": {
       "put": {
         "operationId": "AdminFeaturedCreatorsController_put",
@@ -28985,11 +29037,11 @@
             "in": "path",
             "schema": {
               "enum": [
-                "verse",
                 "reality",
                 "remember",
                 "prayer",
-                "takeaway"
+                "takeaway",
+                "verse"
               ],
               "type": "string"
             }
@@ -30554,6 +30606,343 @@
         ]
       }
     },
+    "/api/hub/events/{id}/orders/wallet": {
+      "post": {
+        "description": "A priced basket needs an open wallet: 409 with reason.code wallet_not_open or wallet_opening, and the app leads to Open your wallet; with no fees set it is 503 fees_not_set. A basket that costs nothing needs no wallet and no fees. With an Idempotency-Key, the same key and tickets answer the same order; the same key with other tickets is 409 idempotency_key_reused, and a malformed key is 400 idempotency_key_required.",
+        "operationId": "createEventWalletOrder",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional. One value per tap on Get tickets (a UUID); sent again unchanged on a retry, it answers the same order.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEventWalletOrderDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventWalletOrderQuoteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Makes an order from the tickets picked in E2 (one line per ticket type,\nso a Regular and a VIP ticket are one payment) and answers E3: the order\npriced by the server and the wallet payment's quote (the tickets, the\nprovider's charge, the total, the balance and any shortfall). Nothing is\nreserved and nothing is debited. A basket that costs nothing (R-8) is\nissued here: it answers `paid` with the tickets and `payment: null`, and\nneeds no wallet and no PIN. A basket that costs money needs an open\nwallet: the answer is `409` with `reason.code` `wallet_not_open` or\n`wallet_opening`, and the app leads to Open your wallet.\n\nWith an `Idempotency-Key`, the same key and the same tickets answer the\nsame order, so a repeated tap never issues or quotes a second one; the\nsame key with other tickets is `409 idempotency_key_reused`, and a key\nthat is not 8 to 128 letters, digits, dashes or underscores is `400\nidempotency_key_required`. A priced basket is quoted, so while the\nrunning provider's fees are not set it answers `503 fees_not_set`; a free\none never asks for them.",
+        "tags": [
+          "EventWalletOrders"
+        ]
+      }
+    },
+    "/api/hub/events/orders/wallet/pay": {
+      "post": {
+        "operationId": "EventWalletOrdersController_pay",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayEventWalletOrderDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventWalletOrderView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pays the order from the wallet, once: the tickets' price moves into\nWAWU's own account and waits there until the event (R-19), with the\nprovider's charge on top (R-10). Answers 201 with the order. `processing`\nwhile the payment is not confirmed or the tickets are being issued (E10:\npoll `GET /events/orders/wallet/{id}`; never pay again), `paid` with the\ntickets, or `failed` with the money on its way back. The same\nIdempotency-Key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN.",
+        "tags": [
+          "EventWalletOrders"
+        ]
+      }
+    },
+    "/api/hub/events/orders/wallet/{orderId}/quote": {
+      "get": {
+        "operationId": "EventWalletOrdersController_quote",
+        "parameters": [
+          {
+            "name": "orderId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventWalletOrderQuoteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The order's quote again: E3 reopened, or a quote past its `expiresAt`.",
+        "tags": [
+          "EventWalletOrders"
+        ]
+      }
+    },
+    "/api/hub/events/orders/wallet/{orderId}": {
+      "get": {
+        "operationId": "EventWalletOrdersController_read",
+        "parameters": [
+          {
+            "name": "orderId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventWalletOrderView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One order as it stands now: what the app polls after `processing` (E10's\nRefresh) and E5's tickets. Only the buyer reads it; another person's\norder and an id nobody holds are the same `404 target_not_found`. It\nreads our own records only and never asks the wallet provider.",
+        "tags": [
+          "EventWalletOrders"
+        ]
+      }
+    },
     "/api/hub/points/convert/quote": {
       "get": {
         "operationId": "PointsConvertController_quote",
@@ -30756,7 +31145,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Turns points into cash in the wallet, once. The cash is worked out at the\nconfig's rate and rounded down; the points are held (soonest-ending lots\nfirst) and the cash is paid from WAWU's own account into the person's\nwallet; the points are spent only when the provider has confirmed it, and\ngo back to their lots if it did not move. Answers 201 with the\nconversion: `completed`, `pending` while the provider has not confirmed\nthe cash yet (the points stay on hold; poll `GET /points/convert/{id}`;\nit is never sent again), or `failed` when the cash did not move and the\npoints are back. The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN.\nBefore the PIN, and changing nothing: `422 below_minimum`, `402\ninsufficient_points`, `400 amount_out_of_range` (more than one move\ncarries), `409 currency_not_supported`, `409 wallet_not_open`, `503\nfees_not_set`.",
+        "summary": "Turns points into cash in the wallet, once. The cash is worked out at the\nconfig's rate and rounded down; the points are held (soonest-ending lots\nfirst) and the cash is paid from WAWU's own account into the person's\nwallet; the points are spent only when the provider has confirmed it, and\ngo back to their lots if it did not move. Answers 201 with the\nconversion: `completed`, `pending` while the provider has not confirmed\nthe cash yet (the points stay on hold; poll `GET /points/convert/{id}`;\nit is never sent again), or `failed` when the cash did not move and the\npoints are back. The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN.\nThe body carries the `quoteToken` of the quote the person was shown: the\nconversion is paid at that quote or not at all. If the rate, the\nminimum, the cap or the cash changed since (or the token is not this\nperson's, not for these points, or past its end), it is `409\nquote_changed` with the new quote in `reason.pointsQuote`, and nothing\nis paid. A body with no token is a plain 400.\nBefore the PIN, and changing nothing: `422 below_minimum`, `402\ninsufficient_points`, `400 amount_out_of_range` (more than one move\ncarries), `409 quote_changed`, `409 currency_not_supported`, `409\nwallet_not_open`, `503 fees_not_set`.",
         "tags": [
           "PointsConvert"
         ],
@@ -33997,6 +34386,14 @@
               }
             ]
           },
+          "pointsQuote": {
+            "description": "quote_changed on a points conversion: the quote as it stands now, with a new token.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PointsConvertQuoteView"
+              }
+            ]
+          },
           "blockedBy": {
             "description": "bank_transfers_blocked: why (W18).",
             "enum": [
@@ -35390,7 +35787,7 @@
         "properties": {
           "show": {
             "type": "boolean",
-            "description": "false hides TGIF on Today for this account; true shows it again."
+            "description": "false stops the daily TGIF notification for this account; true sends one each morning (HOME-16, R-59)."
           }
         },
         "required": [
@@ -36621,6 +37018,22 @@
           }
         }
       },
+      "UpdatePlanSettingsDto": {
+        "type": "object",
+        "properties": {
+          "settings": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Setting key to its new value; null puts the setting back to its default.",
+            "example": {
+              "plan.extra_products.price_kobo": 150000
+            }
+          }
+        },
+        "required": [
+          "settings"
+        ]
+      },
       "PutFeaturedCreatorDto": {
         "type": "object",
         "properties": {
@@ -36886,6 +37299,70 @@
           "quoteToken"
         ]
       },
+      "EventOrderLineDto": {
+        "type": "object",
+        "properties": {
+          "ticketTypeId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "required": [
+          "ticketTypeId",
+          "quantity"
+        ]
+      },
+      "CreateEventWalletOrderDto": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventOrderLineDto"
+            }
+          },
+          "referralCode": {
+            "type": "string",
+            "description": "The referral link this buyer arrived through, when there was one.",
+            "maxLength": 32
+          }
+        },
+        "required": [
+          "lines"
+        ]
+      },
+      "PayEventWalletOrderDto": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`payment.totalKobo` from the quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`payment.quoteToken` from that quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "orderId",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
       "PointsConvertDto": {
         "type": "object",
         "properties": {
@@ -36893,10 +37370,17 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the points quote the person saw. A conversion is paid at that quote or not at all (`409 quote_changed`).",
+            "minLength": 1,
+            "maxLength": 1024
           }
         },
         "required": [
-          "points"
+          "points",
+          "quoteToken"
         ]
       },
       "CreateWaitlistRegistrationDto": {
@@ -39572,6 +40056,17 @@
           },
           "name": {
             "type": "string"
+          },
+          "benefits": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "nullable": true
+          },
+          "eventDate": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -42262,6 +42757,30 @@
           "media"
         ]
       },
+      "PersonBadgeView": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "numbered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "number",
+          "id",
+          "numbered"
+        ]
+      },
       "KnownFollower": {
         "type": "object",
         "properties": {
@@ -42366,6 +42885,14 @@
           "verification": {
             "$ref": "#/components/schemas/VerificationState"
           },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PersonBadgeView"
+              }
+            ],
+            "nullable": true
+          },
           "followers": {
             "type": "number"
           },
@@ -42412,6 +42939,7 @@
           "avatarUrl",
           "coverUrl",
           "verification",
+          "badge",
           "followers",
           "posts",
           "rating",
@@ -42451,6 +42979,14 @@
           "verification": {
             "$ref": "#/components/schemas/VerificationState"
           },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PersonBadgeView"
+              }
+            ],
+            "nullable": true
+          },
           "category": {
             "type": "string"
           },
@@ -42483,6 +43019,7 @@
           "avatarUrl",
           "coverUrl",
           "verification",
+          "badge",
           "category",
           "services",
           "ratingAvg",
@@ -48172,6 +48709,14 @@
           "verification": {
             "$ref": "#/components/schemas/VerificationState"
           },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PersonBadgeView"
+              }
+            ],
+            "nullable": true
+          },
           "following": {
             "type": "boolean"
           }
@@ -48184,6 +48729,7 @@
           "field",
           "pieceCount",
           "verification",
+          "badge",
           "following"
         ]
       },
@@ -48523,6 +49069,184 @@
           "courses",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "MultiplierLevel": {
+        "type": "object",
+        "properties": {
+          "min": {
+            "type": "number"
+          },
+          "x": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "min",
+          "x"
+        ]
+      },
+      "MilestoneStep": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "points": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "count",
+          "points"
+        ]
+      },
+      "PlanSettingView": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "lines",
+              "date",
+              "kobo",
+              "count",
+              "points",
+              "percent",
+              "days",
+              "months",
+              "hours",
+              "time",
+              "levels",
+              "milestones"
+            ]
+          },
+          "usedBy": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "value": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MultiplierLevel"
+                }
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MilestoneStep"
+                }
+              }
+            ],
+            "nullable": true
+          },
+          "default": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MultiplierLevel"
+                }
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MilestoneStep"
+                }
+              }
+            ],
+            "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "default",
+              "set"
+            ]
+          },
+          "provisional": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "why"
+            ],
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "key",
+          "group",
+          "label",
+          "unit",
+          "usedBy",
+          "value",
+          "default",
+          "source",
+          "provisional",
+          "updatedAt"
+        ]
+      },
+      "PlanSettingsView": {
+        "type": "object",
+        "properties": {
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlanSettingView"
+            }
+          }
+        },
+        "required": [
+          "settings"
         ]
       },
       "AdCardView": {
@@ -49365,6 +50089,14 @@
           "reviewCount": {
             "type": "number"
           },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PersonBadgeView"
+              }
+            ],
+            "nullable": true
+          },
           "field": {
             "$ref": "#/components/schemas/ProfessionalFieldRef",
             "nullable": true
@@ -49400,6 +50132,7 @@
           "pieceCount",
           "ratingAvg",
           "reviewCount",
+          "badge",
           "field",
           "city",
           "usualReplyMinutes",
@@ -49494,6 +50227,14 @@
           "reviewCount": {
             "type": "number"
           },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PersonBadgeView"
+              }
+            ],
+            "nullable": true
+          },
           "field": {
             "$ref": "#/components/schemas/ProfessionalFieldRef",
             "nullable": true
@@ -49532,6 +50273,7 @@
           "pieceCount",
           "ratingAvg",
           "reviewCount",
+          "badge",
           "field",
           "city",
           "usualReplyMinutes",
@@ -50061,6 +50803,14 @@
           "memberSince": {
             "type": "string",
             "nullable": true
+          },
+          "badge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PersonBadgeView"
+              }
+            ],
+            "nullable": true
           }
         },
         "required": [
@@ -50070,7 +50820,8 @@
           "openTo",
           "threadsHandle",
           "socialOrder",
-          "memberSince"
+          "memberSince",
+          "badge"
         ]
       },
       "CreatorProfile": {
@@ -53049,7 +53800,8 @@
               "community",
               "content",
               "paid_question",
-              "profile"
+              "profile",
+              "transaction"
             ]
           },
           "id": {
@@ -53844,6 +54596,260 @@
           "badge"
         ]
       },
+      "EventOrderEventView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "startsAt": {
+            "type": "string"
+          },
+          "endsAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "timezone": {
+            "type": "string",
+            "nullable": true
+          },
+          "timeLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "location": {
+            "type": "string"
+          },
+          "venueName": {
+            "type": "string",
+            "nullable": true
+          },
+          "bannerUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "startsAt",
+          "endsAt",
+          "timezone",
+          "timeLabel",
+          "location",
+          "venueName",
+          "bannerUrl"
+        ]
+      },
+      "EventOrderLineView": {
+        "type": "object",
+        "properties": {
+          "ticketTypeId": {
+            "type": "string"
+          },
+          "tierName": {
+            "type": "string"
+          },
+          "unitPriceKobo": {
+            "type": "integer"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "lineKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "ticketTypeId",
+          "tierName",
+          "unitPriceKobo",
+          "quantity",
+          "lineKobo"
+        ]
+      },
+      "EventOrderTicketView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "tierName": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "valid",
+              "checked_in",
+              "void"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "tierName",
+          "status"
+        ]
+      },
+      "EventOrderReturnView": {
+        "type": "object",
+        "properties": {
+          "holdStatus": {
+            "type": "string",
+            "enum": [
+              "held",
+              "released",
+              "refunded"
+            ]
+          },
+          "returned": {
+            "type": "boolean"
+          },
+          "returnedKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "holdStatus",
+          "returned",
+          "returnedKobo"
+        ]
+      },
+      "EventWalletOrderView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "event": {
+            "$ref": "#/components/schemas/EventOrderEventView"
+          },
+          "free": {
+            "type": "boolean"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventOrderLineView"
+            }
+          },
+          "ticketCount": {
+            "type": "number"
+          },
+          "ticketsKobo": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "paid",
+              "processing",
+              "awaiting_payment"
+            ]
+          },
+          "paymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "paymentStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed",
+              "reversed"
+            ],
+            "nullable": true
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "transferFeeKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "totalKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "holderName": {
+            "type": "string",
+            "nullable": true
+          },
+          "tickets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventOrderTicketView"
+            }
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "returned": {
+            "$ref": "#/components/schemas/EventOrderReturnView",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "reference",
+          "event",
+          "free",
+          "lines",
+          "ticketCount",
+          "ticketsKobo",
+          "status",
+          "paymentId",
+          "paymentStatus",
+          "statusMessage",
+          "transferFeeKobo",
+          "totalKobo",
+          "holderName",
+          "tickets",
+          "failureReason",
+          "returned",
+          "createdAt",
+          "paidAt"
+        ]
+      },
+      "EventWalletOrderQuoteView": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "$ref": "#/components/schemas/EventWalletOrderView"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView",
+            "nullable": true
+          }
+        },
+        "required": [
+          "order",
+          "payment"
+        ]
+      },
       "PointsConvertQuoteView": {
         "type": "object",
         "properties": {
@@ -53901,6 +54907,12 @@
               "above_maximum"
             ],
             "nullable": true
+          },
+          "quoteToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
           }
         },
         "required": [
@@ -53914,7 +54926,9 @@
           "feeKobo",
           "wawuPaysProviderCharge",
           "canConvert",
-          "blockedBy"
+          "blockedBy",
+          "quoteToken",
+          "expiresAt"
         ]
       },
       "PointsConversionView": {
