@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import { MoneyError } from '../money-error';
 import { PersonWindowLimiter } from '../person-window-limiter';
 
@@ -8,40 +8,14 @@ import { PersonWindowLimiter } from '../person-window-limiter';
  * WALLET-37; R-51, G-764: "a person can run at most 30 bank name checks an
  * hour; the number is a setting").
  *
- * The setting is `name_check_per_hour` in the admin settings (launch value
- * 30). The admin-settings registry (TIER-06) is not merged yet, so the value
- * is read from this config key, once at boot, and moves into the registry
- * when TIER-06 lands (mobile repo SHARED-CHANGES, WALLET-37 row). Unset is
- * the launch value; a value that is set and is not a whole number from 1 to
- * 1,000 stops the app at boot, naming the key.
+ * The figure is the admin setting `name_check_per_hour` (launch value 30, in
+ * src/plan-settings/plan-settings.defaults.json), a whole number from 1 to
+ * 1,000. It is read from the registry on every check (HOME-17), so an admin's
+ * edit applies to the next check with no restart. The environment key
+ * `NAME_CHECK_PER_HOUR` that WALLET-37 read is retired: nothing reads it.
  */
-export const NAME_CHECK_PER_HOUR_KEY = 'NAME_CHECK_PER_HOUR';
-export const NAME_CHECK_PER_HOUR_LAUNCH = 30;
-const NAME_CHECK_PER_HOUR_MAX = 1000;
+export const NAME_CHECK_PER_HOUR_SETTING = 'name_check_per_hour';
 export const NAME_CHECK_WINDOW_MS = 60 * 60_000;
-
-/** A name check setting that is set but unusable. Stops the app at boot. */
-export class NameCheckConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'NameCheckConfigError';
-  }
-}
-
-export function readNameCheckPerHour(raw: string | undefined | null): number {
-  if (raw === undefined || raw === null || raw.trim() === '') {
-    return NAME_CHECK_PER_HOUR_LAUNCH;
-  }
-  const text = raw.trim();
-  // \d is the ASCII digits only.
-  const n = /^\d+$/.test(text) ? Number(text) : Number.NaN;
-  if (!Number.isSafeInteger(n) || n < 1 || n > NAME_CHECK_PER_HOUR_MAX) {
-    throw new NameCheckConfigError(
-      `${NAME_CHECK_PER_HOUR_KEY} must be a whole number from 1 to ${NAME_CHECK_PER_HOUR_MAX}, or left empty for ${NAME_CHECK_PER_HOUR_LAUNCH}.`,
-    );
-  }
-  return n;
-}
 
 /** The sentence for a person past the limit: the wait in minutes, in plain words. */
 export function nameCheckLimitMessage(retryAfterSeconds: number): string {
@@ -70,14 +44,18 @@ export function nameCheckLimitMessage(retryAfterSeconds: number): string {
  */
 @Injectable()
 export class NameCheckBudget extends PersonWindowLimiter {
-  readonly perHour: number;
-
-  constructor(config: ConfigService) {
-    const perHour = readNameCheckPerHour(
-      config.get<string>(NAME_CHECK_PER_HOUR_KEY),
-    );
+  constructor(private readonly settings: PlanSettingsService) {
     super(
-      [{ name: 'hour', limit: perHour, windowMs: NAME_CHECK_WINDOW_MS }],
+      [
+        {
+          name: 'hour',
+          // Read at every check, so an edit in admin applies at once.
+          get limit(): number {
+            return settings.number(NAME_CHECK_PER_HOUR_SETTING);
+          },
+          windowMs: NAME_CHECK_WINDOW_MS,
+        },
+      ],
       (retryAfterSeconds) =>
         new MoneyError(
           'name_check_rate_limited',
@@ -85,7 +63,11 @@ export class NameCheckBudget extends PersonWindowLimiter {
           { retryAfterSeconds },
         ),
     );
-    this.perHour = perHour;
+  }
+
+  /** The checks one person may make in an hour right now. */
+  get perHour(): number {
+    return this.settings.number(NAME_CHECK_PER_HOUR_SETTING);
   }
 
   /**

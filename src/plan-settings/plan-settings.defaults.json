@@ -2,8 +2,7 @@
   "provisional": {
     "DV2-BOARD-FIGURE": "R-65: the owner did not name this figure; it is the value drawn on a VF, PT, RF or W board of the 16 Oct 2026 designs, loaded as a setting until the owner confirms it.",
     "REF-CLAIM-DAYS": "R-65: no board or ruling gives the number of days after sign-up in which a person can claim a referral code. 7 matches the 7-day reward hold the RF boards draw.",
-    "W44-PASS-LINES": "G-804: the lines under a pass on W44 (the board draws three under the Maker Pass, priority: Entry to the event and the maker area; A table to show your work; Priority when places are given out). No pass has lines until the owner confirms them; an admin sets them here, and a pass with none shows none.",
-    "TGIF-NOTIFICATION-TIME": "HOME-16: the morning time of the TGIF notification, in Africa/Lagos time. 07:00 is the task's default until the owner sets it."
+    "W44-PASS-LINES": "G-804: the lines under a pass on W44 (the board draws three under the Maker Pass, priority: Entry to the event and the maker area; A table to show your work; Priority when places are given out). No pass has lines until the owner confirms them; an admin sets them here, and a pass with none shows none."
   },
   "values": {
     "points.expiry_months": 12,
@@ -15,6 +14,7 @@
     "community_credit_cost_video": 3,
     "community_credit_cost_voice": 3,
     "tgif_notification_time": "07:00",
+    "tgif_notice_retention_days": 30,
     "earnings.daily_move_floor_kobo": 20000,
     "earnings.refused_review_hours": 72
   }

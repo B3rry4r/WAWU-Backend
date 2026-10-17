@@ -9,10 +9,11 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { CommunityModule } from '../../community/community.module';
 import { SearchResponseModule } from '../search-response.module';
+import { AdminRole } from '../../../generated/prisma/enums';
+import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import {
   POPULAR_COMMUNITY_MIN_MEMBERS_DEFAULT,
-  POPULAR_COMMUNITY_MIN_MEMBERS_ENV,
-  popularCommunityMinMembers,
+  POPULAR_COMMUNITY_MIN_MEMBERS_KEY,
 } from '../search-history.config';
 import {
   normaliseSearch,
@@ -25,7 +26,8 @@ import { joinMembers } from './popular-members';
  * only once it has 10 or more members, however many people searched it. The
  * count is the one the room's row shows (`memberCount`: joined members, the
  * host not included). The other names (titles, handles, categories) are not
- * held to it, and the figure is a setting (popular_community_min_members).
+ * held to it, and the figure is an admin setting (popular_community_min_members),
+ * read live from the registry (HOME-17: the old environment variable is retired).
  *
  * Rows made here carry MARK (letters only, so a name made from it holds no
  * digit) in their text, slug or ids, so the spec holds on a database other
@@ -39,9 +41,28 @@ describe('GET /search/popular: a community needs enough members (EXPLORE-06)', (
   let app: INestApplication;
   let prisma: PrismaService;
   let history: SearchHistoryService;
+  let settings: PlanSettingsService;
   const roomIds: string[] = [];
   let seedTag = 0;
-  const saved = process.env[POPULAR_COMMUNITY_MIN_MEMBERS_ENV];
+  const ADMIN = {
+    id: 'explore06-home17-admin',
+    email: 'explore06@admin.test.wawu.dev',
+    role: AdminRole.superadmin,
+  };
+  /** An admin's edit, through the real settings service: saved, audited, reloaded. */
+  const setMin = (value: unknown) =>
+    settings.set(ADMIN, {
+      settings: { [POPULAR_COMMUNITY_MIN_MEMBERS_KEY]: value },
+    });
+  const resetMin = async () => {
+    await prisma.planSetting.deleteMany({
+      where: { key: POPULAR_COMMUNITY_MIN_MEMBERS_KEY },
+    });
+    await prisma.adminOpsAudit.deleteMany({
+      where: { actedByAdminId: ADMIN.id },
+    });
+    await settings.refresh();
+  };
 
   const http = () =>
     request(app.getHttpServer() as Parameters<typeof request>[0]);
@@ -129,25 +150,24 @@ describe('GET /search/popular: a community needs enough members (EXPLORE-06)', (
     await app.init();
     prisma = app.get(PrismaService);
     history = app.get(SearchHistoryService);
-    delete process.env[POPULAR_COMMUNITY_MIN_MEMBERS_ENV];
+    settings = app.get(PlanSettingsService);
+    await resetMin();
     await cleanUp();
   }, 60000);
 
-  afterEach(() => {
-    delete process.env[POPULAR_COMMUNITY_MIN_MEMBERS_ENV];
+  afterEach(async () => {
+    await resetMin();
   });
 
   afterAll(async () => {
-    if (saved === undefined)
-      delete process.env[POPULAR_COMMUNITY_MIN_MEMBERS_ENV];
-    else process.env[POPULAR_COMMUNITY_MIN_MEMBERS_ENV] = saved;
+    await resetMin();
     await cleanUp();
     await app?.close();
   });
 
-  it('the launch value is 10', () => {
+  it('the launch value is 10, and it is the registry default', () => {
     expect(MIN).toBe(10);
-    expect(popularCommunityMinMembers({})).toBe(10);
+    expect(settings.number(POPULAR_COMMUNITY_MIN_MEMBERS_KEY)).toBe(10);
   });
 
   it('a community with 9 members is not listed however many people searched it; at 10 it is', async () => {
@@ -247,39 +267,47 @@ describe('GET /search/popular: a community needs enough members (EXPLORE-06)', (
   });
 
   describe('the setting', () => {
-    it('reads a whole number of 1 or more; anything else keeps the ruled 10', () => {
-      const read = (v: string | undefined) =>
-        popularCommunityMinMembers({ [POPULAR_COMMUNITY_MIN_MEMBERS_ENV]: v });
-      expect(read('25')).toBe(25);
-      expect(read(' 5 ')).toBe(5);
-      expect(read('1')).toBe(1);
-      for (const bad of [
-        undefined,
-        '',
-        '0',
-        '-3',
-        '2.5',
-        'ten',
-        '1e3',
-        '99999999999999999999',
-      ])
-        expect(read(bad)).toBe(MIN);
+    it('takes a whole number of 1 or more; anything else is refused and the ruled 10 stays', async () => {
+      for (const bad of [0, -3, 2.5, '10', 1e21])
+        await expect(setMin(bad)).rejects.toMatchObject({ status: 400 });
+      expect(settings.number(POPULAR_COMMUNITY_MIN_MEMBERS_KEY)).toBe(MIN);
+      await setMin(25);
+      expect(settings.number(POPULAR_COMMUNITY_MIN_MEMBERS_KEY)).toBe(25);
+      await setMin(null);
+      expect(settings.number(POPULAR_COMMUNITY_MIN_MEMBERS_KEY)).toBe(MIN);
     });
 
-    it('changes who is listed without a change to the code', async () => {
+    it('changes who is listed without a restart, even inside the 60 s the answer is kept', async () => {
       const name = `${MARK} Setting Room`;
       await room(name, 6);
       await seed(name.toLowerCase());
       expect(await popular()).not.toContain(name);
 
-      process.env[POPULAR_COMMUNITY_MIN_MEMBERS_ENV] = '5';
-      expect(await popular()).toContain(name);
+      // No resetPopularCache() between the edit and the read: the kept answer
+      // was built with another figure, so it is not served.
+      await setMin(5);
+      expect(
+        data<{ items: string[] }>(await http().get('/api/hub/search/popular'))
+          .items,
+      ).toContain(name);
 
-      process.env[POPULAR_COMMUNITY_MIN_MEMBERS_ENV] = '7';
-      expect(await popular()).not.toContain(name);
+      await setMin(7);
+      expect(
+        data<{ items: string[] }>(await http().get('/api/hub/search/popular'))
+          .items,
+      ).not.toContain(name);
+    });
 
-      process.env[POPULAR_COMMUNITY_MIN_MEMBERS_ENV] = '0';
-      expect(await popular()).not.toContain(name);
+    it('does not read the retired environment variable', async () => {
+      const name = `${MARK} Env Room`;
+      await room(name, 6);
+      await seed(name.toLowerCase());
+      process.env.POPULAR_COMMUNITY_MIN_MEMBERS = '5';
+      try {
+        expect(await popular()).not.toContain(name);
+      } finally {
+        delete process.env.POPULAR_COMMUNITY_MIN_MEMBERS;
+      }
     });
   });
 });

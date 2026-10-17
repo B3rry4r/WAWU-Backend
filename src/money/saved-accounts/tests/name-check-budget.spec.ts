@@ -1,12 +1,10 @@
-import type { ConfigService } from '@nestjs/config';
+import type { PlanSettingsService } from '../../../plan-settings/plan-settings.service';
 import { MoneyError } from '../../money-error';
 import {
-  NAME_CHECK_PER_HOUR_LAUNCH,
+  NAME_CHECK_PER_HOUR_SETTING,
   NAME_CHECK_WINDOW_MS,
   NameCheckBudget,
-  NameCheckConfigError,
   nameCheckLimitMessage,
-  readNameCheckPerHour,
 } from '../name-check-budget';
 
 /**
@@ -15,8 +13,21 @@ import {
  * the bank does to the count.
  */
 
-const config = (value?: string) =>
-  ({ get: () => value }) as unknown as ConfigService;
+/**
+ * The admin settings, as far as the budget reads them: `number(key)`. The
+ * registry itself (the 30, the 1 to 1,000 check, the live edit) is covered
+ * against a real database in home-17-settings.contract.spec.ts.
+ */
+const settings = (value = 30) => {
+  const held = { value };
+  const stub = {
+    number: (key: string) => {
+      expect(key).toBe(NAME_CHECK_PER_HOUR_SETTING);
+      return held.value;
+    },
+  } as unknown as PlanSettingsService;
+  return Object.assign(stub, { held });
+};
 
 function reasonOf(e: unknown) {
   expect(e).toBeInstanceOf(MoneyError);
@@ -26,21 +37,31 @@ function reasonOf(e: unknown) {
 }
 
 describe('the name check setting', () => {
-  it('is 30 at launch when nothing is set', () => {
-    expect(NAME_CHECK_PER_HOUR_LAUNCH).toBe(30);
-    expect(readNameCheckPerHour(undefined)).toBe(30);
-    expect(readNameCheckPerHour('')).toBe(30);
-    expect(new NameCheckBudget(config()).perHour).toBe(30);
+  it('is read from the setting named name_check_per_hour, on every check', async () => {
+    expect(NAME_CHECK_PER_HOUR_SETTING).toBe('name_check_per_hour');
+    const s = settings(2);
+    const budget = new NameCheckBudget(s);
+    expect(budget.perHour).toBe(2);
+    const quiet = { set: () => undefined };
+    const run = () => budget.run('ada', quiet, () => Promise.resolve(1));
+    await run();
+    await run();
+    await expect(run()).rejects.toMatchObject({ status: 429 });
+    // An edit applies to the very next check, with no new budget built.
+    s.held.value = 3;
+    expect(budget.perHour).toBe(3);
+    await run();
+    await expect(run()).rejects.toMatchObject({ status: 429 });
+    s.held.value = 1;
+    await expect(run()).rejects.toMatchObject({ status: 429 });
   });
 
-  it('takes a whole number from 1 to 1000 and stops the app on anything else', () => {
-    expect(readNameCheckPerHour(' 45 ')).toBe(45);
-    expect(readNameCheckPerHour('1')).toBe(1);
-    for (const bad of ['0', '-3', '2.5', 'ten', '1001', '٣', '3e1']) {
-      expect(() => readNameCheckPerHour(bad)).toThrow(NameCheckConfigError);
-      expect(() => new NameCheckBudget(config(bad))).toThrow(
-        /NAME_CHECK_PER_HOUR/,
-      );
+  it('does not read the retired environment key', () => {
+    process.env.NAME_CHECK_PER_HOUR = '1';
+    try {
+      expect(new NameCheckBudget(settings(30)).perHour).toBe(30);
+    } finally {
+      delete process.env.NAME_CHECK_PER_HOUR;
     }
   });
 });
@@ -66,7 +87,7 @@ describe('NameCheckBudget', () => {
   };
 
   it('allows exactly the limit an hour for one person and refuses the next with the wait', async () => {
-    const budget = new NameCheckBudget(config());
+    const budget = new NameCheckBudget(settings());
     let now = 1_000_000;
     budget.now = () => now;
     const out = res();
@@ -97,7 +118,7 @@ describe('NameCheckBudget', () => {
   });
 
   it('holds 20 checks at once to the same count: 30 of 45 run, the rest are refused, none are held', async () => {
-    const budget = new NameCheckBudget(config());
+    const budget = new NameCheckBudget(settings());
     let running = 0;
     let top = 0;
     let made = 0;
@@ -119,7 +140,7 @@ describe('NameCheckBudget', () => {
   });
 
   it('gives the place back for a check the bank could not answer, and only for that', async () => {
-    const budget = new NameCheckBudget(config('2'));
+    const budget = new NameCheckBudget(settings(2));
     const unreachable = () =>
       Promise.reject(new MoneyError('provider_unreachable', 'Try again.'));
     const notFound = () =>
