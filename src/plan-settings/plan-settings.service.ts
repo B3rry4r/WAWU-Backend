@@ -11,6 +11,11 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import type { PlansConfig } from '../plans/plans-config';
 import { buildRegistry } from './plan-setting-registry';
 import {
+  cashRateBreach,
+  cashRateBreachMessage,
+  ruleKeys,
+} from './plan-setting-rules';
+import {
   SettingInvalid,
   type Draft,
   type SettingDef,
@@ -159,45 +164,60 @@ export class PlanSettingsService
   }
 
   /**
-   * Reads the saved rows and rebuilds the plan. A failed read keeps the plan
-   * already held. A row that fails its own check (written outside this
-   * service) or names no setting is skipped and logged: the default is used.
+   * Turns saved rows into values. A row that fails its own check (written
+   * outside this service) or names no setting is skipped and logged: the
+   * default is used.
    */
-  async refresh(): Promise<void> {
-    const mine = ++this.started;
-    try {
-      const rows = await this.prisma.planSetting.findMany();
-      const stored: Snapshot['stored'] = new Map();
-      for (const row of rows) {
-        const def = this.byKey.get(row.key);
-        if (!def) {
+  private readRows(
+    rows: readonly { key: string; value: unknown; updatedAt: Date }[],
+    log = true,
+  ): Snapshot['stored'] {
+    const stored: Snapshot['stored'] = new Map();
+    for (const row of rows) {
+      const def = this.byKey.get(row.key);
+      if (!def) {
+        if (log)
           this.logger.error(
             `Ignored a saved setting that is not known: ${row.key}`,
           );
-          continue;
-        }
-        try {
-          stored.set(row.key, {
-            value: def.parse(row.value),
-            updatedAt: row.updatedAt,
-          });
-        } catch (e) {
-          if (!(e instanceof SettingInvalid)) throw e;
+        continue;
+      }
+      try {
+        stored.set(row.key, {
+          value: def.parse(row.value),
+          updatedAt: row.updatedAt,
+        });
+      } catch (e) {
+        if (!(e instanceof SettingInvalid)) throw e;
+        if (log)
           this.logger.error(
             `Ignored the saved setting ${row.key}, which ${e.message}. Its default is used.`,
           );
-        }
       }
+    }
+    return stored;
+  }
+
+  /**
+   * Reads the saved rows and rebuilds the plan. A failed read keeps the plan
+   * already held and answers false (the next tick of the timer tries again).
+   */
+  async refresh(): Promise<boolean> {
+    const mine = ++this.started;
+    try {
+      const stored = this.readRows(await this.prisma.planSetting.findMany());
       if (mine > this.applied) {
         this.applied = mine;
         this.snapshot = this.build(stored);
       }
+      return true;
     } catch (e) {
       this.logger.warn(
         `Could not reload the plan settings, keeping the ones held: ${
           e instanceof Error ? e.message : String(e)
         }`,
       );
+      return false;
     }
   }
 
@@ -232,26 +252,45 @@ export class PlanSettingsService
    * a setting back to its default. Every value is checked first and one bad
    * value refuses the whole request, so a request is all or nothing. A
    * value equal to the one in force writes nothing.
+   *
+   * Saves take turns: the transaction first takes one advisory lock, and only
+   * then reads the saved rows, so the old value an audit row records is the
+   * value that really was in force when this save began, however many saves
+   * arrive at once, and the cross-setting rule is judged on the rows as they
+   * are. The lock is held for database writes only, never across a network
+   * call (there is none here).
    */
   async set(admin: AdminActor, body: unknown): Promise<PlanSettingsView> {
     const changes = this.parse(body);
     await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended('plan_settings', 0))`;
+      const rows = await tx.planSetting.findMany();
+      const present = new Set(rows.map((r) => r.key));
+      const stored = this.readRows(rows, false);
+
+      // Decide first, write after: nothing is written for a refused request.
+      type Step = Change & { before: SettingValue; after: SettingValue };
+      const steps: Step[] = [];
+      const next: Snapshot['stored'] = new Map(stored);
       for (const c of changes) {
-        const row = await tx.planSetting.findUnique({ where: { key: c.key } });
-        let before: SettingValue = c.def.default;
-        if (row) {
-          try {
-            before = c.def.parse(row.value);
-          } catch (e) {
-            if (!(e instanceof SettingInvalid)) throw e;
-          }
-        }
+        const before = stored.get(c.key)?.value ?? c.def.default;
         const after = c.value ?? c.def.default;
         if (c.value === null) {
-          if (!row) continue;
-          await tx.planSetting.delete({ where: { key: c.key } });
+          if (!present.has(c.key)) continue;
+          next.delete(c.key);
         } else {
           if (same(before, after)) continue;
+          next.set(c.key, { value: c.value, updatedAt: new Date() });
+        }
+        steps.push({ ...c, before, after });
+      }
+      if (steps.length === 0) return;
+      this.assertRules(steps, next);
+
+      for (const c of steps) {
+        if (c.value === null) {
+          await tx.planSetting.delete({ where: { key: c.key } });
+        } else {
           await tx.planSetting.upsert({
             where: { key: c.key },
             create: {
@@ -270,8 +309,8 @@ export class PlanSettingsService
             action: 'plan_setting_set',
             detail: {
               key: c.key,
-              from: before,
-              to: after,
+              from: c.before,
+              to: c.after,
               reset: c.value === null,
             } as never,
             actedByAdminId: admin.id,
@@ -281,9 +320,34 @@ export class PlanSettingsService
         });
       }
     });
-    // Reload at once so the very next quote in this process uses the new figure.
-    await this.refresh();
+    // Reload at once so the very next quote in this process uses the new
+    // figure. If the reload fails the save still stands (and the request
+    // answers): say so loudly, and the next tick of the timer tries again.
+    if (!(await this.refresh())) {
+      this.logger.error(
+        `Saved ${changes.map((c) => c.key).join(', ')}, but could not reload the plan settings. This server keeps the old figures until the next reload, within ${PLAN_SETTINGS_REFRESH_SECONDS} seconds.`,
+      );
+    }
     return this.describe();
+  }
+
+  /**
+   * The rules that tie settings together, judged on the plan the saved rows
+   * would give. Only a request that touches one of the settings in a rule is
+   * held to it, so a pair that was already out of line never blocks a change
+   * to something else, and putting a figure right is never refused.
+   */
+  private assertRules(
+    steps: readonly Change[],
+    next: Snapshot['stored'],
+  ): void {
+    const touched = ruleKeys(this.seed.plans);
+    if (!steps.some((c) => touched.has(c.key))) return;
+    const plan = this.build(next).config;
+    const breach = cashRateBreach(plan);
+    if (breach !== null) {
+      throw new BadRequestException(cashRateBreachMessage(plan, breach));
+    }
   }
 
   private parse(body: unknown): Change[] {

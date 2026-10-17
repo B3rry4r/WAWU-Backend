@@ -6,6 +6,7 @@ import {
   type PlansConfig,
 } from '../plans/plans-config';
 import { buildRegistry } from './plan-setting-registry';
+import { CASH_RATE_KEY, cashRateBreach } from './plan-setting-rules';
 import {
   SettingInvalid,
   type ExtrasDefaults,
@@ -118,6 +119,13 @@ export function checkRegistry(
         `provisional "${d.provisional}" (used by ${d.key}) has no reason`,
       );
     }
+  }
+  const breach = cashRateBreach(plans);
+  if (breach !== null) {
+    throw new PlanSettingsDefaultsError(
+      file,
+      `${CASH_RATE_KEY} is more than ${breach.label} sells points for (${breach.priceKey})`,
+    );
   }
 }
 

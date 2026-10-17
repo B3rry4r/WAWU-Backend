@@ -11,7 +11,8 @@
 --
 -- Rollback: DROP TABLE "PlanSetting". The two enum values cannot be dropped in
 -- Postgres without recreating the types: they are unused when rolled back and
--- are left in place.
+-- are left in place. The enum additions say IF NOT EXISTS, so this file applies
+-- again after that rollback without error.
 
 -- CreateTable
 CREATE TABLE "PlanSetting" (
@@ -28,7 +29,7 @@ CREATE TABLE "PlanSetting" (
 CREATE INDEX "PlanSetting_updatedAt_idx" ON "PlanSetting"("updatedAt");
 
 -- AlterEnum
-ALTER TYPE "AdminOpsResource" ADD VALUE 'plan_setting';
+ALTER TYPE "AdminOpsResource" ADD VALUE IF NOT EXISTS 'plan_setting';
 
 -- AlterEnum
-ALTER TYPE "AdminOpsAction" ADD VALUE 'plan_setting_set';
+ALTER TYPE "AdminOpsAction" ADD VALUE IF NOT EXISTS 'plan_setting_set';

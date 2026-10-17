@@ -8,6 +8,7 @@ import { FeeQuoteService } from '../../money/fees/fee-quote.service';
 import { MoneyError } from '../../money/money-error';
 import { safeKoboNumber } from '../../wallet-provider/wallet-provider.interface';
 import { PointsError } from '../points-error';
+import { PointsConvertQuoteToken } from './points-convert-quote-token';
 import { POINTS_WORD } from '../points-words';
 import { PointsService } from '../points.service';
 import { PointsCashOutService } from './points-cash-out.service';
@@ -25,6 +26,13 @@ import type {
   PointsConversionView,
   PointsConvertQuoteView,
 } from './points-convert-view.type';
+
+/** What a stale or foreign quote token is told. No figure in it, no long dash. */
+export const QUOTE_CHANGED_WORDS =
+  'The cash for your points has changed since you saw it. Check the new amount and try again.';
+
+/** The quote's figures before they are signed. */
+type Figures = Omit<PointsConvertQuoteView, 'quoteToken' | 'expiresAt'>;
 
 /**
  * Points to cash, as a person meets it (task POINTS-04, PT6): the quote
@@ -45,6 +53,7 @@ export class PointsConvertService {
     private readonly points: PointsService,
     private readonly fees: FeeQuoteService,
     private readonly cashOut: PointsCashOutService,
+    private readonly tokens: PointsConvertQuoteToken,
   ) {}
 
   /**
@@ -53,7 +62,9 @@ export class PointsConvertService {
    * asked). It answers `canConvert` and, when false, `blockedBy`, instead of
    * refusing, so the screen can draw "below the minimum" with the figures.
    * Nothing is held or sent. A dollar-billed person gets
-   * `409 currency_not_supported`.
+   * `409 currency_not_supported`. The quote carries a signed `quoteToken`:
+   * the conversion that follows sends it back and is paid at this quote or
+   * not at all (`409 quote_changed`, TIER-06 round 2).
    */
   async quote(
     wawuUserId: string,
@@ -62,9 +73,17 @@ export class PointsConvertService {
   ): Promise<PointsConvertQuoteView> {
     await this.requireNairaAccount(wawuUserId, claims);
     const balance = await this.points.balanceOf(wawuUserId);
-    const points = asked ?? balance;
-    const rate = this.rate();
-    const minimum = this.config.cashOut.minimumPoints;
+    return this.signed(wawuUserId, this.figures(asked ?? balance, balance));
+  }
+
+  /**
+   * Every figure the quote shows, from the config as it stands (read once, so
+   * the rate and the minimum belong together) and the provider's cap.
+   */
+  private figures(points: number, balance: number): Figures {
+    const cashOut = this.config.cashOut;
+    const rate = cashOut.per1000Points.kobo;
+    const minimum = cashOut.minimumPoints;
     const maximum = pointsWithinCap(this.cap(), rate);
     let blockedBy: ConvertBlockedBy | null = null;
     if (points < minimum) blockedBy = 'below_minimum';
@@ -85,30 +104,82 @@ export class PointsConvertService {
     };
   }
 
+  /** The figures with the token that binds a conversion to them. */
+  private signed(wawuUserId: string, f: Figures): PointsConvertQuoteView {
+    const expires = Date.now() + this.tokens.seconds * 1000;
+    return {
+      ...f,
+      quoteToken: this.tokens.sign({
+        v: 1,
+        u: wawuUserId,
+        p: f.points,
+        r: f.rate.kobo,
+        c: f.cashKobo,
+        m: f.minimumPoints,
+        x: f.maximumPoints,
+        f: f.feeKobo,
+        e: expires,
+      }),
+      expiresAt: new Date(expires).toISOString(),
+    };
+  }
+
+  /**
+   * The quote the person was shown, against the figures as they stand: the
+   * token must be one this server signed for this person and these points,
+   * not past its end, and every figure in it (rate, cash, minimum, cap, fee)
+   * the same as now. Otherwise `409 quote_changed` with the quote as it
+   * stands, and nothing is paid.
+   */
+  private assertQuoteHolds(
+    wawuUserId: string,
+    f: Figures,
+    quoteToken: string,
+  ): void {
+    const seen = this.tokens.read(quoteToken);
+    const holds =
+      seen !== null &&
+      seen.u === wawuUserId &&
+      seen.p === f.points &&
+      seen.r === f.rate.kobo &&
+      seen.c === f.cashKobo &&
+      seen.m === f.minimumPoints &&
+      seen.x === f.maximumPoints &&
+      seen.f === f.feeKobo &&
+      Date.now() < seen.e;
+    if (!holds) {
+      throw new MoneyError('quote_changed', QUOTE_CHANGED_WORDS, {
+        pointsQuote: this.signed(wawuUserId, f),
+      });
+    }
+  }
+
   /**
    * The checks that come before the PIN, so a request that cannot succeed
    * never uses up a PIN try and changes nothing: a dollar-billed person,
    * fewer points than the minimum, more cash than one move may carry, more
-   * points than the person has. (No wallet is the wallet gate's, ahead of
-   * this.) The conversion checks the balance again under the person's points
-   * lock, so this read decides nothing on its own.
+   * points than the person has, and a quote that no longer holds (`409
+   * quote_changed`). (No wallet is the wallet gate's, ahead of this.) The
+   * conversion checks the balance again under the person's points lock, so
+   * this read decides nothing on its own. Answers the figures that were
+   * checked, which are the figures a conversion then pays.
    */
   async assertMayConvert(
     wawuUserId: string,
     claims: BillingClaims,
     points: number,
-  ): Promise<void> {
+    quoteToken: string,
+  ): Promise<Figures> {
     await this.requireNairaAccount(wawuUserId, claims);
-    const rate = this.rate();
-    const minimum = this.config.cashOut.minimumPoints;
     const balance = await this.points.balanceOf(wawuUserId);
-    if (points < minimum) {
+    const figures = this.figures(points, balance);
+    if (points < figures.minimumPoints) {
       throw new MoneyError('below_minimum', BELOW_MINIMUM_WORDS, {
-        minimumPoints: minimum,
+        minimumPoints: figures.minimumPoints,
         balancePoints: balance,
       });
     }
-    const cash = cashForPoints(points, rate);
+    const cash = cashForPoints(points, figures.rate.kobo);
     const cap = this.cap();
     if (cash <= 0n || (cap !== null && cash > BigInt(cap))) {
       throw new MoneyError('amount_out_of_range', TOO_MUCH_WORDS, {
@@ -126,6 +197,8 @@ export class PointsConvertService {
         },
       );
     }
+    this.assertQuoteHolds(wawuUserId, figures, quoteToken);
+    return figures;
   }
 
   /**
@@ -138,15 +211,21 @@ export class PointsConvertService {
     wawuUserId: string,
     claims: BillingClaims,
     points: number,
+    quoteToken: string,
     scope: IdempotencyScope,
   ): Promise<PointsConversionView> {
-    await this.assertMayConvert(wawuUserId, claims, points);
-    const rate = this.rate();
+    // The figures checked against the quote are the figures paid: one read.
+    const figures = await this.assertMayConvert(
+      wawuUserId,
+      claims,
+      points,
+      quoteToken,
+    );
     return this.cashOut.start({
       wawuUserId,
       points,
-      per1000PointsKobo: rate,
-      cashKobo: cashForPoints(points, rate),
+      per1000PointsKobo: figures.rate.kobo,
+      cashKobo: cashForPoints(points, figures.rate.kobo),
       scope,
     });
   }
@@ -154,11 +233,6 @@ export class PointsConvertService {
   /** One conversion, for the person it belongs to. */
   read(wawuUserId: string, id: string): Promise<PointsConversionView> {
     return this.cashOut.read(wawuUserId, id);
-  }
-
-  /** Kobo paid for 1,000 points (config). */
-  private rate(): number {
-    return this.config.cashOut.per1000Points.kobo;
   }
 
   /** The provider's cap on one move through WAWU's account, or null. */

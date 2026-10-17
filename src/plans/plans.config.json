@@ -111,8 +111,7 @@
     ],
     "milestones": [
       { "count": 5, "points": 500 },
-      { "count": 10, "points": 1500 },
-      { "count": 25, "points": 5000 }
+      { "count": 10, "points": 1500 }
     ]
   }
 }

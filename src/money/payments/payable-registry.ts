@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { PaymentKind } from '../dto/money-enums';
 import type { MoneyPartyView } from '../money-view.type';
+import type { PayableTerms } from './payable-terms';
 
 /**
  * What the buyer is paying for, as the feature that sells it knows it
@@ -22,6 +23,14 @@ export interface PayableTarget {
    * it (NUV-09), so cents are never charged as kobo.
    */
   currency?: string;
+  /**
+   * What the item promises beyond its price, when that can change while a
+   * person decides (a tier's goods, TIER-06 round 2). The quote is bound to it
+   * (changed since it was given: `409 quote_changed`), and the payment keeps it
+   * from the claim and hands it back in `CompletedPayment.terms`. Unset for a
+   * kind whose price says everything.
+   */
+  terms?: PayableTerms;
   /**
    * The part of `priceKobo` that is WAWU's own fee (R-10), when the price
    * carries one (a bill: the amount, Fintava's bill charge and WAWU's fee all
@@ -65,6 +74,12 @@ export interface CompletedPayment {
    * kind.
    */
   holdId: string | null;
+  /**
+   * The terms the payment was quoted and claimed with (`PayableTarget.terms`);
+   * absent for a kind that sets none, and for a payment claimed before terms
+   * were kept.
+   */
+  terms?: PayableTerms;
 }
 
 /**

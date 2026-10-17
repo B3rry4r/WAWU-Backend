@@ -30808,7 +30808,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Turns points into cash in the wallet, once. The cash is worked out at the\nconfig's rate and rounded down; the points are held (soonest-ending lots\nfirst) and the cash is paid from WAWU's own account into the person's\nwallet; the points are spent only when the provider has confirmed it, and\ngo back to their lots if it did not move. Answers 201 with the\nconversion: `completed`, `pending` while the provider has not confirmed\nthe cash yet (the points stay on hold; poll `GET /points/convert/{id}`;\nit is never sent again), or `failed` when the cash did not move and the\npoints are back. The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN.\nBefore the PIN, and changing nothing: `422 below_minimum`, `402\ninsufficient_points`, `400 amount_out_of_range` (more than one move\ncarries), `409 currency_not_supported`, `409 wallet_not_open`, `503\nfees_not_set`.",
+        "summary": "Turns points into cash in the wallet, once. The cash is worked out at the\nconfig's rate and rounded down; the points are held (soonest-ending lots\nfirst) and the cash is paid from WAWU's own account into the person's\nwallet; the points are spent only when the provider has confirmed it, and\ngo back to their lots if it did not move. Answers 201 with the\nconversion: `completed`, `pending` while the provider has not confirmed\nthe cash yet (the points stay on hold; poll `GET /points/convert/{id}`;\nit is never sent again), or `failed` when the cash did not move and the\npoints are back. The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN.\nThe body carries the `quoteToken` of the quote the person was shown: the\nconversion is paid at that quote or not at all. If the rate, the\nminimum, the cap or the cash changed since (or the token is not this\nperson's, not for these points, or past its end), it is `409\nquote_changed` with the new quote in `reason.pointsQuote`, and nothing\nis paid. A body with no token is a plain 400.\nBefore the PIN, and changing nothing: `422 below_minimum`, `402\ninsufficient_points`, `400 amount_out_of_range` (more than one move\ncarries), `409 quote_changed`, `409 currency_not_supported`, `409\nwallet_not_open`, `503 fees_not_set`.",
         "tags": [
           "PointsConvert"
         ],
@@ -34049,6 +34049,14 @@
               }
             ]
           },
+          "pointsQuote": {
+            "description": "quote_changed on a points conversion: the quote as it stands now, with a new token.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PointsConvertQuoteView"
+              }
+            ]
+          },
           "blockedBy": {
             "description": "bank_transfers_blocked: why (W18).",
             "enum": [
@@ -36961,10 +36969,17 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 2147483647
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the points quote the person saw. A conversion is paid at that quote or not at all (`409 quote_changed`).",
+            "minLength": 1,
+            "maxLength": 1024
           }
         },
         "required": [
-          "points"
+          "points",
+          "quoteToken"
         ]
       },
       "CreateWaitlistRegistrationDto": {
@@ -54158,6 +54173,12 @@
               "above_maximum"
             ],
             "nullable": true
+          },
+          "quoteToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
           }
         },
         "required": [
@@ -54171,7 +54192,9 @@
           "feeKobo",
           "wawuPaysProviderCharge",
           "canConvert",
-          "blockedBy"
+          "blockedBy",
+          "quoteToken",
+          "expiresAt"
         ]
       },
       "PointsConversionView": {

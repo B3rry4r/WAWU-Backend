@@ -34,6 +34,12 @@ import {
   TierGrantRefusal,
   TierGrantService,
 } from '../tier-grant.service';
+import {
+  goodsFromTerms,
+  goodsOf,
+  goodsToTerms,
+  type PurchaseGoods,
+} from './plan-purchase-goods';
 import type {
   PlanPurchaseDto,
   PlanPurchaseQuoteQueryDto,
@@ -292,6 +298,9 @@ export class PlanPurchaseService implements OnModuleInit {
       priceKobo: plan.totalMinor,
       payee: null,
       currency: plan.currency,
+      // The goods the quote promises: the quote token is bound to them and the
+      // payment keeps them, so the grant gives what was quoted (TIER-06 round 2).
+      terms: goodsToTerms(goodsOf(plan, this.config.points.boughtExpiryDays)),
     };
   }
 
@@ -361,7 +370,10 @@ export class PlanPurchaseService implements OnModuleInit {
       payment.priceKobo > INT4_MAX
     )
       throw new Error(`Payment ${payment.paymentId} has no usable price.`);
-    const refusal = await this.grantOnce(payment, terms);
+    // What the payment was quoted with; null for one claimed before the goods
+    // were kept, which is granted from the plan as it stands.
+    const goods = goodsFromTerms(payment.terms);
+    const refusal = await this.grantOnce(payment, terms, goods);
     if (refusal !== null) await this.refund(payment, refusal);
   }
 
@@ -374,6 +386,7 @@ export class PlanPurchaseService implements OnModuleInit {
   private async grantOnce(
     payment: CompletedPayment,
     terms: PurchaseTerms,
+    goods: PurchaseGoods | null,
   ): Promise<string | null> {
     const tier = tierById(this.config, terms.tierId);
     if (tier === null)
@@ -432,6 +445,7 @@ export class PlanPurchaseService implements OnModuleInit {
             fromTierId: terms.fromTierId ?? '',
             tierId: terms.tierId,
             sourceRef,
+            ...(goods === null ? {} : { goods }),
             now,
           });
         } else {
@@ -450,6 +464,7 @@ export class PlanPurchaseService implements OnModuleInit {
             wawuUserId,
             tierId: terms.tierId,
             sourceRef,
+            ...(goods === null ? {} : { goods }),
             now,
           });
         }
@@ -460,9 +475,13 @@ export class PlanPurchaseService implements OnModuleInit {
               wawuUserId,
               source: 'bump',
               sourceRef,
-              points: this.bumpPoints(),
+              points: goods ? goods.bumpPoints : this.bumpPoints(),
               expiresAt: new Date(
-                now.getTime() + this.config.points.boughtExpiryDays * DAY_MS,
+                now.getTime() +
+                  (goods
+                    ? goods.boughtExpiryDays
+                    : this.config.points.boughtExpiryDays) *
+                    DAY_MS,
               ),
             },
             { tx, now },

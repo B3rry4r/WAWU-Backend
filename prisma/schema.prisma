@@ -3793,7 +3793,7 @@ model PlatformSettings {
 
 /// A launch figure an admin has set (TIER-06, R-65): one row per setting key,
 /// holding only the keys somebody changed. A key with no row reads its default
-/// from the seed (`plans.config.json` and `plan-settings.seed.json`).
+/// from the seed (`plans.config.json` and `plan-settings.defaults.json`).
 ///
 /// Key and value are checked by the registry in src/plan-settings before they
 /// are written and again when they are read, so the JSON column is not a
@@ -4786,6 +4786,11 @@ model WalletPayment {
   chargeReviewSince     DateTime?
   /// A tip's message.
   note                  String?
+  /// What the item was quoted with, kept from the claim for the delivery
+  /// (TIER-06 round 2): a tier purchase's goods. A flat JSON object the kind
+  /// wrote (`PayableTarget.terms`); null for a kind that sets none and for
+  /// payments claimed before this column.
+  terms                 Json?
   /// When the debit was first sent to Fintava (the reconcile window).
   sentAt                DateTime?
   completedAt           DateTime?
