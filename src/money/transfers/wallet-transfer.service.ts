@@ -73,6 +73,9 @@ export const BANK_TRANSFER_ROUTE = 'POST money/transfers/bank';
 /** What the provider sees on the transfer. Names nobody and nothing personal. */
 export const TRANSFER_NARRATION = 'WAWU transfer';
 
+/** Added to a send's reference for the transfer that moves WAWU's fee (FIX-52). */
+export const FEE_LEG_SUFFIX = '-fee';
+
 /** Someone else's send is the same 404 as one nobody holds (CONVENTIONS.md section 3). */
 export const TRANSFER_NOT_FOUND_MESSAGE = 'We could not find that send.';
 /** Only when the provider refused the transfer or said it failed: its word, not our inference. */
@@ -675,7 +678,7 @@ export class WalletTransferService implements OnModuleInit {
    */
   private async completeFromRecord(
     seen: TransferRow,
-    rec: {
+    recIn: {
       amountKobo: bigint;
       feeKobo: bigint | null;
       totalKobo: bigint | null;
@@ -690,10 +693,38 @@ export class WalletTransferService implements OnModuleInit {
       debitRecorded: boolean;
     },
   ): Promise<TransferRow> {
+    let rec = recIn;
     const t = await this.prisma.walletTransfer.findUniqueOrThrow({
       where: { id: seen.id },
     });
     if (t.status !== 'pending') return t;
+    // WAWU's fee, on a provider whose own charge cannot carry it (FIX-52): the
+    // send is confirmed, so its fee is moved now, before anything is written.
+    // A fee not yet confirmed leaves the send pending, and the sweep asks again.
+    let feeNote: string | null = null;
+    if (this.feeLegDue(t)) {
+      const leg = await this.collectFeeLeg(t);
+      if (leg.state === 'pending') {
+        await this.reschedule(t, new Date());
+        return this.reload(t);
+      }
+      feeNote = leg.note;
+      // A row the provider's webhook already completed holds the fee as
+      // quoted (the handler adds it); a record from the provider's answer
+      // or lookup states its own charge only, so the fee moved is added.
+      if (
+        leg.state === 'collected' &&
+        !rec.debitRecorded &&
+        rec.feeKobo !== null
+      ) {
+        rec = {
+          ...rec,
+          feeKobo: rec.feeKobo + leg.chargedKobo,
+          totalKobo:
+            rec.totalKobo === null ? null : rec.totalKobo + leg.chargedKobo,
+        };
+      }
+    }
     const quotedFee = t.providerFeeKobo + t.wawuFeeKobo;
     const figures = completedFigures(
       { providerFeeKobo: quotedFee, totalKobo: t.totalKobo },
@@ -792,14 +823,102 @@ export class WalletTransferService implements OnModuleInit {
         wawuFeeKobo: BigInt(real.wawuFeeKobo),
         totalKobo: BigInt(real.totalKobo),
         ...(above ? { debitReviewSince: t.debitReviewSince ?? now } : {}),
-        ...(joinNotes(t.discrepancy, figures.note, ...notes)
-          ? { discrepancy: joinNotes(t.discrepancy, figures.note, ...notes) }
+        ...(joinNotes(t.discrepancy, figures.note, feeNote, ...notes)
+          ? {
+              discrepancy: joinNotes(
+                t.discrepancy,
+                figures.note,
+                feeNote,
+                ...notes,
+              ),
+            }
           : {}),
       },
     });
     return this.prisma.walletTransfer.findUniqueOrThrow({
       where: { id: t.id },
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // WAWU's fee on a provider whose own charge cannot carry it (FIX-52)
+  // -------------------------------------------------------------------------
+
+  /** Whether this send's WAWU fee is a transfer of its own on this provider. */
+  private feeLegDue(t: TransferRow): boolean {
+    return (
+      this.provider.wawuFeeLeg === true &&
+      t.provider === this.provider.name &&
+      t.wawuFeeKobo > 0n &&
+      t.payerAccountNumber !== null
+    );
+  }
+
+  /**
+   * Moves WAWU's fee from the sender to WAWU's own account at the provider,
+   * once the send itself is confirmed: one transfer under the send's
+   * reference plus `-fee`, which the provider's log and Nuvion both answer
+   * with the original when it is asked again, so a replay, a sweep or a
+   * second completion never moves it twice. Nothing is held while the
+   * provider answers. The provider's charge for moving it comes out of the
+   * fee (the quote's provider part is for the send alone), so the person pays
+   * the quote to the kobo. A send that fails or is reversed never gets here,
+   * so there is no fee to give back.
+   *
+   * `pending`: not confirmed (accepted and unfinished, a lost answer, the
+   * provider out of reach): the send waits and nothing is sent again.
+   * `none`: nothing to collect (the fee is not more than the provider's
+   * charge for moving it) or the balance no longer covers it: the send
+   * completes at what really left the wallet.
+   */
+  private async collectFeeLeg(
+    t: TransferRow,
+  ): Promise<
+    | { state: 'collected'; chargedKobo: bigint; note: null }
+    | { state: 'none'; note: string | null }
+    | { state: 'pending'; note: null }
+  > {
+    const wawuFee = koboNumber(t.wawuFeeKobo);
+    const moveCost = this.fees.feesSet
+      ? this.fees.providerFees.walletToWalletKobo(wawuFee)
+      : 0;
+    const legKobo = wawuFee - moveCost;
+    if (legKobo <= 0) {
+      this.logger.warn(
+        `send ${t.id}: WAWU's fee (${wawuFee} kobo) is not more than ${this.provider.label}'s charge for moving it (${moveCost}); not collected`,
+      );
+      return { state: 'none', note: null };
+    }
+    try {
+      const platform = await this.provider.getPlatformAccount();
+      const receipt = await this.provider.walletToWallet({
+        fromAccountNumber: t.payerAccountNumber!,
+        toAccountNumber: platform.accountNumber,
+        amountKobo: BigInt(legKobo),
+        reference: `${t.customerReference}${FEE_LEG_SUFFIX}`,
+        narration: TRANSFER_NARRATION,
+      });
+      return { state: 'collected', chargedKobo: receipt.totalKobo, note: null };
+    } catch (e) {
+      if (
+        e instanceof WalletProviderError &&
+        e.kind === 'insufficient_funds' &&
+        !e.recordMayExist &&
+        !e.requestNotSent
+      ) {
+        this.logger.error(
+          `send ${t.id}: WAWU's fee could not be taken, the balance no longer covers it; completed without it`,
+        );
+        return {
+          state: 'none',
+          note: "WAWU's fee was not collected: the balance no longer covered it",
+        };
+      }
+      this.logger.warn(
+        `send ${t.id}: WAWU's fee is not confirmed yet (${e instanceof WalletProviderError ? e.kind : 'error'}); the send stays pending`,
+      );
+      return { state: 'pending', note: null };
+    }
   }
 
   // -------------------------------------------------------------------------

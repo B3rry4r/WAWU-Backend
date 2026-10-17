@@ -278,15 +278,26 @@ export class NuvionBookRecorder {
           amountKobo: true,
           feeKobo: true,
           totalKobo: true,
+          wawuFeeKobo: true,
         },
       });
       if (!e) continue;
       const amount = Number(t.amountKobo);
       // The charge: Nuvion's record states it on a completed debit; a failed
       // or reversed transfer owes nothing, so the row's own figures stand.
+      // A send's row also holds WAWU's fee as quoted (R-10): Nuvion's charge
+      // carries none of it, WAWU's own transfer moves it once the send is
+      // confirmed (FIX-52), so the row keeps it beside Nuvion's.
+      const wawuFee = Number(e.wawuFeeKobo ?? 0n);
       const charge =
         outcome === 'completed' && side === 'out' && t.feeStated
-          ? { feeKobo: t.feeKobo, totalKobo: amount + t.feeKobo }
+          ? {
+              feeKobo: t.feeKobo + wawuFee,
+              totalKobo: amount + t.feeKobo + wawuFee,
+              ...(wawuFee > 0
+                ? { providerFeeKobo: t.feeKobo, wawuFeeKobo: wawuFee }
+                : {}),
+            }
           : side === 'out'
             ? {
                 feeKobo: Number(e.feeKobo),

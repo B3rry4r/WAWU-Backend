@@ -726,6 +726,16 @@ export interface WalletProvider {
   readonly timings: WalletProviderTimings;
   readonly capabilities: WalletProviderCapabilities;
   /**
+   * The provider's own charge cannot carry WAWU's fee (FIX-52: Nuvion's
+   * `applicable_fee` is Nuvion's, and a transfer has no field for ours), so a
+   * send's WAWU fee moves as a transfer of its own from the sender to WAWU's
+   * account, under the send's reference plus `-fee`, once the send is
+   * confirmed. Absent or false: the provider's one charge carries it (Fintava's
+   * merchant charges), and nothing else is moved.
+   */
+  readonly wawuFeeLeg?: boolean;
+
+  /**
    * The bank code of every wallet at this provider: a party named at a bank
    * is a WAWU wallet only at this bank.
    */
