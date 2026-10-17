@@ -8,6 +8,7 @@ import {
 import { StorageService } from '../storage/storage.service';
 import type { PersonBadgeView } from '../plans/tier-badge/person-badge-view.type';
 import { TierBadgeService } from '../plans/tier-badge/tier-badge.service';
+import { DELETED_CREATOR_ID, DELETED_CREATOR_NAME } from './deleted-creator';
 
 /**
  * PROVISIONAL(FEED-CARD-EVERY, owner=YOU, why=H9 and H10 draw cards among content without saying how often one appears)
@@ -156,6 +157,23 @@ export class FeedCardsService {
   async creatorsFor(ids: string[]): Promise<Map<string, FeedCreator>> {
     const unique = [...new Set(ids)];
     const out = new Map<string, FeedCreator>();
+    // A piece whose creator deleted their account (owner ruling, 16 Oct 2026,
+    // SETTINGS-06): nobody is asked about it, and no name is shown.
+    if (unique.includes(DELETED_CREATOR_ID)) {
+      out.set(DELETED_CREATOR_ID, {
+        wawuId: DELETED_CREATOR_ID,
+        displayName: DELETED_CREATOR_NAME,
+        handle: null,
+        avatarUrl: null,
+        verification: deriveVerificationState({
+          creatorVerifiedAt: null,
+          creatorVerifiedUntil: null,
+          professionalVerifiedAt: null,
+          professionalVerifiedUntil: null,
+        }),
+      });
+      unique.splice(unique.indexOf(DELETED_CREATOR_ID), 1);
+    }
     if (unique.length === 0) return out;
     const [profiles, identities] = await Promise.all([
       this.prisma.userProfile.findMany({

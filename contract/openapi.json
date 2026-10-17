@@ -19598,8 +19598,41 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "account_deletion_blocked: money to settle first (reason.blockers, reason.balanceKobo).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountDeletionBlockedBody"
+                }
+              }
+            }
           }
         },
+        "summary": "Asks to delete the account (R-17: it waits 30 days). Refused with\n`409 account_deletion_blocked` while the wallet holds money, a hold is\nopen or earnings are waiting (SETTINGS-06). `503 provider_unreachable`\nwhen the wallet provider does not answer, so \"empty\" is never guessed.",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/api/hub/account/cancel-deletion": {
+      "post": {
+        "operationId": "AccountController_cancelDeletion",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelDeletionResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cancels a deletion that is waiting (SETTINGS-06): the wallet is\nunfrozen, the content comes back and phone push resumes. WAWU ID calls\nit with the person's new token when they sign in during the 30 days\n(SETTINGS-08). Answers 200 `cancelled: false` when nothing was waiting,\nand 200 `cancelled: false, deletionInProgress: true` with a `message`\nonce the purge has started (data may already be gone, so it is never\nanswered as restored).",
         "tags": [
           "Account"
         ]
@@ -35237,6 +35270,106 @@
       "DeleteAccountDto": {
         "type": "object",
         "properties": {}
+      },
+      "AccountDeletionBlockedReason": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "account_deletion_blocked"
+            ]
+          },
+          "blockers": {
+            "type": "array",
+            "description": "What to settle first. The app leads with `wallet_balance` (Withdraw).",
+            "items": {
+              "type": "string",
+              "enum": [
+                "wallet_balance",
+                "open_hold",
+                "waiting_earnings",
+                "payment_in_progress",
+                "cash_out_in_flight",
+                "wallet_opening"
+              ]
+            }
+          },
+          "balanceKobo": {
+            "type": "integer",
+            "description": "The wallet provider's balance in kobo, when the person has a wallet."
+          },
+          "openHolds": {
+            "type": "integer",
+            "description": "Holds open for or against the person (paid DMs, tickets, bills)."
+          },
+          "waitingEarnings": {
+            "type": "integer",
+            "description": "Sales whose share has not reached the person's wallet yet."
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence the app may show as it is."
+          }
+        },
+        "required": [
+          "code",
+          "blockers",
+          "openHolds",
+          "waitingEarnings",
+          "message"
+        ]
+      },
+      "AccountDeletionBlockedBody": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "null",
+            "nullable": true
+          },
+          "statusCode": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/AccountDeletionBlockedReason"
+          }
+        },
+        "required": [
+          "data",
+          "statusCode",
+          "message",
+          "reason"
+        ]
+      },
+      "CancelDeletionResponseDto": {
+        "type": "object",
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          },
+          "walletUnfrozen": {
+            "type": "boolean"
+          },
+          "contentRestored": {
+            "type": "number"
+          },
+          "deletionInProgress": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "cancelled",
+          "walletUnfrozen",
+          "contentRestored"
+        ]
       },
       "RegisterPushTokenDto": {
         "type": "object",

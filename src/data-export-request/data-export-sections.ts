@@ -1076,6 +1076,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       reason:
         'A switch the server keeps after the person asked to delete the account: it holds nothing but the time of that request.',
     },
+    {
+      model: 'AccountDeletionContent',
+      reason:
+        'Bookkeeping for a deletion that is waiting: the ids of the pieces it hid and the status each had. The pieces themselves are exported in their own section.',
+    },
     { model: 'TransactionPin', reason: 'A PIN hash is a secret.' },
     { model: 'TransactionPinReset', reason: 'A reset code hash is a secret.' },
     { model: 'ApprovalDevice', reason: 'A device key is a secret.' },

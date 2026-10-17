@@ -2695,3 +2695,94 @@ route of its own. Reading one send, of either kind, is `GET
   `failed`; the provider's reversal of the debit (`debit_transfer_reversal`)
   then moves it to `reversed`, with `reversal.returnedKobo` and `keptKobo`
   from the provider's own report, once however often it is reported.
+
+## 25. Delete account: money first, 30 days, cancel (SETTINGS-06)
+
+`DELETE /account` (R-17) asks to delete the signed-in account. It waits 30
+days; signing in during them cancels it (WAWU ID, SETTINGS-08).
+
+- **Money first (Z6).** Refused with `409`, `reason.code`
+  `account_deletion_blocked`, nothing changed, while any of these holds.
+  `reason.blockers` lists them; the app leads with `wallet_balance` (the
+  Withdraw button) and shows `reason.balanceKobo`, the wallet provider's
+  balance, never a sum of our rows. `reason.message` is a sentence to show as
+  it is.
+  - `wallet_balance`: the wallet holds money (available or booked above 0).
+  - `open_hold`: a held payment (paid DM, ticket, bill) where the person is
+    the payer or the payee (R-19). `reason.openHolds` counts them.
+  - `waiting_earnings`: a completed sale whose 85% has not reached their
+    wallet (R-11, `WalletPayment.payeeSettledAt` unset, no hold).
+    `reason.waitingEarnings` counts them. A person with no wallet can have
+    these.
+  - `payment_in_progress`: a payment of theirs with no final answer.
+  - `cash_out_in_flight`: points held for a cash-out.
+  - `wallet_opening`: their wallet is being opened right now.
+- **`503 provider_unreachable`** when the provider does not answer, never a
+  guess that the wallet is empty. A wallet another provider holds (after a
+  rollback) answers the same.
+- **Otherwise `200 { deletionScheduledAt }`**, 30 days out, and: the Naira
+  wallet is frozen at the provider (it can neither send nor receive, so money
+  due to it waits in WAWU's account and is paid on unfreeze, as the hold sweep
+  does, G-10; a provider with no freeze leaves the wallet as it is), the
+  person's content is hidden (`removed`, remembered piece by piece), phone push
+  stops, and WAWU ID starts its grace period. Asking again keeps the date.
+  The money is looked at before the wallet is frozen, and the deletion is
+  recorded before the freeze call, so a freeze whose answer is lost is undone
+  by a cancel or a new request. A request that fails after the freeze lets
+  the wallet go again before it answers.
+- **The wallet follows the row** (round 5, R-1 wallet safety): a deletion in
+  force (`freezing`, `scheduled`, `purging`, `purged`) always has a frozen
+  wallet, and a cancelled or absent one never does. One function
+  (`reconcileWallet`) enforces it: it reads the row and freezes or unfreezes
+  to match, idempotently, acts only on a wallet of the provider the server
+  runs (the person's current wallet, so one opened during the 30 days is
+  frozen too), and never throws. It holds no transaction, no pooled connection
+  and no lock while the provider answers (round 6): it reads the row, asks the
+  provider, reads the row again, and acts again if the row changed (3 rounds at
+  most). Every request that can change the row or the wallet ends with it (a
+  repeat cancel and a refused `DELETE` included), and the hourly sweep runs it
+  for every row in force whatever its age and for every cancelled row until one
+  reconcile was confirmed for it (`AccountDeletion.walletSyncedAt`), so a
+  freeze or unfreeze whose answer was lost, or that the provider refused, is
+  put right within the hour.
+  A repeat `DELETE /account` on a row the purge has finished answers the date
+  it was due and schedules nothing.
+- **`POST /account/cancel-deletion`** (the person's own token; WAWU ID sends
+  the new one when they sign in) unfreezes the wallet, brings back exactly the
+  hidden pieces, resumes push and answers `200 { cancelled, walletUnfrozen,
+  contentRestored }`. With nothing scheduled it changes nothing and answers
+  `cancelled: false`. If the provider does not answer the unfreeze it answers
+  `503` having changed nothing, and can be called again (the wallet is frozen
+  again if that call was applied and only its answer was lost).
+  `walletUnfrozen` is `true` only when the provider confirmed the unfreeze
+  after the cancel; if it could not, the cancel stands with `false` and the
+  hourly sweep lets the wallet go. Once the purge has
+  started it answers `200 { cancelled: false, deletionInProgress: true,
+  message }` (data may already be gone, so it is never answered as restored);
+  the app shows `message` as it is.
+- **After the 30 days** an hourly sweep (`account-deletion-purge`) looks at
+  the money once more (a balance, hold or earning that appeared keeps the
+  account; `AccountDeletion.purgeBlockedBy` says why), then claims the row
+  (`purging`; no cancel from here), releases held points, deletes the Hub's
+  data (`AccountPurgeService`, points first), asks WAWU ID to anonymise the
+  identity, and marks the row `purged` only when all of that worked. A table
+  that would not clear, or WAWU ID not answering, leaves the row `purging`
+  (`purgeBlockedBy` says which) and the next pass carries on; WAWU ID is not
+  asked before the Hub's side is done.
+- **Buyers keep what they paid for, from the DELETE on** (owner ruling, 16 Oct
+  2026; lead rulings 17 Oct 2026). A piece with a completed paid purchase is
+  hidden from everything public (`removed`) the moment the deletion is
+  scheduled, and still opens on `GET /content/:id`, `GET /content/:id/detail`
+  and `GET /content/:id/media` for each buyer with a completed purchase and
+  for nobody else: the creator, a buyer whose purchase is pending, failed or a
+  tip, and a signed-out caller get `404`. A non-buyer also gets `404` on that
+  piece's comments (read, post, like), on save and on rate. Every other
+  removed piece answers exactly as before. A cancel puts the pieces back as
+  they were. At the purge the piece stays whole (title and description as
+  bought, with any email address or phone number in them replaced by
+  `[removed]`; files, lessons and frames), and loses the creator: its creator
+  id becomes `deleted-account`, its slug and tags go. File keys are not
+  renamed (they carry the creator's id in the path but are never shown as
+  text). Pieces with only a pending, failed or tip purchase are stripped to
+  "Removed content" and re-keyed to `deleted-account` too. `AccountDeletion.purgeNote`
+  says how many pieces were kept this way.

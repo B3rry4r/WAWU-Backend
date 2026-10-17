@@ -494,6 +494,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // The mark that this account's deletion was asked for, which stops push
   // until the purge: the purge is that deletion, so the mark goes too.
   { model: 'PushStoppedAccount', column: 'userWawuId', disposition: 'OWNED' },
+  // The content pieces a scheduled deletion hid (SETTINGS-06): their ids and
+  // the status each had, so a cancel can put them back. The pieces go in this
+  // same purge, so the list goes too.
+  {
+    model: 'AccountDeletionContent',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
 
   // Last: everything above may reference these.
   // An admin's choice to feature this creator in Explore (EXPLORE-03): a
@@ -603,6 +611,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   },
 
   // ── admin audit trail, kept on purpose ──────────────────────────────────
+  // The record that this account's deletion was scheduled and ran (SETTINGS-06):
+  // dates, the wallet's provider id and a status. It holds no personal detail,
+  // and the purge sweep reads it to know the deletion is done, so it stays.
+  { model: 'AccountDeletion', column: 'wawuUserId', disposition: 'AUDIT' },
   { model: 'AdminKycAudit', column: 'subjectWawuUserId', disposition: 'AUDIT' },
   {
     model: 'AdminVerificationAudit',
