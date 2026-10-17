@@ -59,7 +59,8 @@ export type EarningSettlementState =
 
 export interface EarningSettlementResult {
   settlementId: string;
-  paymentId: string;
+  /** The sale it is the share of; null for a community host's share of spent credits (WALLET-17). */
+  paymentId: string | null;
   state: EarningSettlementState;
   waiting: EarningWaiting | null;
   status: EarningStatus;
@@ -166,6 +167,22 @@ export const EARNING_ADOPT_MAX_PAGES = 10;
  */
 export function earningReference(paymentId: string, attempt: number): string {
   const base = `wawu-earn-${paymentId}`;
+  return attempt <= 1 ? base : `${base}-${attempt}`;
+}
+
+/**
+ * A community host's share of spent credits as an earning (WALLET-17): the
+ * kind it carries in streams and history, its title, and its reference,
+ * `wawu-earn-cs-<credit earning id>` (49 characters, one per spent credit
+ * whatever the number of callers).
+ */
+export const HOST_SHARE_KIND = 'community_credits';
+export const HOST_SHARE_TITLE = 'Community credits';
+export function hostShareReference(
+  creditSpendEarningId: string,
+  attempt: number,
+): string {
+  const base = `wawu-earn-cs-${creditSpendEarningId}`;
   return attempt <= 1 ? base : `${base}-${attempt}`;
 }
 

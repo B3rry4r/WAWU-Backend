@@ -1456,6 +1456,8 @@ model CreditSpendEarning {
   /// implicit m2m join table would be three tables of machinery for that.
   lotIds            String[]
   earnedAt          DateTime    @default(now())
+  /// The host's share as an earning on its way to their wallet (WALLET-17).
+  settlement        EarningSettlement?
 
   @@index([creatorWawuId])
   @@index([creatorWawuId, earnedAt])
@@ -5173,8 +5175,15 @@ model WalletTransfer {
 /// ─────────────────────────────────────────────────────────────────────────
 model EarningSettlement {
   id                       String        @id @default(uuid())
-  paymentId                String        @unique
-  payment                  WalletPayment @relation(fields: [paymentId], references: [id])
+  /// The sale this earning is the payee's share of. Null for a community host's
+  /// share of spent credits (WALLET-17): exactly one of `paymentId` and
+  /// `creditSpendEarningId` is set.
+  paymentId                String?       @unique
+  payment                  WalletPayment? @relation(fields: [paymentId], references: [id])
+  /// The host's share of one spent credit (CreditSpendEarning.hostShareKobo),
+  /// paid once; it travels in the host's daily move like a sale's share.
+  creditSpendEarningId     String?       @unique
+  creditSpendEarning       CreditSpendEarning? @relation(fields: [creditSpendEarningId], references: [id])
   /// Who is owed it. COUNTERPARTY at account deletion: the payer's record survives.
   payeeWawuUserId          String
   /// What was paid for: the payment's kind, its target and its title.

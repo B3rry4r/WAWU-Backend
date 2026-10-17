@@ -39,6 +39,9 @@ import {
   NOT_SETTLED_HERE,
   waitingAfterRefusal,
   earningReference,
+  HOST_SHARE_KIND,
+  HOST_SHARE_TITLE,
+  hostShareReference,
 } from './earning-rules';
 
 import type { UnsweptSalesPage } from './earning-review.type';
@@ -202,6 +205,7 @@ export class EarningSettlementService {
     const started = Date.now();
     try {
       counts.adopted = await this.adopt();
+      counts.adopted += await this.adoptHostShares();
       counts.planned = await this.plan(now, started, budgetMs);
       let after: EarningSweepCursor | null = this.sweepAfter;
       for (;;) {
@@ -399,14 +403,21 @@ export class EarningSettlementService {
             },
           });
           if (candidates.length === 0) return null;
-          const finished = await tx.$queryRaw<Array<{ id: string }>>(
-            Prisma.sql`
+          // A host's share of spent credits has no sale to be finished
+          // (WALLET-17): it is owed from the moment it is made.
+          const saleIds = candidates.flatMap((c) =>
+            c.paymentId ? [c.paymentId] : [],
+          );
+          const finished = saleIds.length
+            ? await tx.$queryRaw<Array<{ id: string }>>(
+                Prisma.sql`
               SELECT "id" FROM "WalletPayment"
-               WHERE "id" IN (${Prisma.join(candidates.map((c) => c.paymentId))})
+               WHERE "id" IN (${Prisma.join(saleIds)})
                  AND "status" = 'completed'
                  AND "reviewSince" IS NULL AND "chargeReviewSince" IS NULL
                ORDER BY "id" FOR SHARE`,
-          );
+              )
+            : [];
           const finishedSales = new Set(finished.map((r) => r.id));
           const locked = await tx.$queryRaw<Array<{ id: string }>>(
             Prisma.sql`
@@ -437,7 +448,7 @@ export class EarningSettlementService {
           const members: string[] = [];
           for (const c of candidates) {
             if (!open.has(c.id)) continue;
-            if (!finishedSales.has(c.paymentId)) {
+            if (c.paymentId !== null && !finishedSales.has(c.paymentId)) {
               await this.reviewEarning(
                 tx,
                 c.id,
@@ -577,6 +588,97 @@ export class EarningSettlementService {
         }
       }
       if (sales.length < EARNING_ADOPT_PAGE) break;
+    }
+    return made;
+  }
+
+  /**
+   * A community host's share of the credits spent in their room becomes an
+   * earning (WALLET-17), and so travels in the host's one move a day with
+   * their sales (R-55). Once per spent credit (`creditSpendEarningId` is
+   * unique), for exactly `hostShareKobo` (85% of what WAWU collected for the
+   * credits, R-5), owed to the room's host, in WAWU's account.
+   *
+   * Only a spend that was paid for from the wallet is taken: every credit it
+   * used came from a pack bought with the wallet, whose price is in WAWU's
+   * account at the provider this server runs (one account, one provider).
+   * Credits from the web's Flutterwave packs are WAWU's money at Flutterwave,
+   * not here, and a spend that mixed the two has no honest split recorded:
+   * both wait for the web to follow (BACKEND_GAPS). A spend before the sweep's
+   * start (lead ruling 17 Oct) is never taken.
+   */
+  private async adoptHostShares(): Promise<number> {
+    const start = await this.sweepStart();
+    const provider = this.provider.name;
+    let made = 0;
+    const refused: string[] = [];
+    for (let page = 0; page < EARNING_ADOPT_MAX_PAGES; page += 1) {
+      const found = await this.prisma.$queryRaw<
+        Array<{
+          id: string;
+          creator: string;
+          community: string;
+          kobo: string;
+          at: Date;
+          account: string;
+        }>
+      >(Prisma.sql`
+        SELECT e."id", e."creatorWawuId" AS "creator", e."communityId" AS "community",
+               e."hostShareKobo"::text AS "kobo", e."earnedAt" AS "at",
+               MIN(p."merchantAccountNumber") AS "account"
+          FROM "CreditSpendEarning" e
+          CROSS JOIN LATERAL unnest(e."lotIds") AS lot(id)
+          JOIN "CreditLot" l ON l."id" = lot.id
+          JOIN "CreditPurchase" cp ON cp."id" = l."creditPurchaseId"
+          LEFT JOIN "WalletPayment" p
+                 ON p."id" = cp."walletPaymentId" AND p."status" = 'completed'
+         WHERE e."hostShareKobo" > 0 AND e."earnedAt" >= ${start.at}
+           AND NOT EXISTS (SELECT 1 FROM "EarningSettlement" s
+                            WHERE s."creditSpendEarningId" = e."id")
+           AND e."id" <> ALL(${refused}::text[])
+         GROUP BY e."id"
+        HAVING COUNT(*) = COUNT(p."id")
+           AND COUNT(DISTINCT p."merchantAccountNumber") = 1
+           AND COUNT(DISTINCT p."provider") = 1
+           AND MIN(p."provider") = ${provider}
+         ORDER BY e."earnedAt" ASC, e."id" ASC
+         LIMIT ${EARNING_ADOPT_PAGE}`);
+      if (found.length === 0) break;
+      const rows = found.map((f) => ({
+        creditSpendEarningId: f.id,
+        payeeWawuUserId: f.creator,
+        kind: HOST_SHARE_KIND,
+        targetId: f.community,
+        title: HOST_SHARE_TITLE,
+        earnedAt: f.at,
+        amountKobo: BigInt(f.kobo),
+        merchantAccountNumber: f.account,
+        provider,
+        customerReference: hostShareReference(f.id, 1),
+      }));
+      try {
+        const { count } = await this.prisma.earningSettlement.createMany({
+          data: rows,
+          skipDuplicates: true,
+        });
+        made += count;
+      } catch {
+        for (const row of rows) {
+          try {
+            const { count } = await this.prisma.earningSettlement.createMany({
+              data: [row],
+              skipDuplicates: true,
+            });
+            made += count;
+          } catch (e) {
+            refused.push(row.creditSpendEarningId);
+            this.logger.error(
+              `credit earning ${row.creditSpendEarningId}: its earning could not be made (${e instanceof Error ? e.name : 'error'}); a person looks`,
+            );
+          }
+        }
+      }
+      if (found.length < EARNING_ADOPT_PAGE) break;
     }
     return made;
   }
@@ -808,18 +910,23 @@ export class EarningSettlementService {
         select: { id: true, paymentId: true, amountKobo: true },
         orderBy: { id: 'asc' },
       });
-      const finished = members.length
+      const saleIds = members.flatMap((x) =>
+        x.paymentId ? [x.paymentId] : [],
+      );
+      const finished = saleIds.length
         ? await tx.$queryRaw<Array<{ id: string }>>(
             Prisma.sql`
               SELECT "id" FROM "WalletPayment"
-               WHERE "id" IN (${Prisma.join(members.map((x) => x.paymentId))})
+               WHERE "id" IN (${Prisma.join(saleIds)})
                  AND "status" = 'completed'
                  AND "reviewSince" IS NULL AND "chargeReviewSince" IS NULL
                ORDER BY "id" FOR SHARE`,
           )
         : [];
       const ok = new Set(finished.map((r) => r.id));
-      const gone = members.filter((x) => !ok.has(x.paymentId));
+      const gone = members.filter(
+        (x) => x.paymentId !== null && !ok.has(x.paymentId),
+      );
       if (gone.length > 0) {
         // Nothing may be sent for these: out of the move, for a person. The
         // move shrinks (a new reference, the old one may have been tried) or,
@@ -830,7 +937,9 @@ export class EarningSettlementService {
           where: { id: { in: gone.map((x) => x.id) }, moveId: m.id },
           data: { moveId: null, reviewSince: now, discrepancy: note },
         });
-        const left = members.filter((x) => ok.has(x.paymentId));
+        const left = members.filter(
+          (x) => x.paymentId === null || ok.has(x.paymentId),
+        );
         if (left.length === 0) {
           await tx.earningMove.deleteMany({
             where: { id: m.id, status: 'owed', sentAt: null },
@@ -1230,7 +1339,9 @@ export class EarningSettlementService {
       });
       await tx.walletPayment.updateMany({
         where: {
-          id: { in: members.map((x) => x.paymentId) },
+          id: {
+            in: members.flatMap((x) => (x.paymentId ? [x.paymentId] : [])),
+          },
           payeeSettledAt: null,
         },
         data: { payeeSettledAt: now },
@@ -1297,13 +1408,14 @@ export class EarningSettlementService {
       take: 2,
     });
     const only = members.length === 1 ? members[0] : null;
-    const payment = only
+    const payment = only?.paymentId
       ? await this.prisma.walletPayment.findUnique({
           where: { id: only.paymentId },
           select: { payerWawuUserId: true },
         })
       : null;
-    const link = only
+    // A host's share of spent credits is no kind of sale to link to.
+    const link = only?.paymentId
       ? {
           kind: only.kind as PaymentKind,
           targetId: only.targetId,

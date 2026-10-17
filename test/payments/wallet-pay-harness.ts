@@ -307,6 +307,10 @@ export async function bootPayApp(
       await prisma.earningSettlement.deleteMany({
         where: { paymentId: { in: ids } },
       });
+      // A community host's share of spent credits has no payment (WALLET-17).
+      await prisma.earningSettlement.deleteMany({
+        where: { payeeWawuUserId: { in: users }, paymentId: null },
+      });
       await prisma.earningMove.deleteMany({
         where: { payeeWawuUserId: { in: users } },
       });

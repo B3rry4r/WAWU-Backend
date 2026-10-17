@@ -297,6 +297,35 @@ and a deadline of the creator's reply window from that moment.
   took return, and WAWU carries the charge.
 - The web's Flutterwave refund sweep leaves a wallet question alone.
 
+#### Hosts' shares: community credits and event tickets (WALLET-17)
+
+No new route: both shares reach the host's wallet by themselves (R-11) and show
+in the earnings reads (`GET /money/earnings`) and the history like any earning.
+A host without a wallet keeps the share and it lands once, within a minute of
+the wallet opening.
+
+- **Community credits.** The host's 85% (R-5) of the credits spent in their
+  room (`CreditSpendEarning.hostShareKobo`) becomes an earning of kind
+  `community_credits` (a stream the app reads as "Community credits"; the
+  contract's `PaymentKind` enum does not list it, as an earning stream is
+  "a kind this version does not know, kept, last"). It travels in the host's
+  ONE move of the day with their sales (R-55): one transfer a day, a day's
+  total under ₦200 waits, WAWU carries the provider's charge (R-31). Only
+  credits bought with the wallet are paid here: their price is in WAWU's
+  account. Credits from the web's Flutterwave packs, and a spend that mixed
+  both, wait for the web to follow after launch. A spend before the earnings
+  sweep's start (`EARNINGS_SWEEP_START`) is never paid.
+- **Event tickets.** A wallet order's price waits in WAWU's account as a
+  `held` `event_ticket` hold with the host as payee (EVENTS-07). When the
+  event has taken place (`endsAt ?? startsAt` gone by, plus
+  `EVENT_PAYOUT_DELAY_HOURS` if set, none by default), each paid order's hold
+  is RELEASED: the host's 85% moves from WAWU's account to their wallet and
+  WAWU keeps 15%. The hold decides once and one way, so the job running twice,
+  on two servers or at the moment the event is called off pays once or refunds
+  once. An event called off, removed or not over, and an order that is not
+  paid, pays nobody. One release is one transfer per order (the hold's own
+  move, MONEY-18), not part of the daily move of a host's other earnings.
+
 ## 2. The named schemas (G-1)
 
 Every success body and every nested object in these routes is a named schema
