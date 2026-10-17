@@ -30064,7 +30064,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "The purchase still going through for the caller, or `purchase: null`\n(ME-13, M15): a payment still confirming, or confirmed and not yet\nopened, the same ones that make a second purchase `payment_in_progress`.\nDeclared before the id so `pending` is never read as one. Needs no\nwallet: a person with none has nothing going through.",
+        "summary": "The purchase still going through for the caller, or `purchase: null`\n(ME-13, M15): a payment still confirming, or confirmed and not yet\nopened, the same ones that make a second purchase `payment_in_progress`.\nDeclared before the id, so the word `pending` is not taken for an id. It\nneeds no wallet: a person with none has nothing going through.",
         "tags": [
           "PlanPurchases"
         ]
