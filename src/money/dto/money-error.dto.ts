@@ -95,13 +95,21 @@ export class MoneyErrorReason {
 
   bankName?: string;
 
+  /**
+   * account_not_in_your_name: the name on the person's wallet, set beside
+   * `accountName` (the bank's name for the account) and `bankName`. Left out
+   * when the wallet holds no name to show. The comparison itself is made on
+   * the verified name's keyed hashes, never on this text (WALLET-37).
+   */
+  verifiedName?: string;
+
   /** bank_transfers_blocked: why (W18). */
   @ApiPropertyOptional({
     enum: ['kyc_pending', 'kyc_rejected', 'kyc_not_submitted'],
   })
   blockedBy?: BankTransferBlock;
 
-  /** provider_unreachable, idempotency_in_progress, identity_checks_exhausted, open_address_limited, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited: seconds to wait before trying again. */
+  /** provider_unreachable, idempotency_in_progress, identity_checks_exhausted, open_address_limited, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited, name_check_rate_limited: seconds to wait before trying again. */
   retryAfterSeconds?: number;
 
   /** bvn_not_confirmed, bvn_phone_mismatch: BVN checks left in the current 24 hours. selfie_not_matched: selfie matches left in the current 24 hours. */
@@ -126,6 +134,32 @@ export class MoneyErrorReason {
   /** insufficient_points: neededPoints minus balancePoints. */
   @ApiPropertyOptional({ type: 'integer' })
   shortfallPoints?: number;
+
+  /** points_cap_reached (POINTS-03): which cap stopped the job. */
+  @ApiPropertyOptional({
+    enum: ['daily', 'characters_per_job', 'minutes_per_job'],
+  })
+  cap?: 'daily' | 'characters_per_job' | 'minutes_per_job';
+
+  /** points_cap_reached: the cap's size, in `capUnit`. */
+  @ApiPropertyOptional({ type: 'integer' })
+  capLimit?: number;
+
+  /** points_cap_reached: what the cap counts. */
+  @ApiPropertyOptional({ enum: ['points', 'characters', 'minutes'] })
+  capUnit?: 'points' | 'characters' | 'minutes';
+
+  /** points_cap_reached, daily cap: points of AI jobs held or spent today. */
+  @ApiPropertyOptional({ type: 'integer' })
+  usedPoints?: number;
+
+  /** points_cap_reached, daily cap: points still free today. */
+  @ApiPropertyOptional({ type: 'integer' })
+  remainingPoints?: number;
+
+  /** points_cap_reached, daily cap: when the day's count starts again (ISO 8601). */
+  @ApiPropertyOptional({ type: 'string', nullable: true })
+  resetsAt?: string | null;
 }
 
 /** The body of every refused money request. */

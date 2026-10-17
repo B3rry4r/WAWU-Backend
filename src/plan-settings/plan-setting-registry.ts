@@ -42,14 +42,18 @@ const LIMIT = {
   maxMultiplier: 10,
   /** A year of hours. */
   maxHours: 8760,
+  /** A week of minutes (the longest an AI job may run before its points are given back). */
+  maxMinutes: 10_080,
   /** Three years of days. */
   maxDays: 1095,
   /** Ten years of months. */
   maxMonths: 120,
   /** One hundred percent. */
   percent: 100,
-  /** Most people in any count of members or checks. */
+  /** Most people in any count of members. */
   maxPeople: 1_000_000,
+  /** Most bank name checks one person may make in an hour (WALLET-37's limit on the old key). */
+  maxNameChecks: 1000,
 } as const;
 
 const DAYS_PER_YEAR = 365;
@@ -82,6 +86,7 @@ const percent = whole(0, LIMIT.percent);
 const days = whole(1, LIMIT.maxDays);
 const months = whole(1, LIMIT.maxMonths);
 const hours = whole(1, LIMIT.maxHours);
+const minutes = whole(1, LIMIT.maxMinutes);
 const people = whole(1, LIMIT.maxPeople);
 
 /** An en dash or an em dash, written by code so no source line carries one (R-5). */
@@ -241,7 +246,11 @@ const TIER_USED = {
     'the publishing allowance',
   ],
   bonus_points: ['VF1', 'VF5', 'VF7', 'GET /plans', 'the tier grant'],
-  pack_bonus_pct: ['PT4 (the Founding bonus)', 'GET /plans'],
+  pack_bonus_pct: [
+    'PT4 (the Founding bonus)',
+    'POST /plans/purchases (points_pack)',
+    'GET /plans',
+  ],
 } as const;
 
 /**
@@ -528,6 +537,30 @@ export function buildRegistry(
       d.caps.dailyPointsPerUser = v as number;
     },
   });
+  add({
+    key: 'points.max_chars_per_job',
+    group: 'Points',
+    label: 'Characters one AI job can take',
+    unit: 'count',
+    usedBy: ['PT7', 'points_cap_reached (POINTS-03)', 'GET /plans'],
+    default: plans.caps.maxCharsPerJob,
+    parse: count,
+    apply: (d, v) => {
+      d.caps.maxCharsPerJob = v as number;
+    },
+  });
+  add({
+    key: 'points.max_audio_min_per_job',
+    group: 'Points',
+    label: 'Minutes of audio one AI job can run',
+    unit: 'count',
+    usedBy: ['PT7', 'points_cap_reached (POINTS-03)', 'GET /plans'],
+    default: plans.caps.maxAudioMinPerJob,
+    parse: count,
+    apply: (d, v) => {
+      d.caps.maxAudioMinPerJob = v as number;
+    },
+  });
   for (const a of plans.actions) {
     add({
       key: `points.action.${a.id}`,
@@ -637,7 +670,7 @@ export function buildRegistry(
     'Account name checks one person can make in an hour',
     'count',
     ['POST /money/banks/name-check (R-51, WALLET-37)'],
-    whole(1, LIMIT.maxPeople),
+    whole(1, LIMIT.maxNameChecks),
   );
   other(
     'popular_community_min_members',
@@ -668,12 +701,26 @@ export function buildRegistry(
     count,
   );
   other(
+    'points.job_max_run_minutes',
+    'Minutes an AI job can run before its held points are given back',
+    'count',
+    ['The sweep of stale AI holds (POINTS-03)'],
+    minutes,
+    'POINTS-JOB-MAX-RUN',
+  );
+  other(
     'tgif_notification_time',
     'Morning time of the TGIF notification (Africa/Lagos)',
     'time',
-    ['HOME-16'],
+    ['HOME-16 (R-59, owner answer 32)'],
     time,
-    'TGIF-NOTIFICATION-TIME',
+  );
+  other(
+    'tgif_notice_retention_days',
+    'Days a daily TGIF notice is kept before it is cleared',
+    'days',
+    ['the daily TGIF notice clean-up (HOME-17)'],
+    days,
   );
   other(
     'earnings.daily_move_floor_kobo',
@@ -681,6 +728,25 @@ export function buildRegistry(
     'kobo',
     ['WALLET-16 (R-55)'],
     kobo,
+  );
+  other(
+    'plan.transfer_window_hours',
+    'Hours a bank-transfer purchase waits for the money before it lapses',
+    'hours',
+    ['POST /plans/purchases method transfer (TIER-05, VF6)'],
+    hours,
+    'PLAN-TRANSFER-WINDOW',
+  );
+  other(
+    'events.open_orders_per_buyer',
+    'Most open ticket orders per buyer per event',
+    'count',
+    [
+      'POST /events/{id}/orders/wallet (EVENTS-13)',
+      'POST /events/orders/wallet/pay (EVENTS-13)',
+    ],
+    count,
+    'EVENT-ORDER-CAP',
   );
   other(
     'earnings.refused_review_hours',

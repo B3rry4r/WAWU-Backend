@@ -13,6 +13,7 @@ import { StatementService } from './statements/statement.service';
 import { WawuIdMailRelay } from '../admin/notifications/email/email-provider';
 import { LedgerModule } from './ledger/ledger.module';
 import { MoneyInNoticeModule } from './money-in-notice/money-in-notice.module';
+import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { FeeSettings } from './fees/fee-config';
 import { FeeQuoteService } from './fees/fee-quote.service';
@@ -53,7 +54,9 @@ import {
   BankSendTargets,
 } from './transfers/bank-send-target';
 import { MoneyBanksController } from './saved-accounts/money-banks.controller';
+import { NameCheckBudget } from './saved-accounts/name-check-budget';
 import { NameCheckTokenService } from './saved-accounts/name-check-token.service';
+import { PayoutOwnNameGuard } from './transfers/payout-own-name.guard';
 import {
   TransferRecipientGuard,
   TransferRecipients,
@@ -227,6 +230,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     NuvionDocumentsModule,
     // Money in, told once (task WALLET-10): the sweep over credited ledger rows.
     MoneyInNoticeModule,
+    // The admin settings (task HOME-17): the name checks an hour are read live.
+    PlanSettingsModule,
   ],
   controllers: [
     MoneyPinController,
@@ -267,6 +272,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletOpeningService,
     BankAccountCheckService,
     NameCheckTokenService,
+    NameCheckBudget,
     BeneficiaryService,
     PayoutAccountService,
     SavedAccountTargetService,
@@ -288,6 +294,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     TransferRecipientGuard,
     BankSendTargets,
     BankSendTargetGuard,
+    PayoutOwnNameGuard,
     WalletTransferService,
     HoldViewService,
     WalletHoldService,

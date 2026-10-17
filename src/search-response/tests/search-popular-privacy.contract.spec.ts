@@ -15,6 +15,7 @@ import {
   normaliseSearch,
   SearchHistoryService,
 } from '../search-history.service';
+import { joinMembers } from './popular-members';
 
 /**
  * EXPLORE-05 round 2.
@@ -79,6 +80,8 @@ describe('Search, round 2 (EXPLORE-05)', () => {
       data: { name, hostWawuId: USER_BASIC, kind: 'open', description: 'x' },
     });
     roomIds.push(r.id);
+    // R-57: a room is a popular name once it has enough members.
+    await joinMembers(prisma, r.id, MARK);
     return r.id;
   };
   /** `people` synthetic accounts each searched `text`, stored as the Hub stores it. */

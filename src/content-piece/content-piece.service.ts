@@ -35,6 +35,11 @@ import type { VerifyUnlockDto } from './dto/verify-unlock.dto';
 import type { UpdateContentDto } from './dto/update-content.dto';
 import type { MyContentFilter } from './dto/my-content-query.dto';
 import type { MyContentCounts, MyContentItem } from './dto/my-content.view';
+import {
+  assertBuyerOnlyIfHidden,
+  hasBoughtContent,
+  readHidden,
+} from './deletion-hid';
 
 /**
  * The commission rate, for every creator (conventions.md § Identity & format
@@ -206,20 +211,38 @@ export class ContentPieceService {
     id: string,
     requesterWawuId: string | undefined,
   ): Promise<ContentPieceResponse> {
-    const content = await this.prisma.contentPiece.findUnique({
+    const first = await this.prisma.contentPiece.findUnique({
       where: { id },
     });
-    if (!content) {
+    if (!first) {
       throw new NotFoundException('Content not found');
     }
     // Removed is gone for everyone, owner included — there is no undelete,
     // so an owner-exception here would resurrect a piece nothing else can see.
-    if (content.status === 'removed') {
+    // One kind of removed piece is still read by the people who paid for it:
+    // a sold piece its creator's account deletion hid (owner ruling, 16 Oct
+    // 2026, SETTINGS-06; from the moment of DELETE, lead ruling 17 Oct 2026).
+    // Only a completed purchase opens it, never ownership: the creator who
+    // asked for the deletion is not let back in.
+    // `content` is the piece as it is when that is decided: a purge or a cancel
+    // that lands between the read and the check is not a 404 (round 9).
+    const { piece: content, hidden: keptForBuyers } = await readHidden(
+      this.prisma,
+      first,
+    );
+    if (!content || (content.status === 'removed' && !keptForBuyers)) {
       throw new NotFoundException('Content not found');
     }
     if (
+      !keptForBuyers &&
       content.status !== 'live' &&
       content.creatorWawuId !== requesterWawuId
+    ) {
+      throw new NotFoundException('Content not found');
+    }
+    if (
+      keptForBuyers &&
+      !(await hasBoughtContent(this.prisma, content.id, requesterWawuId))
     ) {
       throw new NotFoundException('Content not found');
     }
@@ -1253,11 +1276,19 @@ export class ContentPieceService {
   async save(contentId: string, userWawuId: string): Promise<SavedItem> {
     const content = await this.prisma.contentPiece.findUnique({
       where: { id: contentId },
-      select: { id: true, creatorWawuId: true },
+      select: { id: true, creatorWawuId: true, status: true },
     });
     if (!content) {
       throw new NotFoundException('Content not found');
     }
+    // A piece an account deletion hid can be saved only by its buyers
+    // (SETTINGS-06 round 8); every other removed piece is as it was.
+    await assertBuyerOnlyIfHidden(
+      this.prisma,
+      content,
+      userWawuId,
+      'Content not found',
+    );
     await this.blockedAccounts.assertVisible(
       userWawuId,
       content.creatorWawuId,
@@ -1299,6 +1330,12 @@ export class ContentPieceService {
     if (!content) {
       throw new NotFoundException('Content not found');
     }
+    await assertBuyerOnlyIfHidden(
+      this.prisma,
+      content,
+      raterWawuId,
+      'Content not found',
+    );
     await this.blockedAccounts.assertVisible(
       raterWawuId,
       content.creatorWawuId,

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '../../../generated/prisma/client';
 import type { PaymentKind } from '../dto/money-enums';
 import type { MoneyPartyView } from '../money-view.type';
 import type { PayableTerms } from './payable-terms';
@@ -105,6 +106,20 @@ export interface CompletedPayment {
 export interface PayableKindHandler {
   readonly kind: PaymentKind;
   resolve(lookup: PayableLookup): Promise<PayableTarget>;
+  /**
+   * Optional (EVENTS-13). A rule that must hold across a person's payments for
+   * the kind (a cap on open ticket orders), which `resolve` cannot keep
+   * because two payments claim at once. It runs INSIDE the claim's
+   * transaction, after WAWU's limits and before the payment is written, on
+   * the claim's own `tx`: it takes whatever short lock it needs, counts, and
+   * throws a `MoneyError` to refuse. Nothing is recorded and nothing is sent
+   * when it throws. It touches the database only, never the network: the
+   * transaction is open while it runs.
+   */
+  beforeClaim?(
+    lookup: PayableLookup,
+    tx: Prisma.TransactionClient,
+  ): Promise<void>;
   onCompleted?(payment: CompletedPayment): Promise<void>;
 }
 

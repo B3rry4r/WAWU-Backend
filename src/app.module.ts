@@ -88,6 +88,7 @@ import { WalletBillsModule } from './wallet-bills/wallet-bills.module';
 import { CreditWalletModule } from './credit-purchase/wallet/credit-wallet.module';
 import { EventWalletOrdersModule } from './event-ticketing/wallet/event-wallet-orders.module';
 import { PointsConvertModule } from './points/convert/points-convert.module';
+import { PointsSpendModule } from './points/spend/points-spend.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { NuvionWebhookModule } from './nuvion/webhook/nuvion-webhook.module';
@@ -429,6 +430,12 @@ import { PushModule } from './push/push.module';
     // finishes a conversion whose answer was lost. `points` is a first segment
     // nothing else declares; it sits after PlansModule and MoneyModule.
     PointsConvertModule,
+    // Spend points on AI tools (task POINTS-03): `points/quote`,
+    // `points/shortfall` (POST, and GET by id) and `me/points/settings`, the
+    // internal hold, commit and release the AI tools call, and the sweep of
+    // stale AI holds. After PointsConvertModule; `quote` and `shortfall` are
+    // segments of `points` no other controller declares.
+    PointsSpendModule,
     // The event registration link (task JOIN-01): `waitlist/offers/current`,
     // `waitlist/registrations` (register, verify, status) and the team's
     // `admin/waitlist/registrations` (list, export). `waitlist` and

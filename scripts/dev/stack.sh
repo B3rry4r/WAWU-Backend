@@ -9,10 +9,14 @@
 #   scripts/dev/stack.sh down   --name <n> [--scratch <dir>]
 #
 # Always started (from this repo): a database <n>_wawu_hub_test, its migrations,
-# the Hub on port a, and the mock WAWU ID (the one the contract suite uses) on
-# port b, the last port of the range. Payments use the repo's own in-process
-# Flutterwave mock (no key set); Fintava points at a closed port on this
-# machine; block-net.cjs refuses any request to a host that is not this machine.
+# the Hub on port a, a local Nuvion stand-in (scripts/dev/nuvion-standin.cjs) on
+# port b-1, and the mock WAWU ID (the one the contract suite uses) on port b, the
+# last port of the range. The Hub always runs WALLET_PROVIDER=nuvion: every wallet
+# call goes to the stand-in (nuvion-redirect.cjs sends the one Nuvion sandbox host
+# there; the stand-in signs its webhooks with a test secret the stack sets).
+# Payments use the repo's own in-process Flutterwave mock (no key set); Fintava
+# stays pointed at a closed port on this machine and is never used;
+# block-net.cjs refuses any request to a host that is not this machine.
 # With --with:
 #   id      the real wawu-id (--id <path>) on a+1, database <n>_wawu_id_test;
 #           the Hub then signs people in through it instead of the mock
@@ -31,6 +35,9 @@
 # STACK_STORAGE_ENDPOINT / STACK_STORAGE_PATH_STYLE=true point the Hub's object storage at a stand-in on this
 # machine (for example http://127.0.0.1:7184), so a spec can see the Hub's own storage calls (deletes included).
 # Left unset, the endpoint is a name block-net.cjs refuses, which is what a spec that never reaches storage wants.
+#
+# The stand-in's control routes, and how to seed a funded wallet and fire a webhook:
+# README.md, "Local test stack", and scripts/dev/nuvion-tool.cjs.
 #
 # It never calls a real provider, a wawuafrica.com host or the production Hub.
 set -uo pipefail
@@ -141,6 +148,9 @@ cmd_status() {
     else state="NOT listening (process gone)"; bad=1; fi
     printf '%-9s :%-5s pid %-7s %s\n' "$name" "$port" "$pid" "$state"
   done < "$PIDS"
+  local prov="" nport=""
+  [ -f "$ENVF" ] && prov="$(sed -n 's/^WALLET_PROVIDER=//p' "$ENVF")" && nport="$(sed -n 's/^NUV_PORT=//p' "$ENVF")"
+  [ -n "$prov" ] && printf 'provider  %s (stand-in on :%s)\n' "$prov" "$nport"
   return "$bad"
 }
 
@@ -212,6 +222,7 @@ ID_PORT=$((PORT_A + 1))
 WEB_PORT=$((PORT_A + 2))
 MOB_PORT=$((PORT_A + 3))
 MOCK_PORT=$PORT_B
+NUV_PORT=$((PORT_B - 1))
 TOP=$HUB_PORT
 (( WITH_ID )) && TOP=$ID_PORT
 (( WITH_WEB )) && TOP=$WEB_PORT
@@ -221,12 +232,12 @@ USED_PORTS=("$HUB_PORT:hub")
 (( WITH_ID )) && USED_PORTS+=("$ID_PORT:wawu-id")
 (( WITH_WEB )) && USED_PORTS+=("$WEB_PORT:web")
 (( WITH_MOBILE )) && USED_PORTS+=("$MOB_PORT:mobile")
-if (( MOCK_PORT <= TOP )); then
+if (( NUV_PORT <= TOP )); then
   ASKED=""
   for pair in "${USED_PORTS[@]}"; do ASKED="$ASKED ${pair#*:} ${pair%%:*},"; done
-  die "the range $PORTS is too small. Needed:${ASKED% ,} and the mock WAWU ID on the last port, which must be above $TOP (for example --ports $PORT_A-$((TOP + 1)))"
+  die "the range $PORTS is too small. Needed:${ASKED% ,}, the Nuvion stand-in on the port below the last, and the mock WAWU ID on the last port, which must be above $((TOP + 1)) (for example --ports $PORT_A-$((TOP + 2)))"
 fi
-USED_PORTS+=("$MOCK_PORT:mock-id")
+USED_PORTS+=("$NUV_PORT:nuvion" "$MOCK_PORT:mock-id")
 
 # ---------------------------------------------------------------- refusals (nothing is changed before these pass)
 [ ! -f "$ENVF" ] || die "stack $NAME already exists ($STATE). Stop it first: scripts/dev/stack.sh down --name $NAME"
@@ -279,6 +290,8 @@ mkdir -p "$LOGS" || die "cannot create $LOGS"
   echo "WITH=$WITH"
   echo "HUB_PORT=$HUB_PORT"
   echo "MOCK_PORT=$MOCK_PORT"
+  echo "NUV_PORT=$NUV_PORT"
+  echo "WALLET_PROVIDER=nuvion"
   echo "DB_HUB=$DB_HUB"
   (( WITH_ID )) && { echo "ID_PORT=$ID_PORT"; echo "DB_ID=$DB_ID"; echo "ID_DIR=$ID_DIR"; }
   (( WITH_WEB )) && { echo "WEB_PORT=$WEB_PORT"; echo "WEB_DIR=$WEB_DIR"; }
@@ -364,6 +377,11 @@ BUILD_LOCK="$SCRATCH/.build.lock"
 mkdir -p "$SCRATCH"
 SERVICE_KEY="stack-$NAME-$(rand_hex)"
 ADMIN_SECRET="$(rand_hex)"; ADMIN_REFRESH="$(rand_hex)"
+# Nuvion on this stack: a test webhook secret shared by the stand-in (signs) and the Hub (verifies), kept off disk,
+# WAWU's operational account, and the fees (kobo; the stand-in charges what the Hub is told to quote).
+NUVION_SECRET="stack-nuvion-whsec-$(rand_hex)"
+NUVION_OPS_ID="01STACKOPERATIONAL0000001"
+NUVION_FEE_BOOK="${STACK_NUVION_FEE_BOOK:-0}"; NUVION_FEE_BANK="${STACK_NUVION_FEE_BANK:-2500}"; NUVION_FEE_IN="${STACK_NUVION_FEE_INFLOW:-0}"
 HUB_DB_URL="$PG_BASE/$DB_HUB?schema=public"
 ID_DB_URL="$PG_BASE/$DB_ID?schema=public"
 BLOCK_NET="--require=$DEV_DIR/block-net.cjs"
@@ -390,6 +408,13 @@ build_all() {
   LENV=(MOCK_WAWU_ID_PORT="$MOCK_PORT" WAWU_ID_INTERNAL_SERVICE_KEY="$SERVICE_KEY")
   service mock-id "$MOCK_PORT" "$HUB_DIR" "http://127.0.0.1:$MOCK_PORT/health" 30 node mock-wawu-id/server.js || { flock -u 9; return 1; }
   flock -u 9
+
+  # ---- the Nuvion stand-in (the Hub's only wallet provider on this stack)
+  LENV=(NUVION_STANDIN_PORT="$NUV_PORT" HUB_WEBHOOK_URL="http://127.0.0.1:$HUB_PORT/api/hub/webhooks/nuvion"
+    NUVION_WEBHOOK_SECRET="$NUVION_SECRET" NUVION_OPERATIONAL_ACCOUNT_ID="$NUVION_OPS_ID"
+    NUVION_FEE_BOOK_TRANSFER="$NUVION_FEE_BOOK" NUVION_FEE_BANK_PAYOUT="$NUVION_FEE_BANK" NUVION_FEE_INFLOW="$NUVION_FEE_IN"
+    NODE_OPTIONS="$BLOCK_NET")
+  service nuvion "$NUV_PORT" "$HUB_DIR" "http://127.0.0.1:$NUV_PORT/health" 30 node scripts/dev/nuvion-standin.cjs || return 1
 
   # ---- the real wawu-id
   if (( WITH_ID )); then
@@ -430,10 +455,14 @@ build_all() {
     STORAGE_SECRET_ACCESS_KEY=stack-secret STORAGE_BUCKET=stack-bucket STORAGE_REGION=auto
     STORAGE_FORCE_PATH_STYLE="${STACK_STORAGE_PATH_STYLE:-}"
     FINTAVA_BASE_URL=http://127.0.0.1:1/api/dev FINTAVA_API_KEY=stack-key-not-real
+    WALLET_PROVIDER=nuvion NUVION_BASE_URL=https://api.nuvion.dev NUVION_API_KEY=stack-nuvion-key-not-real
+    NUVION_WEBHOOK_SECRET="$NUVION_SECRET" NUVION_OPERATIONAL_ACCOUNT_ID="$NUVION_OPS_ID"
+    NUVION_FEE_BOOK_TRANSFER="$NUVION_FEE_BOOK" NUVION_FEE_BANK_PAYOUT="$NUVION_FEE_BANK" NUVION_FEE_INFLOW="$NUVION_FEE_IN"
+    STACK_NUVION_STANDIN_PORT="$NUV_PORT"
     FINTAVA_WEBHOOK_SECRET="whsec_stack_$NAME" FEE_QUOTE_KEY="stack-fee-quote-key-$SERVICE_KEY"
     MERCHANT_MAX_PER_TXN_KOBO=1000000000 IDENTITY_HASH_KEY="$SERVICE_KEY"
     CARDEX_API_KEY= GEMINI_API_KEY= EXPO_ACCESS_TOKEN= PUSH_ENABLED=false
-    NODE_OPTIONS="$BLOCK_NET --max-old-space-size=1536")
+    NODE_OPTIONS="$BLOCK_NET --require=$DEV_DIR/nuvion-redirect.cjs --max-old-space-size=1536")
   service hub "$HUB_PORT" "$HUB_DIR" "http://127.0.0.1:$HUB_PORT/api/hub/health" 90 node dist/src/main.js || return 1
 
   # ---- the web production build
@@ -483,6 +512,7 @@ export DATABASE_URL="$HUB_DB_URL"
 export WAWU_ID_JWKS_URL="http://localhost:$MOCK_PORT/.well-known/jwks.json"
 export WAWU_ID_BASE_URL="http://localhost:$MOCK_PORT"
 export HUB_URL="http://localhost:$HUB_PORT"
+export NUVION_STANDIN_URL="http://127.0.0.1:$NUV_PORT"
 EOF
 
 # ---------------------------------------------------------------- summary

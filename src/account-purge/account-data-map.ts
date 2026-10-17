@@ -177,6 +177,12 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // link anyone follows once the account is gone.
   { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
+  // A tier purchase this account chose to pay by bank transfer (TIER-05): the
+  // item, the quote it was confirmed at and where it stands. OWNED, like
+  // MakerPurchase above: it exists only because this account placed it and
+  // names no counterparty. The wallet payment that paid it, if any, stays as
+  // the money's record (WalletPayment, anonymised).
+  { model: 'PlanTransferOrder', column: 'wawuUserId', disposition: 'OWNED' },
   // A product this person was still drafting (TIER-02): its details, no file.
   // It exists only because this account does and is shown to nobody else.
   { model: 'ProductDraft', column: 'wawuUserId', disposition: 'OWNED' },
@@ -449,6 +455,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PointLedger', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointHold', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointLot', column: 'wawuUserId', disposition: 'OWNED' },
+  // "Use wallet" (POINTS-03, PT3): this person's choice about points; theirs alone.
+  { model: 'PointsSetting', column: 'wawuUserId', disposition: 'OWNED' },
   // Points turned into cash (POINTS-04): each row is WAWU's own movement of
   // cash from its account to this person's wallet, and the provider's record
   // of it (our reference, the amount, whether it was confirmed) must outlive
@@ -463,6 +471,39 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'ANONYMISED',
     clear: ['destinationAccountNumber'],
   },
+
+  // ── referral points (REF-02) ────────────────────────────────────────────
+  // This person's own code, the code they used, and the rewards and milestones
+  // that rest on those. A reward and a claim name two people, and either one's
+  // deletion removes the row: the other keeps the points already granted (they
+  // are lots, mapped above), not the record of who was invited. Rewards go
+  // first (they point at the claim), then milestones, claims and the code.
+  {
+    model: 'ReferralReward',
+    column: 'referrerWawuUserId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'ReferralReward',
+    column: 'referredWawuUserId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'ReferralMilestone',
+    column: 'referrerWawuUserId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'PersonReferral',
+    column: 'referrerWawuUserId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'PersonReferral',
+    column: 'referredWawuUserId',
+    disposition: 'OWNED',
+  },
+  { model: 'PersonReferralCode', column: 'wawuUserId', disposition: 'OWNED' },
 
   // The city on this person's professional card (PROS-02). Theirs, and
   // public only beside a listing that goes with them.
@@ -494,6 +535,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // The mark that this account's deletion was asked for, which stops push
   // until the purge: the purge is that deletion, so the mark goes too.
   { model: 'PushStoppedAccount', column: 'userWawuId', disposition: 'OWNED' },
+  // The content pieces a scheduled deletion hid (SETTINGS-06): their ids and
+  // the status each had, so a cancel can put them back. The pieces go in this
+  // same purge, so the list goes too.
+  {
+    model: 'AccountDeletionContent',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
 
   // Last: everything above may reference these.
   // An admin's choice to feature this creator in Explore (EXPLORE-03): a
@@ -603,6 +652,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   },
 
   // ── admin audit trail, kept on purpose ──────────────────────────────────
+  // The record that this account's deletion was scheduled and ran (SETTINGS-06):
+  // dates, the wallet's provider id and a status. It holds no personal detail,
+  // and the purge sweep reads it to know the deletion is done, so it stays.
+  { model: 'AccountDeletion', column: 'wawuUserId', disposition: 'AUDIT' },
   { model: 'AdminKycAudit', column: 'subjectWawuUserId', disposition: 'AUDIT' },
   {
     model: 'AdminVerificationAudit',

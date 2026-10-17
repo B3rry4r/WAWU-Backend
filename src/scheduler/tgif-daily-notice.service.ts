@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { PlanSettingsService } from '../plan-settings/plan-settings.service';
 import { NotificationService } from '../notification/notification.service';
 import { TgifContentService } from '../tgif/content/tgif-content.service';
 import {
@@ -11,8 +11,7 @@ import {
   TGIF_NOTICE_EVERY,
   TGIF_NOTICE_KEEP_DAYS,
   TGIF_NOTICE_RUN_BUDGET_MS,
-  TGIF_NOTIFICATION_TIME_DEFAULT,
-  TGIF_NOTIFICATION_TIME_KEY,
+  TGIF_NOTIFICATION_TIME_SETTING,
   parseNoticeTime,
 } from './tgif-daily-notice.config';
 
@@ -58,7 +57,7 @@ export function lagosClock(now: Date): { day: string; minutes: number } {
  *
  * WHAT IT DOES. Every few minutes the job asks one question: "is it time to
  * make today's notices, and who is still owed one?". From the set time in
- * Lagos (`tgif_notification_time`, default 07:00) until the catch-up window
+ * Lagos (the admin setting `tgif_notification_time`, launch value 07:00) until the catch-up window
  * closes it writes one `tgif_daily` notification for each person who has TGIF
  * on (`TgifPreference.show`, true unless they turned it off in Settings, Z2
  * "TGIF each morning"), titled with that day's TGIF. The phone push is not
@@ -73,6 +72,13 @@ export function lagosClock(now: Date): { day: string; minutes: number } {
  * who turns TGIF on after the set time is reached by the next look inside the
  * window; one who turns it off is skipped at the claim, and a notice already
  * written is not pushed (push-sender reads the switch before sending).
+ *
+ * CHANGING THE TIME (HOME-17). The time is read on every look, so an admin's
+ * edit needs no restart and shows at the next look, and the marker above is
+ * kept per person per Lagos day whatever the time is: moving the time on a day
+ * the notices already went out sends nobody a second one, and the next day's
+ * notices are made at the new time. A change made before the day's notices
+ * have gone out moves that day's too, because nothing was sent yet.
  *
  * A DAY WITH NO TGIF sends nothing: if the book cannot give the day, the run
  * says so in the log and writes nothing.
@@ -95,7 +101,7 @@ export class TgifDailyNoticeService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationService,
     private readonly content: TgifContentService,
-    private readonly config: ConfigService,
+    private readonly settings: PlanSettingsService,
   ) {}
 
   @Cron(TGIF_NOTICE_EVERY, { name: 'tgif-daily-notice' })
@@ -115,18 +121,22 @@ export class TgifDailyNoticeService {
     }
   }
 
-  /** The set time as minutes after midnight in Lagos; a bad setting falls back to the default and says so. */
+  /**
+   * The set time as minutes after midnight in Lagos: the admin setting
+   * `tgif_notification_time`, read live on every look (HOME-17), so an edit
+   * shows at the next look with no restart. The registry only keeps a value
+   * that passes its own check, so this is always a time of day.
+   */
   noticeMinutes(): number {
-    const raw = this.config.get<string>(TGIF_NOTIFICATION_TIME_KEY);
-    if (raw === undefined || raw.trim() === '') {
-      return parseNoticeTime(TGIF_NOTIFICATION_TIME_DEFAULT) as number;
+    const set = this.settings.text(TGIF_NOTIFICATION_TIME_SETTING);
+    const parsed = parseNoticeTime(set);
+    if (parsed === null) {
+      // Unreachable while the registry checks the value; never guess a time.
+      throw new Error(
+        `The setting ${TGIF_NOTIFICATION_TIME_SETTING} is not a time of day.`,
+      );
     }
-    const parsed = parseNoticeTime(raw);
-    if (parsed !== null) return parsed;
-    this.logger.warn(
-      `${TGIF_NOTIFICATION_TIME_KEY} is not a time of day (HH:MM); using ${TGIF_NOTIFICATION_TIME_DEFAULT}.`,
-    );
-    return parseNoticeTime(TGIF_NOTIFICATION_TIME_DEFAULT) as number;
+    return parsed;
   }
 
   /**

@@ -726,7 +726,7 @@ describe('EVENTS-07 buy event tickets from the wallet', () => {
   });
 
   describe("the web's routes keep working beside these", () => {
-    it("a pending wallet order is not failed by the web's verify route, and a called-off event leaves wallet orders to their refund", async () => {
+    it("a pending wallet order is not failed by the web's verify route, and a called-off event sends a wallet order's price back through its hold", async () => {
       const e = await summit();
       const p = await h.buyer(START);
       const q = await start(p, e);
@@ -753,14 +753,15 @@ describe('EVENTS-07 buy event tickets from the wallet', () => {
         (cancel.body as { data: Record<string, unknown> }).data,
       ).toMatchObject({
         cancelled: true,
-        ordersRefunded: 0,
+        ordersRefunded: 1,
         refundsNeedingAttention: 0,
       });
       const order = await h.prisma.eventOrder.findUniqueOrThrow({
         where: { id: q.order.id },
       });
-      // Tickets are void at the door; the refund is EVENTS-10's, through the hold.
-      expect(order).toMatchObject({ status: 'paid', refundError: null });
+      // EVENTS-10: the tickets are void and the price is back with the buyer,
+      // through the hold (the whole of it is in event-call-off-refund.contract.spec.ts).
+      expect(order).toMatchObject({ status: 'refunded', refundError: null });
       expect(
         await h.prisma.eventTicket.count({
           where: { orderId: q.order.id, status: 'void' },
@@ -769,7 +770,7 @@ describe('EVENTS-07 buy event tickets from the wallet', () => {
       const hold = await h.prisma.walletHold.findFirstOrThrow({
         where: { targetId: q.order.id },
       });
-      expect(hold).toMatchObject({ status: 'held', action: null });
+      expect(hold).toMatchObject({ status: 'refunded', action: 'refund' });
     });
 
     it('lets the host replace the tiers over an unpaid quote, and waits for one whose payment is being confirmed', async () => {

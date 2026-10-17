@@ -211,6 +211,34 @@ export class NotificationService {
   }
 
   /**
+   * WALLET-40. `emit()` for a caller whose write must stand or fall with its
+   * own transaction (`client`): the notification is written in it and a
+   * failure is NOT swallowed, so the caller's transaction is undone with it
+   * and tried again. Used where "told once" is the same fact as "the row
+   * exists" (the wallet row and its "account number is ready" notice).
+   *
+   * It does no network call, and the caller must not make one inside the
+   * transaction. Returns the written row, or `null` when the person's switch
+   * for this kind is off (a kind with no switch is never null).
+   */
+  async emitOrThrow(
+    event: NotificationEvent,
+    client: Prisma.TransactionClient,
+  ): Promise<Notification | null> {
+    if (!event.userWawuId) return null;
+    if (await this.isSuppressed(event.userWawuId, event.kind, client)) {
+      return null;
+    }
+    const target = targetFor(event);
+    return client.notification.create({
+      data: {
+        ...composeNotification(event),
+        ...(target ? { target: { create: target } } : {}),
+      },
+    });
+  }
+
+  /**
    * Batch form for the sweeps in SchedulerService, which resolve many
    * recipients at once. Sequential on purpose — these run on a cron with no
    * caller waiting, and a burst of parallel inserts is not worth the
