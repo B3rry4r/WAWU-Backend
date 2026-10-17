@@ -21,7 +21,6 @@ import { readPayoutTransfer } from './payouts';
 import {
   type NuvionStatementLine,
   type NuvionWebhookSubscription,
-  readFeeSimulation,
   readStatementLine,
   readWebhookSubscription,
 } from './reconcile-readers';
@@ -41,11 +40,12 @@ const SCOPE_TTL_MS = 5 * 60_000;
 /**
  * Reconciliation with Nuvion (task NUV-08): the account statements
  * (`GET /accounts/{id}/statements`, one calendar month a call, pending lines
- * included), the transfers read back one by one (`GET /transfers/{id}`), the
- * webhook subscription (`GET` and `PATCH /entity-webhooks`, renewed before
- * its `expires_in` runs out) and fee simulations (`POST /fee-simulations`).
- * The shapes it reads are in reconcile-readers.ts, which says what the saved
- * docs were not here to confirm. This file is NUV-08's alone.
+ * included), the transfers read back one by one (`GET /transfers/{id}`) and
+ * the webhook subscriptions (`GET /entity-webhooks`, read only: the docs give
+ * no call that extends one, api-reference__webhooks.md "Update a webhook").
+ * Nuvion's docs describe no fee simulation, so none is called. The shapes it
+ * reads are in reconcile-readers.ts, from those docs. This file is NUV-08's
+ * alone.
  *
  * What it never does: move money, add up our own records into a balance, or
  * treat silence as proof. A month it cannot read in full is an error, not a
@@ -101,9 +101,9 @@ export function statementTransaction(
     createdAt: line.createdAt ? line.createdAt.toISOString() : '',
     amountKobo: BigInt(line.amountKobo),
     status: line.status,
-    outcome: nuvionTransferStatus(line.status),
-    ourReference: line.uniqueReference,
-    providerReference: line.uniqueReference,
+    outcome: line.outcome,
+    ourReference: line.reference,
+    providerReference: line.reference,
     secondaryReference: null,
     sessionId: null,
     feeKobo: line.feeKobo === null ? null : BigInt(line.feeKobo),
@@ -194,7 +194,9 @@ export class NuvionReconcileArea implements NuvionReconcileMethods {
 
   /**
    * Every line of one calendar month (`GET /accounts/{id}/statements`,
-   * `include_pending`), following the cursor to the end. A month longer
+   * `include_pending`), following the cursor to the end (`cursor` is
+   * pagination.md's parameter for any list; the statement's own query
+   * parameters name none, and its `pagination` answers with `next_cursor`). A month longer
    * than the page cap, or a page that says more follow without a new
    * cursor, is an error: a shorter list is never returned as the month.
    */
@@ -221,7 +223,7 @@ export class NuvionReconcileArea implements NuvionReconcileMethods {
     let unreadable = 0;
     let cursor: string | undefined;
     for (let pages = 1; ; pages += 1) {
-      const page = await this.client.listPage<unknown>(
+      const page = await this.client.statementPage<unknown>(
         op,
         `/accounts/${encodeURIComponent(scope.accountId)}/statements`,
         {
@@ -432,64 +434,6 @@ export class NuvionReconcileArea implements NuvionReconcileMethods {
       if (sub) out.push(sub);
     }
     return out;
-  }
-
-  /**
-   * `PATCH /entity-webhooks/{id}` with a new `expires_in` (seconds): the
-   * subscription runs on, the same address and events. A write that creates
-   * nothing; asking twice only sets the period again.
-   */
-  async renewWebhookSubscription(
-    id: string,
-    expiresInSeconds: number,
-  ): Promise<NuvionWebhookSubscription> {
-    const op: NuvionOp = { name: 'renew webhook', call: 'write' };
-    if (
-      !isNuvionId(id) ||
-      !Number.isSafeInteger(expiresInSeconds) ||
-      expiresInSeconds <= 0
-    ) {
-      throw this.invalid(op, 'a subscription or period');
-    }
-    const answer = await this.client.patch<unknown>(
-      op,
-      `/entity-webhooks/${encodeURIComponent(id)}`,
-      { expires_in: expiresInSeconds },
-    );
-    const sub = readWebhookSubscription(answer.data);
-    if (!sub || sub.id !== id) {
-      throw this.unreadable(op, 'the answer is not the subscription');
-    }
-    return sub;
-  }
-
-  // -------------------------------------------------------------------------
-  // Fee simulations
-  // -------------------------------------------------------------------------
-
-  /**
-   * `POST /fee-simulations`: what Nuvion would charge for a movement of this
-   * kind and amount, from WAWU's operational account. It moves nothing.
-   */
-  async simulateFee(input: {
-    paymentType: 'book-transfer' | 'bank-transfer';
-    type: 'inflow' | 'outflow';
-    amountKobo: number;
-  }): Promise<number> {
-    const op: NuvionOp = { name: 'simulate fee', call: 'read' };
-    if (!Number.isSafeInteger(input.amountKobo) || input.amountKobo <= 0) {
-      throw this.invalid(op, 'an amount');
-    }
-    const answer = await this.client.post<unknown>(op, '/fee-simulations', {
-      account_id: this.client.settings.operationalAccountId,
-      amount: input.amountKobo,
-      currency: NUVION_NAIRA,
-      type: input.type,
-      payment_type: input.paymentType,
-    });
-    const fee = readFeeSimulation(answer.data);
-    if (fee === null) throw this.unreadable(op, 'the simulation states no fee');
-    return fee;
   }
 
   // -------------------------------------------------------------------------

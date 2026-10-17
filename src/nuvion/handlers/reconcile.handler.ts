@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { readNuvionFees } from '../../money/fees/nuvion-fee-config';
 import {
   WALLET_PROVIDER,
   type WalletProvider,
@@ -32,7 +31,7 @@ const HOUR = 3_600_000;
 
 /**
  * Reconciliation with Nuvion (task NUV-08): the missed-delivery sweep, the
- * webhook subscription's renewal and the fee comparison, run on a schedule.
+ * webhook subscription check and the fee check's notice, run on a schedule.
  * This file is NUV-08's alone: it never edits the receiver, the dispatcher
  * or another task's handler, and it needs no module of its own (NUV-01
  * already provides it in NuvionWebhookModule).
@@ -40,8 +39,8 @@ const HOUR = 3_600_000;
  * It lists no event, so no delivery reaches `handle`: Nuvion's deliveries
  * are another task's. What it does is on a clock. Every minute `tick` looks
  * at what is due: the sweep and the subscription check every
- * NUVION_SWEEP_MINUTES, the fee comparison every NUVION_SIMULATE_FEES_HOURS
- * (reconcile-config.ts). Only under `WALLET_PROVIDER=nuvion`: a server
+ * NUVION_SWEEP_MINUTES (reconcile-config.ts). The fee check says once that it
+ * is not available (Nuvion's docs describe no fee simulation). Only under `WALLET_PROVIDER=nuvion`: a server
  * switched back to Fintava does nothing here (NUV-01's rollback rule). A
  * pass that throws is logged and tried again next time; one at a time per
  * server, and two servers doing the same pass is safe (the ledger keeps one
@@ -58,7 +57,7 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
   private readonly logger = new Logger('NuvionReconcile');
   private running = false;
   private lastSweepAt: number | null = null;
-  private lastFeeCheckAt: number | null = null;
+  private feeCheckDone = false;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -87,12 +86,14 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
         this.lastSweepAt = now.getTime();
         await this.guarded('sweep', () => this.sweep(now));
         await this.guarded('subscription check', () =>
-          this.checkSubscription(now),
+          this.checkSubscription(),
         );
       }
-      if (due(this.lastFeeCheckAt, settings.feeCheckHours * HOUR)) {
-        this.lastFeeCheckAt = now.getTime();
-        await this.guarded('fee check', () => this.checkFees());
+      if (!this.feeCheckDone) {
+        await this.guarded('fee check', async () => {
+          await this.checkFees();
+          this.feeCheckDone = true;
+        });
       }
     } finally {
       this.running = false;
@@ -128,27 +129,19 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
   }
 
   /** The subscription check now. Null when Nuvion is not the running provider. */
-  async checkSubscription(
-    now = new Date(),
-  ): Promise<NuvionSubscriptionOutcome | null> {
+  async checkSubscription(): Promise<NuvionSubscriptionOutcome | null> {
     const provider = this.nuvion();
     if (!provider) return null;
     return new NuvionSubscriptionCheck(
       provider,
       new NuvionReconcileFindings(this.prisma),
-      this.settings().renewHours * HOUR,
-    ).run(now);
+    ).run();
   }
 
-  /** The fee comparison now. Null when Nuvion is not the running provider. */
+  /** The fee check now. Null when Nuvion is not the running provider. */
   async checkFees(): Promise<NuvionFeeCheckResult | null> {
-    const provider = this.nuvion();
-    if (!provider) return null;
-    return new NuvionFeeCheck(
-      provider,
-      new NuvionReconcileFindings(this.prisma),
-      () => readNuvionFees(this.getter()),
-    ).run();
+    if (!this.nuvion()) return null;
+    return new NuvionFeeCheck(new NuvionReconcileFindings(this.prisma)).run();
   }
 
   private async guarded(what: string, run: () => Promise<unknown>) {

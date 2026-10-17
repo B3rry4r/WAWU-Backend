@@ -15,7 +15,7 @@ import {
   type StandinAccount,
 } from '../../../test/nuvion/accounts-standin';
 import { NuvionBookStandin } from '../../../test/nuvion/book-standin';
-import { NuvionStandin } from '../../../test/nuvion/nuvion-standin';
+import { errorBody, NuvionStandin } from '../../../test/nuvion/nuvion-standin';
 import {
   guardOutbound,
   type OutboundGuard,
@@ -42,7 +42,7 @@ import { NuvionWebhookModule } from '../webhook/nuvion-webhook.module';
 
 /**
  * NUV-08 end to end on a real database: the sweep, the webhook
- * subscription's renewal and the fee comparison, over Nuvion's stand-in
+ * subscription check and the fee check's notice, over Nuvion's stand-in
  * (test/nuvion/reconcile-standin.ts) through the real adapter and client,
  * with the stored deliveries handed to the real NUV-04, NUV-05 and NUV-06
  * handlers by the real dispatcher and the ledger written by the real
@@ -81,7 +81,7 @@ interface Person {
   number: string;
 }
 
-describe('NUV-08: missed deliveries, the webhook subscription and the fee comparison', () => {
+describe('NUV-08: missed deliveries, the webhook subscription and the fee check', () => {
   const wawuId = new WawuIdDouble();
   const standin = new NuvionStandin();
   const accounts = new NuvionAccountsStandin(standin);
@@ -543,6 +543,33 @@ describe('NUV-08: missed deliveries, the webhook subscription and the fee compar
       expect((await logged()).status).toBe('successful');
     });
 
+    it('a statement line that cannot be read back is reported, not only counted', async () => {
+      const p = await activePerson();
+      const inflow = accounts.addInflow(p.account, {
+        id: uid(),
+        amount: 10_000,
+        created: longAgo(),
+      });
+      standin.on('GET', `/transfers/${inflow.id}`, {
+        status: 404,
+        body: errorBody('error_resource_not_found', 'Resource does not exist'),
+      });
+      const report = await handler.sweep(new Date());
+      expect(report!.unreadable).toBeGreaterThanOrEqual(1);
+      expect(report!.incomplete.join(' ')).toMatch(
+        /could not be read back \(not_found\)/,
+      );
+      expect(await eventsOf(inflow.id)).toHaveLength(0);
+      expect(
+        await prisma.nuvionReconcileFinding.findUnique({
+          where: {
+            kind_subject: { kind: 'sweep_incomplete', subject: 'sweep' },
+          },
+        }),
+      ).toMatchObject({ resolvedAt: null });
+      rec.install();
+    });
+
     it('a statement that cannot be read is reported, not taken as "nothing happened"; the next clean pass clears it', async () => {
       standin.next(
         {
@@ -580,60 +607,47 @@ describe('NUV-08: missed deliveries, the webhook subscription and the fee compar
       prisma.nuvionReconcileFinding.findMany({
         where: { kind, resolvedAt: null },
       });
+    const writes = () =>
+      standin.seen.filter(
+        (r) => r.path.startsWith('/entity-webhooks') && r.method !== 'GET',
+      );
 
     beforeEach(() => {
       rec.subscriptions.clear();
-      rec.renewals.length = 0;
-      rec.failRenewals = false;
-      rec.renewalsDoNothing = false;
     });
 
-    it('one about to expire is renewed for the period it had; a far one is left alone', async () => {
-      const near = rec.addSubscription({
-        expires_in: 86_400,
-        expires_at: Date.now() + 3_600_000,
-      });
-      const far = rec.addSubscription({
-        expires_at: Date.now() + 20 * 86_400_000,
-      });
-      const other = rec.addSubscription({
+    it('an active one is left alone; nothing is renewed, rotated or written', async () => {
+      rec.addSubscription({ expires_in: 3_600 });
+      rec.addSubscription({
         url: 'https://elsewhere.example.test/hooks',
-        expires_at: Date.now() + 1_000,
+        status: 'inactive',
       });
-      expect(await handler.checkSubscription()).toBe('renewed');
-      expect(rec.renewals).toEqual([{ expires_in: 86_400 }]);
-      expect(near.expires_at).toBeGreaterThan(Date.now() + 20 * 3_600_000);
-      expect(far.expires_in).toBe(30 * 86_400);
-      expect(other.expires_at).toBeLessThan(Date.now() + 5_000);
-      expect(await open('subscription_renewal_failed')).toHaveLength(0);
+      expect(await handler.checkSubscription()).toBe('ok');
+      expect(await open('subscription_inactive')).toHaveLength(0);
       expect(await open('subscription_missing')).toHaveLength(0);
+      expect(writes()).toHaveLength(0);
     });
 
-    it('a failed renewal is reported with the subscription named, and clears when a later one works', async () => {
-      const sub = rec.addSubscription({
-        expires_at: Date.now() + 3_600_000,
-      });
-      rec.failRenewals = true;
-      expect(await handler.checkSubscription()).toBe('renewal_failed');
-      const [finding] = await open('subscription_renewal_failed');
-      expect(finding.subject).toBe(sub.id);
-      expect(finding.detail).toMatch(/renewal failed/);
-      expect(finding.seenCount).toBe(1);
-      expect(await handler.checkSubscription()).toBe('renewal_failed');
-      expect((await open('subscription_renewal_failed'))[0].seenCount).toBe(2);
+    it('one that Nuvion has made inactive is reported, then cleared once an active one exists', async () => {
+      rec.addSubscription({ status: 'inactive' });
+      expect(await handler.checkSubscription()).toBe('inactive');
+      const [finding] = await open('subscription_inactive');
+      expect(finding).toMatchObject({ subject: 'subscription', seenCount: 1 });
+      expect(finding.detail).toMatch(/not active/);
+      expect(await handler.checkSubscription()).toBe('inactive');
+      expect((await open('subscription_inactive'))[0].seenCount).toBe(2);
+      expect(writes()).toHaveLength(0);
 
-      rec.failRenewals = false;
-      expect(await handler.checkSubscription()).toBe('renewed');
-      expect(await open('subscription_renewal_failed')).toHaveLength(0);
+      rec.addSubscription();
+      expect(await handler.checkSubscription()).toBe('ok');
+      expect(await open('subscription_inactive')).toHaveLength(0);
     });
 
-    it('a renewal Nuvion accepts but does not honour is a failure too', async () => {
-      rec.addSubscription({ expires_at: Date.now() + 3_600_000 });
-      rec.renewalsDoNothing = true;
-      expect(await handler.checkSubscription()).toBe('renewal_failed');
-      expect((await open('subscription_renewal_failed'))[0].detail).toMatch(
-        /still ends soon/,
-      );
+    it('an old inactive one beside an active one is no finding', async () => {
+      rec.addSubscription({ status: 'inactive' });
+      rec.addSubscription({ status: 'active' });
+      expect(await handler.checkSubscription()).toBe('ok');
+      expect(await open('subscription_inactive')).toHaveLength(0);
     });
 
     it('no subscription for our address at all is reported', async () => {
@@ -645,7 +659,7 @@ describe('NUV-08: missed deliveries, the webhook subscription and the fee compar
       expect(await open('subscription_missing')).toHaveLength(0);
     });
 
-    it('a list that cannot be read is reported', async () => {
+    it('a list that cannot be read is reported, and clears on the next good read', async () => {
       standin.next(
         {
           status: 503,
@@ -658,118 +672,50 @@ describe('NUV-08: missed deliveries, the webhook subscription and the fee compar
         4,
       );
       expect(await handler.checkSubscription()).toBe('unreadable');
-      expect(await open('subscription_renewal_failed')).toHaveLength(1);
+      expect(await open('subscription_unreadable')).toHaveLength(1);
       standin.reset();
+      rec.addSubscription();
+      expect(await handler.checkSubscription()).toBe('ok');
+      expect(await open('subscription_unreadable')).toHaveLength(0);
     });
   });
 
   // ---------------------------------------------------------------------
-  // The fee comparison
+  // The fee check
   // ---------------------------------------------------------------------
 
-  describe('the fee comparison', () => {
-    beforeEach(() => {
-      rec.simulations.length = 0;
-    });
-
-    it('a difference is reported with both figures and the setting is never changed', async () => {
-      // Nuvion charges 1,500 or 2,500 on a payout, as the book transfer
-      // setting says; the payout setting says 2,500 flat.
-      rec.simulatedFee = ({ type, amount }) =>
-        type === 'inflow' ? 0 : amount >= 500_000 ? 2_500 : 1_500;
+  describe('the fee check', () => {
+    it('says once that it is not available, and calls no fee route', async () => {
       const settingBefore = process.env.NUVION_FEE_BANK_PAYOUT;
-      const result = await handler.checkFees();
-      expect(result).toEqual({ compared: 3, differences: 1, skipped: 0 });
+      expect(await handler.checkFees()).toEqual({
+        available: false,
+        reported: true,
+      });
       const finding = await prisma.nuvionReconcileFinding.findUniqueOrThrow({
         where: {
-          kind_subject: {
-            kind: 'fee_differs',
-            subject: 'NUVION_FEE_BANK_PAYOUT',
-          },
+          kind_subject: { kind: 'fee_check_unavailable', subject: 'fee-check' },
         },
       });
-      expect(finding).toMatchObject({
-        settingKobo: 2_500n,
-        providerKobo: 1_500n,
-        amountKobo: 100_000n,
-        resolvedAt: null,
+      expect(finding).toMatchObject({ resolvedAt: null, seenCount: 1 });
+      expect(finding.detail).toMatch(/Fee check not available/);
+      expect(finding.detail).not.toContain('\u2014');
+
+      // Again: the finding is open, so nothing is reported a second time.
+      expect(await handler.checkFees()).toEqual({
+        available: false,
+        reported: false,
       });
-      expect(finding.detail).toContain('2500 kobo');
-      expect(finding.detail).toContain('1500 kobo');
-      expect(process.env.NUVION_FEE_BANK_PAYOUT).toBe(settingBefore);
-      // The equal settings raised nothing.
       expect(
-        await prisma.nuvionReconcileFinding.count({
-          where: { kind: 'fee_differs', resolvedAt: null },
-        }),
+        (
+          await prisma.nuvionReconcileFinding.findUniqueOrThrow({
+            where: { id: finding.id },
+          })
+        ).seenCount,
       ).toBe(1);
-      // Every band of the book transfer setting was simulated, from the account that is WAWU's.
-      expect(
-        rec.simulations.filter((s) => s.payment_type === 'book-transfer'),
-      ).toHaveLength(2);
-      expect(
-        rec.simulations.every((s) => s.account_id === book.operational.id),
-      ).toBe(true);
-    });
-
-    it('the same difference seen again is the same finding; once Nuvion agrees it is resolved', async () => {
-      rec.simulatedFee = ({ type, amount }) =>
-        type === 'inflow' ? 0 : amount >= 500_000 ? 2_500 : 1_500;
-      await handler.checkFees();
-      await handler.checkFees();
-      const seen = await prisma.nuvionReconcileFinding.findUniqueOrThrow({
-        where: {
-          kind_subject: {
-            kind: 'fee_differs',
-            subject: 'NUVION_FEE_BANK_PAYOUT',
-          },
-        },
-      });
-      expect(seen.seenCount).toBeGreaterThanOrEqual(2);
-      rec.simulatedFee = ({ type, payment_type }) =>
-        type === 'inflow'
-          ? 0
-          : payment_type === 'bank-transfer'
-            ? 2_500
-            : 1_500;
-      rec.simulatedFee = ({ type, payment_type, amount }) =>
-        type === 'inflow'
-          ? 0
-          : payment_type === 'bank-transfer'
-            ? 2_500
-            : amount >= 500_000
-              ? 2_500
-              : 1_500;
-      expect(await handler.checkFees()).toMatchObject({ differences: 0 });
-      const cleared = await prisma.nuvionReconcileFinding.findUniqueOrThrow({
-        where: { id: seen.id },
-      });
-      expect(cleared.resolvedAt).not.toBeNull();
-    });
-
-    it('an unset setting is skipped and a simulation Nuvion cannot make is no difference', async () => {
-      const saved = process.env.NUVION_FEE_INFLOW;
-      delete process.env.NUVION_FEE_INFLOW;
-      try {
-        standin.next(
-          {
-            status: 503,
-            body: {
-              status: 'error',
-              message: 'down',
-              type: 'error_service_unavailable',
-            },
-          },
-          1,
-        );
-        rec.simulatedFee = () => 2_500;
-        const r = await handler.checkFees();
-        expect(r).toEqual({ compared: 1, differences: 0, skipped: 2 });
-        expect(r!.differences).toBe(0);
-      } finally {
-        process.env.NUVION_FEE_INFLOW = saved;
-        standin.reset();
-      }
+      expect(process.env.NUVION_FEE_BANK_PAYOUT).toBe(settingBefore);
+      expect(standin.seen.filter((r) => r.path.includes('fee'))).toHaveLength(
+        0,
+      );
     });
   });
 
@@ -778,32 +724,50 @@ describe('NUV-08: missed deliveries, the webhook subscription and the fee compar
   // ---------------------------------------------------------------------
 
   describe('the minute clock', () => {
-    it('sweeps and checks the subscription every NUVION_SWEEP_MINUTES, and the fees once a day', async () => {
+    it('sweeps and checks the subscription every NUVION_SWEEP_MINUTES, and says once that the fee check is not available', async () => {
       const fresh = new NuvionReconcileHandler(
         prisma,
         moduleRef.get(ModuleRef),
       );
-      rec.addSubscription({ expires_at: Date.now() + 20 * 86_400_000 });
+      rec.subscriptions.clear();
+      rec.addSubscription();
       const count = (path: string, method = 'GET') =>
         standin.seen.filter((r) => r.method === method && r.path === path)
           .length;
+      const feeFinding = () =>
+        prisma.nuvionReconcileFinding.findUnique({
+          where: {
+            kind_subject: {
+              kind: 'fee_check_unavailable',
+              subject: 'fee-check',
+            },
+          },
+        });
       const t0 = new Date();
       const subs0 = count('/entity-webhooks');
-      const fees0 = count('/fee-simulations', 'POST');
       await fresh.tick(t0);
       expect(count('/entity-webhooks')).toBe(subs0 + 1);
-      const feesAfterFirst = count('/fee-simulations', 'POST');
-      expect(feesAfterFirst).toBeGreaterThan(fees0);
+      expect(await feeFinding()).toMatchObject({
+        resolvedAt: null,
+        seenCount: 1,
+      });
 
       await fresh.tick(new Date(t0.getTime() + 60_000));
       expect(count('/entity-webhooks')).toBe(subs0 + 1);
 
       await fresh.tick(new Date(t0.getTime() + 16 * 60_000));
       expect(count('/entity-webhooks')).toBe(subs0 + 2);
-      expect(count('/fee-simulations', 'POST')).toBe(feesAfterFirst);
 
       await fresh.tick(new Date(t0.getTime() + 25 * 3_600_000));
-      expect(count('/fee-simulations', 'POST')).toBeGreaterThan(feesAfterFirst);
+      expect(await feeFinding()).toMatchObject({ seenCount: 1 });
+      expect(standin.seen.filter((r) => r.path.includes('fee'))).toHaveLength(
+        0,
+      );
+      expect(
+        standin.seen.filter(
+          (r) => r.path.startsWith('/entity-webhooks') && r.method !== 'GET',
+        ),
+      ).toHaveLength(0);
     });
 
     it('does nothing when Nuvion is not the running provider, and calls nothing', async () => {

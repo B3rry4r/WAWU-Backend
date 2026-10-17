@@ -164,7 +164,7 @@ export class NuvionMissedDeliverySweep {
       }
       for (const line of statement.lines) {
         report.linesSeen += 1;
-        if (nuvionTransferStatus(line.status) === 'pending') {
+        if (line.outcome === 'pending') {
           report.stillPending += 1;
           continue;
         }
@@ -374,12 +374,14 @@ export class NuvionMissedDeliverySweep {
     } catch (e) {
       if (!(e instanceof WalletProviderError)) throw e;
       report.unreadable += 1;
+      report.incomplete.push(`a movement could not be read back (${e.kind})`);
       return;
     }
     const object = isRecord(raw) && isRecord(raw.transfer) ? raw.transfer : raw;
     const read = readPayoutTransfer(object);
     if (!read.ok || read.transfer.id !== c.transferId) {
       report.unreadable += 1;
+      report.incomplete.push('a movement read back is not a transfer');
       return;
     }
     const status = nuvionTransferStatus(read.transfer.status);

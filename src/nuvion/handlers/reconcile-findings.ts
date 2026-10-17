@@ -3,9 +3,10 @@ import type { PrismaService } from '../../common/prisma/prisma.service';
 
 /** What the reconciliation reports; see NuvionReconcileFinding in the schema. */
 export type NuvionFindingKind =
-  | 'fee_differs'
+  | 'fee_check_unavailable'
   | 'subscription_missing'
-  | 'subscription_renewal_failed'
+  | 'subscription_inactive'
+  | 'subscription_unreadable'
   | 'sweep_incomplete';
 
 export interface NuvionFindingInput {
@@ -73,6 +74,15 @@ export class NuvionReconcileFindings {
       where: { kind, subject, resolvedAt: null },
       data: { resolvedAt: new Date() },
     });
+  }
+
+  /** Whether a finding of this kind and subject is reported and not resolved. */
+  async isOpen(kind: NuvionFindingKind, subject: string): Promise<boolean> {
+    const row = await this.prisma.nuvionReconcileFinding.findUnique({
+      where: { kind_subject: { kind, subject } },
+      select: { resolvedAt: true },
+    });
+    return row !== null && row.resolvedAt === null;
   }
 
   open() {

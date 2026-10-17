@@ -10,41 +10,45 @@ import {
 
 /**
  * Nuvion's reconciliation routes on the NUV-01 stand-in (task NUV-08): an
- * account's statement, the webhook subscription and fee simulations. Built
- * on the transfers the accounts stand-in (inflows, payouts) and the book
- * stand-in (book transfers) already hold, so a statement and
- * `GET /transfers/{id}` always agree.
+ * account's statement and the webhook subscriptions. Built on the transfers
+ * the accounts stand-in (inflows, payouts) and the book stand-in (book
+ * transfers) already hold, so a statement and `GET /transfers/{id}` always
+ * agree.
  *
- * THE SHAPES ARE AN ASSUMPTION (see src/nuvion/areas/reconcile-readers.ts):
- * the saved copy of Nuvion's docs was not on the machine this was built on.
- * A statement is a cursor list of lines
- * `{ id, transfer_id, type, amount, applicable_fee, balance_after, status,
- * currency, payment_type, unique_reference, narration, created, account_id,
- * entity_id }`, one calendar month a call (`year`, `month`), pending lines
- * only with `include_pending=true`, oldest first. A subscription is
- * `{ id, url, enabled_events, status, expires_in, expires_at, created }`.
- * A fee simulation answers `{ applicable_fee }`.
+ * THE SHAPES ARE NUVION'S PUBLIC DOCS (round 2; api-reference__accounts.md,
+ * "Get account statements", and api-reference__webhooks.md, "The Webhook
+ * object"). A statement is `{ account_id, ..., transactions: [...],
+ * pagination: {...} }` under `data`, one calendar month a call (`year`,
+ * `month`), pending lines only with `include_pending=true`, oldest first;
+ * each line is `{ transaction_id, date (ISO), type (credit|debit),
+ * description, counterparty, amount, fee, net_amount, running_balance,
+ * reference, status (completed|pending), currency }`. A subscription is
+ * `{ id, entity_id, url, expires_in, enabled_events (an object), status
+ * (active|inactive), created, updated, deleted, stats }`. There is NO
+ * fee-simulation route and NO way to renew a subscription, because the docs
+ * show none: a call to one reaches nothing, and the specs assert none is made.
  */
 
 export interface StandinSubscription {
   id: string;
+  entity_id: string;
   url: string;
-  enabled_events: string[];
-  status: 'active' | 'inactive';
   expires_in: number;
-  expires_at: number;
+  enabled_events: Record<string, unknown>;
+  preferred_events: string[];
+  status: 'active' | 'inactive';
   created: number;
+  updated: number;
+  deleted: number;
 }
 
 interface Row {
   transferId: string;
   accountId: string;
-  entityId: string | null;
   type: 'inflow' | 'outflow';
   amount: number;
   fee: number;
   status: string;
-  paymentType: string | null;
   reference: string | null;
   narration: string | null;
   created: number;
@@ -52,22 +56,8 @@ interface Row {
 
 export class NuvionReconcileStandin {
   readonly subscriptions = new Map<string, StandinSubscription>();
-  /** Every `POST /fee-simulations` body, in order. */
-  readonly simulations: Array<Record<string, unknown>> = [];
-  /** Every `PATCH /entity-webhooks/{id}` body, in order. */
-  readonly renewals: Array<Record<string, unknown>> = [];
   /** Statement requests, as asked. */
   readonly statementRequests: Array<Record<string, string>> = [];
-  /** What Nuvion would charge, by kind, for the simulation. */
-  simulatedFee: (input: {
-    type: string;
-    payment_type: string;
-    amount: number;
-  }) => number = () => 0;
-  /** Renewals answer an error until this is false. */
-  failRenewals = false;
-  /** Renewals answer 200 but leave the expiry where it was. */
-  renewalsDoNothing = false;
   /** Lines of a statement a page serves, whatever `limit` asks (to force many pages). */
   pageCap: number | null = null;
 
@@ -85,11 +75,18 @@ export class NuvionReconcileStandin {
     const s: StandinSubscription = {
       id: standinId('01WHK'),
       url: 'https://api.example.test/api/hub/webhooks/nuvion',
-      enabled_events: ['inflows.completed', 'outflows.completed'],
+      entity_id: standinId('01ENT'),
+      enabled_events: {
+        all: false,
+        inflows: { completed: true, failed: true },
+        outflows: { created: true, completed: true, failed: true },
+      },
+      preferred_events: ['inflows.all', 'outflows.all'],
       status: 'active',
       expires_in: 30 * 86_400,
-      expires_at: now + 30 * 86_400_000,
       created: now,
+      updated: now,
+      deleted: 0,
       ...over,
     };
     this.subscriptions.set(s.id, s);
@@ -104,12 +101,10 @@ export class NuvionReconcileStandin {
       rows.push({
         transferId: t.id,
         accountId,
-        entityId: t.entity_id ?? null,
         type: t.type === 'inflow' ? 'inflow' : 'outflow',
         amount: t.amount as number,
         fee: (t.applicable_fee as number | undefined) ?? 0,
         status: String(t.status),
-        paymentType: (t.payment_type as string | undefined) ?? null,
         reference: (t.unique_reference as string | undefined) ?? null,
         narration: (t.narration as string | undefined) ?? null,
         created: t.created as number,
@@ -120,12 +115,10 @@ export class NuvionReconcileStandin {
       rows.push({
         transferId: b.id,
         accountId,
-        entityId: b.entity_id ?? null,
         type: 'outflow',
         amount: b.amount,
         fee: b.applicable_fee ?? 0,
         status: String(b.status),
-        paymentType: 'book-transfer',
         reference: b.unique_reference ?? null,
         narration: b.narration,
         created: b.created,
@@ -176,12 +169,22 @@ export class NuvionReconcileStandin {
         };
       }
       const wantPending = req.query.include_pending === 'true';
+      // The docs show two words for a line, completed and pending; a failed
+      // or reversed transfer moved nothing and is not a line.
+      const wordOf = (status: string) =>
+        status === 'successful'
+          ? 'completed'
+          : status === 'pending' || status === 'processing'
+            ? 'pending'
+            : null;
       const inMonth = this.rowsOf(id).filter((r) => {
         const d = new Date(r.created);
+        const word = wordOf(r.status);
         return (
           d.getUTCFullYear() === year &&
           d.getUTCMonth() + 1 === month &&
-          (wantPending || (r.status !== 'pending' && r.status !== 'processing'))
+          word !== null &&
+          (wantPending || word === 'completed')
         );
       });
       const limit = Math.min(
@@ -197,35 +200,47 @@ export class NuvionReconcileStandin {
         status: 200,
         body: envelope(
           {
-            data: page.map((r) => ({
-              id: `LINE${r.transferId}`.slice(0, 26),
-              transfer_id: r.transferId,
-              account_id: r.accountId,
-              entity_id: r.entityId,
-              type: r.type,
+            account_id: id,
+            account_holder: 'Test Holder',
+            account_currency: 'NGN',
+            ban: a?.nuvion_ban ?? null,
+            generated_at: new Date().toISOString(),
+            period: {
+              start_date: new Date(Date.UTC(year, month - 1, 1)).toISOString(),
+              end_date: new Date().toISOString(),
+            },
+            balances: {
+              opening_balance: 0,
+              closing_balance: this.balanceOf(id),
+              total_credits: 0,
+              total_debits: 0,
+              total_fees: 0,
+            },
+            transactions: page.map((r) => ({
+              transaction_id: r.transferId,
+              date: new Date(r.created).toISOString(),
+              type: r.type === 'inflow' ? 'credit' : 'debit',
+              description: r.narration ?? 'Transfer',
+              counterparty: { name: 'Test counterparty', account_number: null },
               amount: r.amount,
-              applicable_fee: r.fee,
-              balance_after: r.balance,
-              status: r.status,
+              fee: r.fee,
+              net_amount: r.amount - r.fee,
+              running_balance: r.balance,
+              reference: r.reference ?? r.transferId,
+              status: wordOf(r.status),
               currency: 'NGN',
-              payment_type: r.paymentType,
-              unique_reference: r.reference,
-              narration: r.narration,
-              created: r.created,
             })),
-            meta: {
-              pagination: {
-                order: 'asc',
-                has_next: hasNext,
-                has_previous: start > 0,
-                limit,
-                next_cursor: hasNext ? page[page.length - 1].transferId : null,
-                previous_cursor:
-                  start > 0 ? inMonth[start - 1].transferId : null,
-              },
+            pagination: {
+              order: 'asc',
+              has_next: hasNext,
+              has_previous: start > 0,
+              limit,
+              next_cursor: hasNext ? page[page.length - 1].transferId : null,
+              previous_cursor: start > 0 ? inMonth[start - 1].transferId : null,
+              total_transactions: inMonth.length,
             },
           },
-          'Statement retrieved successfully',
+          'Account statement retrieved successfully',
         ),
       };
     });
@@ -269,45 +284,6 @@ export class NuvionReconcileStandin {
         'Webhooks retrieved successfully',
       ),
     }));
-    s.on('PATCH', /^\/entity-webhooks\/[A-Za-z0-9]+$/, (req): StandinAnswer => {
-      const sub = this.subscriptions.get(req.path.split('/')[2]);
-      if (!sub) return notFound();
-      this.renewals.push((req.body ?? {}) as Record<string, unknown>);
-      if (this.failRenewals) {
-        return {
-          status: 500,
-          body: errorBody('error_internal_server', 'Something went wrong.'),
-        };
-      }
-      const inSeconds = Number(
-        (req.body as { expires_in?: unknown })?.expires_in,
-      );
-      if (!this.renewalsDoNothing && Number.isFinite(inSeconds)) {
-        sub.expires_in = inSeconds;
-        sub.expires_at = Date.now() + inSeconds * 1000;
-      }
-      return {
-        status: 200,
-        body: envelope(sub, 'Webhook updated successfully'),
-      };
-    });
-    s.on('POST', '/fee-simulations', (req) => {
-      const b = (req.body ?? {}) as Record<string, unknown>;
-      this.simulations.push(b);
-      return {
-        status: 200,
-        body: envelope(
-          {
-            applicable_fee: this.simulatedFee({
-              type: String(b.type),
-              payment_type: String(b.payment_type),
-              amount: Number(b.amount),
-            }),
-          },
-          'Fee simulated successfully',
-        ),
-      };
-    });
     return this;
   }
 }

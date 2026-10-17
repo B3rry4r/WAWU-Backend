@@ -1,28 +1,30 @@
+import type { TransferStatus } from '../../money/money-view.type';
+import { nuvionTransferStatus } from '../nuvion-ledger-delivery';
 import { isNuvionId } from './accounts';
 
 /**
  * How Nuvion's answers for reconciliation are read (task NUV-08): statement
- * lines, webhook subscriptions and fee simulations. Pure: no call, no clock,
- * no database. Every figure is whole kobo or the line is refused; nothing is
- * rounded or guessed.
+ * lines and webhook subscriptions. Pure: no call, no clock, no database.
+ * Every figure is whole kobo or the line is refused; nothing is rounded or
+ * guessed.
  *
- * WHAT THIS FILE ASSUMES, in one place. The lead's saved copy of Nuvion's
- * docs (`nuvion/docs/api-reference__accounts.md`, `api-reference__webhooks.md`)
- * was not on the machine this was built on, so the shapes below come from
- * the task text and from the transfer object Nuvion's other pages show
- * (`id`, `amount`, `applicable_fee`, `status`, `type`, `payment_type`,
- * `unique_reference`, `narration`, `created` in Unix milliseconds):
- * - a statement is a cursor list (`data.data`, `data.meta.pagination`) of
- *   lines, each carrying its transfer's id as `transfer_id` (else `id`), a
- *   `type` of `inflow` or `outflow`, the amount, the fee as `applicable_fee`
- *   (else `fee`) and the running balance as `balance_after` (else
- *   `running_balance`);
- * - a webhook subscription carries `id`, `url`, `enabled_events` and either
- *   `expires_at` (Unix milliseconds or ISO text) or `created` with
- *   `expires_in` (seconds);
- * - a fee simulation answers the fee as `applicable_fee` (else `fee`).
- * Each assumption is read here and nowhere else, so the first sandbox month
- * (the task's (key) check) corrects one function if Nuvion's page differs.
+ * The shapes are Nuvion's public docs, nothing else (round 2, after the
+ * verifier read them; `docs.nuvion.co`, saved as `api-reference__*.md`):
+ * - a statement line (`api-reference__accounts.md`, "Get account statements",
+ *   the `transactions` fields and the example body) is `transaction_id`,
+ *   `date` (ISO 8601 text), `type` (`credit` or `debit`), `amount` (before
+ *   the fee), `fee`, `running_balance`, `reference`, `status` (`completed`
+ *   or `pending`) and `currency`. It names no entity, account, payment type
+ *   or narration. Whether `transaction_id` is the transfer's id (what
+ *   `GET /transfers/{id}` takes) is not said in the docs; the first sandbox
+ *   month (the task's (key) check) confirms it.
+ * - a webhook subscription (`api-reference__webhooks.md`, "The Webhook
+ *   object") is `id`, `url`, `expires_in` (seconds, given at creation),
+ *   `enabled_events` (an object of groups), `status` (`active` or
+ *   `inactive`). The docs show no expiry date and no call that extends one:
+ *   an expired subscription goes `inactive` (`expires_in`, :27 to :28), and
+ *   the only thing to do about it is to report it.
+ * Each shape is read here and nowhere else.
  */
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -46,25 +48,31 @@ function whole(v: unknown): number | null {
 
 /** One line of an account's statement, as the reconciliation needs it. */
 export interface NuvionStatementLine {
-  /** The transfer the line is about: what a webhook for it would name. */
+  /** `transaction_id`: the transfer the line is about, what a webhook would name. */
   transferId: string;
-  entityId: string | null;
-  accountId: string | null;
-  /** Money in or money out on this account. */
+  /** Money in (`credit`) or money out (`debit`) on this account. */
   direction: 'in' | 'out';
   amountKobo: number;
   /** The fee the line states; null when it states none (not a charge of 0). */
   feeKobo: number | null;
   /** The account's balance right after this line; null when not stated. */
   balanceAfterKobo: number | null;
-  /** Nuvion's word: pending, processing, successful, failed or reversed. */
+  /** Nuvion's word for a line: `completed` or `pending`. */
   status: string;
+  /** The line's status as a ledger status; null when not one we know. */
+  outcome: TransferStatus | null;
   /** ISO 4217, upper case. */
   currency: string;
-  paymentType: string | null;
-  uniqueReference: string | null;
-  narration: string | null;
+  /** `reference`: the idempotency or tracking reference, as Nuvion states it. */
+  reference: string | null;
+  /** `date`; null when the line carries none that can be read. */
   createdAt: Date | null;
+}
+
+/** A statement line's status as a ledger status: `completed` and `pending`. */
+export function statementOutcome(status: string): TransferStatus | null {
+  const s = status.toLowerCase();
+  return s === 'completed' ? 'completed' : nuvionTransferStatus(s);
 }
 
 /** Reads one statement line. Never throws. */
@@ -72,21 +80,15 @@ export function readStatementLine(
   raw: unknown,
 ): { ok: true; line: NuvionStatementLine } | { ok: false; why: string } {
   if (!isRecord(raw)) return { ok: false, why: 'a line is not an object' };
-  const fromTransfer = text(raw, 'transfer_id');
-  const idOf = fromTransfer ?? text(raw, 'id');
-  if (!isNuvionId(idOf)) {
+  const id = text(raw, 'transaction_id');
+  if (!isNuvionId(id)) {
     return {
       ok: false,
-      why: 'a line names no transfer in the form Nuvion uses',
+      why: 'a line names no transaction in the form Nuvion uses',
     };
   }
   const type = text(raw, 'type')?.toLowerCase() ?? null;
-  const direction =
-    type === 'inflow' || type === 'credit'
-      ? 'in'
-      : type === 'outflow' || type === 'debit'
-        ? 'out'
-        : null;
+  const direction = type === 'credit' ? 'in' : type === 'debit' ? 'out' : null;
   if (direction === null) {
     return { ok: false, why: 'a line is neither money in nor money out' };
   }
@@ -94,10 +96,9 @@ export function readStatementLine(
   if (amount === null || amount <= 0) {
     return { ok: false, why: 'a line amount is not a positive whole number' };
   }
-  const feeRaw = raw.applicable_fee ?? raw.fee;
   let fee: number | null = null;
-  if (feeRaw !== undefined && feeRaw !== null) {
-    fee = whole(feeRaw);
+  if (raw.fee !== undefined && raw.fee !== null) {
+    fee = whole(raw.fee);
     if (fee === null || fee < 0) {
       return {
         ok: false,
@@ -105,10 +106,9 @@ export function readStatementLine(
       };
     }
   }
-  const balanceRaw = raw.balance_after ?? raw.running_balance;
   let balance: number | null = null;
-  if (balanceRaw !== undefined && balanceRaw !== null) {
-    balance = whole(balanceRaw);
+  if (raw.running_balance !== undefined && raw.running_balance !== null) {
+    balance = whole(raw.running_balance);
     if (balance === null) {
       return { ok: false, why: 'a line balance is not a whole number' };
     }
@@ -119,26 +119,22 @@ export function readStatementLine(
   }
   const status = text(raw, 'status')?.toLowerCase() ?? null;
   if (!status) return { ok: false, why: 'a line has no status' };
-  const created = raw.created;
-  const createdAt =
-    typeof created === 'number' && Number.isSafeInteger(created) && created > 0
-      ? new Date(created)
-      : null;
+  const outcome = statementOutcome(status);
+  if (outcome === null) return { ok: false, why: 'a line status is unknown' };
+  const date = text(raw, 'date');
+  const createdAt = date === null ? null : new Date(date);
   return {
     ok: true,
     line: {
-      transferId: idOf,
-      entityId: text(raw, 'entity_id'),
-      accountId: text(raw, 'account_id'),
+      transferId: id,
       direction,
       amountKobo: amount,
       feeKobo: fee,
       balanceAfterKobo: balance,
       status,
+      outcome,
       currency,
-      paymentType: text(raw, 'payment_type')?.toLowerCase() ?? null,
-      uniqueReference: text(raw, 'unique_reference'),
-      narration: text(raw, 'narration'),
+      reference: text(raw, 'reference'),
       createdAt:
         createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : null,
     },
@@ -149,67 +145,50 @@ export function readStatementLine(
 // Webhook subscriptions
 // ---------------------------------------------------------------------------
 
-/** One webhook subscription at Nuvion, the fields renewal needs. */
+/** One webhook subscription at Nuvion, the fields the check needs. */
 export interface NuvionWebhookSubscription {
   id: string;
   url: string;
-  events: string[];
-  /** When Nuvion stops sending to it; null when the record does not say. */
-  expiresAt: Date | null;
-  /** The period it was given, in seconds, when the record says. */
-  expiresInSeconds: number | null;
+  /** Nuvion's word: `active` or `inactive`; null when the record has none. */
+  status: string | null;
+  /** True only for `active`: a subscription of any other state is not delivering. */
   active: boolean;
+  /** The groups switched on, as `inflows.completed`; `all` when all are. */
+  events: string[];
+  /** The period it was given at creation, in seconds. */
+  expiresInSeconds: number | null;
 }
 
-function dateOf(v: unknown): Date | null {
-  if (typeof v === 'number' && Number.isFinite(v) && v > 0) {
-    const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? null : d;
+/** The events an `enabled_events` object switches on (webhooks.md, "enabled_events"). */
+function enabledEvents(v: unknown): string[] {
+  if (!isRecord(v)) return [];
+  if (v.all === true) return ['all'];
+  const out: string[] = [];
+  for (const [group, flags] of Object.entries(v)) {
+    if (!isRecord(flags)) continue;
+    for (const [name, on] of Object.entries(flags)) {
+      if (on === true) out.push(`${group}.${name}`);
+    }
   }
-  if (typeof v === 'string' && v.trim() !== '') {
-    const d = new Date(v);
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
-  return null;
+  return out;
 }
 
 /** Reads one subscription. Null when it carries no id or no address. */
 export function readWebhookSubscription(
   raw: unknown,
 ): NuvionWebhookSubscription | null {
-  const o = isRecord(raw) && isRecord(raw.webhook) ? raw.webhook : raw;
-  if (!isRecord(o)) return null;
-  const id = text(o, 'id');
-  const url = text(o, 'url');
+  if (!isRecord(raw)) return null;
+  const id = text(raw, 'id');
+  const url = text(raw, 'url');
   if (!isNuvionId(id) || !url) return null;
-  const inSeconds = whole(o.expires_in);
-  let expiresAt = dateOf(o.expires_at);
-  if (expiresAt === null && inSeconds !== null && inSeconds > 0) {
-    const from = dateOf(o.updated) ?? dateOf(o.created);
-    if (from) expiresAt = new Date(from.getTime() + inSeconds * 1000);
-  }
-  const events = Array.isArray(o.enabled_events)
-    ? o.enabled_events.filter((e): e is string => typeof e === 'string')
-    : [];
-  const status = text(o, 'status')?.toLowerCase() ?? null;
+  const inSeconds = whole(raw.expires_in);
+  const status = text(raw, 'status')?.toLowerCase() ?? null;
   return {
     id,
     url,
-    events,
-    expiresAt,
+    status,
+    active: status === 'active',
+    events: enabledEvents(raw.enabled_events),
     expiresInSeconds: inSeconds !== null && inSeconds > 0 ? inSeconds : null,
-    active: status === null ? true : status === 'active',
   };
-}
-
-// ---------------------------------------------------------------------------
-// Fee simulations
-// ---------------------------------------------------------------------------
-
-/** The fee a simulation answers, in kobo; null when the answer states none. */
-export function readFeeSimulation(raw: unknown): number | null {
-  const o = isRecord(raw) && isRecord(raw.simulation) ? raw.simulation : raw;
-  if (!isRecord(o)) return null;
-  const fee = whole(o.applicable_fee ?? o.fee);
-  return fee !== null && fee >= 0 ? fee : null;
 }

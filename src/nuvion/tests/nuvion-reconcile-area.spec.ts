@@ -11,7 +11,6 @@ import {
   type NuvionStatementScope,
 } from '../areas/reconcile';
 import {
-  readFeeSimulation,
   readStatementLine,
   readWebhookSubscription,
 } from '../areas/reconcile-readers';
@@ -22,8 +21,9 @@ import { NuvionError } from '../nuvion-error';
  * NUV-08, the reconciliation area against Nuvion's stand-in over a socket:
  * a month of a statement across pages, with fee and running balance, for a
  * person and for WAWU's operational account; the walk of months behind
- * `listTransactions`; the subscription and fee simulation calls. No database
- * and no host but loopback (outbound-guard.ts).
+ * `listTransactions`; the subscription list. The shapes are Nuvion's public
+ * docs (their own example bodies are in DOCS_STATEMENT and DOCS_WEBHOOK). No
+ * database and no host but loopback (outbound-guard.ts).
  */
 
 const OPERATIONAL = '01HXYZOPERATIONAL000000001';
@@ -36,6 +36,132 @@ const SEPT_15 = Date.UTC(2026, 8, 15, 10, 0, 0);
  */
 let uidSeq = 0;
 const uid = () => `01TRF08${String((uidSeq += 1)).padStart(19, '0')}`;
+
+/**
+ * The statement body in Nuvion's docs (api-reference__accounts.md, "Get
+ * account statements", the example response from line 929), cut to four of
+ * its lines: ids, dates, amounts, fees, balances and statuses as printed.
+ */
+const DOCS_STATEMENT = {
+  status: 'success',
+  message: 'Account statement retrieved successfully',
+  data: {
+    account_id: '01HXYZ7890ABCDEFGHJKMNPQRS',
+    account_holder: 'Alex Johnson',
+    account_currency: 'USD',
+    ban: 'NVN0000012345',
+    generated_at: '2026-05-25T15:22:54.373Z',
+    period: {
+      start_date: '2026-05-01T00:00:00.000Z',
+      end_date: '2026-05-25T15:22:54.373Z',
+    },
+    balances: {
+      opening_balance: 947893,
+      closing_balance: 187687,
+      total_credits: 0,
+      total_debits: 754179,
+      total_fees: 6027,
+    },
+    transactions: [
+      {
+        transaction_id: '01HXYZ8002ABCDEFGHJKMNPQRS',
+        date: '2026-05-04T06:14:33.045Z',
+        type: 'debit',
+        description: 'Test Swift Payout',
+        counterparty: {
+          name: 'TEST_Acme Legal Asia',
+          account_number: 'XXXXXXXXXXXXXXXXXX4484',
+        },
+        amount: 5893,
+        fee: 590,
+        net_amount: 5303,
+        running_balance: 447893,
+        reference: 'REF-1785824070816-3337',
+        status: 'pending',
+        currency: 'USD',
+        fx: {
+          source_currency: 'USD',
+          destination_currency: 'EUR',
+          rate: 0.848481,
+          source_amount: 5893,
+          destination_amount: 5000,
+        },
+      },
+      {
+        transaction_id: '01HXYZ8004ABCDEFGHJKMNPQRS',
+        date: '2026-05-05T10:57:02.662Z',
+        type: 'debit',
+        description: 'Test USD SWIFT Payout',
+        counterparty: {
+          name: 'Acme IP Pty Ltd',
+          account_number: 'XXXXXXXX1158',
+        },
+        amount: 5000,
+        fee: 5025,
+        net_amount: -25,
+        running_balance: 437868,
+        reference: 'REF-1785927416953-273',
+        status: 'completed',
+        currency: 'USD',
+      },
+      {
+        transaction_id: '01HXYZ8009ABCDEFGHJKMNPQRS',
+        date: '2026-05-14T12:55:07.303Z',
+        type: 'debit',
+        description: 'Nuvion Flex 90 FR order',
+        counterparty: { name: 'Nuvion Flex 90', account_number: null },
+        amount: 10000,
+        fee: 0,
+        net_amount: 10000,
+        running_balance: 194307,
+        reference: '01HXYZ8109ABCDEFGHJKMNPQRS',
+        status: 'completed',
+        currency: 'USD',
+      },
+    ],
+    pagination: {
+      order: 'asc',
+      has_next: false,
+      has_previous: false,
+      limit: 100,
+      next_cursor: null,
+      previous_cursor: null,
+      total_transactions: 3,
+    },
+  },
+};
+
+/**
+ * The webhook object in Nuvion's docs (api-reference__webhooks.md, "Get a
+ * webhook", the example response), with the optional groups it lists.
+ */
+const DOCS_WEBHOOK = {
+  id: '01HXYZ9001ABCDEFGHJKMNPQRS',
+  entity_id: '01HXYZ1234ABCDEFGHJKMNPQRS',
+  url: 'https://webhooks.example.com/nuvion',
+  expires_in: 31536000,
+  enabled_events: {
+    all: false,
+    entities: { created: false, updated: false },
+    accounts: { created: true, updated: true, deleted: true },
+    inflows: { completed: true, failed: true },
+    outflows: {
+      created: true,
+      completed: true,
+      failed: true,
+      cancelled: false,
+      refunded: false,
+    },
+  },
+  preferred_events: ['accounts.all', 'inflows.all'],
+  description: 'Production payment notifications',
+  tags: ['payments', 'production'],
+  status: 'active',
+  created: 1744056000000,
+  updated: 1744056000000,
+  deleted: 0,
+  stats: { total_webhooks_sent: 1482 },
+};
 
 describe('NUV-08: reconciliation area', () => {
   const standin = new NuvionStandin();
@@ -232,16 +358,16 @@ describe('NUV-08: reconciliation area', () => {
         status: 'success',
         message: 'OK',
         data: {
-          data: [
+          transactions: [
             {
-              transfer_id: 'x',
-              type: 'inflow',
+              transaction_id: '01TRF08BADAMOUNT00000001',
+              type: 'credit',
               amount: 1.5,
               currency: 'NGN',
-              status: 'successful',
+              status: 'completed',
             },
           ],
-          meta: { pagination: { has_next: false, order: 'asc', limit: 100 } },
+          pagination: { has_next: false, order: 'asc', limit: 100 },
         },
       },
       headers: { 'X-Test': req.path },
@@ -264,8 +390,8 @@ describe('NUV-08: reconciliation area', () => {
         status: 'success',
         message: 'OK',
         data: {
-          data: [{ transfer_id: 'bad', type: 'sideways' }],
-          meta: { pagination: { has_next: false, order: 'asc', limit: 100 } },
+          transactions: [{ transaction_id: 'bad', type: 'sideways' }],
+          pagination: { has_next: false, order: 'asc', limit: 100 },
         },
       },
       headers: { 'X-Test': req.path },
@@ -288,14 +414,12 @@ describe('NUV-08: reconciliation area', () => {
         status: 'success',
         message: 'OK',
         data: {
-          data: [],
-          meta: {
-            pagination: {
-              has_next: true,
-              order: 'asc',
-              limit: 100,
-              next_cursor: null,
-            },
+          transactions: [],
+          pagination: {
+            has_next: true,
+            order: 'asc',
+            limit: 100,
+            next_cursor: null,
           },
         },
       },
@@ -330,102 +454,187 @@ describe('NUV-08: reconciliation area', () => {
     expect(standin.seen.length).toBe(before);
   });
 
-  it('the subscription: listed, renewed for the period it had, and the renewal refused when Nuvion errs', async () => {
-    const sub = rec.addSubscription({
-      expires_in: 86_400,
-      expires_at: clock + 3_600_000,
-    });
+  it('the subscription list: read from the docs shape, and no write is made to Nuvion', async () => {
+    const sub = rec.addSubscription({ expires_in: 86_400 });
+    const gone = rec.addSubscription({ status: 'inactive' });
+    const before = standin.seen.length;
     const listed = await area.listWebhookSubscriptions();
     const mine = listed.find((s) => s.id === sub.id)!;
-    expect(mine.url).toBe(sub.url);
-    expect(mine.expiresInSeconds).toBe(86_400);
-    expect(mine.expiresAt!.getTime()).toBe(sub.expires_at);
-
-    const renewed = await area.renewWebhookSubscription(sub.id, 86_400);
-    expect(rec.renewals.at(-1)).toEqual({ expires_in: 86_400 });
-    expect(renewed.expiresAt!.getTime()).toBeGreaterThan(
-      sub.created + 3_600_000,
-    );
-
-    rec.failRenewals = true;
-    await expect(
-      area.renewWebhookSubscription(sub.id, 86_400),
-    ).rejects.toBeInstanceOf(NuvionError);
-    rec.failRenewals = false;
-    await expect(
-      area.renewWebhookSubscription('../x', 86_400),
-    ).rejects.toMatchObject({
-      kind: 'validation',
+    expect(mine).toMatchObject({
+      url: sub.url,
+      status: 'active',
+      active: true,
+      expiresInSeconds: 86_400,
     });
+    expect(mine.events).toEqual([
+      'inflows.completed',
+      'inflows.failed',
+      'outflows.created',
+      'outflows.completed',
+      'outflows.failed',
+    ]);
+    expect(listed.find((s) => s.id === gone.id)).toMatchObject({
+      status: 'inactive',
+      active: false,
+    });
+    // only the documented read; nothing renews, rotates or simulates
+    expect(
+      standin.seen.slice(before).map((r) => `${r.method} ${r.path}`),
+    ).toEqual(['GET /entity-webhooks']);
+    expect(area).not.toHaveProperty('renewWebhookSubscription');
+    expect(area).not.toHaveProperty('simulateFee');
   });
 
-  it('a fee simulation asks from the operational account and moves nothing', async () => {
-    rec.simulatedFee = ({ amount }) => (amount >= 500_000 ? 2_500 : 1_500);
-    const small = await area.simulateFee({
-      paymentType: 'book-transfer',
-      type: 'outflow',
-      amountKobo: 100_000,
-    });
-    const big = await area.simulateFee({
-      paymentType: 'bank-transfer',
-      type: 'outflow',
-      amountKobo: 600_000,
-    });
-    expect([small, big]).toEqual([1_500, 2_500]);
-    expect(rec.simulations.at(-1)).toEqual({
-      account_id: OPERATIONAL,
-      amount: 600_000,
-      currency: 'NGN',
-      type: 'outflow',
-      payment_type: 'bank-transfer',
-    });
+  it("Nuvion's own statement example is read: transactions, pagination, transaction_id, ISO date, completed and pending", async () => {
+    const { entityId, account } = person();
+    standin.next(() => ({ status: 200, body: DOCS_STATEMENT }));
+    const month = await area.statementOfMonth(
+      { accountId: account.id, entityId },
+      2026,
+      5,
+    );
+    expect(month.unreadable).toBe(0);
     expect(
-      standin.seen.filter(
-        (r) => r.method === 'POST' && r.path === '/transfers',
-      ),
-    ).toHaveLength(0);
+      month.lines.map((l) => [
+        l.transferId,
+        l.createdAt!.toISOString(),
+        l.direction,
+        l.amountKobo,
+        l.feeKobo,
+        l.balanceAfterKobo,
+        l.status,
+        l.outcome,
+        l.reference,
+      ]),
+    ).toEqual([
+      [
+        '01HXYZ8002ABCDEFGHJKMNPQRS',
+        '2026-05-04T06:14:33.045Z',
+        'out',
+        5893,
+        590,
+        447893,
+        'pending',
+        'pending',
+        'REF-1785824070816-3337',
+      ],
+      [
+        '01HXYZ8004ABCDEFGHJKMNPQRS',
+        '2026-05-05T10:57:02.662Z',
+        'out',
+        5000,
+        5025,
+        437868,
+        'completed',
+        'completed',
+        'REF-1785927416953-273',
+      ],
+      [
+        '01HXYZ8009ABCDEFGHJKMNPQRS',
+        '2026-05-14T12:55:07.303Z',
+        'out',
+        10000,
+        0,
+        194307,
+        'completed',
+        'completed',
+        '01HXYZ8109ABCDEFGHJKMNPQRS',
+      ],
+    ]);
+  });
+
+  it("a statement's lines older than the window are dropped by their ISO date", async () => {
+    const { entityId, account } = person();
+    const scope: NuvionStatementScope = { accountId: account.id, entityId };
+    accounts.addInflow(account, {
+      id: uid(),
+      created: Date.UTC(2026, 8, 2, 10),
+    });
+    const recent = accounts.addInflow(account, {
+      id: uid(),
+      created: Date.UTC(2026, 8, 20, 9),
+    });
+    const got = await area.statementSince(
+      scope,
+      new Date(Date.UTC(2026, 8, 19, 12)),
+      new Date(Date.UTC(2026, 8, 20, 12)),
+    );
+    expect(got.lines.map((l) => l.transferId)).toEqual([recent.id]);
+  });
+
+  it('a statement answered in the old guessed shape is refused, not read as empty', async () => {
+    const { entityId, account } = person();
+    standin.next(() => ({
+      status: 200,
+      body: {
+        status: 'success',
+        message: 'OK',
+        data: {
+          data: [],
+          meta: { pagination: { has_next: false, order: 'asc', limit: 100 } },
+        },
+      },
+    }));
+    await expect(
+      area.statementOfMonth({ accountId: account.id, entityId }, 2026, 9),
+    ).rejects.toMatchObject({ kind: 'bad_response' });
   });
 
   describe('the readers refuse what is not whole kobo', () => {
-    const base = {
-      transfer_id: '01TRF0000000000000000001',
-      type: 'outflow',
-      amount: 1_000,
-      currency: 'NGN',
-      status: 'successful',
-    };
+    const base = DOCS_STATEMENT.data.transactions[1];
     it('a line', () => {
       expect(readStatementLine(base).ok).toBe(true);
       for (const bad of [
         { ...base, amount: 10.5 },
         { ...base, amount: 0 },
-        { ...base, applicable_fee: -1 },
-        { ...base, applicable_fee: 1.5 },
-        { ...base, balance_after: '100' },
+        { ...base, fee: -1 },
+        { ...base, fee: 1.5 },
+        { ...base, running_balance: '100' },
         { ...base, type: 'sideways' },
-        { ...base, transfer_id: '../x' },
+        { ...base, type: 'inflow' },
+        { ...base, transaction_id: '../x' },
+        {
+          ...base,
+          transfer_id: base.transaction_id,
+          transaction_id: undefined,
+        },
         { ...base, currency: 'naira' },
         { ...base, status: '' },
+        { ...base, status: 'sideways' },
       ]) {
         expect(readStatementLine(bad).ok).toBe(false);
       }
     });
-    it('a subscription and a simulation', () => {
-      const created = Date.UTC(2026, 9, 1);
-      const s = readWebhookSubscription({
-        id: '01WHK0000000000000000001',
-        url: 'https://x.test/api/hub/webhooks/nuvion',
-        created,
-        expires_in: 3_600,
-        enabled_events: ['inflows.completed', 5],
+    it('a line with no readable date is kept, with no time', () => {
+      const r = readStatementLine({ ...base, date: 'not a date' });
+      expect(r.ok && r.line.createdAt).toBeNull();
+      const none = readStatementLine({ ...base, date: undefined });
+      expect(none.ok && none.line.createdAt).toBeNull();
+    });
+    it('a subscription: the docs object, status read, no expiry date made up', () => {
+      const s = readWebhookSubscription(DOCS_WEBHOOK);
+      expect(s).toMatchObject({
+        id: DOCS_WEBHOOK.id,
+        status: 'active',
+        active: true,
+        expiresInSeconds: 31536000,
       });
-      expect(s!.expiresAt!.getTime()).toBe(created + 3_600_000);
-      expect(s!.events).toEqual(['inflows.completed']);
+      expect(s).not.toHaveProperty('expiresAt');
+      expect(s!.events).toContain('inflows.completed');
+      expect(s!.events).not.toContain('inflows.cancelled');
+      expect(
+        readWebhookSubscription({ ...DOCS_WEBHOOK, status: 'inactive' }),
+      ).toMatchObject({ status: 'inactive', active: false });
+      expect(
+        readWebhookSubscription({ ...DOCS_WEBHOOK, status: undefined }),
+      ).toMatchObject({ status: null, active: false });
+      expect(
+        readWebhookSubscription({
+          ...DOCS_WEBHOOK,
+          enabled_events: { all: true },
+        })!.events,
+      ).toEqual(['all']);
       expect(readWebhookSubscription({ id: 'x' })).toBeNull();
-      expect(readFeeSimulation({ applicable_fee: 40 })).toBe(40);
-      expect(readFeeSimulation({ applicable_fee: 40.5 })).toBeNull();
-      expect(readFeeSimulation({ applicable_fee: -1 })).toBeNull();
-      expect(readFeeSimulation('no')).toBeNull();
     });
   });
 
