@@ -544,15 +544,18 @@ describe('EVENTS-10: calling an event off sends the buyers their money back', ()
       );
 
       expect(res.status).toBe(201);
-      const answer = body<Record<string, number | boolean>>(res).data!;
-      // Every order is accounted for: sent back, needing a person, or left to
-      // the minute sweep (the request stops starting new refunds at 15 s).
-      expect(
-        (answer.ordersRefunded as number) +
-          (answer.refundsNeedingAttention as number) +
-          ((answer.ordersLeftToSweep as number | undefined) ?? 0),
-      ).toBe(20);
-      expect(answer.refundsNeedingAttention).toBe(0);
+      // All twenty are chosen and counted within the request's 15 seconds,
+      // and none is left to the sweep. That only holds when the refunds are
+      // sent five at a time: sent one at a time (CONCURRENCY 1) five fit in
+      // the budget and fifteen are left, so this count is the test. A chosen
+      // refund is counted before it is sent, so another process's sweep on
+      // the same database cannot change it.
+      const answer = body<Record<string, unknown>>(res).data!;
+      expect(answer).toMatchObject({
+        ordersRefunded: 20,
+        refundsNeedingAttention: 0,
+      });
+      expect(answer).not.toHaveProperty('ordersLeftToSweep');
       // Twenty moves of three seconds, five at a time: about twelve seconds,
       // not sixty, and nothing else waited on them. The reads really ran
       // during the cancel (a request nobody sent measures nothing).

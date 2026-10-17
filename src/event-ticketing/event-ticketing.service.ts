@@ -40,6 +40,23 @@ export function ticketCode(): string {
   return `${out.slice(0, 4)}-${out.slice(4, 8)}-${out.slice(8, 12)}-${out.slice(12, 16)}`;
 }
 
+/** The call-off answer the web was built against (the counts of Flutterwave refunds, plus the wallet ones). */
+export interface CancelEventAnswer {
+  cancelled: boolean;
+  ordersRefunded: number;
+  refundsNeedingAttention: number;
+}
+
+/**
+ * The same answer when wallet refunds are left for the minute sweep (EVENTS-13).
+ * It is its own shape, not an optional field, because the server leaves the key
+ * out when there are none and never sends null: a contract that says "optional"
+ * is read as "number or null" by every generated client.
+ */
+export interface CancelEventAnswerWithSweep extends CancelEventAnswer {
+  ordersLeftToSweep: number;
+}
+
 export type ScanOutcome = 'valid' | 'already_used' | 'invalid';
 
 export interface ScanResult {
@@ -743,7 +760,11 @@ export class EventTicketingService {
    * hold's own refund (the wallet module's step, run below); the counts it
    * reports are added to the two the web already reads.
    */
-  async cancel(organiserWawuId: string, eventId: string, reason: string) {
+  async cancel(
+    organiserWawuId: string,
+    eventId: string,
+    reason: string,
+  ): Promise<CancelEventAnswer | CancelEventAnswerWithSweep> {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
     });
@@ -852,14 +873,16 @@ export class EventTicketingService {
         `Event ${eventId} cancelled: ${refunded} refunded, ${failed} need a human`,
       );
     }
-    return {
+    const answer: CancelEventAnswer = {
       cancelled: true,
       ordersRefunded: refunded,
       refundsNeedingAttention: failed,
-      // EVENTS-13: wallet refunds the request ran out of time for; the minute
-      // sweep sends them. Present only when there are some, so the answer of
-      // an event without any keeps the shape the web was built against.
-      ...(wallet.leftToSweep ? { ordersLeftToSweep: wallet.leftToSweep } : {}),
     };
+    // EVENTS-13: wallet refunds the request ran out of time for; the minute
+    // sweep sends them. Present only when there are some, so the answer of
+    // an event without any keeps the shape the web was built against.
+    return wallet.leftToSweep
+      ? { ...answer, ordersLeftToSweep: wallet.leftToSweep }
+      : answer;
   }
 }
