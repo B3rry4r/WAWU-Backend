@@ -579,6 +579,25 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
         });
       });
 
+      it('a request that is already cancelled and still carries its quote is not reopened by a signature: 409, it stays cancelled and unsigned (B3a L4)', async () => {
+        const record = await seed({
+          consultationPaidAt: new Date('2026-10-01T09:00:00Z'),
+          status: 'cancelled',
+          quoteAmount: 45_000,
+          quoteNote: 'As agreed.',
+          cancelledAt: new Date('2026-10-02T09:00:00Z'),
+          cancellationReason: 'The client asked us to stop.',
+        });
+        const res = await sign(record.id);
+        expect(res.status).toBe(409);
+        expect(JSON.stringify(res.body)).toContain('nothing was signed');
+        expect(await row(record.id)).toMatchObject({
+          status: 'cancelled',
+          contractSignedAt: null,
+          contractText: null,
+        });
+      });
+
       it('another signature that lands after the read wins: 409 for the late one, the first signature stands', async () => {
         const record = await quoted();
         const res = await signHolding(

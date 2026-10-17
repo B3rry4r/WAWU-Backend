@@ -271,6 +271,10 @@ export class LegalFeeWalletService implements OnModuleInit {
             return 'the booked hour was given up';
           if (r.consultationFee !== payment.priceKobo / KOBO_PER_NAIRA)
             return 'the consultation fee changed';
+          // The grant below needs the request still waiting for this fee; a
+          // request moved to another state by hand would never take it.
+          if (r.status !== 'awaiting_consultation_payment')
+            return 'the request is no longer waiting for the consultation fee';
           return null;
         }
         if (r.serviceTxRef === ref) return null;
