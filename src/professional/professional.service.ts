@@ -34,8 +34,7 @@ import {
 } from './professional-fields';
 import {
   NO_REPLY_STATS,
-  REPLY_TIME_DEFAULTS,
-  toReplyStats,
+  replyTimesFor,
   type ReplyTimeStats,
 } from './professional-reply-time';
 import type { ListProfessionalDirectoryQueryDto } from './dto/professional-directory.dto';
@@ -751,45 +750,11 @@ export class ProfessionalService {
   /**
    * Median reply time over each professional's most recent answered paid
    * messages (professional-reply-time.ts), one query for the whole page.
-   * Per PERSON, not per listing: a paid message goes to the person, and the
-   * same person answers it whichever field they were found in.
    */
-  private async replyTimes(
+  private replyTimes(
     wawuUserIds: string[],
   ): Promise<Map<string, ReplyTimeStats>> {
-    const rows = await this.prisma.$queryRaw<
-      Array<{
-        creatorWawuId: string;
-        medianSeconds: number | null;
-        answered: number;
-      }>
-    >`
-      SELECT "creatorWawuId",
-             percentile_cont(0.5) WITHIN GROUP (ORDER BY "seconds") AS "medianSeconds",
-             COUNT(*)::int AS "answered"
-      FROM (
-        SELECT "creatorWawuId",
-               EXTRACT(EPOCH FROM ("respondedAt" - "sentAt"))::double precision AS "seconds",
-               ROW_NUMBER() OVER (
-                 PARTITION BY "creatorWawuId" ORDER BY "respondedAt" DESC, "id"
-               ) AS "rank"
-        FROM "DirectMessage"
-        WHERE "creatorWawuId" IN (${Prisma.join(wawuUserIds)})
-          AND "status" = ${DmStatus.responded}::"DmStatus"
-          AND "respondedAt" IS NOT NULL
-          AND "respondedAt" >= "sentAt"
-      ) AS "answered"
-      WHERE "rank" <= ${REPLY_TIME_DEFAULTS.sample}
-      GROUP BY "creatorWawuId"`;
-    return new Map(
-      rows.map((r) => [
-        r.creatorWawuId,
-        toReplyStats(
-          r.medianSeconds === null ? null : Number(r.medianSeconds),
-          Number(r.answered),
-        ),
-      ]),
-    );
+    return replyTimesFor(this.prisma, wawuUserIds);
   }
 
   // -------------------------------------------------------------------

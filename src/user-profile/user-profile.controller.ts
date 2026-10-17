@@ -22,6 +22,8 @@ import { SaveInterestsDto } from './dto/save-interests.dto';
 import { SignupProfileService } from './signup-profile.service';
 import { ProfileExperienceService } from './profile-experience.service';
 import { ProfileDetailsService } from './profile-details.service';
+import { VisitorProfileService } from './visitor-profile.service';
+import type { VisitorProfileView } from './visitor-profile.type';
 import { UpdateProfileFieldsDto } from './dto/update-profile-fields.dto';
 import {
   CreateProfileExperienceDto,
@@ -53,6 +55,7 @@ export class UserProfileController {
     private readonly profileExperienceService: ProfileExperienceService,
     private readonly profileDetailsService: ProfileDetailsService,
     private readonly signupProfile: SignupProfileService,
+    private readonly visitorProfileService: VisitorProfileService,
   ) {}
 
   @Get('me')
@@ -191,6 +194,20 @@ export class UserProfileController {
     @CurrentUser() user: WawuJwtClaims,
   ) {
     return this.userProfileService.getPublicProfile(wawuId, user.sub);
+  }
+
+  /**
+   * ME-02: everything M5, M6 and M33 draw about somebody else, in one answer
+   * (the public profile, the profile fields, the person's name, whether the
+   * caller follows them, their live listings). A person the public profile
+   * hides is a 404 here as well.
+   */
+  @Get(':wawuId/visitor-profile')
+  getVisitorProfile(
+    @Param('wawuId') wawuId: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<VisitorProfileView> {
+    return this.visitorProfileService.get(wawuId, user.sub);
   }
 
   /** Somebody else's profile fields: what M5 and M33 draw for a visitor. */
