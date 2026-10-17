@@ -8,6 +8,7 @@ import { ReferralsModule } from '../referrals/referrals.module';
 import { MeController } from './me.controller';
 import { MeSavedService } from './me-saved.service';
 import { MePurchasesService } from './me-purchases.service';
+import { MePaidPurchasesService } from './me-paid-purchases.service';
 import { MeNotificationsService } from './me-notifications.service';
 import { MeEarningsService } from './me-earnings.service';
 
@@ -33,6 +34,7 @@ import { MeEarningsService } from './me-earnings.service';
   providers: [
     MeSavedService,
     MePurchasesService,
+    MePaidPurchasesService,
     MeNotificationsService,
     MeEarningsService,
   ],
