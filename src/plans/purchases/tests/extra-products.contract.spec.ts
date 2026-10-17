@@ -265,7 +265,7 @@ describe('Add more products to a tier (TIER-04)', () => {
       status: 'completed',
       description: 'Plan add-on · Extra products',
     });
-    expect(lines[0].description).not.toMatch(/—/);
+    expect(lines[0].description).not.toMatch(/\u2014/);
   });
 
   it('a second add-on is a second purchase and adds the count again; a person with a tier from an event code is billed in naira by it', async () => {

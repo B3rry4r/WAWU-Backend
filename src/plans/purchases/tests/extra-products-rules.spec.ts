@@ -117,7 +117,7 @@ describe('priceExtraProducts', () => {
   });
 
   it('names the payment and every refusal with no figure and no long dash', () => {
-    const long = /[–—]/;
+    const long = /[\u2013\u2014]/;
     for (const text of [
       EXTRA_PRODUCTS_TITLE,
       TIER_REQUIRED_MESSAGE,
