@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
 import type {
@@ -91,6 +92,37 @@ function conflict(
 function refuse(code: string, message: string): BadRequestException {
   return new BadRequestException({ message, reason: { code } });
 }
+
+/** R-59 (G-761): a campaign is not saved without a picture. */
+const ARTWORK_REQUIRED = 'Add artwork before you save this campaign';
+
+function artworkRequired(): UnprocessableEntityException {
+  return new UnprocessableEntityException({
+    message: ARTWORK_REQUIRED,
+    reason: { code: 'artwork_required' },
+  });
+}
+
+/**
+ * A campaign that still has to be given artwork: it has a card with no picture
+ * (saved before R-59) and is not ended (an ended one is final).
+ */
+function needsArtwork(row: {
+  status: AdCampaignStatus;
+  creative: { artworkUrl: string | null } | null;
+}): boolean {
+  return (
+    row.status !== 'ended' &&
+    row.creative !== null &&
+    row.creative.artworkUrl === null
+  );
+}
+
+/** The same test as a database filter, for the list and the report. */
+const NEEDS_ARTWORK_WHERE: Prisma.AdCampaignWhereInput = {
+  status: { not: 'ended' },
+  creative: { is: { artworkUrl: null } },
+};
 
 function snapshotOf(
   campaign: AdCampaignModel,
@@ -287,6 +319,9 @@ export class AdminAdsService {
     );
     const phaseCounts = counts.slice(statuses.length + placements.length);
 
+    const needingArtwork = await this.prisma.adCampaign.count({
+      where: NEEDS_ARTWORK_WHERE,
+    });
     const servable = await this.prisma.adCampaign.findMany({
       where: {
         status: { in: [...SERVED_STATUSES] },
@@ -327,6 +362,7 @@ export class AdminAdsService {
         placement: query.placement ?? null,
         status: query.status ?? null,
         phase: query.phase ?? null,
+        artwork: query.artwork ?? null,
         from: query.from ? new Date(query.from) : null,
         to: query.to ? new Date(query.to) : null,
       },
@@ -349,6 +385,7 @@ export class AdminAdsService {
           servableViews.filter((v) => v.placement === p && v.servingNow).length,
         ]),
       ) as AdSummaryReportView['servingNow'],
+      needingArtwork,
     };
   }
 
@@ -359,6 +396,7 @@ export class AdminAdsService {
     dto: CreateAdCampaignDto,
     admin: AdminUserView,
   ): Promise<AdCampaignChangeView> {
+    if (!dto.creative.artworkUrl) throw artworkRequired();
     const now = new Date();
     const startsAt = this.instant(dto.startsAt, 'startsAt');
     const endsAt = this.instant(dto.endsAt, 'endsAt');
@@ -387,7 +425,7 @@ export class AdminAdsService {
               ctaLabel: dto.creative.ctaLabel,
               ctaDestination: dto.creative.ctaDestination,
               ctaDestinationId: dto.creative.ctaDestinationId,
-              artworkUrl: dto.creative.artworkUrl ?? null,
+              artworkUrl: dto.creative.artworkUrl,
             },
           },
         },
@@ -458,6 +496,9 @@ export class AdminAdsService {
         artworkUrl:
           c.artworkUrl === undefined ? creative.artworkUrl : c.artworkUrl,
       };
+      // R-59: the saved campaign must have a picture, whether it keeps the one
+      // it has, gets a new one, or (a campaign saved before R-59) still has none.
+      if (nextCreative.artworkUrl === null) throw artworkRequired();
       const after = snapshotOf(nextCampaign, nextCreative);
       const changes = diff(before, after);
       if (Object.keys(changes).length === 0) {
@@ -821,6 +862,7 @@ export class AdminAdsService {
     if (f.status) and.push({ status: f.status });
     if (f.placement) and.push({ placement: f.placement });
     if (f.phase) and.push(this.phaseWhere(f.phase, now));
+    if (f.artwork === 'missing') and.push(NEEDS_ARTWORK_WHERE);
     if (from) and.push({ endsAt: { gt: from } });
     if (to) and.push({ startsAt: { lt: to } });
     return and.length === 0 ? {} : { AND: and };
@@ -948,10 +990,12 @@ export class AdminAdsService {
           : null,
         event: eventView,
         delivery: delivery[row.id],
+        needsArtwork: needsArtwork(row),
         servingNow:
           SERVED_STATUSES.includes(row.status) &&
           phase === 'running' &&
           row.creative !== null &&
+          row.creative.artworkUrl !== null &&
           eventView?.open === true,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,

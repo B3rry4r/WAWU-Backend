@@ -27960,12 +27960,13 @@
             "name": "placement",
             "required": true,
             "in": "query",
-            "description": "`tgif_card` (the TGIF reader) or `today_slot` (Today, TGIF off).",
+            "description": "`tgif_card` (the TGIF reader), `today_slot` (Today, TGIF off) or\n`explore_slider` (the Explore slider, ADS-07: a list of cards, not one).",
             "schema": {
               "type": "string",
               "enum": [
                 "tgif_card",
-                "today_slot"
+                "today_slot",
+                "explore_slider"
               ]
             }
           }
@@ -27976,14 +27977,24 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AdCardView",
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/AdCardView"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AdCardView"
+                      }
+                    }
+                  ],
                   "nullable": true
                 }
               }
             }
           }
         },
-        "summary": "The one live sponsored card for a placement, or `data: null` when nothing\nis eligible (the app draws no card and no empty frame). Never cached: a\ncard must stop the moment its window ends or an admin pauses it.",
+        "summary": "`tgif_card` and `today_slot`: the one live sponsored card for the\nplacement, or `data: null` when nothing is eligible (the app draws no\ncard and no empty frame). `explore_slider`: a list of every live card for\nthe Explore slider, in order, or `data: []`. Never cached: a card must\nstop the moment its window ends or an admin pauses it.",
         "tags": [
           "Ads"
         ]
@@ -31409,7 +31420,8 @@
               "type": "string",
               "enum": [
                 "tgif_card",
-                "today_slot"
+                "today_slot",
+                "explore_slider"
               ]
             }
           },
@@ -31423,6 +31435,18 @@
                 "upcoming",
                 "running",
                 "over"
+              ]
+            }
+          },
+          {
+            "name": "artwork",
+            "required": false,
+            "in": "query",
+            "description": "`missing`: only the campaigns that need artwork before they can be served.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "missing"
               ]
             }
           },
@@ -31535,7 +31559,8 @@
               "type": "string",
               "enum": [
                 "tgif_card",
-                "today_slot"
+                "today_slot",
+                "explore_slider"
               ]
             }
           },
@@ -31550,6 +31575,18 @@
                 "upcoming",
                 "running",
                 "over"
+              ]
+            }
+          },
+          {
+            "name": "artwork",
+            "required": false,
+            "in": "query",
+            "description": "`missing`: only the campaigns that need artwork before they can be served.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "missing"
               ]
             }
           },
@@ -37111,7 +37148,7 @@
           "artworkUrl": {
             "type": "string",
             "nullable": true,
-            "description": "An https link to the picture. Leave it out for a card without one."
+            "description": "An https link to the picture. REQUIRED (R-59): a campaign without artwork\nis refused with 422 \"Add artwork before you save this campaign\". It is\nchecked in the service, after the rest of the body has passed, so the\nrefusal is a 422 and not the validation pipe's 400."
           }
         },
         "required": [
@@ -37131,7 +37168,8 @@
             "type": "string",
             "enum": [
               "tgif_card",
-              "today_slot"
+              "today_slot",
+              "explore_slider"
             ]
           },
           "startsAt": {
@@ -37184,7 +37222,8 @@
           },
           "artworkUrl": {
             "type": "string",
-            "nullable": true
+            "nullable": true,
+            "description": "A new https link to the picture. Sending null, or leaving a campaign that has none without one, is refused with 422 (R-59)."
           }
         }
       },
@@ -37198,7 +37237,8 @@
             "type": "string",
             "enum": [
               "tgif_card",
-              "today_slot"
+              "today_slot",
+              "explore_slider"
             ]
           },
           "startsAt": {
@@ -48554,8 +48594,7 @@
             "type": "string"
           },
           "artworkUrl": {
-            "type": "string",
-            "nullable": true
+            "type": "string"
           }
         },
         "required": [
@@ -54625,7 +54664,8 @@
             "type": "string",
             "enum": [
               "tgif_card",
-              "today_slot"
+              "today_slot",
+              "explore_slider"
             ]
           },
           "status": {
@@ -54665,6 +54705,9 @@
             "$ref": "#/components/schemas/AdEventView",
             "nullable": true
           },
+          "needsArtwork": {
+            "type": "boolean"
+          },
           "servingNow": {
             "type": "boolean"
           },
@@ -54691,6 +54734,7 @@
           "weight",
           "creative",
           "event",
+          "needsArtwork",
           "servingNow",
           "delivery",
           "createdAt",
@@ -54711,7 +54755,8 @@
                 "type": "string",
                 "enum": [
                   "tgif_card",
-                  "today_slot"
+                  "today_slot",
+                  "explore_slider"
                 ],
                 "nullable": true
               },
@@ -54735,6 +54780,13 @@
                 ],
                 "nullable": true
               },
+              "artwork": {
+                "type": "string",
+                "enum": [
+                  "missing"
+                ],
+                "nullable": true
+              },
               "from": {
                 "type": "string",
                 "format": "date-time",
@@ -54750,6 +54802,7 @@
               "placement",
               "status",
               "phase",
+              "artwork",
               "from",
               "to"
             ]
@@ -54781,11 +54834,13 @@
             "type": "object",
             "properties": {
               "tgif_card": {},
-              "today_slot": {}
+              "today_slot": {},
+              "explore_slider": {}
             },
             "required": [
               "tgif_card",
-              "today_slot"
+              "today_slot",
+              "explore_slider"
             ]
           },
           "byStatus": {
@@ -54809,11 +54864,13 @@
             "type": "object",
             "properties": {
               "tgif_card": {},
-              "today_slot": {}
+              "today_slot": {},
+              "explore_slider": {}
             },
             "required": [
               "tgif_card",
-              "today_slot"
+              "today_slot",
+              "explore_slider"
             ]
           },
           "byPhase": {
@@ -54833,12 +54890,17 @@
             "type": "object",
             "properties": {
               "tgif_card": {},
-              "today_slot": {}
+              "today_slot": {},
+              "explore_slider": {}
             },
             "required": [
               "tgif_card",
-              "today_slot"
+              "today_slot",
+              "explore_slider"
             ]
+          },
+          "needingArtwork": {
+            "type": "number"
           }
         },
         "required": [
@@ -54851,7 +54913,8 @@
           "byStatus",
           "byPlacement",
           "byPhase",
-          "servingNow"
+          "servingNow",
+          "needingArtwork"
         ]
       },
       "AdOverlapView": {
@@ -55006,7 +55069,8 @@
             "type": "string",
             "enum": [
               "tgif_card",
-              "today_slot"
+              "today_slot",
+              "explore_slider"
             ]
           },
           "status": {
@@ -55046,6 +55110,9 @@
             "$ref": "#/components/schemas/AdEventView",
             "nullable": true
           },
+          "needsArtwork": {
+            "type": "boolean"
+          },
           "servingNow": {
             "type": "boolean"
           },
@@ -55074,6 +55141,7 @@
           "weight",
           "creative",
           "event",
+          "needsArtwork",
           "servingNow",
           "delivery",
           "createdAt",

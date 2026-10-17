@@ -69,7 +69,7 @@ const dataOf = (res: { body: unknown }): Record<string, unknown> =>
 
 interface CampaignOpts {
   id: string;
-  placement?: 'tgif_card' | 'today_slot';
+  placement?: 'tgif_card' | 'today_slot' | 'explore_slider';
   status?: 'draft' | 'scheduled' | 'live' | 'paused' | 'ended';
   startsAt?: Date;
   endsAt?: Date;
@@ -78,6 +78,8 @@ interface CampaignOpts {
   /** The event the button opens. Default: a fresh open one is made. */
   eventId?: string;
   noCreative?: boolean;
+  /** A campaign saved before ADS-07: its card has no picture. */
+  noArtwork?: boolean;
   advertiser?: string;
   headline?: string;
 }
@@ -99,6 +101,13 @@ describe('GET /ads (ADS-04)', () => {
   const card = async (placement = 'tgif_card', token = viewerToken) => {
     const res = await ask(placement, token).expect(200);
     return envelope(res).data;
+  };
+  /** The Explore slider's list (ADS-07), as the ids in the order served. */
+  const slides = async (token = viewerToken) => {
+    const res = await ask('explore_slider', token).expect(200);
+    const data: unknown = envelope(res).data;
+    expect(Array.isArray(data)).toBe(true);
+    return (data as Array<Record<string, unknown>>).map((c) => c.id);
   };
 
   async function boot(clock: boolean): Promise<INestApplication> {
@@ -198,7 +207,9 @@ describe('GET /ads (ADS-04)', () => {
                   ctaLabel: 'Get tickets',
                   ctaDestination: 'event',
                   ctaDestinationId: eventId,
-                  artworkUrl: `https://cdn.example.test/${o.id}.jpg`,
+                  artworkUrl: o.noArtwork
+                    ? null
+                    : `https://cdn.example.test/${o.id}.jpg`,
                 },
               },
             }),
@@ -386,16 +397,16 @@ describe('GET /ads (ADS-04)', () => {
       });
     });
 
-    it('serves a null subline and a null artwork as null, not as missing keys', async () => {
+    it('serves a null subline as null, not as a missing key, and always with a picture (R-59)', async () => {
       await makeCampaign({ id: 'plain' });
       await prisma.adCreative.update({
         where: { campaignId: PREFIX + 'plain' },
-        data: { subline: null, artworkUrl: null },
+        data: { subline: null },
       });
       const data = await card();
       expect(Object.keys(data ?? {}).sort()).toEqual(CARD_KEYS);
       expect(data?.subline).toBeNull();
-      expect(data?.artworkUrl).toBeNull();
+      expect(data?.artworkUrl).toBe('https://cdn.example.test/plain.jpg');
     });
 
     it('is never cached: no-store on a card and on an empty answer', async () => {
@@ -737,6 +748,222 @@ describe('GET /ads (ADS-04)', () => {
       });
       expect((await card('tgif_card', otherToken))?.id).toBe(PREFIX + 'plain');
       expect((await card('tgif_card', viewerToken))?.id).toBe(PREFIX + 'heavy');
+    });
+  });
+
+  describe('ADS-07: artwork is required, and the Explore slider takes a list', () => {
+    const CLEAN_KEYS = CARD_KEYS;
+
+    it.each(['tgif_card', 'today_slot'] as const)(
+      '%s: a campaign saved without artwork is not served, the next one is',
+      async (placement) => {
+        await makeCampaign({
+          id: 'bare',
+          placement,
+          weight: 100,
+          noArtwork: true,
+        });
+        expect(await card(placement)).toBeNull();
+        await makeCampaign({ id: 'pictured', placement, weight: 1 });
+        expect((await card(placement))?.id).toBe(PREFIX + 'pictured');
+      },
+    );
+
+    it('serves a campaign the moment it is given artwork', async () => {
+      await makeCampaign({ id: 'late', noArtwork: true });
+      expect(await card()).toBeNull();
+      await prisma.adCreative.update({
+        where: { campaignId: PREFIX + 'late' },
+        data: { artworkUrl: 'https://cdn.example.test/late.jpg' },
+      });
+      expect((await card())?.id).toBe(PREFIX + 'late');
+    });
+
+    it('explore_slider: answers 200 with an empty list when nothing is live, never null', async () => {
+      const res = await ask('explore_slider').expect(200);
+      expect(res.body).toEqual({ statusCode: 200, message: 'OK', data: [] });
+      expect(res.headers['cache-control']).toBe('no-store');
+    });
+
+    it('explore_slider: lists every live campaign for it, heaviest first, then earliest start, then earliest booking, then id', async () => {
+      await makeCampaign({
+        id: 'light',
+        placement: 'explore_slider',
+        weight: 1,
+      });
+      await makeCampaign({
+        id: 'heavy',
+        placement: 'explore_slider',
+        weight: 90,
+      });
+      await makeCampaign({
+        id: 'mid-late',
+        placement: 'explore_slider',
+        weight: 50,
+        startsAt: ms(T0, -DAY),
+      });
+      await makeCampaign({
+        id: 'mid-early',
+        placement: 'explore_slider',
+        weight: 50,
+        startsAt: ms(T0, -2 * DAY),
+      });
+      await makeCampaign({
+        id: 'tie-b',
+        placement: 'explore_slider',
+        weight: 20,
+        createdAt: ms(T0, -1000),
+      });
+      await makeCampaign({
+        id: 'tie-a',
+        placement: 'explore_slider',
+        weight: 20,
+        createdAt: ms(T0, -1000),
+      });
+      await makeCampaign({
+        id: 'tie-first',
+        placement: 'explore_slider',
+        weight: 20,
+        createdAt: ms(T0, -5000),
+      });
+      const ids = await slides();
+      expect(ids).toEqual(
+        [
+          'heavy',
+          'mid-early',
+          'mid-late',
+          'tie-first',
+          'tie-a',
+          'tie-b',
+          'light',
+        ].map((n) => PREFIX + n),
+      );
+      // the order does not change between calls
+      expect(await slides()).toEqual(ids);
+    });
+
+    it('explore_slider: each slide has exactly the card fields, with a picture', async () => {
+      await makeCampaign({ id: 'one', placement: 'explore_slider', weight: 2 });
+      await makeCampaign({ id: 'two', placement: 'explore_slider', weight: 1 });
+      const res = await ask('explore_slider').expect(200);
+      const data = envelope(res).data as unknown as Array<
+        Record<string, unknown>
+      >;
+      expect(data).toHaveLength(2);
+      for (const slide of data) {
+        expect(Object.keys(slide).sort()).toEqual(CLEAN_KEYS);
+        expect(slide.artworkUrl).toMatch(/^https:\/\/cdn\.example\.test\//);
+      }
+      expect(data[0]).toEqual({
+        id: PREFIX + 'one',
+        advertiser: 'Advertiser one',
+        headline: 'Headline one',
+        subline: 'Subline one',
+        ctaLabel: 'Get tickets',
+        ctaDestination: 'event',
+        ctaDestinationId: PREFIX + 'ev-one',
+        artworkUrl: 'https://cdn.example.test/one.jpg',
+      });
+    });
+
+    it('explore_slider: leaves out what a single placement leaves out (status, window, card, picture, event)', async () => {
+      const slider = { placement: 'explore_slider' } as const;
+      await makeCampaign({ id: 'live', ...slider });
+      await makeCampaign({ id: 'sched', ...slider, status: 'scheduled' });
+      await makeCampaign({ id: 'draft', ...slider, status: 'draft' });
+      await makeCampaign({ id: 'paused', ...slider, status: 'paused' });
+      await makeCampaign({ id: 'ended', ...slider, status: 'ended' });
+      await makeCampaign({ id: 'soon', ...slider, startsAt: ms(T0, 1) });
+      await makeCampaign({ id: 'over', ...slider, endsAt: T0 });
+      await makeCampaign({ id: 'nocard', ...slider, noCreative: true });
+      await makeCampaign({ id: 'bare', ...slider, noArtwork: true });
+      const closedEvent = await makeEvent(PREFIX + 'ev-closed', {
+        status: 'removed',
+      });
+      await makeCampaign({ id: 'closed', ...slider, eventId: closedEvent });
+      await makeCampaign({ id: 'elsewhere', placement: 'today_slot' });
+      expect((await slides()).sort()).toEqual(
+        [PREFIX + 'live', PREFIX + 'sched'].sort(),
+      );
+    });
+
+    it('explore_slider: serves exactly from startsAt to just before endsAt, to the millisecond', async () => {
+      const startsAt = ms(T0, 10 * DAY);
+      const endsAt = ms(startsAt, 5 * DAY);
+      await makeCampaign({
+        id: 'win',
+        placement: 'explore_slider',
+        startsAt,
+        endsAt,
+      });
+      now = ms(startsAt, -1);
+      expect(await slides()).toEqual([]);
+      now = startsAt;
+      expect(await slides()).toEqual([PREFIX + 'win']);
+      now = ms(endsAt, -1);
+      expect(await slides()).toEqual([PREFIX + 'win']);
+      now = endsAt;
+      expect(await slides()).toEqual([]);
+    });
+
+    it('explore_slider: a pause takes effect on the next call, and a resume brings the slide back', async () => {
+      await makeCampaign({ id: 'a', placement: 'explore_slider', weight: 2 });
+      await makeCampaign({ id: 'b', placement: 'explore_slider', weight: 1 });
+      expect(await slides()).toEqual([PREFIX + 'a', PREFIX + 'b']);
+      await prisma.adCampaign.update({
+        where: { id: PREFIX + 'a' },
+        data: { status: 'paused' },
+      });
+      expect(await slides()).toEqual([PREFIX + 'b']);
+      await prisma.adCampaign.update({
+        where: { id: PREFIX + 'a' },
+        data: { status: 'live' },
+      });
+      expect(await slides()).toEqual([PREFIX + 'a', PREFIX + 'b']);
+    });
+
+    it('explore_slider: never mixes with the single placements', async () => {
+      await makeCampaign({ id: 'slide', placement: 'explore_slider' });
+      expect(await card('tgif_card')).toBeNull();
+      expect(await card('today_slot')).toBeNull();
+      await makeCampaign({ id: 'tgif', placement: 'tgif_card' });
+      await makeCampaign({ id: 'today', placement: 'today_slot' });
+      expect(await slides()).toEqual([PREFIX + 'slide']);
+      expect((await card('tgif_card'))?.id).toBe(PREFIX + 'tgif');
+      expect((await card('today_slot'))?.id).toBe(PREFIX + 'today');
+    });
+
+    it('explore_slider: leaves out an event whose host is blocked either way, for that viewer only', async () => {
+      const blockedHost = await makeEvent(PREFIX + 'ev-blocked');
+      await makeCampaign({
+        id: 'blocked',
+        placement: 'explore_slider',
+        weight: 9,
+        eventId: blockedHost,
+      });
+      const elsewhere = await makeEvent(PREFIX + 'ev-elsewhere', {
+        hostWawuId: '00000000-0000-4000-8000-0000000000aa',
+      });
+      await makeCampaign({
+        id: 'plain',
+        placement: 'explore_slider',
+        weight: 1,
+        eventId: elsewhere,
+      });
+      await prisma.blockedAccount.create({
+        data: { userWawuId: VIEWER_SUB, blockedWawuId: HOST_SUB },
+      });
+      expect(await slides(viewerToken)).toEqual([PREFIX + 'plain']);
+      expect(await slides(otherToken)).toEqual([
+        PREFIX + 'blocked',
+        PREFIX + 'plain',
+      ]);
+    });
+
+    it('explore_slider needs a token (401) like every placement', async () => {
+      await request(app.getHttpServer() as Server)
+        .get('/api/hub/ads?placement=explore_slider')
+        .expect(401);
     });
   });
 

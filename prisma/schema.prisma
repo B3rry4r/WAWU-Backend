@@ -5397,11 +5397,13 @@ model FeaturedCreator {
 // -----------------------------------------------------------------------------
 
 /// Where a sponsored card shows: inside the TGIF reader before the takeaway
-/// (`tgif_card`), or in TGIF's place on Today when the person has TGIF off
-/// (`today_slot`). Adding a placement is an `ALTER TYPE ... ADD VALUE`.
+/// (`tgif_card`), in TGIF's place on Today (`today_slot`), or as a slide in
+/// the Explore slider, which takes turns with events (`explore_slider`, ADS-07,
+/// R-59). Adding a placement is an `ALTER TYPE ... ADD VALUE`.
 enum AdPlacement {
   tgif_card
   today_slot
+  explore_slider
 }
 
 /// Where the team has put a campaign. The window (`startsAt`, `endsAt`) decides
@@ -5487,8 +5489,11 @@ model AdCreative {
   ctaDestinationId String
 
   /// The picture. An http(s) URL from POST /uploads/presign, the same as
-  /// Event.bannerUrl and NotificationCampaign.imageUrl. Null: the card is drawn
-  /// without a picture.
+  /// Event.bannerUrl and NotificationCampaign.imageUrl. REQUIRED for every
+  /// campaign saved from ADS-07 on (R-59): POST and PATCH /admin/ads refuse a
+  /// campaign without it. The column stays nullable for the campaigns saved
+  /// before that; serving skips a campaign whose artwork is null, so no card
+  /// is ever drawn without a picture, and the admin list shows those for fixing.
   artworkUrl String?
 
   createdAt DateTime @default(now())
