@@ -621,6 +621,15 @@ export interface ProviderTransferReceipt {
   sourceAvailableKobo: bigint | null;
   /** The payee ids this send used or made, for the caller to keep (NUV-06). */
   payee?: ProviderPayee | null;
+  /**
+   * True when the provider ACCEPTED the transfer and has not finished it
+   * (FIX-54: a bank send on Nuvion is `pending` first, and says so). The
+   * money may fail to arrive and come back, so the caller must not treat the
+   * send as done: it stays pending until the provider's word (a delivery, or
+   * a read of the transfer) says completed. Absent or false: the receipt is
+   * for a transfer the provider finished, as every other receipt is.
+   */
+  pending?: boolean;
 }
 
 // ---------------------------------------------------------------------------

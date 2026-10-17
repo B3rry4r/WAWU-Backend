@@ -78,6 +78,15 @@ export const LEDGER_ABSENT_FAILURE =
 /** The failure reason when Fintava's own record says FAILURE or CANCELLED. */
 export const LEDGER_FINTAVA_FAILURE = 'Fintava reports this transfer failed.';
 
+/**
+ * The failure reason when Nuvion's own record says a bank send failed or was
+ * cancelled (NUV-06). It is the provider's word, as `LEDGER_FINTAVA_FAILURE`
+ * is, and the only other `failed` a send settles on (FIX-54). What a person
+ * reads: it names no provider.
+ */
+export const LEDGER_BANK_SEND_FAILURE =
+  'The bank did not complete this transfer.';
+
 export interface LedgerReferenceRow {
   value: string;
   kind: LedgerReferenceKind;
@@ -680,6 +689,50 @@ export class LedgerService {
       await tx.fintavaLedgerEntry.update({
         where: { id: entryId },
         data: { status: 'failed', failureReason: LEDGER_ABSENT_FAILURE },
+      });
+      return true;
+    });
+  }
+
+  /**
+   * FIX-54: what the provider says came back for a row that is `reversed`
+   * (Nuvion's `outflows.refunded` credit record), written once. `applyReversal`
+   * is Fintava's way of saying the same and refuses a completed send; a
+   * reversal Nuvion reports reaches the row through `record`, which holds no
+   * figures, so they are put on it here. A row that is not `reversed`, or
+   * already holds them, is left alone. Returns whether this call wrote them.
+   */
+  async noteReversalFigures(
+    entryId: string,
+    reversal: {
+      at: Date;
+      reference: string | null;
+      amountKobo: number;
+      chargesKobo: number;
+      totalKobo: number;
+    },
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "FintavaLedgerEntry" WHERE "id" = ${entryId} FOR UPDATE`;
+      const row = await tx.fintavaLedgerEntry.findUnique({
+        where: { id: entryId },
+        select: { status: true, reversalTotalKobo: true },
+      });
+      if (!row || row.status !== 'reversed' || row.reversalTotalKobo !== null) {
+        return false;
+      }
+      await tx.fintavaLedgerEntry.update({
+        where: { id: entryId },
+        data: {
+          reversedAt: reversal.at,
+          reversalReference: reversal.reference,
+          reversalAmountKobo: koboBig('reversal amount', reversal.amountKobo),
+          reversalChargesKobo: koboBig(
+            'reversal charges',
+            reversal.chargesKobo,
+          ),
+          reversalTotalKobo: koboBig('reversal total', reversal.totalKobo),
+        },
       });
       return true;
     });
