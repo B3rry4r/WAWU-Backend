@@ -39,8 +39,7 @@ export interface DeliverOrRefund<G> {
 }
 
 export type DeliveryOutcome<G> =
-  | { outcome: 'granted'; granted: G }
-  | { outcome: 'refund'; why: string };
+  { outcome: 'granted'; granted: G } | { outcome: 'refund'; why: string };
 
 export async function deliverOrRefund<G>(
   prisma: PrismaService,

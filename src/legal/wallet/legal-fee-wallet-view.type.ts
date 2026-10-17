@@ -1,4 +1,7 @@
-import type { PaymentQuoteView, PaymentView } from '../../money/money-view.type';
+import type {
+  PaymentQuoteView,
+  PaymentView,
+} from '../../money/money-view.type';
 
 /**
  * What the wallet legal fee routes answer (LEGAL-05, S19, S22, S26). Kobo

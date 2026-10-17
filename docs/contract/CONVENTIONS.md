@@ -3012,3 +3012,14 @@ balance (MONEY-11): nothing here is added up into one, and the routes say
 - **Not here** (BACKEND_GAPS G-700 to G-703): refunding or reversing a sale
   after its earning landed; credits' host shares and event hosts' payouts
   (WALLET-17); batching small earnings into one move.
+- **The sweep pays only sales made on or after a start time** (lead ruling,
+  17 Oct 2026; the owner may override). The start is the setting
+  `EARNINGS_SWEEP_START` (ISO 8601 with a zone) when it is set, else the moment
+  this code first reached the environment, stored once in `EarningSweepStart`
+  (one row, written by its migration; a missing row is written by the first
+  sweep that finds it missing, and never changed after). A finished sale with a
+  payee made before the start gets no earning from the sweep, ever: it is not
+  paid by surprise on deploy. `GET /admin/money/earnings/before-start`
+  (superadmin and finance, `limit` and `after`, oldest first) lists those sales
+  for a person to decide; it moves nothing and cannot mark one paid. A sale at
+  exactly the start is paid; the millisecond before it is not.

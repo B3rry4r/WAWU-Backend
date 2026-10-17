@@ -33,8 +33,7 @@ export const LEGAL_FEE_KIND = 'legal_fee';
 export const LEGAL_FEE_REFUND_CONDITION = 'legal_fee_applied';
 
 const KOBO_PER_NAIRA = 100;
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export const LEGAL_REQUEST_NOT_FOUND = 'Legal request not found.';
 export const LEGAL_PAYMENT_NOT_FOUND = 'We could not find that payment.';
@@ -76,7 +75,8 @@ export function feeDue(r: LegalRequest, now = new Date()): FeeDue {
         return { due: false, why: LEGAL_BOOKING_EXPIRED };
       }
       if (
-        r.updatedAt.getTime() < now.getTime() - UNPAID_HOLD_MINUTES * 60_000
+        r.updatedAt.getTime() <
+        now.getTime() - UNPAID_HOLD_MINUTES * 60_000
       ) {
         return { due: false, why: LEGAL_BOOKING_EXPIRED };
       }
@@ -266,7 +266,8 @@ export class LegalFeeWalletService implements OnModuleInit {
         if (r.status === 'cancelled') return 'the request was cancelled';
         if (stage === 'consultation') {
           if (r.consultationTxRef === ref) return null;
-          if (r.consultationPaidAt) return 'the consultation was paid another way';
+          if (r.consultationPaidAt)
+            return 'the consultation was paid another way';
           if (r.consultationMedium !== 'physical' && r.scheduledFor === null)
             return 'the booked hour was given up';
           if (r.consultationFee !== payment.priceKobo / KOBO_PER_NAIRA)

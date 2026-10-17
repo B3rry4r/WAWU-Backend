@@ -43,8 +43,7 @@ export const UNLOCK_NOT_FOUND = 'Content not found';
 export const UNLOCK_FREE = 'This content is free, so no unlock is required.';
 export const UNLOCK_OWNED = 'You have already unlocked this content.';
 export const UNLOCK_PAYMENT_NOT_FOUND = 'We could not find that purchase.';
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The reference a wallet unlock's purchase row carries in place of a Flutterwave charge's (the column is required and unique). */
 export const unlockTxRef = (paymentId: string) => `wallet:${paymentId}`;
@@ -142,8 +141,7 @@ export class UnlockWalletService implements OnModuleInit {
       scope,
     );
     return (
-      (scope.answered as UnlockWalletView | undefined) ??
-      this.present(payment)
+      (scope.answered as UnlockWalletView | undefined) ?? this.present(payment)
     );
   }
 
@@ -161,8 +159,7 @@ export class UnlockWalletService implements OnModuleInit {
         targetId: contentId,
       },
     });
-    if (!payment)
-      throw new MoneyError('not_found', UNLOCK_PAYMENT_NOT_FOUND);
+    if (!payment) throw new MoneyError('not_found', UNLOCK_PAYMENT_NOT_FOUND);
     return this.present(this.payments.view(payment, null));
   }
 
@@ -230,7 +227,9 @@ export class UnlockWalletService implements OnModuleInit {
   private async deliver(payment: CompletedPayment): Promise<void> {
     const creatorId = payment.payeeWawuUserId;
     if (!creatorId)
-      throw new Error(`Payment ${payment.paymentId} is an unlock with no creator.`);
+      throw new Error(
+        `Payment ${payment.paymentId} is an unlock with no creator.`,
+      );
     const ref = unlockTxRef(payment.paymentId);
     const result = await deliverOrRefund(this.prisma, this.holds, payment, {
       condition: UNLOCK_REFUND_CONDITION,

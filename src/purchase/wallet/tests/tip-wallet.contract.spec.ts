@@ -195,7 +195,9 @@ describe('Tip a creator from the wallet (HOME-14), Nuvion stood in', () => {
     ]);
     const statuses = both.map((r) => r.status).sort();
     expect(statuses[0]).toBeLessThan(500);
-    expect(both.filter((r) => r.status === 201).length).toBeGreaterThanOrEqual(1);
+    expect(both.filter((r) => r.status === 201).length).toBeGreaterThanOrEqual(
+      1,
+    );
     expect(h.sendsFrom(payer)).toHaveLength(1);
     expect(await purchases(c)).toHaveLength(1);
     await h.expectLedgerEqualsStandIn([payer]);
@@ -210,10 +212,15 @@ describe('Tip a creator from the wallet (HOME-14), Nuvion stood in', () => {
       h.post(payer2, '/tips/wallet', request(c, q2)),
     ]);
     expect(h.sendsFrom(payer2)).toHaveLength(1);
-    const codes = two.map((r) => (r.body as { reason?: { code?: string } }).reason?.code);
+    const codes = two.map(
+      (r) => (r.body as { reason?: { code?: string } }).reason?.code,
+    );
     expect(two.filter((r) => r.status === 201)).toHaveLength(1);
     expect(codes.filter((c2) => c2 === 'payment_in_progress')).toHaveLength(1);
-    h.nuvion.settle(h.sendsFrom(payer2)[0].request.unique_reference, 'successful');
+    h.nuvion.settle(
+      h.sendsFrom(payer2)[0].request.unique_reference,
+      'successful',
+    );
     await until(async () => {
       await h.pass();
       return (await purchases(c)).length === 2;
@@ -282,7 +289,10 @@ describe('Tip a creator from the wallet (HOME-14), Nuvion stood in', () => {
     expect(h.sendsFrom(payer)).toHaveLength(1);
 
     // The provider's record settles it; the sweep delivers once.
-    h.nuvion.settle(h.sendsFrom(payer)[0].request.unique_reference, 'successful');
+    h.nuvion.settle(
+      h.sendsFrom(payer)[0].request.unique_reference,
+      'successful',
+    );
     await until(async () => {
       await h.pass();
       return (await purchases(c)).length === 1;
@@ -308,7 +318,10 @@ describe('Tip a creator from the wallet (HOME-14), Nuvion stood in', () => {
     expect(pending.status).toBe('pending');
     // The creator's account goes away before the debit is confirmed.
     await h.prisma.userProfile.delete({ where: { wawuUserId: c.id } });
-    h.nuvion.settle(h.sendsFrom(payer)[0].request.unique_reference, 'successful');
+    h.nuvion.settle(
+      h.sendsFrom(payer)[0].request.unique_reference,
+      'successful',
+    );
     h.nuvion.mode = 'successful';
     await until(async () => {
       await h.pass();

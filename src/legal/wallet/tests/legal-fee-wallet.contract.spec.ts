@@ -38,7 +38,9 @@ describe('Pay a legal fee from the wallet (LEGAL-05), Nuvion stood in', () => {
     h = await bootPayApp('l05', {
       modules: [LegalFeeWalletModule],
       cleanup: async (prisma) => {
-        await prisma.legalRequest.deleteMany({ where: { id: { in: requests } } });
+        await prisma.legalRequest.deleteMany({
+          where: { id: { in: requests } },
+        });
       },
     });
   });
@@ -217,7 +219,10 @@ describe('Pay a legal fee from the wallet (LEGAL-05), Nuvion stood in', () => {
     const key = randomUUID();
     const first = await h.post(payer, url(id), request(q), { key });
     expect(first.status).toBe(201);
-    const second = await h.post(payer, url(id), request(q), { key, pin: '0000' });
+    const second = await h.post(payer, url(id), request(q), {
+      key,
+      pin: '0000',
+    });
     expect(second.headers['idempotent-replayed']).toBe('true');
     expect(second.body).toEqual(first.body);
     expect(h.sendsFrom(payer)).toHaveLength(1);
@@ -249,8 +254,13 @@ describe('Pay a legal fee from the wallet (LEGAL-05), Nuvion stood in', () => {
     ]);
     expect(h.sendsFrom(payer2)).toHaveLength(1);
     expect(two.filter((r) => r.status === 201)).toHaveLength(1);
-    expect(two.map(code).filter((c) => c === 'payment_in_progress')).toHaveLength(1);
-    h.nuvion.settle(h.sendsFrom(payer2)[0].request.unique_reference, 'successful');
+    expect(
+      two.map(code).filter((c) => c === 'payment_in_progress'),
+    ).toHaveLength(1);
+    h.nuvion.settle(
+      h.sendsFrom(payer2)[0].request.unique_reference,
+      'successful',
+    );
     await until(async () => {
       await h.pass();
       return (await row(id2)).consultationPaidAt !== null;
@@ -301,11 +311,17 @@ describe('Pay a legal fee from the wallet (LEGAL-05), Nuvion stood in', () => {
     expect((await row(id)).consultationPaidAt).toBeNull();
 
     h.nuvion.mode = 'successful';
-    const retry = await h.post(payer, url(id), request(q), { key, pin: '0000' });
+    const retry = await h.post(payer, url(id), request(q), {
+      key,
+      pin: '0000',
+    });
     expect(retry.headers['idempotent-replayed']).toBe('true');
     expect(h.sendsFrom(payer)).toHaveLength(1);
 
-    h.nuvion.settle(h.sendsFrom(payer)[0].request.unique_reference, 'successful');
+    h.nuvion.settle(
+      h.sendsFrom(payer)[0].request.unique_reference,
+      'successful',
+    );
     await until(async () => {
       await h.pass();
       return (await row(id)).consultationPaidAt !== null;
@@ -331,9 +347,16 @@ describe('Pay a legal fee from the wallet (LEGAL-05), Nuvion stood in', () => {
     // The matter is closed by the legal team before the debit is confirmed.
     await h.prisma.legalRequest.update({
       where: { id },
-      data: { status: 'cancelled', cancelledAt: new Date(), scheduledFor: null },
+      data: {
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        scheduledFor: null,
+      },
     });
-    h.nuvion.settle(h.sendsFrom(payer)[0].request.unique_reference, 'successful');
+    h.nuvion.settle(
+      h.sendsFrom(payer)[0].request.unique_reference,
+      'successful',
+    );
     h.nuvion.mode = 'successful';
     await until(async () => {
       await h.pass();

@@ -7,10 +7,7 @@ import { WalletHoldService } from '../../money/holds/wallet-hold.service';
 import type { OpenWallet } from '../../money/gate/wallet-gate';
 import { loadMoneyParties } from '../../money/money-party';
 import { MoneyError } from '../../money/money-error';
-import type {
-  MoneyPartyView,
-  PaymentView,
-} from '../../money/money-view.type';
+import type { MoneyPartyView, PaymentView } from '../../money/money-view.type';
 import { deliverOrRefund } from '../../money/payments/deliver-or-refund';
 import type { IdempotencyScope } from '../../money/payments/idempotency';
 import {
@@ -50,8 +47,7 @@ export const TIP_PERSON_NOT_FOUND = 'We could not find that person.';
 export const TIP_NOT_FOUND = 'We could not find that tip.';
 export const TIP_BLOCKED = 'You cannot tip this account.';
 export const TIP_AMOUNT_MESSAGE = `A tip is a whole number of naira, from ₦1 to ₦10,000,000.`;
-const UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The reference a wallet tip's purchase row carries in place of a Flutterwave charge's (the column is required and unique). */
 export const tipTxRef = (paymentId: string) => `wallet:${paymentId}`;
@@ -187,8 +183,11 @@ export class TipWalletService implements OnModuleInit {
       where: { wawuUserId: creatorId },
       select: { wawuUserId: true },
     });
-    if (!profile) throw new MoneyError('target_not_found', TIP_PERSON_NOT_FOUND);
-    if (await this.blocked.isBlockedEitherWay(lookup.payerWawuUserId, creatorId)) {
+    if (!profile)
+      throw new MoneyError('target_not_found', TIP_PERSON_NOT_FOUND);
+    if (
+      await this.blocked.isBlockedEitherWay(lookup.payerWawuUserId, creatorId)
+    ) {
       throw new MoneyError('target_not_payable', TIP_BLOCKED);
     }
     const party = (
@@ -219,7 +218,12 @@ export class TipWalletService implements OnModuleInit {
           select: { wawuUserId: true },
         });
         if (!profile) return 'the creator is gone';
-        if (await this.blocked.isBlockedEitherWay(payment.payerWawuUserId, creatorId)) {
+        if (
+          await this.blocked.isBlockedEitherWay(
+            payment.payerWawuUserId,
+            creatorId,
+          )
+        ) {
           return 'the creator and the payer are blocked';
         }
         return null;
@@ -299,7 +303,9 @@ export class TipWalletService implements OnModuleInit {
         });
     const creator = row.payeeWawuUserId
       ? ((
-          await loadMoneyParties(this.prisma, this.wawuId, [row.payeeWawuUserId])
+          await loadMoneyParties(this.prisma, this.wawuId, [
+            row.payeeWawuUserId,
+          ])
         ).get(row.payeeWawuUserId) ?? null)
       : null;
     const status: TipWalletStatus = purchase

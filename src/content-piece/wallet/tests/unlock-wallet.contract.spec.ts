@@ -96,7 +96,8 @@ describe('Unlock content from the wallet (HOME-15), Nuvion stood in', () => {
     expectedTotalKobo: q.payment.totalKobo,
     quoteToken: q.payment.quoteToken,
   });
-  const unlockUrl = (contentId: string) => `/content/${contentId}/unlock/wallet`;
+  const unlockUrl = (contentId: string) =>
+    `/content/${contentId}/unlock/wallet`;
   const grants = (contentId: string) =>
     h.prisma.purchase.findMany({ where: { contentId, type: 'content' } });
   const balance = (p: PayPerson) =>
@@ -204,8 +205,13 @@ describe('Unlock content from the wallet (HOME-15), Nuvion stood in', () => {
     ]);
     expect(h.sendsFrom(payer2)).toHaveLength(1);
     expect(two.filter((r) => r.status === 201)).toHaveLength(1);
-    expect(two.map(code).filter((c) => c === 'payment_in_progress')).toHaveLength(1);
-    h.nuvion.settle(h.sendsFrom(payer2)[0].request.unique_reference, 'successful');
+    expect(
+      two.map(code).filter((c) => c === 'payment_in_progress'),
+    ).toHaveLength(1);
+    h.nuvion.settle(
+      h.sendsFrom(payer2)[0].request.unique_reference,
+      'successful',
+    );
     await until(async () => {
       await h.pass();
       return (await grants(id)).length === 2;
@@ -266,7 +272,10 @@ describe('Unlock content from the wallet (HOME-15), Nuvion stood in', () => {
     expect(retry.headers['idempotent-replayed']).toBe('true');
     expect(h.sendsFrom(payer)).toHaveLength(1);
 
-    h.nuvion.settle(h.sendsFrom(payer)[0].request.unique_reference, 'successful');
+    h.nuvion.settle(
+      h.sendsFrom(payer)[0].request.unique_reference,
+      'successful',
+    );
     await until(async () => {
       await h.pass();
       return (await grants(id)).length === 1;
@@ -296,7 +305,10 @@ describe('Unlock content from the wallet (HOME-15), Nuvion stood in', () => {
       where: { id },
       data: { status: 'removed' },
     });
-    h.nuvion.settle(h.sendsFrom(payer)[0].request.unique_reference, 'successful');
+    h.nuvion.settle(
+      h.sendsFrom(payer)[0].request.unique_reference,
+      'successful',
+    );
     h.nuvion.mode = 'successful';
     await until(async () => {
       await h.pass();
@@ -309,7 +321,9 @@ describe('Unlock content from the wallet (HOME-15), Nuvion stood in', () => {
 
     expect(await grants(id)).toHaveLength(0);
     expect(
-      await h.prisma.earningSettlement.count({ where: { paymentId: pending.id } }),
+      await h.prisma.earningSettlement.count({
+        where: { paymentId: pending.id },
+      }),
     ).toBe(0);
     expect(balance(payer)).toBe(BigInt(RICH - FEE));
     expect(balance(creator)).toBe(0n);
@@ -338,6 +352,8 @@ describe('Unlock content from the wallet (HOME-15), Nuvion stood in', () => {
     const ok = await h.post(other, unlockUrl(live), request(q));
     const unlock = body<UnlockWalletView>(ok).data!;
     // Someone else's purchase is not readable.
-    expect((await h.get(payer, `${unlockUrl(live)}/${unlock.id}`)).status).toBe(404);
+    expect((await h.get(payer, `${unlockUrl(live)}/${unlock.id}`)).status).toBe(
+      404,
+    );
   });
 });

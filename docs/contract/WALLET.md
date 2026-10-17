@@ -170,6 +170,76 @@ A payment whose credits cannot be written yet (`payment.delivered` false) is
 `CreditPurchase.walletPaymentId` (unique) is the link from a purchase to its
 payment; `flutterwaveTxRef` carries `wallet:<payment id>` on these rows.
 
+#### Tips from the wallet (HOME-14)
+
+A tip is paid with three new routes (the web's `POST /tips` and
+`/tips/verify` are unchanged). The kind is `tip`; the target is the creator's
+wawuUserId and the amount is the payer's, a whole number of naira from ₦1 to
+₦10,000,000 in kobo (`amount_out_of_range` otherwise).
+
+- `GET /tips/wallet/quote?creatorWawuId=&amountKobo=`: `{ creator, amountKobo,
+  payment }`. ₦2,000 plus the provider's charge is the total.
+- `POST /tips/wallet` `{ creatorWawuId, amountKobo, note?, expectedTotalKobo,
+  quoteToken }` with `Idempotency-Key` and the PIN: 201 with the tip
+  (`id`, `status` `paid`, `pending`, `failed`, `reversed` or `refunded`,
+  `creator`, `amountKobo`, `note`, `payment`, `paidAt`).
+- `GET /tips/wallet/{id}`: the same tip, for the payer only.
+
+The tip is recorded once per payment as the web's own `Purchase` row of type
+`tip` (`flutterwaveTxRef` is `wallet:<payment id>`, unique), so the creator's
+earnings, the admin streams and the "you were tipped" notification read it as
+they read a Flutterwave tip. The creator's 85% lands by itself (WALLET-16,
+R-11); WAWU keeps 15%. A tip that cannot be delivered (the creator's account
+is gone, or they blocked the payer since) is paid back through MONEY-18's
+refund: the price returns, the charge does not (R-10).
+
+#### Unlocks from the wallet (HOME-15)
+
+A piece is unlocked with three new routes (the web's `POST /content/:id/unlock`
+and `/unlock/verify` are unchanged). The kind is `content_unlock`; the target
+is the content piece id; the price is the piece's own.
+
+- `GET /content/{id}/unlock/wallet/quote`: `{ contentId, title, creator,
+  priceKobo, payment }`. A free piece, your own, one that is gone or one you
+  already own is `target_not_payable` or `target_not_found`.
+- `POST /content/{id}/unlock/wallet` `{ expectedTotalKobo, quoteToken }` with
+  `Idempotency-Key` and the PIN: 201 with the unlock (`status`, `purchased`,
+  `fullAssetUrl` once paid, `payment`).
+- `GET /content/{id}/unlock/wallet/{paymentId}`: the same unlock, for the
+  payer only.
+
+Access is the web's own `Purchase` row of type `content`, written once per
+payment (`wallet:<payment id>`). A debited-but-not-granted payment is granted
+by the payment sweep; one that cannot be granted (the piece was taken down
+since the quote, or the person already owned it by another payment) is paid
+back (`status: refunded`).
+
+#### Legal fees from the wallet (LEGAL-05)
+
+A legal fee is paid with three new routes (the web's `/consultation`,
+`/consultation/verify`, `/payment/init` and `/payment/verify` are unchanged).
+The kind is `legal_fee`; the target is the legal request id, and WAWU is the
+seller (no payee, nothing held).
+
+- `GET /legal/requests/{id}/pay/wallet/quote`: `{ requestId, stage, title,
+  priceKobo, payment }`. The fee due is the consultation fee recorded on the
+  request when the hour was booked (`stage: consultation`, status
+  `awaiting_consultation_payment`, the hold on the hour still good), else the
+  quoted fee once the engagement letter is signed (`stage: service`). Nothing
+  due, a cancelled request or another person's is `target_not_payable` or
+  `target_not_found`.
+- `POST /legal/requests/{id}/pay/wallet` `{ expectedTotalKobo, quoteToken }`
+  with `Idempotency-Key` and the PIN: 201 with the payment (`status`, `stage`,
+  `requestStatus`, `payment`).
+- `GET /legal/requests/{id}/pay/wallet/{paymentId}`: the same, for the payer.
+
+The price is the one on the request (R-14); the quote is bound to the stage
+and the fee, so a request re-booked or re-quoted since is `409 quote_changed`.
+Paying marks the stage paid with one conditional write and records
+`wallet:<payment id>` as the request's `consultationTxRef` or `serviceTxRef`.
+A fee that cannot be applied (the request was cancelled while the debit was
+confirming, the hour was given up, or it was paid another way) is paid back.
+
 ## 2. The named schemas (G-1)
 
 Every success body and every nested object in these routes is a named schema
