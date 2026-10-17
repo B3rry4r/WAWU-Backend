@@ -903,6 +903,159 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
     expect(await passRows(id, member)).toHaveLength(1);
   });
 
+  it('a removed member who leaves and joins again is still removed: only the host lets them back (round 3)', async () => {
+    const host = await person(0, false);
+    const member = await person(5_000_000);
+    const id = await room(host);
+    await pay(member, id);
+    const balanceBefore = available(member);
+    await communities.removeMember(id, host.id, member.id);
+    const rowOf = () =>
+      prisma.communityMembership.findUnique({
+        where: {
+          userWawuId_communityId: { userWawuId: member.id, communityId: id },
+        },
+      });
+    expect((await rowOf())?.status).toBe('pending');
+
+    // The two calls that used to undo the removal, however often they are made.
+    for (let i = 0; i < 2; i += 1) {
+      const left = await request(app.getHttpServer())
+        .delete(`${API}/communities/${id}/join`)
+        .set('Authorization', member.auth);
+      expect(left.status).toBe(200);
+      // The row that says "removed by the host" is still there.
+      expect((await rowOf())?.status).toBe('pending');
+      const back = await request(app.getHttpServer())
+        .post(`${API}/communities/${id}/join`)
+        .set('Authorization', member.auth);
+      expect(back.status).toBe(200);
+      expect(body<{ status: string }>(back).data!.status).toBe('pending');
+      expect((await messages(member, id)).status).toBe(403);
+      expect(
+        body<{ role: string }>(await get(member, `/communities/${id}/room`))
+          .data!.role,
+      ).toBe('pending');
+      expect(
+        body<unknown[]>(await get(member, '/communities/mine')).data,
+      ).toEqual([]);
+    }
+    // The host's queue still shows them, and approving lets them back.
+    const queue = await communities.listJoinRequests(id, host.id, 1, 20);
+    expect(queue.items.map((r) => r.userWawuId)).toEqual([member.id]);
+    expect(
+      (await communities.approveJoinRequest(id, host.id, member.id)).status,
+    ).toBe('joined');
+    expect((await messages(member, id)).status).toBe(200);
+
+    // A member who was never removed still leaves and comes back on their pass.
+    await request(app.getHttpServer())
+      .delete(`${API}/communities/${id}/join`)
+      .set('Authorization', member.auth);
+    expect(await rowOf()).toBeNull();
+    const rejoined = await request(app.getHttpServer())
+      .post(`${API}/communities/${id}/join`)
+      .set('Authorization', member.auth);
+    expect(body<{ status: string }>(rejoined).data!.status).toBe('joined');
+    expect(available(member)).toBe(balanceBefore);
+  });
+
+  it('a renewal paid while the host removes the member ends removed, and every naira comes back (round 3)', async () => {
+    const host = await person(0, false);
+    const member = await person(5_000_000);
+    const id = await room(host);
+    await pay(member, id);
+    const balanceAfterFirst = available(member);
+    const passesAfterFirst = (await passRows(id, member)).length;
+    expect((await messages(member, id)).status).toBe(200);
+
+    // The renewal is paid from the wallet but Nuvion has not settled it yet.
+    const q = await quoteOf(member, id);
+    nuvion.mode = 'pending';
+    const res = await buy(member, id, q);
+    const pending = body<CommunityPassPurchaseView>(res).data!;
+    expect(pending.status).toBe('pending');
+    // The host removes them before it settles.
+    await communities.removeMember(id, host.id, member.id);
+    nuvion.settle(pending.payment.reference, 'successful');
+    nuvion.mode = 'successful';
+    nuvion.feeKobo = () => BigInt(NUVION_FEE);
+    for (let i = 0; i < 4; i += 1) {
+      await payments.sweep(later());
+      await holds.sweep(later());
+      if (available(member) === balanceAfterFirst) break;
+    }
+
+    // Still removed: the payment did not admit them and gave no second pass.
+    const row = await prisma.communityMembership.findUniqueOrThrow({
+      where: {
+        userWawuId_communityId: { userWawuId: member.id, communityId: id },
+      },
+    });
+    expect(row.status).toBe('pending');
+    expect(row.joinedAt).toBeNull();
+    expect((await messages(member, id)).status).toBe(403);
+    expect(await passRows(id, member)).toHaveLength(passesAfterFirst);
+    // The renewal is paid back in full, the charge included; the Hub agrees
+    // with the stand-in; the host earns nothing from it.
+    expect(available(member)).toBe(balanceAfterFirst);
+    const view = body<CommunityPassPurchaseView>(
+      await get(member, `/communities/${id}/pass/${pending.id}`),
+    ).data!;
+    expect(view.status).toBe('refunded');
+    expect(view.passUntil).toBeNull();
+    await earnings.sweep(later());
+    expect(
+      await prisma.earningSettlement.count({
+        where: { paymentId: pending.id },
+      }),
+    ).toBe(0);
+    await expectLedgerMatchesNuvion([member]);
+    // The host lets them back, and the days they paid for first are still there.
+    await communities.approveJoinRequest(id, host.id, member.id);
+    expect((await messages(member, id)).status).toBe(200);
+  });
+
+  it('leaving an open room or an older private room is exactly what it was: the row goes', async () => {
+    const host = await person(0, false);
+    const member = await person(0, false);
+    const open = await prisma.community.create({
+      data: {
+        name: `Open room ${randomUUID().slice(0, 8)}`,
+        description: 'An open room.',
+        hostWawuId: host.id,
+        kind: 'open',
+      },
+    });
+    const older = await room(host, null);
+    for (const [communityId, status] of [
+      [open.id, 'joined'],
+      [older, 'joined'],
+      [older, 'pending'],
+    ] as const) {
+      await prisma.communityMembership.deleteMany({
+        where: { userWawuId: member.id, communityId },
+      });
+      await prisma.communityMembership.create({
+        data: {
+          userWawuId: member.id,
+          communityId,
+          status,
+          joinedAt: status === 'joined' ? new Date() : null,
+        },
+      });
+      const left = await request(app.getHttpServer())
+        .delete(`${API}/communities/${communityId}/join`)
+        .set('Authorization', member.auth);
+      expect(left.status).toBe(200);
+      expect(
+        await prisma.communityMembership.count({
+          where: { userWawuId: member.id, communityId },
+        }),
+      ).toBe(0);
+    }
+  });
+
   it('removing someone from an open room or an older private room is exactly what it was: the row goes, and they can ask again', async () => {
     const host = await person(0, false);
     const member = await person(0, false);
