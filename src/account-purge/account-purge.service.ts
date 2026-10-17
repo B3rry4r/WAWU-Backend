@@ -4,6 +4,7 @@ import { rowsToAnonymise, rowsToDelete } from './account-data-map';
 import { POINTS_PURGE_MODELS, purgePersonPoints } from '../points/points-purge';
 import { DELETED_CREATOR_ID } from '../content-piece/deleted-creator';
 import { objectKeyFrom } from '../storage/storage.service';
+import { scrubContactDetails } from './scrub-contact-details';
 
 /** What a bought content piece is called once its creator's account is gone. */
 export const REMOVED_CONTENT_TITLE = 'Removed content';
@@ -92,7 +93,7 @@ export class AccountPurgeService {
     // Content a buyer paid for stays (owner ruling, round 7), and so do its
     // files: found before anything is deleted, so the storage rows below can
     // leave those files alone.
-    let sold: SoldContent = { ids: [], keys: [] };
+    let sold: SoldContent = { ids: [], keys: [], words: {} };
     try {
       sold = await this.findSoldContent(wawuUserId);
     } catch (e) {
@@ -129,6 +130,12 @@ export class AccountPurgeService {
             ...(rule.model === 'StorageObject' && sold.keys.length > 0
               ? { key: { notIn: sold.keys } }
               : {}),
+            // The mark that a deletion hid a sold piece is what lets its
+            // buyers open it until the piece is re-keyed below (round 8):
+            // it goes only after that.
+            ...(rule.model === 'AccountDeletionContent' && sold.ids.length > 0
+              ? { contentPieceId: { notIn: sold.ids } }
+              : {}),
           },
         });
         if (count > 0) {
@@ -157,6 +164,25 @@ export class AccountPurgeService {
         `Purge failed on ContentPiece (bought) for ${wawuUserId}: ${(e as Error).message}`,
       );
       failed.push('ContentPiece.creatorWawuId');
+    }
+    // The marks of the pieces just kept go last. If the step above failed they
+    // stay, so the buyers can still open their pieces until the retry.
+    if (sold.ids.length > 0 && !failed.includes('ContentPiece.creatorWawuId')) {
+      try {
+        const { count } = await this.prisma.accountDeletionContent.deleteMany({
+          where: { wawuUserId },
+        });
+        if (count > 0) {
+          deleted['AccountDeletionContent.wawuUserId'] =
+            (deleted['AccountDeletionContent.wawuUserId'] ?? 0) + count;
+          total += count;
+        }
+      } catch (e) {
+        this.logger.error(
+          `Purge failed on AccountDeletionContent for ${wawuUserId}: ${(e as Error).message}`,
+        );
+        failed.push('AccountDeletionContent.wawuUserId');
+      }
     }
     // A piece with only an unfinished or failed purchase was nobody's: it
     // cannot be deleted either (the row is restricted), so it goes dark and
@@ -235,12 +261,24 @@ export class AccountPurgeService {
       },
       select: {
         id: true,
+        title: true,
+        description: true,
         previewAssetUrl: true,
         fullAssetUrl: true,
         frames: { select: { url: true } },
       },
     });
     const keys = new Set<string>();
+    // Title and description stay as bought, minus any email address or phone
+    // number in them (round 8). Only a piece that has one is rewritten.
+    const words: SoldContent['words'] = {};
+    for (const r of rows) {
+      const title = scrubContactDetails(r.title);
+      const description = scrubContactDetails(r.description);
+      if (title !== r.title || description !== r.description) {
+        words[r.id] = { title, description };
+      }
+    }
     for (const r of rows) {
       for (const stored of [
         r.previewAssetUrl,
@@ -250,7 +288,7 @@ export class AccountPurgeService {
         if (stored) keys.add(objectKeyFrom(stored));
       }
     }
-    return { ids: rows.map((r) => r.id), keys: [...keys] };
+    return { ids: rows.map((r) => r.id), keys: [...keys], words };
   }
 
   /**
@@ -261,6 +299,12 @@ export class AccountPurgeService {
    * the slug and tags (discovery words) are cleared, and the storage rows of
    * its files are filed under that id too, so they are not the person's and
    * not deleted. Idempotent: a second run finds no piece under the person.
+   *
+   * Round 8: email addresses and phone numbers are taken out of the title and
+   * description (`scrubContactDetails`); the rest of both stays as bought. The
+   * storage keys are NOT renamed: a key carries the creator's id in its path
+   * (`content/<wawuId>/<uuid>`) but is never shown as text, and renaming it
+   * would break the files the buyers read.
    */
   private async keepSoldContent(sold: SoldContent): Promise<number> {
     if (sold.ids.length === 0) return 0;
@@ -274,6 +318,7 @@ export class AccountPurgeService {
             slug: `removed-${id}`,
             tags: [],
             specializations: [],
+            ...(sold.words[id] ?? {}),
           },
         }),
       ),
@@ -293,8 +338,16 @@ export class AccountPurgeService {
    * settings, so nothing a reader could see names the person. Idempotent.
    */
   private async stripReferencedContent(wawuUserId: string): Promise<number> {
+    // Never a piece a buyer paid for: if keeping those failed, they are still
+    // here and wait for the retry, whole (round 8).
     const left = await this.prisma.contentPiece.findMany({
-      where: { creatorWawuId: wawuUserId, purchases: { some: {} } },
+      where: {
+        creatorWawuId: wawuUserId,
+        purchases: {
+          some: {},
+          none: { type: 'content', status: 'completed' },
+        },
+      },
       select: { id: true },
     });
     if (left.length === 0) return 0;
@@ -314,6 +367,9 @@ export class AccountPurgeService {
           where: { id },
           data: {
             status: 'removed',
+            // Nothing is left under the person's id (round 8). No completed
+            // buyer owns it, so it stays unopenable.
+            creatorWawuId: DELETED_CREATOR_ID,
             title: REMOVED_CONTENT_TITLE,
             description: '',
             slug: `removed-${id}`,
@@ -332,4 +388,9 @@ export class AccountPurgeService {
 }
 
 /** The pieces a purge keeps for their buyers, and the storage keys of their files. */
-type SoldContent = { ids: string[]; keys: string[] };
+type SoldContent = {
+  ids: string[];
+  keys: string[];
+  /** Pieces whose title or description had a contact detail: the scrubbed text. */
+  words: Record<string, { title: string; description: string }>;
+};

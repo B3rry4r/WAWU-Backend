@@ -2768,7 +2768,21 @@ days; signing in during them cancels it (WAWU ID, SETTINGS-08).
   identity, and marks the row `purged` only when all of that worked. A table
   that would not clear, or WAWU ID not answering, leaves the row `purging`
   (`purgeBlockedBy` says which) and the next pass carries on; WAWU ID is not
-  asked before the Hub's side is done. Content a buyer paid for cannot be
-  deleted (the receipt points at it): it is hidden and loses its title,
-  description, preview, files and slug, and `AccountDeletion.purgeNote` says
-  how many pieces were kept this way.
+  asked before the Hub's side is done.
+- **Buyers keep what they paid for, from the DELETE on** (owner ruling, 16 Oct
+  2026; lead rulings 17 Oct 2026). A piece with a completed paid purchase is
+  hidden from everything public (`removed`) the moment the deletion is
+  scheduled, and still opens on `GET /content/:id`, `GET /content/:id/detail`
+  and `GET /content/:id/media` for each buyer with a completed purchase and
+  for nobody else: the creator, a buyer whose purchase is pending, failed or a
+  tip, and a signed-out caller get `404`. A non-buyer also gets `404` on that
+  piece's comments (read, post, like), on save and on rate. Every other
+  removed piece answers exactly as before. A cancel puts the pieces back as
+  they were. At the purge the piece stays whole (title and description as
+  bought, with any email address or phone number in them replaced by
+  `[removed]`; files, lessons and frames), and loses the creator: its creator
+  id becomes `deleted-account`, its slug and tags go. File keys are not
+  renamed (they carry the creator's id in the path but are never shown as
+  text). Pieces with only a pending, failed or tip purchase are stripped to
+  "Removed content" and re-keyed to `deleted-account` too. `AccountDeletion.purgeNote`
+  says how many pieces were kept this way.
