@@ -72,6 +72,7 @@ import {
   PayableRegistry,
   type PayableTarget,
 } from './payable-registry';
+import { type PayableTerms, termsDigest, termsFromJson } from './payable-terms';
 import { isUniqueViolationOn } from '../prisma-unique';
 import { MoneyLimits } from '../limits/money-limits.service';
 import { PaymentSettings, splitPrice } from './payment-config';
@@ -357,7 +358,7 @@ export class WalletPaymentService implements OnModuleInit {
       wallet.wawuUserId,
       { kind: 'purchase', amountKobo: target.priceKobo },
       new Date(),
-      subjectOf(q.kind, q.targetId),
+      subjectOf(q.kind, q.targetId, target.terms),
     );
     // The balance first: its answer keeps the account's limit (WALLET-23),
     // which the standing below is read from.
@@ -463,6 +464,8 @@ export class WalletPaymentService implements OnModuleInit {
       openKey,
       nextCheckAt: new Date(now.getTime() + MINUTE),
       note: dto.note?.trim() ? dto.note.trim() : null,
+      // What the item was quoted with, kept for the delivery (TIER-06 round 2).
+      ...(target.terms === undefined ? {} : { terms: target.terms }),
       sentAt: now,
     };
 
@@ -610,7 +613,7 @@ export class WalletPaymentService implements OnModuleInit {
         dto.expectedTotalKobo,
         dto.quoteToken,
         new Date(),
-        subjectOf(dto.kind, dto.targetId),
+        subjectOf(dto.kind, dto.targetId, target.terms),
       );
     } catch (e) {
       if (e instanceof MoneyError && e.code === 'quote_changed') {
@@ -630,7 +633,7 @@ export class WalletPaymentService implements OnModuleInit {
       wallet.wawuUserId,
       { kind: 'purchase', amountKobo: target.priceKobo },
       new Date(),
-      subjectOf(dto.kind, dto.targetId),
+      subjectOf(dto.kind, dto.targetId, target.terms),
     );
     return new MoneyError('quote_changed', QUOTE_CHANGED_MESSAGE, {
       paymentQuote: this.quoteView(
@@ -2018,6 +2021,7 @@ export class WalletPaymentService implements OnModuleInit {
         },
       });
       if (claimed.count === 0) return false;
+      const terms = termsFromJson(p.terms);
       await handler.onCompleted({
         paymentId: p.id,
         payerWawuUserId: p.payerWawuUserId,
@@ -2027,6 +2031,7 @@ export class WalletPaymentService implements OnModuleInit {
         payeeWawuUserId: p.payeeWawuUserId,
         note: p.note,
         holdId: hold?.id ?? null,
+        ...(terms === null ? {} : { terms }),
       });
       // Delivered: only now is the buyer's claim on the item given up, so
       // the feature's record of ownership is in place before another
@@ -2153,7 +2158,15 @@ export class WalletPaymentService implements OnModuleInit {
   }
 }
 
-/** What a payment quote is bound to: one kind and one item. */
-export function subjectOf(kind: PaymentKind, targetId: string): string {
-  return `payment:${kind}:${targetId}`;
+/**
+ * What a payment quote is bound to: one kind and one item, and the terms the
+ * item was quoted with when it has any (a changed term is a changed quote).
+ */
+export function subjectOf(
+  kind: PaymentKind,
+  targetId: string,
+  terms?: PayableTerms,
+): string {
+  const base = `payment:${kind}:${targetId}`;
+  return terms === undefined ? base : `${base}:terms:${termsDigest(terms)}`;
 }

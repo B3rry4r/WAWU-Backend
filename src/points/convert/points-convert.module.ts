@@ -7,6 +7,7 @@ import { WalletProviderModule } from '../../wallet-provider/wallet-provider.modu
 import { PointsModule } from '../points.module';
 import { PointsCashOutService } from './points-cash-out.service';
 import { ConvertPrecheckGuard } from './points-convert-precheck.guard';
+import { PointsConvertQuoteToken } from './points-convert-quote-token';
 import { PointsConvertController } from './points-convert.controller';
 import { PointsConvertService } from './points-convert.service';
 
@@ -30,6 +31,11 @@ import { PointsConvertService } from './points-convert.service';
     WalletProviderModule,
   ],
   controllers: [PointsConvertController],
-  providers: [PointsCashOutService, PointsConvertService, ConvertPrecheckGuard],
+  providers: [
+    PointsCashOutService,
+    PointsConvertService,
+    PointsConvertQuoteToken,
+    ConvertPrecheckGuard,
+  ],
 })
 export class PointsConvertModule {}

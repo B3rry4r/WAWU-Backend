@@ -371,6 +371,37 @@ page calls `GET /admin/ads/:id/report?from=&to=` and draws `delivery` and
 the overview calls `GET /admin/ads/report`. Counts survive a pause or an end.
 A counted campaign cannot be deleted (end it instead).
 
+### Plan settings (`/api/hub/admin/plan-settings`, task TIER-06)
+
+The launch figures (tier prices and lengths, the add-5-products price, the
+points cash rate, expiry and daily cap, packs, AI tool costs, the referral
+ladder, the event pass lines and date, and a few figures from other rulings)
+are admin settings, not code (R-65). `GET` lists every setting with its value,
+its default, the screens that print it and a provisional note where the owner
+did not name the figure. `PATCH` takes `{ "settings": { "<key>": <value> } }`:
+a `null` puts a setting back to its default, zero and negative figures are
+refused, a request is all or nothing, and each setting that changed writes one
+`AdminOpsAudit` row (superadmin and finance change; support reads).
+
+`PLANS_CONFIG` is the live plan: the defaults (`src/plans/plans.config.json`
+and `src/plan-settings/plan-settings.defaults.json`) with the saved rows
+(`PlanSetting`) laid over them, kept in memory. The saving process reloads at
+once; another Hub process picks the change up within 15 seconds. A task that
+needs a setting reads it with `PlanSettingsService.number(key)`, `.text(key)`
+or `.value(key)`. 85/15 is not a setting. Dollar prices are not settings yet.
+
+What a person is shown is what they get. A points cash-out carries the
+`quoteToken` of its quote (`GET /points/convert/quote`) in the body and is paid
+at that quote or not at all: a changed rate, minimum, cap or cash is `409
+quote_changed` with the new quote in `reason.pointsQuote`. A tier purchase's
+goods (products, bonus points, days, bump points, expiry) are the payment's
+`terms`: the quote token is bound to them and the payment keeps them from the
+claim, so a plan changed while a payment confirms changes nothing already
+bought. The cash rate may never exceed the price per point of any way points
+are sold (a pack, the checkout offer, the shortfall rate): a change that would
+is a 400 naming both settings, whichever of them is changed. Saves take turns
+(one advisory lock), so each audit row's old value is true.
+
 ### Environment
 
 | Variable | Required | Notes |

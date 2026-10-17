@@ -71,13 +71,28 @@ export class PlansService {
       extraProducts: held.extraProducts,
       pointsIncluded: held.pointsIncluded,
       firstVoiceIntroIncluded: held.voiceIntroIncluded,
-      eventPass: held.eventPass ? passView(held.eventPass) : null,
+      eventPass: held.eventPass
+        ? passView(held.eventPass, this.config.eventDate)
+        : null,
     };
   }
 }
 
-function passView(p: PlanEventPass): PlanEventPassView {
-  return { id: p.id, name: p.name };
+/**
+ * A pass as the app reads it. The benefit lines and the event date are admin
+ * settings (TIER-06): each is left out until one is set, so a pass nobody has
+ * written lines for reads exactly as it did before.
+ */
+function passView(
+  p: PlanEventPass,
+  eventDate: string | null | undefined,
+): PlanEventPassView {
+  return {
+    id: p.id,
+    name: p.name,
+    ...(p.benefits ? { benefits: [...p.benefits] } : {}),
+    ...(eventDate ? { eventDate } : {}),
+  };
 }
 
 /** The config in one currency: what GET /plans answers, less `currencyFixed`. */
@@ -97,7 +112,7 @@ export function planIn(
       bonusPointsExpireDays: t.bonusExpiryDays,
       priceMinor: priceIn(t.price, currency),
       // The config check guarantees every tier's pass is listed.
-      eventPass: passView(passes.get(t.eventPass)!),
+      eventPass: passView(passes.get(t.eventPass)!, config.eventDate),
       badge: { ...t.badge },
       packBonusPercent: t.packBonusPct,
       firstVoiceIntroIncluded: t.firstVoiceIntro,

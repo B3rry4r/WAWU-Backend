@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
+import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { PointsModule } from '../points/points.module';
 import { BillingCurrencyService } from './billing-currency.service';
 import { MakerTierService } from './maker-tier.service';
 import { MeTierController } from './me-tier.controller';
-import { loadPlansConfig, PLANS_CONFIG } from './plans-config';
 import { PlansController } from './plans.controller';
 import { PlansService } from './plans.service';
 import { PublishingAllowanceService } from './publishing-allowance.service';
@@ -13,8 +13,10 @@ import { TierGrantService } from './tier-grant.service';
 
 /**
  * The maker plan (TIER-01, R-43): its figures from `plans.config.json`,
- * checked at boot (a bad file stops the server naming the field), a
- * person's billing currency, and the one reader of their tier.
+ * checked at boot (a bad file stops the server naming the field), with the
+ * settings an admin saved laid over them (TIER-06, R-65: PlanSettingsModule
+ * provides PLANS_CONFIG as the live plan), a person's billing currency, and
+ * the one reader of their tier.
  *
  * The publishing gate (TIER-02): `PublishingAllowanceService` says what a
  * person may publish and has used, `PublishingGate` refuses with a 402 when
@@ -33,10 +35,9 @@ import { TierGrantService } from './tier-grant.service';
  * PrismaService comes from the global PrismaModule, as for every module.
  */
 @Module({
-  imports: [PointsModule],
+  imports: [PointsModule, PlanSettingsModule],
   controllers: [PlansController, MeTierController],
   providers: [
-    { provide: PLANS_CONFIG, useFactory: () => loadPlansConfig() },
     BillingCurrencyService,
     MakerTierService,
     PlansService,
@@ -46,7 +47,8 @@ import { TierGrantService } from './tier-grant.service';
     TierGrantService,
   ],
   exports: [
-    PLANS_CONFIG,
+    // Re-exports PLANS_CONFIG (the live plan) and PlanSettingsService.
+    PlanSettingsModule,
     BillingCurrencyService,
     MakerTierService,
     PlansService,

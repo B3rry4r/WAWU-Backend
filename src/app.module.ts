@@ -17,6 +17,7 @@ import { AdminFeaturedCreatorsModule } from './admin/featured-creators/admin-fea
 import { ExploreModule } from './explore/explore.module';
 import { AdminLegalDocumentsModule } from './admin/legal-documents/admin-legal-documents.module';
 import { AdminSchoolsModule } from './admin/schools/admin-schools.module';
+import { AdminPlanSettingsModule } from './admin/plan-settings/admin-plan-settings.module';
 import { AboutModule } from './about/about.module';
 import { AdsModule } from './ads/ads.module';
 import { PrismaModule } from './common/prisma/prisma.module';
@@ -375,6 +376,9 @@ import { PushModule } from './push/push.module';
     AboutModule,
     AdminLegalDocumentsModule,
     AdminSchoolsModule,
+    // TIER-06: the launch figures as admin settings, under `admin/plan-settings`
+    // (one exact path, so it cannot shadow or be shadowed).
+    AdminPlanSettingsModule,
     // EXPLORE-03: the superadmin write that features a creator, under
     // `admin/featured-creators`.
     AdminFeaturedCreatorsModule,

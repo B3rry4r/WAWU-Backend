@@ -1,7 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Prisma } from '../../generated/prisma/client';
 import { PointsService } from '../points/points.service';
-import { PLANS_CONFIG, tierById, type PlansConfig } from './plans-config';
+import {
+  PLANS_CONFIG,
+  tierById,
+  type PlanTier,
+  type PlansConfig,
+} from './plans-config';
 
 type Tx = Prisma.TransactionClient;
 
@@ -34,6 +39,38 @@ export async function lockPersonTier(
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`tier:${wawuUserId}`}, 0))`;
 }
 
+/**
+ * What one grant of a tier gives, copied from the plan at one moment. A
+ * purchase takes it when the buyer is quoted and grants from that copy, so a
+ * plan changed while the payment confirms never changes what was bought
+ * (TIER-06 round 2). Without one, a grant reads the plan as it stands now
+ * (an event code's claim, JOIN-03).
+ */
+export interface TierGoods {
+  /** How long the tier lasts. */
+  days: number;
+  /** Products the tier lets a person publish. */
+  products: number;
+  bonusPoints: number;
+  /** How long the bonus points lot lasts. */
+  bonusExpiryDays: number;
+  /** An `event_passes` id. */
+  eventPass: string;
+  firstVoiceIntro: boolean;
+}
+
+/** The goods a tier gives in the plan as it stands. */
+export function tierGoodsOf(tier: PlanTier): TierGoods {
+  return {
+    days: tier.days,
+    products: tier.products,
+    bonusPoints: tier.bonusPoints,
+    bonusExpiryDays: tier.bonusExpiryDays,
+    eventPass: tier.eventPass,
+    firstVoiceIntro: tier.firstVoiceIntro,
+  };
+}
+
 export interface TierGrantInput {
   wawuUserId: string;
   /** A tier in `plans.config.json`. */
@@ -45,8 +82,10 @@ export interface TierGrantInput {
    * so the same reference grants once however often it is asked.
    */
   sourceRef: string;
-  /** How many days to give. Omitted means the tier's own days. */
+  /** How many days to give. Omitted means the goods' days. */
   days?: number;
+  /** What the tier gives. Omitted means the tier as the plan has it now. */
+  goods?: TierGoods;
   /** The moment to act as of (tests). */
   now?: Date;
 }
@@ -59,6 +98,8 @@ export interface TierUpgradeInput {
   tierId: string;
   /** The purchase's payment reference, as for `grant`. */
   sourceRef: string;
+  /** What the new tier gives. Omitted means the tier as the plan has it now. */
+  goods?: TierGoods;
   /** The moment to act as of (tests). */
   now?: Date;
 }
@@ -118,7 +159,8 @@ export class TierGrantService {
     const tier = tierById(this.config, input.tierId);
     if (tier === null)
       throw new Error(`The plans file names no tier "${input.tierId}".`);
-    const days = input.days ?? tier.days;
+    const goods = input.goods ?? tierGoodsOf(tier);
+    const days = input.days ?? goods.days;
     if (!Number.isSafeInteger(days) || days < 1)
       throw new Error('A grant gives a whole number of days, at least one.');
 
@@ -130,7 +172,7 @@ export class TierGrantService {
       data: [
         {
           wawuUserId: input.wawuUserId,
-          type: tier.eventPass,
+          type: goods.eventPass,
           purchaseRef: input.sourceRef,
         },
       ],
@@ -181,9 +223,9 @@ export class TierGrantService {
         tierId: tier.id,
         activeFrom: now,
         activeUntil,
-        productsIncluded: tier.products,
-        pointsIncluded: tier.bonusPoints,
-        voiceIntroIncluded: tier.firstVoiceIntro,
+        productsIncluded: goods.products,
+        pointsIncluded: goods.bonusPoints,
+        voiceIntroIncluded: goods.firstVoiceIntro,
       };
       if (held === null)
         await tx.makerTier.create({
@@ -204,14 +246,14 @@ export class TierGrantService {
 
     let pointsGranted = 0;
     let pointsExpireAt: Date | null = null;
-    if (tier.bonusPoints > 0) {
+    if (goods.bonusPoints > 0) {
       const lot = await this.points.grant(
         {
           wawuUserId: input.wawuUserId,
           source: 'tier_bonus',
           sourceRef: input.sourceRef,
-          points: tier.bonusPoints,
-          expiresAt: new Date(now.getTime() + tier.bonusExpiryDays * DAY_MS),
+          points: goods.bonusPoints,
+          expiresAt: new Date(now.getTime() + goods.bonusExpiryDays * DAY_MS),
         },
         { tx, now },
       );
@@ -251,13 +293,15 @@ export class TierGrantService {
     if (tier === null)
       throw new Error(`The plans file names no tier "${input.tierId}".`);
 
+    const goods = input.goods ?? tierGoodsOf(tier);
+
     await lockPersonTier(tx, input.wawuUserId);
 
     const { count } = await tx.eventPass.createMany({
       data: [
         {
           wawuUserId: input.wawuUserId,
-          type: tier.eventPass,
+          type: goods.eventPass,
           purchaseRef: input.sourceRef,
         },
       ],
@@ -293,7 +337,7 @@ export class TierGrantService {
     if (held.tierId === tier.id)
       throw new TierGrantRefusal('An upgrade moves to a different tier.');
 
-    const activeUntil = new Date(now.getTime() + tier.days * DAY_MS);
+    const activeUntil = new Date(now.getTime() + goods.days * DAY_MS);
     assertDate(activeUntil);
     await tx.makerTier.update({
       where: { wawuUserId: input.wawuUserId },
@@ -301,13 +345,13 @@ export class TierGrantService {
         tierId: tier.id,
         activeFrom: now,
         activeUntil,
-        productsIncluded: tier.products,
-        pointsIncluded: tier.bonusPoints,
-        voiceIntroIncluded: held.voiceIntroIncluded || tier.firstVoiceIntro,
+        productsIncluded: goods.products,
+        pointsIncluded: goods.bonusPoints,
+        voiceIntroIncluded: held.voiceIntroIncluded || goods.firstVoiceIntro,
       },
     });
 
-    const extra = Math.max(0, tier.bonusPoints - held.pointsIncluded);
+    const extra = Math.max(0, goods.bonusPoints - held.pointsIncluded);
     let pointsGranted = 0;
     let pointsExpireAt: Date | null = null;
     if (extra > 0) {
@@ -317,7 +361,7 @@ export class TierGrantService {
           source: 'tier_bonus',
           sourceRef: input.sourceRef,
           points: extra,
-          expiresAt: new Date(now.getTime() + tier.bonusExpiryDays * DAY_MS),
+          expiresAt: new Date(now.getTime() + goods.bonusExpiryDays * DAY_MS),
         },
         { tx, now },
       );
@@ -332,7 +376,7 @@ export class TierGrantService {
       extended: false,
       activeFrom: now,
       activeUntil,
-      daysAdded: tier.days,
+      daysAdded: goods.days,
       pointsGranted,
       pointsExpireAt,
     };
