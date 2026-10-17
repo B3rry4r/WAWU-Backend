@@ -13517,6 +13517,10 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "ordersLeftToSweep": {
+                      "type": "number",
+                      "nullable": true
+                    },
                     "cancelled": {
                       "type": "boolean"
                     },
@@ -30800,7 +30804,7 @@
             }
           },
           "409": {
-            "description": "reason.code: target_not_payable",
+            "description": "reason.code: target_not_payable, event_order_limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -30918,7 +30922,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress, event_order_limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -34504,7 +34508,8 @@
               "open_address_limited",
               "below_minimum",
               "insufficient_points",
-              "currency_not_supported"
+              "currency_not_supported",
+              "event_order_limit"
             ],
             "type": "string"
           },

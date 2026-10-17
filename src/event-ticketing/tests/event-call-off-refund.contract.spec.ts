@@ -520,28 +520,62 @@ describe('EVENTS-10: calling an event off sends the buyers their money back', ()
         },
       );
 
+      // The cancel is SENT now (`.then()` is what sends a supertest request),
+      // so the bystander's reads below happen while it is in flight.
       const startedAt = Date.now();
-      const cancelling = callOff(e);
-      const waits: number[] = [];
-      for (let i = 0; i < 6; i += 1) {
+      let cancelEndedAt = 0;
+      const cancelling = callOff(e).then((res) => {
+        cancelEndedAt = Date.now();
+        return res;
+      });
+      const reads: Array<{ atMs: number; tookMs: number }> = [];
+      while (cancelEndedAt === 0 && reads.length < 60) {
         await sleep(700);
         const t0 = Date.now();
         await r.read(bystander, quote.order.id).expect(200);
-        waits.push(Date.now() - t0);
+        reads.push({ atMs: t0 - startedAt, tookMs: Date.now() - t0 });
       }
       const res = await cancelling;
-      const tookMs = Date.now() - startedAt;
+      const tookMs = cancelEndedAt - startedAt;
       installFintava(h.double, h.wallets);
+      const during = reads.filter((x) => x.atMs < tookMs);
+      console.log(
+        `EVENTS-13 twenty buyers: cancel ${tookMs} ms; ${during.length} bystander reads while it ran, slowest ${Math.max(...reads.map((x) => x.tookMs))} ms: ${JSON.stringify(reads)}`,
+      );
 
       expect(res.status).toBe(201);
-      expect(body<Record<string, unknown>>(res).data).toMatchObject({
-        ordersRefunded: 20,
-        refundsNeedingAttention: 0,
-      });
+      const answer = body<Record<string, number | boolean>>(res).data!;
+      // Every order is accounted for: sent back, needing a person, or left to
+      // the minute sweep (the request stops starting new refunds at 15 s).
+      expect(
+        (answer.ordersRefunded as number) +
+          (answer.refundsNeedingAttention as number) +
+          ((answer.ordersLeftToSweep as number | undefined) ?? 0),
+      ).toBe(20);
+      expect(answer.refundsNeedingAttention).toBe(0);
       // Twenty moves of three seconds, five at a time: about twelve seconds,
-      // not sixty, and nothing else waited on them.
+      // not sixty, and nothing else waited on them. The reads really ran
+      // during the cancel (a request nobody sent measures nothing).
       expect(tookMs).toBeLessThan(25_000);
-      expect(Math.max(...waits)).toBeLessThan(1_000);
+      expect(during.length).toBeGreaterThanOrEqual(5);
+      expect(Math.max(...reads.map((x) => x.tookMs))).toBeLessThan(1_000);
+
+      // After the sweeps every buyer is whole, with exactly one move. A refund
+      // is "chosen" when the answer counts it, and a minute sweep of ANOTHER
+      // process on the same database (the local stack's Hub, which reaches no
+      // provider) can take a hold's lease between its choice and its send; the
+      // hold then waits out a two minute back-off. Our own sweep, run as if
+      // the back-off were over, sends it, so the test waits for that and for
+      // nothing else.
+      const sweepEnd = Date.now() + 30_000;
+      while (
+        !buyers.every((p) => balance(p) === START) &&
+        Date.now() < sweepEnd
+      ) {
+        await h.callOff.sweep();
+        await h.holds.sweep(LATER());
+        await sleep(250);
+      }
       for (const p of buyers) {
         expect(balance(p)).toBe(START);
         expect(moves(p)).toHaveLength(1);

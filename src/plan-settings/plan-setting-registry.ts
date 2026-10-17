@@ -683,6 +683,17 @@ export function buildRegistry(
     kobo,
   );
   other(
+    'events.open_orders_per_buyer',
+    'Most open ticket orders per buyer per event',
+    'count',
+    [
+      'POST /events/{id}/orders/wallet (EVENTS-13)',
+      'POST /events/orders/wallet/pay (EVENTS-13)',
+    ],
+    count,
+    'EVENT-ORDER-CAP',
+  );
+  other(
     'earnings.refused_review_hours',
     'Hours after the first refusal before a refused earning goes to review',
     'hours',

@@ -755,22 +755,31 @@ export class EventTicketingService {
       throw new ConflictException('This event is already cancelled.');
     }
 
-    await this.prisma.$transaction([
-      this.prisma.event.update({
-        where: { id: eventId },
+    // EVENTS-13: the update is conditional on the event not being cancelled
+    // yet, so two cancels at once cannot both win (the check above reads the
+    // row before either has written it). The loser waits for the winner's
+    // row lock, finds `cancelledAt` set, changes nothing and gets the answer
+    // a later cancel gets: 409. Only the winner voids the tickets and runs
+    // the refunds.
+    const won = await this.prisma.$transaction(async (tx) => {
+      const cancelled = await tx.event.updateMany({
+        where: { id: eventId, cancelledAt: null },
         data: {
           status: 'cancelled',
           cancelledAt: new Date(),
           cancelReason: reason,
         },
-      }),
+      });
+      if (cancelled.count === 0) return false;
       // Void first. A ticket for a cancelled event must not scan in, even if
       // its refund has not gone through yet.
-      this.prisma.eventTicket.updateMany({
+      await tx.eventTicket.updateMany({
         where: { eventId, status: { in: ['valid', 'checked_in'] } },
         data: { status: 'void' },
-      }),
-    ]);
+      });
+      return true;
+    });
+    if (!won) throw new ConflictException('This event is already cancelled.');
 
     // EVENTS-07: orders paid from the wallet are not Flutterwave charges. Their
     // price sits in a hold, and EVENTS-10 refunds them through it (the step
@@ -847,6 +856,10 @@ export class EventTicketingService {
       cancelled: true,
       ordersRefunded: refunded,
       refundsNeedingAttention: failed,
+      // EVENTS-13: wallet refunds the request ran out of time for; the minute
+      // sweep sends them. Present only when there are some, so the answer of
+      // an event without any keeps the shape the web was built against.
+      ...(wallet.leftToSweep ? { ordersLeftToSweep: wallet.leftToSweep } : {}),
     };
   }
 }

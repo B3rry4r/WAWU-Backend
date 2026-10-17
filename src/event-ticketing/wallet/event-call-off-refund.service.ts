@@ -106,6 +106,19 @@ export class EventCallOffRefundService implements OnModuleInit {
       });
       if (page.length < PAGE || Date.now() > deadline) break;
     }
+    // EVENTS-13: what this pass did not finish is still `paid` with no
+    // `refundError`: orders it never reached (the time ran out) and orders
+    // whose refund could not be asked yet. The sweep takes them next; the
+    // answer says how many, so every paid order is counted once.
+    const left = await this.prisma.eventOrder.count({
+      where: {
+        eventId,
+        paymentProvider: 'wallet',
+        status: 'paid',
+        refundError: null,
+      },
+    });
+    if (left > 0) counts.leftToSweep = left;
     return counts;
   }
 
