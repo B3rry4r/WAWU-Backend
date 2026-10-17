@@ -4,6 +4,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import {
   POPULAR_CACHE_SECONDS,
   POPULAR_MIN_PEOPLE,
+  popularCommunityMinMembers,
   POPULAR_SEARCHES_SHOWN,
   POPULAR_WINDOW_DAYS,
   RECENT_SEARCHES_KEPT,
@@ -110,8 +111,9 @@ export class SearchHistoryService {
    * enough people have searched: nothing stands in for a search nobody made.
    *
    * An entry is the NAME of something a signed-out visitor can find today (a
-   * content title, a creator's handle with a creator state, a community name,
-   * a category name) that the searched text equals once both are folded
+   * content title, a creator's handle with a creator state, a community name
+   * once the community has popularCommunityMinMembers() members (R-57), a
+   * category name) that the searched text equals once both are folded
    * (popular-name.ts), and the name has to pass the character rule there. The
    * text shown is that name, never a searcher's spelling. One query ranks
    * them, and only texts that pass the equality count, so texts typed only to
@@ -153,14 +155,18 @@ export class SearchHistoryService {
    * with its folded form; `names` are the shown-able names of public things,
    * folded, one per folded text (a category before a community before a
    * creator handle before a title, then the lower name); the join is equality
-   * of the folded forms. People are counted over every spelling that folds to
-   * the same name, one count per person. `PushStoppedAccount` is the mark
+   * of the folded forms. A community is a name only while it has enough
+   * members (the same count as its row's memberCount: joined, host not
+   * included); another public thing with the same name still is one. People
+   * are counted over every spelling that folds to the same name, one count per
+   * person. `PushStoppedAccount` is the mark
    * `DELETE /account` leaves on an account whose deletion is scheduled (a
    * cancel removes it, the purge deletes it with the account's data).
    */
   private async rankPopular(now: Date): Promise<SearchTextList> {
     const since = new Date(now.getTime() - POPULAR_WINDOW_DAYS * 86_400_000);
     const col = (ref: string) => Prisma.raw(ref);
+    const minMembers = popularCommunityMinMembers();
     const rows = await this.prisma.$queryRaw<{ shown: string }[]>(Prisma.sql`
       WITH keys AS (
         SELECT h."queryKey" AS qk, ${foldSql(col('h."queryKey"'))} AS fk
@@ -180,6 +186,8 @@ export class SearchHistoryService {
           SELECT ${foldSql(col('m.name'))}, m.name, 2
           FROM "Community" m
           WHERE ${showableNameSql(col('m.name'))}
+            AND (SELECT COUNT(*) FROM "CommunityMembership" cm
+                 WHERE cm."communityId" = m.id AND cm.status = 'joined') >= ${minMembers}
           UNION ALL
           SELECT ${foldSql(col('p.handle'))}, p.handle, 3
           FROM "UserProfile" p
