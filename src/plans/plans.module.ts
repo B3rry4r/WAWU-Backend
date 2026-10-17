@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { IdentityPauseModule } from '../money/opening/identity-pause.module';
 import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { PointsModule } from '../points/points.module';
 import { BillingCurrencyService } from './billing-currency.service';
@@ -32,10 +33,13 @@ import { TierGrantService } from './tier-grant.service';
  * PointsService, so PointsModule is imported, and it is already mounted ahead
  * of this module by MeModule, so no route moves.
  *
+ * The gate also refuses while the person's identity check is paused (S7
+ * round 2, F3): `IdentityPauseModule` gives it the reader.
+ *
  * PrismaService comes from the global PrismaModule, as for every module.
  */
 @Module({
-  imports: [PointsModule, PlanSettingsModule],
+  imports: [PointsModule, PlanSettingsModule, IdentityPauseModule],
   controllers: [PlansController, MeTierController],
   providers: [
     BillingCurrencyService,

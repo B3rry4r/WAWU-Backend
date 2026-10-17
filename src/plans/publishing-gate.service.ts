@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
+import {
+  IdentityPauseService,
+  IdentityPausedError,
+} from '../money/opening/identity-pause';
 import {
   PublishingAllowanceService,
   type PublishingAllowance,
@@ -19,21 +23,33 @@ import {
  * `tier_required` or `product_limit_reached`); the route's
  * `PublishingOffersInterceptor` adds the offers.
  *
+ * It also refuses while the person's identity check is paused (S7 round 2,
+ * F3): 403 `identity_paused` with the Hub's own sentence, after the tier and
+ * before the room (`identity-pause.ts`). A check that passed, one still under
+ * way, and one never started are not refused.
+ *
  * Nothing here moves or hides anything already published: an ended tier, or a
  * limit lowered by the end of a tick, only stops the NEXT publish or upload.
  */
 @Injectable()
 export class PublishingGate {
-  constructor(private readonly allowance: PublishingAllowanceService) {}
+  constructor(
+    private readonly allowance: PublishingAllowanceService,
+    // Absent in a unit spec that builds the gate by hand: nothing is paused.
+    @Optional() private readonly identity?: IdentityPauseService,
+  ) {}
 
   /**
    * A file may be accepted, or an edit that carries one: the person must be
-   * able to publish at all (a running tier or a held tick). It does not ask
-   * for room, because the piece being edited already has its place.
+   * able to publish at all (a running tier or a held tick, and an identity
+   * check that is not paused). It does not ask for room, because the piece
+   * being edited already has its place.
    */
   async assertMayUpload(wawuUserId: string): Promise<PublishingAllowance> {
     const allowance = await this.allowance.of(wawuUserId);
     if (allowance.basis === 'none') throw this.tierRequired(allowance);
+    const paused = await this.identity?.of(wawuUserId);
+    if (paused) throw new IdentityPausedError(paused);
     return allowance;
   }
 
