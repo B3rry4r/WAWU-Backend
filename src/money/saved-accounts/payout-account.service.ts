@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
+  accountNameIsWalletName,
   accountNameMatches,
   nameWords,
   readBvnNameKeys,
@@ -67,8 +68,9 @@ export function notYourNameMessage(
  * the BVN name kept by the check; else, when none is kept (every wallet
  * opened under Nuvion keeps none), the wallet's own account name as the
  * provider gave it, which the provider verified when the wallet opened,
- * compared by the same rule (every word of it is a word of the bank's name,
- * in any order); else nothing, and the account is refused with a plain
+ * compared by `accountNameIsWalletName` (every word of the bank's name is a
+ * word of the wallet's, in any order, and at least two words match, so a
+ * middle name the bank leaves out does not matter); else nothing, and the account is refused with a plain
  * reason (a person without an opened wallet cannot withdraw anyway).
  */
 @Injectable()
@@ -147,8 +149,9 @@ export class PayoutAccountService {
     const verifiedName = wallet?.accountName?.trim() || null;
     if (bvn === null) {
       if (verifiedName !== null && nameWords(verifiedName).length > 0) {
-        const held = new Set(nameWords(account.accountName));
-        if (nameWords(verifiedName).every((w) => held.has(w))) return null;
+        if (accountNameIsWalletName(verifiedName, account.accountName)) {
+          return null;
+        }
       } else {
         return new MoneyError(
           'account_not_in_your_name',

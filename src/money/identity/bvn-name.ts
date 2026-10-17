@@ -140,3 +140,22 @@ export function accountNameMatches(
   if (words.size === 0) return false;
   return [...keys.first, ...keys.last].every((key) => words.has(key));
 }
+
+/**
+ * Whether a bank's account name is the name on the person's wallet, for a
+ * person whose BVN name is not kept (WALLET-37 round 3, the lead's ruling):
+ * every word of the bank's name is a word of the wallet's name, in any
+ * order, and at least two words match (a first name and a surname). Banks
+ * often leave a middle name out, so the bank's name may be shorter than the
+ * wallet's; a word of the bank's name that the wallet's name does not have,
+ * or one word alone, does not match. Words are read as `nameWords` reads
+ * them (case, spacing, punctuation and accents do not count).
+ */
+export function accountNameIsWalletName(
+  walletName: string | null | undefined,
+  accountName: string,
+): boolean {
+  const held = new Set(nameWords(walletName));
+  const words = nameWords(accountName);
+  return words.length >= 2 && words.every((w) => held.has(w));
+}

@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import {
+  accountNameIsWalletName,
   accountNameMatches,
   bvnNameKeys,
   type NameBinding,
@@ -168,5 +169,51 @@ describe('accountNameMatches (A21 "matches your BVN")', () => {
       accountNameMatches(adaKeys, 'ADA SANDBOX', hmac(`${KEY}x`), ada),
     ).toBe(false);
     expect(wordKey(hash, ada, 'ADA')).toBe(adaKeys.first[0]);
+  });
+});
+
+describe('accountNameIsWalletName (WALLET-37 round 3: the wallet name is the verified name)', () => {
+  const wallet = 'Chidinma Adaeze Okoro';
+
+  it.each([
+    ['middle name left out', 'CHIDINMA OKORO'],
+    ['swapped order', 'OKORO CHIDINMA'],
+    ['every word, bank order', 'OKORO CHIDINMA ADAEZE'],
+    ['case, spacing and punctuation', '  okoro,  chidinma-adaeze '],
+    ['accents off', 'ÓKORO CHÍDINMA'],
+    ['the other pair of words', 'ADAEZE OKORO'],
+  ])('accepts %s: %p', (_why, bank) => {
+    expect(accountNameIsWalletName(wallet, bank)).toBe(true);
+  });
+
+  it.each([
+    ['a different surname', 'CHIDINMA ADEBAYO'],
+    ['a single word', 'OKORO'],
+    ['a single word repeated', 'OKORO OKORO'],
+    ['a word the wallet name lacks', 'CHIDINMA ADAEZE OKORO JR'],
+    ['a stranger', 'SIMI MICHELLE'],
+    ['an initial in place of a name', 'C OKORO'],
+    ['nothing', ''],
+    ['punctuation only', ' - . '],
+  ])('refuses %s: %p', (_why, bank) => {
+    expect(accountNameIsWalletName(wallet, bank)).toBe(false);
+  });
+
+  it('a wallet name of one word never vouches for an account', () => {
+    expect(accountNameIsWalletName('Sandbox', 'SANDBOX')).toBe(false);
+    expect(accountNameIsWalletName('Sandbox', 'SANDBOX ADA')).toBe(false);
+  });
+
+  it('a two-word wallet name needs both words in the bank name', () => {
+    expect(accountNameIsWalletName('Ada Sandbox', 'SANDBOX ADA')).toBe(true);
+    expect(accountNameIsWalletName('Ada Sandbox', 'ADA')).toBe(false);
+    expect(accountNameIsWalletName('Ada Sandbox', 'ADA SANDBOX VENTURES')).toBe(
+      false,
+    );
+  });
+
+  it('a wallet name with nothing readable vouches for nothing', () => {
+    expect(accountNameIsWalletName('', 'CHIDINMA OKORO')).toBe(false);
+    expect(accountNameIsWalletName(null, 'CHIDINMA OKORO')).toBe(false);
   });
 });
