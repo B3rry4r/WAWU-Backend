@@ -205,12 +205,14 @@ describe('Public schools on rows the admin wrote (SCHOOLS-04 round 3)', () => {
     }
   });
 
-  describe('D2: a cursor for every name the admin accepts', () => {
+  describe('D2: a cursor for every name the admin accepts, and for the worst-bytes name the table holds', () => {
     const ids: Record<string, string> = {};
     beforeAll(async () => {
       // The admin's maximum of each worst character, and one more refused.
       // FIX-19: the worst-bytes name holds a control character, which the
-      // admin refuses now; its rows are written to the table instead.
+      // admin refuses now; its rows are written to the table instead. For that
+      // name the refusal is the control character, so the 121-character
+      // refusal is asserted for the units name only (SWEEP-APP-1 FIX-19 L2).
       const refusedBody = (name: string) => ({
         name,
         category: 'vocational',

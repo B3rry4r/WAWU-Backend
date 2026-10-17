@@ -841,10 +841,18 @@ export class StorageService {
     if (Date.now() - row.createdAt.getTime() < CONFIRM_HOLD_MS) {
       return { key, status: 'pending' };
     }
-    await this.prisma.storageObject.updateMany({
+    const { count } = await this.prisma.storageObject.updateMany({
       where: { id: row.id, status: 'pending' },
       data: { status: 'abandoned' },
     });
+    if (count === 0) {
+      // The row moved while the bucket was asked (the file landed and the sweep
+      // confirmed it): say what it is now, not what it was when this call read it.
+      const now = await this.prisma.storageObject.findUnique({
+        where: { id: row.id },
+      });
+      if (now?.status === 'confirmed') return { key, status: 'confirmed' };
+    }
     return { key, status: 'abandoned' };
   }
 

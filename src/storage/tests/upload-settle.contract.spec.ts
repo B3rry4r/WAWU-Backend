@@ -21,6 +21,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import { TICK_STORAGE_BYTES } from '../../common/creator-allowance';
 import { StorageModule } from '../storage.module';
+import { StorageService } from '../storage.service';
 
 /**
  * FIX-15 over HTTP, on the real database and the real S3 client: an upload the
@@ -578,6 +579,37 @@ describe('A refused upload does not count against storage (FIX-15, contract)', (
   });
 
   describe('the sweep, with no confirm call', () => {
+    it('answers confirmed, not abandoned, when the sweep confirmed the row while the bucket was being asked (SWEEP-APP-1 FIX-15 L3)', async () => {
+      const key = dataOf<{ key: string }>(await presign(PERSON, 1 * MB)).key;
+      // old enough to be given up on, with no file in the bucket
+      await prisma.storageObject.update({
+        where: { key },
+        data: { createdAt: new Date(Date.now() - 3_600_000) },
+      });
+      const service = app.get(StorageService) as unknown as {
+        bucketHolds: (key: string, why: string) => Promise<string>;
+      };
+      const asked = jest
+        .spyOn(service, 'bucketHolds')
+        .mockImplementationOnce(async () => {
+          // the file landed and the sweep confirmed the row between this call's read and its write
+          await prisma.storageObject.update({
+            where: { key },
+            data: { status: 'confirmed', confirmedAt: new Date() },
+          });
+          return 'absent';
+        });
+      try {
+        expect(dataOf(await confirm(PERSON, { key }))).toEqual({
+          key,
+          status: 'confirmed',
+        });
+      } finally {
+        asked.mockRestore();
+      }
+      expect((await rowFor(key)).status).toBe('confirmed');
+    });
+
     it('gives back a reservation that never completed once the grace has passed, and keeps one that did', async () => {
       const gone = dataOf<{ key: string }>(await presign(SWEEP, 30 * MB)).key;
       const landed = await presign(SWEEP, 10 * MB);
