@@ -73,7 +73,7 @@ export class NuvionSubscriptionCheck {
 }
 
 export interface NuvionFeeCheckResult {
-  /** True when Nuvion's fees could be compared with the settings. Never, for now. */
+  /** True when Nuvion's fees could be compared with the settings: false while its docs give no way to read them. */
   available: boolean;
   /** True when this run opened the finding that says so. */
   reported: boolean;
