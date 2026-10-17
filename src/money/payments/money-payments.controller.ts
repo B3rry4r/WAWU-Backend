@@ -31,7 +31,11 @@ import {
   type IdempotencyScope,
   RequireIdempotentApproval,
 } from './idempotency';
-import { PAY_ROUTE, WalletPaymentService } from './wallet-payment.service';
+import {
+  PAY_ROUTE,
+  QUOTE_REFUSES_OPEN_KINDS,
+  WalletPaymentService,
+} from './wallet-payment.service';
 
 /**
  * Pay from wallet (task MONEY-17) and the poll of one payment (task
@@ -53,7 +57,10 @@ export class MoneyPaymentsController {
    * wallet yet, or an item not priced in naira, is target_not_payable.
    * While the running provider's fees are not set, fees_not_set before
    * anything else (NUV-07); `withinDailyLimit` and `remainingTodayKobo` say
-   * where today's purchase limit stands.
+   * where today's purchase limit stands. For a school fee (FIX-58), when the
+   * payer already has an open payment for the item (a second phone),
+   * `payment_in_progress` with `reason.paymentId`, as the payment itself
+   * answers it: no live Pay is drawn. Every other kind is quoted as before.
    */
   @Get('payments/quote')
   @Header('Cache-Control', 'no-store')
@@ -65,13 +72,16 @@ export class MoneyPaymentsController {
     'target_not_payable',
     'amount_out_of_range',
     'fees_not_set',
+    'payment_in_progress',
   )
   @RequireFeesSet()
   quote(
     @CurrentWallet() wallet: OpenWallet,
     @Query() query: PaymentQuoteQueryDto,
   ): Promise<PaymentQuoteView> {
-    return this.payments.quote(wallet, query);
+    return this.payments.quote(wallet, query, {
+      refuseIfOpen: QUOTE_REFUSES_OPEN_KINDS.includes(query.kind),
+    });
   }
 
   /**

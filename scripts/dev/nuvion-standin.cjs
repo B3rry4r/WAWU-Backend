@@ -16,6 +16,8 @@
 //   account_details.created) -> active with a ten-digit number after STANDIN_DETAILS_MS (account_details.updated).
 //   Transfers (book transfers to a nuvion_ban, bank sends to a payment detail) are accepted as pending,
 //   debit the payer at once and settle after STANDIN_SETTLE_MS (outflows.completed).
+//   A bank send that is reversed after it completed sends `outflows.refunded` as Nuvion's docs
+//   define it: a CREDIT record (type inflow, meta.source_payment_id naming the send), not the send itself.
 //
 // Control routes, for a verifier (no auth: local only), all under /__standin/:
 //   GET  state                     counts, every account with its balance, the webhooks sent
@@ -332,6 +334,34 @@ function finish(i, to) {
   t.status_reason =
     to === 'failed' ? 'compliance_hold' : to === 'successful' ? 'processing_complete' : 'reversed_by_nuvion';
   t.updated = now();
+  if (to === 'reversed' && t.payment_type === 'bank-transfer') {
+    // Nuvion's docs: `outflows.refunded` is a CREDIT record (type inflow) of the money coming back,
+    // naming the reversed transfer in meta.source_payment_id, not the transfer itself (webhooks/event-types).
+    // It gives back what the payer got back: the amount and the charge.
+    const id = ulid('01CRD');
+    const credit = {
+      id,
+      amount: total,
+      currency: t.currency,
+      unique_reference: `${t.unique_reference}_reversal`,
+      counterparty_id: `acct-${t.account_id}-bank-return`,
+      account_id: t.account_id,
+      entity_id: t.entity_id,
+      status: 'successful',
+      status_reason: 'bank_returned',
+      narration: `REVERSAL | ${t.id}`,
+      type: 'inflow',
+      payment_type: 'bank-transfer',
+      applicable_fee: 0,
+      meta: { source: 'bank_return', source_payment_id: t.id },
+      created: now(),
+      updated: now(),
+    };
+    const ci = { t: credit, toAccountId: null };
+    transfers.set(id, ci);
+    deliver('outflows.refunded', transferView(ci));
+    return;
+  }
   deliver(
     to === 'successful' ? 'outflows.completed' : to === 'failed' ? 'outflows.failed' : 'outflows.refunded',
     transferView(i),

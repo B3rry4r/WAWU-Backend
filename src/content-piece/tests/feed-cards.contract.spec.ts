@@ -85,6 +85,7 @@ describe('Feed cards, creator info and media details (contract)', () => {
   let stranger: Who; // not a creator
 
   const pieceIds: string[] = [];
+  const dmIds: string[] = [];
   const fakeIds: string[] = [];
   let topVideo: string;
   let topPdf: string;
@@ -379,6 +380,10 @@ describe('Feed cards, creator info and media details (contract)', () => {
       where: { contentId: { in: pieceIds } },
     });
     await prisma.contentPiece.deleteMany({ where: { id: { in: pieceIds } } });
+    await prisma.directMessage.deleteMany({ where: { id: { in: dmIds } } });
+    await prisma.professionalLocation.deleteMany({
+      where: { wawuUserId: { in: people } },
+    });
     await prisma.professionalProfile.deleteMany({
       where: { wawuUserId: { in: people } },
     });
@@ -532,6 +537,54 @@ describe('Feed cards, creator info and media details (contract)', () => {
       expect(card.dmPrice).toBe(1500);
       expect(card.dmResponseHours).toBe(24);
       expect(JSON.stringify(card)).not.toMatch(/trust/i);
+    });
+
+    it('a professional card says where they work and how fast they usually answer, and nothing until they have said and answered', async () => {
+      const before = (await firstPage(fan, 2))[5].professional as Record<
+        string,
+        unknown
+      >;
+      expect(before.city).toBeNull();
+      expect(before.usualReplyMinutes).toBeNull();
+
+      await prisma.professionalLocation.create({
+        data: { wawuUserId: proTop.sub, city: 'Ikeja' },
+      });
+      const sentAt = new Date('2026-10-01T10:00:00Z');
+      // Three answered paid messages, answered after 60, 180 and 240 minutes: the median is 180.
+      for (const minutes of [60, 180, 240]) {
+        const id = randomUUID();
+        dmIds.push(id);
+        await prisma.directMessage.create({
+          data: {
+            id,
+            creatorWawuId: proTop.sub,
+            senderWawuId: randomUUID(),
+            text: 'A question for the card spec.',
+            amount: 1500,
+            status: 'responded',
+            sentAt,
+            deadlineAt: new Date(sentAt.getTime() + 24 * 3600 * 1000),
+            respondedAt: new Date(sentAt.getTime() + minutes * 60 * 1000),
+            flutterwaveTxRef: `cards-spec-${id}`,
+          },
+        });
+      }
+      const after = (await firstPage(fan, 2))[5].professional as Record<
+        string,
+        unknown
+      >;
+      expect(after.city).toBe('Ikeja');
+      expect(after.usualReplyMinutes).toBe(180);
+
+      // Two answered messages are too few to call a usual time (the directory's rule).
+      await prisma.directMessage.delete({ where: { id: dmIds[0] } });
+      const few = (await firstPage(fan, 2))[5].professional as Record<
+        string,
+        unknown
+      >;
+      expect(few.usualReplyMinutes).toBeNull();
+      expect(few.city).toBe('Ikeja');
     });
 
     it('a user is never offered a professional who cannot be messaged, or one they blocked', async () => {

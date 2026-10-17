@@ -16,10 +16,19 @@ export type PlanPurchaseKind = (typeof PLAN_PURCHASE_KINDS)[number];
  */
 export const POINTS_PACK_KIND = 'points_pack' as const;
 
+/**
+ * The `kind` of an extra products purchase (TIER-04, VF13): `POST
+ * /plans/purchases` and `GET /plans/purchases/quote` take it with no `tierId`,
+ * `packId` or `bump`: what is bought is the one add-on the settings describe
+ * (how many products, at what price), put on the tier the person holds.
+ */
+export const EXTRA_PRODUCTS_KIND = 'extra_products' as const;
+
 /** Everything the purchase routes accept as `kind`. */
 export const PLAN_PURCHASE_REQUEST_KINDS = [
   ...PLAN_PURCHASE_KINDS,
   POINTS_PACK_KIND,
+  EXTRA_PRODUCTS_KIND,
 ] as const;
 export type PlanPurchaseRequestKind =
   (typeof PLAN_PURCHASE_REQUEST_KINDS)[number];
@@ -42,10 +51,14 @@ export const PLAN_PAYMENT_KINDS = [
 ] as const satisfies readonly PaymentKind[];
 export type PlanPaymentKind = (typeof PLAN_PAYMENT_KINDS)[number];
 
-/** Every payment kind the purchase routes take: a tier's two, and a points pack's (POINTS-02). */
+/**
+ * Every payment kind the purchase routes take: a tier's two, a points pack's
+ * (POINTS-02) and the extra products' (TIER-04).
+ */
 export const PURCHASE_PAYMENT_KINDS = [
   ...PLAN_PAYMENT_KINDS,
   POINTS_PACK_KIND,
+  EXTRA_PRODUCTS_KIND,
 ] as const satisfies readonly PaymentKind[];
 export type PurchasePaymentKind = (typeof PURCHASE_PAYMENT_KINDS)[number];
 
@@ -128,4 +141,21 @@ export function packTargetIdOf(packId: string): string | null {
 export function packIdOf(paymentKind: string, targetId: string): string | null {
   if (paymentKind !== POINTS_PACK_KIND) return null;
   return PACK.exec(targetId)?.[1] ?? null;
+}
+
+/**
+ * The payment's `targetId` for the extra products add-on. There is one add-on,
+ * so the target names it and nothing else: how many products it holds and what
+ * it costs are the settings' (and the payment's terms keep what was quoted).
+ */
+export const EXTRA_PRODUCTS_TARGET_ID = 'extra-products';
+
+/** Whether a payment of this kind and target is the extra products add-on. */
+export function isExtraProducts(
+  paymentKind: string,
+  targetId: string,
+): boolean {
+  return (
+    paymentKind === EXTRA_PRODUCTS_KIND && targetId === EXTRA_PRODUCTS_TARGET_ID
+  );
 }

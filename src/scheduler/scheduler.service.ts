@@ -51,7 +51,13 @@ export class SchedulerService {
   async refundExpiredDms(): Promise<void> {
     const now = new Date();
     const expired = await this.prisma.directMessage.findMany({
-      where: { status: 'awaiting_response', deadlineAt: { lt: now } },
+      where: {
+        status: 'awaiting_response',
+        deadlineAt: { lt: now },
+        // A question paid from the wallet is refunded through its hold
+        // (INBOX-17), not by a Flutterwave refund that does not exist for it.
+        NOT: { flutterwaveTxRef: { startsWith: 'wallet:' } },
+      },
       select: { id: true },
       take: 500,
     });
@@ -64,6 +70,7 @@ export class SchedulerService {
           // wins the race rather than being refunded out from under them.
           status: 'awaiting_response',
           deadlineAt: { lt: now },
+          NOT: { flutterwaveTxRef: { startsWith: 'wallet:' } },
         },
         data: { status: 'refunded', refundStatus: 'owed' },
       });

@@ -261,6 +261,26 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // AITOOLS-01: the AI tool jobs the person ran (no text is kept).
+    key: 'aiToolJobs',
+    models: ['AiToolJob'],
+    load: (prisma, me) =>
+      prisma.aiToolJob.findMany({
+        where: { wawuUserId: me },
+        orderBy: { createdAt: 'desc' },
+        take: 500,
+        select: {
+          tool: true,
+          state: true,
+          characters: true,
+          units: true,
+          costPoints: true,
+          createdAt: true,
+          finishedAt: true,
+        },
+      }),
+  },
+  {
     key: 'notificationSettings',
     models: ['NotificationSettings'],
     load: (prisma, me) =>
@@ -561,6 +581,26 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    key: 'paidQuestionDrafts',
+    models: ['PaidDmDraft'],
+    // The words of a paid question the requester wrote and has not paid for
+    // (INBOX-17): their own writing, kept until paid or removed after a
+    // fortnight. The idempotency key of the request that made it is a
+    // technical mark and is not selected.
+    load: (prisma, me) =>
+      prisma.paidDmDraft.findMany({
+        where: { senderWawuId: me },
+        select: {
+          id: true,
+          creatorWawuId: true,
+          text: true,
+          responseWindowHours: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  {
     key: 'paidMessageRepliesWritten',
     models: ['DmReply'],
     load: (prisma, me) =>
@@ -723,6 +763,24 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           amountMinor: true,
           method: true,
           status: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  // The products this person added to their tier (TIER-04). The payment
+  // reference is a payment id, so it stays out (rule 3).
+  {
+    key: 'extraProductsPurchases',
+    models: ['MakerExtraProducts'],
+    load: (prisma, me) =>
+      prisma.makerExtraProducts.findMany({
+        where: { wawuUserId: me },
+        select: {
+          tierId: true,
+          products: true,
+          currency: true,
+          amountMinor: true,
           createdAt: true,
         },
         orderBy: NEWEST,
@@ -1287,6 +1345,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     },
     { model: 'ChatParticipant', reason: 'A read position, not content.' },
     { model: 'CommunityReadMarker', reason: 'A read position, not content.' },
+    {
+      model: 'CommunityPass',
+      reason:
+        'A pass is 30 days of a room, paid from the wallet; what was paid is exported with the payments, and the end date is on the membership.',
+    },
     {
       model: 'CommunityMessageKey',
       reason:

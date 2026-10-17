@@ -3,8 +3,24 @@ import {
   ApiPropertyOptional,
   getSchemaPath,
 } from '@nestjs/swagger';
-import { IsUUID } from 'class-validator';
+import { Type } from 'class-transformer';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import type { PublicIntakeView } from '../schools-public.views';
+import {
+  LIST_DEFAULT_LIMIT,
+  LIST_MAX_LIMIT,
+  LIST_TABS,
+  type EnrolmentTab,
+} from './school-enrolment-list';
 import {
   ENROLMENT_ERROR_STATUS,
   type EnrolmentErrorCode,
@@ -16,6 +32,35 @@ export class EnrolDto {
   @ApiProperty({ format: 'uuid' })
   @IsUUID()
   intakeId!: string;
+}
+
+/** GET /schools/enrolments: My courses (SC8). */
+export class ListEnrolmentsDto {
+  /** `current` or `finished`; left out, both tabs together. */
+  @ApiPropertyOptional({ enum: LIST_TABS })
+  @IsOptional()
+  @IsIn(LIST_TABS)
+  tab?: EnrolmentTab;
+
+  /** Rows per page. */
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: LIST_MAX_LIMIT,
+    default: LIST_DEFAULT_LIMIT,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(LIST_MAX_LIMIT)
+  limit?: number;
+
+  /** The `nextCursor` of the page before. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  cursor?: string;
 }
 
 /** What a refused enrolment says beside its code (the contract's one error shape, CONVENTIONS section 3). */

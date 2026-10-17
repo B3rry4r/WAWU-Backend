@@ -1112,6 +1112,74 @@ describe('Hold, release and refund (MONEY-18) on Fintava', () => {
     expect((await holdOfPayment(payment.id)).status).toBe('released');
   });
 
+  it('F3 a refused release goes on being tried under the same reference and, past the review bound, goes to a person; a frozen wallet waits on', async () => {
+    const creator = await person(0, false);
+    const frozenCreator = await person(0, false);
+    const buyer = await person(600_000);
+    const payment = await paid(buyer, 'paid_dm', listing(creator));
+    const hold = await holdOfPayment(payment.id);
+    wallets.mode = 'refuse';
+    const first = await holds.release({ paymentId: payment.id });
+    expect(first).toMatchObject({ state: 'waiting', waiting: 'refused' });
+
+    // Inside the bound it keeps trying, on the one reference.
+    await holds.sweep(later(2 * 60 * 60_000));
+    await holds.sweep(later(28 * 60 * 60_000));
+    const trying = await holdOfPayment(payment.id);
+    expect(trying.waiting).toBe('refused');
+    expect(trying.reviewSince).toBeNull();
+    expect(asked(hold.id)).toBeGreaterThanOrEqual(3);
+    expect(sendsOf(`wawu-rel-${hold.id}`)).toEqual([]);
+
+    // At the bound (counted from when the release was asked for) a person looks.
+    const bound = 72 * 3_600_000;
+    const s = await holds.drive(
+      hold.id,
+      new Date(trying.actionAt!.getTime() + bound),
+    );
+    expect(s.state).toBe('review');
+    const review = await holdOfPayment(payment.id);
+    expect(review.reviewSince).not.toBeNull();
+    expect(review.status).toBe('held');
+    expect(review.sentAt).toBeNull();
+    expect(review.discrepancy).toContain('refused for 72 hours');
+    expect(balanceOf(creator)).toBe(0);
+
+    // Out of the sweep from here, even when the provider would now take it.
+    wallets.mode = 'live';
+    const seen = asked(hold.id);
+    await holds.sweep(later(2 * 60 * 60_000));
+    await holds.release({ paymentId: payment.id });
+    expect(asked(hold.id)).toBe(seen);
+    expect(sendsOf(`wawu-rel-${hold.id}`)).toEqual([]);
+    expect(balanceOf(creator)).toBe(0);
+
+    // The bound is for a refusal only: a frozen wallet waits past it (G-10).
+    const second = await paid(buyer, 'paid_dm', listing(frozenCreator));
+    wallets.frozen.add(frozenCreator.accountNumber);
+    expect(await holds.release({ paymentId: second.id })).toMatchObject({
+      state: 'waiting',
+      waiting: 'recipient_frozen',
+    });
+    const frozenHold = await holdOfPayment(second.id);
+    const late = await holds.drive(
+      frozenHold.id,
+      new Date(frozenHold.actionAt!.getTime() + bound + 24 * 3_600_000),
+    );
+    expect(late).toMatchObject({
+      state: 'waiting',
+      waiting: 'recipient_frozen',
+    });
+    expect((await holdOfPayment(second.id)).reviewSince).toBeNull();
+    // And it is paid the moment the wallet is unfrozen, however late.
+    wallets.frozen.clear();
+    await holds.sweep(
+      new Date(frozenHold.actionAt!.getTime() + bound + 48 * 3_600_000),
+    );
+    expect((await holdOfPayment(second.id)).status).toBe('released');
+    expect(balanceOf(frozenCreator)).toBe(85_000);
+  });
+
   // -------------------------------------------------------------------------
   // The provider's record is the truth
   // -------------------------------------------------------------------------

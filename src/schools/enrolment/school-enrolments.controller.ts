@@ -7,6 +7,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiResponse } from '@nestjs/swagger';
@@ -14,8 +15,16 @@ import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface'
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import { PlainObjectBodyPipe } from '../plain-object-body.pipe';
-import { EnrolDto, SchoolEnrolmentErrorEnvelope } from './school-enrolment.dto';
-import type { SchoolEnrolmentView } from './school-enrolment-view.type';
+import { contactOf } from './school-report';
+import {
+  EnrolDto,
+  ListEnrolmentsDto,
+  SchoolEnrolmentErrorEnvelope,
+} from './school-enrolment.dto';
+import type {
+  SchoolEnrolmentPage,
+  SchoolEnrolmentView,
+} from './school-enrolment-view.type';
 import { SchoolEnrolmentService } from './school-enrolment.service';
 
 /**
@@ -60,7 +69,25 @@ export class SchoolEnrolmentsController {
     @CurrentUser() user: WawuJwtClaims,
     @Body(PlainObjectBodyPipe) dto: EnrolDto,
   ): Promise<SchoolEnrolmentView> {
-    return this.enrolments.enrol(user.sub, dto);
+    // The tap on Continue is the student's agreement to share their details
+    // with the school (SC4): the report keeps the time and the details on the
+    // token (SCHOOLS-09).
+    return this.enrolments.enrol(user.sub, dto, new Date(), contactOf(user));
+  }
+
+  /**
+   * My courses (SC8): this student's enrolments, newest first. `tab` is
+   * `current` or `finished` (left out: both). Each row carries its class's
+   * start date, the course's end date and the tab it belongs in. A place that
+   * was given back unpaid is not listed. Pages by `cursor` (CONVENTIONS).
+   */
+  @Get()
+  @Header('Cache-Control', 'no-store')
+  list(
+    @CurrentUser() user: WawuJwtClaims,
+    @Query() query: ListEnrolmentsDto,
+  ): Promise<SchoolEnrolmentPage> {
+    return this.enrolments.list(user.sub, query);
   }
 
   /**

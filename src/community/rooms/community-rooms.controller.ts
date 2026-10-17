@@ -16,7 +16,7 @@ import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface'
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import { CreatorAccountGuard } from '../../common/guards/creator-account.guard';
-import { CreateCommunityDto } from '../dto/create-community.dto';
+import { CreateRoomDto } from '../dto/create-room.dto';
 import { CommunityRoomsService } from './community-rooms.service';
 import type {
   CommunityLinkView,
@@ -102,7 +102,7 @@ export class CommunityRoomsController {
   @UseGuards(CreatorAccountGuard)
   createRoom(
     @CurrentUser() user: WawuJwtClaims,
-    @Body() dto: CreateCommunityDto,
+    @Body() dto: CreateRoomDto,
   ): Promise<CommunityRoom> {
     return this.rooms.createRoom(user.sub, dto);
   }

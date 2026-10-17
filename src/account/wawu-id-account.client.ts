@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { IDENTITY_MARK_TIMEOUT_MS } from './account-deletion-config';
 import type { WawuIdAccountGateway } from './wawu-id-account.gateway';
 
 /**
@@ -58,11 +59,26 @@ export class WawuIdAccountClient implements WawuIdAccountGateway {
    * pending_deletion, stamps deletedAt and revokes every session, then the
    * hub finalizes with anonymize once the grace period is up.
    */
-  async scheduleAccountDeletion(wawuUserId: string): Promise<{ scheduled: boolean }> {
-    const res = await fetch(`${this.baseUrl}/internal/users/${wawuUserId}/mark-deletion`, {
-      method: 'POST',
-      headers: { 'X-Service-Key': this.serviceKey },
-    });
+  async scheduleAccountDeletion(
+    wawuUserId: string,
+    purgeAfter: Date,
+  ): Promise<{ scheduled: boolean }> {
+    // SETTINGS-08: the body carries the Hub's own end of the 30 days, so WAWU
+    // ID's window and the Hub's purge agree. The call is bounded: the Hub asks
+    // again until WAWU ID confirms, and a call that never answers must not hold
+    // a request or a pass for ever.
+    const res = await fetch(
+      `${this.baseUrl}/internal/users/${encodeURIComponent(wawuUserId)}/mark-deletion`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Service-Key': this.serviceKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ purgeAfter: purgeAfter.toISOString() }),
+        signal: AbortSignal.timeout(IDENTITY_MARK_TIMEOUT_MS),
+      },
+    );
     if (!res.ok) {
       this.logger.error(`WAWU ID account deletion call failed for ${wawuUserId}: ${res.status}`);
       throw new Error('WAWU ID account deletion failed');

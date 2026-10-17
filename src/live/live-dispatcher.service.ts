@@ -3,6 +3,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { ChatService } from '../chat/chat.service';
 import { CommunityMessageService } from '../community-message/community-message.service';
+import { CommunityPassAccess } from '../community/pass/community-pass-access.service';
 import { encodeLiveCursor } from './live-cursor';
 import { LiveConnections } from './live-connections.service';
 import type { LiveEvent, LiveLegalThreadEvent } from './live-event.type';
@@ -40,6 +41,7 @@ export class LiveDispatcher {
     private readonly blocks: BlockedAccountService,
     private readonly chats: ChatService,
     private readonly communityMessages: CommunityMessageService,
+    private readonly passAccess: CommunityPassAccess,
   ) {}
 
   /** Queues a signal behind the earlier ones for the same room. */
@@ -70,6 +72,8 @@ export class LiveDispatcher {
         return this.chatMessage(signal.chatId, signal.messageId);
       case 'chat.read':
         return this.chatRead(signal.chatId, signal.readerWawuId);
+      case 'money_request.updated':
+        return this.moneyRequestUpdated(signal.chatId, signal.requestId);
       case 'community.message':
         return this.communityMessage(signal.communityId, signal.messageId);
       case 'legal.thread':
@@ -98,6 +102,47 @@ export class LiveDispatcher {
         const event: LiveEvent = {
           type: 'chat.message',
           cursor: encodeLiveCursor(row.createdAt),
+          message,
+        };
+        this.connections.send(wawuId, event);
+      }),
+    );
+  }
+
+  /**
+   * A request was paid, declined or cancelled: both people in the chat get
+   * the bubble as they see it now, and nobody once either has blocked the
+   * other (as for a message).
+   */
+  private async moneyRequestUpdated(
+    chatId: string,
+    requestId: string,
+  ): Promise<void> {
+    const [request, chat] = await Promise.all([
+      this.prisma.moneyRequest.findUnique({ where: { id: requestId } }),
+      this.prisma.chatConversation.findUnique({ where: { id: chatId } }),
+    ]);
+    if (!request || !chat || !request.messageId || !request.changedAt) return;
+    const here = [chat.userAWawuId, chat.userBWawuId].filter((id) =>
+      this.connections.has(id),
+    );
+    if (here.length === 0) return;
+    if (
+      await this.blocks.isBlockedEitherWay(chat.userAWawuId, chat.userBWawuId)
+    )
+      return;
+    const row = await this.prisma.chatMessage.findUnique({
+      where: { id: request.messageId },
+    });
+    if (!row) return;
+    await Promise.all(
+      here.map(async (wawuId) => {
+        const [message] = await this.chats.viewMessages(wawuId, [row]);
+        if (!message) return;
+        const event: LiveEvent = {
+          type: 'money_request.updated',
+          cursor: encodeLiveCursor(request.changedAt as Date),
+          chatId,
           message,
         };
         this.connections.send(wawuId, event);
@@ -188,6 +233,13 @@ export class LiveDispatcher {
       select: { userWawuId: true },
     });
     const allowed = new Set(members.map((m) => m.userWawuId));
+    // INBOX-24 (R-63): a member whose pass has ended is not sent the room.
+    for (const id of await this.passAccess.lapsedMembers(
+      communityId,
+      [...allowed].filter((id) => id !== community.hostWawuId),
+    )) {
+      allowed.delete(id);
+    }
     if (connected.includes(community.hostWawuId)) {
       allowed.add(community.hostWawuId);
     }

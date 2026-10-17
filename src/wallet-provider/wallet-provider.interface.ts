@@ -479,6 +479,18 @@ export interface ProviderTransaction {
    * not say, which is not the same as zero.
    */
   merchantChargeKobo?: bigint | null;
+  /**
+   * Which way the money went on the holder's account, when the provider's
+   * record says (NUV-08: Nuvion's statement lines). Absent or null: the
+   * record does not say.
+   */
+  direction?: 'in' | 'out' | null;
+  /**
+   * The holder's balance right after this movement, in kobo, when the
+   * provider's record says (NUV-08: a statement's running balance). Only
+   * the provider's own figure: never one added up from our records.
+   */
+  balanceAfterKobo?: bigint | null;
 }
 
 export type ProviderTransactionKind = 'transfer' | 'charge' | 'other';
@@ -621,6 +633,15 @@ export interface ProviderTransferReceipt {
   sourceAvailableKobo: bigint | null;
   /** The payee ids this send used or made, for the caller to keep (NUV-06). */
   payee?: ProviderPayee | null;
+  /**
+   * True when the provider ACCEPTED the transfer and has not finished it
+   * (FIX-54: a bank send on Nuvion is `pending` first, and says so). The
+   * money may fail to arrive and come back, so the caller must not treat the
+   * send as done: it stays pending until the provider's word (a delivery, or
+   * a read of the transfer) says completed. Absent or false: the receipt is
+   * for a transfer the provider finished, as every other receipt is.
+   */
+  pending?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -725,6 +746,16 @@ export interface WalletProvider {
   readonly configured: boolean;
   readonly timings: WalletProviderTimings;
   readonly capabilities: WalletProviderCapabilities;
+  /**
+   * The provider's own charge cannot carry WAWU's fee (FIX-52: Nuvion's
+   * `applicable_fee` is Nuvion's, and a transfer has no field for ours), so a
+   * send's WAWU fee moves as a transfer of its own from the sender to WAWU's
+   * account, under the send's reference plus `-fee`, once the send is
+   * confirmed. Absent or false: the provider's one charge carries it (Fintava's
+   * merchant charges), and nothing else is moved.
+   */
+  readonly wawuFeeLeg?: boolean;
+
   /**
    * The bank code of every wallet at this provider: a party named at a bank
    * is a WAWU wallet only at this bank.

@@ -4,6 +4,7 @@ import { rowsToAnonymise, rowsToDelete } from './account-data-map';
 import { AccountPurgeHooks } from './purge-hooks';
 import { POINTS_PURGE_MODELS, purgePersonPoints } from '../points/points-purge';
 import { DELETED_CREATOR_ID } from '../content-piece/deleted-creator';
+import { eraseAskerRequests } from '../money-request/money-request-erase';
 import { objectKeyFrom } from '../storage/storage.service';
 import { scrubContactDetails } from './scrub-contact-details';
 
@@ -91,6 +92,27 @@ export class AccountPurgeService {
     const failed: string[] = [];
     let total = 0;
     let pointsLeft = false;
+
+    // Money requests this person asked (INBOX-15 round 2): open ones are
+    // cancelled and their words cleared before the chat bubble goes, so no
+    // request outlives the person who made it. One that fails is retried by
+    // the next pass; the rest of the purge does not wait for it.
+    try {
+      const asked = await eraseAskerRequests(this.prisma, wawuUserId);
+      if (asked.closed > 0) {
+        deleted['MoneyRequest.requesterWawuId (cancelled)'] = asked.closed;
+        total += asked.closed;
+      }
+      if (asked.memosCleared > 0) {
+        deleted['MoneyRequest.memo (cleared)'] = asked.memosCleared;
+        total += asked.memosCleared;
+      }
+    } catch (e) {
+      this.logger.error(
+        `Purge failed on money requests asked by ${wawuUserId}: ${(e as Error).message}`,
+      );
+      failed.push('MoneyRequest.requesterWawuId');
+    }
 
     // Points (POINTS-01) go in their own transaction under the person's
     // points lock: the ledger is append-only and its delete trigger accepts

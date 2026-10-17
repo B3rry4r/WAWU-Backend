@@ -45,8 +45,10 @@ export const LINK_KIND_LABELS: Record<PaymentKind, string> = {
   tier: 'Tier',
   tier_bump: 'Tier and points',
   points_pack: `Bought ${POINTS_WORD}`,
+  extra_products: 'Plan add-on',
   points_shortfall: `Topped up ${POINTS_WORD}`,
   points_cash_out: `${POINTS_WORD_TITLE} to cash`,
+  community_pass: 'Room pass',
 };
 
 /** Between the parts of a description. */

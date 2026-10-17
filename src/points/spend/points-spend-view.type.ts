@@ -64,6 +64,12 @@ export interface PointsQuoteView {
   shortfallPoints: number;
   /** The person's "Use wallet" choice (off until they turn it on). */
   useWallet: boolean;
+  /**
+   * A signed token for this cost (AITOOLS-01): a job route runs the job only
+   * when it costs exactly these points now, so a person never pays a price they
+   * were not shown. Good for the fee quotes' own time.
+   */
+  quoteToken: string;
   /** True when the balance covers the cost and no cap stops the job. */
   canRun: boolean;
   /** The cap that stops the job, or null. When one does, no wallet money is offered. */

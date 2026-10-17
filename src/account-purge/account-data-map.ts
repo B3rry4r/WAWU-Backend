@@ -138,6 +138,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'ProfileEducation', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CourseEnrollment', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CommunityMembership', column: 'userWawuId', disposition: 'OWNED' },
+  // The passes this person bought for private communities (INBOX-24, R-63):
+  // OWNED, like VerificationPurchase. The row exists only because this account
+  // paid and names no counterparty; the money's record is the payment, which
+  // stays and is anonymised below.
+  { model: 'CommunityPass', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person has read in each community (INBOX-01).
   { model: 'CommunityReadMarker', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'Notification', column: 'userWawuId', disposition: 'OWNED' },
@@ -176,6 +181,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // (WalletPayment below, anonymised); its id is this row's key and is not a
   // link anyone follows once the account is gone.
   { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
+  // More products this account bought on its tier (TIER-04): how many and what
+  // it cost. OWNED, like MakerPurchase above: the row exists only because this
+  // account bought something and names no counterparty. The money's record is
+  // the payment, which stays (WalletPayment below, anonymised).
+  { model: 'MakerExtraProducts', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
   // A tier purchase this account chose to pay by bank transfer (TIER-05): the
   // item, the quote it was confirmed at and where it stands. OWNED, like
@@ -267,6 +277,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'Community', column: 'hostWawuId', disposition: 'OWNED' },
   { model: 'Event', column: 'hostWawuId', disposition: 'OWNED' },
   { model: 'DirectMessage', column: 'senderWawuId', disposition: 'OWNED' },
+  // An unpaid paid question waits here for its payment (INBOX-17): the asker's, gone with them.
+  { model: 'PaidDmDraft', column: 'senderWawuId', disposition: 'OWNED' },
   { model: 'BillPayment', column: 'buyerWawuId', disposition: 'OWNED' },
   { model: 'ShopOrder', column: 'buyerWawuId', disposition: 'OWNED' },
   { model: 'EventOrder', column: 'buyerWawuId', disposition: 'OWNED' },
@@ -411,6 +423,16 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'ANONYMISED',
   },
+  // The copy of a student's name, email and phone that the enrolment report
+  // to the school is made from (SCHOOLS-09). The send clears it; a student who
+  // leaves before then has it cleared here, and the report is then given up,
+  // not sent. The consent time and the delivery state stay with the order.
+  {
+    model: 'SchoolEnrolmentReport',
+    column: 'wawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['studentName', 'studentEmail', 'studentPhone'],
+  },
   // The codes this person made to share their receipts (WALLET-18). They go
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
@@ -457,6 +479,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PointLot', column: 'wawuUserId', disposition: 'OWNED' },
   // "Use wallet" (POINTS-03, PT3): this person's choice about points; theirs alone.
   { model: 'PointsSetting', column: 'wawuUserId', disposition: 'OWNED' },
+  // AI tool jobs (AITOOLS-01): what a person ran, how long and what it cost. No text is
+  // kept. The audio is a StorageObject of the person's, removed with the rest of their files.
+  { model: 'AiToolJob', column: 'wawuUserId', disposition: 'OWNED' },
   // Points turned into cash (POINTS-04): each row is WAWU's own movement of
   // cash from its account to this person's wallet, and the provider's record
   // of it (our reference, the amount, whether it was confirmed) must outlive
@@ -571,6 +596,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'COUNTERPARTY',
   },
   {
+    model: 'PaidDmDraft',
+    column: 'creatorWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  {
     model: 'FollowRelationship',
     column: 'followingWawuId',
     disposition: 'COUNTERPARTY',
@@ -611,6 +641,29 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'userBWawuId',
     disposition: 'COUNTERPARTY',
   },
+  // A money request (INBOX-15) has two people, so neither row is deleted with
+  // one of them: the other person's thread and, when it was paid, the record
+  // of the money that moved both stay. What each side's erase does:
+  // - the ASKER's: their chat bubble goes (ChatMessage above), so the purge
+  //   itself (eraseAskerRequests, at the start of AccountPurgeService.purge)
+  //   clears the reason they wrote (MoneyRequest.memo and the send's copy of
+  //   it) and cancels every request of theirs that is pending and not being
+  //   paid. One being paid is settled by its send first: paid if it
+  //   completes, closed if it fails. This id is then scrubbed by WAWU ID's
+  //   anonymize, as above.
+  // - the PAYER's: the request is the asker's, so it stays for them (they can
+  //   still cancel it); the payer's id on it is scrubbed by WAWU ID's
+  //   anonymize, which is the usual blank.
+  {
+    model: 'MoneyRequest',
+    column: 'requesterWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  {
+    model: 'MoneyRequest',
+    column: 'payerWawuId',
+    disposition: 'COUNTERPARTY',
+  },
   // Views this account made of OTHER people's profiles. Deleting them would
   // silently reduce somebody else's historical figures, which is editing a
   // third party's records to erase this one; the reference is scrubbed by
@@ -647,6 +700,24 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // payer's hold, and the share it owes, survive.
   {
     model: 'WalletHold',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
+  // Somebody else's sale that pays this account (WALLET-16): the payer's
+  // payment, and the share it owes, survive, and so does the record of that
+  // share waiting for this account's wallet or landing in it. An account is
+  // deleted only with an empty wallet (R-17); what is still owed stays in
+  // WAWU's account with no one to land it to (BACKEND_GAPS G-702).
+  {
+    model: 'EarningSettlement',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
+  // The creator's move of the day (WALLET-16, R-55): the same record of what
+  // is owed to this account, one transfer for several sales. It survives for
+  // the same reason.
+  {
+    model: 'EarningMove',
     column: 'payeeWawuUserId',
     disposition: 'COUNTERPARTY',
   },
@@ -696,6 +767,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'WalletHold', column: 'wawuShareKobo' },
   // WAWU's 15% share in kobo on a school enrolment (SCHOOLS-07), not a person.
   { model: 'SchoolEnrolment', column: 'wawuShareKobo' },
+  // WAWU's 15% share in kobo on a school fee settlement (SCHOOLS-11), not a person.
+  { model: 'SchoolSettlement', column: 'wawuShareKobo' },
   // WAWU's fee in kobo on a send between two people (WALLET-07), not a person.
   { model: 'WalletTransfer', column: 'wawuFeeKobo' },
 ];

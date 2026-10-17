@@ -4,6 +4,7 @@ import { DirectMessageService } from './direct-message.service';
 import { PaidDmController } from './paid-dm.controller';
 import { PaidDmService } from './paid-dm.service';
 import { DmReplyWriter } from './dm-reply-writer';
+import { DmAnsweredHooks } from './dm-answered-hooks';
 import { PaidDmPauseService } from './paid-dm-pause.service';
 import { PaidDmSettingsService } from './paid-dm-settings.service';
 import { PaidDmStandingSweep } from './paid-dm-standing.sweep';
@@ -46,6 +47,7 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
     DmRefundService,
     PaidDmService,
     DmReplyWriter,
+    DmAnsweredHooks,
     PaidDmPauseService,
     PaidDmSettingsService,
     PaidDmStandingSweep,
@@ -74,6 +76,7 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
     DirectMessageService,
     DmRefundService,
     PaidDmPauseService,
+    DmAnsweredHooks,
     FLUTTERWAVE_CLIENT,
   ],
 })

@@ -21,6 +21,10 @@ import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { NotificationService } from '../notification/notification.service';
 import { LivePublisher } from '../live/live-publisher.service';
+import {
+  CommunityPassAccess,
+  PASS_ENDED_MESSAGE,
+} from '../community/pass/community-pass-access.service';
 import type { CreateCommunityMessageDto } from './dto/create-community-message.dto';
 
 /**
@@ -170,6 +174,7 @@ export class CommunityMessageService {
     private readonly wawuId: WawuIdClient,
     private readonly live: LivePublisher,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly passAccess: CommunityPassAccess,
   ) {}
 
   /**
@@ -323,6 +328,11 @@ export class CommunityMessageService {
       throw new ForbiddenException(
         'Join this community to read or post in it.',
       );
+    }
+    // INBOX-24 (R-63). In a private room that sells a pass, a member whose
+    // pass has ended reads and posts nothing until they renew.
+    if (!(await this.passAccess.mayEnter(communityId, userWawuId))) {
+      throw new ForbiddenException(PASS_ENDED_MESSAGE);
     }
   }
 

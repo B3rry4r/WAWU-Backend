@@ -3,10 +3,11 @@ import { Prisma } from '../../generated/prisma/client';
 /**
  * The inbox's one ranking, as SQL (task INBOX-07).
  *
- * Three sources, one row per conversation, each with the same four columns:
+ * Four sources, one row each, with the same four columns:
  *
- *   kind    'chat' | 'community' | 'paid_dm'
- *   key     'chat:<id>' | 'community:<id>' | 'paid_dm:<side>:<wawuId>', unique
+ *   kind    'chat' | 'community' | 'paid_dm' | 'money_request'
+ *   key     'chat:<id>' | 'community:<id>' | 'paid_dm:<side>:<wawuId>' |
+ *           'money_request:<id>', unique
  *   at      the time the row is ranked by
  *   unread  what that source calls unread
  *
@@ -34,6 +35,11 @@ import { Prisma } from '../../generated/prisma/client';
  *               person and side. Ranked by the newest question or reply.
  *               Unread: on the creator side the questions still waiting for
  *               an answer inside their window; the fan side has none.
+ *   money       MoneyRequest (INBOX-15): one row per request the caller made
+ *               or was asked for, in any status. Ranked by when its status
+ *               last changed, else when it was made. Unread is always 0:
+ *               the request is also a message in its chat, which counts it,
+ *               so the badge counts a request once.
  *
  * Every value reaches the SQL as a parameter. Raw SQL because one statement
  * has to rank three tables together.
@@ -105,6 +111,14 @@ export function feedCtes(me: string, now: Date): Prisma.Sql {
       JOIN "Community" c ON c."id" = ms."communityId"
       WHERE ms."userWawuId" = ${me} AND ms."status" = 'joined'
         AND c."hostWawuId" <> ${me}
+        -- INBOX-24 (R-63): a room that sells a pass is listed only while the
+        -- person's pass runs; its preview and unread count are reading.
+        AND (NOT EXISTS (SELECT 1 FROM "CommunityPassPrice" pp
+                          WHERE pp."communityId" = c."id")
+             OR EXISTS (SELECT 1 FROM "CommunityPass" cp
+                         WHERE cp."communityId" = c."id"
+                           AND cp."userWawuId" = ${me}
+                           AND cp."endsAt" > ${nowTs}))
     ),
     communities AS (
       SELECT 'community'::text AS kind,
@@ -132,9 +146,18 @@ export function feedCtes(me: string, now: Date): Prisma.Sql {
       UNION ALL
       ${paidSide('creator')}
     ),
+    money AS (
+      SELECT 'money_request'::text AS kind,
+             'money_request:' || r."id" AS key,
+             COALESCE(r."changedAt", r."createdAt") AS at,
+             0::bigint AS unread
+      FROM "MoneyRequest" r
+      WHERE r."requesterWawuId" = ${me} OR r."payerWawuId" = ${me}
+    ),
     feed AS (
       SELECT kind, key, at, unread FROM chats
       UNION ALL SELECT kind, key, at, unread FROM communities
       UNION ALL SELECT kind, key, at, unread FROM paid
+      UNION ALL SELECT kind, key, at, unread FROM money
     )`;
 }

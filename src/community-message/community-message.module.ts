@@ -6,6 +6,7 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
 import { NotificationModule } from '../notification/notification.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { LivePublisherModule } from '../live/live-publisher.module';
+import { CommunityPassAccessModule } from '../community/pass/community-pass-access.module';
 
 /**
  * CommunityMessage resource module. PrismaService comes from the globally
@@ -26,6 +27,7 @@ import { LivePublisherModule } from '../live/live-publisher.module';
     WawuAuthModule,
     LivePublisherModule,
     BlockedAccountModule,
+    CommunityPassAccessModule,
   ],
   controllers: [CommunityMessageController],
   providers: [CommunityMessageService],

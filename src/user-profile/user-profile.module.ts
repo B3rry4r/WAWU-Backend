@@ -13,6 +13,7 @@ import { ProfileDetailsService } from './profile-details.service';
 import { ProfileWorksController } from './profile-works.controller';
 import { ProfileWorkService } from './profile-work.service';
 import { ProfileEducationService } from './profile-education.service';
+import { SignupProfileService } from './signup-profile.service';
 import { ProfileAudienceService } from './profile-audience.service';
 
 /**
@@ -55,6 +56,7 @@ import { ProfileAudienceService } from './profile-audience.service';
     ProfileWorkService,
     ProfileEducationService,
     ProfileAudienceService,
+    SignupProfileService,
   ],
 })
 export class UserProfileModule {}

@@ -73,11 +73,22 @@ export type FeePartCode = (typeof FEE_PART_CODES)[number];
  * debit into WAWU's own account with no seller split, not held. Its `targetId`
  * is `pack-<packId>` (docs/contract/PLANS.md section 10).
  *
+ * `extra_products` (TIER-04) is WAWU's own sale of more product places on the
+ * tier a person holds (VF13): one debit into WAWU's own account with no seller
+ * split, not held. Its `targetId` is `extra-products` (docs/contract/PLANS.md
+ * section 11).
+ *
  * `points_shortfall` (POINTS-03) is WAWU's own sale of the points an AI job is
  * short of (PT3), bought from the wallet at the pack rate on the person's
  * confirmation: one debit into WAWU's own account with no seller split, not
  * held. Its `targetId` is `shortfall-<points>` (docs/contract/CONVENTIONS.md
  * section 16a).
+ *
+ * `community_pass` (INBOX-24, R-63) is 30 days in a private community, bought
+ * from the wallet with the PIN. Its `targetId` is the community's id. The host
+ * is the payee (85%, R-5); it is not held: the host's share is an earning
+ * like any sale, paid in their one move a day (R-55), and a pass that cannot
+ * be granted is paid back in full, the charge included.
  *
  * `points_cash_out` (POINTS-04) is not a payment anyone makes from the wallet:
  * it is the link kind of the ledger rows of points turned into cash, WAWU's
@@ -98,8 +109,10 @@ export const PAYMENT_KINDS = [
   'tier',
   'tier_bump',
   'points_pack',
+  'extra_products',
   'points_shortfall',
   'points_cash_out',
+  'community_pass',
 ] as const;
 export type PaymentKind = (typeof PAYMENT_KINDS)[number];
 
@@ -231,9 +244,16 @@ export const MONEY_ERROR_CODES = [
   // Buying event tickets (EVENTS-13): the buyer already holds the most open
   // paid ticket orders one event allows (an admin setting).
   'event_order_limit',
+  // Paying a question from the wallet (INBOX-17, G-75): the fan already has a
+  // question waiting on this creator, so another is not taken until it is answered or refunded.
+  'question_already_waiting',
   // Spending points on AI tools (POINTS-03): a cap stops the job; the person
   // has enough points, so there is no shortfall to buy.
   'points_cap_reached',
   'points_not_short',
+  // Adding products needs a tier that is running (TIER-04, VF13): the person
+  // has none, or it ended. Also the code of the publishing gate (TIER-02), in
+  // its own richer body on the routes that publish.
+  'tier_required',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

@@ -129,7 +129,14 @@ scripts/dev/stack.sh down   --name <n>
 - `. <scratch>/<n>/env.sh` points one spec at the stack (`DATABASE_URL` and the
   mock WAWU ID's URLs), e.g. `npm run test:contract -- <spec>`.
 - `up` refuses to start when `free -g` shows under 5 GB available
-  (`STACK_MIN_FREE_GB`) or when any of its ports is in use, and changes nothing.
+  (`STACK_MIN_FREE_GB`) or when any port of the range is already listening
+  (it names the process holding it), and changes nothing.
+- A service is `UP` only when its own process (or a child of it) is the listener
+  on its port. A port that answers because another stack holds it does not count:
+  `up` prints the service as `FAILED`, a `why:` line and the last lines of its log,
+  and exits non-zero; `status` says `NOT OURS` for it. Check it with
+  `scripts/dev/stack-selftest.sh [base-port]` (default `7850`; it uses eight ports
+  from the base, needs no database and ends with `EXIT 0` or `EXIT 1`).
 - `down` stops every recorded PID and its children, confirms the ports are
   closed with a connect test and drops the databases. Running it twice is safe.
 - `--id`, `--web` and `--mobile` take a checkout of your own (a worktree): the
@@ -143,6 +150,26 @@ scripts/dev/stack.sh down   --name <n>
   stand-in) points the Hub's object storage at a stand-in on this machine, for a
   spec that must see the Hub's own storage calls. Left unset, storage is a name
   the network guard refuses.
+- `STACK_RESEND_API_KEY` (any text, with `RESEND_BASE_URL` set in the same shell)
+  gives wawu-id a mail transport; `node scripts/dev/mail-standin.cjs <port> <file>`
+  is a stand-in for it that records each mail it is given. Left unset, wawu-id has
+  no transport and an email route answers 503 (FIX-53, the data-export email).
+
+### AI voice and storage on the stack (AITOOLS-01)
+
+The AI voice tools call a voice provider whose key is the owner's and is on no
+build machine, so a stack runs them against a local stand-in. `stack.sh` does
+not start it: run `node scripts/dev/voice-standin.cjs <port>` (it answers the
+provider's one call, `POST /v1/text-to-speech/<voice>`; a script containing
+`[[fail]]`, `[[reject]]`, `[[html]]` or `[[slow:1500]]` makes it fail, refuse,
+answer with a web page or wait) and export `AI_VOICE_BASE_URL=http://127.0.0.1:<port>`,
+`AI_VOICE_API_KEY=standin-key` and `AI_VOICE_VOICES` (a JSON list of `{ id, name,
+description, providerVoiceId }` with provider voice ids `stand-in-ada` and
+`stand-in-tunde`) in the shell that runs `stack.sh up`. A finished job stores its
+audio, so also run `node scripts/dev/storage-standin.cjs <port> stack-bucket` and
+set `STACK_STORAGE_ENDPOINT=http://127.0.0.1:<port>` with
+`STACK_STORAGE_PATH_STYLE=true`. Keep both ports outside the stack's range.
+Without these the tool is listed `enabled: false` and a job is refused.
 
 ### Nuvion on the stack (STACK-NUV)
 
@@ -770,8 +797,8 @@ enforces it in its own service (INBOX-06). A signed-out reader sees everyone.
 **Data export.** `POST /settings/privacy/export` records a request (asking
 again while one is pending returns that one). `DataExportFulfilmentService`
 sweeps pending requests every minute and asks WAWU ID to email a signed link
-(`POST /internal/users/:id/data-export`, the mock in `mock-wawu-id` records it
-in `GET /internal/mail-outbox`). `GET /settings/privacy/export/download?token=`
+(`POST /internal/users/:id/data-export`, built in wawu-id by FIX-53; the mock in
+`mock-wawu-id` records it in `GET /internal/mail-outbox`). `GET /settings/privacy/export/download?token=`
 builds the file when the link is opened, from `data-export-sections.ts`: every
 section names its fields, nothing is exported by default, and
 `data-export-map.spec.ts` fails when a table the account purge deletes is in

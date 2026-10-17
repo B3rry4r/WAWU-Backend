@@ -78,6 +78,15 @@ export const LEDGER_ABSENT_FAILURE =
 /** The failure reason when Fintava's own record says FAILURE or CANCELLED. */
 export const LEDGER_FINTAVA_FAILURE = 'Fintava reports this transfer failed.';
 
+/**
+ * The failure reason when Nuvion's own record says a bank send failed or was
+ * cancelled (NUV-06). It is the provider's word, as `LEDGER_FINTAVA_FAILURE`
+ * is, and the only other `failed` a send settles on (FIX-54). What a person
+ * reads: it names no provider.
+ */
+export const LEDGER_BANK_SEND_FAILURE =
+  'The bank did not complete this transfer.';
+
 export interface LedgerReferenceRow {
   value: string;
   kind: LedgerReferenceKind;
@@ -399,6 +408,39 @@ export class LedgerService {
   }
 
   /**
+   * Tells the sending feature that something a still pending send waits on
+   * has happened at the provider (FIX-52: the delivery of the transfer that
+   * moved WAWU's fee), so the send goes on now and not at its next sweep.
+   * The send is found by the sender's row for `reference`; nothing is
+   * written. A reference that holds no send row is left alone.
+   */
+  async wakeTransfer(
+    accountNumber: string,
+    reference: string,
+  ): Promise<boolean> {
+    const ids = await this.entriesFor(accountNumber, 'out', [reference]);
+    if (ids.length !== 1) return false;
+    const row = await this.prisma.fintavaLedgerEntry.findUnique({
+      where: { id: ids[0] },
+      select: { transferId: true },
+    });
+    if (!row?.transferId) return false;
+    const event: LedgerTransferSettled = {
+      entryId: ids[0],
+      transferId: row.transferId,
+      status: 'pending',
+    };
+    for (const listener of this.transferSettledListeners) {
+      void listener(event).catch((e: unknown) =>
+        this.logger.error(
+          `ledger: a send wake listener failed (${e instanceof Error ? e.name : 'error'})`,
+        ),
+      );
+    }
+    return true;
+  }
+
+  /**
    * Called (not awaited) after a write committed in which a signed provider
    * report (a webhook) said a payment's debit was COMPLETED at another charge
    * than the buyer's row holds (MONEY-17 round 8, R7-1). The row keeps its
@@ -653,6 +695,109 @@ export class LedgerService {
   }
 
   /**
+   * FIX-54: what the provider says came back for a row that is `reversed`
+   * (Nuvion's `outflows.refunded` credit record), written once. `applyReversal`
+   * is Fintava's way of saying the same and refuses a completed send; a
+   * reversal Nuvion reports reaches the row through `record`, which holds no
+   * figures, so they are put on it here. A row that is not `reversed`, or
+   * already holds them, is left alone. Returns whether this call wrote them.
+   */
+  async noteReversalFigures(
+    entryId: string,
+    reversal: {
+      at: Date;
+      reference: string | null;
+      amountKobo: number;
+      chargesKobo: number;
+      totalKobo: number;
+    },
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "FintavaLedgerEntry" WHERE "id" = ${entryId} FOR UPDATE`;
+      const row = await tx.fintavaLedgerEntry.findUnique({
+        where: { id: entryId },
+        select: {
+          status: true,
+          reversalTotalKobo: true,
+          reversalChargesKobo: true,
+        },
+      });
+      if (!row || row.status !== 'reversed' || row.reversalTotalKobo !== null) {
+        return false;
+      }
+      // WAWU's fee, when it was given back before these figures arrived
+      // (noteFeeReturned), is already on the row as the charges: it stays in
+      // them and in the total.
+      const fee = row.reversalChargesKobo ?? 0n;
+      await tx.fintavaLedgerEntry.update({
+        where: { id: entryId },
+        data: {
+          reversedAt: reversal.at,
+          reversalReference: reversal.reference,
+          reversalAmountKobo: koboBig('reversal amount', reversal.amountKobo),
+          reversalChargesKobo:
+            koboBig('reversal charges', reversal.chargesKobo) + fee,
+          reversalTotalKobo:
+            koboBig('reversal total', reversal.totalKobo) + fee,
+        },
+      });
+      return true;
+    });
+  }
+
+  /**
+   * FIX-54 round 2: WAWU's fee, given back to the sender through the
+   * `-fee-back` transfer, counted as returned on the sender's reversed row.
+   * The provider's credit does not carry it, yet it moved back to the wallet,
+   * so the row's figures (what W14 prints) must say it: the fee is put on the
+   * row as the reversal's charges and added to its total. Either order works:
+   * a fee noted before the credit's figures arrive waits as the charges, and
+   * `noteReversalFigures` keeps it. Written once (the same fee again changes
+   * nothing); a row that is not `reversed`, or holds a charge that is not this
+   * fee (a provider's own report), is left alone. Returns whether it wrote.
+   */
+  async noteFeeReturned(
+    sender: { customerReference: string; wawuUserId: string },
+    feeKobo: bigint,
+  ): Promise<boolean> {
+    if (feeKobo <= 0n) return false;
+    return this.prisma.$transaction(async (tx) => {
+      const found = await tx.fintavaLedgerEntry.findFirst({
+        where: {
+          customerReference: sender.customerReference,
+          wawuUserId: sender.wawuUserId,
+          walletKind: 'user',
+          direction: 'out',
+        },
+        select: { id: true },
+      });
+      if (!found) return false;
+      await tx.$queryRaw`SELECT "id" FROM "FintavaLedgerEntry" WHERE "id" = ${found.id} FOR UPDATE`;
+      const row = await tx.fintavaLedgerEntry.findUnique({
+        where: { id: found.id },
+        select: {
+          status: true,
+          reversalTotalKobo: true,
+          reversalChargesKobo: true,
+        },
+      });
+      if (!row || row.status !== 'reversed') return false;
+      const noted = row.reversalChargesKobo ?? 0n;
+      if (noted !== 0n) return false;
+      await tx.fintavaLedgerEntry.update({
+        where: { id: found.id },
+        data: {
+          reversalChargesKobo: feeKobo,
+          ...(row.reversalTotalKobo !== null
+            ? { reversalTotalKobo: row.reversalTotalKobo + feeKobo }
+            : {}),
+        },
+      });
+      return true;
+    });
+  }
+
+  /**
    * MONEY-08: records a disagreement with Fintava on a row without changing
    * anything else (the stored figures and status stand; MONEY-16 reports
    * it). A note already on the row is not written twice.
@@ -759,6 +904,40 @@ export class LedgerService {
       },
     });
     return pending.count + revived.count > 0;
+  }
+
+  /**
+   * SCHOOLS-11 round 2: a payout from WAWU's own account is written `pending`
+   * at the charge quoted when the send is leased. When the provider states its
+   * own charge (its answer, its record of the send), the row, while it is still
+   * `pending`, takes it, so the row says what left the account and the
+   * completion that follows agrees with it. Only the running provider's
+   * merchant `out` row under that reference, at that amount, and never a row
+   * holding a disagreement. Returns whether the row changed.
+   */
+  async restatePendingCharge(
+    customerReference: string,
+    amountKobo: bigint,
+    feeKobo: bigint,
+  ): Promise<boolean> {
+    const { count } = await this.prisma.fintavaLedgerEntry.updateMany({
+      where: {
+        customerReference,
+        walletKind: 'merchant',
+        direction: 'out',
+        status: 'pending',
+        amountKobo,
+        discrepancy: null,
+        NOT: { feeKobo },
+        AND: [rowsOf(this.provider.name)],
+      },
+      data: {
+        feeKobo,
+        providerFeeKobo: feeKobo,
+        totalKobo: amountKobo + feeKobo,
+      },
+    });
+    return count > 0;
   }
 
   private async recordIn(

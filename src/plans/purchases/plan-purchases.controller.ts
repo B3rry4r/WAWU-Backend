@@ -39,7 +39,11 @@ import {
   PlanPurchaseService,
   type PurchaseAnswer,
 } from './plan-purchase.service';
-import type { PlanPurchaseQuoteView } from './plan-purchase-view.type';
+import type {
+  PendingPlanPurchaseView,
+  PlanPurchaseQuoteView,
+} from './plan-purchase-view.type';
+import type { ExtraProductsQuoteView } from './extra-products-view.type';
 import type { PointsPackQuoteView } from './points-pack-view.type';
 
 /**
@@ -62,6 +66,10 @@ export class PlanPurchasesController {
    * `kind=points_pack&packId=` is a points pack (POINTS-02, PT4): answers a
    * `PointsPackQuoteView` with the pack's price and points, the Founding
    * Maker's bonus points (0 for anyone else) and how long the points last.
+   * `kind=extra_products` is the add-on that gives more product places
+   * (TIER-04, VF13): answers an `ExtraProductsQuoteView` with the price, how
+   * many products it adds and the places the person has now and would have;
+   * without a tier that is running it is `402 tier_required`.
    * Nothing is reserved. A purchase that does not fit what the caller holds
    * is `target_not_payable` with the reason in words; a plan payment still
    * going through is `payment_in_progress`.
@@ -73,6 +81,7 @@ export class PlanPurchasesController {
     ...WALLET_GATE_ERRORS,
     'target_not_found',
     'target_not_payable',
+    'tier_required',
     'payment_in_progress',
     'amount_out_of_range',
     'fees_not_set',
@@ -81,7 +90,9 @@ export class PlanPurchasesController {
   quote(
     @CurrentWallet() wallet: OpenWallet,
     @Query() query: PlanPurchaseQuoteQueryDto,
-  ): Promise<PlanPurchaseQuoteView | PointsPackQuoteView> {
+  ): Promise<
+    PlanPurchaseQuoteView | PointsPackQuoteView | ExtraProductsQuoteView
+  > {
     return this.purchases.quote(wallet, query);
   }
 
@@ -113,6 +124,13 @@ export class PlanPurchasesController {
    * pack's points (plus the Founding Maker's bonus) is added once, ending
    * after the bought-points expiry, and the answer is a `PointsPackPurchaseView`
    * (`kind: "points_pack"`).
+   *
+   * `kind: extra_products` (TIER-04, VF13) adds the settings' number of
+   * products to the tier the person holds, the same way: from the wallet or
+   * by transfer, added once, kept by the account whatever happens to the tier
+   * after, and answered as an `ExtraProductsPurchaseView`
+   * (`kind: "extra_products"`). Without a tier that is running it is `402
+   * tier_required` and nothing is taken.
    */
   @Post()
   @HttpCode(201)
@@ -123,6 +141,7 @@ export class PlanPurchasesController {
     'daily_limit_exceeded',
     'target_not_found',
     'target_not_payable',
+    'tier_required',
     'payment_in_progress',
   )
   @RequireFeesSet()
@@ -132,6 +151,21 @@ export class PlanPurchasesController {
     @Body() dto: PlanPurchaseDto,
   ): Promise<PurchaseAnswer> {
     return this.purchases.buy(wallet, scope, dto);
+  }
+
+  /**
+   * The purchase still going through for the caller, or `purchase: null`
+   * (ME-13, M15): a payment still confirming, or confirmed and not yet
+   * opened, the same ones that make a second purchase `payment_in_progress`.
+   * Declared before the id, so the word `pending` is not taken for an id. It
+   * needs no wallet: a person with none has nothing going through.
+   */
+  @Get('pending')
+  @Header('Cache-Control', 'no-store')
+  pending(
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<PendingPlanPurchaseView> {
+    return this.purchases.pending(user.sub);
   }
 
   /**
