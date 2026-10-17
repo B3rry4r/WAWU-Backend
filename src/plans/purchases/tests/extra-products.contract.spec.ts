@@ -7,6 +7,7 @@ import {
   type Person,
   type TierHarness,
 } from '../../../../test/plans/tier-purchase-harness';
+import { NuvionSeamStandIn } from '../../../../test/payments/nuvion-seam-standin';
 import { body } from '../../../../test/payments/poll-helpers';
 import { AdminRole } from '../../../../generated/prisma/enums';
 import type { AdminActor } from '../../../common/audit/admin-ops-audit.service';
@@ -29,13 +30,17 @@ import type {
 /**
  * TIER-04 over HTTP: add more products to a tier from the wallet, on the real
  * MoneyModule, PlansModule, PointsModule and PlanPurchasesModule, a real
- * database, real RS256 tokens and the real Fintava client over a socket to the
- * Fintava double. No provider host is called. Every price and count is read
- * from the config the Hub reads (the file, then the settings an admin saved).
+ * database, real RS256 tokens and the wallet provider seam with NUVION stood
+ * in (R-39, R-45): a purchase is a book transfer into WAWU's operational
+ * account, and Nuvion's documented first answer is `pending`, settled later.
+ * No Nuvion, Fintava or wawuafrica.com host is called. NUVION_FEE is a spec
+ * value, not a fact about Nuvion. Every price and count is read from the config
+ * the Hub reads (the file, then the settings an admin saved).
  */
 
 jest.setTimeout(120_000);
 
+const NUVION_FEE = 2325;
 const DAY = 86_400_000;
 const config = loadPlansConfig();
 const addOn = config.extraProducts;
@@ -48,7 +53,8 @@ const admin: AdminActor = {
   role: AdminRole.finance,
 };
 
-describe('Add more products to a tier (TIER-04)', () => {
+describe('Add more products to a tier (TIER-04), Nuvion stood in', () => {
+  const nuvion = new NuvionSeamStandIn();
   let h: TierHarness;
   let call: ReturnType<typeof api>;
   let settings: PlanSettingsService;
@@ -56,7 +62,8 @@ describe('Add more products to a tier (TIER-04)', () => {
   let gate: PublishingGate;
 
   beforeAll(async () => {
-    h = await bootTierApp('t04');
+    nuvion.feeKobo = () => BigInt(NUVION_FEE);
+    h = await bootTierApp('t04', { nuvion, nuvionFeeKobo: NUVION_FEE });
     call = api(h);
     settings = h.get(PlanSettingsService);
     allowance = h.get(PublishingAllowanceService);
@@ -72,7 +79,7 @@ describe('Add more products to a tier (TIER-04)', () => {
     await h.close();
   });
   beforeEach(() => {
-    h.wallets.mode = 'live';
+    nuvion.mode = 'successful';
   });
 
   const data = <T>(res: Response) => body<T>(res).data!;
@@ -100,8 +107,8 @@ describe('Add more products to a tier (TIER-04)', () => {
     const res = await call.buy(p, bodyFor(q), opts);
     return { q, res, view: data<ExtraProductsPurchaseView>(res) };
   }
-  const sendsFrom = (p: Person) =>
-    h.wallets.sends.filter((s) => s.from === p.accountNumber);
+  const sendsFrom = (p: Person) => nuvion.sendsFrom(p.account!.accountId);
+  const balance = (p: Person) => Number(p.account!.availableKobo);
   const set = (key: string, value: number | null) =>
     settings.set(admin, { settings: { [key]: value } });
   const rowOf = (p: Person) =>
@@ -147,7 +154,7 @@ describe('Add more products to a tier (TIER-04)', () => {
     await expect(gate.assertRoomForProduct(p.id)).rejects.toMatchObject({
       code: 'product_limit_reached',
     });
-    const before = h.wallets.kobo.get(p.accountNumber)!;
+    const before = balance(p);
 
     const q = await quoted(p);
     expect(q).toMatchObject({
@@ -190,10 +197,12 @@ describe('Add more products to a tier (TIER-04)', () => {
 
     // One debit at the price, the provider's charge on top.
     expect(sendsFrom(p)).toHaveLength(1);
-    expect(sendsFrom(p)[0].amountKobo).toBe(addOnPrice);
-    expect(h.wallets.kobo.get(p.accountNumber)).toBe(
-      before - addOnPrice - sendsFrom(p)[0].feeKobo,
-    );
+    expect(sendsFrom(p)[0]).toMatchObject({
+      amountKobo: BigInt(addOnPrice),
+      feeKobo: BigInt(NUVION_FEE),
+      toAccountId: nuvion.operational.accountId,
+    });
+    expect(balance(p)).toBe(before - addOnPrice - NUVION_FEE);
     expect(view.payment!.totalKobo).toBe(q.payment.totalKobo);
 
     // The tier row and the purchase row.
@@ -426,7 +435,7 @@ describe('Add more products to a tier (TIER-04)', () => {
 
   it('check 3: with no tier the quote and the purchase are 402 tier_required, and nothing is debited or kept', async () => {
     const p = await h.buyer(RICH);
-    const before = h.wallets.kobo.get(p.accountNumber)!;
+    const before = balance(p);
     const res = await quoteRoute(p, { kind: 'extra_products' });
     expect(res.status).toBe(402);
     expect(reasonOf(res)).toMatchObject({
@@ -447,7 +456,7 @@ describe('Add more products to a tier (TIER-04)', () => {
     expect(buy.status).toBe(402);
     expect(reasonOf(buy).code).toBe('tier_required');
     expect(sendsFrom(p)).toHaveLength(0);
-    expect(h.wallets.kobo.get(p.accountNumber)).toBe(before);
+    expect(balance(p)).toBe(before);
     expect(
       await h.prisma.walletPayment.count({ where: { payerWawuUserId: p.id } }),
     ).toBe(0);
@@ -644,15 +653,15 @@ describe('Add more products to a tier (TIER-04)', () => {
     const p = await h.buyer(RICH);
     await running(p);
     const q = await quoted(p);
-    h.wallets.mode = 'timeout';
+    nuvion.mode = 'pending';
     const res = await call.buy(p, bodyFor(q));
-    h.wallets.mode = 'live';
     const pending = data<ExtraProductsPurchaseView>(res);
     expect(pending.status).toBe('pending');
     expect(pending.grant).toBeNull();
     expect((await rowOf(p)).extraProducts).toBe(0);
     await set('plan.extra_products.count', addOn.count + 7);
     try {
+      nuvion.settle(pending.payment!.reference, 'successful');
       await h.sweepLater();
       const done = data<ExtraProductsPurchaseView>(
         await call.read(p, pending.id),
@@ -670,17 +679,18 @@ describe('Add more products to a tier (TIER-04)', () => {
     const p = await h.buyer(RICH);
     await running(p);
     const q = await quoted(p);
-    h.wallets.mode = 'timeout';
+    nuvion.mode = 'pending';
     const res = await call.buy(p, bodyFor(q));
-    h.wallets.mode = 'live';
-    expect(data<ExtraProductsPurchaseView>(res).status).toBe('pending');
+    const pending = data<ExtraProductsPurchaseView>(res);
+    expect(pending.status).toBe('pending');
     await h.prisma.makerTier.update({
       where: { wawuUserId: p.id },
       data: { activeUntil: new Date(Date.now() - DAY) },
     });
+    nuvion.settle(pending.payment!.reference, 'successful');
     await h.sweepLater();
     const done = data<ExtraProductsPurchaseView>(
-      await call.read(p, data<ExtraProductsPurchaseView>(res).id),
+      await call.read(p, pending.id),
     );
     expect(done.status).toBe('paid');
     expect((await rowOf(p)).extraProducts).toBe(addOn.count);
@@ -729,7 +739,7 @@ describe('Add more products to a tier (TIER-04)', () => {
     expect(reasonOf(res).code).toBe('insufficient_funds');
     expect(sendsFrom(p)).toHaveLength(0);
     expect((await rowOf(p)).extraProducts).toBe(0);
-    h.wallets.kobo.set(p.accountNumber, RICH);
+    p.account!.availableKobo = BigInt(RICH);
     const again = await call.buy(p, bodyFor(q), { key });
     expect(again.status).toBe(201);
     expect((await rowOf(p)).extraProducts).toBe(addOn.count);
@@ -792,7 +802,7 @@ describe('Add more products to a tier (TIER-04)', () => {
       });
       const res = await call.buy(p, bodyFor(q));
       expect(res.status).toBe(201);
-      expect(sendsFrom(p)[0].amountKobo).toBe(330_000);
+      expect(sendsFrom(p)[0].amountKobo).toBe(BigInt(330_000));
       expect((await rowOf(p)).extraProducts).toBe(2);
     } finally {
       await set('plan.extra_products.price_kobo', null);
