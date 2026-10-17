@@ -706,6 +706,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'WalletHold', column: 'wawuShareKobo' },
   // WAWU's 15% share in kobo on a school enrolment (SCHOOLS-07), not a person.
   { model: 'SchoolEnrolment', column: 'wawuShareKobo' },
+  // WAWU's 15% share in kobo on a school fee settlement (SCHOOLS-11), not a person.
+  { model: 'SchoolSettlement', column: 'wawuShareKobo' },
   // WAWU's fee in kobo on a send between two people (WALLET-07), not a person.
   { model: 'WalletTransfer', column: 'wawuFeeKobo' },
 ];

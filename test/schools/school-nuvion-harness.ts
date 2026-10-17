@@ -17,6 +17,8 @@ import { ResponseInterceptor } from '../../src/common/interceptors/response.inte
 import { PrismaModule } from '../../src/common/prisma/prisma.module';
 import { PrismaService } from '../../src/common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../src/hub-app-options';
+import { AdminAuthModule } from '../../src/admin/auth/admin-auth.module';
+import { AdminSchoolsModule } from '../../src/admin/schools/admin-schools.module';
 import { MoneyModule } from '../../src/money/money.module';
 import type {
   PaymentQuoteView,
@@ -207,6 +209,10 @@ export interface SchoolNuvion {
   enrol(p: Person, intakeId: string): request.Test;
   /** Pays the enrolment's fee from the wallet (quote, PIN) and answers the payment. */
   pay(p: Person, enrolmentId: string): Promise<PaymentView>;
+  /** The Authorization header of an admin of this role (made on first ask). */
+  adminAuth(role: 'superadmin' | 'reviewer' | 'finance'): Promise<{
+    Authorization: string;
+  }>;
   /** Enrols and pays: the enrolment id. */
   enrolAndPay(p: Person, intakeId: string): Promise<string>;
   get(p: Person, path: string): request.Test;
@@ -243,6 +249,8 @@ export async function bootSchoolNuvion(
     WAWU_ID_JWKS_URL: wawuId.jwksUrl,
     WAWU_ID_BASE_URL: mail.baseUrl,
     WAWU_ID_INTERNAL_SERVICE_KEY: 'school-test-service-key',
+    ADMIN_JWT_SECRET: `${tag}-admin-access-secret-0123456789abcdef01`,
+    ADMIN_JWT_REFRESH_SECRET: `${tag}-admin-refresh-secret-0123456789abcdef0`,
     PIN_LOCK_MINUTES: '',
     IDEMPOTENCY_KEY_HOURS: '',
     PAYMENT_REVIEW_AFTER_HOURS: '',
@@ -257,8 +265,10 @@ export async function bootSchoolNuvion(
       ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
       PassportModule.register({ defaultStrategy: 'wawu-jwt' }),
       PrismaModule,
+      AdminAuthModule,
       MoneyModule,
       SchoolsPublicModule,
+      AdminSchoolsModule,
     ],
     providers: [WawuJwtStrategy, WawuIdClient],
   })
@@ -288,6 +298,8 @@ export async function bootSchoolNuvion(
 
   const users: string[] = [];
   const schoolIds: string[] = [];
+  const adminIds: string[] = [];
+  const adminTokens = new Map<string, { Authorization: string }>();
 
   const h: SchoolNuvion = {
     app,
@@ -394,6 +406,32 @@ export async function bootSchoolNuvion(
       }
       return body<PaymentView>(res).data!;
     },
+    async adminAuth(role) {
+      const known = adminTokens.get(role);
+      if (known) return known;
+      const argon2 = await import('argon2');
+      const id = randomUUID();
+      adminIds.push(id);
+      const email = `${tag}-${role}-${id.slice(0, 8)}@admin.test.wawu.dev`;
+      await prisma.adminUser.create({
+        data: {
+          id,
+          email,
+          passwordHash: await argon2.hash('school-money-admin-password'),
+          name: `${tag} ${role}`,
+          role,
+        },
+      });
+      const res = await request(app.getHttpServer())
+        .post(`${BASE}/admin/auth/login`)
+        .send({ email, password: 'school-money-admin-password' });
+      if (res.status !== 200) throw new Error(`admin login ${res.status}`);
+      const header = {
+        Authorization: `Bearer ${(res.body as { data: { accessToken: string } }).data.accessToken}`,
+      };
+      adminTokens.set(role, header);
+      return header;
+    },
     async enrolAndPay(p, intakeId) {
       const made = await h.enrol(p, intakeId);
       if (made.status !== 201) {
@@ -409,10 +447,6 @@ export async function bootSchoolNuvion(
         .set('Authorization', p.auth);
     },
     async close() {
-      const orders = await prisma.schoolEnrolment.findMany({
-        where: { schoolId: { in: schoolIds } },
-        select: { id: true, paymentId: true },
-      });
       const payments = await prisma.walletPayment.findMany({
         where: { payerWawuUserId: { in: users } },
         select: { id: true, customerReference: true },
@@ -421,12 +455,20 @@ export async function bootSchoolNuvion(
         where: { paymentId: { in: payments.map((p) => p.id) } },
         select: { customerReference: true },
       });
+      const settlementRows = await prisma.schoolSettlement.findMany({
+        where: { schoolId: { in: schoolIds } },
+        select: { id: true },
+      });
+      const settlementRefs = settlementRows.flatMap((r) => [
+        `wawu-bank-sch-${r.id}`,
+        `wawu-bank-sch-${r.id}-2`,
+      ]);
       const refs = [
         ...payments.map((p) => p.customerReference),
         ...holds
           .map((x) => x.customerReference)
           .filter((r): r is string => !!r),
-        ...orders.map((o) => `wawu-bank-sch-${o.id}`),
+        ...settlementRefs,
       ];
       await prisma.fintavaLedgerEntry.deleteMany({
         where: {
@@ -437,6 +479,9 @@ export async function bootSchoolNuvion(
           ],
         },
       });
+      await prisma.schoolSettlement.deleteMany({
+        where: { schoolId: { in: schoolIds } },
+      });
       await prisma.schoolEnrolment.deleteMany({
         where: { schoolId: { in: schoolIds } },
       });
@@ -446,7 +491,11 @@ export async function bootSchoolNuvion(
       await prisma.walletPayment.deleteMany({
         where: { payerWawuUserId: { in: users } },
       });
+      await prisma.schoolPayee.deleteMany({
+        where: { schoolId: { in: schoolIds } },
+      });
       await prisma.school.deleteMany({ where: { id: { in: schoolIds } } });
+      await prisma.adminUser.deleteMany({ where: { id: { in: adminIds } } });
       await prisma.moneyIdempotencyKey.deleteMany({
         where: { wawuUserId: { in: users } },
       });

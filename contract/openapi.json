@@ -28599,6 +28599,209 @@
         ]
       }
     },
+    "/api/hub/admin/schools/{id}/payee": {
+      "get": {
+        "operationId": "SchoolSettlementAdminController_payee",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolPayeeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The bank account the school is paid at; 404 when it has none yet.",
+        "tags": [
+          "SchoolSettlementAdmin"
+        ]
+      },
+      "put": {
+        "operationId": "SchoolSettlementAdminController_setPayee",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPayeeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolPayeeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Saves the school's bank account after the bank confirms it (the holder's\nname is what the bank gives). A miss saves nothing: 422.",
+        "tags": [
+          "SchoolSettlementAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/school-settlements": {
+      "get": {
+        "operationId": "SchoolSettlementAdminController_list",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "sent",
+                "paid",
+                "refunded",
+                "review"
+              ]
+            }
+          },
+          {
+            "name": "action",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "payout",
+                "refund"
+              ]
+            }
+          },
+          {
+            "name": "schoolId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 36,
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolSettlementPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Settlements, newest first: what is owed to schools, what was paid, what went back.",
+        "tags": [
+          "SchoolSettlementAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/school-intakes/{id}/cancel": {
+      "post": {
+        "operationId": "SchoolSettlementAdminController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelIntakeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Calls a class off: no more enrolments, unpaid places go back, and every\npaid enrolment's fee goes back to the student's wallet. A fee already paid\nto the school is counted in `alreadyPaidOut`, not refunded.",
+        "tags": [
+          "SchoolSettlementAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/school-enrolments/{id}/refund": {
+      "post": {
+        "operationId": "SchoolSettlementAdminController_refund",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolSettlementView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sends one paid enrolment's fee back to the student. 409 once it is on its way to the school.",
+        "tags": [
+          "SchoolSettlementAdmin"
+        ]
+      }
+    },
     "/api/hub/admin/plan-settings": {
       "get": {
         "operationId": "AdminPlanSettingsController_list",
@@ -37707,6 +37910,27 @@
             "type": "boolean"
           }
         }
+      },
+      "SetPayeeDto": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string",
+            "description": "The bank's code in the provider's list.",
+            "pattern": "^[A-Za-z0-9]{3,12}$",
+            "example": "058"
+          },
+          "accountNumber": {
+            "type": "string",
+            "description": "Ten digits. The bank is asked for the holder's name before anything is saved.",
+            "pattern": "^\\d{10}$",
+            "example": "0123456789"
+          }
+        },
+        "required": [
+          "bankCode",
+          "accountNumber"
+        ]
       },
       "UpdatePlanSettingsDto": {
         "type": "object",
@@ -49683,6 +49907,175 @@
           "title",
           "effectiveDate",
           "sections"
+        ]
+      },
+      "SchoolPayeeView": {
+        "type": "object",
+        "properties": {
+          "schoolId": {
+            "type": "string"
+          },
+          "bankCode": {
+            "type": "string"
+          },
+          "bankName": {
+            "type": "string"
+          },
+          "accountNumberLast4": {
+            "type": "string"
+          },
+          "accountName": {
+            "type": "string"
+          },
+          "verifiedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schoolId",
+          "bankCode",
+          "bankName",
+          "accountNumberLast4",
+          "accountName",
+          "verifiedAt"
+        ]
+      },
+      "SchoolSettlementView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "enrolmentId": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "schoolId": {
+            "type": "string"
+          },
+          "schoolName": {
+            "type": "string"
+          },
+          "courseTitle": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "refund",
+              "payout"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "review",
+              "refunded",
+              "paid",
+              "sent"
+            ]
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "schoolShareKobo": {
+            "type": "integer"
+          },
+          "wawuShareKobo": {
+            "type": "integer"
+          },
+          "providerFeeKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "waiting": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "no_payee",
+              "funds",
+              "refused"
+            ],
+            "nullable": true
+          },
+          "reviewNote": {
+            "type": "string",
+            "nullable": true
+          },
+          "decidedAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "refundedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "enrolmentId",
+          "reference",
+          "schoolId",
+          "schoolName",
+          "courseTitle",
+          "action",
+          "status",
+          "priceKobo",
+          "schoolShareKobo",
+          "wawuShareKobo",
+          "providerFeeKobo",
+          "waiting",
+          "reviewNote",
+          "decidedAt",
+          "paidAt",
+          "refundedAt"
+        ]
+      },
+      "SchoolSettlementPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SchoolSettlementView"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "CancelIntakeView": {
+        "type": "object",
+        "properties": {
+          "intakeId": {
+            "type": "string"
+          },
+          "cancelledAt": {
+            "type": "string"
+          },
+          "refunding": {
+            "type": "number"
+          },
+          "alreadyPaidOut": {
+            "type": "number"
+          },
+          "placesReleased": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "intakeId",
+          "cancelledAt",
+          "refunding",
+          "alreadyPaidOut",
+          "placesReleased"
         ]
       },
       "AdminSchoolSummary": {
