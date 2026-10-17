@@ -65,6 +65,11 @@ export class MailRelayDouble {
   readonly mails = new Map<string, { id: string; to: string; text: string }>();
   /** Answered to every request when set: 'down' is a 503, 'refuse' a 400, 'lose' takes the mail and answers 500. */
   mode: 'ok' | 'down' | 'refuse' | 'lose' = 'ok';
+  /**
+   * How long a request is held before the relay looks at it (ms). A busy CI
+   * machine does this by itself; a spec sets it to meet that on purpose.
+   */
+  delayMs = 0;
   private server: Server | null = null;
   private port = 0;
 
@@ -76,13 +81,14 @@ export class MailRelayDouble {
     this.requests.length = 0;
     this.mails.clear();
     this.mode = 'ok';
+    this.delayMs = 0;
   }
 
   async start(): Promise<void> {
     this.server = createServer((req, res) => {
       const chunks: Buffer[] = [];
       req.on('data', (c: Buffer) => chunks.push(c));
-      req.on('end', () => {
+      const answer = () => {
         res.setHeader('Content-Type', 'application/json');
         if (req.method !== 'POST' || req.url !== '/internal/mail/send') {
           res.statusCode = 404;
@@ -128,6 +134,10 @@ export class MailRelayDouble {
           return;
         }
         res.end(JSON.stringify({ id: mail.id }));
+      };
+      req.on('end', () => {
+        if (this.delayMs > 0) setTimeout(answer, this.delayMs);
+        else answer();
       });
     });
     await new Promise<void>((r) =>
