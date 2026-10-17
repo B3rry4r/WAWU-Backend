@@ -7,6 +7,8 @@ import { DELETED_CREATOR_ID } from '../content-piece/deleted-creator';
 import { eraseAskerRequests } from '../money-request/money-request-erase';
 import { objectKeyFrom } from '../storage/storage.service';
 import { scrubContactDetails } from './scrub-contact-details';
+import { eraseFiles, findIdentityKeys } from './purge-files';
+import { StorageRemover } from '../storage/storage-remover';
 
 /** What a bought content piece is called once its creator's account is gone. */
 export const REMOVED_CONTENT_TITLE = 'Removed content';
@@ -41,6 +43,7 @@ export class AccountPurgeService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly hooks?: AccountPurgeHooks,
+    @Optional() private readonly files?: StorageRemover,
   ) {}
 
   /**
@@ -84,6 +87,7 @@ export class AccountPurgeService {
     pointsLeft: boolean;
     failed: string[];
     keptForBuyers: number;
+    files: PurgeFilesReport;
   }> {
     // EVENTS-07: money held for this person's events goes back before any row goes.
     await this.hooks?.beforeErase(wawuUserId);
@@ -155,8 +159,26 @@ export class AccountPurgeService {
       soldUnknown = true;
     }
 
+    // The files of the person's identity and verification rows are named by
+    // rows the loop below deletes, so they are read first (FIX-65). Without
+    // that list no file is touched: the retry does it right.
+    let identityUnknown = false;
+    let identityKeys: string[] = [];
+    try {
+      identityKeys = await findIdentityKeys(this.prisma, wawuUserId);
+    } catch (e) {
+      this.logger.error(
+        `Purge could not look for identity files of ${wawuUserId}: ${(e as Error).message}`,
+      );
+      identityUnknown = true;
+    }
+
     for (const rule of rowsToDelete()) {
       if (pointsModels.has(rule.model)) continue;
+      // The person's files (StorageObject rows) are the list of what is in the
+      // bucket, so they go last, after every row that pointed at a file, and
+      // only once their objects are gone (FIX-65, below).
+      if (rule.model === 'StorageObject') continue;
       // What is kept, and what each piece was, decides these three. Without
       // that list nothing of them is touched: the retry does it right
       // (round 9; a lost list must never cost a buyer a file or a mark).
@@ -279,6 +301,60 @@ export class AccountPurgeService {
       }
     }
 
+    // The person's files (FIX-65): after every row that pointed at one. A
+    // purge that is already incomplete leaves them for the pass that is not,
+    // so nothing is removed while a row may still show it.
+    const files: PurgeFilesReport = {
+      objectsRemoved: 0,
+      ownerKept: 0,
+      eventKept: 0,
+    };
+    if (soldUnknown || identityUnknown) {
+      failed.push('StorageObject.wawuUserId');
+    } else if (failed.length > 0) {
+      this.logger.warn(
+        `Files of ${wawuUserId} wait for the rest of the purge (${failed.length} table(s) not cleared)`,
+      );
+    } else {
+      try {
+        const out = await eraseFiles(this.prisma, this.files, {
+          wawuUserId,
+          soldKeys: sold.keys,
+          identityKeys,
+        });
+        files.objectsRemoved = out.objectsRemoved;
+        files.ownerKept = out.ownerKept;
+        files.eventKept = out.eventKept;
+        for (const [label, n] of [
+          ['StorageObject.wawuUserId', out.rowsDeleted],
+          [
+            'StorageObject.wawuUserId (identity files kept for the owner)',
+            out.ownerKept,
+          ],
+          [
+            'StorageObject.wawuUserId (event image kept while the event stands)',
+            out.eventKept,
+          ],
+        ] as const) {
+          if (n > 0) {
+            deleted[label] = n;
+            total += n;
+          }
+        }
+        if (out.left !== null) {
+          this.logger.error(
+            `Purge could not clear every file of ${wawuUserId}: ${out.left}`,
+          );
+          failed.push('StorageObject.wawuUserId');
+        }
+      } catch (e) {
+        this.logger.error(
+          `Purge failed on StorageObject.wawuUserId for ${wawuUserId}: ${(e as Error).message}`,
+        );
+        failed.push('StorageObject.wawuUserId');
+      }
+    }
+
     this.logger.log(
       `Purged ${total} rows for ${wawuUserId}: ${JSON.stringify(deleted)}` +
         (keptForBuyers > 0
@@ -291,7 +367,7 @@ export class AccountPurgeService {
           ? `; could not clear ${failed.join(', ')} (purge again)`
           : ''),
     );
-    return { deleted, total, pointsLeft, failed, keptForBuyers };
+    return { deleted, total, pointsLeft, failed, keptForBuyers, files };
   }
 
   /**
@@ -496,6 +572,16 @@ export class AccountPurgeService {
     ]);
     return ids.length;
   }
+}
+
+/** What the purge did with the person's files (FIX-65), for the account's `purgeNote`. */
+export interface PurgeFilesReport {
+  /** Objects the bucket no longer holds after this run. */
+  objectsRemoved: number;
+  /** Identity and verification files kept, refiled under the deleted account, for the owner's ruling. */
+  ownerKept: number;
+  /** Event images kept because an event that still stands shows them. */
+  eventKept: number;
 }
 
 /** The pieces a purge keeps for their buyers, and the storage keys of their files. */

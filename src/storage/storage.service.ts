@@ -17,6 +17,7 @@ import {
 } from './dto/presign-upload.dto';
 import { formatFolderRule } from './upload-formats';
 import { deleteFromBucket } from './bucket-delete';
+import { createStorageClient } from './storage-client';
 import { releaseOwnUpload } from './upload-release';
 import { LOCKED_TX, inPersonsTurn, lockStorageQuota } from './storage-lock';
 import { sweepLateFiles, type LateSweepResult } from './late-file-sweep';
@@ -73,8 +74,6 @@ const UPLOAD_URL_SECONDS = 300;
  * reconcileStale gives a slow upload before it settles one.
  */
 const DEFAULT_SWEEP_MARGIN_SECONDS = 600;
-/** How long the storage client waits to connect, for an answer and in all (STORAGE_REQUEST_TIMEOUT_MS). */
-const DEFAULT_STORAGE_REQUEST_TIMEOUT_MS = 10_000;
 
 /**
  * How long after presign `POST /uploads/confirm` leaves a missing file alone:
@@ -375,65 +374,20 @@ export class StorageService {
       Number.isFinite(margin) && margin >= 0
         ? margin
         : DEFAULT_SWEEP_MARGIN_SECONDS;
-    const endpoint = this.config.get<string>('STORAGE_ENDPOINT');
-    const accessKeyId = this.config.get<string>('STORAGE_ACCESS_KEY_ID');
-    const secretAccessKey = this.config.get<string>(
-      'STORAGE_SECRET_ACCESS_KEY',
-    );
-    this.bucket = this.config.get<string>('STORAGE_BUCKET') ?? '';
-    const timeout = Number(
-      this.config.get<string>('STORAGE_REQUEST_TIMEOUT_MS'),
-    );
-    const requestTimeoutMs =
-      Number.isFinite(timeout) && timeout >= 100
-        ? timeout
-        : DEFAULT_STORAGE_REQUEST_TIMEOUT_MS;
-
+    const made = createStorageClient(this.config);
+    this.bucket =
+      made?.bucket ?? this.config.get<string>('STORAGE_BUCKET') ?? '';
     // Storage is optional at boot so the rest of the API still runs in
     // environments where it isn't configured yet — but every upload request
     // then fails loudly (503) instead of handing back a broken URL.
-    if (!endpoint || !accessKeyId || !secretAccessKey || !this.bucket) {
+    if (!made) {
       this.logger.warn(
         'Object storage is not configured (STORAGE_ENDPOINT / STORAGE_ACCESS_KEY_ID / STORAGE_SECRET_ACCESS_KEY / STORAGE_BUCKET). Uploads will be rejected.',
       );
       this.client = null;
       return;
     }
-
-    this.client = new S3Client({
-      region: this.config.get<string>('STORAGE_REGION') ?? 'auto',
-      endpoint,
-      credentials: { accessKeyId, secretAccessKey },
-      // Railway Buckets use virtual-hosted-style URLs (bucket as subdomain),
-      // which is the S3 default. Buckets created before that change need
-      // path-style — set STORAGE_FORCE_PATH_STYLE=true for those.
-      forcePathStyle:
-        this.config.get<string>('STORAGE_FORCE_PATH_STYLE') === 'true',
-      // MUST stay 'WHEN_REQUIRED'. Since v3.729 the SDK defaults to
-      // 'WHEN_SUPPORTED', which adds an integrity checksum to every
-      // PutObject. Presigning has no body to checksum, so it hashed NOTHING
-      // and baked `x-amz-checksum-crc32=AAAAAA==` — CRC32 of zero bytes —
-      // into the signed URL. The browser then PUT the real file, whose
-      // checksum is obviously not that, and storage rejected every single
-      // upload with 400 Bad Request. KYC documents, content assets, CAC and
-      // NEPC paperwork: none of it could be uploaded at all.
-      requestChecksumCalculation: 'WHEN_REQUIRED',
-      // No bucket call may hang a request or the sweep (ME-04 round 5). The
-      // calls this client makes are a HEAD and a DELETE of one key, so a
-      // short bound on connecting, on silence and on the whole request is
-      // plenty. The SDK's own default is no limit at all, and it warns rather
-      // than fails when only `requestTimeout` is set, hence
-      // `throwOnRequestTimeout`. One retry, so a hung bucket costs a caller
-      // about twenty seconds at most, and nothing is held meanwhile (see
-      // storage-lock.ts).
-      requestHandler: {
-        connectionTimeout: requestTimeoutMs,
-        socketTimeout: requestTimeoutMs,
-        requestTimeout: requestTimeoutMs,
-        throwOnRequestTimeout: true,
-      },
-      maxAttempts: 2,
-    });
+    this.client = made.client;
   }
 
   private bucketLocationRead: Promise<BucketLocation | null> | null = null;
