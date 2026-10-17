@@ -821,6 +821,7 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
     ).toEqual([
       'POST bills/wallet/pay',
       'POST credits/purchase/wallet',
+      'POST events/orders/wallet/pay',
       'POST money/payments',
       'POST money/transfers/bank',
       'POST money/transfers/wawu',

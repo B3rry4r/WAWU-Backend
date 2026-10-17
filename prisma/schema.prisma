@@ -3302,9 +3302,10 @@ model EventTicketType {
   salesStartAt DateTime?
   salesEndAt   DateTime?
 
-  event   Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  orders  EventOrder[]
-  tickets EventTicket[]
+  event      Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  orders     EventOrder[]
+  tickets    EventTicket[]
+  orderLines EventOrderLine[]
 
   @@index([eventId])
 }
@@ -3341,13 +3342,63 @@ model EventOrder {
 
   createdAt DateTime @default(now())
 
+  /// EVENTS-07: the order paid from the buyer's WAWU wallet. All of these are
+  /// null on an order the web paid through Flutterwave, whose reference stays
+  /// `flutterwaveTxRef` above until the web follows (after launch). A wallet
+  /// order still fills `flutterwaveTxRef` (the column is required and unique)
+  /// with `wawu-event-wallet-<id>`, which no Flutterwave charge can match.
+  ///
+  /// `paymentProvider` is `wallet` for a wallet order, null for the web's.
+  paymentProvider  String?
+  /// The reference a person quotes, provider-neutral: WAW-EVT- and eight
+  /// characters. Null on the web's orders.
+  paymentReference String?  @unique
+  /// The wallet payment (WalletPayment.id) that paid the order and the hold
+  /// its price sits in until the event (R-19). Set when the payment is
+  /// delivered; EVENTS-10 refunds, WALLET-17 releases, through the hold.
+  walletPaymentId  String?  @unique
+  holdId           String?
+  paidAt           DateTime?
+  /// Why a paid order could not be given its tickets (sold out in between,
+  /// the event called off); the hold is refunded and the order is `failed`.
+  failureReason    String?
+  /// The buyer's optional Idempotency-Key on the order's creation: the same
+  /// key for the same basket answers the same order, never a second one.
+  requestKey       String?
+
   event      Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
   ticketType EventTicketType @relation(fields: [ticketTypeId], references: [id])
   tickets    EventTicket[]
+  /// EVENTS-07: the basket. Empty on the web's orders, which hold one tier in
+  /// `ticketTypeId` and `quantity` above. On a wallet order `ticketTypeId` is
+  /// the first line's tier and `quantity` the tickets in all; the lines are
+  /// the truth of what was bought.
+  lines      EventOrderLine[]
 
+  @@unique([buyerWawuId, requestKey])
   @@index([eventId, status])
   @@index([buyerWawuId])
   @@index([referralCode])
+}
+
+/// EVENTS-07: one tier of a basket order (E2: Regular and VIP in one payment).
+/// The name and the price are snapshotted, like the order's total.
+model EventOrderLine {
+  id             String   @id @default(uuid())
+  orderId        String
+  ticketTypeId   String
+  /// The tier's name when it was bought ("VIP").
+  tierName       String
+  /// Naira for one ticket when it was bought; 0 for a free tier.
+  unitPriceNaira Int
+  quantity       Int
+  createdAt      DateTime @default(now())
+
+  order      EventOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  ticketType EventTicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, ticketTypeId])
+  @@index([ticketTypeId])
 }
 
 /// One admittance. One row per seat, not per order, because each is scanned

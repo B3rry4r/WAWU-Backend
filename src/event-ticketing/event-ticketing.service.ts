@@ -32,7 +32,7 @@ import { BlockedAccountService } from '../blocked-account/blocked-account.servic
  * drops the characters people confuse.
  */
 const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-function ticketCode(): string {
+export function ticketCode(): string {
   const bytes = randomBytes(16);
   let out = '';
   for (const b of bytes) out += CODE_ALPHABET[b % CODE_ALPHABET.length];
@@ -141,7 +141,72 @@ export class EventTicketingService {
       );
     }
 
+    // EVENTS-07: a quote someone opened from the wallet is an unpaid order that
+    // names these tiers, and would stop them being replaced. An unpaid order
+    // with no payment started goes with them (the buyer asks again); one whose
+    // payment is still being confirmed is waited for, never deleted.
+    const unpaid = await this.prisma.eventOrder.findMany({
+      where: { eventId, status: 'pending', paymentProvider: 'wallet' },
+      select: { id: true },
+    });
+    if (unpaid.length > 0) {
+      const inFlight = await this.prisma.walletPayment.count({
+        where: {
+          kind: 'event_ticket',
+          targetId: { in: unpaid.map((o) => o.id) },
+          status: { in: ['pending', 'completed'] },
+        },
+      });
+      if (inFlight > 0) {
+        throw new ConflictException(
+          'A payment for these tickets is still being confirmed. Try again in a minute.',
+        );
+      }
+    }
+
+    // A wallet order that failed or was refunded (EVENTS-07 round 2) names
+    // these tiers too, with nothing sold, and its foreign key would stop them
+    // being replaced. Its money is in the buyer's history, not in the order, so
+    // it goes with the tiers once the price is back with the buyer; while a
+    // refund is still on its way the host waits.
+    const settled = await this.prisma.eventOrder.findMany({
+      where: {
+        eventId,
+        paymentProvider: 'wallet',
+        status: { in: ['failed', 'refunded'] },
+      },
+      select: { id: true },
+    });
+    if (settled.length > 0) {
+      const returning = await this.prisma.walletHold.count({
+        where: {
+          kind: 'event_ticket',
+          status: 'held',
+          targetId: { in: settled.map((o) => o.id) },
+        },
+      });
+      if (returning > 0) {
+        throw new ConflictException(
+          'Money for an order that could not be finished is still on its way back to the buyer. Try again in a minute.',
+        );
+      }
+    }
+
     await this.prisma.$transaction([
+      this.prisma.eventOrder.deleteMany({
+        where: {
+          id: { in: unpaid.map((o) => o.id) },
+          status: 'pending',
+          paymentProvider: 'wallet',
+        },
+      }),
+      this.prisma.eventOrder.deleteMany({
+        where: {
+          id: { in: settled.map((o) => o.id) },
+          status: { in: ['failed', 'refunded'] },
+          paymentProvider: 'wallet',
+        },
+      }),
       this.prisma.eventTicketType.deleteMany({ where: { eventId, sold: 0 } }),
       this.prisma.eventTicketType.createMany({
         data: types.map((t) => ({
@@ -330,6 +395,11 @@ export class EventTicketingService {
       // The browser's verify and the webhook can settle the same charge. The
       // second caller gets the tickets that exist rather than a duplicate set.
       return this.ticketsFor(order.id);
+    }
+    if (order.paymentProvider === 'wallet') {
+      // EVENTS-07: an order paid from the wallet has no Flutterwave charge to
+      // verify; asking would fail it. It is paid on its own route.
+      throw new ConflictException('This order is paid from your wallet.');
     }
     if (order.status !== 'pending') {
       throw new ConflictException(`This order is already ${order.status}.`);
@@ -695,8 +765,17 @@ export class EventTicketingService {
       }),
     ]);
 
+    // EVENTS-07: orders paid from the wallet are not Flutterwave charges. Their
+    // price sits in a hold, and EVENTS-10 refunds them through it, so the
+    // Flutterwave loop below leaves them alone (it would otherwise record
+    // that they need the Flutterwave dashboard).
     const orders = await this.prisma.eventOrder.findMany({
-      where: { eventId, status: 'paid', amountNaira: { gt: 0 } },
+      where: {
+        eventId,
+        status: 'paid',
+        amountNaira: { gt: 0 },
+        OR: [{ paymentProvider: null }, { paymentProvider: { not: 'wallet' } }],
+      },
     });
 
     let refunded = 0;
