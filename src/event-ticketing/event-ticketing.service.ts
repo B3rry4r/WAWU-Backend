@@ -673,12 +673,7 @@ export class EventTicketingService {
       this.totals(eventId),
       this.prisma.eventOrder.findMany({
         where: { eventId, status: 'paid' },
-        select: {
-          amountNaira: true,
-          commissionRate: true,
-          referralCode: true,
-          buyerWawuId: true,
-        },
+        select: { amountNaira: true, commissionRate: true, referralCode: true },
       }),
       this.prisma.eventReferral.findMany({ where: { eventId } }),
     ]);
@@ -700,13 +695,6 @@ export class EventTicketingService {
       byCode.set(o.referralCode, entry);
     }
 
-    // EVENTS-08 (E25): how many people calling the event off sends money back
-    // to. One person with two orders counts once, and a free ticket has no
-    // money to send back, so it adds no one.
-    const buyersToRefund = new Set(
-      paid.filter((o) => o.amountNaira > 0).map((o) => o.buyerWawuId),
-    ).size;
-
     return {
       eventId,
       eventName: event.name,
@@ -717,8 +705,6 @@ export class EventTicketingService {
       grossNaira: gross,
       /** What the organiser is actually owed, after WAWU's cut. */
       netNaira: Math.round(net),
-      /** People who paid for a ticket and would be refunded if it is called off. */
-      buyersToRefund,
       referrals: referrals.map((r) => ({
         code: r.code,
         label: r.label,

@@ -13338,9 +13338,6 @@
                     "netNaira": {
                       "type": "number"
                     },
-                    "buyersToRefund": {
-                      "type": "number"
-                    },
                     "referrals": {
                       "type": "array",
                       "items": {
@@ -13373,7 +13370,6 @@
                     "attendees",
                     "grossNaira",
                     "netNaira",
-                    "buyersToRefund",
                     "referrals"
                   ]
                 }
@@ -13577,6 +13573,37 @@
           }
         },
         "summary": "The events the caller works the door at.",
+        "tags": [
+          "EventRunning"
+        ]
+      }
+    },
+    "/api/hub/events/{id}/call-off": {
+      "get": {
+        "operationId": "EventRunningController_callOffPreview",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CallOffPreview"
+                }
+              }
+            }
+          }
+        },
+        "summary": "How many people calling the event off would refund (E25).",
         "tags": [
           "EventRunning"
         ]
@@ -45294,6 +45321,17 @@
           "ticketsSold",
           "revenueNaira",
           "createdAt"
+        ]
+      },
+      "CallOffPreview": {
+        "type": "object",
+        "properties": {
+          "buyersToRefund": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "buyersToRefund"
         ]
       },
       "DoorStaffView": {

@@ -84,6 +84,12 @@ export interface HostSoldCounts {
 }
 
 /** GET /events/:id/referrals: one shared link and what it sold. */
+/** Who a call-off would send money back to (E25). */
+export interface CallOffPreview {
+  /** Distinct people with a paid order of a priced ticket: two orders count once, a free ticket adds no one. */
+  buyersToRefund: number;
+}
+
 export interface EventReferralSalesView {
   id: string;
   code: string;
@@ -215,6 +221,24 @@ export class EventRunningService {
         ticketsSold: counts.get(eventId) ?? 0,
       })),
     };
+  }
+
+  /**
+   * How many people calling the event off would refund (E25 "All 64 buyers
+   * get their money back"). A new route, not a field on the dashboard: the
+   * dashboard's answer is locked by the protected route suite (MONEY-01).
+   */
+  async callOffPreview(
+    hostWawuId: string,
+    eventId: string,
+  ): Promise<CallOffPreview> {
+    await this.assertHost(hostWawuId, eventId);
+    const paid = await this.prisma.eventOrder.findMany({
+      where: { eventId, status: 'paid', amountNaira: { gt: 0 } },
+      select: { buyerWawuId: true },
+      distinct: ['buyerWawuId'],
+    });
+    return { buyersToRefund: paid.length };
   }
 
   /**

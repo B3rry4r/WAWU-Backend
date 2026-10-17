@@ -18,6 +18,7 @@ import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { AddDoorStaffDto, DoorScanDto } from './dto/event-running.dto';
 import {
   EventRunningService,
+  type CallOffPreview,
   type DoorCheckInResult,
   type DoorEventList,
   type DoorStaffView,
@@ -61,6 +62,15 @@ export class EventRunningController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<EventReferralSalesView[]> {
     return this.service.referrals(user.sub, id);
+  }
+
+  /** How many people calling the event off would refund (E25). */
+  @Get(':id/call-off')
+  callOffPreview(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<CallOffPreview> {
+    return this.service.callOffPreview(user.sub, id);
   }
 
   /** Who the host lets check tickets in. */
