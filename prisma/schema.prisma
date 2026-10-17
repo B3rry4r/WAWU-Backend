@@ -5438,9 +5438,46 @@ model SchoolEnrolment {
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
+  report          SchoolEnrolmentReport?
+
   @@index([wawuUserId, createdAt])
   @@index([intakeId, status])
   @@index([status, reservedUntil])
+}
+
+/// SCHOOLS-09: the enrolment report that goes to the school (SC7: the school
+/// gets the student's name, email and phone, the course and the intake). One
+/// row per order, made in the same transaction as the order, when the student
+/// taps Continue on SC4 (the screen that says the school gets these details):
+/// `consentAt` is that moment. The contact details are a copy of the student's
+/// sign-in token at that moment, kept only until the report is sent; the send
+/// clears them. The report goes when the order is `enrolled` (paid, or a
+/// course with no fee), through the mail relay under the key
+/// `school-report-<enrolmentId>`, so a retry or a second server cannot send a
+/// second mail. `leaseUntil` is the claim on a try in flight, `nextAttemptAt`
+/// the rest before the next try, `gaveUpAt` when the tries ran out.
+model SchoolEnrolmentReport {
+  enrolmentId   String          @id
+  enrolment     SchoolEnrolment @relation(fields: [enrolmentId], references: [id], onDelete: Cascade)
+  /// The student. Set to null with the contact details when the account is deleted.
+  wawuUserId    String?
+  studentName   String?
+  studentEmail  String?
+  studentPhone  String?
+  consentAt     DateTime
+  attempts      Int             @default(0)
+  nextAttemptAt DateTime?
+  leaseUntil    DateTime?
+  sentAt        DateTime?
+  /// The mail relay's id for the mail it took.
+  messageId     String?
+  /// Why the last try failed (a status or a name, never an address).
+  lastError     String?
+  gaveUpAt      DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([sentAt, gaveUpAt, nextAttemptAt])
 }
 
 /// SETTINGS-02: the owner's legal text, one row per document ("terms",

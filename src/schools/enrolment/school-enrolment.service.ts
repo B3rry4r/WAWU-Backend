@@ -25,6 +25,8 @@ import {
 import { isUniqueViolation } from '../../money/prisma-unique';
 import { intakeView, type PublicIntakeView } from '../schools-public.views';
 import { SchoolEnrolmentError } from './school-enrolment-error';
+import { SchoolReportService } from './school-report.service';
+import { type StudentContact } from './school-report';
 import {
   DEFAULT_MAX_OPEN_RESERVATIONS,
   DEFAULT_RESERVATION_MINUTES,
@@ -40,8 +42,20 @@ import {
   SCHOOL_FEE_KIND,
   splitCourseFee,
 } from './school-enrolment-rules';
-import type { SchoolEnrolmentView } from './school-enrolment-view.type';
-import type { EnrolDto } from './school-enrolment.dto';
+import {
+  decodeListCursor,
+  encodeListCursor,
+  endDateOf,
+  LIST_DEFAULT_LIMIT,
+  LISTED_STATUSES,
+  tabOf,
+} from './school-enrolment-list';
+import type {
+  SchoolEnrolmentListItem,
+  SchoolEnrolmentPage,
+  SchoolEnrolmentView,
+} from './school-enrolment-view.type';
+import type { EnrolDto, ListEnrolmentsDto } from './school-enrolment.dto';
 
 /** Rows one pass of the release sweep gives back, and passes per minute. */
 const RELEASE_BATCH = 200;
@@ -51,6 +65,9 @@ const RELEASE_PASSES = 5;
 const OPEN_PAYMENT = Prisma.sql`SELECT 1 FROM "WalletPayment" p
   WHERE p."kind" = 'school_fee' AND p."targetId" = e."id"
     AND p."status" IN ('pending', 'completed')`;
+
+/** No details: a call that did not come from a signed-in request (the report then has nothing to send). */
+const NO_CONTACT: StudentContact = { name: null, email: null, phone: null };
 
 /** The class had no seat (carries nothing; the caller names the next class). */
 class NoSeat extends Error {}
@@ -108,6 +125,7 @@ export class SchoolEnrolmentService implements OnModuleInit {
     private readonly registry: PayableRegistry,
     private readonly holds: WalletHoldService,
     private readonly holdViews: HoldViewService,
+    private readonly reports: SchoolReportService,
   ) {}
 
   onModuleInit(): void {
@@ -127,6 +145,7 @@ export class SchoolEnrolmentService implements OnModuleInit {
     wawuUserId: string,
     dto: EnrolDto,
     now: Date = new Date(),
+    contact: StudentContact = NO_CONTACT,
   ): Promise<SchoolEnrolmentView> {
     const intake = await this.loadIntake(dto.intakeId);
     let gaveBack = false;
@@ -162,7 +181,9 @@ export class SchoolEnrolmentService implements OnModuleInit {
         );
       }
       try {
-        const row = await this.claim(wawuUserId, intake, now);
+        const row = await this.claim(wawuUserId, intake, now, contact);
+        // A course with no fee is enrolled at once: the school hears now.
+        if (row.status === 'enrolled') this.tellSchool(row.id);
         return this.viewOf(row);
       } catch (e) {
         if (e instanceof NoSeat) {
@@ -193,6 +214,82 @@ export class SchoolEnrolmentService implements OnModuleInit {
     });
     if (!row) throw new NotFoundException(ENROLMENT_MESSAGES.notFound);
     return this.viewOf(row);
+  }
+
+  /**
+   * My courses (SC8): this student's enrolments, newest first, each with its
+   * class's start and end date. `tab` keeps only the current or only the
+   * finished ones. A place given back unpaid (`released`) is not a course and
+   * is not listed. It reads our own records only.
+   */
+  async list(
+    wawuUserId: string,
+    query: ListEnrolmentsDto,
+    now: Date = new Date(),
+  ): Promise<SchoolEnrolmentPage> {
+    const limit = query.limit ?? LIST_DEFAULT_LIMIT;
+    const after = query.cursor ? decodeListCursor(query.cursor) : null;
+    const today = lagosToday(now);
+    // The last day of the class, in the database: start + weeks x 7 - 1 days.
+    const endDay = Prisma.sql`(e."intakeStartDate" + (c."weeks" * 7 - 1))`;
+    const tabWhere =
+      query.tab === 'current'
+        ? Prisma.sql`AND e."status" <> 'refunded' AND ${endDay} >= ${today}::date`
+        : query.tab === 'finished'
+          ? Prisma.sql`AND (e."status" = 'refunded' OR ${endDay} < ${today}::date)`
+          : Prisma.empty;
+    const afterWhere = after
+      ? Prisma.sql`AND (e."createdAt", e."id") < (${after.createdAt}, ${after.id})`
+      : Prisma.empty;
+    const ids = await this.prisma.$queryRaw<{ id: string }[]>`
+      SELECT e."id" FROM "SchoolEnrolment" e
+        JOIN "SchoolCourse" c ON c."id" = e."courseId"
+       WHERE e."wawuUserId" = ${wawuUserId}
+         AND e."status" IN (${Prisma.join([...LISTED_STATUSES])})
+         ${tabWhere} ${afterWhere}
+       ORDER BY e."createdAt" DESC, e."id" DESC
+       LIMIT ${limit + 1}`;
+    const pageIds = ids.slice(0, limit).map((r) => r.id);
+    const rows = await this.prisma.schoolEnrolment.findMany({
+      where: { id: { in: pageIds } },
+      include: { course: { select: { weeks: true } } },
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const ordered = pageIds.flatMap((id) => {
+      const r = byId.get(id);
+      return r ? [r] : [];
+    });
+    const payments = await this.paymentsOf(ordered);
+    const items: SchoolEnrolmentListItem[] = [];
+    for (const row of ordered) {
+      const view = await this.viewOf(row, payments);
+      const endDate = endDateOf(view.intake.startDate, row.course.weeks);
+      items.push({
+        ...view,
+        weeks: row.course.weeks,
+        endDate,
+        tab: tabOf(view.status, endDate, today),
+      });
+    }
+    return {
+      items,
+      nextCursor:
+        ids.length > limit && ordered.length > 0
+          ? encodeListCursor(ordered[ordered.length - 1])
+          : null,
+    };
+  }
+
+  private async paymentsOf(
+    rows: SchoolEnrolment[],
+  ): Promise<Map<string, { providerFeeKobo: bigint; totalKobo: bigint }>> {
+    const ids = rows.flatMap((r) => (r.paymentId ? [r.paymentId] : []));
+    if (ids.length === 0) return new Map();
+    const paid = await this.prisma.walletPayment.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, providerFeeKobo: true, totalKobo: true },
+    });
+    return new Map(paid.map((p) => [p.id, p]));
   }
 
   // -------------------------------------------------------------------------
@@ -247,6 +344,7 @@ export class SchoolEnrolmentService implements OnModuleInit {
     wawuUserId: string,
     intake: Intake,
     now: Date,
+    contact: StudentContact,
   ): Promise<SchoolEnrolment> {
     const price = intake.course.priceKobo;
     return this.prisma.$transaction(async (tx) => {
@@ -300,7 +398,7 @@ export class SchoolEnrolmentService implements OnModuleInit {
       }
       if (!(await this.takeSeat(tx, intake.id))) throw new NoSeat();
       const split = splitCourseFee(price);
-      return tx.schoolEnrolment.create({
+      const order = await tx.schoolEnrolment.create({
         data: {
           wawuUserId,
           schoolId: intake.course.school.id,
@@ -320,7 +418,25 @@ export class SchoolEnrolmentService implements OnModuleInit {
           enrolledAt: price === 0 ? now : null,
         },
       });
+      // SC4's Continue is the student's agreement to share their details with
+      // the school (SCHOOLS-09): the time and a copy of the details, in the
+      // order's own transaction.
+      await this.reports.capture(tx, {
+        enrolmentId: order.id,
+        wawuUserId,
+        contact,
+        consentAt: now,
+      });
+      return order;
     });
+  }
+
+  /**
+   * Starts the report to the school without making the caller wait for the
+   * mail relay: the minute sweep sends it if this try does not.
+   */
+  private tellSchool(enrolmentId: string): void {
+    void this.reports.deliverQuietly(enrolmentId);
   }
 
   /** The conditional write: a seat is taken only while one is left. */
@@ -521,6 +637,12 @@ export class SchoolEnrolmentService implements OnModuleInit {
    * either way.
    */
   private async onCompleted(payment: CompletedPayment): Promise<void> {
+    await this.settleCompleted(payment);
+    // Paid and enrolled: the school hears (a refunded order is not sent).
+    this.tellSchool(payment.targetId);
+  }
+
+  private async settleCompleted(payment: CompletedPayment): Promise<void> {
     const now = new Date();
     const won = await this.prisma.schoolEnrolment.updateMany({
       where: { id: payment.targetId, status: 'reserved', paymentId: null },
@@ -644,12 +766,17 @@ export class SchoolEnrolmentService implements OnModuleInit {
   // The view
   // -------------------------------------------------------------------------
 
-  async viewOf(row: SchoolEnrolment): Promise<SchoolEnrolmentView> {
+  async viewOf(
+    row: SchoolEnrolment,
+    prefetched?: Map<string, { providerFeeKobo: bigint; totalKobo: bigint }>,
+  ): Promise<SchoolEnrolmentView> {
     const paid = row.paymentId
-      ? await this.prisma.walletPayment.findUnique({
-          where: { id: row.paymentId },
-          select: { providerFeeKobo: true, totalKobo: true },
-        })
+      ? prefetched
+        ? (prefetched.get(row.paymentId) ?? null)
+        : await this.prisma.walletPayment.findUnique({
+            where: { id: row.paymentId },
+            select: { providerFeeKobo: true, totalKobo: true },
+          })
       : null;
     let returned: SchoolEnrolmentView['returned'] = null;
     if (row.status === 'refunded' && row.paymentId) {
