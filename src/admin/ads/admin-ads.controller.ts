@@ -142,7 +142,7 @@ export class AdminAdsController {
     return this.service.remove(id, admin);
   }
 
-  /** draft to scheduled (or live, if its window has started). The booking is approved by being scheduled. */
+  /** draft to scheduled (or live, if its window has started). The booking is approved by being scheduled. A campaign with no artwork is a 422 (R-59). */
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
   @Post(':id/schedule')
   @HttpCode(HttpStatus.OK)
@@ -164,7 +164,7 @@ export class AdminAdsController {
     return this.service.pause(id, admin);
   }
 
-  /** paused back on air, while its window and its event are still open. */
+  /** paused back on air, while its window and its event are still open. A campaign with no artwork is a 422 (R-59). */
   @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
   @Post(':id/resume')
   @HttpCode(HttpStatus.OK)

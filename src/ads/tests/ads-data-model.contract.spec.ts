@@ -218,6 +218,23 @@ describe('Ads data model (ADS-03)', () => {
       );
       expect(r.rows[0].n).toBe(12);
     });
+
+    it('accepts the Explore slider placement (ADS-07) and still refuses one outside the three', async () => {
+      await campaign(`${PREFIX}slider`, { placement: 'explore_slider' });
+      const r = await db.query<{ placement: string }>(
+        `SELECT placement::text AS placement FROM "AdCampaign" WHERE id = $1`,
+        [`${PREFIX}slider`],
+      );
+      expect(r.rows[0].placement).toBe('explore_slider');
+      const labels = await db.query<{ label: string }>(
+        `SELECT unnest(enum_range(NULL::"AdPlacement"))::text AS label`,
+      );
+      expect(labels.rows.map((x) => x.label).sort()).toEqual([
+        'explore_slider',
+        'tgif_card',
+        'today_slot',
+      ]);
+    });
   });
 
   describe('the serving query (ADS-04)', () => {

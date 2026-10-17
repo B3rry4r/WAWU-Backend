@@ -336,14 +336,20 @@ writes to `superadmin` and `reviewer`.
 
 | Route | Notes |
 | --- | --- |
-| `GET /admin/ads` | Filters `status`, `placement`, `phase` (`upcoming`, `running`, `over`), `from` and `to` (campaigns whose window overlaps the range); `sort` `latest` or `soonest` by window start, ties by id; `page` and `perPage` like the other admin lists. |
+| `GET /admin/ads` | Filters `status`, `placement`, `artwork=missing` (campaigns saved before ADS-07 with no picture, not ended, each also flagged `needsArtwork`), `phase` (`upcoming`, `running`, `over`), `from` and `to` (campaigns whose window overlaps the range); `sort` `latest` or `soonest` by window start, ties by id; `page` and `perPage` like the other admin lists. |
 | `GET /admin/ads/report` | Campaigns in a range counted by status, placement and phase, how many serving would show right now per placement, and `delivery` (views, taps, skips, ctr) overall, `deliveryByStatus` and `deliveryByPlacement` for those campaigns over the range's UTC days. |
-| `POST /admin/ads` | A draft with its card. Nothing is served until it is scheduled. |
+| `POST /admin/ads` | A draft with its card. Nothing is served until it is scheduled. The card needs `artworkUrl` (R-59): without it the answer is 422 "Add artwork before you save this campaign" (`reason.code` `artwork_required`). Placements: `tgif_card`, `today_slot`, `explore_slider`. |
 | `GET /admin/ads/:id` | Campaign, card, its event, overlapping bookings on the placement and the whole audit history. |
 | `GET /admin/ads/:id/report` | Window, how much of it has run, what was done to it, and `delivery` plus `days` (`{ day, views, taps, skips }`, oldest first, empty days omitted) over `from` and `to`; `range` echoes what they became. |
-| `PATCH /admin/ads/:id` | Edit a draft or a paused campaign; the audit row records each changed field's before and after. |
+| `PATCH /admin/ads/:id` | Edit a draft or a paused campaign; the audit row records each changed field's before and after. A save that would leave the campaign with no artwork (clearing it, or a campaign saved before ADS-07 that still has none) is the same 422. |
 | `DELETE /admin/ads/:id` | A draft only. Its audit rows stay. |
-| `POST /admin/ads/:id/schedule`, `/pause`, `/resume`, `/end` | The state machine in `src/admin/ads/ad-campaign-state.ts`. An illegal move, or a repeat, is a 409 whose `reason` names the code and the statuses allowed. |
+| `POST /admin/ads/:id/schedule`, `/pause`, `/resume`, `/end` | The state machine in `src/admin/ads/ad-campaign-state.ts`. An illegal move, or a repeat, is a 409 whose `reason` names the code and the statuses allowed. `schedule` and `resume` refuse a campaign with no artwork (R-59): the same 422 "Add artwork before you save this campaign" (`reason.code` `artwork_required`), nothing changed; `pause` and `end` are never refused for it. |
+
+`GET /ads?placement=` serves a campaign only when it has artwork. `tgif_card` and
+`today_slot` answer one card (or `data: null`); `explore_slider` (ADS-07)
+answers a list of every live card for the Explore slider, heaviest first, or
+`data: []`, and the app interleaves it with events. Views, taps and skips are
+counted by `POST /ads/:id/events` the same way for all three.
 
 Every change runs in one transaction that locks the campaign row, so two
 requests for one campaign take turns: one outcome, one audit row
