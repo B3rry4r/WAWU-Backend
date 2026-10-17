@@ -865,7 +865,8 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       expect(body(await open(who).expect(422)).reason?.code).toBe(
         'account_not_opened',
       );
-      expect(await row(who)).toMatchObject({
+      const failed = await row(who);
+      expect(failed).toMatchObject({
         state: 'failed',
         failure: 'refused_validation',
       });
@@ -873,7 +874,13 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       await open(who).expect(200);
       expect(creates()).toHaveLength(2);
       expect(entities).toHaveLength(1);
-      expect(await row(who)).toMatchObject({ state: 'review', attempts: 2 });
+      const retried = await row(who);
+      expect(retried).toMatchObject({ state: 'review', attempts: 2 });
+      // The retry takes a new claim on the number: its lifetime counts from
+      // this try, not the failed one (SWEEP-MONEY NUV-03 N2, mutant C1).
+      expect(retried!.bvnVerifiedAt.getTime()).toBeGreaterThan(
+        failed!.bvnVerifiedAt.getTime(),
+      );
     });
 
     it('Nuvion says the application is under compliance review: 409 identity_under_review with its reason code; nothing is sent again meanwhile', async () => {

@@ -131,7 +131,15 @@ export class WalletProviderError extends Error {
 
   /** The error in this backend's own shape, for a route to throw. */
   toHttpException(detail: { retryAfterSeconds?: number } = {}): HttpException {
-    return walletProviderErrorToHttp(this.kind, {
+    // A request that provably never left is not "still being confirmed":
+    // nothing was sent, so it says plainly that payments are not available
+    // (SWEEP-MONEY WALLET-07 D3).
+    const kind =
+      this.requestNotSent &&
+      (this.kind === 'outcome_unknown' || this.kind === 'not_confirmed')
+        ? 'unavailable'
+        : this.kind;
+    return walletProviderErrorToHttp(kind, {
       retryAfterSeconds: detail.retryAfterSeconds ?? this.retryAfterSeconds,
     });
   }
