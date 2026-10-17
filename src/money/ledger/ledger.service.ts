@@ -794,6 +794,40 @@ export class LedgerService {
     return pending.count + revived.count > 0;
   }
 
+  /**
+   * SCHOOLS-11 round 2: a payout from WAWU's own account is written `pending`
+   * at the charge quoted when the send is leased. When the provider states its
+   * own charge (its answer, its record of the send), the row, while it is still
+   * `pending`, takes it, so the row says what left the account and the
+   * completion that follows agrees with it. Only the running provider's
+   * merchant `out` row under that reference, at that amount, and never a row
+   * holding a disagreement. Returns whether the row changed.
+   */
+  async restatePendingCharge(
+    customerReference: string,
+    amountKobo: bigint,
+    feeKobo: bigint,
+  ): Promise<boolean> {
+    const { count } = await this.prisma.fintavaLedgerEntry.updateMany({
+      where: {
+        customerReference,
+        walletKind: 'merchant',
+        direction: 'out',
+        status: 'pending',
+        amountKobo,
+        discrepancy: null,
+        NOT: { feeKobo },
+        AND: [rowsOf(this.provider.name)],
+      },
+      data: {
+        feeKobo,
+        providerFeeKobo: feeKobo,
+        totalKobo: amountKobo + feeKobo,
+      },
+    });
+    return count > 0;
+  }
+
   private async recordIn(
     tx: Prisma.TransactionClient,
     input: LedgerMovementInput,

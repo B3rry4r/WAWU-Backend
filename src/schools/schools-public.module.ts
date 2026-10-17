@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { SchoolEnrolmentsController } from './enrolment/school-enrolments.controller';
 import { SchoolEnrolmentsModule } from './enrolment/school-enrolments.module';
 import { SchoolLinkController } from './school-link.controller';
 import { SchoolLinkService } from './school-link.service';
@@ -13,7 +14,13 @@ import { SchoolsPublicService } from './schools-public.service';
  */
 @Module({
   imports: [SchoolEnrolmentsModule],
-  controllers: [SchoolsPublicController, SchoolLinkController],
+  // The enrolments controller first: its `GET schools/enrolments` must be
+  // matched before `GET schools/:id` (routes register in this order).
+  controllers: [
+    SchoolEnrolmentsController,
+    SchoolsPublicController,
+    SchoolLinkController,
+  ],
   providers: [SchoolsPublicService, SchoolLinkService],
   exports: [SchoolsPublicService],
 })

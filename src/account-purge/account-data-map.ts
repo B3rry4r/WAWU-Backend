@@ -416,6 +416,16 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'ANONYMISED',
   },
+  // The copy of a student's name, email and phone that the enrolment report
+  // to the school is made from (SCHOOLS-09). The send clears it; a student who
+  // leaves before then has it cleared here, and the report is then given up,
+  // not sent. The consent time and the delivery state stay with the order.
+  {
+    model: 'SchoolEnrolmentReport',
+    column: 'wawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['studentName', 'studentEmail', 'studentPhone'],
+  },
   // The codes this person made to share their receipts (WALLET-18). They go
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
@@ -724,6 +734,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'WalletHold', column: 'wawuShareKobo' },
   // WAWU's 15% share in kobo on a school enrolment (SCHOOLS-07), not a person.
   { model: 'SchoolEnrolment', column: 'wawuShareKobo' },
+  // WAWU's 15% share in kobo on a school fee settlement (SCHOOLS-11), not a person.
+  { model: 'SchoolSettlement', column: 'wawuShareKobo' },
   // WAWU's fee in kobo on a send between two people (WALLET-07), not a person.
   { model: 'WalletTransfer', column: 'wawuFeeKobo' },
 ];
