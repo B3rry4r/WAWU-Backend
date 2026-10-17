@@ -11,10 +11,12 @@ import {
   type WalletProviderName,
 } from '../../wallet-provider/wallet-provider.interface';
 import {
+  MONEY_IN_CATEGORIES,
   MONEY_IN_NOTICE_CONFIG_KEYS,
   MONEY_IN_NOTICE_DEFAULTS,
   moneyInNoticeWindowMs,
 } from './money-in-notice-config';
+import { creditSourceOf } from './money-in-sources';
 
 /** What one pass over one credited ledger row did. */
 export type MoneyInNoticeOutcome =
@@ -29,6 +31,17 @@ export type MoneyInNoticeOutcome =
 
 export type MoneyInSweepReport = Record<MoneyInNoticeOutcome, number>;
 
+/** What one pass over one told credit that the ledger has since reversed did. */
+export type MoneyInCorrectionOutcome =
+  /** A `money_in_reversed` notification was written, with the mark, in one transaction. */
+  | 'corrected'
+  /** Not eligible any more, locked by a writer, or another process took it. */
+  | 'skipped'
+  /** Nothing was written; tried again. */
+  | 'failed';
+
+export type MoneyInCorrectionReport = Record<MoneyInCorrectionOutcome, number>;
+
 /** The notification could not be written for a reason that is not the switch. */
 class NoticeNotWritten extends Error {
   constructor() {
@@ -40,11 +53,13 @@ class NoticeNotWritten extends Error {
 const MINUTE = 60_000;
 
 /**
- * The ledger rows that are money in, told or not: an `in` row of category
- * `top_up` on a person's wallet, completed, with no disagreement recorded on
- * it, of the provider this server runs (R-39: a server acts only on its own
- * provider's rows), that has no mark yet. One definition, read by the sweep
- * and again under the row's lock before anything is written.
+ * The ledger rows that are money in, told or not: an `in` row of a money-in
+ * category (`MONEY_IN_CATEGORIES`: a bank transfer in, money from another
+ * person, earnings, a refund; R-54) on a person's wallet, completed, with no
+ * disagreement recorded on it, of the provider this server runs (R-39: a
+ * server acts only on its own provider's rows), that has no mark yet. One
+ * definition, read by the sweep and again under the row's lock before
+ * anything is written.
  *
  * A row with a disagreement (`discrepancy`) is a stop for review (WORKFLOW
  * section 10): the amount in the text could be wrong, so nothing is said until
@@ -55,13 +70,34 @@ export function creditedRows(
 ): Prisma.FintavaLedgerEntryWhereInput {
   return {
     direction: 'in',
-    category: 'top_up',
+    category: { in: [...MONEY_IN_CATEGORIES] },
     walletKind: 'user',
     status: 'completed',
     wawuUserId: { not: null },
     discrepancy: null,
     AND: [rowsOf(provider)],
     moneyInNotice: null,
+  };
+}
+
+/**
+ * The credits a person was told about and the ledger has since reversed, that
+ * have no correction yet (WALLET-39). A credit nobody was told about (`muted`,
+ * `before`, or never marked) has nothing to correct. A recorded disagreement
+ * does not hold a correction back: the row is reversed, which the ledger
+ * never takes back, and the notice that stands says otherwise.
+ */
+export function reversedCredits(
+  provider: WalletProviderName,
+): Prisma.FintavaLedgerEntryWhereInput {
+  return {
+    direction: 'in',
+    category: { in: [...MONEY_IN_CATEGORIES] },
+    walletKind: 'user',
+    status: 'reversed',
+    wawuUserId: { not: null },
+    AND: [rowsOf(provider)],
+    moneyInNotice: { is: { outcome: 'sent', correctedAt: null } },
   };
 }
 
@@ -96,15 +132,34 @@ export function creditedRows(
  *
  * A credit recalled after it was told is not told again: a row that is no
  * longer `completed` is never told, and a row already marked is never told
- * twice (BACKEND_GAPS G-730).
+ * twice (BACKEND_GAPS G-730). WALLET-39: it is corrected instead. When the
+ * ledger row of a credit that was told (`sent`) goes `reversed`, one
+ * `money_in_reversed` notification follows, written with the mark's
+ * `correctedAt` in one transaction under the same lock, so a reversal is
+ * corrected once. A credit nobody was told about is not corrected.
+ *
+ * WALLET-39 (R-54): every credit to a person's wallet is told, not only a bank
+ * transfer: money from another person, earnings landing, a refund. The unit
+ * is still one ledger row, so whatever writes an `in` row of a money-in
+ * category (WALLET-16's settlement, a released or refunded hold, a book
+ * transfer) is covered with no hook of its own. Each notice carries the row's
+ * id as its `transaction` target, which the phone push repeats in `data`:
+ * the app opens `GET /money/transactions/{id}` (the receipt, or W46 for a
+ * bank transfer in).
  */
 @Injectable()
 export class MoneyInNoticeService {
   private readonly logger = new Logger(MoneyInNoticeService.name);
   private readonly windowMs: number;
   private sweeping = false;
+  private correcting = false;
   /** Rows that failed, and when each may be tried again (per process). */
   private readonly retryAt = new Map<string, { at: number; delayMs: number }>();
+  /** The same for corrections. */
+  private readonly correctRetryAt = new Map<
+    string,
+    { at: number; delayMs: number }
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -130,6 +185,18 @@ export class MoneyInNoticeService {
     } catch (e) {
       this.logger.error(
         `money in: a pass failed (${e instanceof Error ? e.name : 'Error'})`,
+      );
+    }
+    try {
+      const fixed = await this.sweepCorrections();
+      if (fixed.corrected + fixed.failed > 0) {
+        this.logger.log(
+          `money in: ${fixed.corrected} corrected, ${fixed.failed} failed`,
+        );
+      }
+    } catch (e) {
+      this.logger.error(
+        `money in: a correction pass failed (${e instanceof Error ? e.name : 'Error'})`,
       );
     }
   }
@@ -198,7 +265,7 @@ export class MoneyInNoticeService {
       this.logger.error(
         `money in: a credit could not be told (${e instanceof Error ? e.name : 'Error'}); it is tried again`,
       );
-      this.backOff(entryId, now);
+      this.backOff(this.retryAt, entryId, now);
       return 'failed';
     }
   }
@@ -219,8 +286,12 @@ export class MoneyInNoticeService {
       select: {
         wawuUserId: true,
         amountKobo: true,
+        category: true,
+        linkKind: true,
+        counterpartyKind: true,
         counterpartyName: true,
         counterpartyAccountNumber: true,
+        counterpartyBankName: true,
       },
     });
     if (!row || row.wawuUserId === null) return 'skipped';
@@ -235,8 +306,8 @@ export class MoneyInNoticeService {
           kind: 'money_in',
           userWawuId: row.wawuUserId,
           amountKobo: row.amountKobo,
-          senderName: row.counterpartyName,
-          senderAccountNumber: row.counterpartyAccountNumber,
+          ...creditSourceOf(row),
+          about: { target: { kind: 'transaction', id: entryId } },
         },
         tx,
       );
@@ -258,13 +329,132 @@ export class MoneyInNoticeService {
     return outcome;
   }
 
+  /**
+   * WALLET-39. One pass over the told credits the ledger has reversed since,
+   * oldest first, each corrected once. One pass at a time per process; other
+   * processes are kept out row by row (the lock, then the mark).
+   */
+  async sweepCorrections(now = new Date()): Promise<MoneyInCorrectionReport> {
+    const report: MoneyInCorrectionReport = {
+      corrected: 0,
+      skipped: 0,
+      failed: 0,
+    };
+    if (this.correcting) return report;
+    this.correcting = true;
+    try {
+      const since = new Date(
+        now.getTime() - MONEY_IN_NOTICE_DEFAULTS.correctionDays * 86_400_000,
+      );
+      const seen = new Set<string>(
+        [...this.correctRetryAt.entries()]
+          .filter(([, r]) => r.at > now.getTime())
+          .map(([id]) => id),
+      );
+      for (let pass = 0; pass < MONEY_IN_NOTICE_DEFAULTS.passes; pass += 1) {
+        const due = await this.prisma.fintavaLedgerEntry.findMany({
+          where: {
+            ...reversedCredits(this.provider.name),
+            occurredAt: { gte: since },
+            ...(seen.size > 0 ? { id: { notIn: [...seen] } } : {}),
+          },
+          orderBy: [{ updatedAt: 'asc' }, { id: 'asc' }],
+          take: MONEY_IN_NOTICE_DEFAULTS.batch,
+          select: { id: true },
+        });
+        for (const { id } of due) {
+          seen.add(id);
+          report[await this.correctEntry(id, now)] += 1;
+        }
+        if (due.length < MONEY_IN_NOTICE_DEFAULTS.batch) break;
+      }
+      return report;
+    } finally {
+      this.correcting = false;
+    }
+  }
+
+  /** One ledger row, by id: corrects it if it was told and is now reversed. */
+  async correctEntry(
+    entryId: string,
+    now = new Date(),
+  ): Promise<MoneyInCorrectionOutcome> {
+    try {
+      const outcome = await this.prisma.$transaction(
+        (tx) => this.correct(tx, entryId, now),
+        { maxWait: 5_000, timeout: 15_000 },
+      );
+      this.correctRetryAt.delete(entryId);
+      return outcome;
+    } catch (e) {
+      // The name only: a message can quote what the row carried.
+      this.logger.error(
+        `money in: a reversed credit could not be corrected (${e instanceof Error ? e.name : 'Error'}); it is tried again`,
+      );
+      this.backOff(this.correctRetryAt, entryId, now);
+      return 'failed';
+    }
+  }
+
+  private async correct(
+    tx: Prisma.TransactionClient,
+    entryId: string,
+    now: Date,
+  ): Promise<'corrected' | 'skipped'> {
+    const locked = await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "FintavaLedgerEntry"
+       WHERE "id" = ${entryId}
+       FOR NO KEY UPDATE SKIP LOCKED`;
+    if (locked.length === 0) return 'skipped';
+    const row = await tx.fintavaLedgerEntry.findFirst({
+      where: { id: entryId, ...reversedCredits(this.provider.name) },
+      select: {
+        wawuUserId: true,
+        amountKobo: true,
+        category: true,
+        linkKind: true,
+        counterpartyKind: true,
+        counterpartyName: true,
+        counterpartyAccountNumber: true,
+        counterpartyBankName: true,
+      },
+    });
+    if (!row || row.wawuUserId === null) return 'skipped';
+    // No switch is read here: the list always carries the correction of a
+    // notice that stands in it. "Money in" mutes the phone push only
+    // (PUSH_ONLY_GATE).
+    const written = await this.notifications.emit(
+      {
+        kind: 'money_in_reversed',
+        userWawuId: row.wawuUserId,
+        amountKobo: row.amountKobo,
+        ...creditSourceOf(row),
+        about: { target: { kind: 'transaction', id: entryId } },
+      },
+      tx,
+    );
+    if (!written) throw new NoticeNotWritten();
+    const marked = await tx.moneyInNotice.updateMany({
+      where: { entryId, outcome: 'sent', correctedAt: null },
+      data: { correctedAt: now, correctionNotificationId: written.id },
+    });
+    // The lock and the read above say this is one row: anything else undoes
+    // the notification with it.
+    if (marked.count !== 1) throw new NoticeNotWritten();
+    return 'corrected';
+  }
+
   /** 1, 2, 4 ... minutes, at most an hour, before a row that failed is tried again. */
-  private backOff(entryId: string, now: Date): void {
-    const prev = this.retryAt.get(entryId);
+  private backOff(
+    rests: Map<string, { at: number; delayMs: number }>,
+    entryId: string,
+    now: Date,
+  ): void {
+    const prev = rests.get(entryId);
     const delayMs = Math.min(
       prev ? prev.delayMs * 2 : MINUTE,
       MONEY_IN_NOTICE_DEFAULTS.maxRestMinutes * MINUTE,
     );
-    this.retryAt.set(entryId, { at: now.getTime() + delayMs, delayMs });
+    rests.set(entryId, { at: now.getTime() + delayMs, delayMs });
   }
 }

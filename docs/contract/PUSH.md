@@ -61,6 +61,7 @@ decides nothing about categories by itself:
 | Pushed | Switch |
 |---|---|
 | `sale`, `tip_received`, `money_in` | Money in (`moneyIn`) |
+| `money_in_reversed` | Money in (`moneyIn`), for push only (the list always carries it, WALLET-39) |
 | `dm_refunded` | Refunds (`refunds`) |
 | `new_follower` | New followers (`newFollowers`) |
 | `dm_deadline` | Paid questions (`dmReminders`) |
@@ -94,6 +95,14 @@ app). `review_received` keeps the piece title and the stars (reviews are
 public); the amount-bearing kinds are as BACKEND_GAPS G-266 says. `money_in` (WALLET-10)
 also names the sender, with only the last four digits of their account number,
 when the provider gave a name (G-737); without a name it says the amount alone.
+Since WALLET-39 (R-54) `money_in` is every credit to a wallet, and says where it
+came from: "from Tolu B." (another person, a short name and no number), "in
+earnings", "from your points", "a refund of ...", "by bank transfer". A credit
+that was told and is later reversed is followed by one `money_in_reversed`
+("The ₦5,000 you received from Tolu B. was reversed."). Both carry the ledger
+row's id as `target: { "kind": "transaction", "id": "<id>" }`, the id
+`GET /money/transactions/{id}` answers: the app opens that receipt (or W46 for
+a bank transfer in).
 `actionHref` and `target` are present only when the notification has them. A
 body that would pass Expo's 4096 byte payload limit is shortened; `data` never
 is. INBOX-21 reads `data` on a tap.

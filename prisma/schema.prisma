@@ -4618,7 +4618,9 @@ model FintavaLedgerEntry {
 
   /// WALLET-10: the answer to "was the person told about this credit": one
   /// row once the money-in notice sweep has dealt with it. Only `in` rows of
-  /// category `top_up` on a person's wallet ever get one.
+  /// a person's wallet ever get one: a bank transfer in (`top_up`), money from
+  /// another person (`transfer`), earnings landed (`earning`) and refunds
+  /// (`refund`), since WALLET-39.
   moneyInNotice MoneyInNotice?
 
   @@index([wawuUserId, occurredAt])
@@ -4634,8 +4636,9 @@ model FintavaLedgerEntry {
 /// ─────────────────────────────────────────────────────────────────────────
 /// MONEY IN, TOLD ONCE (task WALLET-10, BACKEND_GAPS G-33)
 ///
-/// One row per credited ledger row (`direction` in, `category` top_up, on a
-/// person's wallet) that the money-in notice sweep has dealt with: the
+/// One row per credited ledger row (`direction` in, `category` top_up, transfer,
+/// earning or refund since WALLET-39, on a person's wallet) that the money-in
+/// notice sweep has dealt with: the
 /// primary key is the exactly-once rule. The row is written in the same
 /// transaction as the Notification it answers (NotificationService.emit takes
 /// the transaction), so there is never a notification without its row here,
@@ -4672,6 +4675,16 @@ model MoneyInNotice {
   outcome        MoneyInNoticeOutcome
   notificationId String?
   createdAt      DateTime             @default(now())
+
+  /// WALLET-39: when the person was told the credit was taken back (the
+  /// ledger row went `reversed` after a `sent` notice). Null until then, and
+  /// always null on a `muted` or `before` mark: nothing was said, so nothing
+  /// needs correcting. The mark and the correction notification are written in
+  /// one transaction, so a reversal is corrected once.
+  correctedAt              DateTime?
+  /// The correction notification written then; null when `correctedAt` was
+  /// set by the migration for a reversal that was already in the ledger.
+  correctionNotificationId String?
 }
 
 /// Every reference one ledger row is known by. The primary key is the

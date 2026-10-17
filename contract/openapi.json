@@ -53450,7 +53450,8 @@
               "community",
               "content",
               "paid_question",
-              "profile"
+              "profile",
+              "transaction"
             ]
           },
           "id": {

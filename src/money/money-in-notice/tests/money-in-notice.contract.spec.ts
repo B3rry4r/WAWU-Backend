@@ -99,6 +99,32 @@ function backfillSql(): string {
   return file.slice(at);
 }
 
+/**
+ * WALLET-39: the part of its migration that marks the credits of the other
+ * money-in categories already there, for the same reason as above.
+ */
+function allCreditsBackfillSql(): string {
+  const file = readFileSync(
+    join(
+      __dirname,
+      '..',
+      '..',
+      '..',
+      '..',
+      'prisma',
+      'migrations',
+      '20261024070000_money_in_all_credits',
+      'migration.sql',
+    ),
+    'utf8',
+  );
+  const at = file.indexOf('INSERT INTO "MoneyInNotice"');
+  const end = file.indexOf('-- Backfill 2', at);
+  expect(at).toBeGreaterThan(0);
+  expect(end).toBeGreaterThan(at);
+  return file.slice(at, end);
+}
+
 describe('Money in, told once (WALLET-10)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
@@ -315,6 +341,7 @@ describe('Money in, told once (WALLET-10)', () => {
     expect(provider.name).toBe('fintava');
     // Credits another suite left in this database are not news to this one.
     await prisma.$executeRawUnsafe(backfillSql());
+    await prisma.$executeRawUnsafe(allCreditsBackfillSql());
   }, 60_000);
 
   afterAll(async () => {
@@ -695,9 +722,11 @@ describe('Money in, told once (WALLET-10)', () => {
         title: 'Money received',
         body: 'You received ₦4,500 from Ngozi Eze (****1291).',
       });
+      // WALLET-39: the notice carries the ledger row's id, so the app opens it.
       expect(mine[0].data).toEqual({
         notificationId: note.id,
         kind: 'money_in',
+        target: { kind: 'transaction', id: entry },
       });
       // Another pass, another process: no second push for the same notification.
       await sender.runOnce();
@@ -964,8 +993,6 @@ describe('Money in, told once (WALLET-10)', () => {
       ['failed', { status: 'failed' as const }],
       ['reversed', { status: 'reversed' as const }],
       ['money out', { direction: 'out' as const }],
-      ['a transfer between people', { category: 'transfer' as const }],
-      ['an earning', { category: 'earning' as const }],
     ])('does not tell %s', async (_name, o) => {
       const ada = await addUser();
       const entry = await credit(ada, o);
