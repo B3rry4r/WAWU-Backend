@@ -28720,6 +28720,16 @@
               "default": 20,
               "type": "number"
             }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the previous page: opaque, sent back as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -50045,10 +50055,15 @@
             "items": {
               "$ref": "#/components/schemas/SchoolSettlementView"
             }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
-          "items"
+          "items",
+          "nextCursor"
         ]
       },
       "CancelIntakeView": {

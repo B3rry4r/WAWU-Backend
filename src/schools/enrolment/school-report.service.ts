@@ -119,13 +119,11 @@ export class SchoolReportService {
       email: row.studentEmail,
       phone: row.studentPhone,
     };
-    if (
-      row.wawuUserId === null ||
-      (student.name === null &&
-        student.email === null &&
-        student.phone === null)
-    ) {
-      // The student's account is gone, and the details with it: nothing to send.
+    if (row.wawuUserId === null) {
+      // The student's account is gone (the purge clears the id and the
+      // details together): nothing to send. A token that gave no name, email
+      // or phone is not this: the account is there, and the school is told
+      // what exists (the course, the reference, the consent).
       await this.giveUp(enrolmentId, 'the student removed their account');
       return 'gave_up';
     }

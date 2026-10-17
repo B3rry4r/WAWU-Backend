@@ -40,9 +40,10 @@ export interface SchoolSettlementView {
   refundedAt: string | null;
 }
 
-/** A page of settlements, newest first. */
+/** A page of settlements, newest first. `nextCursor` null means the last page. */
 export interface SchoolSettlementPage {
   items: SchoolSettlementView[];
+  nextCursor: string | null;
 }
 
 /** What cancelling a class did to the fees paid for it. */

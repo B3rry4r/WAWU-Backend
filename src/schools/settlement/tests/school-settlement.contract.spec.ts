@@ -41,6 +41,8 @@ const WAWU_SHARE = 2_250_000;
 const BANK_FEE = 2_500n; // the stand-in's bank charge, WAWU's (R-31)
 const BOOK_FEE = 1_500n; // the stand-in's book charge on a refund, WAWU's
 const HOLDER = 'GREENFIELD TECH ACADEMY LTD';
+/** Past the longest rest between two looks at a send (an hour), so the next sweep is due. */
+const LONG_REST = 61 * 60_000;
 
 describe('Pay schools their share of course fees (SCHOOLS-11) on Nuvion stood in', () => {
   let h: SchoolNuvion;
@@ -179,6 +181,69 @@ describe('Pay schools their share of course fees (SCHOOLS-11) on Nuvion stood in
         ).toBe(false);
       }
     }
+  }
+
+  /**
+   * WAWU's account at every moment (SCHOOLS-11 round 2): what the ledger counts
+   * as moved (pending and completed `out` rows) is exactly what the stand-in
+   * took from the account (every send it did not give back), reference by
+   * reference, and a reference never has two rows.
+   */
+  async function ledgerHoldsWhatTheAccountHolds(
+    settlementId?: string,
+  ): Promise<{
+    rows: Array<{ ref: string | null; status: string; total: bigint }>;
+  }> {
+    const settlementRows = await h.prisma.schoolSettlement.findMany({
+      where: { schoolId: { in: schoolIds } },
+      select: { id: true },
+    });
+    const refs = settlementRows.flatMap((r) => [
+      `wawu-bank-sch-${r.id}`,
+      `wawu-bank-sch-${r.id}-2`,
+    ]);
+    const rows = await h.prisma.fintavaLedgerEntry.findMany({
+      where: { customerReference: { in: refs }, direction: 'out' },
+      orderBy: { createdAt: 'asc' },
+    });
+    const seen = rows.map((r) => r.customerReference);
+    expect(new Set(seen).size).toBe(seen.length);
+    const live = rows.filter(
+      (r) => r.status === 'pending' || r.status === 'completed',
+    );
+    const taken = h.nuvion
+      .bankSends()
+      .filter(
+        (t) =>
+          refs.includes(t.request.unique_reference) && t.status !== 'failed',
+      );
+    expect(live.map((l) => l.customerReference).sort()).toEqual(
+      taken.map((t) => t.request.unique_reference).sort(),
+    );
+    expect(live.reduce((n, l) => n + BigInt(l.totalKobo), 0n)).toBe(
+      taken.reduce((n, t) => n + t.amountKobo + t.feeKobo, 0n),
+    );
+    // Never a second live row for one settlement.
+    for (const r of settlementRows) {
+      expect(
+        live.filter((l) =>
+          l.customerReference?.startsWith(`wawu-bank-sch-${r.id}`),
+        ).length,
+      ).toBeLessThanOrEqual(1);
+    }
+    return {
+      rows: rows
+        .filter(
+          (r) =>
+            !settlementId ||
+            r.customerReference?.startsWith(`wawu-bank-sch-${settlementId}`),
+        )
+        .map((r) => ({
+          ref: r.customerReference,
+          status: r.status,
+          total: BigInt(r.totalKobo),
+        })),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -678,6 +743,172 @@ describe('Pay schools their share of course fees (SCHOOLS-11) on Nuvion stood in
     });
   });
 
+  describe('the ledger while a payout is in flight', () => {
+    it('a slow payout is a pending row from the send, the same row once it completes, and the account is matched throughout', async () => {
+      const c = await classAt(today());
+      const id = await paidEnrolment(c, await student());
+      await settlements.run(later());
+      let s = await settlementOf(id);
+      expect(s.status).toBe('sent');
+      const ref = `wawu-bank-sch-${s.id}`;
+      let seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows).toEqual([
+        { ref, status: 'pending', total: BigInt(SCHOOL_SHARE) + BANK_FEE },
+      ]);
+      // The provider is still working: every look in between, still one row.
+      for (let i = 0; i < 3; i += 1) {
+        await Promise.all(
+          Array.from({ length: 3 }, () => settlements.run(later())),
+        );
+        seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+        expect(seen.rows).toHaveLength(1);
+        expect(seen.rows[0].status).toBe('pending');
+      }
+      finishSends([s.id], 'successful');
+      await settlements.run(later(LONG_REST));
+      s = await settlementOf(id);
+      expect(s.status).toBe('paid');
+      seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows).toEqual([
+        { ref, status: 'completed', total: BigInt(SCHOOL_SHARE) + BANK_FEE },
+      ]);
+      await settlements.run(later());
+      expect((await ledgerHoldsWhatTheAccountHolds(s.id)).rows).toHaveLength(1);
+      await ledgerEqualsStandin();
+    });
+
+    it("takes the provider's own charge when it differs from the quote, with no disagreement on the row", async () => {
+      const c = await classAt(today());
+      const id = await paidEnrolment(c, await student());
+      h.nuvion.bankFeeKobo = () => 3_000n;
+      await settlements.run(later());
+      const s = await settlementOf(id);
+      const ref = `wawu-bank-sch-${s.id}`;
+      let seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows).toEqual([
+        { ref, status: 'pending', total: BigInt(SCHOOL_SHARE) + 3_000n },
+      ]);
+      finishSends([s.id], 'successful');
+      await settlements.run(later(LONG_REST));
+      expect((await settlementOf(id)).status).toBe('paid');
+      seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows).toEqual([
+        { ref, status: 'completed', total: BigInt(SCHOOL_SHARE) + 3_000n },
+      ]);
+      const row = await h.prisma.fintavaLedgerEntry.findFirstOrThrow({
+        where: { customerReference: ref },
+      });
+      expect(row.discrepancy).toBeNull();
+      expect(BigInt(row.providerFeeKobo ?? 0)).toBe(3_000n);
+      await ledgerEqualsStandin();
+    });
+
+    it('a lost answer is a pending row (the provider took the send), and completes as the same row', async () => {
+      const c = await classAt(today());
+      const id = await paidEnrolment(c, await student());
+      h.nuvion.bankMode = 'lost_answer';
+      await settlements.run(later());
+      let s = await settlementOf(id);
+      expect(s.status).toBe('sent');
+      let seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows.map((r) => r.status)).toEqual(['pending']);
+      h.nuvion.bankMode = 'pending';
+      await Promise.all(
+        Array.from({ length: 4 }, () => settlements.run(later())),
+      );
+      seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows.map((r) => r.status)).toEqual(['pending']);
+      finishSends([s.id], 'successful');
+      await settlements.run(later(LONG_REST));
+      s = await settlementOf(id);
+      expect(s.status).toBe('paid');
+      seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows.map((r) => r.status)).toEqual(['completed']);
+      await ledgerEqualsStandin();
+    });
+
+    it('a failed payout reverses its row, the retry under -2 has its own one row, and only one is ever live', async () => {
+      const c = await classAt(today());
+      const id = await paidEnrolment(c, await student());
+      await settlements.run(later());
+      let s = await settlementOf(id);
+      const ref = `wawu-bank-sch-${s.id}`;
+      finishSends([s.id], 'failed');
+      await settlements.run(later(LONG_REST)); // the provider's record says failed
+      let seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows).toEqual([
+        { ref, status: 'failed', total: BigInt(SCHOOL_SHARE) + BANK_FEE },
+      ]);
+      await settlements.run(later()); // sent again under -2
+      s = await settlementOf(id);
+      seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows.map((r) => [r.ref, r.status])).toEqual([
+        [ref, 'failed'],
+        [`${ref}-2`, 'pending'],
+      ]);
+      await Promise.all(
+        Array.from({ length: 3 }, () => settlements.run(later())),
+      );
+      expect((await ledgerHoldsWhatTheAccountHolds(s.id)).rows).toHaveLength(2);
+      finishSends([s.id], 'successful');
+      await settlements.run(later(LONG_REST));
+      expect((await settlementOf(id)).status).toBe('paid');
+      seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows.map((r) => [r.ref, r.status])).toEqual([
+        [ref, 'failed'],
+        [`${ref}-2`, 'completed'],
+      ]);
+      await ledgerEqualsStandin();
+    });
+
+    it('a payout that fails twice leaves two failed rows and none live', async () => {
+      const c = await classAt(today());
+      const id = await paidEnrolment(c, await student());
+      await settlements.run(later());
+      let s = await settlementOf(id);
+      finishSends([s.id], 'failed');
+      await settlements.run(later(LONG_REST));
+      await settlements.run(later());
+      finishSends([s.id], 'failed');
+      await settlements.run(later(LONG_REST));
+      await settlements.run(later());
+      s = await settlementOf(id);
+      expect(s.status).toBe('review');
+      const seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows.map((r) => r.status)).toEqual(['failed', 'failed']);
+      await ledgerEqualsStandin();
+    });
+
+    it('a send the provider never took leaves no live row, and the same reference is one row when it is taken later', async () => {
+      const c = await classAt(today());
+      const id = await paidEnrolment(c, await student());
+      h.nuvion.bankMode = 'not_sent';
+      await settlements.run(later());
+      let s = await settlementOf(id);
+      expect(s.status).toBe('pending');
+      let seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows.filter((r) => r.status === 'pending')).toHaveLength(0);
+      h.nuvion.bankMode = 'insufficient';
+      await settlements.run(later(30 * 60_000));
+      seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows.filter((r) => r.status === 'pending')).toHaveLength(0);
+      h.nuvion.bankMode = 'pending';
+      await settlements.run(later(2 * 60 * 60_000));
+      s = await settlementOf(id);
+      expect(s.status).toBe('sent');
+      seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows.map((r) => [r.ref, r.status])).toEqual([
+        [`wawu-bank-sch-${s.id}`, 'pending'],
+      ]);
+      finishSends([s.id], 'successful');
+      await settlements.run(later(LONG_REST));
+      expect((await settlementOf(id)).status).toBe('paid');
+      seen = await ledgerHoldsWhatTheAccountHolds(s.id);
+      expect(seen.rows.map((r) => r.status)).toEqual(['completed']);
+      await ledgerEqualsStandin();
+    });
+  });
+
   describe('the dashboard routes', () => {
     it('are for finance and the superadmin; a user and a reviewer are refused; a payee is saved only when the bank confirms it', async () => {
       const finance = await h.adminAuth('finance');
@@ -789,6 +1020,92 @@ describe('Pay schools their share of course fees (SCHOOLS-11) on Nuvion stood in
       await settlements.run(later());
       await ledgerEqualsStandin();
       expect(holds).toBeDefined();
+    });
+
+    it('GET /admin/school-settlements is a cursor page: every settlement once, newest first, a new one mid-scroll repeats nothing, and a cursor not ours is a 400', async () => {
+      const finance = await h.adminAuth('finance');
+      const http = () => request(h.app.getHttpServer());
+      const c = await classAt(today());
+      const ids: string[] = [];
+      for (let i = 0; i < 5; i += 1)
+        ids.push(await paidEnrolment(c, await student()));
+      await settlements.run(later());
+      const url = (q: string) =>
+        `/api/hub/admin/school-settlements?schoolId=${c.schoolId}&${q}`;
+      const page = async (q: string) =>
+        body<SchoolSettlementPage>(
+          await http().get(url(q)).set(finance).expect(200),
+        ).data!;
+      const expected = (
+        await h.prisma.schoolSettlement.findMany({
+          where: { schoolId: c.schoolId },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        })
+      ).map((r) => r.enrolmentId);
+      expect(expected.sort()).toEqual([...ids].sort());
+      const newestFirst = (
+        await h.prisma.schoolSettlement.findMany({
+          where: { schoolId: c.schoolId },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        })
+      ).map((r) => r.enrolmentId);
+
+      // Everything at once is one page and the last.
+      const all = await page('limit=100');
+      expect(all.items.map((i) => i.enrolmentId)).toEqual(newestFirst);
+      expect(all.nextCursor).toBeNull();
+
+      // Two at a time: every settlement once, in the same order, and the last
+      // page says so. A settlement made while scrolling is not on a page
+      // already handed out and repeats nothing.
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      let pages = 0;
+      let added = false;
+      do {
+        const got: SchoolSettlementPage = await page(
+          `limit=2${cursor ? `&cursor=${cursor}` : ''}`,
+        );
+        expect(got.items.length).toBeLessThanOrEqual(2);
+        seen.push(...got.items.map((i) => i.enrolmentId));
+        cursor = got.nextCursor;
+        pages += 1;
+        if (!added) {
+          added = true;
+          await paidEnrolment(c, await student());
+          await settlements.run(later());
+        }
+      } while (cursor && pages < 10);
+      expect(cursor).toBeNull();
+      expect(seen.slice(0, 5)).toEqual(newestFirst);
+      expect(new Set(seen).size).toBe(seen.length);
+      expect(seen).toHaveLength(5);
+
+      // The cursor is ours or a 400, never a 500.
+      for (const bad of [
+        'x',
+        'not a cursor',
+        'e30',
+        'WyJub3BlIiwxXQ',
+        'a'.repeat(201),
+      ]) {
+        await http()
+          .get(url(`cursor=${encodeURIComponent(bad)}`))
+          .set(finance)
+          .expect(400);
+      }
+      await http().get(url('limit=0')).set(finance).expect(400);
+      await http().get(url('limit=101')).set(finance).expect(400);
+      const open = await h.prisma.schoolSettlement.findMany({
+        where: { schoolId: c.schoolId },
+        select: { id: true },
+      });
+      finishSends(
+        open.map((r) => r.id),
+        'successful',
+      );
+      await settlements.run(later());
+      await ledgerEqualsStandin();
     });
   });
 });

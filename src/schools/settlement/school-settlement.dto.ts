@@ -65,4 +65,11 @@ export class ListSettlementsDto {
   @Min(1)
   @Max(100)
   limit?: number;
+
+  /** The `nextCursor` of the previous page: opaque, sent back as given. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  cursor?: string;
 }

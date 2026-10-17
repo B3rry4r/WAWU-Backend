@@ -16,7 +16,11 @@ import { FeeQuoteService } from '../../money/fees/fee-quote.service';
 import { HoldRequestError } from '../../money/holds/hold-rules';
 import { WalletHoldService } from '../../money/holds/wallet-hold.service';
 import type { LedgerMovementInput } from '../../money/ledger/ledger.interface';
-import { koboNumber, LedgerService } from '../../money/ledger/ledger.service';
+import {
+  koboNumber,
+  LEDGER_ABSENT_FAILURE,
+  LedgerService,
+} from '../../money/ledger/ledger.service';
 import { PaymentSettings } from '../../money/payments/payment-config';
 import { isRowOf } from '../../wallet-provider/provider-rows';
 import {
@@ -28,12 +32,17 @@ import {
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import { WalletProviderLimitError } from '../../wallet-provider/wallet-provider-limit';
 import {
+  decodeListCursor,
+  encodeListCursor,
+} from '../enrolment/school-enrolment-list';
+import {
   lagosToday,
   SCHOOL_FEE_KIND,
 } from '../enrolment/school-enrolment-rules';
 import type { ListSettlementsDto } from './school-settlement.dto';
 import {
   MAX_ATTEMPT,
+  PAYOUT_FAILED_REASON,
   PAYOUT_NARRATION,
   payoutReference,
   restMs,
@@ -52,8 +61,18 @@ import type {
 const START_BATCH = 100;
 const DRIVE_BATCH = 100;
 const REFUND_REASON = 'The class was cancelled.';
+/** Settlements one dashboard page gives when no limit is asked for. */
+const LIST_DEFAULT_LIMIT = 20;
 
 type Tx = Prisma.TransactionClient;
+
+/** The bank account a school is paid at, as the ledger records it. */
+interface PayoutPlace {
+  bankCode: string | null;
+  bankName: string | null;
+  accountNumber: string | null;
+  accountName: string | null;
+}
 
 /** A decision that cannot be made: the other way was already chosen. */
 class Refused extends ConflictException {}
@@ -291,22 +310,38 @@ export class SchoolSettlementService {
     return this.view(row.id);
   }
 
+  /** Settlements newest first, a cursor page (CONVENTIONS section 6). */
   async list(query: ListSettlementsDto): Promise<SchoolSettlementPage> {
+    const limit = query.limit ?? LIST_DEFAULT_LIMIT;
+    const after = query.cursor ? decodeListCursor(query.cursor) : null;
     const rows = await this.prisma.schoolSettlement.findMany({
       where: {
         ...(query.status ? { status: query.status } : {}),
         ...(query.action ? { action: query.action } : {}),
         ...(query.schoolId ? { schoolId: query.schoolId } : {}),
+        ...(after
+          ? {
+              OR: [
+                { createdAt: { lt: after.createdAt } },
+                { createdAt: after.createdAt, id: { lt: after.id } },
+              ],
+            }
+          : {}),
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      take: query.limit ?? 20,
+      take: limit + 1,
       include: {
         enrolment: {
           select: { reference: true, courseTitle: true, schoolName: true },
         },
       },
     });
-    return { items: rows.map((r) => this.viewOf(r)) };
+    const page = rows.slice(0, limit);
+    return {
+      items: page.map((r) => this.viewOf(r)),
+      nextCursor:
+        rows.length > limit ? encodeListCursor(page[page.length - 1]) : null,
+    };
   }
 
   async view(id: string): Promise<SchoolSettlementView> {
@@ -554,35 +589,51 @@ export class SchoolSettlementService {
       row.customerReference ?? payoutReference(row.id, row.attempt);
 
     // The lease: only the caller that wins it hands the send to the provider.
+    // The ledger's `out` row is written `pending` in the same transaction, the
+    // way a person's bank send is, so WAWU's account and the ledger agree from
+    // the moment the money can leave it until the provider says what became of it.
     const leaseUntil = new Date(
       now.getTime() +
         this.provider.timings.moneyTimeoutMs +
         this.provider.timings.resendSafetyMs,
     );
-    const leased = await this.prisma.schoolSettlement.updateMany({
-      where: {
-        id: row.id,
-        action: 'payout',
-        status: 'pending',
-        sentAt: null,
-        OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
-      },
-      data: {
-        status: 'sent',
-        sentAt: now,
-        nextAttemptAt: leaseUntil,
-        attempts: { increment: 1 },
-        waiting: null,
-        customerReference: reference,
-        bankCode: payee.bankCode,
-        bankName: payee.bankName,
-        bankAccountNumber: payee.accountNumber,
-        bankAccountName: payee.accountName,
-        counterpartyId: payee.counterpartyId,
-        paymentDetailId: payee.paymentDetailId,
-      },
+    const leased = await this.prisma.$transaction(async (tx) => {
+      const taken = await tx.schoolSettlement.updateMany({
+        where: {
+          id: row.id,
+          action: 'payout',
+          status: 'pending',
+          sentAt: null,
+          OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+        },
+        data: {
+          status: 'sent',
+          sentAt: now,
+          nextAttemptAt: leaseUntil,
+          attempts: { increment: 1 },
+          waiting: null,
+          customerReference: reference,
+          bankCode: payee.bankCode,
+          bankName: payee.bankName,
+          bankAccountNumber: payee.accountNumber,
+          bankAccountName: payee.accountName,
+          counterpartyId: payee.counterpartyId,
+          paymentDetailId: payee.paymentDetailId,
+        },
+      });
+      if (taken.count === 0) return false;
+      await this.ledger.record(
+        await this.payoutMovement(tx, row, reference, payee, {
+          status: 'pending',
+          fee: this.quotedFee(amount),
+          transactionId: null,
+          figuresStand: true,
+        }),
+        tx,
+      );
+      return true;
     });
-    if (leased.count === 0) return;
+    if (!leased) return;
 
     let receipt: ProviderTransferReceipt;
     try {
@@ -600,7 +651,7 @@ export class SchoolSettlementService {
         },
       });
     } catch (e) {
-      await this.afterRefusal(row, e, now);
+      await this.afterRefusal(row, e, now, reference, payee);
       return;
     }
     if (receipt.amountKobo !== amount) {
@@ -618,6 +669,8 @@ export class SchoolSettlementService {
         nextAttemptAt: null,
       },
     });
+    // The row says what the provider took, not what was quoted.
+    await this.restateCharge(row, reference, receipt.feeKobo);
     if (
       receipt.payee &&
       (receipt.payee.counterpartyId || receipt.payee.paymentDetailId)
@@ -651,6 +704,8 @@ export class SchoolSettlementService {
     row: SchoolSettlement,
     e: unknown,
     now: Date,
+    reference: string,
+    payee: PayoutPlace,
   ): Promise<void> {
     const refusal = e instanceof WalletProviderError ? e : null;
     if (!refusal || (refusal.recordMayExist && !refusal.requestNotSent)) {
@@ -692,7 +747,16 @@ export class SchoolSettlementService {
         `school settlement ${row.id}: ${this.provider.label} refused the payout (${refusal.kind}); nothing moved`,
       );
     }
-    // Nothing moved: the lease is given back and the same reference is used again.
+    // Nothing moved: the lease is given back and the same reference is used
+    // again, so the ledger row written at the lease is reversed (and is the
+    // same row, revived, when the send is taken later).
+    await this.ledgerEnd(
+      row,
+      reference,
+      payee,
+      'failed',
+      LEDGER_ABSENT_FAILURE,
+    );
     await this.prisma.schoolSettlement.updateMany({
       where: { id: row.id, status: 'sent' },
       data: {
@@ -720,6 +784,19 @@ export class SchoolSettlementService {
     }
     if (answer?.state === 'found') {
       const t = answer.transaction;
+      const place: PayoutPlace = {
+        bankCode: row.bankCode,
+        bankName: row.bankName,
+        accountNumber: row.bankAccountNumber,
+        accountName: row.bankAccountName,
+      };
+      if (t.outcome !== 'failed' && t.outcome !== 'reversed') {
+        await this.restateCharge(
+          row,
+          row.customerReference!,
+          t.feeKobo ?? null,
+        );
+      }
       if (t.outcome === 'completed') {
         if (t.amountKobo !== BigInt(row.schoolShareKobo)) {
           await this.toReview(
@@ -744,10 +821,24 @@ export class SchoolSettlementService {
         return;
       }
       if (t.outcome === 'failed') {
+        await this.ledgerEnd(
+          row,
+          row.customerReference,
+          place,
+          'failed',
+          PAYOUT_FAILED_REASON,
+        );
         await this.retryAfterFailure(row, now);
         return;
       }
       if (t.outcome === 'reversed') {
+        await this.ledgerEnd(
+          row,
+          row.customerReference,
+          place,
+          'reversed',
+          PAYOUT_FAILED_REASON,
+        );
         await this.toReview(
           row,
           `${this.provider.label} sent the payout and the bank returned it; WAWU's account holds the money again`,
@@ -832,12 +923,7 @@ export class SchoolSettlementService {
    */
   private async settlePayout(
     row: SchoolSettlement,
-    payee: {
-      bankCode: string | null;
-      bankName: string | null;
-      accountNumber: string | null;
-      accountName: string | null;
-    },
+    payee: PayoutPlace,
     fee: bigint | null,
     transactionId: string | null,
     now: Date,
@@ -870,60 +956,157 @@ export class SchoolSettlementService {
     });
   }
 
-  /** WAWU's account paid the school: one `out` row under our reference. Best effort, like every ledger write after the money moved. */
+  /**
+   * WAWU's account paid the school: the `out` row written `pending` at the
+   * lease becomes `completed` (the same row, under the same reference; one is
+   * created here only for a payout sent before the pending row was written).
+   * The provider's own charge is what the row says. Best effort, like every
+   * ledger write after the money moved.
+   */
   private async writeLedger(
     row: SchoolSettlement,
-    payee: {
-      bankCode: string | null;
-      bankName: string | null;
-      accountNumber: string | null;
-      accountName: string | null;
-    },
+    payee: PayoutPlace,
     fee: bigint | null,
     transactionId: string | null,
   ): Promise<void> {
+    const reference = row.customerReference;
     try {
-      const hold = await this.prisma.walletHold.findUniqueOrThrow({
-        where: { id: row.holdId },
-        select: { merchantAccountNumber: true, title: true, targetId: true },
-      });
-      const taken = fee !== null && fee >= 0n ? fee : 0n;
-      const movement: LedgerMovementInput = {
-        wallet: { kind: 'merchant', accountNumber: hold.merchantAccountNumber },
-        direction: 'out',
-        status: 'completed',
-        category: 'earning',
-        amountKobo: row.schoolShareKobo,
-        feeKobo: koboNumber(taken),
-        totalKobo: row.schoolShareKobo + koboNumber(taken),
-        providerFeeKobo: koboNumber(taken),
-        wawuFeeKobo: 0,
-        figuresStand: fee === null,
-        counterparty: {
-          kind: 'bank_account',
-          name: payee.accountName,
-          accountNumber: payee.accountNumber,
-          bankCode: payee.bankCode,
-          bankName: payee.bankName,
+      if (reference !== null) await this.restateCharge(row, reference, fee);
+      const movement = await this.payoutMovement(
+        this.prisma,
+        row,
+        reference,
+        payee,
+        {
+          status: 'completed',
+          fee: fee !== null && fee >= 0n ? fee : 0n,
+          transactionId,
+          figuresStand: fee === null,
         },
-        link: {
-          kind: SCHOOL_FEE_KIND,
-          targetId: hold.targetId,
-          title: hold.title,
-        },
-        narration: PAYOUT_NARRATION,
-        references: {
-          customerReference: row.customerReference,
-          fintavaTransactionId: transactionId,
-        },
-        source: 'send',
-      };
+      );
       await this.ledger.record(movement, undefined, { quiet: true });
     } catch (e) {
       this.logger.error(
         `school settlement ${row.id}: the ledger could not record the payout (${e instanceof Error ? e.name : 'error'})`,
       );
     }
+  }
+
+  /**
+   * The payout did not leave WAWU's account (`failed`: the provider says it
+   * failed, or never took it) or came back (`reversed`): the pending row is
+   * reversed, so the ledger stops counting money that is not gone. The row's
+   * own figures stand. Best effort.
+   */
+  private async ledgerEnd(
+    row: SchoolSettlement,
+    reference: string | null,
+    payee: PayoutPlace,
+    status: 'failed' | 'reversed',
+    failureReason: string,
+  ): Promise<void> {
+    if (BigInt(row.schoolShareKobo) <= 0n) return;
+    try {
+      const movement = await this.payoutMovement(
+        this.prisma,
+        row,
+        reference,
+        payee,
+        {
+          status,
+          fee: this.quotedFee(BigInt(row.schoolShareKobo)),
+          transactionId: row.providerTransactionId,
+          figuresStand: true,
+          failureReason: status === 'failed' ? failureReason : null,
+        },
+      );
+      await this.ledger.record(movement, undefined, { quiet: true });
+    } catch (e) {
+      this.logger.error(
+        `school settlement ${row.id}: the ledger could not record that the payout ${status === 'failed' ? 'did not leave' : 'came back'} (${e instanceof Error ? e.name : 'error'})`,
+      );
+    }
+  }
+
+  /** The provider's own charge replaces the quoted one on a row still pending. Best effort. */
+  private async restateCharge(
+    row: SchoolSettlement,
+    reference: string,
+    fee: bigint | null,
+  ): Promise<void> {
+    if (fee === null || fee < 0n) return;
+    try {
+      await this.ledger.restatePendingCharge(
+        reference,
+        BigInt(row.schoolShareKobo),
+        fee,
+      );
+    } catch (e) {
+      this.logger.error(
+        `school settlement ${row.id}: the ledger could not take the provider's charge (${e instanceof Error ? e.name : 'error'})`,
+      );
+    }
+  }
+
+  /** The charge a payout of this size is quoted at; 0 when the schedule is not set. */
+  private quotedFee(amount: bigint): bigint {
+    try {
+      const fee = this.fees.providerFees.bankTransferKobo(Number(amount));
+      return Number.isSafeInteger(fee) && fee >= 0 ? BigInt(fee) : 0n;
+    } catch {
+      return 0n;
+    }
+  }
+
+  /** WAWU's account paying the school, as one `out` row of the ledger. */
+  private async payoutMovement(
+    db: Tx | PrismaService,
+    row: Pick<SchoolSettlement, 'id' | 'holdId' | 'schoolShareKobo'>,
+    reference: string | null,
+    payee: PayoutPlace,
+    o: {
+      status: 'pending' | 'completed' | 'failed' | 'reversed';
+      fee: bigint;
+      transactionId: string | null;
+      figuresStand: boolean;
+      failureReason?: string | null;
+    },
+  ): Promise<LedgerMovementInput> {
+    const hold = await db.walletHold.findUniqueOrThrow({
+      where: { id: row.holdId },
+      select: { merchantAccountNumber: true, title: true, targetId: true },
+    });
+    return {
+      wallet: { kind: 'merchant', accountNumber: hold.merchantAccountNumber },
+      direction: 'out',
+      status: o.status,
+      category: 'earning',
+      amountKobo: row.schoolShareKobo,
+      feeKobo: koboNumber(o.fee),
+      totalKobo: row.schoolShareKobo + koboNumber(o.fee),
+      providerFeeKobo: koboNumber(o.fee),
+      wawuFeeKobo: 0,
+      figuresStand: o.figuresStand,
+      counterparty: {
+        kind: 'bank_account',
+        name: payee.accountName,
+        accountNumber: payee.accountNumber,
+        bankCode: payee.bankCode,
+        bankName: payee.bankName,
+      },
+      link: {
+        kind: SCHOOL_FEE_KIND,
+        targetId: hold.targetId,
+        title: hold.title,
+      },
+      narration: PAYOUT_NARRATION,
+      failureReason: o.failureReason ?? null,
+      references: {
+        customerReference: reference,
+        fintavaTransactionId: o.transactionId,
+      },
+      source: 'send',
+    };
   }
 
   // ---- Waiting and review -------------------------------------------------

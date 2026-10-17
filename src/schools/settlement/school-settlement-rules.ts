@@ -31,6 +31,9 @@ export const SETTLEMENT_WAITING = [
 ] as const;
 export type SettlementWaiting = (typeof SETTLEMENT_WAITING)[number];
 
+/** What the ledger row of a payout the bank did not complete says. No provider name. */
+export const PAYOUT_FAILED_REASON = 'The bank did not complete this transfer.';
+
 /** How many references one payout may use: the first, and one retry after a proved failure. */
 export const MAX_ATTEMPT = 2;
 

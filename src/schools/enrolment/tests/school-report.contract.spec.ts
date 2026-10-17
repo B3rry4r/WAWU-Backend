@@ -252,6 +252,41 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       expect(h.mail.requests).toHaveLength(0);
     });
 
+    it('a student whose token gave no name, email or phone is not a removed account: the school is told what exists', async () => {
+      h.mail.mode = 'down';
+      const c = await h.seed({
+        priceKobo: 0,
+        intakes: [{ capacity: 5, startDate: day(40) }],
+        title: 'Beadwork Basics',
+      });
+      const p = await h.person(0);
+      const made = await h.enrol(p, c.intakeIds[0]);
+      const view = body<SchoolEnrolmentView>(made).data!;
+      await until(async () => (await reportOf(view.id)).nextAttemptAt !== null);
+      // The account is there (its id stays); the token gave no details.
+      await h.prisma.schoolEnrolmentReport.update({
+        where: { enrolmentId: view.id },
+        data: {
+          studentName: null,
+          studentEmail: null,
+          studentPhone: null,
+          nextAttemptAt: null,
+          leaseUntil: null,
+        },
+      });
+      h.mail.mode = 'ok';
+      h.mail.requests.length = 0;
+      expect(await reports.deliver(view.id)).toBe('sent');
+      expect(h.mail.requests).toHaveLength(1);
+      const mail = [...h.mail.mails.values()].at(-1)!;
+      expect(mail.text).toContain('Student: not given');
+      expect(mail.text).toContain('Course: Beadwork Basics');
+      expect(mail.text).toContain(`Reference: ${view.reference}`);
+      const row = await reportOf(view.id);
+      expect(row.sentAt).not.toBeNull();
+      expect(row.gaveUpAt).toBeNull();
+    });
+
     it('an order whose fee went back is never reported', async () => {
       h.mail.mode = 'down';
       const c = await h.seed({
