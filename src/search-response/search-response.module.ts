@@ -8,6 +8,7 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { StorageModule } from '../storage/storage.module';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { SchoolsPublicModule } from '../schools/schools-public.module';
+import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { OptionalWawuAuthGuard } from './guards/optional-wawu-auth.guard';
 
 /**
@@ -19,6 +20,7 @@ import { OptionalWawuAuthGuard } from './guards/optional-wawu-auth.guard';
   imports: [
     BlockedAccountModule,
     SchoolsPublicModule,
+    PlanSettingsModule,
     WawuAuthModule,
     StorageModule,
   ],

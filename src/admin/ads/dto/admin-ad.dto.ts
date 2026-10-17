@@ -34,6 +34,8 @@ const PLACEMENTS = Object.values(AdPlacement);
 const STATUSES = Object.values(AdCampaignStatus);
 const DESTINATIONS = Object.values(AdCtaDestination);
 const PHASES = ['upcoming', 'running', 'over'] as const;
+/** `missing`: the campaigns that still need artwork (saved before R-59 without any, not ended). */
+const ARTWORK_FILTERS = ['missing'] as const;
 
 /**
  * Event ids are uuids, but the version is not pinned: ids already stored are
@@ -72,7 +74,12 @@ export class CreateAdCreativeDto {
   @Matches(UUID_LIKE, { message: 'ctaDestinationId must be an event id.' })
   ctaDestinationId!: string;
 
-  /** An https link to the picture. Leave it out for a card without one. */
+  /**
+   * An https link to the picture. REQUIRED (R-59): a campaign without artwork
+   * is refused with 422 "Add artwork before you save this campaign". It is
+   * checked in the service, after the rest of the body has passed, so the
+   * refusal is a 422 and not the validation pipe's 400.
+   */
   @IsOptional()
   @IsArtworkUrl()
   artworkUrl?: string | null;
@@ -132,6 +139,7 @@ export class UpdateAdCreativeDto {
   @Matches(UUID_LIKE, { message: 'ctaDestinationId must be an event id.' })
   ctaDestinationId?: string;
 
+  /** A new https link to the picture. Sending null, or leaving a campaign that has none without one, is refused with 422 (R-59). */
   @IsOptional()
   @IsArtworkUrl()
   artworkUrl?: string | null;
@@ -186,6 +194,11 @@ export class AdCampaignFilterDto {
   @IsIn(PHASES)
   phase?: (typeof PHASES)[number];
 
+  /** `missing`: only the campaigns that need artwork before they can be served. */
+  @IsOptional()
+  @IsIn(ARTWORK_FILTERS)
+  artwork?: (typeof ARTWORK_FILTERS)[number];
+
   @IsOptional()
   @IsUtcInstant('from')
   from?: string;
@@ -211,6 +224,11 @@ export class AdCampaignListQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsIn(PHASES)
   phase?: (typeof PHASES)[number];
+
+  /** `missing`: only the campaigns that need artwork before they can be served. */
+  @IsOptional()
+  @IsIn(ARTWORK_FILTERS)
+  artwork?: (typeof ARTWORK_FILTERS)[number];
 
   @IsOptional()
   @IsUtcInstant('from')

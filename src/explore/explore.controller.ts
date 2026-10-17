@@ -6,6 +6,7 @@ import { ExploreService } from './explore.service';
 import {
   ExploreCreatorsQueryDto,
   FeaturedCreatorsQueryDto,
+  SuggestedCreatorsQueryDto,
 } from './dto/explore-creators-query.dto';
 
 /**
@@ -37,5 +38,13 @@ export class ExploreController {
     @CurrentUser() user: WawuJwtClaims | undefined,
   ) {
     return this.service.featured(query, user?.sub ?? null);
+  }
+
+  @Get('suggested-creators')
+  suggested(
+    @Query() query: SuggestedCreatorsQueryDto,
+    @CurrentUser() user: WawuJwtClaims | undefined,
+  ) {
+    return this.service.suggested(query, user?.sub ?? null);
   }
 }

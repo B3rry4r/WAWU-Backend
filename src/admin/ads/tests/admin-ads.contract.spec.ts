@@ -97,6 +97,7 @@ const CAMPAIGN_KEYS = [
   'endsAt',
   'event',
   'id',
+  'needsArtwork',
   'phase',
   'placement',
   'servingNow',
@@ -336,7 +337,9 @@ describe('Admin ads contract (ADS-06)', () => {
    * live, startsAt <= now < endsAt, a creative, and an open event. Not imported
    * (ADS-04 is on its own branch); `servingNow` in the views is the same rule.
    */
-  async function servedFor(placement: 'tgif_card' | 'today_slot') {
+  async function servedFor(
+    placement: 'tgif_card' | 'today_slot' | 'explore_slider',
+  ) {
     const now = new Date();
     const candidates = await prisma.adCampaign.findMany({
       where: {
@@ -344,7 +347,7 @@ describe('Admin ads contract (ADS-06)', () => {
         status: { in: ['scheduled', 'live'] },
         startsAt: { lte: now },
         endsAt: { gt: now },
-        creative: { isNot: null },
+        creative: { is: { artworkUrl: { not: null } } },
       },
       include: { creative: true },
     });
@@ -791,17 +794,15 @@ describe('Admin ads contract (ADS-06)', () => {
       expect(row?.creative?.headline).toBe('Gospel Night Live');
     });
 
-    it('defaults the weight, accepts no subline and no artwork, and accepts null for both', async () => {
-      const a = await create(
-        { weight: undefined },
-        { subline: undefined, artworkUrl: undefined },
-      );
+    it('defaults the weight, accepts no subline, and accepts null for it (artwork is required: ADS-07)', async () => {
+      const a = await create({ weight: undefined }, { subline: undefined });
       expect(a.weight).toBe(AD_WEIGHT_MIN);
       expect(a.creative.subline).toBeNull();
-      expect(a.creative.artworkUrl).toBeNull();
-      const b = await create({}, { subline: null, artworkUrl: null });
+      expect(a.creative.artworkUrl).toBe(
+        'https://cdn.example.com/ads/gospel.png',
+      );
+      const b = await create({}, { subline: null });
       expect(b.creative.subline).toBeNull();
-      expect(b.creative.artworkUrl).toBeNull();
     });
 
     it('stores text trimmed, with one space between words, in NFC', async () => {
@@ -1129,6 +1130,322 @@ describe('Admin ads contract (ADS-06)', () => {
       expect(a.id).not.toBe(b.id);
       expect(await auditOf(a.id)).toHaveLength(1);
       expect(await auditOf(b.id)).toHaveLength(1);
+    });
+  });
+
+  // ── artwork is required (ADS-07, R-59) ───────────────────────────────────
+
+  describe('artwork is required, and the Explore slider is a placement (ADS-07)', () => {
+    const NO_ARTWORK = 'Add artwork before you save this campaign';
+    const campaignCount = () => prisma.adCampaign.count();
+    const serveFor = async (placement: string) =>
+      (
+        await http()
+          .get('/api/hub/ads')
+          .query({ placement })
+          .set(bearer(userToken))
+      ).body.data as Json | Json[] | null;
+    /** A campaign saved before ADS-07: no picture. Made by hand, as the old routes allowed. */
+    async function legacy(
+      status: 'draft' | 'scheduled' | 'live' | 'paused' | 'ended',
+      over: Json = {},
+    ): Promise<Json> {
+      const c = await inStatus(status, over);
+      await prisma.adCreative.update({
+        where: { campaignId: c.id },
+        data: { artworkUrl: null },
+      });
+      return (await http().get(`${BASE}/${c.id}`).set(asSuper())).body.data;
+    }
+
+    it.each([
+      ['left out', undefined],
+      ['null', null],
+    ])(
+      'POST without artwork (%s) is a 422 with the plain sentence, and saves nothing',
+      async (_name, artworkUrl) => {
+        const before = await campaignCount();
+        const audits = await prisma.adminAdAudit.count();
+        const res = await http()
+          .post(BASE)
+          .set(asSuper())
+          .send(body({}, { artworkUrl }));
+        expect(res.status).toBe(422);
+        expect(res.body.message).toBe(NO_ARTWORK);
+        expect(res.body.reason).toEqual({ code: 'artwork_required' });
+        expect(await campaignCount()).toBe(before);
+        expect(await prisma.adminAdAudit.count()).toBe(audits);
+      },
+    );
+
+    it('POST with artwork saves it, and the campaign serves once scheduled', async () => {
+      const c = await create(
+        { startsAt: iso(hoursFromNow(-1)), placement: 'tgif_card' },
+        { artworkUrl: 'https://cdn.example.com/ads/with-picture.png' },
+      );
+      expect(c.needsArtwork).toBe(false);
+      expect(c.creative.artworkUrl).toBe(
+        'https://cdn.example.com/ads/with-picture.png',
+      );
+      expect(await serveFor('tgif_card')).toBeNull();
+      expect((await act(c.id, 'schedule')).status).toBe(200);
+      expect(await serveFor('tgif_card')).toMatchObject({
+        id: c.id,
+        artworkUrl: 'https://cdn.example.com/ads/with-picture.png',
+      });
+    });
+
+    it('an artwork link that is not a link is still the validation 400, not the 422', async () => {
+      const res = await http()
+        .post(BASE)
+        .set(asSuper())
+        .send(body({}, { artworkUrl: 'not a link' }));
+      expect(res.status).toBe(400);
+    });
+
+    it('PATCH refuses to clear the artwork (422) and leaves the campaign and its history alone', async () => {
+      const c = await create();
+      const audits = (await auditOf(c.id)).length;
+      const res = await http()
+        .patch(`${BASE}/${c.id}`)
+        .set(asSuper())
+        .send({ weight: 7, creative: { artworkUrl: null } });
+      expect(res.status).toBe(422);
+      expect(res.body.message).toBe(NO_ARTWORK);
+      expect(res.body.reason).toEqual({ code: 'artwork_required' });
+      const row = await rowOf(c.id);
+      expect(row?.weight).toBe(5);
+      expect(row?.creative?.artworkUrl).toBe(
+        'https://cdn.example.com/ads/gospel.png',
+      );
+      expect(await auditOf(c.id)).toHaveLength(audits);
+    });
+
+    it('PATCH on a campaign saved without artwork needs artwork in the same request, whatever else it changes', async () => {
+      const c = await legacy('draft');
+      const refused = await http()
+        .patch(`${BASE}/${c.id}`)
+        .set(asSuper())
+        .send({ weight: 7 });
+      expect(refused.status).toBe(422);
+      expect(refused.body.message).toBe(NO_ARTWORK);
+      expect((await rowOf(c.id))?.weight).toBe(5);
+
+      const fixed = await http()
+        .patch(`${BASE}/${c.id}`)
+        .set(asSuper())
+        .send({
+          weight: 7,
+          creative: { artworkUrl: 'https://cdn.example.com/ads/fixed.png' },
+        });
+      expect(fixed.status).toBe(200);
+      expect(fixed.body.data.campaign).toMatchObject({
+        weight: 7,
+        needsArtwork: false,
+        creative: { artworkUrl: 'https://cdn.example.com/ads/fixed.png' },
+      });
+      expect(fixed.body.data.audit.changes.artworkUrl).toEqual({
+        from: null,
+        to: 'https://cdn.example.com/ads/fixed.png',
+      });
+    });
+
+    it('a live campaign without artwork is not editable (409) before it is a missing-artwork 422: pause it, then fix it', async () => {
+      const c = await legacy('live');
+      const live = await http()
+        .patch(`${BASE}/${c.id}`)
+        .set(asSuper())
+        .send({ weight: 7 });
+      expect(live.status).toBe(409);
+      expect(live.body.reason.code).toBe('not_editable');
+      expect((await act(c.id, 'pause')).status).toBe(200);
+      const fixed = await http()
+        .patch(`${BASE}/${c.id}`)
+        .set(asSuper())
+        .send({
+          creative: { artworkUrl: 'https://cdn.example.com/ads/fixed.png' },
+        });
+      expect(fixed.status).toBe(200);
+      expect((await act(c.id, 'resume')).status).toBe(200);
+      expect((await serveFor('tgif_card')) as Json).toMatchObject({ id: c.id });
+    });
+
+    it('schedule refuses a campaign with no artwork (422, the same sentence) and changes nothing; with artwork it goes on', async () => {
+      const c = await legacy('draft', { startsAt: iso(hoursFromNow(-1)) });
+      const audits = (await auditOf(c.id)).length;
+      const refused = await act(c.id, 'schedule');
+      expect(refused.status).toBe(422);
+      expect(refused.body.message).toBe(NO_ARTWORK);
+      expect(refused.body.reason).toEqual({ code: 'artwork_required' });
+      expect((await rowOf(c.id))?.status).toBe('draft');
+      expect(await auditOf(c.id)).toHaveLength(audits);
+      expect(await serveFor('tgif_card')).toBeNull();
+
+      const fixed = await http()
+        .patch(`${BASE}/${c.id}`)
+        .set(asSuper())
+        .send({
+          creative: { artworkUrl: 'https://cdn.example.com/ads/fixed.png' },
+        });
+      expect(fixed.status).toBe(200);
+      expect((await act(c.id, 'schedule')).status).toBe(200);
+      expect((await serveFor('tgif_card')) as Json).toMatchObject({ id: c.id });
+    });
+
+    it('resume refuses a campaign with no artwork (422, the same sentence) and changes nothing; with artwork it goes back on air', async () => {
+      const c = await legacy('paused');
+      const audits = (await auditOf(c.id)).length;
+      const refused = await act(c.id, 'resume');
+      expect(refused.status).toBe(422);
+      expect(refused.body.message).toBe(NO_ARTWORK);
+      expect(refused.body.reason).toEqual({ code: 'artwork_required' });
+      expect((await rowOf(c.id))?.status).toBe('paused');
+      expect(await auditOf(c.id)).toHaveLength(audits);
+      expect(await serveFor('tgif_card')).toBeNull();
+
+      const fixed = await http()
+        .patch(`${BASE}/${c.id}`)
+        .set(asSuper())
+        .send({
+          creative: { artworkUrl: 'https://cdn.example.com/ads/fixed.png' },
+        });
+      expect(fixed.status).toBe(200);
+      expect((await act(c.id, 'resume')).status).toBe(200);
+      expect((await rowOf(c.id))?.status).toBe('live');
+    });
+
+    it('pause and end still work on a campaign with no artwork (taking it off air is never refused)', async () => {
+      const live = await legacy('live');
+      expect((await act(live.id, 'pause')).status).toBe(200);
+      expect((await act(live.id, 'end')).status).toBe(200);
+      const draft = await legacy('draft');
+      expect((await act(draft.id, 'end')).status).toBe(200);
+    });
+
+    it('campaigns saved without artwork are not served, and are listed for fixing', async () => {
+      const bare = await legacy('live', { placement: 'today_slot' });
+      const ok = await inStatus('live', { placement: 'tgif_card' });
+      const bareDraft = await legacy('draft');
+      const bareEnded = await legacy('ended');
+
+      // not served, by the real route and by the admin view of the same rule
+      expect(await serveFor('today_slot')).toBeNull();
+      expect(bare.servingNow).toBe(false);
+      expect(ok.servingNow).toBe(true);
+      expect((await servedFor('today_slot')).map((x) => x.id)).not.toContain(
+        bare.id,
+      );
+
+      // flagged on every view of the campaign, except an ended one (final)
+      const detail = await http().get(`${BASE}/${bare.id}`).set(asSuper());
+      expect(detail.body.data.needsArtwork).toBe(true);
+      expect(detail.body.data.servingNow).toBe(false);
+      const flags = async (id: string) =>
+        (await http().get(`${BASE}/${id}`).set(asSuper())).body.data
+          .needsArtwork;
+      expect([
+        await flags(bare.id),
+        await flags(bareDraft.id),
+        await flags(bareEnded.id),
+        await flags(ok.id),
+      ]).toEqual([true, true, false, false]);
+
+      // the list filter returns the ones that need fixing and only those
+      const missing = await http()
+        .get(BASE)
+        .query({ artwork: 'missing', perPage: 100 })
+        .set(asSuper());
+      expect(missing.status).toBe(200);
+      const found = (missing.body.data as Json[]).map((x) => x.id);
+      expect(found).toEqual(expect.arrayContaining([bare.id, bareDraft.id]));
+      expect(found).not.toContain(ok.id);
+      expect(found).not.toContain(bareEnded.id);
+      for (const row of missing.body.data as Json[]) {
+        expect(row.needsArtwork).toBe(true);
+        expect(row.creative.artworkUrl).toBeNull();
+      }
+      // it combines with the other filters
+      const narrowed = await http()
+        .get(BASE)
+        .query({ artwork: 'missing', status: 'draft', perPage: 100 })
+        .set(asSuper());
+      expect((narrowed.body.data as Json[]).map((x) => x.id)).toContain(
+        bareDraft.id,
+      );
+      expect((narrowed.body.data as Json[]).map((x) => x.id)).not.toContain(
+        bare.id,
+      );
+      // and the report says how many are waiting, over everything
+      const summary = await http().get(`${BASE}/report`).set(asSuper());
+      expect(summary.body.data.needingArtwork).toBeGreaterThanOrEqual(2);
+      const before = summary.body.data.needingArtwork as number;
+      await prisma.adCreative.update({
+        where: { campaignId: bareDraft.id },
+        data: { artworkUrl: 'https://cdn.example.com/ads/fixed.png' },
+      });
+      expect(
+        (await http().get(`${BASE}/report`).set(asSuper())).body.data
+          .needingArtwork,
+      ).toBe(before - 1);
+    });
+
+    it('only the value missing is a filter value (400 otherwise)', async () => {
+      for (const artwork of ['present', 'MISSING', '']) {
+        const res = await http().get(BASE).query({ artwork }).set(asSuper());
+        expect([artwork, res.status]).toEqual([artwork, 400]);
+      }
+    });
+
+    it('explore_slider is a placement an admin can book, and GET /ads lists its live campaigns in order', async () => {
+      const light = await create(
+        {
+          startsAt: iso(hoursFromNow(-1)),
+          placement: 'explore_slider',
+          weight: 1,
+        },
+        { headline: 'Light slide' },
+      );
+      const heavy = await create(
+        {
+          startsAt: iso(hoursFromNow(-1)),
+          placement: 'explore_slider',
+          weight: 50,
+        },
+        { headline: 'Heavy slide' },
+      );
+      expect(heavy.placement).toBe('explore_slider');
+      expect(await serveFor('explore_slider')).toEqual([]);
+      await act(light.id, 'schedule');
+      await act(heavy.id, 'schedule');
+      const slides = (await serveFor('explore_slider')) as Json[];
+      expect(slides.map((s) => s.id)).toEqual([heavy.id, light.id]);
+      expect(slides[0]).toMatchObject({
+        headline: 'Heavy slide',
+        artworkUrl: 'https://cdn.example.com/ads/gospel.png',
+      });
+      // the single placements are untouched by it
+      expect(await serveFor('tgif_card')).toBeNull();
+      expect(await serveFor('today_slot')).toBeNull();
+      // a pause takes the slide out on the next call
+      await act(heavy.id, 'pause');
+      expect(
+        ((await serveFor('explore_slider')) as Json[]).map((s) => s.id),
+      ).toEqual([light.id]);
+      // the admin report counts the placement
+      const summary = await http().get(`${BASE}/report`).set(asSuper());
+      expect(
+        summary.body.data.byPlacement.explore_slider,
+      ).toBeGreaterThanOrEqual(2);
+      expect(
+        summary.body.data.servingNow.explore_slider,
+      ).toBeGreaterThanOrEqual(1);
+      const listed = await http()
+        .get(BASE)
+        .query({ placement: 'explore_slider', perPage: 100 })
+        .set(asSuper());
+      expect((listed.body.data as Json[]).map((x) => x.id)).toEqual(
+        expect.arrayContaining([heavy.id, light.id]),
+      );
     });
   });
 
@@ -1648,7 +1965,7 @@ describe('Admin ads contract (ADS-06)', () => {
           creative: {
             headline: '  New   headline ',
             subline: null,
-            artworkUrl: null,
+            artworkUrl: 'https://cdn.example.com/ads/renamed.png',
           },
         });
       expect(res.status).toBe(200);
@@ -1657,7 +1974,11 @@ describe('Admin ads contract (ADS-06)', () => {
       expect(d).toMatchObject({
         advertiser: `${TAG} Renamed`,
         weight: 9,
-        creative: { headline: 'New headline', subline: null, artworkUrl: null },
+        creative: {
+          headline: 'New headline',
+          subline: null,
+          artworkUrl: 'https://cdn.example.com/ads/renamed.png',
+        },
       });
       expect(res.body.data.audit).toMatchObject({
         action: 'updated',
@@ -1671,7 +1992,7 @@ describe('Admin ads contract (ADS-06)', () => {
         subline: { from: 'Abuja · Sat 18 October · from ₦5,000', to: null },
         artworkUrl: {
           from: 'https://cdn.example.com/ads/gospel.png',
-          to: null,
+          to: 'https://cdn.example.com/ads/renamed.png',
         },
       });
       expect(Object.keys(d).sort()).toEqual(DETAIL_KEYS);
@@ -2255,9 +2576,11 @@ describe('Admin ads contract (ADS-06)', () => {
         'deliveryByStatus',
         'filters',
         'generatedAt',
+        'needingArtwork',
         'servingNow',
       ]);
       expect(Object.keys(r.filters).sort()).toEqual([
+        'artwork',
         'from',
         'phase',
         'placement',
@@ -2272,12 +2595,17 @@ describe('Admin ads contract (ADS-06)', () => {
         paused: 1,
         ended: 0,
       });
-      expect(r.byPlacement).toEqual({ tgif_card: 2, today_slot: 1 });
+      expect(r.byPlacement).toEqual({
+        tgif_card: 2,
+        today_slot: 1,
+        explore_slider: 0,
+      });
       expect(r.byPhase).toEqual({ upcoming: 3, running: 0, over: 0 });
       expect(r.filters).toEqual({
         placement: null,
         status: null,
         phase: null,
+        artwork: null,
         from: '2033-05-01T00:00:00.000Z',
         to: '2033-07-01T00:00:00.000Z',
       });
@@ -2622,6 +2950,7 @@ describe('Admin ads contract (ADS-06)', () => {
       expect(r.deliveryByPlacement).toEqual({
         tgif_card: { views: 10, taps: 5, skips: 1, ctr: 0.5 },
         today_slot: { views: 40, taps: 5, skips: 2, ctr: 0.125 },
+        explore_slider: ZERO,
       });
       expect(r.deliveryByStatus).toEqual({
         draft: { views: 10, taps: 5, skips: 1, ctr: 0.5 },

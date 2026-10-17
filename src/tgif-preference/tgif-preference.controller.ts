@@ -9,8 +9,9 @@ import {
 import { UpdateTgifPreferenceDto } from './dto/update-tgif-preference.dto';
 
 /**
- * HOME-11: GET and PATCH /settings/tgif, the caller's own TGIF-on-Today
- * preference. Own data only: the user id comes from the token, never the path.
+ * HOME-11: GET and PATCH /settings/tgif, the caller's own TGIF switch (since
+ * HOME-16: "send me TGIF each morning"). Own data only: the user id comes from
+ * the token, never the path.
  */
 @Controller('settings/tgif')
 @UseGuards(WawuAuthGuard)

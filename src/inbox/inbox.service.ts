@@ -9,10 +9,15 @@ import {
   encodeInboxCursor,
   type InboxCursor,
 } from './inbox-cursor';
+import {
+  type MoneyRequestRow,
+  type MoneyRequestStatus,
+} from '../money-request/money-request-view.type';
 import { feedCtes, utc } from './inbox-feed.sql';
 import type {
   InboxCommunity,
   InboxItem,
+  InboxMoneyRequest,
   InboxKind,
   InboxPage,
   InboxPerson,
@@ -35,6 +40,9 @@ interface ChatLastRow {
   kind: string;
   text: string | null;
   at: Date;
+  /** Set when the last bubble is a request for money. */
+  request_amount: bigint | null;
+  request_status: string | null;
 }
 
 interface CommunityLastRow {
@@ -171,16 +179,21 @@ export class InboxService {
     const chatRows = of('chat');
     const roomRows = of('community');
     const paidRows = of('paid_dm');
+    const moneyRows = of('money_request');
 
-    const [chats, rooms, paid, hidden] = await Promise.all([
+    const [chats, rooms, paid, money, hidden] = await Promise.all([
       this.chatParts(me, chatRows),
       this.roomParts(me, roomRows),
       this.paidParts(me, paidRows),
+      this.moneyParts(moneyRows),
       this.blocks.hiddenFrom(me),
     ]);
 
     const people = await this.dms.lookupOtherParties([
       ...chats.others.values(),
+      ...[...money.values()].map((q) =>
+        q.requesterWawuId === me ? q.payerWawuId : q.requesterWawuId,
+      ),
       ...[...rooms.last.values()].map((l) => l.sender),
       ...paid.others,
     ]);
@@ -206,6 +219,7 @@ export class InboxService {
         chat: null,
         paidDm: null,
         community: null,
+        moneyRequest: null,
       };
       if (r.kind === 'chat') {
         const id = idOf(r.key);
@@ -226,6 +240,13 @@ export class InboxService {
                 mine: last.sender === me,
                 senderName: null,
                 sentAt: last.at.toISOString(),
+                moneyRequest:
+                  last.request_amount !== null && last.request_status !== null
+                    ? {
+                        amountKobo: Number(last.request_amount),
+                        status: last.request_status as MoneyRequestStatus,
+                      }
+                    : null,
               }
             : null,
           chat: {
@@ -256,9 +277,42 @@ export class InboxService {
                 mine: last.sender === me,
                 senderName: person(last.sender).name,
                 sentAt: last.at.toISOString(),
+                moneyRequest: null,
               }
             : null,
           community,
+        };
+      }
+      if (r.kind === 'money_request') {
+        const q = money.get(idOf(r.key));
+        if (!q) return null;
+        const outgoing = q.requesterWawuId === me;
+        const other = outgoing ? q.payerWawuId : q.requesterWawuId;
+        const moneyRequest: InboxMoneyRequest = {
+          requestId: q.id,
+          chatId: q.conversationId,
+          direction: outgoing ? 'outgoing' : 'incoming',
+          other: person(other),
+          amountKobo: Number(q.amountKobo),
+          memo: q.memo,
+          status: q.status as MoneyRequestStatus,
+          paying: q.status === 'pending' && q.transferId !== null,
+          canMessage: !hiddenSet.has(other),
+        };
+        return {
+          ...base,
+          preview: {
+            text: q.memo,
+            attachment: null,
+            mine: outgoing,
+            senderName: null,
+            sentAt: q.createdAt.toISOString(),
+            moneyRequest: {
+              amountKobo: Number(q.amountKobo),
+              status: q.status as MoneyRequestStatus,
+            },
+          },
+          moneyRequest,
         };
       }
       const { side, other } = paidParts(r.key);
@@ -272,6 +326,7 @@ export class InboxService {
             mine: side === 'fan' ? !bubble.is_reply : bubble.is_reply,
             senderName: null,
             sentAt: r.at.toISOString(),
+            moneyRequest: null,
           }
         : null;
       return {
@@ -289,6 +344,17 @@ export class InboxService {
       };
     });
     return items.filter((i): i is InboxItem => i !== null);
+  }
+
+  /** The requests on the page, by id. */
+  private async moneyParts(
+    rows: FeedRow[],
+  ): Promise<Map<string, MoneyRequestRow & { conversationId: string }>> {
+    if (rows.length === 0) return new Map();
+    const found = await this.prisma.moneyRequest.findMany({
+      where: { id: { in: rows.map((r) => idOf(r.key)) } },
+    });
+    return new Map(found.map((q) => [q.id, q]));
   }
 
   /** The other person and the last message of each chat on the page. */
@@ -311,8 +377,10 @@ export class InboxService {
       this.prisma.$queryRaw<ChatLastRow[]>(Prisma.sql`
         SELECT DISTINCT ON (m."conversationId")
                m."conversationId" AS chat_id, m."senderWawuId" AS sender,
-               m."kind" AS kind, m."text" AS text, m."createdAt" AS at
+               m."kind" AS kind, m."text" AS text, m."createdAt" AS at,
+               q."amountKobo" AS request_amount, q."status" AS request_status
         FROM "ChatMessage" m
+        LEFT JOIN "MoneyRequest" q ON q."messageId" = m."id"
         WHERE m."conversationId" IN (${Prisma.join(ids)})
         ORDER BY m."conversationId", m."createdAt" DESC, m."id" DESC`),
     ]);

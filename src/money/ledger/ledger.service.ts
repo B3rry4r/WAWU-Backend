@@ -399,6 +399,39 @@ export class LedgerService {
   }
 
   /**
+   * Tells the sending feature that something a still pending send waits on
+   * has happened at the provider (FIX-52: the delivery of the transfer that
+   * moved WAWU's fee), so the send goes on now and not at its next sweep.
+   * The send is found by the sender's row for `reference`; nothing is
+   * written. A reference that holds no send row is left alone.
+   */
+  async wakeTransfer(
+    accountNumber: string,
+    reference: string,
+  ): Promise<boolean> {
+    const ids = await this.entriesFor(accountNumber, 'out', [reference]);
+    if (ids.length !== 1) return false;
+    const row = await this.prisma.fintavaLedgerEntry.findUnique({
+      where: { id: ids[0] },
+      select: { transferId: true },
+    });
+    if (!row?.transferId) return false;
+    const event: LedgerTransferSettled = {
+      entryId: ids[0],
+      transferId: row.transferId,
+      status: 'pending',
+    };
+    for (const listener of this.transferSettledListeners) {
+      void listener(event).catch((e: unknown) =>
+        this.logger.error(
+          `ledger: a send wake listener failed (${e instanceof Error ? e.name : 'error'})`,
+        ),
+      );
+    }
+    return true;
+  }
+
+  /**
    * Called (not awaited) after a write committed in which a signed provider
    * report (a webhook) said a payment's debit was COMPLETED at another charge
    * than the buyer's row holds (MONEY-17 round 8, R7-1). The row keeps its
@@ -759,6 +792,40 @@ export class LedgerService {
       },
     });
     return pending.count + revived.count > 0;
+  }
+
+  /**
+   * SCHOOLS-11 round 2: a payout from WAWU's own account is written `pending`
+   * at the charge quoted when the send is leased. When the provider states its
+   * own charge (its answer, its record of the send), the row, while it is still
+   * `pending`, takes it, so the row says what left the account and the
+   * completion that follows agrees with it. Only the running provider's
+   * merchant `out` row under that reference, at that amount, and never a row
+   * holding a disagreement. Returns whether the row changed.
+   */
+  async restatePendingCharge(
+    customerReference: string,
+    amountKobo: bigint,
+    feeKobo: bigint,
+  ): Promise<boolean> {
+    const { count } = await this.prisma.fintavaLedgerEntry.updateMany({
+      where: {
+        customerReference,
+        walletKind: 'merchant',
+        direction: 'out',
+        status: 'pending',
+        amountKobo,
+        discrepancy: null,
+        NOT: { feeKobo },
+        AND: [rowsOf(this.provider.name)],
+      },
+      data: {
+        feeKobo,
+        providerFeeKobo: feeKobo,
+        totalKobo: amountKobo + feeKobo,
+      },
+    });
+    return count > 0;
   }
 
   private async recordIn(

@@ -283,7 +283,11 @@ function buildObject(type, depth) {
       : checker.getDeclaredTypeOfSymbol(prop);
     let schema = toSchema(propType, depth + 1);
     if (schema === null) continue; // pure undefined/void property
-    if (declaredIn(type, NULLABLE_REF_AS_ALLOF_DIRS)) schema = nullableRefAsAllOf(schema);
+    if (
+      declaredIn(type, NULLABLE_REF_AS_ALLOF_DIRS) ||
+      refersToDeclaredIn(propType, NULLABLE_TARGET_AS_ALLOF_DIRS)
+    )
+      schema = nullableRefAsAllOf(schema);
     schema = koboAsInteger(prop.getName(), schema);
     if (declaredIn(type, WHOLE_NUMBER_DIRS)) schema = numberAsInteger(schema);
     properties[prop.getName()] = schema;
@@ -324,6 +328,23 @@ const NULLABLE_REF_AS_ALLOF_DIRS = [
   // Points (task POINTS-01): a new route, so nothing published changes.
   path.join(ROOT, 'src', 'points') + path.sep,
 ];
+
+/**
+ * Like NULLABLE_REF_AS_ALLOF_DIRS, but decided by the type a property points
+ * at rather than the type that holds it: a new nullable field on a view that
+ * is already published (task TIER-07's `badge`, on the profile fields, the
+ * cards and the directory) is written the 3.0 way that keeps the null, while
+ * every other field of those views is written exactly as before.
+ */
+const NULLABLE_TARGET_AS_ALLOF_DIRS = [
+  path.join(ROOT, 'src', 'plans', 'tier-badge') + path.sep,
+];
+
+/** True when `type`, or a member of the union it is, is declared under `dirs`. */
+function refersToDeclaredIn(type, dirs) {
+  const members = type.isUnion?.() ? type.types : [type];
+  return members.some((t) => declaredIn(t, dirs));
+}
 
 function declaredIn(type, dirs) {
   const symbol = type.aliasSymbol ?? type.getSymbol();

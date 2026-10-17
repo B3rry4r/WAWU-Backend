@@ -13,6 +13,11 @@ import { BlockedAccountService } from '../blocked-account/blocked-account.servic
 import { StorageService } from '../storage/storage.service';
 import { LivePublisher } from '../live/live-publisher.service';
 import {
+  MONEY_REQUEST_MESSAGE_KIND,
+  toMoneyRequestView,
+} from '../money-request/money-request-view.type';
+import type { Prisma } from '../../generated/prisma/client';
+import {
   CHAT_LIMITS,
   CHAT_UPLOAD_FOLDERS,
   type ChatUploadFolder,
@@ -218,6 +223,53 @@ export class ChatService {
     const row = await this.conversationFor(me, chatId);
     const [summary] = await this.summaries(me, [row]);
     return summary;
+  }
+
+  // ── for the money requests written into a chat (INBOX-15) ────────────────
+
+  /**
+   * The other person in a chat the caller is in. Someone else's chat answers
+   * 404 exactly as one that does not exist. A block in either direction is
+   * refused with 403 `chat_blocked` when `forSending` is set, as a message is.
+   */
+  async otherInChat(
+    me: string,
+    chatId: string,
+    forSending = false,
+  ): Promise<string> {
+    const chat = await this.conversationFor(me, chatId);
+    const other = this.otherOf(chat, me);
+    if (forSending) await this.assertCanMessage(me, other);
+    return other;
+  }
+
+  /**
+   * Writes one message of a kind this service does not make itself (a money
+   * request) inside the caller's transaction: the row, the chat's activity
+   * time, and the sender's own read mark, as a sent message moves all three.
+   * The caller publishes the live signal after its transaction commits.
+   */
+  async writeMessage(
+    tx: Prisma.TransactionClient,
+    me: string,
+    chatId: string,
+    kind: string,
+    text: string | null,
+  ): Promise<MessageRow> {
+    const created = await tx.chatMessage.create({
+      data: { conversationId: chatId, senderWawuId: me, kind, text },
+    });
+    await tx.chatConversation.update({
+      where: { id: chatId },
+      data: { lastActivityAt: created.createdAt },
+    });
+    await this.advanceMark(tx, chatId, me, created);
+    return created;
+  }
+
+  /** One message of a chat as `viewer` sees it, signed links and request included. */
+  async viewMessage(viewer: string, row: MessageRow): Promise<ChatMessage> {
+    return this.toMessageWithMarks(viewer, row);
   }
 
   // ── messages ─────────────────────────────────────────────────────────────
@@ -720,6 +772,12 @@ export class ChatService {
     const mine = row.senderWawuId === me;
     const otherRead = marks?.other ?? null;
     const otherReadId = marks?.otherMessageId ?? '';
+    const request =
+      row.kind === MONEY_REQUEST_MESSAGE_KIND
+        ? await this.prisma.moneyRequest.findUnique({
+            where: { messageId: row.id },
+          })
+        : null;
     return {
       id: row.id,
       chatId: row.conversationId,
@@ -736,6 +794,7 @@ export class ChatService {
               name: row.attachmentName,
             }
           : null,
+      moneyRequest: request ? toMoneyRequestView(request, me) : null,
       clientMessageId: mine ? row.clientMessageId : null,
       createdAt: row.createdAt.toISOString(),
       readState: mine

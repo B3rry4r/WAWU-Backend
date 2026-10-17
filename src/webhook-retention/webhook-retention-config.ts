@@ -187,6 +187,11 @@ export const WEBHOOK_TABLE_READERS: readonly WebhookTableReader[] = [
       'The dispatcher: the payload of `pending` rows only, claimed and re-checked as `pending`. The handlers get the delivery from it and never query the table.',
   },
   {
+    file: 'src/nuvion/handlers/reconcile-sweep.ts',
+    reads:
+      'The NUV-08 sweep: whether any stored delivery of a final event (inflows or outflows) names a transfer id (resourceId and event only, never a body). Columns the job keeps, so a delivery whose body was cleared still counts as held.',
+  },
+  {
     file: 'src/webhook-retention/webhook-retention.service.ts',
     reads: 'This job: ids and states, to clear and to count the rows it holds.',
   },

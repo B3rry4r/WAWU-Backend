@@ -21,6 +21,7 @@ import type { BuyTicketsDto, VerifyOrderDto } from './dto/event-ticketing.dto';
 import { ticketTotals } from './ticket-counts';
 import type { TicketTier } from '../../generated/prisma/enums';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
+import { EventCancelHooks } from './event-cancel-hooks';
 
 /**
  * A ticket code, and why it looks like this.
@@ -32,11 +33,28 @@ import { BlockedAccountService } from '../blocked-account/blocked-account.servic
  * drops the characters people confuse.
  */
 const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-function ticketCode(): string {
+export function ticketCode(): string {
   const bytes = randomBytes(16);
   let out = '';
   for (const b of bytes) out += CODE_ALPHABET[b % CODE_ALPHABET.length];
   return `${out.slice(0, 4)}-${out.slice(4, 8)}-${out.slice(8, 12)}-${out.slice(12, 16)}`;
+}
+
+/** The call-off answer the web was built against (the counts of Flutterwave refunds, plus the wallet ones). */
+export interface CancelEventAnswer {
+  cancelled: boolean;
+  ordersRefunded: number;
+  refundsNeedingAttention: number;
+}
+
+/**
+ * The same answer when wallet refunds are left for the minute sweep (EVENTS-13).
+ * It is its own shape, not an optional field, because the server leaves the key
+ * out when there are none and never sends null: a contract that says "optional"
+ * is read as "number or null" by every generated client.
+ */
+export interface CancelEventAnswerWithSweep extends CancelEventAnswer {
+  ordersLeftToSweep: number;
 }
 
 export type ScanOutcome = 'valid' | 'already_used' | 'invalid';
@@ -81,6 +99,7 @@ export class EventTicketingService {
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly cancelHooks: EventCancelHooks,
   ) {}
 
   /* ------------------------------------------------------------------ *
@@ -141,7 +160,72 @@ export class EventTicketingService {
       );
     }
 
+    // EVENTS-07: a quote someone opened from the wallet is an unpaid order that
+    // names these tiers, and would stop them being replaced. An unpaid order
+    // with no payment started goes with them (the buyer asks again); one whose
+    // payment is still being confirmed is waited for, never deleted.
+    const unpaid = await this.prisma.eventOrder.findMany({
+      where: { eventId, status: 'pending', paymentProvider: 'wallet' },
+      select: { id: true },
+    });
+    if (unpaid.length > 0) {
+      const inFlight = await this.prisma.walletPayment.count({
+        where: {
+          kind: 'event_ticket',
+          targetId: { in: unpaid.map((o) => o.id) },
+          status: { in: ['pending', 'completed'] },
+        },
+      });
+      if (inFlight > 0) {
+        throw new ConflictException(
+          'A payment for these tickets is still being confirmed. Try again in a minute.',
+        );
+      }
+    }
+
+    // A wallet order that failed or was refunded (EVENTS-07 round 2) names
+    // these tiers too, with nothing sold, and its foreign key would stop them
+    // being replaced. Its money is in the buyer's history, not in the order, so
+    // it goes with the tiers once the price is back with the buyer; while a
+    // refund is still on its way the host waits.
+    const settled = await this.prisma.eventOrder.findMany({
+      where: {
+        eventId,
+        paymentProvider: 'wallet',
+        status: { in: ['failed', 'refunded'] },
+      },
+      select: { id: true },
+    });
+    if (settled.length > 0) {
+      const returning = await this.prisma.walletHold.count({
+        where: {
+          kind: 'event_ticket',
+          status: 'held',
+          targetId: { in: settled.map((o) => o.id) },
+        },
+      });
+      if (returning > 0) {
+        throw new ConflictException(
+          'Money for an order that could not be finished is still on its way back to the buyer. Try again in a minute.',
+        );
+      }
+    }
+
     await this.prisma.$transaction([
+      this.prisma.eventOrder.deleteMany({
+        where: {
+          id: { in: unpaid.map((o) => o.id) },
+          status: 'pending',
+          paymentProvider: 'wallet',
+        },
+      }),
+      this.prisma.eventOrder.deleteMany({
+        where: {
+          id: { in: settled.map((o) => o.id) },
+          status: { in: ['failed', 'refunded'] },
+          paymentProvider: 'wallet',
+        },
+      }),
       this.prisma.eventTicketType.deleteMany({ where: { eventId, sold: 0 } }),
       this.prisma.eventTicketType.createMany({
         data: types.map((t) => ({
@@ -330,6 +414,11 @@ export class EventTicketingService {
       // The browser's verify and the webhook can settle the same charge. The
       // second caller gets the tickets that exist rather than a duplicate set.
       return this.ticketsFor(order.id);
+    }
+    if (order.paymentProvider === 'wallet') {
+      // EVENTS-07: an order paid from the wallet has no Flutterwave charge to
+      // verify; asking would fail it. It is paid on its own route.
+      throw new ConflictException('This order is paid from your wallet.');
     }
     if (order.status !== 'pending') {
       throw new ConflictException(`This order is already ${order.status}.`);
@@ -665,8 +754,17 @@ export class EventTicketingService {
    * Each order is refunded independently: one failure does not stop the rest,
    * and what could not be sent is recorded on the order for a human to
    * settle rather than lost to a log line.
+   *
+   * EVENTS-10: an order paid from the wallet (EVENTS-07) is a held price, not a
+   * Flutterwave charge. Its buyer gets back everything they paid through the
+   * hold's own refund (the wallet module's step, run below); the counts it
+   * reports are added to the two the web already reads.
    */
-  async cancel(organiserWawuId: string, eventId: string, reason: string) {
+  async cancel(
+    organiserWawuId: string,
+    eventId: string,
+    reason: string,
+  ): Promise<CancelEventAnswer | CancelEventAnswerWithSweep> {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
     });
@@ -678,29 +776,49 @@ export class EventTicketingService {
       throw new ConflictException('This event is already cancelled.');
     }
 
-    await this.prisma.$transaction([
-      this.prisma.event.update({
-        where: { id: eventId },
+    // EVENTS-13: the update is conditional on the event not being cancelled
+    // yet, so two cancels at once cannot both win (the check above reads the
+    // row before either has written it). The loser waits for the winner's
+    // row lock, finds `cancelledAt` set, changes nothing and gets the answer
+    // a later cancel gets: 409. Only the winner voids the tickets and runs
+    // the refunds.
+    const won = await this.prisma.$transaction(async (tx) => {
+      const cancelled = await tx.event.updateMany({
+        where: { id: eventId, cancelledAt: null },
         data: {
           status: 'cancelled',
           cancelledAt: new Date(),
           cancelReason: reason,
         },
-      }),
+      });
+      if (cancelled.count === 0) return false;
       // Void first. A ticket for a cancelled event must not scan in, even if
       // its refund has not gone through yet.
-      this.prisma.eventTicket.updateMany({
+      await tx.eventTicket.updateMany({
         where: { eventId, status: { in: ['valid', 'checked_in'] } },
         data: { status: 'void' },
-      }),
-    ]);
+      });
+      return true;
+    });
+    if (!won) throw new ConflictException('This event is already cancelled.');
 
+    // EVENTS-07: orders paid from the wallet are not Flutterwave charges. Their
+    // price sits in a hold, and EVENTS-10 refunds them through it (the step
+    // below), so the Flutterwave loop leaves them alone (it would otherwise
+    // record that they need the Flutterwave dashboard). Run first: it holds
+    // nothing across the provider and stops at its own time limit.
+    const wallet = await this.cancelHooks.afterCalledOff(eventId);
     const orders = await this.prisma.eventOrder.findMany({
-      where: { eventId, status: 'paid', amountNaira: { gt: 0 } },
+      where: {
+        eventId,
+        status: 'paid',
+        amountNaira: { gt: 0 },
+        OR: [{ paymentProvider: null }, { paymentProvider: { not: 'wallet' } }],
+      },
     });
 
-    let refunded = 0;
-    let failed = 0;
+    let refunded = wallet.refunded;
+    let failed = wallet.needAttention;
     for (const order of orders) {
       if (!order.flutterwaveTxId) {
         await this.prisma.eventOrder.update({
@@ -755,10 +873,16 @@ export class EventTicketingService {
         `Event ${eventId} cancelled: ${refunded} refunded, ${failed} need a human`,
       );
     }
-    return {
+    const answer: CancelEventAnswer = {
       cancelled: true,
       ordersRefunded: refunded,
       refundsNeedingAttention: failed,
     };
+    // EVENTS-13: wallet refunds the request ran out of time for; the minute
+    // sweep sends them. Present only when there are some, so the answer of
+    // an event without any keeps the shape the web was built against.
+    return wallet.leftToSweep
+      ? { ...answer, ordersLeftToSweep: wallet.leftToSweep }
+      : answer;
   }
 }

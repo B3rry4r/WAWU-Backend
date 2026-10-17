@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { DirectMessageModule } from '../direct-message/direct-message.module';
+import { EventCancelHooks } from './event-cancel-hooks';
 import { EventTicketingController } from './event-ticketing.controller';
 import { EventTicketingService } from './event-ticketing.service';
 import { EventRunningController } from './event-running.controller';
@@ -18,6 +19,9 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
  * behave exactly like a missed DM's: the refund adapter, its retry semantics
  * and its "accepted is not settled" distinction are already right there.
  *
+ * EventCancelHooks lets the wallet module (EVENTS-10) send the held prices of
+ * a called-off event back to their buyers without this module importing it.
+ *
  * EventRunningController (EVENTS-05) serves the organiser's numbers and the
  * door staff; WawuAuthModule also gives it WawuIdClient for holder names.
  */
@@ -32,7 +36,8 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
     EventTicketingService,
     EventRunningService,
     EventHeldTicketsService,
+    EventCancelHooks,
   ],
-  exports: [EventTicketingService],
+  exports: [EventTicketingService, EventCancelHooks],
 })
 export class EventTicketingModule {}

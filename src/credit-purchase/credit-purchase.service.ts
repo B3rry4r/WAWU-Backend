@@ -5,20 +5,13 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
-import { CreditPack } from '../../generated/prisma/enums';
+import { KOBO_PER_NAIRA, PACK_TABLE } from './credit-packs';
 import {
   FLUTTERWAVE_CLIENT,
   type FlutterwaveClient,
 } from './flutterwave-client.interface';
 import type { CreateCreditPurchaseDto } from './dto/create-credit-purchase.dto';
 import type { VerifyCreditPurchaseDto } from './dto/verify-credit-purchase.dto';
-
-/**
- * `CreditPurchase.amount` is whole naira (every pack price is). Cost basis is
- * carried in kobo so the per-credit maths on a ₦1,000/120 pack stays exact
- * integer arithmetic instead of drifting through 8.3333 floats.
- */
-const KOBO_PER_NAIRA = 100;
 
 export interface FlutterwaveConfigResponse {
   flutterwaveConfig: {
@@ -28,17 +21,6 @@ export interface FlutterwaveConfigResponse {
     publicKey: string;
   };
 }
-
-/**
- * Server-side pack->price/credits table (registry.json CreditPurchase note:
- * "pack->amount/credits looked up server-side ... per product-truths.json").
- * Never accepted from the client.
- */
-const PACK_TABLE: Record<CreditPack, { amount: number; credits: number }> = {
-  starter: { amount: 500, credits: 50 },
-  popular: { amount: 1000, credits: 120 },
-  pro: { amount: 2000, credits: 300 },
-};
 
 /**
  * CreditPurchase resource — registry.json "CreditPurchase". Owns

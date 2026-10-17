@@ -13,6 +13,7 @@ import { StatementService } from './statements/statement.service';
 import { WawuIdMailRelay } from '../admin/notifications/email/email-provider';
 import { LedgerModule } from './ledger/ledger.module';
 import { MoneyInNoticeModule } from './money-in-notice/money-in-notice.module';
+import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { FeeSettings } from './fees/fee-config';
 import { FeeQuoteService } from './fees/fee-quote.service';
@@ -48,6 +49,14 @@ import { MoneyHoldsController } from './holds/money-holds.controller';
 import { WalletHoldService } from './holds/wallet-hold.service';
 import { MoneyPaymentsController } from './payments/money-payments.controller';
 import { MoneyTransfersController } from './transfers/money-transfers.controller';
+import {
+  BankSendTargetGuard,
+  BankSendTargets,
+} from './transfers/bank-send-target';
+import { MoneyBanksController } from './saved-accounts/money-banks.controller';
+import { NameCheckBudget } from './saved-accounts/name-check-budget';
+import { NameCheckTokenService } from './saved-accounts/name-check-token.service';
+import { PayoutOwnNameGuard } from './transfers/payout-own-name.guard';
 import {
   TransferRecipientGuard,
   TransferRecipients,
@@ -185,6 +194,13 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
  * answer was lost from the provider's own record (it runs where
  * ScheduleModule.forRoot() is loaded). It never sends twice.
  *
+ * WALLET-09: sending money to a bank account (`POST /money/transfers/bank`)
+ * with the bank list and the name check (`GET /money/banks`, `POST
+ * /money/banks/name-check`): the same send as WALLET-07's, to any Nigerian
+ * bank account, the account name-checked with the bank before the PIN is
+ * looked at, WAWU's limits checked in the claim (WALLET-23's included), and
+ * a pending send found again by our reference.
+ *
  * WALLET-27: statements (`/money/statements`), the caller's completed
  * movements over a period of Lagos days as a CSV file, behind the wallet
  * gate, read from the ledger only; it never calls Fintava.
@@ -214,6 +230,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     NuvionDocumentsModule,
     // Money in, told once (task WALLET-10): the sweep over credited ledger rows.
     MoneyInNoticeModule,
+    // The admin settings (task HOME-17): the name checks an hour are read live.
+    PlanSettingsModule,
   ],
   controllers: [
     MoneyPinController,
@@ -228,6 +246,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyFeesController,
     MoneyPaymentsController,
     MoneyTransfersController,
+    MoneyBanksController,
     MoneyHoldsController,
     MoneyReceiptController,
     PublicReceiptController,
@@ -252,6 +271,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletOpeningSettings,
     WalletOpeningService,
     BankAccountCheckService,
+    NameCheckTokenService,
+    NameCheckBudget,
     BeneficiaryService,
     PayoutAccountService,
     SavedAccountTargetService,
@@ -271,6 +292,9 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletPaymentService,
     TransferRecipients,
     TransferRecipientGuard,
+    BankSendTargets,
+    BankSendTargetGuard,
+    PayoutOwnNameGuard,
     WalletTransferService,
     HoldViewService,
     WalletHoldService,
@@ -305,6 +329,11 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletHoldService,
     HoldViewService,
     MoneyCheckService,
+    // INBOX-15: paying a money request is a send to the requester, made by
+    // the same service (WALLET-07) with a hook that ties the request to the
+    // send inside the send's claim; the recipient check answers before the PIN.
+    WalletTransferService,
+    TransferRecipients,
   ],
 })
 export class MoneyModule {}

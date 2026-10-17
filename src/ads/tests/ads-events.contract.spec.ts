@@ -99,7 +99,9 @@ interface CampaignOpts {
   startsAt?: Date;
   endsAt?: Date;
   noCreative?: boolean;
-  placement?: 'tgif_card' | 'today_slot';
+  /** A campaign saved before ADS-07: its card has no picture. */
+  noArtwork?: boolean;
+  placement?: 'tgif_card' | 'today_slot' | 'explore_slider';
   eventId?: string;
 }
 
@@ -237,6 +239,11 @@ describe('POST /ads/:id/events (ADS-05)', () => {
                   ctaLabel: 'Get tickets',
                   ctaDestination: 'event',
                   ctaDestinationId: eventId,
+                  // ADS-07 (R-59): a card without a picture is not served, so
+                  // it cannot be counted either.
+                  artworkUrl: o.noArtwork
+                    ? null
+                    : `https://cdn.example.test/ads05-${o.n}.jpg`,
                 },
               },
             }),
@@ -850,6 +857,28 @@ describe('POST /ads/:id/events (ADS-05)', () => {
         expect(await totalsRow(id)).toEqual({ views: 0, taps: 0, skips: 0 });
       },
     );
+
+    it('refuses a campaign saved without artwork (R-59), and counts it once it has some', async () => {
+      const id = await makeCampaign({ n: 1, noArtwork: true });
+      await send(id, 'view').expect(404);
+      await send(id, 'tap').expect(404);
+      expect(await rawCounts(id)).toEqual({ views: 0, taps: 0, skips: 0 });
+      await prisma.adCreative.update({
+        where: { campaignId: id },
+        data: { artworkUrl: 'https://cdn.example.test/ads05-fixed.jpg' },
+      });
+      await send(id, 'view').expect(200);
+      expect(await rawCounts(id)).toEqual({ views: 1, taps: 0, skips: 0 });
+    });
+
+    it('counts a view of an Explore slider slide once a day, as for any other card (ADS-07)', async () => {
+      const id = await makeCampaign({ n: 1, placement: 'explore_slider' });
+      await send(id, 'view').expect(200);
+      await send(id, 'view').expect(200);
+      await send(id, 'tap').expect(200);
+      expect(await rawCounts(id)).toEqual({ views: 1, taps: 1, skips: 0 });
+      expect(await totalsRow(id)).toEqual({ views: 1, taps: 1, skips: 0 });
+    });
 
     it('refuses a campaign whose event never existed or was deleted', async () => {
       const ghost = await makeCampaign({ n: 1, eventId: 'ads05-spec-ghost' });

@@ -58,7 +58,7 @@ export type FeePartCode = (typeof FEE_PART_CODES)[number];
  *
  *   content_unlock  HOME-15     tip           HOME-14
  *   credit_pack     INBOX-16    verification  ME-18
- *   legal_fee       LEGAL-05    school_fee    SCHOOLS-07
+ *   legal_fee       LEGAL-05    school_fee    SCHOOLS-07 (held)
  *   paid_dm         INBOX-17 (held)
  *   event_ticket    EVENTS-07 (held)
  *   bill            BILLS-04 (held)
@@ -68,6 +68,21 @@ export type FeePartCode = (typeof FEE_PART_CODES)[number];
  * offer's extra points (`tier_bump`). They are paid in one debit into WAWU's
  * own account with no seller split, and are not held. Their `targetId` names
  * the terms (docs/contract/PLANS.md section 8).
+ *
+ * `points_pack` (POINTS-02) is WAWU's own sale of a points pack (PT4): one
+ * debit into WAWU's own account with no seller split, not held. Its `targetId`
+ * is `pack-<packId>` (docs/contract/PLANS.md section 10).
+ *
+ * `extra_products` (TIER-04) is WAWU's own sale of more product places on the
+ * tier a person holds (VF13): one debit into WAWU's own account with no seller
+ * split, not held. Its `targetId` is `extra-products` (docs/contract/PLANS.md
+ * section 11).
+ *
+ * `points_shortfall` (POINTS-03) is WAWU's own sale of the points an AI job is
+ * short of (PT3), bought from the wallet at the pack rate on the person's
+ * confirmation: one debit into WAWU's own account with no seller split, not
+ * held. Its `targetId` is `shortfall-<points>` (docs/contract/CONVENTIONS.md
+ * section 16a).
  *
  * `points_cash_out` (POINTS-04) is not a payment anyone makes from the wallet:
  * it is the link kind of the ledger rows of points turned into cash, WAWU's
@@ -87,6 +102,9 @@ export const PAYMENT_KINDS = [
   'bill',
   'tier',
   'tier_bump',
+  'points_pack',
+  'extra_products',
+  'points_shortfall',
   'points_cash_out',
 ] as const;
 export type PaymentKind = (typeof PAYMENT_KINDS)[number];
@@ -99,6 +117,7 @@ export const HELD_PAYMENT_KINDS: readonly PaymentKind[] = [
   'paid_dm',
   'event_ticket',
   'bill',
+  'school_fee',
 ];
 
 /** The filter chips on W26: All, Money in, Money out, Bills, Content. */
@@ -148,6 +167,13 @@ export const MONEY_ERROR_CODES = [
   'amount_out_of_range',
   'quote_changed',
   'name_check_failed',
+  // A saved bank account whose holder's name at the bank is no longer the one kept (WALLET-09).
+  'account_name_changed',
+  // A payout account, or a withdrawal to one, whose holder at the bank is not
+  // the person's verified name (WALLET-37, R-51); and the 30-an-hour limit on
+  // bank name checks, per person (WALLET-37, R-51).
+  'account_not_in_your_name',
+  'name_check_rate_limited',
   'recipient_not_found',
   'recipient_has_no_wallet',
   'recipient_blocked',
@@ -208,5 +234,16 @@ export const MONEY_ERROR_CODES = [
   'below_minimum',
   'insufficient_points',
   'currency_not_supported',
+  // Buying event tickets (EVENTS-13): the buyer already holds the most open
+  // paid ticket orders one event allows (an admin setting).
+  'event_order_limit',
+  // Spending points on AI tools (POINTS-03): a cap stops the job; the person
+  // has enough points, so there is no shortfall to buy.
+  'points_cap_reached',
+  'points_not_short',
+  // Adding products needs a tier that is running (TIER-04, VF13): the person
+  // has none, or it ended. Also the code of the publishing gate (TIER-02), in
+  // its own richer body on the routes that publish.
+  'tier_required',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

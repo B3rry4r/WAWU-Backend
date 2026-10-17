@@ -13,7 +13,12 @@ import {
   UPLOAD_FOLDERS,
   serveAs,
   type UploadFolder,
+  type UploadFormatId,
 } from './dto/presign-upload.dto';
+import { formatFolderRule } from './upload-formats';
+import { releaseOwnUpload } from './upload-release';
+import { LOCKED_TX, inPersonsTurn, lockStorageQuota } from './storage-lock';
+import { sweepLateFiles, type LateSweepResult } from './late-file-sweep';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import {
@@ -30,7 +35,10 @@ import {
   TICK_STORAGE_BYTES,
   TICK_UPLOADS,
 } from '../common/creator-allowance';
-import { PublishingAllowanceService } from '../plans/publishing-allowance.service';
+import {
+  PublishingAllowanceService,
+  type AllowanceDb,
+} from '../plans/publishing-allowance.service';
 import { PublishingGate } from '../plans/publishing-gate.service';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -56,6 +64,16 @@ const RECONCILE_GRACE_MS = 15 * 60 * 1000;
 
 /** How long a presigned PUT URL can still start an upload. */
 const UPLOAD_URL_SECONDS = 300;
+
+/**
+ * Extra time after a given-up upload's link has expired before the sweep looks
+ * at its file (ME-04 round 3), unless UPLOAD_SWEEP_MARGIN_SECONDS says
+ * otherwise. With the link's 300 s it makes 15 minutes, the same time
+ * reconcileStale gives a slow upload before it settles one.
+ */
+const DEFAULT_SWEEP_MARGIN_SECONDS = 600;
+/** How long the storage client waits to connect, for an answer and in all (STORAGE_REQUEST_TIMEOUT_MS). */
+const DEFAULT_STORAGE_REQUEST_TIMEOUT_MS = 10_000;
 
 /**
  * How long after presign `POST /uploads/confirm` leaves a missing file alone:
@@ -340,6 +358,8 @@ export class StorageService {
   private readonly logger = new Logger(StorageService.name);
   private readonly client: S3Client | null;
   private readonly bucket: string;
+  /** Seconds past a link's life before the sweep removes a late file. */
+  private readonly sweepMarginSeconds: number;
 
   constructor(
     private readonly config: ConfigService,
@@ -347,12 +367,26 @@ export class StorageService {
     private readonly allowance: PublishingAllowanceService,
     private readonly gate: PublishingGate,
   ) {
+    const margin = Number(
+      this.config.get<string>('UPLOAD_SWEEP_MARGIN_SECONDS'),
+    );
+    this.sweepMarginSeconds =
+      Number.isFinite(margin) && margin >= 0
+        ? margin
+        : DEFAULT_SWEEP_MARGIN_SECONDS;
     const endpoint = this.config.get<string>('STORAGE_ENDPOINT');
     const accessKeyId = this.config.get<string>('STORAGE_ACCESS_KEY_ID');
     const secretAccessKey = this.config.get<string>(
       'STORAGE_SECRET_ACCESS_KEY',
     );
     this.bucket = this.config.get<string>('STORAGE_BUCKET') ?? '';
+    const timeout = Number(
+      this.config.get<string>('STORAGE_REQUEST_TIMEOUT_MS'),
+    );
+    const requestTimeoutMs =
+      Number.isFinite(timeout) && timeout >= 100
+        ? timeout
+        : DEFAULT_STORAGE_REQUEST_TIMEOUT_MS;
 
     // Storage is optional at boot so the rest of the API still runs in
     // environments where it isn't configured yet — but every upload request
@@ -383,6 +417,21 @@ export class StorageService {
       // upload with 400 Bad Request. KYC documents, content assets, CAC and
       // NEPC paperwork: none of it could be uploaded at all.
       requestChecksumCalculation: 'WHEN_REQUIRED',
+      // No bucket call may hang a request or the sweep (ME-04 round 5). The
+      // calls this client makes are a HEAD and a DELETE of one key, so a
+      // short bound on connecting, on silence and on the whole request is
+      // plenty. The SDK's own default is no limit at all, and it warns rather
+      // than fails when only `requestTimeout` is set, hence
+      // `throwOnRequestTimeout`. One retry, so a hung bucket costs a caller
+      // about twenty seconds at most, and nothing is held meanwhile (see
+      // storage-lock.ts).
+      requestHandler: {
+        connectionTimeout: requestTimeoutMs,
+        socketTimeout: requestTimeoutMs,
+        requestTimeout: requestTimeoutMs,
+        throwOnRequestTimeout: true,
+      },
+      maxAttempts: 2,
     });
   }
 
@@ -437,6 +486,7 @@ export class StorageService {
     contentType: string,
     extension: string,
     contentLength: number,
+    format?: UploadFormatId,
   ): Promise<{ uploadUrl: string; key: string; fileUrl: string }> {
     if (!this.client) {
       throw new ServiceUnavailableException(
@@ -444,10 +494,17 @@ export class StorageService {
       );
     }
 
+    // ME-04: a call that names a content format is checked against that
+    // format's own rules (GET /uploads/formats) instead of the folder's wider
+    // list and the one global cap. A call without one is untouched.
+    const formatRule = format ? this.formatRuleFor(format, folder) : null;
+
     // Per-destination allowlist. Without it any signed-in user could store
     // text/html or image/svg+xml and get a URL that serves it executable
     // from the storage origin.
-    const allowed = FOLDER_CONTENT_TYPES[folder] ?? [];
+    const allowed = formatRule
+      ? formatRule.contentTypes
+      : (FOLDER_CONTENT_TYPES[folder] ?? []);
     if (!allowed.includes(contentType)) {
       throw new BadRequestException(
         `${contentType} is not allowed in ${folder}. Allowed: ${allowed.join(', ')}.`,
@@ -458,6 +515,11 @@ export class StorageService {
     if (folderCap !== undefined && contentLength > folderCap) {
       throw new PayloadTooLargeException(
         `A file in ${folder} can be at most ${formatBytes(folderCap)}.`,
+      );
+    }
+    if (format && formatRule && contentLength > formatRule.maxBytes) {
+      throw new PayloadTooLargeException(
+        `A ${format} file can be at most ${formatBytes(formatRule.maxBytes)}.`,
       );
     }
 
@@ -687,12 +749,17 @@ export class StorageService {
       throw new NotFoundException('We could not find that upload.');
     }
     if (row.status === 'confirmed') return { key, status: 'confirmed' };
+    // The person gave this file up (POST /uploads/release). A file that lands
+    // afterwards, through the link that was still valid, is not counted again:
+    // the row stays released, and the sweep removes the file once the link has
+    // expired. Nothing to ask of the bucket.
+    if (row.releasedAt || row.removingAt) return { key, status: 'abandoned' };
 
     const held = await this.bucketHolds(key, 'settle');
     if (held === 'unknown') throw new ServiceUnavailableException(CHECK_LATER);
     if (held === 'present') {
-      await this.adoptArrived(wawuId, row.id, key);
-      return { key, status: 'confirmed' };
+      const adopted = await this.adoptArrived(wawuId, row.id, key);
+      return { key, status: adopted ? 'confirmed' : 'abandoned' };
     }
     if (row.status !== 'pending') return { key, status: 'abandoned' };
     if (Date.now() - row.createdAt.getTime() < CONFIRM_HOLD_MS) {
@@ -719,25 +786,41 @@ export class StorageService {
     wawuId: string,
     rowId: string,
     key: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     await this.reconcileStale(wawuId);
-    const refusal = await this.prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`storage-quota:${wawuId}`}, 0))`;
-      const row = await tx.storageObject.findUnique({ where: { id: rowId } });
-      if (!row || row.status === 'confirmed') return null;
-      if (row.status === 'abandoned' && CONTENT_FOLDERS.includes(row.folder)) {
-        const { usage, tickHeld } = await this.readUsage(wawuId, tx);
-        if (usage.usedBytes + row.bytes > usage.limitBytes) {
-          return this.storageFullRefusal(row.bytes, usage, tickHeld);
+    // In the person's turn (storage-lock.ts), so a burst of confirms waits in
+    // memory and not on pooled connections (ME-04 round 6).
+    const refusal = await inPersonsTurn(wawuId, () =>
+      this.prisma.$transaction(async (tx) => {
+        // The same lock a release takes (storage-lock.ts), so a release that is
+        // under way finishes first and this confirm then reads its mark.
+        await lockStorageQuota(tx, wawuId);
+        const row = await tx.storageObject.findUnique({ where: { id: rowId } });
+        if (!row || row.status === 'confirmed') return null;
+        // Released while this confirm was under way, or being removed: it
+        // stays released.
+        if (row.releasedAt || row.removingAt) return 'released' as const;
+        if (
+          row.status === 'abandoned' &&
+          CONTENT_FOLDERS.includes(row.folder)
+        ) {
+          const { usage, tickHeld } = await this.readUsage(wawuId, tx, tx);
+          if (usage.usedBytes + row.bytes > usage.limitBytes) {
+            return this.storageFullRefusal(row.bytes, usage, tickHeld);
+          }
         }
-      }
-      await tx.storageObject.update({
-        where: { id: rowId },
-        data: { status: 'confirmed', confirmedAt: new Date() },
-      });
-      return null;
-    });
-    if (!refusal) return;
+        // Guarded on the row not being released, whatever the lock says: a
+        // confirmed row that is also released, with no file, could not be
+        // cleared by the person.
+        await tx.storageObject.updateMany({
+          where: { id: rowId, releasedAt: null, removingAt: null },
+          data: { status: 'confirmed', confirmedAt: new Date() },
+        });
+        return null;
+      }, LOCKED_TX),
+    );
+    if (refusal === 'released') return false;
+    if (!refusal) return true;
     try {
       await this.client!.send(
         new DeleteObjectCommand({ Bucket: this.bucket, Key: key }),
@@ -831,6 +914,9 @@ export class StorageService {
   private async readUsage(
     wawuId: string,
     db: Pick<Prisma.TransactionClient, 'storageObject'>,
+    // Given by a caller inside a transaction, so the allowance is read on the
+    // transaction's own connection and not on a second one from the pool.
+    allowanceDb?: AllowanceDb,
   ): Promise<{ usage: StorageUsage; tickHeld: boolean }> {
     const [agg, allowance] = await Promise.all([
       db.storageObject.aggregate({
@@ -841,7 +927,7 @@ export class StorageService {
           folder: { in: [...CONTENT_FOLDERS] },
         },
       }),
-      this.allowance.of(wawuId),
+      this.allowance.of(wawuId, new Date(), allowanceDb),
     ]);
 
     const usedBytes = agg._sum.bytes ?? 0;
@@ -879,6 +965,23 @@ export class StorageService {
       free: { uploads: 0, storageBytes: FREE_STORAGE_BYTES },
       withTick: { uploads: TICK_UPLOADS, storageBytes: TICK_STORAGE_BYTES },
     };
+  }
+
+  /**
+   * The rule a named format sets for a folder (ME-04). Only the two content
+   * folders have one: anything else is refused, so a format cannot be used to
+   * reach a folder it has no say over.
+   */
+  private formatRuleFor(
+    format: UploadFormatId,
+    folder: UploadFolder,
+  ): { contentTypes: readonly string[]; maxBytes: number } {
+    if (folder !== 'content/full' && folder !== 'content/preview') {
+      throw new BadRequestException(
+        `A format only applies to content/full and content/preview, not ${folder}.`,
+      );
+    }
+    return formatFolderRule(format, folder);
   }
 
   /**
@@ -932,5 +1035,46 @@ export class StorageService {
       );
       if (stale.length < RECONCILE_BATCH) return;
     }
+  }
+
+  /**
+   * ME-04 round 3: removes the files that landed after their upload was given
+   * up on (released, or never arrived), once the PUT link they came through has
+   * expired. See late-file-sweep.ts. Run on a timer by StorageSweepService;
+   * safe to run at any time and from several Hubs at once.
+   */
+  sweepLateFiles(wawuId?: string): Promise<LateSweepResult> {
+    return sweepLateFiles(
+      {
+        client: this.client,
+        bucket: this.bucket,
+        folders: CONTENT_FOLDERS,
+        prisma: this.prisma,
+        logger: this.logger,
+      },
+      {
+        linkSeconds: UPLOAD_URL_SECONDS,
+        marginSeconds: this.sweepMarginSeconds,
+        wawuId,
+      },
+    );
+  }
+
+  /**
+   * ME-04 round 2: gives back the space of an upload the caller reserved and
+   * no listing has claimed (POST /uploads/release). See upload-release.ts.
+   */
+  releaseUpload(wawuId: string, key: string): Promise<{ released: true }> {
+    return releaseOwnUpload(
+      {
+        client: this.client,
+        bucket: this.bucket,
+        folders: CONTENT_FOLDERS,
+        prisma: this.prisma,
+        logger: this.logger,
+      },
+      wawuId,
+      key,
+    );
   }
 }

@@ -7,10 +7,13 @@ import { ContentStatus } from '../../generated/prisma/enums';
 import { Prisma } from '../../generated/prisma/client';
 import { StorageService, objectKeyFrom } from '../storage/storage.service';
 import type { VerificationState } from '../common/verification/verification-state';
+import type { PersonBadgeView } from '../plans/tier-badge/person-badge-view.type';
+import { TierBadgeService } from '../plans/tier-badge/tier-badge.service';
 import { EXPLORE_CATEGORIES, normaliseInterest } from './explore-categories';
 import type {
   ExploreCreatorsQueryDto,
   FeaturedCreatorsQueryDto,
+  SuggestedCreatorsQueryDto,
 } from './dto/explore-creators-query.dto';
 
 /** One creator card, the same fields the older GET /creators serves. */
@@ -22,11 +25,17 @@ export interface ExploreCreatorCard {
   field: string | null;
   pieceCount: number;
   verification: VerificationState;
+  /**
+   * Their tier badge while a tier runs, else null (TIER-07): the pill beside
+   * the name, with the Founding Maker number.
+   */
+  badge: PersonBadgeView | null;
   following: boolean;
 }
 
 const DEFAULT_PER_PAGE = 24;
 const DEFAULT_FEATURED = 10;
+const DEFAULT_SUGGESTED = 10;
 
 /**
  * Explore's category chips and featured creators (EXPLORE-03).
@@ -45,6 +54,7 @@ export class ExploreService {
     private readonly wawuId: WawuIdClient,
     private readonly blockedAccounts: BlockedAccountService,
     private readonly storage: StorageService,
+    private readonly badges: TierBadgeService,
   ) {}
 
   categories() {
@@ -58,12 +68,22 @@ export class ExploreService {
    * list of ids ever travels as bind parameters (the only array is the
    * viewer's own blocks, bound as one value).
    */
-  private async eligibleFrom(viewer: string | null, category?: string) {
+  private async eligibleFrom(
+    viewer: string | null,
+    category?: string,
+    anyOf?: string[],
+  ) {
     const hidden = await this.blockedAccounts.hiddenFrom(viewer);
     const inCategory = category
       ? Prisma.sql`AND EXISTS (SELECT 1 FROM unnest(p."interests") AS i
           WHERE regexp_replace(lower(i), '[^a-z0-9]', '', 'g') = ${normaliseInterest(category)}::text)`
       : Prisma.empty;
+    // AUTH-06: in any of several categories (the keys are normaliseInterest values).
+    const inAny =
+      anyOf && anyOf.length > 0
+        ? Prisma.sql`AND EXISTS (SELECT 1 FROM unnest(p."interests") AS i
+          WHERE regexp_replace(lower(i), '[^a-z0-9]', '', 'g') = ANY(${anyOf}::text[]))`
+        : Prisma.empty;
     return Prisma.sql`
       FROM "UserProfile" p
       WHERE p."accountType" = 'creator'::"AccountType"
@@ -72,7 +92,8 @@ export class ExploreService {
         AND NOT EXISTS (SELECT 1 FROM "PrivacySettings" s
           WHERE s."userWawuId" = p."wawuUserId" AND s."showInMemberLists" = false)
         AND p."wawuUserId" <> ALL(${hidden}::text[])
-        ${inCategory}`;
+        ${inCategory}
+        ${inAny}`;
   }
 
   private async cardsFor(ids: string[], viewer: string | null) {
@@ -136,7 +157,7 @@ export class ExploreService {
   ): Promise<ExploreCreatorCard[]> {
     if (profiles.length === 0) return [];
     const ids = profiles.map((p) => p.wawuUserId);
-    const [identities, following] = await Promise.all([
+    const [identities, following, badgeBy] = await Promise.all([
       this.wawuId.lookupPublicIdentities(ids),
       viewer
         ? this.prisma.followRelationship.findMany({
@@ -144,6 +165,7 @@ export class ExploreService {
             select: { followingWawuId: true },
           })
         : Promise.resolve([]),
+      this.badges.forMany(ids),
     ]);
     const followingSet = new Set(following.map((f) => f.followingWawuId));
     const avatars = await Promise.all(
@@ -166,6 +188,7 @@ export class ExploreService {
           field: p.interests[0] ?? null,
           pieceCount: counts.get(p.wawuUserId) ?? 0,
           verification: deriveVerificationState(p),
+          badge: badgeBy.get(p.wawuUserId) ?? null,
           following: followingSet.has(p.wawuUserId),
         };
       })
@@ -230,5 +253,31 @@ export class ExploreService {
       if (rows.length < 50) break;
     }
     return { items: items.slice(0, limit) };
+  }
+
+  /**
+   * People to follow at the end of sign-up (A13, AUTH-06): the same creators
+   * Explore may show this viewer, those who match the most of the picked
+   * categories first, then by handle. No picks is the plain list. The viewer
+   * is never in their own list.
+   */
+  async suggested(query: SuggestedCreatorsQueryDto, viewer: string | null) {
+    const limit = query.limit ?? DEFAULT_SUGGESTED;
+    const keys = [...new Set((query.interests ?? []).map(normaliseInterest))];
+    const from = await this.eligibleFrom(viewer, undefined, keys);
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>`
+      SELECT p."wawuUserId" AS id ${from}
+        AND p."wawuUserId" <> ${viewer ?? ''}::text
+      ORDER BY (SELECT count(DISTINCT regexp_replace(lower(i), '[^a-z0-9]', '', 'g'))
+                  FROM unnest(p."interests") AS i
+                 WHERE regexp_replace(lower(i), '[^a-z0-9]', '', 'g') = ANY(${keys}::text[])) DESC,
+               p."handle" ASC, p."wawuUserId" ASC
+      LIMIT ${limit}`;
+    return {
+      items: await this.cardsFor(
+        rows.map((r) => r.id),
+        viewer,
+      ),
+    };
   }
 }

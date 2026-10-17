@@ -219,6 +219,22 @@ SUPPORT_EMAIL=
 NUVION_FEE_BOOK_TRANSFER=
 NUVION_FEE_BANK_PAYOUT=
 NUVION_FEE_INFLOW=
+# Reconciliation with Nuvion (NUV-08; src/nuvion/handlers/reconcile-config.ts),
+# only under WALLET_PROVIDER=nuvion. Tuning, not money: every one is optional
+# and an empty or unusable value uses its default. Nuvion stops retrying a
+# webhook after 15 minutes, so a sweep finds the movements whose delivery
+# never came: NUVION_SWEEP_MINUTES is how often it runs (default 15),
+# NUVION_SWEEP_LOOKBACK_HOURS how far back it reads statements (24),
+# NUVION_SWEEP_MAX_ACCOUNTS how many accounts one pass reads at most (300; the
+# rest are rotated through across passes). The same pass looks at the webhook
+# subscription and reports one that is missing or not active (Nuvion's docs give
+# no way to extend one). Nuvion's docs describe no fee simulation, so the fee
+# check reports once that it is not available. See the NuvionReconcileFinding
+# table for what was reported. (PROVISIONAL(NUVION-SWEEP-MINUTES),
+# PROVISIONAL(NUVION-SWEEP-LOOKBACK-HOURS), PROVISIONAL(NUVION-SWEEP-MAX-ACCOUNTS)).
+NUVION_SWEEP_MINUTES=
+NUVION_SWEEP_LOOKBACK_HOURS=
+NUVION_SWEEP_MAX_ACCOUNTS=
 # WAWU's own limits on moving money (NUV-07), per person and per kind, under
 # either provider. Whole kobo, 1 or more; empty = no WAWU limit. Above one,
 # 403 limit_reached naming the limit, before anything is sent. The owner sets

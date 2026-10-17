@@ -38,6 +38,8 @@ describe('which notifications reach a phone', () => {
     expect(ungatedButSent.sort()).toEqual([
       'community_join_approved',
       'community_join_declined',
+      // WALLET-40 (owner answer 31): the owner asked for this alert.
+      'wallet_ready',
     ]);
   });
 
@@ -61,7 +63,12 @@ describe('which notifications reach a phone', () => {
         PUSH_ONLY_GATE[kind] ?? SETTINGS_GATE[kind],
       );
     }
-    expect(PUSH_ONLY_GATE).toEqual({ dm_received: 'dmReminders' });
+    // WALLET-39: the correction of a money-in notice is never hidden from the
+    // list; "Money in" mutes only its push.
+    expect(PUSH_ONLY_GATE).toEqual({
+      dm_received: 'dmReminders',
+      money_in_reversed: 'moneyIn',
+    });
     expect(SETTINGS_GATE.dm_received).toBeUndefined(); // the list is unchanged for the web
   });
 });
@@ -82,10 +89,28 @@ const EVENTS: NotificationEvent[] = [
     senderName: 'Ada Obi',
     senderAccountNumber: '0865231291',
   },
+  // WALLET-39: a credit the person was told about was taken back.
+  {
+    kind: 'money_in_reversed',
+    userWawuId: 'u',
+    amountKobo: 250_050n,
+    source: 'transfer',
+    senderName: 'Tolu Bakare',
+  },
   { kind: 'dm_received', userWawuId: 'u', amount: 2000 },
   { kind: 'dm_deadline', userWawuId: 'u', hoursLeft: 3 },
   { kind: 'dm_refunded', userWawuId: 'u', amount: 2000 },
   { kind: 'new_follower', userWawuId: 'u' },
+  // HOME-16: the morning TGIF notice (added with the kind: this list must name every pushed kind).
+  {
+    kind: 'tgif_daily',
+    userWawuId: 'u',
+    day: '2026-10-17',
+    series: 'SONS, NOT SLAVES',
+    verseReference: 'Romans 8:15 (NIV)',
+  },
+  // WALLET-40: the account number is ready (added with the kind: this list must name every pushed kind).
+  { kind: 'wallet_ready', userWawuId: 'u' },
   { kind: 'content_published', userWawuId: 'u', contentTitle: 'Night shoot' },
   {
     kind: 'content_rejected',

@@ -104,16 +104,21 @@ scripts/dev/stack.sh down   --name <n>
 | wawu-id | `a+1` | `--with id` | the real identity service from `--id`, database `<n>_wawu_id_test` |
 | web | `a+2` | `--with web` | production build of `--web` (`VERCEL_ENV=production`, so `/join` only), pointed at this Hub |
 | mobile | `a+3` | `--with mobile` | web export of `--mobile` with its own Metro cache, then a grep that only this stack's ports are baked in |
+| Nuvion stand-in | `b-1` | yes | `scripts/dev/nuvion-standin.cjs`: the wallet provider the Hub runs on (see below) |
 | mock WAWU ID | `b` | yes | the mock the contract suite uses (`mock-wawu-id/`), on the last port of the range |
 
 - The Hub signs people in through wawu-id when `id` is on, and through the mock
   otherwise. Payments use the repo's own Flutterwave mock (no key is set).
-  Fintava points at a closed port on this machine. `scripts/dev/block-net.cjs`
-  is preloaded into the Hub and wawu-id and refuses any request to a host that
-  is not this machine, so nothing reaches a real provider or a wawuafrica.com host.
-- The range must hold every port asked for and end above them, for example
-  `--ports 6531-6534 --with id,web` (Hub 6531, id 6532, web 6533, mock 6534) or
-  `--ports 6537-6538` (Hub 6537, mock 6538).
+  The Hub always runs `WALLET_PROVIDER=nuvion` (there is no Fintava option);
+  Fintava's settings point at a closed port on this machine and nothing uses
+  them. `scripts/dev/block-net.cjs` is preloaded into the Hub and wawu-id and
+  refuses any request to a host that is not this machine, so nothing reaches a
+  real provider or a wawuafrica.com host.
+- The range must hold every port asked for, the Nuvion stand-in one below the
+  last, and end above them, for example `--ports 6531-6535 --with id,web` (Hub
+  6531, id 6532, web 6533, stand-in 6534, mock 6535) or `--ports 6537-6539`
+  (Hub 6537, stand-in 6538, mock 6539). `status` names the provider and the
+  stand-in's port.
 - Names are lower case letters, digits and `_` (agents use their brief's prefix,
   for example `ostk1`). Each name has its own databases, logs and PIDs.
 - Logs go to `<scratch>/<n>/logs/`, PIDs to `<scratch>/<n>/pids`. `<scratch>` is
@@ -134,6 +139,44 @@ scripts/dev/stack.sh down   --name <n>
   lockfile is the same, and runs `npm ci` otherwise. `dist/` is rebuilt only when
   the source is newer (`--rebuild` forces it), so do not rebuild the Hub checkout
   while a stack from it is running.
+- `STACK_STORAGE_ENDPOINT` (with `STACK_STORAGE_PATH_STYLE=true` for a path-style
+  stand-in) points the Hub's object storage at a stand-in on this machine, for a
+  spec that must see the Hub's own storage calls. Left unset, storage is a name
+  the network guard refuses.
+
+### Nuvion on the stack (STACK-NUV)
+
+The Hub's Nuvion adapter accepts only Nuvion's two real hosts, so the stack gives
+it the sandbox host and `scripts/dev/nuvion-redirect.cjs` (preloaded after
+`block-net.cjs`) sends every request to that one host to the stand-in on
+`127.0.0.1`. Nuvion's production host stays refused. The stand-in answers what the
+adapter calls, in the shapes of the in-process double (`test/nuvion/`): entities,
+documents, the onboarding submission (approved after about a second), the naira
+account and its account details (active with a ten-digit number), accounts and
+balances, book transfers to a `nuvion_ban` (also WAWU's operational account),
+bank sends (bank list, name check, counterparties, payment details, transfers),
+and the webhooks the Hub expects, signed with a test secret the stack sets
+(`x-nuvion-event-signature`, HMAC-SHA256 of `timestamp.body`). A transfer is
+`pending`, debits the payer at once and settles after 1.5 s (`outflows.completed`).
+The Hub reads webhooks on a 30 second tick, so opening a wallet (three webhooks in
+a row) takes about two minutes. The Nuvion fees are the stack's own
+(`STACK_NUVION_FEE_BOOK`, `STACK_NUVION_FEE_BANK`, `STACK_NUVION_FEE_INFLOW`, kobo;
+defaults 0, 2500, 0), given to the Hub and charged by the stand-in alike. The
+stand-in's log is `<scratch>/<n>/logs/nuvion.log`.
+
+```bash
+# 1. A person with an approved, funded wallet, through the Hub's own routes. Prints one JSON line:
+#    token, userId, accountNumber, pin, balanceKobo (the Hub's and the stand-in's). --token for a stack with --with id.
+node scripts/dev/nuvion-tool.cjs seed --name <n> --scratch <dir> [--amount-kobo 5000000] [--pin 4829]
+# 2. A signed webhook from the stand-in to the Hub: money in, or move a transfer on.
+node scripts/dev/nuvion-tool.cjs fire --name <n> --scratch <dir> --inflow <account number> --amount-kobo 250000
+#    also: --settle <transfer id> --status failed|reversed|successful   --event <name> --transfer-id <id>   --state
+```
+
+`fire --state` (or `GET <stand-in>/__standin/state`) lists the stand-in's accounts,
+transfers and webhooks sent; `GET /__standin/account/<id, number or ban>` reads one
+balance, to compare with `GET /api/hub/money/wallet/balance`. The Hub never sees a
+control route.
 
 `scripts/dev/quiet.sh <name> -- <command...>` runs any command with its full
 output in `<scratch>/logs/<name>.log`, appends `EXIT <code>`, prints the last 15
@@ -332,14 +375,20 @@ writes to `superadmin` and `reviewer`.
 
 | Route | Notes |
 | --- | --- |
-| `GET /admin/ads` | Filters `status`, `placement`, `phase` (`upcoming`, `running`, `over`), `from` and `to` (campaigns whose window overlaps the range); `sort` `latest` or `soonest` by window start, ties by id; `page` and `perPage` like the other admin lists. |
+| `GET /admin/ads` | Filters `status`, `placement`, `artwork=missing` (campaigns saved before ADS-07 with no picture, not ended, each also flagged `needsArtwork`), `phase` (`upcoming`, `running`, `over`), `from` and `to` (campaigns whose window overlaps the range); `sort` `latest` or `soonest` by window start, ties by id; `page` and `perPage` like the other admin lists. |
 | `GET /admin/ads/report` | Campaigns in a range counted by status, placement and phase, how many serving would show right now per placement, and `delivery` (views, taps, skips, ctr) overall, `deliveryByStatus` and `deliveryByPlacement` for those campaigns over the range's UTC days. |
-| `POST /admin/ads` | A draft with its card. Nothing is served until it is scheduled. |
+| `POST /admin/ads` | A draft with its card. Nothing is served until it is scheduled. The card needs `artworkUrl` (R-59): without it the answer is 422 "Add artwork before you save this campaign" (`reason.code` `artwork_required`). Placements: `tgif_card`, `today_slot`, `explore_slider`. |
 | `GET /admin/ads/:id` | Campaign, card, its event, overlapping bookings on the placement and the whole audit history. |
 | `GET /admin/ads/:id/report` | Window, how much of it has run, what was done to it, and `delivery` plus `days` (`{ day, views, taps, skips }`, oldest first, empty days omitted) over `from` and `to`; `range` echoes what they became. |
-| `PATCH /admin/ads/:id` | Edit a draft or a paused campaign; the audit row records each changed field's before and after. |
+| `PATCH /admin/ads/:id` | Edit a draft or a paused campaign; the audit row records each changed field's before and after. A save that would leave the campaign with no artwork (clearing it, or a campaign saved before ADS-07 that still has none) is the same 422. |
 | `DELETE /admin/ads/:id` | A draft only. Its audit rows stay. |
-| `POST /admin/ads/:id/schedule`, `/pause`, `/resume`, `/end` | The state machine in `src/admin/ads/ad-campaign-state.ts`. An illegal move, or a repeat, is a 409 whose `reason` names the code and the statuses allowed. |
+| `POST /admin/ads/:id/schedule`, `/pause`, `/resume`, `/end` | The state machine in `src/admin/ads/ad-campaign-state.ts`. An illegal move, or a repeat, is a 409 whose `reason` names the code and the statuses allowed. `schedule` and `resume` refuse a campaign with no artwork (R-59): the same 422 "Add artwork before you save this campaign" (`reason.code` `artwork_required`), nothing changed; `pause` and `end` are never refused for it. |
+
+`GET /ads?placement=` serves a campaign only when it has artwork. `tgif_card` and
+`today_slot` answer one card (or `data: null`); `explore_slider` (ADS-07)
+answers a list of every live card for the Explore slider, heaviest first, or
+`data: []`, and the app interleaves it with events. Views, taps and skips are
+counted by `POST /ads/:id/events` the same way for all three.
 
 Every change runs in one transaction that locks the campaign row, so two
 requests for one campaign take turns: one outcome, one audit row
@@ -366,6 +415,37 @@ page calls `GET /admin/ads/:id/report?from=&to=` and draws `delivery` and
 `days`; the table calls `GET /admin/ads?...` and reads `delivery` on each row;
 the overview calls `GET /admin/ads/report`. Counts survive a pause or an end.
 A counted campaign cannot be deleted (end it instead).
+
+### Plan settings (`/api/hub/admin/plan-settings`, task TIER-06)
+
+The launch figures (tier prices and lengths, the add-5-products price, the
+points cash rate, expiry and daily cap, packs, AI tool costs, the referral
+ladder, the event pass lines and date, and a few figures from other rulings)
+are admin settings, not code (R-65). `GET` lists every setting with its value,
+its default, the screens that print it and a provisional note where the owner
+did not name the figure. `PATCH` takes `{ "settings": { "<key>": <value> } }`:
+a `null` puts a setting back to its default, zero and negative figures are
+refused, a request is all or nothing, and each setting that changed writes one
+`AdminOpsAudit` row (superadmin and finance change; support reads).
+
+`PLANS_CONFIG` is the live plan: the defaults (`src/plans/plans.config.json`
+and `src/plan-settings/plan-settings.defaults.json`) with the saved rows
+(`PlanSetting`) laid over them, kept in memory. The saving process reloads at
+once; another Hub process picks the change up within 15 seconds. A task that
+needs a setting reads it with `PlanSettingsService.number(key)`, `.text(key)`
+or `.value(key)`. 85/15 is not a setting. Dollar prices are not settings yet.
+
+What a person is shown is what they get. A points cash-out carries the
+`quoteToken` of its quote (`GET /points/convert/quote`) in the body and is paid
+at that quote or not at all: a changed rate, minimum, cap or cash is `409
+quote_changed` with the new quote in `reason.pointsQuote`. A tier purchase's
+goods (products, bonus points, days, bump points, expiry) are the payment's
+`terms`: the quote token is bound to them and the payment keeps them from the
+claim, so a plan changed while a payment confirms changes nothing already
+bought. The cash rate may never exceed the price per point of any way points
+are sold (a pack, the checkout offer, the shortfall rate): a change that would
+is a 400 naming both settings, whichever of them is changed. Saves take turns
+(one advisory lock), so each audit row's old value is true.
 
 ### Environment
 
@@ -636,15 +716,26 @@ project with enhanced push security) and `EXPO_PUSH_BASE_URL` (default
 `https://exp.host`) are optional; both are listed in `deploy/README.md` and
 `.env.example`. Android needs the owner's FCM credentials uploaded to Expo.
 
-## Money in (WALLET-10)
+## Money in (WALLET-10, WALLET-39)
 
-A bank transfer into a person's account is a completed `in` row of category
-`top_up` in the ledger (`src/money/ledger/`; Fintava's `account_funded` through
-the ledger sweep, Nuvion's `inflows.completed` through NUV-04's handler). A
-sweep in every Hub (`src/money/money-in-notice/`, every 10 seconds) turns each
-such row into one `money_in` notification, which the push sender above then
-sends to the person's phones. It reads the ledger, never the webhook event, and
-never calls the provider; a server tells only the rows of the provider it runs.
+Every credit to a person's wallet is a completed `in` row in the ledger
+(`src/money/ledger/`) of one of four categories: a bank transfer in (`top_up`;
+Fintava's `account_funded` through the ledger sweep, Nuvion's
+`inflows.completed` through NUV-04's handler), money from another person
+(`transfer`), earnings landing (`earning`: WALLET-16's settlement, a released
+hold, a points cash-out) and a refund (`refund`). A sweep in every Hub
+(`src/money/money-in-notice/`, every 10 seconds) turns each such row into one
+`money_in` notification ("You received ₦5,000 from Tolu B.", "in earnings", "a
+refund of ...", "by bank transfer"), which the push sender above then sends to
+the person's phones. It reads the ledger, never the webhook event, and never
+calls the provider; a server tells only the rows of the provider it runs. A
+writer of a new `in` row needs no hook: its category is in
+`MONEY_IN_CATEGORIES` and its words in `money-in-sources.ts`.
+
+The notification carries the ledger row's id as its `transaction` target (the
+id `GET /money/transactions/{id}` answers), in `GET /me/notifications` and in
+the push's `data`. Its text names the amount and where it came from, never a
+whole account number.
 
 Exactly once: the notification and its mark (`MoneyInNotice`, primary key the
 ledger row) are written in one transaction with the row locked, so a replayed
@@ -653,6 +744,13 @@ between the row and the push all end in one notification. With the person's
 "Money in" switch (Z3) off, only the mark is written (`muted`): nothing is
 sent and nothing waits. `MONEY_IN_NOTICE_WINDOW_HOURS` (default 72, in
 `.env.example`) bounds how far back a pass reads.
+
+A credit that was told and is then reversed in the ledger (`reversed`) is
+followed by one `money_in_reversed` notification ("The ₦5,000 you received
+from Tolu B. was reversed."), written with the mark's `correctedAt` in one
+transaction, up to 30 days after the credit. A credit nobody was told about
+(`muted`, `before`) is not corrected. The list always carries the correction;
+"Money in" off silences only its push.
 
 ## Blocking and data export (SETTINGS-04)
 

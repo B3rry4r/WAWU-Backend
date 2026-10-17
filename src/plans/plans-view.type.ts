@@ -12,6 +12,17 @@ export type PlanCurrency = 'NGN' | 'USD';
 export interface PlanEventPassView {
   id: string;
   name: string;
+  /**
+   * The lines W44 prints under the pass, set in admin settings (TIER-06,
+   * G-804). Left out when none is set.
+   */
+  benefits?: string[] | null;
+  /**
+   * The day of the event, `YYYY-MM-DD`, set in admin settings (TIER-06,
+   * G-804). Left out until the owner sets it: W44 then reads "Date to be
+   * announced".
+   */
+  eventDate?: string | null;
 }
 
 export interface PlanBadgeView {
