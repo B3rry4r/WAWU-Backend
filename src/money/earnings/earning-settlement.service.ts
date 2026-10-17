@@ -147,11 +147,14 @@ export class EarningSettlementService {
   ) {}
 
   /**
-   * What is owed now, for the nightly check (MONEY-16): the earnings still
-   * `owed` of the provider this server runs, counted and summed in kobo. The
-   * money is in WAWU's own account until the provider confirms the move, so
-   * it is part of what that account holds. Compared with the provider's own
-   * balance by MONEY-16, never shown as a balance.
+   * What is owed now: the earnings still `owed` of the provider this server
+   * runs, counted and summed in kobo. The money is in WAWU's own account until
+   * the provider confirms the move, so it is part of what that account holds.
+   * Never shown as a balance. The nightly check (MONEY-16) does not call this:
+   * an earning sent and not yet confirmed has no ledger row, and the check
+   * leaves any movement younger than its settle window (30 minutes,
+   * `DEFAULT_SETTLE_MINUTES`) to the next run; one still unconfirmed after
+   * that is a finding it is right to raise.
    */
   async owedTotals(): Promise<{ count: number; amountKobo: bigint }> {
     const rows = await this.prisma.earningSettlement.aggregate({

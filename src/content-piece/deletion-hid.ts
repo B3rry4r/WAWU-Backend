@@ -49,7 +49,29 @@ export async function readHidden(
   if (marker) return { piece, hidden: marker.priorStatus === 'live' };
   const now = await db.contentPiece.findUnique({ where: { id: piece.id } });
   if (!now || now.status !== 'removed') return { piece: now, hidden: false };
-  return { piece: now, hidden: now.creatorWawuId === DELETED_CREATOR_ID };
+  if (now.creatorWawuId !== DELETED_CREATOR_ID) {
+    return { piece: now, hidden: false };
+  }
+  return { piece: now, hidden: await hiddenUnderDeletedAccount(db, piece.id) };
+}
+
+/**
+ * A piece that is `removed` and now keyed to the deleted account: the strip
+ * always leaves a marker under it, so the marker is read again and decides
+ * (a read that missed the marker just before the strip committed must not
+ * treat a piece that was taken down earlier as the buyers', SWEEP-MONEY,
+ * SETTINGS-06 L15). Only a piece with no marker at all (a purge from before
+ * the markers) is the buyers' on the creator id alone.
+ */
+async function hiddenUnderDeletedAccount(
+  db: Db,
+  pieceId: string,
+): Promise<boolean> {
+  const marker = await db.accountDeletionContent.findFirst({
+    where: { contentPieceId: pieceId },
+    select: { priorStatus: true },
+  });
+  return marker ? marker.priorStatus === 'live' : true;
 }
 
 /** The same question for a caller that holds only a few columns and needs a yes or no. */
@@ -67,11 +89,14 @@ export async function hiddenByDeletion(
     where: { id: piece.id },
     select: { status: true, creatorWawuId: true },
   });
-  return (
-    now !== null &&
-    now.status === 'removed' &&
-    now.creatorWawuId === DELETED_CREATOR_ID
-  );
+  if (
+    now === null ||
+    now.status !== 'removed' ||
+    now.creatorWawuId !== DELETED_CREATOR_ID
+  ) {
+    return false;
+  }
+  return hiddenUnderDeletedAccount(db, piece.id);
 }
 
 /** True when this person has a completed paid purchase of the piece. */

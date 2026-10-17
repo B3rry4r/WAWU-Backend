@@ -13,6 +13,7 @@ import request from 'supertest';
 import { AppModule } from '../app.module';
 import { FlutterwaveWalletClient } from '../wallet/flutterwave-wallet.client';
 import { FLUTTERWAVE_WALLET_GATEWAY } from '../wallet/flutterwave-wallet.gateway';
+import { checkStorableTextOnEveryRoute } from '../storable-text/storable-text.pipe';
 import { AllExceptionsFilter } from '../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../common/interceptors/response.interceptor';
 import {
@@ -202,6 +203,10 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
     );
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
+    // FIX-17 F5: the pipe that refuses text Postgres cannot take is wired in as
+    // the Hub installs it, so this suite shows the routes the web calls answer
+    // as before with it on, not only that the lock is intact.
+    checkStorableTextOnEveryRoute(app);
     await app.init();
     live = liveRoutes(app);
 

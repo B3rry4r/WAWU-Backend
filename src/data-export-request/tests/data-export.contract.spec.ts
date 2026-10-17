@@ -894,13 +894,12 @@ describe('Data export (contract)', () => {
           }>;
         };
       };
-      expect(file.data.tierTransferPurchases).toEqual([
-        expect.objectContaining({
-          targetId: 'pack-s',
-          paymentKind: 'points_pack',
-          terms: expect.objectContaining({ points: 120, bonusPoints: 12 }),
-        }),
-      ]);
+      expect(file.data.tierTransferPurchases).toHaveLength(1);
+      const [exported] = file.data.tierTransferPurchases;
+      expect(exported.targetId).toBe('pack-s');
+      expect(exported.paymentKind).toBe('points_pack');
+      expect(exported.terms.points).toBe(120);
+      expect(exported.terms.bonusPoints).toBe(12);
     } finally {
       await prisma.planTransferOrder.delete({ where: { id: order.id } });
     }
