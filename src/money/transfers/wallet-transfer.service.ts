@@ -75,6 +75,8 @@ export const TRANSFER_NARRATION = 'WAWU transfer';
 
 /** Added to a send's reference for the transfer that moves WAWU's fee (FIX-52). */
 export const FEE_LEG_SUFFIX = '-fee';
+/** Added to the same reference for the transfer that gives the fee back (FIX-52). */
+export const FEE_RETURN_SUFFIX = '-fee-back';
 
 /** Someone else's send is the same 404 as one nobody holds (CONVENTIONS.md section 3). */
 export const TRANSFER_NOT_FOUND_MESSAGE = 'We could not find that send.';
@@ -116,6 +118,32 @@ const LATE_SUCCESS_SIGHTING = /\bstatus failed vs completed\b/;
 const PARTY_WAIT_MS = 3_000;
 
 type TransferRow = Prisma.WalletTransferGetPayload<object>;
+
+/**
+ * Where WAWU's fee stands before a send goes out (FIX-52). `moved`: its own
+ * transfer is finished and took `debitKobo` from the sender. `none`: there is
+ * no such transfer on this provider, or the fee is not more than the
+ * provider's charge for moving it. `pending`: Nuvion has not finished it, or
+ * its answer was lost: the send waits and the fee is never moved twice.
+ * `refused`: the provider said it made nothing (`definitive`: for a reason
+ * that will not pass, so a send waiting on it is failed).
+ */
+type FeeStep =
+  | { state: 'moved'; debitKobo: bigint }
+  | { state: 'none' }
+  | { state: 'pending' }
+  | { state: 'refused'; error: WalletProviderError; definitive: boolean };
+
+/** Refusals of the fee's transfer that a later try would not change. */
+const FEE_REFUSALS_FINAL: readonly WalletProviderErrorKind[] = [
+  'insufficient_funds',
+  'wallet_inactive',
+  'refused',
+];
+/** A fee to give back is looked for this long, then it is left to a person. */
+const FEE_RETURN_GIVE_UP_MS = 24 * 60 * MINUTE;
+/** The rest between two tries to give a fee back. */
+const FEE_RETURN_RETRY_MS = 2 * MINUTE;
 
 /**
  * Provider refusals that mean no money moved and the person can fix it, or
@@ -252,7 +280,11 @@ export class WalletTransferService implements OnModuleInit {
       );
     }
     // A send's ledger row settled by anything settles the send now.
-    this.ledger.onTransferSettled((e) => this.settle(e.transferId));
+    // A pending status is a wake (the fee's transfer was delivered): the send
+    // goes on, which may ask the provider. Any other status only reads the ledger.
+    this.ledger.onTransferSettled((e) =>
+      this.settle(e.transferId, new Date(), e.status === 'pending'),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -315,6 +347,16 @@ export class WalletTransferService implements OnModuleInit {
     // send still leaves a send the sweep settles, and a repeat of the key is
     // answered from this send).
     const transfer = await this.claim(scope, data);
+
+    // WAWU's fee moves FIRST (FIX-52): a balance spent while the send is on
+    // its way can never evade it. Nothing else moves unless it did.
+    const feeStep = await this.takeFee(transfer);
+    if (feeStep.state === 'refused') {
+      return this.afterRefusal(transfer, scope, feeStep.error, wallet);
+    }
+    if (feeStep.state === 'pending') {
+      return this.answer(scope, await this.reload(transfer));
+    }
 
     let receipt: ProviderTransferReceipt;
     try {
@@ -413,6 +455,15 @@ export class WalletTransferService implements OnModuleInit {
     // row and the key's link to it, in one transaction, before the provider
     // is called.
     const transfer = await this.claim(scope, data);
+
+    // WAWU's fee moves first, as for a send to a WAWU user (FIX-52).
+    const feeStep = await this.takeFee(transfer);
+    if (feeStep.state === 'refused') {
+      return this.afterRefusal(transfer, scope, feeStep.error, wallet);
+    }
+    if (feeStep.state === 'pending') {
+      return this.answer(scope, await this.reload(transfer));
+    }
 
     let receipt: ProviderTransferReceipt;
     try {
@@ -698,30 +749,28 @@ export class WalletTransferService implements OnModuleInit {
       where: { id: seen.id },
     });
     if (t.status !== 'pending') return t;
-    // WAWU's fee, on a provider whose own charge cannot carry it (FIX-52): the
-    // send is confirmed, so its fee is moved now, before anything is written.
-    // A fee not yet confirmed leaves the send pending, and the sweep asks again.
+    // WAWU's fee moved before the send did (FIX-52). A record from the
+    // provider's answer or lookup states its own charge for the send only, so
+    // the fee's transfer, read back, is added; a row the provider's delivery
+    // already completed holds it (the handler reads the same record). A fee
+    // that was never moved leaves the send at what really left the wallet.
     let feeNote: string | null = null;
     if (this.feeLegDue(t)) {
-      const leg = await this.collectFeeLeg(t);
-      if (leg.state === 'pending') {
-        await this.reschedule(t, new Date());
-        return this.reload(t);
-      }
-      feeNote = leg.note;
-      // A row the provider's webhook already completed holds the fee as
-      // quoted (the handler adds it); a record from the provider's answer
-      // or lookup states its own charge only, so the fee moved is added.
-      if (
-        leg.state === 'collected' &&
-        !rec.debitRecorded &&
-        rec.feeKobo !== null
-      ) {
+      const moved = await this.feeLegDebit(t);
+      if (moved === null) {
+        // Nothing to say when the fee is not more than the provider's charge
+        // for moving it (no transfer was due); a fee that was due and is not
+        // there is told.
+        if (this.feeLegKobo(koboNumber(t.wawuFeeKobo)) > 0) {
+          feeNote = "WAWU's fee was not collected";
+        }
+      } else if (!rec.debitRecorded && rec.feeKobo !== null) {
+        const charge = rec.feeKobo;
+        const total = rec.totalKobo;
         rec = {
           ...rec,
-          feeKobo: rec.feeKobo + leg.chargedKobo,
-          totalKobo:
-            rec.totalKobo === null ? null : rec.totalKobo + leg.chargedKobo,
+          feeKobo: charge + moved,
+          totalKobo: total === null ? null : total + moved,
         };
       }
     }
@@ -855,70 +904,295 @@ export class WalletTransferService implements OnModuleInit {
   }
 
   /**
-   * Moves WAWU's fee from the sender to WAWU's own account at the provider,
-   * once the send itself is confirmed: one transfer under the send's
-   * reference plus `-fee`, which the provider's log and Nuvion both answer
-   * with the original when it is asked again, so a replay, a sweep or a
-   * second completion never moves it twice. Nothing is held while the
-   * provider answers. The provider's charge for moving it comes out of the
-   * fee (the quote's provider part is for the send alone), so the person pays
-   * the quote to the kobo. A send that fails or is reversed never gets here,
-   * so there is no fee to give back.
-   *
-   * `pending`: not confirmed (accepted and unfinished, a lost answer, the
-   * provider out of reach): the send waits and nothing is sent again.
-   * `none`: nothing to collect (the fee is not more than the provider's
-   * charge for moving it) or the balance no longer covers it: the send
-   * completes at what really left the wallet.
+   * What the fee's transfer moves, in kobo. Nuvion charges for moving it on
+   * what it moves (a banded schedule charges by band), so the amount is the
+   * one whose own charge brings the sender's debit to WAWU's fee, to the
+   * kobo where the schedule allows it. At most the fee, at least 0.
    */
-  private async collectFeeLeg(
-    t: TransferRow,
-  ): Promise<
-    | { state: 'collected'; chargedKobo: bigint; note: null }
-    | { state: 'none'; note: string | null }
-    | { state: 'pending'; note: null }
-  > {
+  private feeLegKobo(wawuFee: number): number {
+    if (!this.fees.feesSet) return wawuFee;
+    const charge = (kobo: number) =>
+      this.fees.providerFees.walletToWalletKobo(kobo);
+    let leg = wawuFee - charge(wawuFee);
+    for (let i = 0; i < 6 && leg > 0; i += 1) {
+      const next = wawuFee - charge(leg);
+      if (next === leg) break;
+      leg = next;
+    }
+    return Math.max(0, Math.min(leg, wawuFee));
+  }
+
+  /**
+   * Moves WAWU's fee from the sender to WAWU's own account at the provider,
+   * BEFORE the send (lead ruling, 17 Oct): one transfer under the send's
+   * reference plus `-fee`, which the provider's log and Nuvion both answer
+   * with the original when it is asked again, so a replay, a parallel send, a
+   * sweep or a late delivery never moves it twice. A balance spent after it
+   * can no longer evade it. Nothing is held while the provider answers. The
+   * provider's charge for moving it is taken on what it moves, so the person
+   * pays the quote to the kobo.
+   */
+  private async takeFee(t: TransferRow): Promise<FeeStep> {
+    if (!this.feeLegDue(t)) return { state: 'none' };
     const wawuFee = koboNumber(t.wawuFeeKobo);
-    const moveCost = this.fees.feesSet
-      ? this.fees.providerFees.walletToWalletKobo(wawuFee)
-      : 0;
-    const legKobo = wawuFee - moveCost;
-    if (legKobo <= 0) {
+    const leg = this.feeLegKobo(wawuFee);
+    if (leg <= 0) {
       this.logger.warn(
-        `send ${t.id}: WAWU's fee (${wawuFee} kobo) is not more than ${this.provider.label}'s charge for moving it (${moveCost}); not collected`,
+        `send ${t.id}: WAWU's fee (${wawuFee} kobo) is not more than ${this.provider.label}'s charge for moving it; not collected`,
       );
-      return { state: 'none', note: null };
+      return { state: 'none' };
     }
     try {
       const platform = await this.provider.getPlatformAccount();
       const receipt = await this.provider.walletToWallet({
         fromAccountNumber: t.payerAccountNumber!,
         toAccountNumber: platform.accountNumber,
-        amountKobo: BigInt(legKobo),
+        amountKobo: BigInt(leg),
         reference: `${t.customerReference}${FEE_LEG_SUFFIX}`,
         narration: TRANSFER_NARRATION,
       });
-      return { state: 'collected', chargedKobo: receipt.totalKobo, note: null };
+      return { state: 'moved', debitKobo: receipt.totalKobo };
     } catch (e) {
-      if (
-        e instanceof WalletProviderError &&
-        e.kind === 'insufficient_funds' &&
-        !e.recordMayExist &&
-        !e.requestNotSent
-      ) {
-        this.logger.error(
-          `send ${t.id}: WAWU's fee could not be taken, the balance no longer covers it; completed without it`,
-        );
+      if (e instanceof WalletProviderError && !e.recordMayExist) {
         return {
-          state: 'none',
-          note: "WAWU's fee was not collected: the balance no longer covered it",
+          state: 'refused',
+          error: e,
+          definitive: FEE_REFUSALS_FINAL.includes(e.kind),
         };
       }
       this.logger.warn(
-        `send ${t.id}: WAWU's fee is not confirmed yet (${e instanceof WalletProviderError ? e.kind : 'error'}); the send stays pending`,
+        `send ${t.id}: WAWU's fee is not confirmed yet (${e instanceof WalletProviderError ? e.kind : 'error'}); the send waits and nothing is sent`,
       );
-      return { state: 'pending', note: null };
+      return { state: 'pending' };
     }
+  }
+
+  /** The provider's record of a transfer under a send's reference plus `suffix`; read only. */
+  private async legRecord(
+    t: TransferRow,
+    suffix: string,
+  ): Promise<ProviderTransaction | 'unknown' | null> {
+    try {
+      const r = await this.provider.findTransactionByReference(
+        `${t.customerReference}${suffix}`,
+      );
+      if (r.state === 'found') return r.transaction;
+      return r.state === 'absent' ? null : 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /** What the fee's transfer took from the sender, or null when it took nothing (read only). */
+  private async feeLegDebit(t: TransferRow): Promise<bigint | null> {
+    const rec = await this.legRecord(t, FEE_LEG_SUFFIX);
+    if (
+      rec === null ||
+      rec === 'unknown' ||
+      rec.outcome !== 'completed' ||
+      rec.feeKobo === null ||
+      rec.feeKobo === undefined
+    ) {
+      return null;
+    }
+    return rec.amountKobo + rec.feeKobo;
+  }
+
+  /**
+   * Gives the fee back to a sender whose send did not stand (failed, or
+   * reversed before or after it completed): the person gets every naira back,
+   * Nuvion's charges on both transfers are WAWU's. One transfer under the
+   * send's reference plus `-fee-back`, from WAWU's account, made once however
+   * often it is asked. `none`: no fee was taken. `pending`: not finished yet.
+   */
+  private async returnFee(
+    t: TransferRow,
+  ): Promise<'done' | 'none' | 'pending'> {
+    if (!this.feeLegDue(t)) return 'none';
+    const rec = await this.legRecord(t, FEE_LEG_SUFFIX);
+    const old =
+      Date.now() - (t.sentAt ?? t.createdAt).getTime() > FEE_RETURN_GIVE_UP_MS;
+    if (rec === 'unknown' || (rec !== null && rec.outcome === 'pending')) {
+      if (old) {
+        this.logger.error(
+          `send ${t.id}: WAWU's fee transfer is still not known after a day; a person looks`,
+        );
+        return 'none';
+      }
+      return 'pending';
+    }
+    if (rec === null || rec.outcome !== 'completed') return 'none';
+    const owed = rec.amountKobo + (rec.feeKobo ?? 0n);
+    try {
+      const platform = await this.provider.getPlatformAccount();
+      await this.provider.walletToWallet({
+        fromAccountNumber: platform.accountNumber,
+        toAccountNumber: t.payerAccountNumber!,
+        amountKobo: owed,
+        reference: `${t.customerReference}${FEE_RETURN_SUFFIX}`,
+        narration: TRANSFER_NARRATION,
+      });
+      return 'done';
+    } catch (e) {
+      this.logger.warn(
+        `send ${t.id}: WAWU's fee could not be given back yet (${e instanceof WalletProviderError ? e.kind : 'error'}); asked again`,
+      );
+      return 'pending';
+    }
+  }
+
+  /**
+   * A send that did not stand owes its sender the fee back. The row is
+   * marked (`nextCheckAt` on a failed, reversed or completed send is
+   * otherwise empty) so the sweep goes on until it is given back; the first
+   * try is made now.
+   */
+  private async owe(t: TransferRow): Promise<void> {
+    if (!this.feeLegDue(t)) return;
+    await this.prisma.walletTransfer.updateMany({
+      where: { id: t.id },
+      data: { nextCheckAt: new Date() },
+    });
+    await this.returnOwed(t);
+  }
+
+  /** One try at giving a fee back; the mark stays while it is not done. */
+  private async returnOwed(t: TransferRow): Promise<void> {
+    let result: 'done' | 'none' | 'pending' = 'pending';
+    try {
+      result = await this.returnFee(t);
+    } catch (e) {
+      this.logger.error(
+        `send ${t.id}: giving the fee back failed (${e instanceof Error ? e.name : 'error'}); asked again`,
+      );
+    }
+    await this.prisma.walletTransfer.updateMany({
+      where: { id: t.id },
+      data: {
+        nextCheckAt:
+          result === 'pending'
+            ? new Date(Date.now() + FEE_RETURN_RETRY_MS)
+            : null,
+      },
+    });
+  }
+
+  /** Sends that owe a fee back and are due another try. */
+  private async returnOwedFees(now: Date): Promise<void> {
+    const due = await this.prisma.walletTransfer.findMany({
+      where: {
+        status: { in: ['failed', 'reversed', 'completed'] },
+        nextCheckAt: { lte: now },
+        provider: this.provider.name,
+      },
+      orderBy: { nextCheckAt: 'asc' },
+      take: SWEEP_PAGE,
+    });
+    for (const t of due) await this.returnOwed(t);
+  }
+
+  /**
+   * A completed send that Nuvion reversed afterwards: its sender's row says
+   * so, and the send follows it once (`completed` to `reversed`) and gives
+   * the fee back with the rest (FIX-52). Only a send that had a fee leg.
+   */
+  private async followLateReversal(t: TransferRow): Promise<TransferRow> {
+    if (t.status !== 'completed' || !this.feeLegDue(t)) return t;
+    const row = await this.prisma.fintavaLedgerEntry.findFirst({
+      where: {
+        customerReference: t.customerReference,
+        direction: 'out',
+        walletKind: 'user',
+      },
+      select: { status: true, reversedAt: true },
+    });
+    if (row?.status !== 'reversed') return t;
+    const moved = await this.prisma.walletTransfer.updateMany({
+      where: { id: t.id, status: 'completed' },
+      data: { status: 'reversed', reversedAt: row.reversedAt ?? new Date() },
+    });
+    const fresh = await this.reload(t);
+    if (moved.count > 0) await this.owe(fresh);
+    return fresh;
+  }
+
+  /**
+   * The send's own transfer, made from the sweep or a wake: only for a send
+   * that waited on its fee, once the fee is confirmed. The provider answers a
+   * reference it has already seen with the original, so this never makes a
+   * second transfer.
+   */
+  private async issueSend(
+    t: TransferRow,
+    now: Date,
+  ): Promise<TransferStatus | null> {
+    const wallet = t.payerAccountNumber
+      ? await this.prisma.fintavaWallet.findUnique({
+          where: { accountNumber: t.payerAccountNumber },
+          select: { customerId: true, provider: true },
+        })
+      : null;
+    if (!wallet || !isRowOf(this.provider.name, wallet.provider)) {
+      await this.reschedule(t, now);
+      return 'pending';
+    }
+    let receipt: ProviderTransferReceipt;
+    try {
+      receipt =
+        t.kind === 'bank_account'
+          ? await this.provider.bankTransfer({
+              from: { kind: 'customer', customerId: wallet.customerId },
+              accountNumber: t.bankAccountNumber ?? '',
+              accountName: t.bankAccountName ?? '',
+              bankCode: t.bankCode ?? '',
+              amountKobo: t.amountKobo,
+              reference: t.customerReference,
+              narration: TRANSFER_NARRATION,
+              payee: null,
+            })
+          : await this.provider.walletToWallet({
+              fromAccountNumber: t.payerAccountNumber!,
+              toAccountNumber: t.recipientAccountNumber ?? '',
+              amountKobo: t.amountKobo,
+              reference: t.customerReference,
+              narration: TRANSFER_NARRATION,
+            });
+    } catch (e) {
+      if (
+        e instanceof WalletProviderError &&
+        !e.recordMayExist &&
+        NO_TRANSFER_REFUSALS.includes(e.kind)
+      ) {
+        return (await this.markFailed(t, TRANSFER_FAILED_REASON))
+          .status as TransferStatus;
+      }
+      await this.reschedule(t, now);
+      return 'pending';
+    }
+    if (receipt.amountKobo !== t.amountKobo) {
+      return (
+        await this.toReview(
+          t,
+          `amountKobo ${t.amountKobo} vs ${receipt.amountKobo}`,
+        )
+      ).status as TransferStatus;
+    }
+    await this.markSentToBank(t, now);
+    return (
+      await this.completeFromRecord(t, {
+        amountKobo: receipt.amountKobo,
+        feeKobo: receipt.feeKobo,
+        totalKobo: receipt.totalKobo,
+        refs: {
+          fintavaReference: receipt.providerReference,
+          tagapayTransRef: receipt.secondaryReference,
+          fintavaTransactionId: receipt.transactionId,
+        },
+        source: 'send',
+        occurredAt: null,
+        debitRecorded: false,
+      })
+    ).status as TransferStatus;
   }
 
   // -------------------------------------------------------------------------
@@ -967,6 +1241,7 @@ export class WalletTransferService implements OnModuleInit {
         after = { at: last.nextCheckAt!, id: last.id };
       }
       await this.lookForLateSuccess(now);
+      await this.returnOwedFees(now);
     } catch (e) {
       this.logger.error(
         `send sweep failed: ${e instanceof Error ? e.message : 'unknown'}`,
@@ -1097,6 +1372,9 @@ export class WalletTransferService implements OnModuleInit {
       const followed = await this.followReversal(t);
       return (await this.noteLateSuccess(followed)).status as TransferStatus;
     }
+    if (t.status === 'completed') {
+      return (await this.followLateReversal(t)).status as TransferStatus;
+    }
     if (t.status !== 'pending') return t.status as TransferStatus;
     const row = await this.prisma.fintavaLedgerEntry.findFirst({
       where: {
@@ -1147,6 +1425,26 @@ export class WalletTransferService implements OnModuleInit {
     // The provider is asked.
     if (!ask) return 'pending';
     const answer = await this.askProvider(t);
+    if (
+      this.feeLegDue(t) &&
+      (answer?.state === 'absent' ||
+        (answer?.state === 'unknown' && answer.why === 'unrecognised'))
+    ) {
+      // The provider holds no transfer of the send: it waits on its fee
+      // (FIX-52). The fee's transfer is asked again (never repeated), and the
+      // send goes out only once the fee is moved. A send the provider already
+      // holds is never held up, and never has its fee taken late.
+      const fee = await this.takeFee(t);
+      if (fee.state === 'refused' && fee.definitive) {
+        return (await this.markFailed(t, TRANSFER_FAILED_REASON))
+          .status as TransferStatus;
+      }
+      if (fee.state === 'refused' || fee.state === 'pending') {
+        await this.reschedule(t, now);
+        return 'pending';
+      }
+      return this.issueSend(t, now);
+    }
     if (answer?.state === 'found') {
       const found = answer.transaction;
       await this.markSentToBank(t, occurredOf(found) ?? now);
@@ -1664,11 +1962,15 @@ export class WalletTransferService implements OnModuleInit {
     return this.reload(t);
   }
 
-  private toReversed(t: TransferRow): Promise<TransferRow> {
-    return this.transition(t, 'reversed', {
+  private async toReversed(t: TransferRow): Promise<TransferRow> {
+    const row = await this.transition(t, 'reversed', {
       reversedAt: new Date(),
       nextCheckAt: null,
     });
+    // Reversed before it completed: the fee goes back with the rest (FIX-52).
+    if (row.status === 'reversed' && t.status === 'pending')
+      await this.owe(row);
+    return row;
   }
 
   private async markFailed(
@@ -1681,6 +1983,7 @@ export class WalletTransferService implements OnModuleInit {
       failedAt: new Date(),
       nextCheckAt: null,
     });
+    if (row.status === 'failed' && !t.reviewSince) await this.owe(row);
     if (writeLedger && row.status === 'failed') {
       try {
         await this.ledger.record(

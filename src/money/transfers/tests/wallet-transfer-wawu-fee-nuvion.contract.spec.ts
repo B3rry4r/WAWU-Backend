@@ -55,8 +55,10 @@ import { WalletTransferService } from '../wallet-transfer.service';
  * `applicable_fee` is Nuvion's own charge and carries nothing for WAWU.
  * Nuvion's transfer has no field for a fee of ours, so WAWU's fee is its own
  * book transfer from the sender to WAWU's operational account, under the
- * reference `<send reference>-fee`, once the send itself is confirmed (a send
- * that fails or is reversed never has one, so there is nothing to give back).
+ * reference `<send reference>-fee`. It moves FIRST (round 2, lead ruling 17
+ * Oct): a balance spent while the send is on its way can never evade it. If it
+ * is refused nothing else moves; a send that then fails, or is reversed even
+ * after it completed, gives the fee back under `<send reference>-fee-back`.
  *
  * The REAL Nuvion adapter and book area over Nuvion's stand-in (a socket);
  * nothing here reaches a Nuvion, Fintava or wawuafrica.com host (every
@@ -181,6 +183,51 @@ describe('WAWU fee on a send to a WAWU user, collected on Nuvion (FIX-52)', () =
   const available = (p: Person) => book.availableOf(p.account.id);
   const operational = () => book.availableOf(book.operational.id);
   const feeLegs = (reference: string) => book.byReference(`${reference}-fee`);
+  const feeBacks = (reference: string) =>
+    book.byReference(`${reference}-fee-back`);
+  const ledgerNet = async (p: Person) => {
+    const rows = await prisma.fintavaLedgerEntry.findMany({
+      where: { wawuUserId: p.id, status: 'completed' },
+      select: { direction: true, totalKobo: true },
+    });
+    return rows.reduce(
+      (n, r) => n + (r.direction === 'in' ? 1 : -1) * Number(r.totalKobo),
+      0,
+    );
+  };
+  const deliver = async (
+    event: string,
+    transfer: Record<string, unknown>,
+    p: Person,
+  ) =>
+    new NuvionBookHandler(prisma, moduleRef.get(ModuleRef)).handle({
+      id: randomUUID(),
+      eventId: randomUUID(),
+      event,
+      resourceId: transfer.id as string,
+      entityId: p.account.entity_id,
+      data: transfer,
+      receivedAt: new Date(),
+      attempts: 1,
+    });
+  const waitFor = async (
+    check: () => boolean | Promise<boolean>,
+    ms = 8000,
+  ) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (await check()) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
+  };
+  /** The order Nuvion made its transfers in (the stand-in keeps it). */
+  const madeBefore = (first: string, second: string) => {
+    const refs = book.all().map((t) => t.unique_reference);
+    return (
+      refs.indexOf(first) >= 0 && refs.indexOf(first) < refs.indexOf(second)
+    );
+  };
   const rowOf = (id: string) =>
     prisma.walletTransfer.findUniqueOrThrow({ where: { id } });
   const ledgerOut = (reference: string) =>
@@ -283,6 +330,7 @@ describe('WAWU fee on a send to a WAWU user, collected on Nuvion (FIX-52)', () =
       const refs = rows.flatMap((r) => [
         r.customerReference,
         `${r.customerReference}-fee`,
+        `${r.customerReference}-fee-back`,
       ]);
       await prisma.fintavaLedgerEntry.deleteMany({
         where: {
@@ -334,47 +382,35 @@ describe('WAWU fee on a send to a WAWU user, collected on Nuvion (FIX-52)', () =
     book.mode = 'pending';
   });
 
-  it('the person is debited exactly the quoted total and WAWU fee lands in the operational account once, however often the send is replayed, swept or settled again', async () => {
+  it('the fee moves BEFORE the send; the person is debited exactly the quote, WAWU gets the fee once, and replays, parallel taps, sweeps and settling again move nothing more', async () => {
     const me = await person(PERSON_START);
     const to = await person(0);
     const opBefore = operational();
     const b = await prepare(me, to, AMOUNT);
     expect(b.quotedTotal).toBe(AMOUNT + FEE + WAWU_FEE);
+    book.mode = 'successful';
 
     const key = randomUUID();
-    const res = await post(me, b, key);
+    const taps = await Promise.all([post(me, b, key), post(me, b, key)]);
+    const res = taps[0];
     expect(res.status).toBe(201);
     const view = body<TransferView>(res).data!;
-    expect(view.status).toBe('pending');
-    // Accepted by Nuvion: only the send itself has left her balance so far.
-    expect(available(me)).toBe(PERSON_START - AMOUNT - FEE);
-    expect(feeLegs(view.reference)).toHaveLength(0);
-
-    // Nuvion finishes the send; the fee follows it, and Nuvion answers that at once.
-    book.settle(view.reference, 'successful');
-    book.mode = 'successful';
-    await transfers.sweep(later());
+    expect(view.status).toBe('completed');
+    expect(madeBefore(`${view.reference}-fee`, view.reference)).toBe(true);
+    expect(PERSON_START - available(me)).toBe(b.quotedTotal);
+    expect(available(to)).toBe(AMOUNT);
+    expect(operational() - opBefore).toBe(WAWU_FEE - FEE);
     const done = await rowOf(view.id);
     expect(done).toMatchObject({ status: 'completed', discrepancy: null });
     expect(Number(done.totalKobo)).toBe(b.quotedTotal);
-    expect(Number(done.providerFeeKobo)).toBe(FEE);
-    expect(Number(done.wawuFeeKobo)).toBe(WAWU_FEE);
-
-    // The person is debited the quote, to the kobo.
-    expect(PERSON_START - available(me)).toBe(b.quotedTotal);
-    expect(available(to)).toBe(AMOUNT);
-    // WAWU's fee, less what Nuvion charged to move it, is in the operational account.
-    expect(operational() - opBefore).toBe(WAWU_FEE - FEE);
-    expect(feeLegs(view.reference)).toHaveLength(1);
-    // The ledger row and the receipt say the fee as quoted.
+    // The ledger holds what Nuvion moved, as the quote says it.
     const out = await ledgerOut(view.reference);
     expect(Number(out.totalKobo)).toBe(b.quotedTotal);
     expect(Number(out.feeKobo)).toBe(FEE + WAWU_FEE);
     expect(Number(out.wawuFeeKobo)).toBe(WAWU_FEE);
+    expect(await ledgerNet(me)).toBe(-(PERSON_START - available(me)));
 
-    // Replays and retries move nothing more.
     const replay = await post(me, b, key);
-    expect(replay.status).toBe(201);
     expect(replay.headers['idempotent-replayed']).toBe('true');
     await transfers.sweep(later());
     await transfers.settle(view.id, later(), true);
@@ -385,165 +421,229 @@ describe('WAWU fee on a send to a WAWU user, collected on Nuvion (FIX-52)', () =
     expect(operational() - opBefore).toBe(WAWU_FEE - FEE);
   });
 
-  it('a send Nuvion fails never has a fee: nothing reaches the operational account and the person is whole', async () => {
+  it('finding 1: a balance spent between two sends cannot evade the fee: the send that cannot be paid fails whole and its fee comes back', async () => {
+    const quoteEach = AMOUNT + FEE + WAWU_FEE;
+    // Enough for two sends' amounts and charges and ONE fee: the old order
+    // accepted both sends and collected one fee.
+    const me = await person(2 * (AMOUNT + FEE) + WAWU_FEE);
+    const to = await person(0);
+    const opBefore = operational();
+    const b1 = await prepare(me, to, AMOUNT);
+    const b2 = await prepare(me, to, AMOUNT);
+    const one = body<TransferView>(await post(me, b1)).data!;
+    const two = body<TransferView>(await post(me, b2)).data!;
+    // Both wait on their fee; nothing is sent yet.
+    expect(one.status).toBe('pending');
+    expect(two.status).toBe('pending');
+    expect(book.byReference(one.reference)).toHaveLength(0);
+    expect(book.byReference(two.reference)).toHaveLength(0);
+    book.settle(`${one.reference}-fee`, 'successful');
+    book.settle(`${two.reference}-fee`, 'successful');
+    await transfers.sweep(later());
+    // Only one of the sends can be paid; the other is refused by Nuvion.
+    const sent = [one, two].filter((v) => book.byReference(v.reference).length);
+    expect(sent).toHaveLength(1);
+    book.settle(sent[0].reference, 'successful');
+    for (const v of [one, two]) {
+      if (feeBacks(v.reference).length) {
+        book.settle(`${v.reference}-fee-back`, 'successful');
+      }
+    }
+    book.mode = 'successful';
+    await transfers.sweep(later());
+    await transfers.sweep(later());
+    const rows = [await rowOf(one.id), await rowOf(two.id)];
+    expect(rows.map((r) => r.status).sort()).toEqual(['completed', 'failed']);
+    const failed = rows.find((r) => r.status === 'failed')!;
+    // The fee of the send that did not go is back; the other paid its own.
+    expect(feeBacks(failed.customerReference)).toHaveLength(1);
+    expect(2 * (AMOUNT + FEE) + WAWU_FEE - available(me)).toBe(quoteEach);
+    expect(await ledgerNet(me)).toBe(-quoteEach);
+    // Both fees reached WAWU; the one given back cost the return and Nuvion's charge on it.
+    expect(operational() - opBefore).toBe(
+      2 * (WAWU_FEE - FEE) - (WAWU_FEE + FEE),
+    );
+    expect(available(to)).toBe(AMOUNT);
+  });
+
+  it('a fee Nuvion has accepted and not finished keeps the send waiting with nothing sent, is not made twice, and the send goes on once the fee is finished', async () => {
     const me = await person(PERSON_START);
     const to = await person(0);
     const opBefore = operational();
     const b = await prepare(me, to, AMOUNT);
     const view = body<TransferView>(await post(me, b)).data!;
+    expect(view.status).toBe('pending');
+    expect(feeLegs(view.reference)).toHaveLength(1);
+    expect(book.byReference(view.reference)).toHaveLength(0);
+    await transfers.sweep(later());
+    await transfers.sweep(later());
+    expect(feeLegs(view.reference)).toHaveLength(1);
+    expect(book.byReference(view.reference)).toHaveLength(0);
+    expect((await rowOf(view.id)).status).toBe('pending');
+
+    book.settle(`${view.reference}-fee`, 'successful');
+    await transfers.sweep(later(60 * 60_000));
+    expect(book.byReference(view.reference)).toHaveLength(1);
+    book.settle(view.reference, 'successful');
+    await transfers.sweep(later(60 * 60_000));
+    expect((await rowOf(view.id)).status).toBe('completed');
+    expect(feeLegs(view.reference)).toHaveLength(1);
+    expect(book.byReference(view.reference)).toHaveLength(1);
+    expect(PERSON_START - available(me)).toBe(b.quotedTotal);
+    expect(operational() - opBefore).toBe(WAWU_FEE - FEE);
+  });
+
+  it('finding 3: a fee Nuvion fails stops the send before anything else moves: nothing is sent, the person is whole and told', async () => {
+    const me = await person(PERSON_START);
+    const to = await person(0);
+    const opBefore = operational();
+    const b = await prepare(me, to, AMOUNT);
+    const view = body<TransferView>(await post(me, b)).data!;
+    book.settle(`${view.reference}-fee`, 'failed');
+    await transfers.sweep(later());
+    const row = await rowOf(view.id);
+    expect(row.status).toBe('failed');
+    expect(book.byReference(view.reference)).toHaveLength(0);
+    expect(feeBacks(view.reference)).toHaveLength(0);
+    expect(available(me)).toBe(PERSON_START);
+    expect(operational()).toBe(opBefore);
+    expect(await ledgerNet(me)).toBe(0);
+    const told = await request(app.getHttpServer())
+      .get(`${BASE}/transfers/${view.id}`)
+      .set('Authorization', me.auth);
+    expect(body<TransferView>(told).data!.status).toBe('failed');
+  });
+
+  it('a send Nuvion fails after the fee moved gives the fee back: the person is whole, and the fee comes back once however often it is swept', async () => {
+    const me = await person(PERSON_START);
+    const to = await person(0);
+    const b = await prepare(me, to, AMOUNT);
+    const view = body<TransferView>(await post(me, b)).data!;
+    book.settle(`${view.reference}-fee`, 'successful');
+    await transfers.sweep(later());
     book.settle(view.reference, 'failed');
     book.mode = 'successful';
     await transfers.sweep(later());
+    await transfers.sweep(later());
+    await transfers.sweep(later());
     expect((await rowOf(view.id)).status).toBe('failed');
-    expect(feeLegs(view.reference)).toHaveLength(0);
+    expect(feeBacks(view.reference)).toHaveLength(1);
     expect(available(me)).toBe(PERSON_START);
-    expect(operational()).toBe(opBefore);
+    expect(available(to)).toBe(0);
+    expect(await ledgerNet(me)).toBe(0);
   });
 
-  it('a send Nuvion reverses never has a fee either', async () => {
+  it('finding 4: a completed send Nuvion reverses later gives WAWU fee back too, and the send says reversed', async () => {
     const me = await person(PERSON_START);
     const to = await person(0);
-    const opBefore = operational();
     const b = await prepare(me, to, AMOUNT);
-    const view = body<TransferView>(await post(me, b)).data!;
-    book.settle(view.reference, 'successful');
-    book.settle(view.reference, 'reversed');
     book.mode = 'successful';
+    const view = body<TransferView>(await post(me, b)).data!;
+    expect(view.status).toBe('completed');
+    const sent = book.settle(view.reference, 'reversed');
+    const result = await deliver('outflows.refunded', sent, me);
+    expect(result.outcome).toBe('done');
+    // The ledger's own event settles the send; settling again is harmless.
+    await waitFor(async () => (await rowOf(view.id)).status === 'reversed');
+    await transfers.settle(view.id, later(), false);
     await transfers.sweep(later());
     expect((await rowOf(view.id)).status).toBe('reversed');
-    expect(feeLegs(view.reference)).toHaveLength(0);
+    expect(feeBacks(view.reference)).toHaveLength(1);
     expect(available(me)).toBe(PERSON_START);
-    expect(operational()).toBe(opBefore);
+    expect(available(to)).toBe(0);
+    const read = await request(app.getHttpServer())
+      .get(`${BASE}/transfers/${view.id}`)
+      .set('Authorization', me.auth);
+    expect(body<TransferView>(read).data!.status).toBe('reversed');
   });
 
-  it('a fee Nuvion has accepted and not finished keeps the send pending, is not made twice, and completes the send once Nuvion finishes it', async () => {
+  it('finding 5: the delivery of the fee transfer wakes the send at once, without waiting for the sweep', async () => {
     const me = await person(PERSON_START);
     const to = await person(0);
-    const opBefore = operational();
     const b = await prepare(me, to, AMOUNT);
     const view = body<TransferView>(await post(me, b)).data!;
-    book.settle(view.reference, 'successful');
-    // The fee's transfer is accepted as pending and stays so.
-    await transfers.sweep(later());
-    expect((await rowOf(view.id)).status).toBe('pending');
-    expect(feeLegs(view.reference)).toHaveLength(1);
-    await transfers.sweep(later());
-    expect((await rowOf(view.id)).status).toBe('pending');
-    expect(feeLegs(view.reference)).toHaveLength(1);
-
-    book.settle(`${view.reference}-fee`, 'successful');
-    await transfers.sweep(later());
-    expect((await rowOf(view.id)).status).toBe('completed');
-    expect(feeLegs(view.reference)).toHaveLength(1);
-    expect(PERSON_START - available(me)).toBe(b.quotedTotal);
-    expect(operational() - opBefore).toBe(WAWU_FEE - FEE);
-  });
-
-  it('a send Nuvion completes by its delivery: the ledger row holds the fee as quoted at once, and the send completes with the fee moved once', async () => {
-    const me = await person(PERSON_START);
-    const to = await person(0);
-    const opBefore = operational();
-    const b = await prepare(me, to, AMOUNT);
-    const view = body<TransferView>(await post(me, b)).data!;
-    book.settle(view.reference, 'successful');
-    book.mode = 'successful';
-    const sent = book.byReference(view.reference)[0];
-    const result = await new NuvionBookHandler(
-      prisma,
-      moduleRef.get(ModuleRef),
-    ).handle({
-      id: randomUUID(),
-      eventId: randomUUID(),
-      event: 'outflows.completed',
-      resourceId: sent.id,
-      entityId: me.account.entity_id,
-      data: sent,
-      receivedAt: new Date(),
-      attempts: 1,
-    });
+    expect(book.byReference(view.reference)).toHaveLength(0);
+    const fee = book.settle(`${view.reference}-fee`, 'successful');
+    const result = await deliver('outflows.completed', fee, me);
     expect(result.outcome).toBe('done');
+    expect(
+      await waitFor(() => book.byReference(view.reference).length === 1),
+    ).toBe(true);
+
+    // The send's own delivery writes the ledger row at what Nuvion moved, the
+    // fee's transfer included, which is what the quote says.
+    const sendTx = book.settle(view.reference, 'successful');
+    const completed = await deliver('outflows.completed', sendTx, me);
+    expect(completed.outcome).toBe('done');
     const out = await ledgerOut(view.reference);
     expect(out.status).toBe('completed');
     expect(Number(out.totalKobo)).toBe(b.quotedTotal);
-    expect(Number(out.feeKobo)).toBe(FEE + WAWU_FEE);
-    expect(Number(out.providerFeeKobo)).toBe(FEE);
     expect(Number(out.wawuFeeKobo)).toBe(WAWU_FEE);
-    // The ledger's own event settles the send; the sweep finishes it if that raced.
-    for (let i = 0; i < 3; i += 1) {
-      if ((await rowOf(view.id)).status === 'completed') break;
-      await transfers.sweep(later());
-    }
-    const done = await rowOf(view.id);
-    expect(done).toMatchObject({ status: 'completed', discrepancy: null });
-    expect(Number(done.totalKobo)).toBe(b.quotedTotal);
-    expect(feeLegs(view.reference)).toHaveLength(1);
+    expect(await ledgerNet(me)).toBe(-(PERSON_START - available(me)));
     expect(PERSON_START - available(me)).toBe(b.quotedTotal);
-    expect(operational() - opBefore).toBe(WAWU_FEE - FEE);
   });
 
-  it("a send to a bank, completed from the ledger row the bank handler wrote at the quoted figures, moves WAWU's ₦25 once", async () => {
+  it('finding 2: the ledger holds what Nuvion moved on the delivery path too: a send whose fee never moved is written at the send alone', async () => {
     const me = await person(PERSON_START);
+    const to = await person(0);
     const opBefore = operational();
-    const bankFee = 2500;
+    // A send already on its way when the fee came first (the book transfer
+    // went out under the old order): its fee was never moved.
     const id = randomUUID();
-    const total = AMOUNT + FEE + bankFee;
+    const reference = `wawu-send-${id}`;
+    const total = AMOUNT + FEE + WAWU_FEE;
     const row = await prisma.walletTransfer.create({
       data: {
         id,
-        kind: 'bank_account',
+        kind: 'wawu_user',
         payerWawuUserId: me.id,
-        bankCode: '058',
-        bankName: 'Test Bank',
-        bankAccountNumber: '0123456789',
-        bankAccountName: 'Test Holder',
+        recipientWawuUserId: to.id,
         amountKobo: BigInt(AMOUNT),
         providerFeeKobo: BigInt(FEE),
-        wawuFeeKobo: BigInt(bankFee),
+        wawuFeeKobo: BigInt(WAWU_FEE),
         totalKobo: BigInt(total),
-        customerReference: `wawu-bank-${id}`,
+        customerReference: reference,
         payerAccountNumber: me.accountNumber,
+        recipientAccountNumber: to.accountNumber,
         provider: 'nuvion',
         status: 'pending',
         nextCheckAt: new Date(),
         sentAt: new Date(),
       },
     });
-    const ledger = moduleRef.get(LedgerService);
     const movement = (
       transfers as unknown as {
         movement: (t: unknown, side: string, status: string) => never;
       }
     ).movement.bind(transfers);
-    await ledger.record(movement(row, 'out', 'pending'));
-    await ledger.record(movement(row, 'out', 'completed'));
-    // The payout itself is Nuvion's; only the fee is ours to move.
+    await moduleRef.get(LedgerService).record(movement(row, 'out', 'pending'));
+    await moduleRef.get(LedgerService).record(movement(row, 'in', 'pending'));
     book.mode = 'successful';
+    const provider = moduleRef.get<NuvionWalletProvider>(WALLET_PROVIDER);
+    await provider.walletToWallet({
+      fromAccountNumber: me.accountNumber,
+      toAccountNumber: to.accountNumber,
+      amountKobo: BigInt(AMOUNT),
+      reference,
+    });
+    const sent = book.byReference(reference)[0];
+    const delivered = await deliver('outflows.completed', sent, me);
+    expect(delivered).toMatchObject({ outcome: 'done' });
+    // The ledger will not complete its row at a charge other than the one
+    // quoted (it keeps it pending and notes it); the send settles it at what
+    // Nuvion moved, and the fee is not moved after the fact.
     await transfers.settle(id, later(), false);
     await transfers.settle(id, later(), true);
+    const out = await ledgerOut(reference);
+    expect(out.status).toBe('completed');
+    expect(Number(out.totalKobo)).toBe(AMOUNT + FEE);
+    expect(await ledgerNet(me)).toBe(-(PERSON_START - available(me)));
     const done = await rowOf(id);
-    expect(done).toMatchObject({ status: 'completed', discrepancy: null });
-    expect(Number(done.totalKobo)).toBe(total);
-    expect(Number(done.wawuFeeKobo)).toBe(bankFee);
-    expect(feeLegs(row.customerReference)).toHaveLength(1);
-    expect(PERSON_START - available(me)).toBe(bankFee);
-    expect(operational() - opBefore).toBe(bankFee - FEE);
-  });
-
-  it('a person who spent the fee in between is debited what really left, the send completes below the quote and says so, and no fee reaches WAWU', async () => {
-    const me = await person(PERSON_START);
-    const to = await person(0);
-    const opBefore = operational();
-    const b = await prepare(me, to, AMOUNT);
-    const view = body<TransferView>(await post(me, b)).data!;
-    book.settle(view.reference, 'successful');
-    accounts.accounts.get(me.account.id)!.balance.available = 0;
-    book.mode = 'successful';
-    await transfers.sweep(later());
-    const done = await rowOf(view.id);
     expect(done.status).toBe('completed');
     expect(Number(done.totalKobo)).toBe(AMOUNT + FEE);
     expect(done.discrepancy).toMatch(/WAWU/);
-    expect(feeLegs(view.reference)).toHaveLength(0);
+    // The fee is not moved after the fact.
+    expect(feeLegs(reference)).toHaveLength(0);
     expect(operational()).toBe(opBefore);
     expect(fintavaHits).toEqual([]);
   });
