@@ -31796,7 +31796,7 @@
             }
           }
         },
-        "summary": "draft to scheduled (or live, if its window has started). The booking is approved by being scheduled.",
+        "summary": "draft to scheduled (or live, if its window has started). The booking is approved by being scheduled. A campaign with no artwork is a 422 (R-59).",
         "tags": [
           "AdminAds"
         ]
@@ -31858,7 +31858,7 @@
             }
           }
         },
-        "summary": "paused back on air, while its window and its event are still open.",
+        "summary": "paused back on air, while its window and its event are still open. A campaign with no artwork is a 422 (R-59).",
         "tags": [
           "AdminAds"
         ]
