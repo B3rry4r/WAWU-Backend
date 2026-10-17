@@ -18,12 +18,8 @@ import {
 } from '../../money/payments/payable-registry';
 import { WalletPaymentService } from '../../money/payments/wallet-payment.service';
 import { NotificationService } from '../../notification/notification.service';
-import {
-  MAX_TIP_KOBO,
-  MIN_TIP_KOBO,
-  type TipWalletDto,
-  type TipWalletQuoteQueryDto,
-} from './tip-wallet.dto';
+import { MAX_TIP_KOBO, MIN_TIP_KOBO } from './tip-wallet.dto';
+import type { TipWalletDto, TipWalletQuoteQueryDto } from './tip-wallet.dto';
 import type {
   TipWalletQuoteView,
   TipWalletStatus,
