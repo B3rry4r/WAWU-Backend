@@ -71,8 +71,8 @@ export interface PayHarness {
   /**
    * The ledger agrees with the stand-in: for every person given, the stand-in
    * account holds what the account opened with, plus the ledger's completed
-   * money in, minus its completed money out (the total, charge included);
-   * WAWU's own account the same, from the merchant side of the ledger.
+   * money in, minus its completed money out (the total, charge included).
+   * WAWU's own account is checked by the spec that moves it, by exact figures.
    */
   expectLedgerEqualsStandIn(people: PayPerson[]): Promise<void>;
   /** Pieces of the stand-in's send history of one person. */
@@ -177,7 +177,6 @@ export async function bootPayApp(
   const accountNumbers: string[] = [];
   let accountSeq = 0;
   let clock = Date.now();
-  const operationalOpening = nuvion.operational.availableKobo;
 
   const harness: PayHarness = {
     app,
@@ -263,12 +262,6 @@ export async function bootPayApp(
           standIn: nuvion.accounts.get(p.account.accountId)!.availableKobo,
         }).toEqual({ who: 'person', standIn: held });
       }
-      const merchant = await prisma.fintavaLedgerEntry.findMany({
-        where: { walletKind: 'merchant', status: 'completed' },
-        select: { direction: true, amountKobo: true, totalKobo: true },
-      });
-      void merchant;
-      void operationalOpening;
     },
     async close() {
       const payRows = await prisma.walletPayment.findMany({
