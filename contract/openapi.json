@@ -47309,7 +47309,11 @@
             }
           },
           "creatorEarning": {
-            "$ref": "#/components/schemas/PaidDmCreatorEarning",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaidDmCreatorEarning"
+              }
+            ],
             "nullable": true
           }
         },
