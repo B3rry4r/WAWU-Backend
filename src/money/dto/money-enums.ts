@@ -216,5 +216,8 @@ export const MONEY_ERROR_CODES = [
   'below_minimum',
   'insufficient_points',
   'currency_not_supported',
+  // Buying event tickets (EVENTS-13): the buyer already holds the most open
+  // paid ticket orders one event allows (an admin setting).
+  'event_order_limit',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

@@ -6,6 +6,13 @@ export interface CalledOffRefunds {
   refunded: number;
   /** Orders whose price cannot go back by itself (the host's share was already paid out): a person settles them. */
   needAttention: number;
+  /**
+   * Orders still waiting for their refund when the step returned (the request's time ran out or the provider
+   * could not be asked yet): the minute sweep sends them. Left out when none
+   * (EVENTS-13), so ordersRefunded + refundsNeedingAttention + this always
+   * equals the paid orders.
+   */
+  leftToSweep?: number;
 }
 
 /**
@@ -38,6 +45,9 @@ export class EventCancelHooks {
         const counts = await hook(eventId);
         total.refunded += counts.refunded;
         total.needAttention += counts.needAttention;
+        if (counts.leftToSweep) {
+          total.leftToSweep = (total.leftToSweep ?? 0) + counts.leftToSweep;
+        }
       } catch (e) {
         // The step's own sweep finishes it; the host's cancel has happened.
         this.logger.error(

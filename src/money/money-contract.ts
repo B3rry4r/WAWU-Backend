@@ -116,6 +116,10 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   below_minimum: 422,
   insufficient_points: 402,
   currency_not_supported: 409,
+  // EVENTS-13. Default (agent), owner may override: 409, as target_not_payable.
+  // The request is understood; this buyer holds the most open ticket orders
+  // one event allows, so another cannot be paid until one is refunded or fails.
+  event_order_limit: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

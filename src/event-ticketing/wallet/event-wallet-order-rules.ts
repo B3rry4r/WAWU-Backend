@@ -22,6 +22,10 @@ export const EVENT_NOT_FOUND_MESSAGE = 'Event not found.';
 export const TICKET_NOT_FOUND_MESSAGE = 'That ticket is not on this event.';
 export const NOT_ON_SALE_MESSAGE = 'Tickets are not on sale for this event.';
 export const CANCELLED_MESSAGE = 'This event has been cancelled.';
+/** The setting (admin, TIER-06 registry) for the most open paid ticket orders one buyer may hold on one event (EVENTS-13). */
+export const OPEN_ORDERS_SETTING = 'events.open_orders_per_buyer';
+export const ORDER_LIMIT_MESSAGE =
+  'You have reached the order limit for this event.';
 export const OWN_EVENT_MESSAGE = 'You cannot buy tickets to your own event.';
 export const NOT_OPEN_MESSAGE = 'Sales have not opened for this ticket yet.';
 export const CLOSED_MESSAGE = 'Sales have closed for this ticket.';

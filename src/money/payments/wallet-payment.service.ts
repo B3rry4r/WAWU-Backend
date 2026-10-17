@@ -539,7 +539,18 @@ export class WalletPaymentService implements OnModuleInit {
     // send still leaves a payment the sweep settles, and a repeat of the key
     // is answered from this payment). Its unique `openKey` is what makes one
     // buyer and one item one open payment, under any key.
-    const payment = await this.claim(scope, id, data, openKey);
+    const payment = await this.claim(scope, id, data, openKey, (tx) =>
+      handler.beforeClaim
+        ? handler.beforeClaim(
+            {
+              payerWawuUserId: payer,
+              targetId: dto.targetId,
+              amountKobo: dto.amountKobo,
+            },
+            tx,
+          )
+        : Promise.resolve(),
+    );
 
     // The claim is held, and the claim is never given up before what was paid
     // for is delivered (complete / fulfil below), so anything the feature
@@ -595,6 +606,7 @@ export class WalletPaymentService implements OnModuleInit {
     id: string,
     data: Prisma.WalletPaymentCreateInput,
     openKey: string,
+    guard: (tx: Prisma.TransactionClient) => Promise<void>,
   ): Promise<PaymentRow> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
@@ -612,6 +624,10 @@ export class WalletPaymentService implements OnModuleInit {
             },
             { tx },
           );
+          // The kind's own cross-payment rule (EVENTS-13), on this same
+          // transaction, so two payments claiming at once are checked one
+          // after the other and a refusal records nothing.
+          await guard(tx);
           await this.keys.attach(tx, scope, id);
           const row = await tx.walletPayment.create({ data });
           await this.ledger.record(this.movement(row, 'out', 'pending'), tx);
