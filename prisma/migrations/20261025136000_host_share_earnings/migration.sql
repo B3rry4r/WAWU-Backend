@@ -15,7 +15,7 @@
 -- moves holding them have landed or been withdrawn); ALTER TABLE
 -- "EarningSettlement" DROP COLUMN "creditSpendEarningId"; ALTER COLUMN
 -- "paymentId" SET NOT NULL; restore the two functions below from
--- 20261025120000_earning_settlements.
+-- 20261025132000_earning_settlements.
 
 -- AlterTable
 ALTER TABLE "EarningSettlement" ALTER COLUMN "paymentId" DROP NOT NULL;

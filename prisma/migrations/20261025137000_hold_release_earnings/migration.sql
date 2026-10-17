@@ -21,7 +21,7 @@
 -- already has an earning) is untouched.
 --
 -- Rollback: restore "EarningSettlement_insert_guard" from
--- 20261025160000_host_share_earnings (after the earnings made from holds have
+-- 20261025136000_host_share_earnings (after the earnings made from holds have
 -- landed or been withdrawn).
 
 CREATE OR REPLACE FUNCTION "EarningSettlement_insert_guard"() RETURNS trigger AS $$
