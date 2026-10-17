@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
+import request from 'supertest';
+import { AdminRole } from '../../../../generated/prisma/enums';
+import { AdminTokenService } from '../../../admin/auth/admin-token.service';
 import {
   bootPayApp,
   type PayHarness,
@@ -34,6 +37,11 @@ describe('The earnings sweep starts at a time (WALLET-16)', () => {
   beforeAll(async () => {
     h = await bootPayApp('w16s', {
       modules: [],
+      env: {
+        ADMIN_JWT_SECRET: 'w16s-admin-access-secret-0123456789abcdef0123',
+        ADMIN_JWT_REFRESH_SECRET:
+          'w16s-admin-refresh-secret-0123456789abcdef01',
+      },
       extra: (app) => {
         const registry = app.get(PayableRegistry);
         registry.register({
@@ -62,6 +70,7 @@ describe('The earnings sweep starts at a time (WALLET-16)', () => {
     });
   });
   afterAll(async () => {
+    await h.prisma.adminUser.deleteMany({ where: { id: { in: adminIds } } });
     // The row the migration wrote stays as it was found.
     await h.prisma.earningSweepStart.upsert({
       where: { id: 1 },
@@ -71,7 +80,28 @@ describe('The earnings sweep starts at a time (WALLET-16)', () => {
     await h.close();
   });
   let originalStart: Date;
+  const adminIds: string[] = [];
+  const adminTokens: Partial<Record<AdminRole, string>> = {};
   beforeAll(async () => {
+    const issuer = h.app.get(AdminTokenService, { strict: false });
+    for (const role of [
+      AdminRole.superadmin,
+      AdminRole.finance,
+      AdminRole.support,
+    ]) {
+      const id = randomUUID();
+      adminIds.push(id);
+      const admin = await h.prisma.adminUser.create({
+        data: {
+          id,
+          email: `w16s-${role}-${id}@admin.test.wawu.dev`,
+          passwordHash: 'not-a-real-hash',
+          name: `WALLET-16 ${role}`,
+          role,
+        },
+      });
+      adminTokens[role] = issuer.issuePair(admin).accessToken;
+    }
     originalStart = (
       await h.prisma.earningSweepStart.findUniqueOrThrow({ where: { id: 1 } })
     ).startedAt;
@@ -237,34 +267,81 @@ describe('The earnings sweep starts at a time (WALLET-16)', () => {
     expect(await h.prisma.earningSweepStart.count()).toBe(1);
   });
 
-  it('lists the earlier sales a page at a time, oldest first, and the admin route is closed to the public', async () => {
+  it('lists the earlier sales a page at a time, oldest first, over HTTP as a cursor page, and the admin route is closed to the public', async () => {
     const creator = await h.person(0);
     const a = await sale(creator);
     await sleep(5);
     const b = await sale(creator);
     await sleep(5);
     const c = await sale(creator);
-    await setStart(new Date(c.completedAt.getTime() + 1000));
+    const startsAt = new Date(c.completedAt.getTime() + 1000);
+    await setStart(startsAt);
     const ids = [a, b, c].map((s) => s.paymentId);
-    const seen: string[] = [];
-    let after: string | undefined;
-    for (let i = 0; i < 100; i += 1) {
-      const page = await h.earnings.unsweptBeforeStart({ limit: 1, after });
-      for (const item of page.items) seen.push(item.paymentId);
-      after = page.nextAfter ?? undefined;
-      if (!after) break;
-    }
-    const mineInOrder = seen.filter((id) => ids.includes(id));
-    expect(mineInOrder).toEqual(ids);
-    expect(new Set(seen).size).toBe(seen.length);
-    const total = (await h.earnings.unsweptBeforeStart({ limit: 1 })).total;
-    expect(total).toBe(seen.length);
+    const url = '/api/hub/admin/money/earnings/before-start';
+    const get = (token: string | undefined, query = '') => {
+      const req = request(h.app.getHttpServer()).get(`${url}${query}`);
+      return token ? req.set('Authorization', `Bearer ${token}`) : req;
+    };
+    type Page = {
+      startsAt: string;
+      source: string;
+      count: number;
+      items: Array<{ paymentId: string }>;
+      nextCursor: string | null;
+    };
 
-    // No admin token, no list.
-    const request = (await import('supertest')).default;
-    const res = await request(h.app.getHttpServer()).get(
-      '/api/hub/admin/money/earnings/before-start',
+    // The repo's cursor page (CONVENTIONS section 6): the response interceptor
+    // keeps the whole shape, because it has no numeric `total`.
+    const first = await get(adminTokens[AdminRole.superadmin], '?limit=1');
+    expect(first.status).toBe(200);
+    const firstPage = body<Page>(first).data!;
+    expect(Array.isArray(firstPage.items)).toBe(true);
+    expect(firstPage.items).toHaveLength(1);
+    expect(firstPage.startsAt).toBe(startsAt.toISOString());
+    expect(firstPage.source).toBe('first_run');
+    expect(typeof firstPage.count).toBe('number');
+    expect(firstPage.nextCursor).not.toBeNull();
+    expect(body<Page>(first)).not.toHaveProperty('pagination');
+
+    // Walk every page by the cursor the server gave, as finance would.
+    const seen: string[] = [];
+    let cursor: string | null = null;
+    for (let i = 0; i < 200; i += 1) {
+      const res = await get(
+        adminTokens[AdminRole.finance],
+        `?limit=1${cursor ? `&cursor=${cursor}` : ''}`,
+      );
+      expect(res.status).toBe(200);
+      const page = body<Page>(res).data!;
+      for (const item of page.items) seen.push(item.paymentId);
+      cursor = page.nextCursor;
+      if (!cursor) break;
+    }
+    expect(cursor).toBeNull();
+    expect(seen.filter((id) => ids.includes(id))).toEqual(ids);
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(
+      body<Page>(await get(adminTokens[AdminRole.superadmin], '?limit=1')).data!
+        .count,
+    ).toBe(seen.length);
+
+    // The service says the same.
+    const direct = await h.earnings.unsweptBeforeStart({ limit: 1 });
+    expect(direct.count).toBe(seen.length);
+    expect(direct.nextCursor).toBe(firstPage.nextCursor);
+
+    // Closed to the public and to support; a bad limit or cursor is a plain 400.
+    expect((await get(undefined)).status).toBe(401);
+    expect((await get('not-a-token')).status).toBe(401);
+    expect((await get(adminTokens[AdminRole.support])).status).toBe(403);
+    expect((await get(adminTokens[AdminRole.finance], '?limit=0')).status).toBe(
+      400,
     );
-    expect(res.status).toBe(401);
+    expect(
+      (await get(adminTokens[AdminRole.finance], '?limit=101')).status,
+    ).toBe(400);
+    expect(
+      (await get(adminTokens[AdminRole.finance], '?cursor=junk')).status,
+    ).toBe(400);
   });
 });

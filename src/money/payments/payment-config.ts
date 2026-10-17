@@ -50,7 +50,29 @@ export const DEFAULT_EARNINGS_REFUSED_REVIEW_AFTER_HOURS = 72;
  * server's own zone would mean a different moment on each machine.
  */
 const ISO_WITH_ZONE =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Whether the text names a moment that exists as written: `new Date` rolls
+ * `2026-02-31T10:00:00Z` over to 3 March and `T24:00:00Z` to the next day, and
+ * a mistyped start would then move silently. The day must be a real calendar
+ * day and the clock 00:00 to 23:59:59.
+ */
+function isRealMoment(text: string): boolean {
+  const m = ISO_WITH_ZONE.exec(text);
+  if (!m) return false;
+  const [year, month, day, hour, minute] = m.slice(1, 6).map(Number);
+  const second = m[6] === undefined ? 0 : Number(m[6]);
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  // Years 0 to 99 are read as 1900 to 1999 by Date.UTC: set the year again.
+  calendar.setUTCFullYear(year);
+  return (
+    calendar.getUTCFullYear() === year &&
+    calendar.getUTCMonth() === month - 1 &&
+    calendar.getUTCDate() === day
+  );
+}
 
 /**
  * PROVISIONAL(PAYMENT-REVIEW-AFTER-HOURS, owner=YOU, why=no ruling names how long a payment whose outcome Fintava has not settled is asked about before a person looks at it)
@@ -124,7 +146,7 @@ export class PaymentSettings {
     const startKey = PAYMENT_CONFIG_KEYS.earningsSweepStart;
     const startRaw = config.get<string>(startKey)?.trim();
     if (startRaw) {
-      const at = ISO_WITH_ZONE.test(startRaw) ? new Date(startRaw) : null;
+      const at = isRealMoment(startRaw) ? new Date(startRaw) : null;
       if (at === null || Number.isNaN(at.getTime())) {
         throw new FeeConfigError(
           `${startKey} must be a moment with its zone, like 2026-10-25T09:00:00Z.`,

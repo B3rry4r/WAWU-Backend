@@ -18,9 +18,13 @@ export interface UnsweptSalesPage {
   startsAt: string;
   /** `config` when EARNINGS_SWEEP_START set it, else `first_run`. */
   source: 'config' | 'first_run';
-  /** How many such sales there are in all. */
-  total: number;
+  /**
+   * How many such sales there are in all. Not called `total`: the response
+   * interceptor takes any `items` plus a numeric `total` for an offset page
+   * and rewrites it, which dropped the cursor and the start (B1 check, F1).
+   */
+  count: number;
   items: UnsweptSaleView[];
-  /** Pass as `after` for the next page; null on the last. */
-  nextAfter: string | null;
+  /** A cursor page (CONVENTIONS section 6): pass as `cursor` for the next page; null on the last. */
+  nextCursor: string | null;
 }

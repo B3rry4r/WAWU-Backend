@@ -632,10 +632,10 @@ export class EarningSettlementService {
   /**
    * Finished sales with a payee that were made before the sweep's start and
    * have no earning: the ones the sweep will never pay, for an admin to look
-   * at (oldest first, a page at a time by the last payment id seen).
+   * at (oldest first, a cursor page: `nextCursor` is the last payment id seen).
    */
   async unsweptBeforeStart(
-    opts: { limit?: number; after?: string } = {},
+    opts: { limit?: number; cursor?: string } = {},
   ): Promise<UnsweptSalesPage> {
     const start = await this.sweepStart();
     const limit = Math.min(Math.max(opts.limit ?? 50, 1), 100);
@@ -645,16 +645,16 @@ export class EarningSettlementService {
     };
     const total = await this.prisma.walletPayment.count({ where });
     let cursor: Prisma.WalletPaymentWhereInput = {};
-    if (opts.after) {
+    if (opts.cursor) {
       const seen = await this.prisma.walletPayment.findUnique({
-        where: { id: opts.after },
+        where: { id: opts.cursor },
         select: { completedAt: true },
       });
       if (seen?.completedAt) {
         cursor = {
           OR: [
             { completedAt: { gt: seen.completedAt } },
-            { completedAt: seen.completedAt, id: { gt: opts.after } },
+            { completedAt: seen.completedAt, id: { gt: opts.cursor } },
           ],
         };
       }
@@ -677,7 +677,7 @@ export class EarningSettlementService {
     return {
       startsAt: start.at.toISOString(),
       source: start.source,
-      total,
+      count: total,
       items: page.map((r) => ({
         paymentId: r.id,
         kind: r.kind,
@@ -687,7 +687,7 @@ export class EarningSettlementService {
         payeeShareKobo: koboNumber(r.payeeShareKobo),
         completedAt: r.completedAt!.toISOString(),
       })),
-      nextAfter: rows.length > limit ? page[page.length - 1].id : null,
+      nextCursor: rows.length > limit ? page[page.length - 1].id : null,
     };
   }
 

@@ -100,3 +100,43 @@ describe('The two settings of the daily move (R-55)', () => {
     }
   });
 });
+
+describe('EARNINGS_SWEEP_START must be a moment that exists as written (B1 check, F3)', () => {
+  const start = (value: string) =>
+    settings({ EARNINGS_SWEEP_START: value }).earningsSweepStart;
+
+  it('reads real moments, a leap day included', () => {
+    expect(start('2028-02-29T10:00:00Z')?.toISOString()).toBe(
+      '2028-02-29T10:00:00.000Z',
+    );
+    expect(start('2026-10-25T23:59:59+01:00')?.toISOString()).toBe(
+      '2026-10-25T22:59:59.000Z',
+    );
+    expect(start('2026-12-31T23:59Z')?.toISOString()).toBe(
+      '2026-12-31T23:59:00.000Z',
+    );
+  });
+
+  it('refuses a day that does not exist instead of rolling it into the next month', () => {
+    for (const bad of [
+      '2026-02-31T10:00:00Z',
+      '2026-02-29T10:00:00Z',
+      '2026-04-31T10:00:00Z',
+      '2026-06-00T10:00:00Z',
+      '2026-13-01T10:00:00Z',
+    ]) {
+      expect(() => start(bad)).toThrow(FeeConfigError);
+    }
+  });
+
+  it('refuses an hour, minute or second that does not exist', () => {
+    for (const bad of [
+      '2026-10-25T24:00:00Z',
+      '2026-10-25T23:60:00Z',
+      '2026-10-25T10:00:60Z',
+      '2026-10-25T25:00:00Z',
+    ]) {
+      expect(() => start(bad)).toThrow(FeeConfigError);
+    }
+  });
+});

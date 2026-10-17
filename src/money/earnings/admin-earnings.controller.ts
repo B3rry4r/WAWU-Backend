@@ -29,7 +29,7 @@ export class AdminEarningsController {
   beforeStart(@Query() query: AdminUnsweptQueryDto): Promise<UnsweptSalesPage> {
     return this.earnings.unsweptBeforeStart({
       limit: query.limit,
-      after: query.after,
+      cursor: query.cursor,
     });
   }
 }

@@ -3062,6 +3062,10 @@ balance (MONEY-11): nothing here is added up into one, and the routes say
   sweep that finds it missing, and never changed after). A finished sale with a
   payee made before the start gets no earning from the sweep, ever: it is not
   paid by surprise on deploy. `GET /admin/money/earnings/before-start`
-  (superadmin and finance, `limit` and `after`, oldest first) lists those sales
-  for a person to decide; it moves nothing and cannot mark one paid. A sale at
+  (superadmin and finance, `limit` and `cursor`, oldest first) lists those sales
+  for a person to decide; it moves nothing and cannot mark one paid. It is a
+  cursor page (section 6): `data` is `{ startsAt, source, count, items,
+  nextCursor }`, `count` being how many such sales there are in all. It is not
+  called `total` because the response interceptor rewrites any `items` beside a
+  numeric `total` as an offset page and would drop the cursor and the start. A sale at
   exactly the start is paid; the millisecond before it is not.

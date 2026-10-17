@@ -17679,10 +17679,10 @@
             }
           },
           {
-            "name": "after",
+            "name": "cursor",
             "required": false,
             "in": "query",
-            "description": "The `nextAfter` of the page before.",
+            "description": "The `nextCursor` of the page before (CONVENTIONS section 6).",
             "schema": {
               "format": "uuid",
               "type": "string"
@@ -41095,7 +41095,7 @@
               "first_run"
             ]
           },
-          "total": {
+          "count": {
             "type": "number"
           },
           "items": {
@@ -41104,7 +41104,7 @@
               "$ref": "#/components/schemas/UnsweptSaleView"
             }
           },
-          "nextAfter": {
+          "nextCursor": {
             "type": "string",
             "nullable": true
           }
@@ -41112,9 +41112,9 @@
         "required": [
           "startsAt",
           "source",
-          "total",
+          "count",
           "items",
-          "nextAfter"
+          "nextCursor"
         ]
       },
       "EarningStreamView": {

@@ -11,8 +11,8 @@ export class AdminUnsweptQueryDto {
   @Max(100)
   limit?: number;
 
-  /** The `nextAfter` of the page before. */
+  /** The `nextCursor` of the page before (CONVENTIONS section 6). */
   @IsOptional()
   @IsUUID()
-  after?: string;
+  cursor?: string;
 }
