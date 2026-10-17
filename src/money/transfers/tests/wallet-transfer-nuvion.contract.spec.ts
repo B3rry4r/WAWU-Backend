@@ -508,6 +508,151 @@ describe('Send to a WAWU user (WALLET-07) on the provider seam, Nuvion stood in'
     expect(await states(view.reference)).toEqual(['out:pending']);
   });
 
+  /**
+   * SWEEP-MONEY row WALLET-07 D1 (mutant M02): `completeFromRecord` reads the
+   * send afresh and does nothing to one that is no longer pending. A sweep or a
+   * webhook that holds an older, pending copy must not complete, re-price or
+   * flag a send that settled while it was working.
+   */
+  describe('completeFromRecord with a stale pending copy of a send that has settled', () => {
+    type Record_ = {
+      amountKobo: bigint;
+      feeKobo: bigint | null;
+      totalKobo: bigint | null;
+      refs: Record<string, string | null>;
+      source: 'send' | 'lookup' | 'history' | 'webhook';
+      occurredAt: Date | null;
+      debitRecorded: boolean;
+    };
+    const completeFromRecord = (
+      stale: unknown,
+      rec: Record_,
+    ): Promise<{
+      status: string;
+      discrepancy: string | null;
+      debitReviewSince: Date | null;
+      reviewSince: Date | null;
+    }> =>
+      (
+        transfers as unknown as {
+          completeFromRecord: (s: unknown, r: Record_) => Promise<never>;
+        }
+      ).completeFromRecord(stale, rec);
+    // A record that charges far more than the quote would flag a pending send.
+    const dearRecord: Record_ = {
+      amountKobo: 200_000n,
+      feeKobo: 90_000n,
+      totalKobo: 290_000n,
+      refs: {},
+      source: 'webhook',
+      occurredAt: null,
+      debitRecorded: false,
+    };
+    const ledgerSnapshot = async (reference: string) =>
+      (await ledgerRows(reference)).map((r) => ({
+        id: r.id,
+        direction: r.direction,
+        status: r.status,
+        amountKobo: String(r.amountKobo),
+        feeKobo: String(r.feeKobo),
+        totalKobo: String(r.totalKobo),
+        discrepancy: r.discrepancy,
+        updatedAt: r.updatedAt.getTime(),
+      }));
+
+    it.each(['completed', 'failed'] as const)(
+      'a send that is already %s is returned as it stands: no ledger row, figure or flag changes',
+      async (settled) => {
+        const me = await person(1_000_000);
+        const to = await person(0);
+        const b = await ready(me, to, 200_000);
+        const pending = body<TransferView>(await send(me, b)).data!;
+        expect(pending.status).toBe('pending');
+        const stale = await prisma.walletTransfer.findUniqueOrThrow({
+          where: { id: pending.id },
+        });
+        expect(stale.status).toBe('pending');
+        nuvion.settle(
+          pending.reference,
+          settled === 'completed' ? 'successful' : 'failed',
+        );
+        await sweepLater();
+        const before = await prisma.walletTransfer.findUniqueOrThrow({
+          where: { id: pending.id },
+        });
+        expect(before.status).toBe(settled);
+        const rowsBefore = await ledgerSnapshot(pending.reference);
+
+        const out = await completeFromRecord(stale, dearRecord);
+
+        expect(out.status).toBe(settled);
+        const after = await prisma.walletTransfer.findUniqueOrThrow({
+          where: { id: pending.id },
+        });
+        expect(after).toEqual(before);
+        expect(await ledgerSnapshot(pending.reference)).toEqual(rowsBefore);
+      },
+    );
+  });
+
+  /**
+   * SWEEP-MONEY row WALLET-07 D2 (mutants M20 and M21): the sweep asks again
+   * 2, 4, 8, 16, 32, 60, 60 minutes after each unknown answer, never sooner,
+   * and sends a send nobody has answered to a person at 72 hours, not before.
+   */
+  describe('the sweep of a pending send', () => {
+    const MIN = 60_000;
+    const HOUR = 60 * MIN;
+
+    it('asks again 2, 4, 8, 16, 32, 60, 60 minutes after each unknown answer, and not sooner', async () => {
+      const me = await person(1_000_000);
+      const to = await person(0);
+      const pending = body<TransferView>(
+        await send(me, await ready(me, to, 200_000)),
+      ).data!;
+      const row = () =>
+        prisma.walletTransfer.findUniqueOrThrow({ where: { id: pending.id } });
+      let at = (await row()).nextCheckAt!.getTime();
+      const waits = [2, 4, 8, 16, 32, 60, 60];
+      for (const [i, minutes] of waits.entries()) {
+        await transfers.sweep(new Date(at));
+        const r = await row();
+        expect(r.status).toBe('pending');
+        expect(r.checks).toBe(i + 1);
+        expect(r.nextCheckAt!.getTime() - at).toBe(minutes * MIN);
+        // One millisecond early asks nothing: the count stays.
+        await transfers.sweep(new Date(r.nextCheckAt!.getTime() - 1));
+        expect((await row()).checks).toBe(i + 1);
+        at = r.nextCheckAt!.getTime();
+      }
+    });
+
+    it('sends a send nobody has answered to review at 72 hours, not at 71 hours 59 minutes', async () => {
+      const me = await person(1_000_000);
+      const to = await person(0);
+      const pending = body<TransferView>(
+        await send(me, await ready(me, to, 200_000)),
+      ).data!;
+      const first = await prisma.walletTransfer.findUniqueOrThrow({
+        where: { id: pending.id },
+      });
+      const sent = (first.sentAt ?? first.createdAt).getTime();
+      await transfers.sweep(new Date(sent + 72 * HOUR - MIN));
+      const early = await prisma.walletTransfer.findUniqueOrThrow({
+        where: { id: pending.id },
+      });
+      expect(early.status).toBe('pending');
+      expect(early.reviewSince).toBeNull();
+      await transfers.sweep(new Date(sent + 72 * HOUR + 5 * MIN));
+      const late = await prisma.walletTransfer.findUniqueOrThrow({
+        where: { id: pending.id },
+      });
+      expect(late.status).toBe('pending');
+      expect(late.reviewSince).not.toBeNull();
+      expect(late.discrepancy).toMatch(/no answer from .* after 72 hours/);
+    });
+  });
+
   it('a wallet another provider holds is not sent to; and no Fintava host was called, no answer carried a phone', async () => {
     const me = await person(1_000_000);
     const to = await person(0);

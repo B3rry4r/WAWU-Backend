@@ -343,5 +343,25 @@ describe('The earnings sweep starts at a time (WALLET-16)', () => {
     expect(
       (await get(adminTokens[AdminRole.finance], '?cursor=junk')).status,
     ).toBe(400);
+
+    // R55-1: a well-formed cursor that matches no payment is a plain 400 too,
+    // not a restart at the first page with a cursor again (a loop for a client).
+    const unknownCursor = await get(
+      adminTokens[AdminRole.finance],
+      `?cursor=${randomUUID()}`,
+    );
+    expect(unknownCursor.status).toBe(400);
+    expect(JSON.stringify(unknownCursor.body)).toContain(
+      'cursor is not one this list gave.',
+    );
+    // R55-2: a limit that is not a number says so, in the same words as a limit
+    // that is out of range (it used to read "must not be greater than 100").
+    for (const bad of ['abc', '0', '101']) {
+      const res = await get(adminTokens[AdminRole.finance], `?limit=${bad}`);
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body)).toContain(
+        'limit must be a whole number from 1 to 100.',
+      );
+    }
   });
 });

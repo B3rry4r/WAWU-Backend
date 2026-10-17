@@ -220,7 +220,12 @@ export class AiJobService {
       });
       return { job, replayed: false };
     } catch (e) {
-      if (!isUniqueViolation(e)) throw e;
+      if (!isUniqueViolation(e)) {
+        await this.giveBackUnwrittenHold(data.id, data.holdId);
+        throw e;
+      }
+      // Lost the unique index: the hold is the winner's own (one hold per
+      // user and key), so it is never given back from here.
       const winner = await this.prisma.aiToolJob.findUnique({
         where: { id: data.id },
       });
@@ -228,6 +233,33 @@ export class AiJobService {
       if (winner.requestHash !== requestHash)
         throw new AiToolError('idempotency_key_reused', KEY_REUSED_MESSAGE);
       return { job: await this.reconcile(winner), replayed: true };
+    }
+  }
+
+  /**
+   * The job row could not be written, so nothing will ever settle this hold:
+   * give the points back now, not at the stale-hold sweep 30 to 35 minutes on
+   * (SWEEP-MONEY, AITOOLS-01 L2). Only for the failure to create the row, never
+   * for the lost race on the unique index (that hold is the winner's). A row
+   * under this id means another request's job holds these points and settles
+   * them, so nothing is given back then. A repeat under the same key meets this
+   * spent reference (`points_hold_settled`) and starts again under a new key.
+   */
+  private async giveBackUnwrittenHold(
+    id: string,
+    holdId: string,
+  ): Promise<void> {
+    try {
+      const row = await this.prisma.aiToolJob.findUnique({
+        where: { id },
+        select: { id: true },
+      });
+      if (row) return;
+      await this.spend.release(holdId);
+    } catch (err) {
+      this.logger.error(
+        `ai job ${id}: the job could not be written and the points were not given back yet (${(err as Error).name ?? 'Error'}); the stale-hold sweep will`,
+      );
     }
   }
 
