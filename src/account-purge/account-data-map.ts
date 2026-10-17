@@ -67,6 +67,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'AUTHORED',
   },
   { model: 'DmReport', column: 'reporterWawuId', disposition: 'AUTHORED' },
+  // The key a reply bubble was sent under (INBOX-18 round 2): one row per
+  // bubble, made by the same creator, so it is their sending record. Listed
+  // before DmReply, which it points at; it would also go with the bubble
+  // through the foreign key, and saying so keeps the drift guard honest.
+  { model: 'DmReplyKey', column: 'creatorWawuId', disposition: 'AUTHORED' },
   // A reply bubble (INBOX-08) is the creator's writing; it goes with them.
   { model: 'DmReply', column: 'creatorWawuId', disposition: 'AUTHORED' },
   // A free chat message (INBOX-06) is this person's writing; it goes with

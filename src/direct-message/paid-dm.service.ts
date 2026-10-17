@@ -227,19 +227,31 @@ export class PaidDmService {
     };
   }
 
-  /** The creator adds a reply bubble to a question sent to them. */
+  /**
+   * The creator adds a reply bubble to a question sent to them. With an
+   * `Idempotency-Key` the bubble is stored once per creator and key, and a
+   * repeat answers with the question as it stands, `replayed: true`
+   * (INBOX-18 round 2; DmReplyWriter says how).
+   */
   async reply(
     creatorWawuId: string,
     messageId: string,
     text: string,
-  ): Promise<PaidDmQuestion> {
-    await this.replyWriter.post(creatorWawuId, messageId, text, 'any');
+    idempotencyKey?: string,
+  ): Promise<{ question: PaidDmQuestion; replayed: boolean }> {
+    const { replayed } = await this.replyWriter.post(
+      creatorWawuId,
+      messageId,
+      text,
+      'any',
+      idempotencyKey,
+    );
     const row = await this.prisma.directMessage.findUniqueOrThrow({
       where: { id: messageId },
       include: { replies: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] } },
     });
     const [question] = await this.toQuestions(creatorWawuId, [row]);
-    return question;
+    return { question, replayed };
   }
 
   // ── internals ────────────────────────────────────────────────────────────

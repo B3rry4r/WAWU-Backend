@@ -1178,8 +1178,27 @@ model DmReply {
   creatorWawuId String
   text          String
   createdAt     DateTime      @default(now())
+  /// INBOX-18 round 2. The row of `DmReplyKey` for the key this bubble was sent with, when the creator gave one.
+  /// Nothing reads it from a bubble; it is only the other side of that table's relation.
+  idempotencyKey DmReplyKey?
 
   @@index([messageId, createdAt])
+}
+
+/// INBOX-18 round 2 (verifier F1). The `Idempotency-Key` a creator gave when they posted a reply bubble on a paid
+/// question: one row per (creator, key), pointing at the bubble that key stored. The primary key is the unique index
+/// that makes a bubble stored ONCE per creator and key, even when two requests with the same key arrive at the same
+/// moment on two servers: the database refuses the second row, so the second request answers with the first bubble
+/// (see DmReplyWriter.post). A separate table, not a column on DmReply, so no read of a bubble can carry a key; a
+/// bubble sent without a key has no row here. Same shape as CommunityMessageKey (INBOX-05 round 5).
+model DmReplyKey {
+  creatorWawuId String
+  key           String
+  replyId       String   @unique
+  reply         DmReply  @relation(fields: [replyId], references: [id], onDelete: Cascade)
+  createdAt     DateTime @default(now())
+
+  @@id([creatorWawuId, key])
 }
 
 /// Rolling per-creator stats maintained by the DM-deadline-sweep cron job

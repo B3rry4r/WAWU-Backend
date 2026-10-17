@@ -332,6 +332,23 @@ credit is taken). The same key for other words or another room is
 leaves the key free to use once the cause is fixed. The app makes one key per message and
 sends it again unchanged on every retry of that message.
 
+**Not only money: a creator's reply to a paid question.** `POST
+/paid-dm/questions/:messageId/replies` takes an OPTIONAL `Idempotency-Key` too (the
+same 8 to 128 characters of `[A-Za-z0-9_-]`; INBOX-18 round 2). Without it the route
+behaves exactly as it always has: every call is a bubble. With it, per `(creatorWawuId,
+key)` the bubble is stored once (`DmReplyKey`, primary key creator plus key, written with
+the bubble by one nested create, so the unique index is the lock). A repeat, and a second
+request with the same key at the same moment on one server or two, answers `201` with the
+question as it stands (the first bubble in it once, and any later bubble too) and
+`Idempotent-Replayed: true`, and stores nothing, releases nothing and asks no one again.
+A key still in flight is answered this way, not with `idempotency_in_progress`: the second
+request waits on the index for the first to commit and then answers with its bubble. The
+same key for another question or other words is `409` with `reason:
+idempotency_key_reused`. A header that is not 8 to 128 of `[A-Za-z0-9_-]` is `400`. A
+refusal (403, 404, 409 for the window) stores nothing and leaves the key free. The app
+makes one key per reply attempt, keeps it across a retry of that attempt, and makes a new
+one for a new reply.
+
 **On the PIN routes (optional).** `PUT /money/pin` and `POST /money/pin/reset/confirm`
 move no money, so they do not need a key, but they take one if it is sent
 (WALLET-06 round 2). A phone whose answer to a PIN change or a reset was lost

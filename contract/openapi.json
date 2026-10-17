@@ -764,6 +764,16 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional. One value per reply, made by the app when the creator first taps Reply and sent again unchanged on every retry of that same reply (never reused for another). Per creator and key the reply is stored once; a repeat, or a second request with the same key at the same moment, answers with the question as it stands, the first reply in it once, and the header `Idempotent-Replayed: true`, and stores and releases nothing again. The same key for another question or other words is `409` with `reason: idempotency_key_reused`. A value that is not 8 to 128 of [A-Za-z0-9_-] is `400`. Without it the reply behaves as it always has.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
           }
         ],
         "requestBody": {

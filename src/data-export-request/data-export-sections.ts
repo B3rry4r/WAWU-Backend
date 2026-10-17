@@ -1330,6 +1330,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       reason:
         'The key one community message was sent under, so a repeat is not stored twice; the message itself is exported under communityMessages.',
     },
+    {
+      model: 'DmReplyKey',
+      reason:
+        'The key one paid-question reply was sent under, so a repeat is not stored twice; the reply itself is exported under paidMessageRepliesWritten.',
+    },
     { model: 'CartItem', reason: 'A transient basket, not a record.' },
     {
       model: 'EventReferral',
