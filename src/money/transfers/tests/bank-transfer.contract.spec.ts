@@ -1583,7 +1583,7 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
     const me = await person(5_000_000);
     await prisma.fintavaWallet.update({
       where: { wawuUserId: me.id },
-      data: { accountName: 'Okoro Chidinma Adaeze' },
+      data: { accountName: 'Okoro Chidinma' },
     });
     const number = account('CHIDINMA ADAEZE OKORO');
     const saved = await putPayoutTo(me, number);
@@ -1600,7 +1600,7 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
       code: 'account_not_in_your_name',
       accountName: 'MALLORY NEW',
       bankName: GTB.name,
-      verifiedName: 'Okoro Chidinma Adaeze',
+      verifiedName: 'Okoro Chidinma',
     });
 
     // The saved account, once the bank names someone else: refused before
@@ -1620,7 +1620,7 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
     expect(body(refused).reason).toMatchObject({
       code: 'account_not_in_your_name',
       accountName: 'MALLORY NEW',
-      verifiedName: 'Okoro Chidinma Adaeze',
+      verifiedName: 'Okoro Chidinma',
     });
     expect(await triesLeft(me)).toBe(triesBefore);
     expect(sendsFrom(me)).toHaveLength(0);

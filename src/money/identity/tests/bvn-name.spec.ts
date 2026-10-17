@@ -172,11 +172,11 @@ describe('accountNameMatches (A21 "matches your BVN")', () => {
   });
 });
 
-describe('accountNameIsWalletName (WALLET-37 round 3: the wallet name is the verified name)', () => {
+describe('accountNameIsWalletName (WALLET-37 round 4: either side may leave out a middle name)', () => {
   const wallet = 'Chidinma Adaeze Okoro';
 
   it.each([
-    ['middle name left out', 'CHIDINMA OKORO'],
+    ['middle name left out by the bank', 'CHIDINMA OKORO'],
     ['swapped order', 'OKORO CHIDINMA'],
     ['every word, bank order', 'OKORO CHIDINMA ADAEZE'],
     ['case, spacing and punctuation', '  okoro,  chidinma-adaeze '],
@@ -190,30 +190,72 @@ describe('accountNameIsWalletName (WALLET-37 round 3: the wallet name is the ver
     ['a different surname', 'CHIDINMA ADEBAYO'],
     ['a single word', 'OKORO'],
     ['a single word repeated', 'OKORO OKORO'],
-    ['a word the wallet name lacks', 'CHIDINMA ADAEZE OKORO JR'],
     ['a stranger', 'SIMI MICHELLE'],
     ['an initial in place of a name', 'C OKORO'],
+    ['one word shared and one not', 'CHIDINMA ADEBAYO JR'],
     ['nothing', ''],
     ['punctuation only', ' - . '],
   ])('refuses %s: %p', (_why, bank) => {
     expect(accountNameIsWalletName(wallet, bank)).toBe(false);
   });
 
-  it('a wallet name of one word never vouches for an account', () => {
+  it('the wallet name may be the one that leaves the middle name out', () => {
+    expect(
+      accountNameIsWalletName('Okoro Chidinma', 'CHIDINMA ADAEZE OKORO'),
+    ).toBe(true);
+    expect(
+      accountNameIsWalletName('Okoro Chidinma', 'OKORO CHIDINMA ADAEZE'),
+    ).toBe(true);
+    expect(accountNameIsWalletName('Okoro Chidinma', 'CHIDINMA OKORO')).toBe(
+      true,
+    );
+    expect(accountNameIsWalletName('Chidinma Okoro', 'OKORO CHIDINMA')).toBe(
+      true,
+    );
+  });
+
+  it('both ways: the same two names are accepted whichever side is shorter', () => {
+    const short = 'Okoro Chidinma';
+    const long = 'CHIDINMA ADAEZE OKORO';
+    expect(accountNameIsWalletName(short, long)).toBe(true);
+    expect(accountNameIsWalletName(long, short)).toBe(true);
+  });
+
+  it('a different surname is refused whichever side is shorter', () => {
+    expect(
+      accountNameIsWalletName('Okoro Chidinma', 'CHIDINMA ADAEZE ADEBAYO'),
+    ).toBe(false);
+    expect(
+      accountNameIsWalletName('Chidinma Adaeze Okoro', 'CHIDINMA ADEBAYO'),
+    ).toBe(false);
+    expect(accountNameIsWalletName('Okoro Chidinma', 'ADEBAYO CHIDINMA')).toBe(
+      false,
+    );
+    expect(accountNameIsWalletName('Okoro Chidinma', 'SIMI MICHELLE')).toBe(
+      false,
+    );
+  });
+
+  it('a single shared word is refused whichever side is longer', () => {
+    expect(accountNameIsWalletName('Okoro Chidinma', 'OKORO')).toBe(false);
+    expect(accountNameIsWalletName('Okoro', 'OKORO CHIDINMA')).toBe(false);
+    expect(accountNameIsWalletName('Okoro Chidinma', 'OKORO SIMI')).toBe(false);
     expect(accountNameIsWalletName('Sandbox', 'SANDBOX')).toBe(false);
     expect(accountNameIsWalletName('Sandbox', 'SANDBOX ADA')).toBe(false);
   });
 
-  it('a two-word wallet name needs both words in the bank name', () => {
+  it('two words in common are enough when one name holds the other', () => {
     expect(accountNameIsWalletName('Ada Sandbox', 'SANDBOX ADA')).toBe(true);
     expect(accountNameIsWalletName('Ada Sandbox', 'ADA')).toBe(false);
     expect(accountNameIsWalletName('Ada Sandbox', 'ADA SANDBOX VENTURES')).toBe(
-      false,
+      true,
     );
+    expect(accountNameIsWalletName('Ada Sandbox', 'ADA VENTURES')).toBe(false);
   });
 
   it('a wallet name with nothing readable vouches for nothing', () => {
     expect(accountNameIsWalletName('', 'CHIDINMA OKORO')).toBe(false);
     expect(accountNameIsWalletName(null, 'CHIDINMA OKORO')).toBe(false);
+    expect(accountNameIsWalletName(undefined, 'CHIDINMA OKORO')).toBe(false);
   });
 });

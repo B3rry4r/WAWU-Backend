@@ -143,19 +143,24 @@ export function accountNameMatches(
 
 /**
  * Whether a bank's account name is the name on the person's wallet, for a
- * person whose BVN name is not kept (WALLET-37 round 3, the lead's ruling):
- * every word of the bank's name is a word of the wallet's name, in any
- * order, and at least two words match (a first name and a surname). Banks
- * often leave a middle name out, so the bank's name may be shorter than the
- * wallet's; a word of the bank's name that the wallet's name does not have,
- * or one word alone, does not match. Words are read as `nameWords` reads
- * them (case, spacing, punctuation and accents do not count).
+ * person whose BVN name is not kept (WALLET-37 round 4, the lead's ruling):
+ * every word of the SHORTER of the two names is a word of the longer one, in
+ * any order, and at least two words match (a first name and a surname).
+ * Either side may leave a middle name out: the bank's "CHIDINMA OKORO" and
+ * the wallet's "Chidinma Adaeze Okoro" match, and so do the wallet's "Okoro
+ * Chidinma" and the bank's "CHIDINMA ADAEZE OKORO". A word of the shorter
+ * name that the longer one does not have, or one word alone, does not
+ * match. Words are read as `nameWords` reads them (case, spacing,
+ * punctuation and accents do not count, repeats count once).
  */
 export function accountNameIsWalletName(
   walletName: string | null | undefined,
   accountName: string,
 ): boolean {
-  const held = new Set(nameWords(walletName));
-  const words = nameWords(accountName);
-  return words.length >= 2 && words.every((w) => held.has(w));
+  const wallet = nameWords(walletName);
+  const bank = nameWords(accountName);
+  const [shorter, longer] =
+    wallet.length <= bank.length ? [wallet, bank] : [bank, wallet];
+  const held = new Set(longer);
+  return shorter.length >= 2 && shorter.every((w) => held.has(w));
 }

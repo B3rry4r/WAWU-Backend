@@ -680,7 +680,7 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
         const who = await withWallet();
         await prisma.fintavaWallet.update({
           where: { wawuUserId: who.id },
-          data: { accountName: 'Okoro Chidinma Adaeze' },
+          data: { accountName: 'Okoro Chidinma' },
         });
         bank({ status: 200, body: nameAnswer('CHIDINMA ADAEZE OKORO') });
         const saved = body<PayoutAccountView>(
@@ -709,9 +709,9 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
         expect(body<unknown>(refused).reason).toMatchObject({
           accountName: 'SIMI MICHELLE',
           bankName: 'ACCESS BANK',
-          verifiedName: 'Okoro Chidinma Adaeze',
+          verifiedName: 'Okoro Chidinma',
           message:
-            'This account is in the name SIMI MICHELLE, but your wallet is in the name Okoro Chidinma Adaeze. You can only be paid to an account in your own name.',
+            'This account is in the name SIMI MICHELLE, but your wallet is in the name Okoro Chidinma. You can only be paid to an account in your own name.',
         });
         const read = body<PayoutAccountView>(await getPayout(who).expect(200));
         expect(read.data?.accountNumber).toBe(STUB_ACCOUNT);
@@ -721,8 +721,8 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
           }),
         ).toBe(1);
 
-        // Round 3: a middle name the bank leaves out is fine (first name and
-        // surname match); a different surname, or a surname alone, is not.
+        // Round 3: a different surname, or a surname alone, is not the name;
+        // a bank name of the same two words is.
         bank({
           status: 200,
           body: nameAnswer('CHIDINMA OKORO', {
@@ -752,6 +752,29 @@ describe('Saved beneficiaries and the payout account (WALLET-14) over HTTP', () 
           409,
           'account_not_in_your_name',
         );
+
+        // Round 4: either side may leave a middle name out. The wallet above
+        // is "Okoro Chidinma" and the bank gave all three words (saved first
+        // in this test); now the wallet holds the middle name and the bank
+        // leaves it out.
+        await prisma.fintavaWallet.update({
+          where: { wawuUserId: who.id },
+          data: { accountName: 'Okoro Chidinma Adaeze' },
+        });
+        bank({
+          status: 200,
+          body: nameAnswer('OKORO CHIDINMA', {
+            bankCode: '000014',
+            accountNumber: '0690000034',
+          }),
+        });
+        const bankLeavesItOut = body<PayoutAccountView>(
+          await putPayout(who, {
+            bankCode: '000014',
+            accountNumber: '0690000034',
+          }).expect(200),
+        );
+        expect(bankLeavesItOut.data?.accountName).toBe('OKORO CHIDINMA');
 
         // Part of the name is not the name: a surname alone is refused.
         bank({

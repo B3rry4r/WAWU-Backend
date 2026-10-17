@@ -68,10 +68,11 @@ export function notYourNameMessage(
  * the BVN name kept by the check; else, when none is kept (every wallet
  * opened under Nuvion keeps none), the wallet's own account name as the
  * provider gave it, which the provider verified when the wallet opened,
- * compared by `accountNameIsWalletName` (every word of the bank's name is a
- * word of the wallet's, in any order, and at least two words match, so a
- * middle name the bank leaves out does not matter); else nothing, and the account is refused with a plain
- * reason (a person without an opened wallet cannot withdraw anyway).
+ * compared by `accountNameIsWalletName` (every word of the shorter of the two
+ * names is a word of the longer, in any order, and at least two words match,
+ * so either side may leave a middle name out); else nothing, and the account
+ * is refused with a plain reason (a person without an opened wallet cannot
+ * withdraw anyway).
  */
 @Injectable()
 export class PayoutAccountService {
