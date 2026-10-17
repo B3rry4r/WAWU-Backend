@@ -44,12 +44,23 @@ export const OPEN_ORDER_STATES: readonly OrderStatus[] = [
  */
 export const MINUTE_MS = 60_000;
 export const HOUR_MS = 3_600_000;
+export const SECOND_MS = MINUTE_MS / 60;
 
 export const TRANSFER_DEFAULTS = {
   /** Between two passes of the settlement sweep. */
   sweepMs: 8_000,
-  /** Orders dealt with per pass. */
+  /** Rows read at a time when a pass looks for stale claims. Never a limit on what a pass settles. */
   batch: 64,
+  /** Waiting orders read at a time when a pass looks for the people who are due. */
+  scanPage: 512,
+  /** People whose newest money-in row is looked up in one read. */
+  lookupPage: 256,
+  /**
+   * How long a pass keeps starting on people who are due. What it did not get
+   * to is still due (an order it settled or checked is not), and the next pass
+   * takes the oldest of those first.
+   */
+  sweepBudgetMs: 18 * SECOND_MS,
   /** People settled at the same time in a pass. */
   concurrency: 4,
   /**
@@ -63,9 +74,14 @@ export const TRANSFER_DEFAULTS = {
   staleGraceMs: MINUTE_MS + MINUTE_MS,
 } as const;
 
-/** The idempotency key the settlement pays an order under: one payment per order. */
+/**
+ * The idempotency key the settlement pays an order under: one payment per
+ * order. It holds a colon, which the Idempotency-Key header does not allow
+ * (8 to 128 letters, digits, - or _), so a person can never send it: their
+ * own keys and the settlement's never meet.
+ */
 export function settleKeyOf(orderId: string): string {
-  return `transfer-${orderId}`;
+  return `transfer:${orderId}`;
 }
 
 /** One waiting order per person and item: unique while the order is open. */
@@ -91,6 +107,8 @@ export const NOT_PAYABLE_ANY_MORE_MESSAGE =
   'This purchase cannot be made any more. Nothing was taken from your wallet.';
 export const SETTLING_MESSAGE =
   'Your money arrived. We are completing your purchase. Do not pay again.';
+export const PAYMENT_FAILED_WAITING_MESSAGE =
+  'Your money arrived, but the payment did not go through and nothing was taken from your wallet. We will try again while this purchase is still open.';
 export const LIMIT_WAITING_MESSAGE =
   'Your money arrived, but a limit stops the purchase for now. It will go through as soon as the limit allows, while this purchase is still open.';
 
@@ -133,4 +151,45 @@ export function backoffMs(checks: number): number {
     TRANSFER_DEFAULTS.maxBackoffMs,
     MINUTE_MS * (1 << Math.min(checks, 4)),
   );
+}
+
+/** What the sweep needs of a waiting order to say whether it is due. */
+export type WaitingFacts = Pick<
+  PlanTransferOrder,
+  'wawuUserId' | 'createdAt' | 'creditsSeenAt' | 'nextCheckAt'
+>;
+
+/**
+ * The people with a waiting order that is due, in the order the sweep settles
+ * them. An order is due when a money-in row is newer than what it last looked
+ * at (`creditsSeenAt`, else its own creation), or its recheck time has come.
+ * People a new credit may have paid for come first, then those whose recheck
+ * came, each oldest waiting order first. `latestCredit` is each person's
+ * newest money-in row the Hub knows of.
+ */
+export function duePeople(
+  orders: readonly WaitingFacts[],
+  latestCredit: ReadonlyMap<string, Date>,
+  now: Date,
+): string[] {
+  const byCredit = new Map<string, number>();
+  const byTimer = new Map<string, number>();
+  const note = (into: Map<string, number>, person: string, at: number) =>
+    into.set(person, Math.min(into.get(person) ?? at, at));
+  for (const o of orders) {
+    const at = o.createdAt.getTime();
+    const latest = latestCredit.get(o.wawuUserId);
+    const seen = (o.creditsSeenAt ?? o.createdAt).getTime();
+    if (latest !== undefined && latest.getTime() > seen)
+      note(byCredit, o.wawuUserId, at);
+    else if (o.nextCheckAt !== null && o.nextCheckAt.getTime() <= now.getTime())
+      note(byTimer, o.wawuUserId, at);
+  }
+  const oldestFirst = (m: Map<string, number>) =>
+    [...m.entries()]
+      .sort((a, b) => a[1] - b[1] || (a[0] < b[0] ? -1 : 1))
+      .map(([person]) => person);
+  const credited = oldestFirst(byCredit);
+  const asked = new Set(credited);
+  return [...credited, ...oldestFirst(byTimer).filter((p) => !asked.has(p))];
 }

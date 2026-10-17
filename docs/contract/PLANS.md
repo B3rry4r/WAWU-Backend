@@ -370,7 +370,15 @@ and again every few minutes; a balance is never a sum of our rows. Rules:
   (`failed`, "The price or what comes with it changed...") and nothing is taken.
 - **The window** is the admin setting `plan.transfer_window_hours` (default 24,
   PROVISIONAL(PLAN-TRANSFER-WINDOW)). After it the purchase is `expired`; the
-  money stays in the wallet and nothing is taken.
+  money stays in the wallet and nothing is taken. A purchase whose payment was
+  already made is never expired: it reads `paid`.
+- **Every waiting purchase is looked at.** However many purchases wait, one
+  whose money has landed is settled on the next pass, not after the older ones
+  expire.
+- **A refused payment waits again.** When the wallet payment is refused and
+  nothing moved, the purchase stays `awaiting_transfer` (`statusMessage` says
+  so) and is tried again later, once, as a payment of its own; if the window
+  has run out by then it is `expired`.
 - **Oldest first.** One person's waiting purchases are paid oldest first, each
   only while the balance, read again before each, covers its total.
 - **One waiting purchase per item.** Asking again for the same item closes the

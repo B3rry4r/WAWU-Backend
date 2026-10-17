@@ -29,7 +29,9 @@ import {
 } from '../../wallet-provider/wallet-provider.interface';
 import {
   backoffMs,
+  duePeople,
   HOUR_MS,
+  lapsed,
   MINUTE_MS,
   EXPIRED_MESSAGE,
   LIMIT_WAITING_MESSAGE,
@@ -38,6 +40,7 @@ import {
   ORDER_STATUS,
   orderOpenKey,
   PAID_ANOTHER_WAY_MESSAGE,
+  PAYMENT_FAILED_WAITING_MESSAGE,
   QUOTE_CHANGED_MESSAGE,
   REPLACED_MESSAGE,
   sameQuote,
@@ -81,6 +84,15 @@ export type SettleOutcome =
   /** Could not be tried now (the provider, a limit); waiting, tried again later. */
   | 'retry';
 
+/** The few columns of a waiting order the sweep reads to say who is due. */
+interface WaitingRow {
+  id: string;
+  wawuUserId: string;
+  createdAt: Date;
+  creditsSeenAt: Date | null;
+  nextCheckAt: Date | null;
+}
+
 /** The errors that end an order: the item cannot be paid for any more. */
 const CLOSING_CODES = new Set<string>([
   'target_not_payable',
@@ -115,7 +127,18 @@ const CLOSING_CODES = new Set<string>([
  *   the result is recorded in one short write. A claim that dies is
  *   recovered by the sweep from the order's idempotency key.
  * - **A lapsed window** marks the order `expired`. The money that arrived
- *   stays in the wallet and nothing is taken.
+ *   stays in the wallet and nothing is taken. An order whose payment was made
+ *   but not yet linked (the process died between the two) is linked, never
+ *   expired.
+ * - **Every waiting order is looked at.** A pass reads all of them (a light
+ *   page at a time), asks the ledger once per page of people for their newest
+ *   money-in row, and settles the people who are due: a new credit first,
+ *   then a recheck that came, oldest order first, within a time budget. An
+ *   order it checked is not due again until a new credit or its recheck, so a
+ *   crowd of unfunded orders never hides one whose money landed.
+ * - **A payment that failed moves nothing** and the order waits again (the
+ *   next try later, never two payments: a failed payment is let go of, a
+ *   payment in progress or made is linked).
  * - **Oldest first.** One person's waiting orders are settled oldest first,
  *   each only while the balance, read again before each, covers its total.
  * - **Paid another way.** A wallet payment for the same item made after the
@@ -269,8 +292,9 @@ export class PlanTransferService {
 
   /**
    * One pass: lapse the orders whose window ended, recover the claims that
-   * died, then settle the orders of every person whose wallet got a new
-   * credit (or whose recheck is due), oldest order first.
+   * died, then settle the people who are due (a new credit, or a recheck that
+   * came), the ones a credit may have paid for first, oldest order first,
+   * until the time budget is spent. Nothing is held across a provider call.
    */
   async sweep(now: Date = new Date()): Promise<TransferSweepReport> {
     const report: TransferSweepReport = {
@@ -287,20 +311,17 @@ export class PlanTransferService {
     try {
       report.expired = await this.expireLapsed(now);
       report.recovered = await this.recoverStale(now);
-      const orders = await this.prisma.planTransferOrder.findMany({
-        where: { status: ORDER_STATUS.awaiting, expiresAt: { gt: now } },
-        orderBy: { createdAt: 'asc' },
-        take: TRANSFER_DEFAULTS.batch,
-      });
-      const byPerson = new Map<string, PlanTransferOrder[]>();
-      for (const o of orders)
-        byPerson.set(o.wawuUserId, [...(byPerson.get(o.wawuUserId) ?? []), o]);
-      const people = [...byPerson.entries()];
-      for (let i = 0; i < people.length; i += TRANSFER_DEFAULTS.concurrency) {
+      const people = await this.duePeopleAt(now);
+      const stop = Date.now() + TRANSFER_DEFAULTS.sweepBudgetMs;
+      for (
+        let i = 0;
+        i < people.length && Date.now() < stop;
+        i += TRANSFER_DEFAULTS.concurrency
+      ) {
         const all = await Promise.all(
           people
             .slice(i, i + TRANSFER_DEFAULTS.concurrency)
-            .map(([person, theirs]) => this.settlePerson(person, theirs, now)),
+            .map((person) => this.settlePerson(person, now)),
         );
         for (const outcomes of all)
           for (const o of outcomes) if (o !== 'skipped') report[o] += 1;
@@ -311,17 +332,42 @@ export class PlanTransferService {
     }
   }
 
-  /** Orders whose window lapsed with no payment: `expired`; nothing is taken. */
+  /**
+   * Orders whose window lapsed: `expired`, nothing taken. Except an order whose
+   * payment was made (the process died before it was linked): that one is
+   * linked, never expired. Returns how many expired.
+   */
   async expireLapsed(now: Date): Promise<number> {
-    const { count } = await this.prisma.planTransferOrder.updateMany({
-      where: { status: ORDER_STATUS.awaiting, expiresAt: { lte: now } },
-      data: {
-        status: ORDER_STATUS.expired,
-        openKey: null,
-        statusMessage: EXPIRED_MESSAGE,
-      },
-    });
-    return count;
+    let expired = 0;
+    for (;;) {
+      const lapsedNow = await this.prisma.planTransferOrder.findMany({
+        where: { status: ORDER_STATUS.awaiting, expiresAt: { lte: now } },
+        orderBy: { createdAt: 'asc' },
+        take: TRANSFER_DEFAULTS.batch,
+      });
+      let done = 0;
+      for (const order of lapsedNow) {
+        const made = await this.paymentOf(order);
+        if (made) {
+          // Paid and the window ran out before it was linked: it was paid.
+          await this.link(order.id, made, [ORDER_STATUS.awaiting]);
+          done += 1;
+          continue;
+        }
+        const { count } = await this.prisma.planTransferOrder.updateMany({
+          where: { id: order.id, status: ORDER_STATUS.awaiting },
+          data: {
+            status: ORDER_STATUS.expired,
+            openKey: null,
+            statusMessage: EXPIRED_MESSAGE,
+          },
+        });
+        expired += count;
+        done += 1;
+      }
+      if (done === 0 || lapsedNow.length < TRANSFER_DEFAULTS.batch) break;
+    }
+    return expired;
   }
 
   /**
@@ -342,19 +388,16 @@ export class PlanTransferService {
     });
     let recovered = 0;
     for (const order of stale) {
-      const row = await this.prisma.moneyIdempotencyKey.findUnique({
-        where: {
-          wawuUserId_method_route_key: this.keyMatch(order),
-        },
-      });
-      if (row?.resourceId) {
-        recovered += (await this.link(order.id, row.resourceId)) ? 1 : 0;
+      const made = await this.paymentOf(order);
+      if (made) {
+        recovered += (await this.link(order.id, made)) ? 1 : 0;
         continue;
       }
-      if (row)
-        await this.prisma.moneyIdempotencyKey.deleteMany({
-          where: { ...this.keyMatch(order), resourceId: null },
-        });
+      // Nothing was made (or the payment failed and was let go of): the key is
+      // given back and the order waits again.
+      await this.prisma.moneyIdempotencyKey.deleteMany({
+        where: { ...this.keyMatch(order), resourceId: null },
+      });
       const back = await this.prisma.planTransferOrder.updateMany({
         where: { id: order.id, status: ORDER_STATUS.settling },
         data: {
@@ -368,18 +411,25 @@ export class PlanTransferService {
     return recovered;
   }
 
+  /** Which ledger rows are money in on a person's wallet (one or many people). */
+  private creditsOf(
+    who: string | { in: string[] },
+  ): Prisma.FintavaLedgerEntryWhereInput {
+    return {
+      wawuUserId: who,
+      walletKind: 'user',
+      direction: 'in',
+      status: 'completed',
+      category: { in: [...MONEY_IN_CATEGORIES] },
+      discrepancy: null,
+      AND: [rowsOf(this.provider.name)],
+    };
+  }
+
   /** The newest credit on the person's wallet the Hub knows of, or null. */
   private async latestCreditAt(wawuUserId: string): Promise<Date | null> {
     const row = await this.prisma.fintavaLedgerEntry.findFirst({
-      where: {
-        wawuUserId,
-        walletKind: 'user',
-        direction: 'in',
-        status: 'completed',
-        category: { in: [...MONEY_IN_CATEGORIES] },
-        discrepancy: null,
-        AND: [rowsOf(this.provider.name)],
-      },
+      where: this.creditsOf(wawuUserId),
       orderBy: { createdAt: 'desc' },
       select: { createdAt: true },
     });
@@ -387,25 +437,90 @@ export class PlanTransferService {
   }
 
   /**
-   * One person's waiting orders, oldest first, when something says the balance
-   * may have changed: a credit newer than what the order last looked at, or
-   * its recheck is due. Each is settled with a balance read of its own.
+   * The people with a waiting order that is due, in the order to settle them
+   * (see `duePeople`). Reads every waiting order a light page at a time, then
+   * asks the ledger for the newest money-in row of a page of people at once,
+   * looking back no further than the oldest thing a waiting order has seen.
+   * Database reads only; nothing is held when it returns.
+   */
+  private async duePeopleAt(now: Date): Promise<string[]> {
+    const waiting: WaitingRow[] = [];
+    let after: { createdAt: Date; id: string } | null = null;
+    for (;;) {
+      const page: WaitingRow[] = await this.prisma.planTransferOrder.findMany({
+        where: {
+          status: ORDER_STATUS.awaiting,
+          expiresAt: { gt: now },
+          ...(after
+            ? {
+                OR: [
+                  { createdAt: { gt: after.createdAt } },
+                  { createdAt: after.createdAt, id: { gt: after.id } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: TRANSFER_DEFAULTS.scanPage,
+        select: {
+          id: true,
+          wawuUserId: true,
+          createdAt: true,
+          creditsSeenAt: true,
+          nextCheckAt: true,
+        },
+      });
+      waiting.push(...page);
+      if (page.length < TRANSFER_DEFAULTS.scanPage) break;
+      after = page[page.length - 1];
+    }
+    const seenSince = new Map<string, number>();
+    for (const o of waiting) {
+      const seen = (o.creditsSeenAt ?? o.createdAt).getTime();
+      seenSince.set(
+        o.wawuUserId,
+        Math.min(seenSince.get(o.wawuUserId) ?? seen, seen),
+      );
+    }
+    const latest = new Map<string, Date>();
+    const everyone = [...seenSince.keys()];
+    for (let i = 0; i < everyone.length; i += TRANSFER_DEFAULTS.lookupPage) {
+      const chunk = everyone.slice(i, i + TRANSFER_DEFAULTS.lookupPage);
+      const oldest = Math.min(...chunk.map((p) => seenSince.get(p) ?? 0));
+      const rows = await this.prisma.fintavaLedgerEntry.groupBy({
+        by: ['wawuUserId'],
+        where: {
+          ...this.creditsOf({ in: chunk }),
+          createdAt: { gt: new Date(oldest) },
+        },
+        _max: { createdAt: true },
+      });
+      for (const r of rows)
+        if (r.wawuUserId && r._max.createdAt)
+          latest.set(r.wawuUserId, r._max.createdAt);
+    }
+    return duePeople(waiting, latest, now);
+  }
+
+  /**
+   * One due person's waiting orders, oldest first, each settled with a balance
+   * read of its own (so an older order is paid before a newer one, and only
+   * while the balance covers it).
    */
   private async settlePerson(
     person: string,
-    orders: PlanTransferOrder[],
     now: Date,
   ): Promise<SettleOutcome[]> {
     try {
-      const latest = await this.latestCreditAt(person);
-      const due = orders.some(
-        (o) =>
-          (o.nextCheckAt !== null &&
-            o.nextCheckAt.getTime() <= now.getTime()) ||
-          (latest !== null &&
-            latest.getTime() > (o.creditsSeenAt ?? o.createdAt).getTime()),
-      );
-      if (!due) return [];
+      const orders = await this.prisma.planTransferOrder.findMany({
+        where: {
+          wawuUserId: person,
+          status: ORDER_STATUS.awaiting,
+          expiresAt: { gt: now },
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true },
+      });
       const out: SettleOutcome[] = [];
       for (const o of orders) out.push(await this.settleOrder(o.id, now));
       return out;
@@ -465,11 +580,9 @@ export class PlanTransferService {
       return 'closed';
     }
     // A payment an earlier, interrupted attempt made is this order's payment.
-    const earlier = await this.prisma.moneyIdempotencyKey.findUnique({
-      where: { wawuUserId_method_route_key: this.keyMatch(order) },
-    });
-    if (earlier?.resourceId) {
-      await this.link(order.id, earlier.resourceId);
+    const earlier = await this.paymentOf(order);
+    if (earlier) {
+      await this.link(order.id, earlier);
       return 'pending';
     }
     const wallet = await this.walletOf(order.wawuUserId);
@@ -542,8 +655,45 @@ export class PlanTransferService {
       await this.keys.release(scope, true).catch(() => undefined);
       return this.afterRefusal(order, e, now, latest);
     }
+    if (payment.status === 'failed')
+      return this.afterFailedPayment(order, now, latest);
     await this.link(order.id, payment.id);
     return payment.status === 'completed' ? 'paid' : 'pending';
+  }
+
+  /**
+   * The wallet payment came back `failed`: the provider refused it and nothing
+   * moved. The order is not that payment's: the failed payment is let go of
+   * (its key is freed, so the retry is a payment of its own, never a second
+   * payment for one order) and the order waits again, tried later, unless its
+   * window has lapsed, when it is expired with nothing taken.
+   */
+  private async afterFailedPayment(
+    order: PlanTransferOrder,
+    now: Date,
+    latest: Date | null,
+  ): Promise<SettleOutcome> {
+    await this.letGo(order);
+    if (lapsed(order, now)) {
+      await this.prisma.planTransferOrder.updateMany({
+        where: { id: order.id, status: ORDER_STATUS.settling },
+        data: {
+          status: ORDER_STATUS.expired,
+          openKey: null,
+          settlingSince: null,
+          statusMessage: EXPIRED_MESSAGE,
+        },
+      });
+      return 'closed';
+    }
+    // The credits seen so far are marked, so only a newer credit wakes it
+    // before the rest it was given.
+    await this.waitAgain(order, now, {
+      failed: true,
+      message: PAYMENT_FAILED_WAITING_MESSAGE,
+      creditsSeenAt: latest,
+    });
+    return 'retry';
   }
 
   /** What a refusal while settling means for the order: closed, or waiting to be tried again. */
@@ -620,10 +770,18 @@ export class PlanTransferService {
   // Recording the result (each one short write, nothing held)
   // -------------------------------------------------------------------------
 
-  /** The wallet payment exists: the order is that payment's. Once. */
-  private async link(orderId: string, paymentId: string): Promise<boolean> {
+  /**
+   * The wallet payment exists: the order is that payment's. Once. `from` are
+   * the states it may be linked from: `settling` (the settlement holds it), or
+   * `awaiting` for a lapsed order whose payment was found before it expired.
+   */
+  private async link(
+    orderId: string,
+    paymentId: string,
+    from: string[] = [ORDER_STATUS.settling],
+  ): Promise<boolean> {
     const { count } = await this.prisma.planTransferOrder.updateMany({
-      where: { id: orderId, status: ORDER_STATUS.settling },
+      where: { id: orderId, status: { in: from } },
       data: {
         status: ORDER_STATUS.settled,
         paymentId,
@@ -633,6 +791,35 @@ export class PlanTransferService {
       },
     });
     return count === 1;
+  }
+
+  /**
+   * The payment an earlier attempt of this order made, found by the order's
+   * own idempotency key: its id when it is pending or completed, null when
+   * there is none. A key that names a payment that FAILED is let go of
+   * (nothing moved, so the order may try again under a fresh key).
+   */
+  private async paymentOf(order: PlanTransferOrder): Promise<string | null> {
+    const row = await this.prisma.moneyIdempotencyKey.findUnique({
+      where: { wawuUserId_method_route_key: this.keyMatch(order) },
+    });
+    if (!row?.resourceId) return null;
+    const payment = await this.prisma.walletPayment.findUnique({
+      where: { id: row.resourceId },
+      select: { status: true },
+    });
+    if (payment?.status === 'failed') {
+      await this.letGo(order);
+      return null;
+    }
+    return row.resourceId;
+  }
+
+  /** Frees the order's idempotency key after a payment that failed. */
+  private async letGo(order: Pick<PlanTransferOrder, 'id' | 'wawuUserId'>) {
+    await this.prisma.moneyIdempotencyKey.deleteMany({
+      where: this.keyMatch(order),
+    });
   }
 
   private async close(order: PlanTransferOrder, message: string) {
