@@ -606,6 +606,63 @@ describe('Pay by bank transfer at checkout (TIER-05), Nuvion stood in', () => {
     expect(sendsFrom(p)).toHaveLength(1);
   });
 
+  it('a process that died after the payment was made does not pay twice: the next pass, or the recovery, links the payment it made', async () => {
+    const p = await person(0);
+    const placed = await order(p, { kind: 'tier', tierId: small.id });
+    await credit(p, placed.transfer!.totalKobo);
+    const link = jest
+      .spyOn(
+        transfers as unknown as { link: (...a: unknown[]) => Promise<boolean> },
+        'link',
+      )
+      .mockRejectedValueOnce(new Error('connection lost'));
+    try {
+      expect(await transfers.settleOrder(placed.id)).toBe('retry');
+    } finally {
+      link.mockRestore();
+    }
+    expect(sendsFrom(p)).toHaveLength(1);
+    expect(await rows(p)).toHaveLength(1);
+    // The next attempt finds the payment under the order's key and links it.
+    expect(
+      await transfers.settleOrder(placed.id, new Date(Date.now() + 600_000)),
+    ).toBe('pending');
+    const paid = (await statusOf(p, placed.id)) as PlanPurchaseView;
+    expect(paid).toMatchObject({
+      id: placed.id,
+      method: 'transfer',
+      status: 'paid',
+    });
+    expect(sendsFrom(p)).toHaveLength(1);
+
+    // The same, when the process died holding the order for good.
+    const q = await person(0);
+    const second = await order(q, { kind: 'tier', tierId: small.id });
+    await credit(q, second.transfer!.totalKobo);
+    const lost = jest
+      .spyOn(
+        transfers as unknown as { link: (...a: unknown[]) => Promise<boolean> },
+        'link',
+      )
+      .mockRejectedValueOnce(new Error('killed'));
+    try {
+      await transfers.settleOrder(second.id);
+    } finally {
+      lost.mockRestore();
+    }
+    await h.prisma.planTransferOrder.update({
+      where: { id: second.id },
+      data: {
+        status: 'settling',
+        settlingSince: new Date(Date.now() - 3_600_000),
+      },
+    });
+    expect(await transfers.recoverStale(new Date())).toBe(1);
+    expect(await statusOf(q, second.id)).toMatchObject({ status: 'paid' });
+    expect(sendsFrom(q)).toHaveLength(1);
+    expect(await rows(q)).toHaveLength(1);
+  });
+
   it('a settlement that died holding the order is recovered: it waits again, or links the payment it made', async () => {
     const p = await person(0);
     const placed = await order(p, { kind: 'tier', tierId: small.id });
