@@ -464,6 +464,39 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     clear: ['destinationAccountNumber'],
   },
 
+  // ── referral points (REF-02) ────────────────────────────────────────────
+  // This person's own code, the code they used, and the rewards and milestones
+  // that rest on those. A reward and a claim name two people, and either one's
+  // deletion removes the row: the other keeps the points already granted (they
+  // are lots, mapped above), not the record of who was invited. Rewards go
+  // first (they point at the claim), then milestones, claims and the code.
+  {
+    model: 'ReferralReward',
+    column: 'referrerWawuUserId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'ReferralReward',
+    column: 'referredWawuUserId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'ReferralMilestone',
+    column: 'referrerWawuUserId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'PersonReferral',
+    column: 'referrerWawuUserId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'PersonReferral',
+    column: 'referredWawuUserId',
+    disposition: 'OWNED',
+  },
+  { model: 'PersonReferralCode', column: 'wawuUserId', disposition: 'OWNED' },
+
   // The city on this person's professional card (PROS-02). Theirs, and
   // public only beside a listing that goes with them.
   {

@@ -980,6 +980,56 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // REF-02: the person's own referral code, and the code they used. Only
+    // their own code and the day they used someone's: no one else's name.
+    key: 'referralCode',
+    models: ['PersonReferralCode', 'PersonReferral'],
+    load: async (prisma, me) => {
+      const [mine, used] = await Promise.all([
+        prisma.personReferralCode.findUnique({
+          where: { wawuUserId: me },
+          select: { code: true, createdAt: true },
+        }),
+        prisma.personReferral.findUnique({
+          where: { referredWawuUserId: me },
+          select: { code: true, claimedAt: true },
+        }),
+      ]);
+      return { mine, used };
+    },
+  },
+  {
+    // REF-02: the points each person they invited earned them, and the
+    // milestones. Points and dates only; the invited person is not named.
+    key: 'referralRewards',
+    models: ['ReferralReward', 'ReferralMilestone'],
+    load: async (prisma, me) => {
+      const [rewards, milestones] = await Promise.all([
+        prisma.referralReward.findMany({
+          where: { referrerWawuUserId: me },
+          select: {
+            id: true,
+            tierId: true,
+            basePoints: true,
+            multiplierMilli: true,
+            points: true,
+            state: true,
+            availableAt: true,
+            createdAt: true,
+            settledAt: true,
+          },
+          orderBy: NEWEST,
+        }),
+        prisma.referralMilestone.findMany({
+          where: { referrerWawuUserId: me },
+          select: { count: true, points: true, grantedAt: true },
+          orderBy: { count: 'asc' },
+        }),
+      ]);
+      return { rewards, milestones };
+    },
+  },
+  {
     // POINTS-04: each time the person turned points into cash, in kobo: how
     // many points, how much cash, how it ended. No account number and no
     // provider reference.
