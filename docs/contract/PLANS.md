@@ -301,7 +301,7 @@ and the PIN is MONEY-09's (five wrong tries lock it).
 | Route | Does |
 |---|---|
 | `GET /plans/purchases/quote?kind=&tierId=&bump=` | The pay sheet (VF6) before the PIN. `kind` is `tier` (a first purchase, or after the last one ended), `renew` (the tier held, again) or `upgrade` (to a bigger tier than the one running). `bump=true` adds the checkout bump (extra points, `GET /plans` `checkoutBump`). Answers `PlanPurchaseQuoteView`: the plan priced (`planMinor`, `bumpMinor`, `bumpPoints`), the `paymentKind` and `payment`, the wallet payment's own quote (price, the provider's charge, total, balance, shortfall and the signed `quoteToken`). Nothing is reserved. |
-| `POST /plans/purchases` | Pays. Headers `Idempotency-Key` (required) and `X-Transaction-Pin` (or a biometric approval, MONEY-14). Body: `kind`, `tierId`, optional `bump`, `method: "wallet"`, `expectedTotalKobo` and `quoteToken` from the quote. Answers 201 with a `PlanPurchaseView`. |
+| `POST /plans/purchases` | Pays. Headers `Idempotency-Key` (required) and `X-Transaction-Pin` (or a biometric approval, MONEY-14). Body: `kind`, `tierId`, optional `bump`, `method: "wallet"` or `"transfer"` (below), `expectedTotalKobo` and `quoteToken` from the quote. Answers 201 with a `PlanPurchaseView`. |
 | `GET /plans/purchases/{id}` | One purchase as it stands now; `id` is the purchase's id (below). The caller's own only: another person's purchase, a payment of another kind and an id nobody holds are the same `404 not_found`. Reads WAWU's records only. `Cache-Control: no-store`. |
 
 `POST` pays through `POST /money/payments`' own code (quote check, balance
@@ -341,6 +341,48 @@ asked (a later renewal moves `activeUntil`); the lots and the pass are this
 payment's own, read by its reference. Amounts are `amountMinor` (the plan's
 price, or the upgrade's difference, plus the bump's, in the minor unit of
 `currency`; never the provider's charge) and the payment's kobo fields.
+
+### Paying by bank transfer (`method: "transfer"`, TIER-05)
+
+VF6 "transfer details shown" and PT4. `POST /plans/purchases` with `method:
+"transfer"` takes the same body, headers and checks as `wallet` (the PIN, the
+quote token and `expectedTotalKobo`; `409 quote_changed`, `409
+target_not_payable`, `503 provider_unreachable` when the balance cannot be
+read) and moves no money. It answers 201 with a `PlanTransferOrderView`:
+
+| Field | Meaning |
+|---|---|
+| `status` | `awaiting_transfer` (the money has not covered the total yet), `pending` (it landed and the wallet payment is being made), `expired` (the time to send ran out), `failed` (it cannot be made any more; `statusMessage` says why). `payment`, `grant` and `paidAt` are null. |
+| `transfer` | While `awaiting_transfer`: the person's OWN wallet account (`accountNumber`, `accountName`, `bankName`, `bankCode`; R-42: money in is a transfer into the person's own account number, WAWU has no collection account), `priceKobo`, `bankChargeKobo` (the label is "Bank charge", R-10, R-53), `totalKobo` (price plus Bank charge), `balanceKobo` (the provider's available balance now; null when it did not answer), `amountNeededKobo` (total less balance, never below 0; null when the balance is unknown) and `expiresAt`. |
+
+The purchase is paid from the wallet, once, through the same wallet payment as
+`method: "wallet"` (so the grant, the checks and the refund path are the same),
+when the provider's available balance covers the total. The Hub looks within
+seconds of a credit reaching the wallet (a money-in row of the ledger, WALLET-10)
+and again every few minutes; a balance is never a sum of our rows. Rules:
+
+- **One payment per purchase.** Several transfers, one landing twice, a sweep
+  and another server finding it together, or a later transfer pay it once.
+  Money that arrives after it is paid stays in the wallet.
+- **The quote binds.** The order keeps the price, the Bank charge total and
+  the goods confirmed with the PIN. If any differs when the money lands (the
+  price or the goods were changed in admin settings) the purchase is closed
+  (`failed`, "The price or what comes with it changed...") and nothing is taken.
+- **The window** is the admin setting `plan.transfer_window_hours` (default 24,
+  PROVISIONAL(PLAN-TRANSFER-WINDOW)). After it the purchase is `expired`; the
+  money stays in the wallet and nothing is taken.
+- **Oldest first.** One person's waiting purchases are paid oldest first, each
+  only while the balance, read again before each, covers its total.
+- **One waiting purchase per item.** Asking again for the same item closes the
+  first (`failed`, "You started this purchase again..."); paying the item from
+  the wallet meanwhile closes it too ("You paid for this another way...").
+- **Nothing is taken without the PIN given at checkout**: the order is placed
+  behind the PIN, and what is paid later is exactly that quote.
+
+`GET /plans/purchases/{id}` reads the order under the id it was given; once the
+wallet payment exists the same id reads a `PlanPurchaseView` with `method:
+"transfer"` (`paid`, or `pending` while the provider confirms), and the payment's
+own id reads it too.
 
 ### What a purchase is paid as
 

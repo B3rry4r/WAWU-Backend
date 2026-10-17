@@ -718,6 +718,27 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // What this person chose to pay for by bank transfer (TIER-05) and where it
+  // stands. The payment that paid it is a payment id, so it stays out (rule 3).
+  {
+    key: 'tierTransferPurchases',
+    models: ['PlanTransferOrder'],
+    load: (prisma, me) =>
+      prisma.planTransferOrder.findMany({
+        where: { wawuUserId: me },
+        select: {
+          targetId: true,
+          priceKobo: true,
+          providerFeeKobo: true,
+          totalKobo: true,
+          status: true,
+          statusMessage: true,
+          expiresAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
   {
     key: 'eventPasses',
     models: ['EventPass'],

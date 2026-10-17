@@ -5,6 +5,7 @@ import { nairaText } from '../../money/insufficient-funds';
 import { MoneyError } from '../../money/money-error';
 import type { PaymentStatus, PaymentView } from '../../money/money-view.type';
 import { WalletHoldService } from '../../money/holds/wallet-hold.service';
+import { WalletOpeningService } from '../../money/opening/wallet-opening.service';
 import type { IdempotencyScope } from '../../money/payments/idempotency';
 import {
   type CompletedPayment,
@@ -20,7 +21,9 @@ import {
   WalletPaymentService,
 } from '../../money/payments/wallet-payment.service';
 import { PointsService } from '../../points/points.service';
+import type { PlanTransferOrder } from '../../../generated/prisma/client';
 import { BillingCurrencyService } from '../billing-currency.service';
+import type { PlanCurrency } from '../plans-view.type';
 import { MakerTierService } from '../maker-tier.service';
 import {
   countIn,
@@ -55,6 +58,7 @@ import {
 } from './plan-purchase-rules';
 import {
   PLAN_PAYMENT_KINDS,
+  PLAN_PURCHASE_ROUTE,
   paymentKindOf,
   type PlanPaymentKind,
   type PurchaseTerms,
@@ -65,11 +69,20 @@ import type {
   PlanPurchaseGrantView,
   PlanPurchaseQuoteView,
   PlanPurchaseStatus,
+  PlanPurchaseTransferView,
   PlanPurchaseView,
+  PlanTransferOrderView,
 } from './plan-purchase-view.type';
+import {
+  amountNeeded,
+  EXPIRED_MESSAGE,
+  lapsed,
+  ORDER_STATUS,
+  SETTLING_MESSAGE,
+} from './plan-transfer-order';
+import { PlanTransferService } from './plan-transfer.service';
 
-/** The route a purchase's Idempotency-Key is scoped to. */
-export const PLAN_PURCHASE_ROUTE = 'POST plans/purchases';
+export { PLAN_PURCHASE_ROUTE };
 
 export const PURCHASE_NOT_FOUND_MESSAGE = 'We could not find that purchase.';
 
@@ -162,6 +175,8 @@ export class PlanPurchaseService implements OnModuleInit {
     private readonly payments: WalletPaymentService,
     private readonly registry: PayableRegistry,
     private readonly holds: WalletHoldService,
+    private readonly transfers: PlanTransferService,
+    private readonly opening: WalletOpeningService,
   ) {}
 
   onModuleInit(): void {
@@ -230,32 +245,81 @@ export class PlanPurchaseService implements OnModuleInit {
   }
 
   /**
-   * Pays for a purchase from the wallet. The answer, and every replay of the
-   * request's key, is the purchase as `present` builds it.
+   * Pays for a purchase from the wallet, or confirms it for payment by bank
+   * transfer (`method: transfer`, TIER-05). The answer, and every replay of
+   * the request's key, is the purchase as `present` (wallet) or
+   * `presentOrder` (transfer) builds it.
    */
   async buy(
     wallet: OpenWallet,
     scope: IdempotencyScope,
     dto: PlanPurchaseDto,
-  ): Promise<PlanPurchaseView> {
+  ): Promise<PlanPurchaseView | PlanTransferOrderView> {
     const terms = await this.termsFor(wallet.wawuUserId, dto);
+    const kind = paymentKindOf(terms.bump);
+    const targetId = this.targetOf(terms);
+    if (dto.method === 'transfer')
+      return this.buyByTransfer(wallet, scope, dto, kind, targetId);
     const payment = await this.payments.pay(
       wallet,
       {
-        kind: paymentKindOf(terms.bump),
-        targetId: this.targetOf(terms),
+        kind,
+        targetId,
         expectedTotalKobo: dto.expectedTotalKobo,
         quoteToken: dto.quoteToken,
       },
       scope,
     );
+    // The item is now being bought from the wallet: a bank-transfer purchase of
+    // the same item that is still waiting is closed (it would be a second one).
+    if (payment.status !== 'failed')
+      await this.transfers
+        .closeWaiting(wallet.wawuUserId, targetId)
+        .catch(() => undefined);
     return (
       (scope.answered as PlanPurchaseView | undefined) ?? this.present(payment)
     );
   }
 
+  /**
+   * The person chose to pay by bank transfer (VF6 "transfer details shown"):
+   * the quote they saw is checked exactly as a wallet payment checks it, the
+   * order is written, and the answer says where to send the money and how
+   * much is still needed. Nothing is taken and nothing is held.
+   */
+  private async buyByTransfer(
+    wallet: OpenWallet,
+    scope: IdempotencyScope,
+    dto: PlanPurchaseDto,
+    kind: PlanPaymentKind,
+    targetId: string,
+  ): Promise<PlanTransferOrderView> {
+    const { target, fee, availableKobo } = await this.payments.vouch(wallet, {
+      kind,
+      targetId,
+      expectedTotalKobo: dto.expectedTotalKobo,
+      quoteToken: dto.quoteToken,
+    });
+    const order = await this.transfers.place({
+      wallet,
+      kind,
+      targetId,
+      target,
+      fee,
+      availableKobo,
+    });
+    const view = await this.presentOrder(order, availableKobo);
+    await this.transfers.answer(scope, view);
+    return view as PlanTransferOrderView;
+  }
+
   /** One purchase as it stands now. Only the buyer reads it. */
-  async read(wawuUserId: string, id: string): Promise<PlanPurchaseView> {
+  async read(
+    wawuUserId: string,
+    id: string,
+  ): Promise<PlanPurchaseView | PlanTransferOrderView> {
+    const order = await this.transfers.find(wawuUserId, id);
+    if (order) return this.presentOrder(order);
     const payment = await this.prisma.walletPayment.findFirst({
       where: {
         id,
@@ -265,6 +329,98 @@ export class PlanPurchaseService implements OnModuleInit {
     });
     if (!payment) throw new MoneyError('not_found', PURCHASE_NOT_FOUND_MESSAGE);
     return this.present(this.payments.view(payment, null));
+  }
+
+  /**
+   * A purchase bought by transfer as the routes answer it. While it waits, the
+   * provider's available balance is read for the amount still needed (pass it
+   * when it was just read); once the money landed and the wallet payment
+   * exists, it is that payment's purchase under the order's id.
+   */
+  private async presentOrder(
+    order: PlanTransferOrder,
+    knownAvailableKobo?: number,
+  ): Promise<PlanPurchaseView | PlanTransferOrderView> {
+    const kind = order.paymentKind as PlanPaymentKind;
+    const terms = termsOf(kind, order.targetId);
+    if (terms === null)
+      throw new Error(`Order ${order.id} is not a tier purchase.`);
+    if (order.status === ORDER_STATUS.settled && order.paymentId) {
+      const payment = await this.prisma.walletPayment.findUnique({
+        where: { id: order.paymentId },
+      });
+      if (payment) return this.present(this.payments.view(payment, null));
+    }
+    const base = {
+      id: order.id,
+      kind: terms.kind,
+      tierId: terms.tierId,
+      fromTierId: terms.fromTierId,
+      bump: terms.bump,
+      method: 'transfer' as const,
+      currency: PAYMENT_CURRENCY as PlanCurrency,
+      amountMinor: order.priceKobo,
+      payment: null,
+      grant: null,
+      createdAt: order.createdAt.toISOString(),
+      paidAt: null,
+    };
+    const waiting =
+      order.status === ORDER_STATUS.awaiting && !lapsed(order, new Date());
+    if (waiting)
+      return {
+        ...base,
+        status: 'awaiting_transfer',
+        statusMessage: order.statusMessage,
+        transfer: await this.transferView(order, knownAvailableKobo),
+      };
+    if (order.status === ORDER_STATUS.closed)
+      return {
+        ...base,
+        status: 'failed',
+        statusMessage: order.statusMessage,
+        transfer: null,
+      };
+    if (order.status === ORDER_STATUS.settling || order.status === 'settled')
+      return {
+        ...base,
+        status: 'pending',
+        statusMessage: SETTLING_MESSAGE,
+        transfer: null,
+      };
+    return {
+      ...base,
+      status: 'expired',
+      statusMessage: order.statusMessage ?? EXPIRED_MESSAGE,
+      transfer: null,
+    };
+  }
+
+  /** Where to send the money and how much is still needed; the account is the person's own wallet. */
+  private async transferView(
+    order: PlanTransferOrder,
+    knownAvailableKobo?: number,
+  ): Promise<PlanPurchaseTransferView | null> {
+    const wallet = await this.opening.view(order.wawuUserId);
+    if (!wallet.account) return null;
+    let balance: number | null = knownAvailableKobo ?? null;
+    if (knownAvailableKobo === undefined) {
+      const open = await this.transfers.walletOf(order.wawuUserId);
+      balance = open ? await this.payments.availableOrNull(open) : null;
+    }
+    return {
+      accountNumber: wallet.account.accountNumber,
+      accountName: wallet.account.accountName,
+      bankName: wallet.account.bankName,
+      bankCode: wallet.account.bankCode,
+      priceKobo: order.priceKobo,
+      bankChargeKobo: order.providerFeeKobo,
+      totalKobo: order.totalKobo,
+      balanceKobo: balance,
+      amountNeededKobo:
+        balance === null ? null : amountNeeded(order.totalKobo, balance),
+      expiresAt: order.expiresAt.toISOString(),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -570,13 +726,16 @@ export class PlanPurchaseService implements OnModuleInit {
           where: { paymentId: view.id },
           select: { status: true, amountKobo: true },
         });
+    // A payment the settlement of a bank-transfer purchase made is that
+    // purchase's: it keeps the id the person was given while it waited.
+    const order = await this.transfers.byPayment(view.id);
     return {
-      id: view.id,
+      id: order?.id ?? view.id,
       kind: terms.kind,
       tierId: terms.tierId,
       fromTierId: terms.fromTierId,
       bump: terms.bump,
-      method: 'wallet',
+      method: order ? 'transfer' : 'wallet',
       currency: row?.currency ?? PAYMENT_CURRENCY,
       amountMinor: row?.amountMinor ?? view.priceKobo,
       status: row ? 'paid' : payback ? 'refunded' : statusOf(view.status),

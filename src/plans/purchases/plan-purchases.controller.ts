@@ -41,6 +41,7 @@ import {
 import type {
   PlanPurchaseQuoteView,
   PlanPurchaseView,
+  PlanTransferOrderView,
 } from './plan-purchase-view.type';
 
 /**
@@ -94,6 +95,17 @@ export class PlanPurchasesController {
    * and body answer the first result again (`Idempotent-Replayed: true`)
    * without checking the PIN. Not enough money is `402 insufficient_funds`
    * with the shortfall; no wallet is `409 wallet_not_open`.
+   *
+   * `method: transfer` (TIER-05, VF6 "transfer details shown") confirms the
+   * purchase with the PIN at the quote the person saw and takes nothing. It
+   * answers 201 with a `PlanTransferOrderView`, `awaiting_transfer`: the
+   * wallet's own account number, bank and account name, the Bank charge and
+   * the amount still needed (the total less the available balance, never
+   * below 0). The purchase is paid from the wallet, once, the moment the
+   * balance covers the total, and then reads like any other purchase under
+   * the same id. A quote that changed is `409 quote_changed`; the time to send
+   * the money (an admin setting) runs out as `expired`, with nothing taken.
+   * Two requests for one item leave one waiting purchase.
    */
   @Post()
   @HttpCode(201)
@@ -111,14 +123,16 @@ export class PlanPurchasesController {
     @CurrentWallet() wallet: OpenWallet,
     @CurrentIdempotencyScope() scope: IdempotencyScope,
     @Body() dto: PlanPurchaseDto,
-  ): Promise<PlanPurchaseView> {
+  ): Promise<PlanPurchaseView | PlanTransferOrderView> {
     return this.purchases.buy(wallet, scope, dto);
   }
 
   /**
-   * One purchase as it stands now: what the app polls after `pending`.
-   * Only the buyer reads it; another person's purchase and an id nobody
-   * holds are the same `404 not_found`. It reads our own records only.
+   * One purchase as it stands now: what the app polls after `pending`, and
+   * while it waits for a bank transfer (`awaiting_transfer`, with the amount
+   * still needed read from the provider's balance; `null` when the provider
+   * does not answer). Only the buyer reads it; another person's purchase and
+   * an id nobody holds are the same `404 not_found`.
    */
   @Get(':id')
   @Header('Cache-Control', 'no-store')
@@ -126,7 +140,7 @@ export class PlanPurchasesController {
   read(
     @CurrentUser() user: WawuJwtClaims,
     @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<PlanPurchaseView> {
+  ): Promise<PlanPurchaseView | PlanTransferOrderView> {
     return this.purchases.read(user.sub, id);
   }
 }

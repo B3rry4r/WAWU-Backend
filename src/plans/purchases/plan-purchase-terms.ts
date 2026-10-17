@@ -8,9 +8,16 @@ import type { PaymentKind } from '../../money/dto/money-enums';
 export const PLAN_PURCHASE_KINDS = ['tier', 'renew', 'upgrade'] as const;
 export type PlanPurchaseKind = (typeof PLAN_PURCHASE_KINDS)[number];
 
-/** The only way to pay for a purchase today. */
-export const PLAN_PURCHASE_METHODS = ['wallet'] as const;
+/**
+ * How a purchase is paid: `wallet` takes the money from the wallet now;
+ * `transfer` (TIER-05) waits for the person to send the money to their own
+ * wallet account and pays from the wallet the moment it lands.
+ */
+export const PLAN_PURCHASE_METHODS = ['wallet', 'transfer'] as const;
 export type PlanPurchaseMethod = (typeof PLAN_PURCHASE_METHODS)[number];
+
+/** The route a purchase's Idempotency-Key is scoped to. */
+export const PLAN_PURCHASE_ROUTE = 'POST plans/purchases';
 
 /** The payment kinds a purchase is paid under: with or without the checkout offer. */
 export const PLAN_PAYMENT_KINDS = [

@@ -67,7 +67,11 @@ export class PlanPurchaseDto {
   @IsBoolean()
   bump?: boolean;
 
-  /** How it is paid: from the wallet. */
+  /**
+   * How it is paid: `wallet` from the balance now, or `transfer`: the answer
+   * carries the wallet's own account number and the amount still needed, and
+   * the purchase is paid from the wallet when the money lands.
+   */
   @ApiProperty({ enum: PLAN_PURCHASE_METHODS })
   @IsIn(PLAN_PURCHASE_METHODS)
   method!: PlanPurchaseMethod;
