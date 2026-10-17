@@ -30115,6 +30115,33 @@
         ]
       }
     },
+    "/api/hub/plans/purchases/pending": {
+      "get": {
+        "operationId": "PlanPurchasesController_pending",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingPlanPurchaseView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The purchase still going through for the caller, or `purchase: null`\n(ME-13, M15): a payment still confirming, or confirmed and not yet\nopened, the same ones that make a second purchase `payment_in_progress`.\nDeclared before the id, so the word `pending` is not taken for an id. It\nneeds no wallet: a person with none has nothing going through.",
+        "tags": [
+          "PlanPurchases"
+        ]
+      }
+    },
     "/api/hub/plans/purchases/{id}": {
       "get": {
         "operationId": "PlanPurchasesController_read",
@@ -55851,6 +55878,22 @@
           "grant",
           "createdAt",
           "paidAt"
+        ]
+      },
+      "PendingPlanPurchaseView": {
+        "type": "object",
+        "properties": {
+          "purchase": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanPurchaseView"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "purchase"
         ]
       },
       "BillReturnView": {
