@@ -138,7 +138,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      await until(async () => (await reportOf(id)).nextAttemptAt !== null);
       expect((await reportOf(id)).sentAt).toBeNull();
       h.mail.mode = 'ok';
       h.mail.requests.length = 0;
@@ -161,7 +161,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      await until(async () => (await reportOf(id)).nextAttemptAt !== null);
       expect(h.mail.mails.size).toBe(1);
       expect((await reportOf(id)).sentAt).toBeNull();
       expect((await reportOf(id)).lastError).toContain('transient');
@@ -182,7 +182,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      await until(async () => (await reportOf(id)).nextAttemptAt !== null);
       const first = await reportOf(id);
       expect(first.nextAttemptAt!.getTime()).toBeGreaterThan(Date.now());
       // Resting: a sweep now does not try it.
@@ -204,7 +204,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      await until(async () => (await reportOf(id)).nextAttemptAt !== null);
       for (let i = 0; i < 20; i += 1) {
         const row = await reportOf(id);
         if (row.gaveUpAt) break;
@@ -233,7 +233,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      await until(async () => (await reportOf(id)).nextAttemptAt !== null);
       // What the account purge does to the row (account-data-map.ts).
       await h.prisma.schoolEnrolmentReport.update({
         where: { enrolmentId: id },
@@ -296,7 +296,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      await until(async () => (await reportOf(id)).nextAttemptAt !== null);
       await h.prisma.schoolEnrolment.update({
         where: { id },
         data: { status: 'refunded', refundedAt: new Date() },

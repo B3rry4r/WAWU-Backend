@@ -289,6 +289,21 @@ describe('AITOOLS-01: the AI tools catalogue and VoiceOver (contract)', () => {
     expect((await jobsOf(PLAIN))[0].failureCode).toBe('store_failed');
   });
 
+  it('AITOOLS-01 L2: when the job row cannot be written the held points go back at once, not at the sweep, and the person gets the error', async () => {
+    await h.grant(PLAIN, COST_1);
+    const create = jest
+      .spyOn(h.prisma.aiToolJob, 'create')
+      .mockRejectedValueOnce(new Error('the database went away'));
+    const res = await h.create(PLAIN, body());
+    create.mockRestore();
+    expect(res.status).toBe(500);
+    expect(await jobsOf(PLAIN)).toHaveLength(0);
+    expect(await h.balance(PLAIN)).toBe(COST_1);
+    const holds = await holdsOf(PLAIN);
+    expect(holds).toHaveLength(1);
+    expect(holds[0].state).toBe('released');
+  });
+
   // ---------------------------------------------------------------------------
   // Check 4: two jobs at once never take points below zero
   // ---------------------------------------------------------------------------

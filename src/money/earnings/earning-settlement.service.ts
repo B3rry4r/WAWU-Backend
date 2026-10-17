@@ -1,4 +1,9 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -67,6 +72,9 @@ function hasWalletOf(payee: Prisma.Sql, provider: string): Prisma.Sql {
      WHERE w."wawuUserId" = ${payee}
        AND LOWER(BTRIM(COALESCE(w."provider", 'fintava'))) = ${provider})`;
 }
+
+/** The answer to a cursor the before-start list did not give. */
+const UNSWEPT_CURSOR_MESSAGE = 'cursor is not one this list gave.';
 
 /**
  * A sale's 85% lands in the payee's wallet (task WALLET-16, R-11, R-55).
@@ -752,14 +760,17 @@ export class EarningSettlementService {
         where: { id: opts.cursor },
         select: { completedAt: true },
       });
-      if (seen?.completedAt) {
-        cursor = {
-          OR: [
-            { completedAt: { gt: seen.completedAt } },
-            { completedAt: seen.completedAt, id: { gt: opts.cursor } },
-          ],
-        };
+      // A cursor this list did not give (a payment that is not here) is a
+      // plain 400, not a restart at page 1 (CONVENTIONS section 6).
+      if (!seen?.completedAt) {
+        throw new BadRequestException(UNSWEPT_CURSOR_MESSAGE);
       }
+      cursor = {
+        OR: [
+          { completedAt: { gt: seen.completedAt } },
+          { completedAt: seen.completedAt, id: { gt: opts.cursor } },
+        ],
+      };
     }
     const rows = await this.prisma.walletPayment.findMany({
       where: { AND: [where, cursor] },

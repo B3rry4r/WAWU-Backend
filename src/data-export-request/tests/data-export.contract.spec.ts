@@ -858,4 +858,51 @@ describe('Data export (contract)', () => {
       }
     }
   });
+
+  it('a points pack ordered by bank transfer is in the file with its kind, points and bonus (POINTS-02 L2)', async () => {
+    const order = await prisma.planTransferOrder.create({
+      data: {
+        wawuUserId: USER,
+        paymentKind: 'points_pack',
+        targetId: 'pack-s',
+        priceKobo: 500_000,
+        providerFeeKobo: 5_000,
+        totalKobo: 505_000,
+        terms: {
+          v: 1,
+          packId: 's',
+          points: 120,
+          bonusPoints: 12,
+          boughtExpiryDays: 365,
+        },
+        status: 'awaiting',
+        expiresAt: new Date(Date.now() + 86_400_000),
+      },
+    });
+    try {
+      const req = await ask();
+      await fulfil.fulfil(req.id);
+      const mail = await mailFor(req.id);
+      const file = JSON.parse(
+        (await openLink(mail.downloadUrl).expect(200)).text,
+      ) as {
+        data: {
+          tierTransferPurchases: Array<{
+            targetId: string;
+            paymentKind: string;
+            terms: { points: number; bonusPoints: number };
+          }>;
+        };
+      };
+      expect(file.data.tierTransferPurchases).toEqual([
+        expect.objectContaining({
+          targetId: 'pack-s',
+          paymentKind: 'points_pack',
+          terms: expect.objectContaining({ points: 120, bonusPoints: 12 }),
+        }),
+      ]);
+    } finally {
+      await prisma.planTransferOrder.delete({ where: { id: order.id } });
+    }
+  });
 });

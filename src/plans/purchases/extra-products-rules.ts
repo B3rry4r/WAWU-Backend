@@ -56,7 +56,13 @@ export function priceExtraProducts(
   const products = config.extraProducts.count;
   // The tier row keeps the total in a whole-number column: an add-on that does
   // not fit it is not sold, rather than failing after the person has paid.
-  if (held.extraProducts + products > INT4_MAX)
+  // What a creator may have published at once (included plus extra) is also
+  // compared against a 32-bit column when they post, so it is held to the same
+  // bound (SWEEP-MONEY, TIER-04 L1).
+  if (
+    held.extraProducts + products > INT4_MAX ||
+    held.productsAllowed + products > INT4_MAX
+  )
     throw new PurchaseRefusal(
       'target_not_payable',
       EXTRA_PRODUCTS_TOO_MANY_MESSAGE,

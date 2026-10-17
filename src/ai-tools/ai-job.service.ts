@@ -154,20 +154,33 @@ export class AiJobService {
       { now },
     );
 
-    const row = await this.record(
-      {
-        id,
-        wawuUserId,
-        idempotencyKey,
+    let row: { job: AiToolJob; replayed: boolean };
+    try {
+      row = await this.record(
+        {
+          id,
+          wawuUserId,
+          idempotencyKey,
+          requestHash,
+          voiceId: dto.voiceId,
+          characters,
+          units,
+          costPoints: held.costPoints,
+          holdId: held.holdId,
+        },
         requestHash,
-        voiceId: dto.voiceId,
-        characters,
-        units,
-        costPoints: held.costPoints,
-        holdId: held.holdId,
-      },
-      requestHash,
-    );
+      );
+    } catch (e) {
+      // No job row, so nothing will ever settle this hold: give the points back
+      // now, not at the stale-hold sweep 30 to 35 minutes on (SWEEP-MONEY,
+      // AITOOLS-01 L2). A repeat of the request holds once more under its key.
+      await this.spend.release(held.holdId).catch((err: unknown) => {
+        this.logger.error(
+          `ai job ${id}: the job could not be written and the points were not given back yet (${(err as Error).name ?? 'Error'}); the stale-hold sweep will`,
+        );
+      });
+      throw e;
+    }
     if (row.replayed) return { job: await this.view(row.job), replayed: true };
 
     // Nothing is held open from here: the answer goes out, the run goes on.

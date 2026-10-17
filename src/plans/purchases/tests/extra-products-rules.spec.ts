@@ -116,6 +116,23 @@ describe('priceExtraProducts', () => {
     ).not.toThrow();
   });
 
+  it('refuses an add-on when what the person may publish at once (included plus extra) would pass the 32-bit bound, though the extras alone fit (TIER-04 L1)', () => {
+    const count = config.extraProducts.count;
+    const r = refusal(() =>
+      priceExtraProducts(
+        config,
+        'NGN',
+        held('active', 0, INT4_MAX - count + 1),
+      ),
+    );
+    expect(r.code).toBe('target_not_payable');
+    expect(r.message).toBe(EXTRA_PRODUCTS_TOO_MANY_MESSAGE);
+    expect(
+      priceExtraProducts(config, 'NGN', held('active', 0, INT4_MAX - count))
+        .productsAllowedAfter,
+    ).toBe(INT4_MAX);
+  });
+
   it('names the payment and every refusal with no figure and no long dash', () => {
     const long = /[\u2013\u2014]/;
     for (const text of [
