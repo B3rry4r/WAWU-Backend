@@ -1047,13 +1047,32 @@ export class WalletTransferService implements OnModuleInit {
         reference: `${t.customerReference}${FEE_RETURN_SUFFIX}`,
         narration: TRANSFER_NARRATION,
       });
-      return 'done';
     } catch (e) {
       this.logger.warn(
         `send ${t.id}: WAWU's fee could not be given back yet (${e instanceof WalletProviderError ? e.kind : 'error'}); asked again`,
       );
       return 'pending';
     }
+    // FIX-54 round 2: what came back is what the provider's credit gave plus
+    // this fee, so a reversed send's figures say both. The transfer above is
+    // made once however often it is asked, and so is this note.
+    if (t.payerWawuUserId) {
+      try {
+        await this.ledger.noteFeeReturned(
+          {
+            customerReference: t.customerReference,
+            wawuUserId: t.payerWawuUserId,
+          },
+          owed,
+        );
+      } catch (e) {
+        this.logger.error(
+          `send ${t.id}: the fee given back could not be noted on the ledger (${e instanceof Error ? e.name : 'error'}); asked again`,
+        );
+        return 'pending';
+      }
+    }
+    return 'done';
   }
 
   /**
@@ -1587,7 +1606,7 @@ export class WalletTransferService implements OnModuleInit {
           ),
           source,
           occurredAt: occurredOf(found),
-          failureReason: status === 'failed' ? LEDGER_FINTAVA_FAILURE : null,
+          failureReason: status === 'failed' ? this.ledgerFailureOf(t) : null,
         },
         undefined,
         { quiet: true },
@@ -1597,6 +1616,18 @@ export class WalletTransferService implements OnModuleInit {
         `send ${t.id}: the ledger could not record ${this.provider.label}'s record (${e instanceof Error ? e.name : 'error'})`,
       );
     }
+  }
+
+  /**
+   * The reason a failed ledger row carries when the sweep's own reading
+   * failed it: a Nuvion bank send says what the webhook path says
+   * (`outflows.failed`), the provider-neutral bank text; any other send keeps
+   * Fintava's, as before.
+   */
+  private ledgerFailureOf(t: TransferRow): string {
+    return t.kind === 'bank_account' && t.provider === 'nuvion'
+      ? LEDGER_BANK_SEND_FAILURE
+      : LEDGER_FINTAVA_FAILURE;
   }
 
   /** Still unknown: asked again later, or sent to review past the bound. */
@@ -1721,7 +1752,13 @@ export class WalletTransferService implements OnModuleInit {
     };
   }
 
-  /** What came back after a reversal, from the provider's own report on the sender's row; null when it gave none. */
+  /**
+   * What came back after a reversal, from the sender's row; null when the
+   * provider gave no report. The row's total is the provider's credit plus
+   * WAWU's fee once it was given back (LedgerService.noteFeeReturned), so
+   * the figures equal what moved back to the wallet and the kept part is
+   * only what no transfer returned.
+   */
   private reversalOf(
     t: TransferRow,
     row: { reversalTotalKobo: bigint | null; reversedAt: Date | null } | null,

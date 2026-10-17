@@ -48,6 +48,10 @@ import {
   nuvionAreas,
 } from '../../../nuvion/nuvion-wallet-provider';
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
+import {
+  LedgerService,
+  LEDGER_BANK_SEND_FAILURE,
+} from '../../ledger/ledger.service';
 import { MoneyModule } from '../../money.module';
 import type {
   AccountNameView,
@@ -346,6 +350,8 @@ describe('A bank send on Nuvion shows its true outcome (FIX-54)', () => {
     prisma.fintavaLedgerEntry.findFirstOrThrow({
       where: { customerReference: reference, direction: 'out' },
     });
+  const reversalTotal = async (reference: string, kobo: number) =>
+    Number((await ledgerOut(reference)).reversalTotalKobo ?? 0) === kobo;
   const read = async (p: Person, id: string) =>
     body<TransferView>(
       await request(app.getHttpServer())
@@ -643,6 +649,11 @@ describe('A bank send on Nuvion shows its true outcome (FIX-54)', () => {
       true,
     );
 
+    // The fee-back is counted once it has been made and noted (round 2).
+    expect(
+      await waitFor(() => reversalTotal(view.reference, b.quotedTotal)),
+    ).toBe(true);
+
     const reversed = await read(me, view.id);
     expect(reversed.status).toBe('reversed');
     expect(reversed.timeline.map((t) => t.step)).toEqual([
@@ -650,13 +661,14 @@ describe('A bank send on Nuvion shows its true outcome (FIX-54)', () => {
       'completed',
       'reversed',
     ]);
+    // All of it came back, Nuvion's credit and WAWU's fee: nothing is kept.
     expect(reversed.reversal).toMatchObject({
-      returnedKobo: b.quotedTotal - WAWU_FEE,
-      keptKobo: WAWU_FEE,
+      returnedKobo: b.quotedTotal,
+      keptKobo: 0,
     });
     const out = await ledgerOut(view.reference);
     expect(out.status).toBe('reversed');
-    expect(Number(out.reversalTotalKobo)).toBe(b.quotedTotal - WAWU_FEE);
+    expect(Number(out.reversalTotalKobo)).toBe(b.quotedTotal);
     // The whole of it is back: Nuvion's credit and WAWU's fee.
     expect(available(me)).toBe(PERSON_START);
 
@@ -710,9 +722,116 @@ describe('A bank send on Nuvion shows its true outcome (FIX-54)', () => {
     expect(feeLegs(view.reference)).toHaveLength(1);
     expect((await ledgerOut(view.reference)).status).toBe('reversed');
     expect(available(me)).toBe(PERSON_START);
+    expect(
+      await waitFor(() => reversalTotal(view.reference, b.quotedTotal)),
+    ).toBe(true);
     expect((await read(me, view.id)).reversal).toMatchObject({
-      returnedKobo: b.quotedTotal - WAWU_FEE,
+      returnedKobo: b.quotedTotal,
+      keptKobo: 0,
     });
+  });
+
+  it("a reversed send's figures equal what the stand-in returned: the credit and WAWU's fee-back, whichever of them the Hub heard of first", async () => {
+    const { me, b, view, nuvion } = await send();
+    pay.settle(nuvion.id, 'successful');
+    await deliver('outflows.completed', pay.delivery(nuvion.id), me);
+    expect(
+      await waitFor(async () => (await rowOf(view.id)).status === 'completed'),
+    ).toBe(true);
+    const beforeRefund = available(me);
+
+    const { credit } = pay.reverse(nuvion.id);
+    const refund = {
+      ...pay.delivery(credit.id),
+      amount: b.quotedTotal - WAWU_FEE,
+    };
+    expect((await deliver('outflows.refunded', refund, me)).outcome).toBe(
+      'done',
+    );
+    expect(
+      await waitFor(async () => (await rowOf(view.id)).status === 'reversed'),
+    ).toBe(true);
+    expect(await waitFor(() => feeBacks(view.reference).length === 1)).toBe(
+      true,
+    );
+    expect(
+      await waitFor(() => reversalTotal(view.reference, b.quotedTotal)),
+    ).toBe(true);
+
+    // What moved back, read from the stand-in: the wallet's gain since the
+    // refund is Nuvion's credit and WAWU's fee-back together.
+    const movedBack = available(me) - beforeRefund;
+    const feeBack = feeBacks(view.reference).reduce(
+      (n, t) => n + Number(t.amount),
+      0,
+    );
+    expect(feeBack).toBe(WAWU_FEE);
+    const reversal = (await read(me, view.id)).reversal!;
+    expect(reversal.returnedKobo).toBe(movedBack);
+    expect(reversal.returnedKobo + reversal.keptKobo).toBe(b.quotedTotal);
+    expect(reversal.keptKobo).toBe(PERSON_START - available(me));
+
+    // The other order: the fee-back was noted before the credit's figures
+    // reached the row. The row ends the same, and a replay changes nothing.
+    const out = await ledgerOut(view.reference);
+    await prisma.fintavaLedgerEntry.update({
+      where: { id: out.id },
+      data: {
+        reversedAt: null,
+        reversalReference: null,
+        reversalAmountKobo: null,
+        reversalChargesKobo: null,
+        reversalTotalKobo: null,
+      },
+    });
+    const ledger = moduleRef.get(LedgerService);
+    expect(
+      await ledger.noteFeeReturned(
+        { customerReference: view.reference, wawuUserId: me.id },
+        BigInt(WAWU_FEE),
+      ),
+    ).toBe(true);
+    expect((await read(me, view.id)).reversal).toBeNull();
+    expect(
+      await ledger.noteReversalFigures(out.id, {
+        at: new Date(),
+        reference: credit.id,
+        amountKobo: b.quotedTotal - WAWU_FEE,
+        chargesKobo: 0,
+        totalKobo: b.quotedTotal - WAWU_FEE,
+      }),
+    ).toBe(true);
+    expect((await read(me, view.id)).reversal).toMatchObject({
+      returnedKobo: b.quotedTotal,
+      keptKobo: 0,
+    });
+    expect(
+      await ledger.noteFeeReturned(
+        { customerReference: view.reference, wawuUserId: me.id },
+        BigInt(WAWU_FEE),
+      ),
+    ).toBe(false);
+    expect((await read(me, view.id)).reversal).toMatchObject({
+      returnedKobo: b.quotedTotal,
+      keptKobo: 0,
+    });
+  });
+
+  it('a send the sweep fails on its own reading says what the webhook path says, not Fintava', async () => {
+    pay.loseAnswerNext();
+    const { me, view } = await send();
+    await new Promise((r) => setTimeout(r, 700));
+    pay.settle(pay.byReference(view.reference)[0].id, 'failed');
+    await transfers.sweep(later());
+    expect((await rowOf(view.id)).status).toBe('failed');
+    const out = await ledgerOut(view.reference);
+    expect(out.status).toBe('failed');
+    expect(out.failureReason).toBe(LEDGER_BANK_SEND_FAILURE);
+    expect(out.failureReason).not.toMatch(/fintava/i);
+    expect(await waitFor(() => feeBacks(view.reference).length === 1)).toBe(
+      true,
+    );
+    expect(available(me)).toBe(PERSON_START);
   });
 
   it('a send that waited on its fee and is issued later by the sweep is pending too, not completed on acceptance', async () => {

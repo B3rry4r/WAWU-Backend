@@ -716,22 +716,81 @@ export class LedgerService {
       await tx.$queryRaw`SELECT "id" FROM "FintavaLedgerEntry" WHERE "id" = ${entryId} FOR UPDATE`;
       const row = await tx.fintavaLedgerEntry.findUnique({
         where: { id: entryId },
-        select: { status: true, reversalTotalKobo: true },
+        select: {
+          status: true,
+          reversalTotalKobo: true,
+          reversalChargesKobo: true,
+        },
       });
       if (!row || row.status !== 'reversed' || row.reversalTotalKobo !== null) {
         return false;
       }
+      // WAWU's fee, when it was given back before these figures arrived
+      // (noteFeeReturned), is already on the row as the charges: it stays in
+      // them and in the total.
+      const fee = row.reversalChargesKobo ?? 0n;
       await tx.fintavaLedgerEntry.update({
         where: { id: entryId },
         data: {
           reversedAt: reversal.at,
           reversalReference: reversal.reference,
           reversalAmountKobo: koboBig('reversal amount', reversal.amountKobo),
-          reversalChargesKobo: koboBig(
-            'reversal charges',
-            reversal.chargesKobo,
-          ),
-          reversalTotalKobo: koboBig('reversal total', reversal.totalKobo),
+          reversalChargesKobo:
+            koboBig('reversal charges', reversal.chargesKobo) + fee,
+          reversalTotalKobo:
+            koboBig('reversal total', reversal.totalKobo) + fee,
+        },
+      });
+      return true;
+    });
+  }
+
+  /**
+   * FIX-54 round 2: WAWU's fee, given back to the sender through the
+   * `-fee-back` transfer, counted as returned on the sender's reversed row.
+   * The provider's credit does not carry it, yet it moved back to the wallet,
+   * so the row's figures (what W14 prints) must say it: the fee is put on the
+   * row as the reversal's charges and added to its total. Either order works:
+   * a fee noted before the credit's figures arrive waits as the charges, and
+   * `noteReversalFigures` keeps it. Written once (the same fee again changes
+   * nothing); a row that is not `reversed`, or holds a charge that is not this
+   * fee (a provider's own report), is left alone. Returns whether it wrote.
+   */
+  async noteFeeReturned(
+    sender: { customerReference: string; wawuUserId: string },
+    feeKobo: bigint,
+  ): Promise<boolean> {
+    if (feeKobo <= 0n) return false;
+    return this.prisma.$transaction(async (tx) => {
+      const found = await tx.fintavaLedgerEntry.findFirst({
+        where: {
+          customerReference: sender.customerReference,
+          wawuUserId: sender.wawuUserId,
+          walletKind: 'user',
+          direction: 'out',
+        },
+        select: { id: true },
+      });
+      if (!found) return false;
+      await tx.$queryRaw`SELECT "id" FROM "FintavaLedgerEntry" WHERE "id" = ${found.id} FOR UPDATE`;
+      const row = await tx.fintavaLedgerEntry.findUnique({
+        where: { id: found.id },
+        select: {
+          status: true,
+          reversalTotalKobo: true,
+          reversalChargesKobo: true,
+        },
+      });
+      if (!row || row.status !== 'reversed') return false;
+      const noted = row.reversalChargesKobo ?? 0n;
+      if (noted !== 0n) return false;
+      await tx.fintavaLedgerEntry.update({
+        where: { id: found.id },
+        data: {
+          reversalChargesKobo: feeKobo,
+          ...(row.reversalTotalKobo !== null
+            ? { reversalTotalKobo: row.reversalTotalKobo + feeKobo }
+            : {}),
         },
       });
       return true;
