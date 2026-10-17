@@ -558,14 +558,21 @@ export class PlanTransferService {
     const order = await this.prisma.planTransferOrder.findUniqueOrThrow({
       where: { id: orderId },
     });
+    // The newest credit this attempt saw, once it has looked.
+    const seen: { creditAt?: Date | null } = {};
     try {
-      return await this.settleTaken(order, now);
+      return await this.settleTaken(order, now, seen);
     } catch (e) {
-      // Not a refusal we know: the order waits again, a little later.
+      // Not a refusal we know: the order waits again, a little later. The
+      // credit this attempt saw is marked, so only a newer credit wakes it
+      // before then: the provider's limits are shared by every WAWU payment.
       this.logger.error(
         `transfer purchase ${order.id}: could not be settled (${e instanceof Error ? e.name : 'Error'}); it waits and is tried again`,
       );
-      await this.waitAgain(order, now, { failed: true });
+      await this.waitAgain(order, now, {
+        failed: true,
+        creditsSeenAt: seen.creditAt,
+      });
       return 'retry';
     }
   }
@@ -573,6 +580,7 @@ export class PlanTransferService {
   private async settleTaken(
     order: PlanTransferOrder,
     now: Date,
+    seen: { creditAt?: Date | null },
   ): Promise<SettleOutcome> {
     const kind = order.paymentKind as PlanPaymentKind;
     if (!PLAN_PAYMENT_KINDS.includes(kind)) {
@@ -592,12 +600,13 @@ export class PlanTransferService {
     }
     // Read before the balance: a credit that lands after this is seen again.
     const latest = await this.latestCreditAt(order.wawuUserId);
+    seen.creditAt = latest;
 
     let quoted: Awaited<ReturnType<WalletPaymentService['currentQuote']>>;
     try {
       quoted = await this.payments.currentQuote(wallet, kind, order.targetId);
     } catch (e) {
-      return this.afterRefusal(order, e, now);
+      return this.afterRefusal(order, e, now, latest);
     }
     if (
       !sameQuote(order, {
@@ -615,7 +624,10 @@ export class PlanTransferService {
       return 'closed';
     }
     if (other === 'confirming') {
-      await this.waitAgain(order, now, { delayMs: MINUTE_MS });
+      await this.waitAgain(order, now, {
+        delayMs: MINUTE_MS,
+        creditsSeenAt: latest,
+      });
       return 'retry';
     }
     if (quoted.availableKobo < order.totalKobo) {
@@ -635,7 +647,7 @@ export class PlanTransferService {
       scope.claimId = await this.keys.claim(scope, now);
     } catch (e) {
       // The key is held: an earlier attempt of this order is still on it.
-      return this.afterRefusal(order, e, now);
+      return this.afterRefusal(order, e, now, latest);
     }
     let payment: PaymentView;
     try {
@@ -701,7 +713,7 @@ export class PlanTransferService {
     order: PlanTransferOrder,
     e: unknown,
     now: Date,
-    latest?: Date | null,
+    latest: Date | null,
   ): Promise<SettleOutcome> {
     const code = e instanceof MoneyError ? e.code : null;
     if (code !== null && CLOSING_CODES.has(code)) {
@@ -721,10 +733,11 @@ export class PlanTransferService {
       await this.waitAgain(order, now, {
         failed: true,
         message: LIMIT_WAITING_MESSAGE,
+        creditsSeenAt: latest,
       });
       return 'retry';
     }
-    await this.waitAgain(order, now, { failed: true });
+    await this.waitAgain(order, now, { failed: true, creditsSeenAt: latest });
     return 'retry';
   }
 
