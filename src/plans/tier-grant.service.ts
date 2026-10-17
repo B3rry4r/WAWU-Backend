@@ -7,6 +7,7 @@ import {
   type PlanTier,
   type PlansConfig,
 } from './plans-config';
+import { ensureBadgeNumber } from './tier-badge/badge-number';
 
 type Tx = Prisma.TransactionClient;
 
@@ -244,6 +245,13 @@ export class TierGrantService {
       };
     }
 
+    // A numbered badge's number is taken before the points, which stay the
+    // last write of the transaction (POINTS-01, TIER-03 round 2). A renewal of
+    // a numbered tier whose holder has none yet (held before numbers existed)
+    // gets one here too.
+    if (tierById(this.config, outcome.tierId)?.badge.numbered === true)
+      await ensureBadgeNumber(tx, input.wawuUserId);
+
     let pointsGranted = 0;
     let pointsExpireAt: Date | null = null;
     if (goods.bonusPoints > 0) {
@@ -350,6 +358,9 @@ export class TierGrantService {
         voiceIntroIncluded: held.voiceIntroIncluded || goods.firstVoiceIntro,
       },
     });
+
+    // Before the points, which stay the last write (see `grant`).
+    if (tier.badge.numbered) await ensureBadgeNumber(tx, input.wawuUserId);
 
     const extra = Math.max(0, goods.bonusPoints - held.pointsIncluded);
     let pointsGranted = 0;

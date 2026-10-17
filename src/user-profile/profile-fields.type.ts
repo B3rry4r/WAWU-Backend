@@ -1,3 +1,5 @@
+import type { PersonBadgeView } from '../plans/tier-badge/person-badge-view.type';
+
 /**
  * GET and PATCH /users/me/profile-fields, and GET /users/:wawuId/profile-fields
  * (ME-05): the profile fields M1, M4, M5, M8, M9 and M33 show.
@@ -23,4 +25,9 @@ export interface ProfileFieldsView {
   socialOrder: string[];
   /** When the profile began, ISO 8601: "On Who Made This since ...". Null before a profile exists. */
   memberSince: string | null;
+  /**
+   * The person's tier badge while a tier runs, else null (TIER-07): the pill
+   * beside the name on M1 and M5, with the Founding Maker number (VF7a).
+   */
+  badge: PersonBadgeView | null;
 }

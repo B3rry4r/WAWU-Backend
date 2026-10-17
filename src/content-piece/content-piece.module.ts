@@ -25,6 +25,7 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
 import { NotificationModule } from '../notification/notification.module';
 import { StorageModule } from '../storage/storage.module';
 import { PlansModule } from '../plans/plans.module';
+import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
 
 /**
  * registry.json "ContentPiece" resource module. PrismaService comes from
@@ -43,6 +44,8 @@ import { PlansModule } from '../plans/plans.module';
     WawuAuthModule,
     // The publishing gate (TIER-02): publishing needs a tier.
     PlansModule,
+    // The tier badge on the creator and professional cards (TIER-07).
+    TierBadgeModule,
   ],
   controllers: [
     ContentPieceController,
