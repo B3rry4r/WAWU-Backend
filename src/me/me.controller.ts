@@ -24,6 +24,7 @@ import { MePurchasesService } from './me-purchases.service';
 import { MePaidPurchasesService } from './me-paid-purchases.service';
 import { MeNotificationsService } from './me-notifications.service';
 import { MeEarningsService } from './me-earnings.service';
+import { MeCoursesService } from './me-courses.service';
 import type {
   EarningSalePage,
   LessonDoneState,
@@ -54,17 +55,20 @@ export class MeController {
     private readonly paidPurchases: MePaidPurchasesService,
     private readonly notifications: MeNotificationsService,
     private readonly earnings: MeEarningsService,
+    private readonly courses: MeCoursesService,
   ) {}
 
-  /** M7's figures in one read: purchases, saved, unread notifications. */
+  /** M7's figures in one read: purchases, saved, unread notifications, enrolled courses. */
   @Get('counts')
   async counts(@CurrentUser() user: WawuJwtClaims): Promise<MeCountsView> {
-    const [purchases, saved, unreadNotifications] = await Promise.all([
-      this.purchases.count(user.sub),
-      this.saved.count(user.sub),
-      this.notifications.unreadCount(user.sub),
-    ]);
-    return { purchases, saved, unreadNotifications };
+    const [purchases, saved, unreadNotifications, enrolledCourses] =
+      await Promise.all([
+        this.purchases.count(user.sub),
+        this.saved.count(user.sub),
+        this.notifications.unreadCount(user.sub),
+        this.courses.enrolledCount(user.sub),
+      ]);
+    return { purchases, saved, unreadNotifications, enrolledCourses };
   }
 
   /** Saved (M30): content, events and creators, newest first, by tab. */

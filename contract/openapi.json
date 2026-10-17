@@ -30594,7 +30594,7 @@
             }
           }
         },
-        "summary": "M7's figures in one read: purchases, saved, unread notifications.",
+        "summary": "M7's figures in one read: purchases, saved, unread notifications, enrolled courses.",
         "tags": [
           "Me"
         ]
@@ -58910,12 +58910,16 @@
           },
           "unreadNotifications": {
             "type": "number"
+          },
+          "enrolledCourses": {
+            "type": "number"
           }
         },
         "required": [
           "purchases",
           "saved",
-          "unreadNotifications"
+          "unreadNotifications",
+          "enrolledCourses"
         ]
       },
       "SavedContentView": {

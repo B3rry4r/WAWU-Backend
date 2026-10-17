@@ -25,6 +25,11 @@ export interface MeCountsView {
   saved: number;
   /** Unread notifications. M7 "Notifications 3 new". */
   unreadNotifications: number;
+  /**
+   * School places the caller has paid for whose class has not finished (SC8's
+   * Current tab, paid rows). M7 "My courses 1 enrolled" (ME-03).
+   */
+  enrolledCourses: number;
 }
 
 /* ------------------------------------------------------------------ */

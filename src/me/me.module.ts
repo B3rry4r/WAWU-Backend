@@ -11,6 +11,7 @@ import { MePurchasesService } from './me-purchases.service';
 import { MePaidPurchasesService } from './me-paid-purchases.service';
 import { MeNotificationsService } from './me-notifications.service';
 import { MeEarningsService } from './me-earnings.service';
+import { MeCoursesService } from './me-courses.service';
 
 /**
  * The caller's own lists (task ME-10). ContentPieceModule supplies
@@ -37,6 +38,7 @@ import { MeEarningsService } from './me-earnings.service';
     MePaidPurchasesService,
     MeNotificationsService,
     MeEarningsService,
+    MeCoursesService,
   ],
 })
 export class MeModule {}
