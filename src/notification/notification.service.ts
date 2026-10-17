@@ -360,6 +360,19 @@ export class NotificationService {
         })
       ).map((r) => r.userWawuId),
     );
+    // Someone who switched it off after the job claimed them and before this read
+    // is left out, and their claim goes with the notice: they are owed nothing
+    // today, but if they switch it back on this morning the next look gives them
+    // the day's one notice, instead of finding the marker and writing none
+    // (SWEEP-INBOX HOME-16 F1). The claim and this delete share one transaction.
+    if (off.size > 0) {
+      await client.tgifDailyNotice.deleteMany({
+        where: {
+          userWawuId: { in: [...off] },
+          day: new Date(`${event.day}T00:00:00.000Z`),
+        },
+      });
+    }
     const recipients = recipientWawuIds.filter((id) => !off.has(id));
     if (recipients.length === 0) return 0;
 

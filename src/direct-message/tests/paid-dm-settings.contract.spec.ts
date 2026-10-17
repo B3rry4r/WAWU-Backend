@@ -367,6 +367,12 @@ describe('Paid message settings (contract, INBOX-12)', () => {
         '?priceKobo=-100',
         '?priceKobo=1000000100',
         '?priceKobo=100000&priceKobo=200000',
+        // JS-Number spellings that are not plain digits (INBOX-12 R2-1)
+        '?priceKobo=0x1388',
+        '?priceKobo=0005000',
+        '?priceKobo=%20100000',
+        '?priceKobo=%2B100000',
+        '?priceKobo=1e5',
         '?price=100000',
         '?priceKobo=100000&extra=1',
       ]) {
