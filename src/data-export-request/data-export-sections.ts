@@ -251,6 +251,16 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // POINTS-03: the person's "Use wallet" choice for points (PT3).
+    key: 'pointsSettings',
+    models: ['PointsSetting'],
+    load: (prisma, me) =>
+      prisma.pointsSetting.findUnique({
+        where: { wawuUserId: me },
+        select: { useWallet: true, updatedAt: true },
+      }),
+  },
+  {
     key: 'notificationSettings',
     models: ['NotificationSettings'],
     load: (prisma, me) =>

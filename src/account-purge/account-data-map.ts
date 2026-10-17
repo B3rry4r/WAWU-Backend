@@ -455,6 +455,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PointLedger', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointHold', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointLot', column: 'wawuUserId', disposition: 'OWNED' },
+  // "Use wallet" (POINTS-03, PT3): this person's choice about points; theirs alone.
+  { model: 'PointsSetting', column: 'wawuUserId', disposition: 'OWNED' },
   // Points turned into cash (POINTS-04): each row is WAWU's own movement of
   // cash from its account to this person's wallet, and the provider's record
   // of it (our reference, the amount, whether it was confirmed) must outlive

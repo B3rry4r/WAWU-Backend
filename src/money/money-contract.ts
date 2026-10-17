@@ -120,6 +120,12 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // The request is understood; this buyer holds the most open ticket orders
   // one event allows, so another cannot be paid until one is refunded or fails.
   event_order_limit: 409,
+  // POINTS-03. Default (agent), owner may override: 422 for a cap (the request
+  // is understood, the size of the job or the day's count is the problem, as
+  // below_minimum); 409 when the person is not short of points (nothing to
+  // buy, as wallet_already_open).
+  points_cap_reached: 422,
+  points_not_short: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

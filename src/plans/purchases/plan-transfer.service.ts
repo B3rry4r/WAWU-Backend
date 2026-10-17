@@ -48,9 +48,9 @@ import {
   TRANSFER_DEFAULTS,
 } from './plan-transfer-order';
 import {
-  PLAN_PAYMENT_KINDS,
   PLAN_PURCHASE_ROUTE,
-  type PlanPaymentKind,
+  PURCHASE_PAYMENT_KINDS,
+  type PurchasePaymentKind,
 } from './plan-purchase-terms';
 
 type Tx = Prisma.TransactionClient;
@@ -176,7 +176,7 @@ export class PlanTransferService {
    */
   async place(input: {
     wallet: OpenWallet;
-    kind: PlanPaymentKind;
+    kind: PurchasePaymentKind;
     targetId: string;
     target: PayableTarget;
     fee: FeeQuoteView;
@@ -582,8 +582,8 @@ export class PlanTransferService {
     now: Date,
     seen: { creditAt?: Date | null },
   ): Promise<SettleOutcome> {
-    const kind = order.paymentKind as PlanPaymentKind;
-    if (!PLAN_PAYMENT_KINDS.includes(kind)) {
+    const kind = order.paymentKind as PurchasePaymentKind;
+    if (!PURCHASE_PAYMENT_KINDS.includes(kind)) {
       await this.close(order, NOT_PAYABLE_ANY_MORE_MESSAGE);
       return 'closed';
     }
@@ -748,7 +748,7 @@ export class PlanTransferService {
     const rows = await this.prisma.walletPayment.findMany({
       where: {
         payerWawuUserId: order.wawuUserId,
-        kind: { in: [...PLAN_PAYMENT_KINDS] },
+        kind: { in: [...PURCHASE_PAYMENT_KINDS] },
         targetId: order.targetId,
         createdAt: { gte: order.createdAt },
         status: { in: ['pending', 'completed'] },

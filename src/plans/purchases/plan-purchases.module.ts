@@ -9,6 +9,7 @@ import { PlansModule } from '../plans.module';
 import { PlanPurchasesController } from './plan-purchases.controller';
 import { PlanPurchaseService } from './plan-purchase.service';
 import { PlanTransferService } from './plan-transfer.service';
+import { PointsPackService } from './points-pack.service';
 
 /**
  * Buying, renewing and upgrading a tier from the wallet (task TIER-03): the
@@ -20,6 +21,10 @@ import { PlanTransferService } from './plan-transfer.service';
  *
  * Mounting it in AppModule is SHARED-CHANGES TIER-03 #1 (one import and one
  * entry, after PlansModule).
+ *
+ * POINTS-02 adds the points pack (`kind: points_pack`, `PointsPackService`)
+ * on the same routes: a payment kind of its own, registered with the wallet
+ * payments, bought from the wallet or by transfer like a tier.
  *
  * TIER-05 adds `method: transfer` (`PlanTransferService`): a purchase waits for
  * a bank transfer into the person's own wallet account and is paid from the
@@ -36,6 +41,6 @@ import { PlanTransferService } from './plan-transfer.service';
     WalletProviderModule,
   ],
   controllers: [PlanPurchasesController],
-  providers: [PlanPurchaseService, PlanTransferService],
+  providers: [PlanPurchaseService, PlanTransferService, PointsPackService],
 })
 export class PlanPurchasesModule {}

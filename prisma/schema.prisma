@@ -6412,6 +6412,20 @@ model PointHold {
 
   @@unique([purpose, reference])
   @@index([wawuUserId, createdAt])
+  /// POINTS-03's sweep of stale AI holds: the `held` ones older than the job's
+  /// longest run time, oldest first.
+  @@index([state, createdAt])
+}
+
+/// One person's choices about points (task POINTS-03, PT3). A row exists only
+/// once the person has chosen; no row reads as the defaults (`useWallet` off).
+model PointsSetting {
+  wawuUserId String   @id
+  /// "Use wallet": when points run short, the quote shows the wallet money
+  /// that would buy the shortfall. It never spends anything by itself; the
+  /// money moves only on `POST /points/shortfall` with the PIN.
+  useWallet  Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
 }
 
 /// Append-only: one row per change to one lot's points. Never updated; a

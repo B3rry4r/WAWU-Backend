@@ -134,6 +134,32 @@ export class MoneyErrorReason {
   /** insufficient_points: neededPoints minus balancePoints. */
   @ApiPropertyOptional({ type: 'integer' })
   shortfallPoints?: number;
+
+  /** points_cap_reached (POINTS-03): which cap stopped the job. */
+  @ApiPropertyOptional({
+    enum: ['daily', 'characters_per_job', 'minutes_per_job'],
+  })
+  cap?: 'daily' | 'characters_per_job' | 'minutes_per_job';
+
+  /** points_cap_reached: the cap's size, in `capUnit`. */
+  @ApiPropertyOptional({ type: 'integer' })
+  capLimit?: number;
+
+  /** points_cap_reached: what the cap counts. */
+  @ApiPropertyOptional({ enum: ['points', 'characters', 'minutes'] })
+  capUnit?: 'points' | 'characters' | 'minutes';
+
+  /** points_cap_reached, daily cap: points of AI jobs held or spent today. */
+  @ApiPropertyOptional({ type: 'integer' })
+  usedPoints?: number;
+
+  /** points_cap_reached, daily cap: points still free today. */
+  @ApiPropertyOptional({ type: 'integer' })
+  remainingPoints?: number;
+
+  /** points_cap_reached, daily cap: when the day's count starts again (ISO 8601). */
+  @ApiPropertyOptional({ type: 'string', nullable: true })
+  resetsAt?: string | null;
 }
 
 /** The body of every refused money request. */
