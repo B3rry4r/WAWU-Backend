@@ -1194,6 +1194,12 @@ export class WalletTransferService implements OnModuleInit {
       ).status as TransferStatus;
     }
     await this.markSentToBank(t, now);
+    if (receipt.pending) {
+      // Taken, not finished (FIX-54): as in `afterReceipt`, the send waits for
+      // the provider's word and is asked again by the sweep.
+      await this.reschedule(t, now);
+      return (await this.reload(t)).status as TransferStatus;
+    }
     return (
       await this.completeFromRecord(t, {
         amountKobo: receipt.amountKobo,

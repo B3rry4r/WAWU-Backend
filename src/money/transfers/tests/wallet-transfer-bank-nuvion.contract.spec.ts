@@ -715,6 +715,37 @@ describe('A bank send on Nuvion shows its true outcome (FIX-54)', () => {
     });
   });
 
+  it('a send that waited on its fee and is issued later by the sweep is pending too, not completed on acceptance', async () => {
+    // WAWU's fee transfer is accepted and not finished: the send waits, and
+    // nothing is sent to the bank yet.
+    book.mode = 'pending';
+    const { me, b, view, count } = await send();
+    expect(view.status).toBe('pending');
+    expect(count).toBe(0);
+    expect(PERSON_START - available(me)).toBeLessThan(b.quotedTotal);
+
+    // The fee finishes; the sweep issues the send once Nuvion's answer is
+    // overdue. Nuvion accepts it: pending, and the Hub says so.
+    book.settle(`${view.reference}-fee`, 'successful');
+    await new Promise((r) => setTimeout(r, 700));
+    await transfers.sweep(later());
+    await waitFor(() => pay.byReference(view.reference).length === 1);
+    const made = pay.byReference(view.reference);
+    expect(made).toHaveLength(1);
+    expect(made[0].status).toBe('pending');
+    expect((await rowOf(view.id)).status).toBe('pending');
+    expect((await read(me, view.id)).status).toBe('pending');
+    expect(PERSON_START - available(me)).toBe(b.quotedTotal);
+
+    // Only Nuvion's word completes it.
+    pay.settle(made[0].id, 'successful');
+    await transfers.sweep(later());
+    expect((await rowOf(view.id)).status).toBe('completed');
+    expect(feeLegs(view.reference)).toHaveLength(1);
+    expect(pay.byReference(view.reference)).toHaveLength(1);
+    expect(await ledgerNet(me)).toBe(-(PERSON_START - available(me)));
+  });
+
   it("a lost answer then a status poll: the send waits, is never sent twice, and the sweep settles it from Nuvion's own record", async () => {
     pay.loseAnswerNext();
     const { me, b, view, count } = await send();
