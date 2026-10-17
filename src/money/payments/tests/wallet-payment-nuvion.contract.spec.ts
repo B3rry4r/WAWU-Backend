@@ -475,6 +475,11 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
           customerReference: { in: rows.map((r) => r.customerReference) },
         },
       });
+      // MERGE-12: a tip that completes writes its creator's EarningSettlement
+      // (WALLET-16, B3a), which holds the payment with Restrict.
+      await prisma.earningSettlement.deleteMany({
+        where: { payment: { payerWawuUserId: { in: users } } },
+      });
       await prisma.walletPayment.deleteMany({
         where: { payerWawuUserId: { in: users } },
       });
