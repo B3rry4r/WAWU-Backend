@@ -22,6 +22,11 @@ export interface InboxPerson {
   handle: string | null;
   avatarUrl: string | null;
   verification: VerificationState;
+  /**
+   * True only for the support side of a support thread (SUPPORT-01): the row
+   * draws the app's own mark. Left out for every ordinary person.
+   */
+  support?: boolean;
 }
 
 /** What a row's last line says, for the preview under the name. */
