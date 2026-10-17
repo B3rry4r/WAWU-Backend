@@ -39,6 +39,7 @@ import {
   PlanPurchaseService,
 } from './plan-purchase.service';
 import type {
+  PendingPlanPurchaseView,
   PlanPurchaseQuoteView,
   PlanPurchaseView,
   PlanTransferOrderView,
@@ -125,6 +126,21 @@ export class PlanPurchasesController {
     @Body() dto: PlanPurchaseDto,
   ): Promise<PlanPurchaseView | PlanTransferOrderView> {
     return this.purchases.buy(wallet, scope, dto);
+  }
+
+  /**
+   * The purchase still going through for the caller, or `purchase: null`
+   * (ME-13, M15): a payment still confirming, or confirmed and not yet
+   * opened, the same ones that make a second purchase `payment_in_progress`.
+   * Declared before the id so `pending` is never read as one. Needs no
+   * wallet: a person with none has nothing going through.
+   */
+  @Get('pending')
+  @Header('Cache-Control', 'no-store')
+  pending(
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<PendingPlanPurchaseView> {
+    return this.purchases.pending(user.sub);
   }
 
   /**

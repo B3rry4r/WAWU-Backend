@@ -71,6 +71,7 @@ import type {
   PlanPurchaseQuoteView,
   PlanPurchaseStatus,
   PlanPurchaseTransferView,
+  PendingPlanPurchaseView,
   PlanPurchaseView,
   PlanTransferOrderView,
 } from './plan-purchase-view.type';
@@ -331,6 +332,29 @@ export class PlanPurchaseService implements OnModuleInit {
     });
     if (!payment) throw new MoneyError('not_found', PURCHASE_NOT_FOUND_MESSAGE);
     return this.present(this.payments.view(payment, null));
+  }
+
+  /**
+   * The purchase still going through for this person, newest first: a plan
+   * payment that is still confirming, or confirmed and not yet opened (the
+   * same two states that make another purchase `payment_in_progress`). Read
+   * for ME-13's "Paid, still confirming" after the app is opened again;
+   * nothing is written and nothing waits on the provider.
+   */
+  async pending(wawuUserId: string): Promise<PendingPlanPurchaseView> {
+    const payment = await this.prisma.walletPayment.findFirst({
+      where: {
+        payerWawuUserId: wawuUserId,
+        kind: { in: [...PLAN_PAYMENT_KINDS] },
+        OR: OPEN_PAYMENT_STATES,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    return {
+      purchase: payment
+        ? await this.present(this.payments.view(payment, null))
+        : null,
+    };
   }
 
   /**
