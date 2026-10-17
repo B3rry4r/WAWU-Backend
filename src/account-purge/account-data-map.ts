@@ -609,6 +609,20 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'userBWawuId',
     disposition: 'COUNTERPARTY',
   },
+  // A money request (INBOX-15) is written into a chat and is shared by the
+  // two people in it; a paid one is also a record of money that moved to the
+  // other person. It stays with its chat for the other person, and this
+  // account's id on it is scrubbed by WAWU ID's anonymize, as above.
+  {
+    model: 'MoneyRequest',
+    column: 'requesterWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  {
+    model: 'MoneyRequest',
+    column: 'payerWawuId',
+    disposition: 'COUNTERPARTY',
+  },
   // Views this account made of OTHER people's profiles. Deleting them would
   // silently reduce somebody else's historical figures, which is editing a
   // third party's records to erase this one; the reference is scrubbed by

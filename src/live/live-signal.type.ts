@@ -10,6 +10,7 @@ export const LIVE_CHANNEL = 'wawu_live';
 export type LiveSignal =
   | { kind: 'chat.message'; chatId: string; messageId: string }
   | { kind: 'chat.read'; chatId: string; readerWawuId: string }
+  | { kind: 'money_request.updated'; chatId: string; requestId: string }
   | { kind: 'community.message'; communityId: string; messageId: string }
   | { kind: 'legal.thread'; legalRequestId: string; messageId: string };
 

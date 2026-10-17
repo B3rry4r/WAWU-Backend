@@ -28961,6 +28961,358 @@
         ]
       }
     },
+    "/api/hub/chats/{chatId}/money-requests": {
+      "post": {
+        "operationId": "MoneyRequestController_create",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMoneyRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatMessage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Ask the other person in the chat for money. Writes the request into the\nchat as a message of kind `money_request` and answers that message,\nwhich carries the request. Nothing moves until they pay. The asker needs\nan open wallet (to receive what they ask for): without one the answer is\n`409` with `reason.code` `wallet_not_open` or `wallet_opening`. A block\nin either direction is `403 chat_blocked`. `clientRequestId` makes a\nresend after a lost answer return the first request.",
+        "tags": [
+          "MoneyRequest"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}/money-requests/{requestId}": {
+      "get": {
+        "operationId": "MoneyRequestController_get",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyRequestView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One request as it stands now. A payment that was not confirmed when it\nwas made is settled from its send first, so this is the route the app\npolls while a request shows `paying`.",
+        "tags": [
+          "MoneyRequest"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}/money-requests/{requestId}/pay": {
+      "post": {
+        "operationId": "MoneyRequestController_pay",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayMoneyRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransferView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range, self_transfer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded, recipient_blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: recipient_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, recipient_has_no_wallet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pay a request: a send to the person who asked, for the amount asked, with\nthe wallet send's fees on top (R-10: the provider's charge and WAWU's\nfee, quoted by `GET /money/fees/quote?kind=wawu_transfer`; the requester\ngets exactly the amount). Only the person who was asked can pay, and only\nwhile the request is `pending` and no payment for it is on its way. Answers\n201 with the send, as `POST /money/transfers/wawu` does: completed (the\nrequest is then `paid`), pending (not confirmed yet: the request shows\n`paying`, and is never paid again), or failed (nothing moved; the request\nis still `pending`). The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN. A\nrequest that is not the caller's, no longer pending, or already being paid\nis answered before the PIN is looked at: `403 money_request_not_yours`,\n`409 money_request_not_pending`, `409 money_request_being_paid`.",
+        "tags": [
+          "MoneyRequest"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}/money-requests/{requestId}/decline": {
+      "post": {
+        "operationId": "MoneyRequestController_decline",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyRequestView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The person who was asked says no. Final; the same answer again is not an error.",
+        "tags": [
+          "MoneyRequest"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}/money-requests/{requestId}/cancel": {
+      "post": {
+        "operationId": "MoneyRequestController_cancel",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyRequestView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The person who asked takes it back. Final; the same answer again is not an error.",
+        "tags": [
+          "MoneyRequest"
+        ]
+      }
+    },
     "/api/hub/tgif/{date}": {
       "get": {
         "operationId": "TgifController_day",
@@ -29272,13 +29624,14 @@
             "name": "kind",
             "required": false,
             "in": "query",
-            "description": "Only rows of this kind (the Paid DMs and Communities chips). All kinds when left out.",
+            "description": "Only rows of this kind (the Paid DMs, Communities and Money chips; the\nMoney chip is `money_request`). All kinds when left out.",
             "schema": {
               "type": "string",
               "enum": [
                 "chat",
                 "paid_dm",
-                "community"
+                "community",
+                "money_request"
               ]
             }
           }
@@ -37404,6 +37757,50 @@
         "required": [
           "contentType",
           "contentLength"
+        ]
+      },
+      "CreateMoneyRequestDto": {
+        "type": "object",
+        "properties": {
+          "amountKobo": {
+            "type": "integer",
+            "description": "What is asked for, in kobo.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "memo": {
+            "type": "string",
+            "description": "What it is for (\"Logo edits, round 2\").",
+            "maxLength": 100
+          },
+          "clientRequestId": {
+            "type": "string",
+            "description": "The sender app's own id for this request, so a resend after a lost\nanswer returns the first request instead of asking twice.",
+            "pattern": "^[A-Za-z0-9_-]{8,128}$"
+          }
+        },
+        "required": [
+          "amountKobo"
+        ]
+      },
+      "PayMoneyRequestDto": {
+        "type": "object",
+        "properties": {
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`totalKobo` from the fee quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from that fee quote (`GET /money/fees/quote?kind=wawu_transfer`).",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "expectedTotalKobo",
+          "quoteToken"
         ]
       },
       "ReactTgifDto": {
@@ -53072,6 +53469,74 @@
           "name"
         ]
       },
+      "MoneyRequestView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string",
+            "nullable": true
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "outgoing",
+              "incoming"
+            ]
+          },
+          "requesterWawuId": {
+            "type": "string"
+          },
+          "payerWawuId": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "memo": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "paid",
+              "cancelled",
+              "declined"
+            ]
+          },
+          "paying": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "resolvedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "chatId",
+          "messageId",
+          "direction",
+          "requesterWawuId",
+          "payerWawuId",
+          "amountKobo",
+          "memo",
+          "status",
+          "paying",
+          "createdAt",
+          "resolvedAt"
+        ]
+      },
       "ChatMessage": {
         "type": "object",
         "properties": {
@@ -53093,7 +53558,8 @@
               "video",
               "image",
               "text",
-              "file"
+              "file",
+              "money_request"
             ]
           },
           "text": {
@@ -53104,6 +53570,14 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/ChatAttachment"
+              }
+            ],
+            "nullable": true
+          },
+          "moneyRequest": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoneyRequestView"
               }
             ],
             "nullable": true
@@ -53132,6 +53606,7 @@
           "kind",
           "text",
           "attachment",
+          "moneyRequest",
           "clientMessageId",
           "createdAt",
           "readState"
@@ -53491,6 +53966,32 @@
           "cursor"
         ]
       },
+      "LiveMoneyRequestEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "money_request.updated"
+            ]
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "message": {
+            "$ref": "#/components/schemas/ChatMessage"
+          },
+          "cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "chatId",
+          "message",
+          "cursor"
+        ]
+      },
       "LiveCommunityMessageEvent": {
         "type": "object",
         "properties": {
@@ -53529,6 +54030,9 @@
                 },
                 {
                   "$ref": "#/components/schemas/LiveChatReadEvent"
+                },
+                {
+                  "$ref": "#/components/schemas/LiveMoneyRequestEvent"
                 },
                 {
                   "$ref": "#/components/schemas/LiveCommunityMessageEvent"
@@ -53574,6 +54078,28 @@
           },
           "sentAt": {
             "type": "string"
+          },
+          "moneyRequest": {
+            "type": "object",
+            "properties": {
+              "amountKobo": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "paid",
+                  "cancelled",
+                  "declined"
+                ]
+              }
+            },
+            "required": [
+              "amountKobo",
+              "status"
+            ],
+            "nullable": true
           }
         },
         "required": [
@@ -53581,7 +54107,8 @@
           "attachment",
           "mine",
           "senderName",
-          "sentAt"
+          "sentAt",
+          "moneyRequest"
         ]
       },
       "InboxPerson": {
@@ -53700,6 +54227,60 @@
           "role"
         ]
       },
+      "InboxMoneyRequest": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "outgoing",
+              "incoming"
+            ]
+          },
+          "other": {
+            "$ref": "#/components/schemas/InboxPerson"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "memo": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "paid",
+              "cancelled",
+              "declined"
+            ]
+          },
+          "paying": {
+            "type": "boolean"
+          },
+          "canMessage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requestId",
+          "chatId",
+          "direction",
+          "other",
+          "amountKobo",
+          "memo",
+          "status",
+          "paying",
+          "canMessage"
+        ]
+      },
       "InboxItem": {
         "type": "object",
         "properties": {
@@ -53711,7 +54292,8 @@
             "enum": [
               "paid_dm",
               "community",
-              "chat"
+              "chat",
+              "money_request"
             ]
           },
           "lastActivityAt": {
@@ -53752,6 +54334,14 @@
               }
             ],
             "nullable": true
+          },
+          "moneyRequest": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InboxMoneyRequest"
+              }
+            ],
+            "nullable": true
           }
         },
         "required": [
@@ -53762,7 +54352,8 @@
           "preview",
           "chat",
           "paidDm",
-          "community"
+          "community",
+          "moneyRequest"
         ]
       },
       "InboxPage": {

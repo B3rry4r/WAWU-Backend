@@ -78,6 +78,7 @@ import { AccountPurgeModule } from './account-purge/account-purge.module';
 import { WalletModule } from './wallet/wallet.module';
 import { MoneyModule } from './money/money.module';
 import { ChatModule } from './chat/chat.module';
+import { MoneyRequestModule } from './money-request/money-request.module';
 import { TgifModule } from './tgif/tgif.module';
 import { LiveModule } from './live/live.module';
 import { InboxModule } from './inbox/inbox.module';
@@ -385,6 +386,10 @@ import { PushModule } from './push/push.module';
     // Free chat between two users (task INBOX-06). `@Controller('chats')` is a
     // first segment nothing else declares, so it cannot shadow or be shadowed.
     ChatModule,
+    // Money requests written into a chat (task INBOX-15): routes under
+    // `chats/:chatId/money-requests`, deeper than every route ChatController
+    // serves, so none is shadowed or shadows another.
+    MoneyRequestModule,
     // TGIF reactions, readers and shares (HOME-10): GET and POST under /tgif.
     TgifModule,
     // Live updates for chat (task INBOX-02): the WebSocket at `/api/hub/live`
