@@ -25,6 +25,7 @@ import {
 import { PointsService } from '../../points.service';
 import type { MyPointsView } from '../../points-view.type';
 import { PointsHoldSweepService } from '../points-hold-sweep.service';
+import { DOLLARS_NOTE, NO_WALLET_NOTE } from '../points-shortfall.service';
 import { PointsSpendModule } from '../points-spend.module';
 import { PointsSpendService, jobHoldReference } from '../points-spend.service';
 import type {
@@ -493,7 +494,9 @@ describe('Spend points on AI tools (POINTS-03)', () => {
       shortfallPoints: costOf(minuteTool, 2) - 10,
       wallet: null,
     });
-    expect(q.walletNote).toMatch(/wallet/i);
+    // A walletless Nigerian (no PersonBilling row, nothing fixed) is told to
+    // open a wallet, never the dollars note.
+    expect(q.walletNote).toBe(NO_WALLET_NOTE);
     const fake = {
       expectedTotalKobo: 1,
       quoteToken: 'x',
@@ -523,8 +526,40 @@ describe('Spend points on AI tools (POINTS-03)', () => {
     expect(qu).toMatchObject({
       wallet: null,
     });
-    expect(qu.walletNote).toMatch(/naira/i);
+    expect(qu.walletNote).toBe(DOLLARS_NOTE);
     expect(sendsFrom(usd)).toHaveLength(0);
+
+    // Fixed in dollars with no wallet: the dollars note comes first.
+    const usdBare = await h.walletless();
+    await h.prisma.personBilling.create({
+      data: {
+        wawuUserId: usdBare.id,
+        currency: 'USD',
+        fixedBy: 'first_purchase',
+        purchaseRef: randomUUID(),
+      },
+    });
+    await useWallet(usdBare, true);
+    await give(usdBare, 10);
+    const qub = await quoted(usdBare, job(2));
+    expect(qub.wallet).toBeNull();
+    expect(qub.walletNote).toBe(DOLLARS_NOTE);
+
+    // Fixed in naira with no wallet: told to open one.
+    const ngnBare = await h.walletless();
+    await h.prisma.personBilling.create({
+      data: {
+        wawuUserId: ngnBare.id,
+        currency: 'NGN',
+        fixedBy: 'first_purchase',
+        purchaseRef: randomUUID(),
+      },
+    });
+    await useWallet(ngnBare, true);
+    await give(ngnBare, 10);
+    const qnb = await quoted(ngnBare, job(2));
+    expect(qnb.wallet).toBeNull();
+    expect(qnb.walletNote).toBe(NO_WALLET_NOTE);
 
     // A cap that stops the job: buying points would not let it run.
     const capped = await h.buyer(RICH);

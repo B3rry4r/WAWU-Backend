@@ -120,10 +120,16 @@ export class PointsShortfallService implements OnModuleInit {
     wawuUserId: string,
     shortfallPoints: number,
   ): Promise<{ wallet: PointsShortfallOfferView | null; note: string | null }> {
-    const currency = (await this.billing.resolve(wawuUserId, {})).currency;
-    if (currency !== 'NGN') return { wallet: null, note: DOLLARS_NOTE };
+    // The note, in order: a billing currency fixed in dollars (the dollars
+    // note); else no open wallet (open one: the normal case under R-6, and
+    // the unfixed currency without claims reads USD, so it must not decide
+    // before this); else the currency as priced.
+    const billing = await this.billing.resolve(wawuUserId, {});
+    if (billing.fixed && billing.currency !== 'NGN')
+      return { wallet: null, note: DOLLARS_NOTE };
     const wallet = await this.walletOf(wawuUserId);
     if (wallet === null) return { wallet: null, note: NO_WALLET_NOTE };
+    if (billing.currency !== 'NGN') return { wallet: null, note: DOLLARS_NOTE };
     const targetId = shortfallTargetOf(shortfallPoints);
     try {
       const payment = await this.payments.quote(wallet, {
