@@ -15,6 +15,7 @@ import {
 import {
   PLAN_PURCHASE_METHODS,
   PLAN_PURCHASE_REQUEST_KINDS,
+  PLAN_PURCHASE_KINDS,
   POINTS_PACK_KIND,
   type PlanPurchaseMethod,
   type PlanPurchaseRequestKind,
@@ -27,7 +28,8 @@ const TIER_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const PACK_ID_PATTERN = TIER_ID_PATTERN;
 
 /** A tier purchase carries a `tierId`; a points pack purchase carries a `packId` instead. */
-const isTier = (o: { kind?: unknown }): boolean => o.kind !== POINTS_PACK_KIND;
+const isTier = (o: { kind?: unknown }): boolean =>
+  (PLAN_PURCHASE_KINDS as readonly unknown[]).includes(o.kind);
 const isPack = (o: { kind?: unknown }): boolean => o.kind === POINTS_PACK_KIND;
 
 /**
@@ -44,8 +46,9 @@ const readFlag = ({ value }: { value: unknown }): unknown =>
 export class PlanPurchaseQuoteQueryDto {
   /**
    * `tier` (a first purchase, or after the last ended), `renew` (the tier
-   * held), `upgrade` (to a bigger tier) or `points_pack` (a points pack,
-   * POINTS-02).
+   * held), `upgrade` (to a bigger tier), `points_pack` (a points pack,
+   * POINTS-02) or `extra_products` (more product places on the tier held,
+   * TIER-04, with no `tierId`, `packId` or `bump`).
    */
   @ApiProperty({ enum: PLAN_PURCHASE_REQUEST_KINDS })
   @IsIn(PLAN_PURCHASE_REQUEST_KINDS)

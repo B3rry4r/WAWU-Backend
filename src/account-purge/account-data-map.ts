@@ -176,6 +176,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // (WalletPayment below, anonymised); its id is this row's key and is not a
   // link anyone follows once the account is gone.
   { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
+  // More products this account bought on its tier (TIER-04): how many and what
+  // it cost. OWNED, like MakerPurchase above: the row exists only because this
+  // account bought something and names no counterparty. The money's record is
+  // the payment, which stays (WalletPayment below, anonymised).
+  { model: 'MakerExtraProducts', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
   // A tier purchase this account chose to pay by bank transfer (TIER-05): the
   // item, the quote it was confirmed at and where it stands. OWNED, like

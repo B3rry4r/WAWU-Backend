@@ -73,6 +73,11 @@ export type FeePartCode = (typeof FEE_PART_CODES)[number];
  * debit into WAWU's own account with no seller split, not held. Its `targetId`
  * is `pack-<packId>` (docs/contract/PLANS.md section 9).
  *
+ * `extra_products` (TIER-04) is WAWU's own sale of more product places on the
+ * tier a person holds (VF13): one debit into WAWU's own account with no seller
+ * split, not held. Its `targetId` is `extra-products` (docs/contract/PLANS.md
+ * section 10).
+ *
  * `points_shortfall` (POINTS-03) is WAWU's own sale of the points an AI job is
  * short of (PT3), bought from the wallet at the pack rate on the person's
  * confirmation: one debit into WAWU's own account with no seller split, not
@@ -98,6 +103,7 @@ export const PAYMENT_KINDS = [
   'tier',
   'tier_bump',
   'points_pack',
+  'extra_products',
   'points_shortfall',
   'points_cash_out',
 ] as const;
@@ -227,5 +233,9 @@ export const MONEY_ERROR_CODES = [
   // has enough points, so there is no shortfall to buy.
   'points_cap_reached',
   'points_not_short',
+  // Adding products needs a tier that is running (TIER-04, VF13): the person
+  // has none, or it ended. Also the code of the publishing gate (TIER-02), in
+  // its own richer body on the routes that publish.
+  'tier_required',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];
