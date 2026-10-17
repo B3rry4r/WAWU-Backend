@@ -42516,6 +42516,7 @@
               "tier",
               "tier_bump",
               "points_pack",
+              "extra_products",
               "points_shortfall",
               "points_cash_out"
             ]
@@ -42619,6 +42620,7 @@
               "tier",
               "tier_bump",
               "points_pack",
+              "extra_products",
               "points_shortfall",
               "points_cash_out"
             ]
