@@ -17542,6 +17542,127 @@
         "x-wawu-built-by": "MONEY-18"
       }
     },
+    "/api/hub/money/earnings": {
+      "get": {
+        "operationId": "MoneyEarningsController_summary",
+        "parameters": [
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "description": "The month `thisMonth` is about, YYYY-MM in Africa/Lagos time. The current\nmonth when absent.",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EarningsView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "month is not YYYY-MM.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyPlainErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Earned all time and in a month, by kind of sale, with what is still waiting to reach the wallet.",
+        "tags": [
+          "MoneyEarnings"
+        ],
+        "x-wawu-built-by": "WALLET-16"
+      }
+    },
+    "/api/hub/money/earnings/content": {
+      "get": {
+        "operationId": "MoneyEarningsController_content",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "description": "The month the pieces earned in, YYYY-MM in Africa/Lagos time. The\ncurrent month when absent. A cursor is good only for the month it was\ngiven for.",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EarningContentPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "month is not YYYY-MM, or the cursor is not one this list gave.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyPlainErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One month's earnings piece by piece, largest first.",
+        "tags": [
+          "MoneyEarnings"
+        ],
+        "x-wawu-built-by": "WALLET-16"
+      }
+    },
     "/api/hub/money/transactions/{id}/receipt": {
       "post": {
         "operationId": "MoneyReceiptController_issue",
@@ -39893,6 +40014,173 @@
           }
         },
         "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "EarningStreamView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bill",
+              "content_unlock",
+              "tip",
+              "credit_pack",
+              "verification",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket",
+              "tier",
+              "tier_bump"
+            ]
+          },
+          "earnedKobo": {
+            "type": "integer"
+          },
+          "sales": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "earnedKobo",
+          "sales"
+        ]
+      },
+      "EarningsPeriodView": {
+        "type": "object",
+        "properties": {
+          "earnedKobo": {
+            "type": "integer"
+          },
+          "sales": {
+            "type": "number"
+          },
+          "streams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EarningStreamView"
+            }
+          }
+        },
+        "required": [
+          "earnedKobo",
+          "sales",
+          "streams"
+        ]
+      },
+      "EarningsWaitingView": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "amountKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "amountKobo"
+        ]
+      },
+      "EarningsView": {
+        "type": "object",
+        "properties": {
+          "allTime": {
+            "$ref": "#/components/schemas/EarningsPeriodView"
+          },
+          "month": {
+            "type": "string"
+          },
+          "thisMonth": {
+            "$ref": "#/components/schemas/EarningsPeriodView"
+          },
+          "waiting": {
+            "$ref": "#/components/schemas/EarningsWaitingView"
+          },
+          "held": {
+            "$ref": "#/components/schemas/EarningsWaitingView"
+          },
+          "walletOpen": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "allTime",
+          "month",
+          "thisMonth",
+          "waiting",
+          "held",
+          "walletOpen"
+        ]
+      },
+      "EarningContentView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bill",
+              "content_unlock",
+              "tip",
+              "credit_pack",
+              "verification",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket",
+              "tier",
+              "tier_bump"
+            ]
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "earnedKobo": {
+            "type": "integer"
+          },
+          "sales": {
+            "type": "number"
+          },
+          "lastAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "targetId",
+          "title",
+          "earnedKobo",
+          "sales",
+          "lastAt"
+        ]
+      },
+      "EarningContentPage": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EarningContentView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "month",
           "items",
           "nextCursor"
         ]

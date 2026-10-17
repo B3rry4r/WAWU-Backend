@@ -4928,6 +4928,8 @@ model WalletPayment {
   updatedAt             DateTime  @updatedAt
   /// Set for a held kind (paid DM, ticket, bill) once the payment completes (MONEY-18).
   hold                  WalletHold?
+  /// The payee's 85% of an ordinary sale, owed to their wallet until it lands (WALLET-16).
+  earning               EarningSettlement?
 
   @@index([payerWawuUserId, createdAt])
   @@index([status, createdAt])
@@ -5114,6 +5116,81 @@ model WalletTransfer {
   @@index([payerWawuUserId, createdAt])
   @@index([recipientWawuUserId, createdAt])
   @@index([status, reviewSince, nextCheckAt, id])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// A SALE'S 85% LANDING IN THE PAYEE'S WALLET (task WALLET-16, R-11)
+///
+/// An ordinary sale (an unlock, a tip, a legal fee, school fees: any kind that
+/// is not held) is paid into WAWU's own account at the wallet provider
+/// (WalletPayment, MONEY-17), and the payee's 85% (R-5) then has to reach the
+/// payee's wallet. One row per such payment, made when the payment is
+/// finished (completed, delivered, not in review) and owed until the provider
+/// CONFIRMS the move: `owed`, then `landed`. A held kind never has one: the
+/// hold's release lands its share (MONEY-18), and the database refuses a row
+/// for a payment that has a hold, so the same 85% cannot land twice.
+///
+/// A person with no wallet yet keeps earning: the row waits (`waiting:
+/// payee_wallet`) and lands within a minute of the wallet opening. The
+/// provider's balance is still the only balance; nothing here is added up
+/// into one (the earnings read says "earned" and "waiting", never "balance").
+///
+/// Exactly once, whoever asks: the payment id is unique, and so is the
+/// reference the provider sees (`wawu-earn-<payment id>`, one per earning).
+/// The move is handed over by a lease (`sentAt`) only one caller wins; a lost
+/// answer is found again by that reference and never sent under another. Only
+/// the provider's own record that a move FAILED starts a new try, under a new
+/// reference (`attempt`). `amountKobo` is the payment's `payeeShareKobo`
+/// frozen when the row is made. Every figure is integer kobo.
+/// ─────────────────────────────────────────────────────────────────────────
+model EarningSettlement {
+  id                       String        @id @default(uuid())
+  paymentId                String        @unique
+  payment                  WalletPayment @relation(fields: [paymentId], references: [id])
+  /// Who is owed it. COUNTERPARTY at account deletion: the payer's record survives.
+  payeeWawuUserId          String
+  /// What was paid for: the payment's kind, its target and its title.
+  kind                     String
+  targetId                 String
+  title                    String
+  /// When the sale completed: the month an earning counts in.
+  earnedAt                 DateTime
+  /// What moves out of WAWU's account to the payee: the payee's 85%. Positive.
+  amountKobo               BigInt
+  /// WAWU's own account at the provider the sale was paid into.
+  merchantAccountNumber    String
+  /// The wallet provider that took the sale (the payment's own).
+  provider                 String        @default("fintava")
+  /// owed or landed.
+  status                   String        @default("owed")
+  /// When the provider confirmed the move into the payee's wallet.
+  settledAt                DateTime?
+  /// OUR reference at the provider for the current try: `wawu-earn-<payment id>`,
+  /// with the try's number added after a proven failure.
+  customerReference        String        @unique
+  attempt                  Int           @default(1)
+  destinationAccountNumber String?
+  /// When the current try was handed to the provider. Set means "a record may
+  /// exist at the provider": it is asked, never sent again, until it says.
+  sentAt                   DateTime?
+  /// The provider's own charge on the move (WAWU's, R-31); null when its record did not say.
+  providerFeeKobo          BigInt?
+  /// The schedule: the next try or the next question to the provider. `waiting`
+  /// says why nothing has moved (payee_wallet, recipient_frozen, funds,
+  /// provider, not_supported, refused).
+  nextAttemptAt            DateTime?
+  attempts                 Int           @default(0)
+  checks                   Int           @default(0)
+  waiting                  String?
+  /// A person has to look (no answer past the review bound, a reversed move,
+  /// an amount that is not the share). Out of the sweep; the money stays put.
+  reviewSince              DateTime?
+  discrepancy              String?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+
+  @@index([status, reviewSince, nextAttemptAt])
+  @@index([payeeWawuUserId, earnedAt])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────

@@ -58,6 +58,13 @@ const NOT_GATED: Record<string, string> = {
     'Open your wallet: opening the account (A7, MONEY-12)',
   'GET money/wallet':
     'Answers 200 with state not_open or opening: how the Wallet tab finds out (MONEY-12)',
+  // WALLET-16 (R-11): a creator with no wallet keeps earning, and has to be
+  // able to read what they earned and that it is waiting for them. Both read
+  // our own records of the sales and never the provider.
+  'GET money/earnings':
+    'Earnings: what a creator earned and what waits for their wallet (W39, R-11, WALLET-16)',
+  'GET money/earnings/content':
+    'Earnings: one month piece by piece, for a creator with no wallet yet (W39, R-11, WALLET-16)',
   // Declared, not served: Nigeria's bank list and a name check need no wallet.
   'GET money/banks': 'the bank list (WALLET-09) reads no wallet',
   'POST money/banks/name-check':

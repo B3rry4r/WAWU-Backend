@@ -650,6 +650,16 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'payeeWawuUserId',
     disposition: 'COUNTERPARTY',
   },
+  // Somebody else's sale that pays this account (WALLET-16): the payer's
+  // payment, and the share it owes, survive, and so does the record of that
+  // share waiting for this account's wallet or landing in it. An account is
+  // deleted only with an empty wallet (R-17); what is still owed stays in
+  // WAWU's account with no one to land it to (BACKEND_GAPS G-702).
+  {
+    model: 'EarningSettlement',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
 
   // ── admin audit trail, kept on purpose ──────────────────────────────────
   // The record that this account's deletion was scheduled and ran (SETTINGS-06):

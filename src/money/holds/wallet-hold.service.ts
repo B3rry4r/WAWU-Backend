@@ -579,7 +579,24 @@ export class WalletHoldService {
         nextAttemptAt: new Date(now.getTime() + restMs(hold.attempts + 1)),
       },
     });
+    // The review bound applies to a refusal with nothing moved (a person has
+    // to look at why), CONVENTIONS section 26. The lease is already given
+    // back above, so the hold goes to review with nothing handed over.
+    if (waiting === 'refused' && this.refusedTooLong(hold, now)) {
+      return this.toReview(
+        hold,
+        `the ${hold.action} has been refused for ${this.settings.reviewAfterHours} hours`,
+      );
+    }
     return this.settlementOf(await this.load(hold.id));
+  }
+
+  /** Whether a hold's action has been refused for as long as the review bound, counted from when the action was asked for. */
+  private refusedTooLong(hold: HoldRow, now: Date): boolean {
+    return (
+      now.getTime() - (hold.actionAt ?? hold.createdAt).getTime() >=
+      this.settings.reviewAfterHours * 3_600_000
+    );
   }
 
   /** The provider confirmed the move in its answer. */
@@ -913,19 +930,10 @@ export class WalletHoldService {
         `hold ${hold.id}: the ${hold.action} waits (${waiting}); the money stays in WAWU's account`,
       );
     }
-    // The review bound applies to a refusal with nothing moved (a person has
-    // to look at why); a missing wallet or a frozen one waits for as long as
-    // it takes (R-11, G-10), and the provider being away is transient.
-    if (
-      waiting === 'refused' &&
-      now.getTime() - (hold.actionAt ?? hold.createdAt).getTime() >=
-        this.settings.reviewAfterHours * 3_600_000
-    ) {
-      return this.toReview(
-        hold,
-        `the ${hold.action} has been refused for ${this.settings.reviewAfterHours} hours`,
-      );
-    }
+    // No review bound here: a missing wallet or a frozen one waits for as long
+    // as it takes (R-11, G-10), and the provider being away is transient. The
+    // bound is for a refusal with nothing moved, and is read where the refusal
+    // is (afterRefusal).
     await this.prisma.walletHold.updateMany({
       where: { id: hold.id, status: 'held', sentAt: null },
       data: {
