@@ -5194,6 +5194,21 @@ model EarningSettlement {
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
+/// WHEN THE EARNINGS SWEEP STARTS PAYING (task WALLET-16, lead ruling 17 Oct 2026)
+///
+/// One row (id 1). The earnings sweep pays only sales completed on or after
+/// `startedAt`; an older sale that was never settled is never paid by the
+/// sweep and is listed for an admin to look at. The row is written by the
+/// migration, so `startedAt` is the moment this code reached the environment
+/// (the default); the setting EARNINGS_SWEEP_START, when set, takes the place
+/// of it. Never changed by code once written.
+model EarningSweepStart {
+  id        Int      @id @default(1)
+  startedAt DateTime
+  createdAt DateTime @default(now())
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
 /// RECEIPTS (task WALLET-18)
 ///
 /// A receipt is one ledger row (FintavaLedgerEntry) its owner chose to

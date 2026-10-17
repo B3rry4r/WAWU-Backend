@@ -46,6 +46,8 @@ import { IdempotencyGuard, IdempotencyService } from './payments/idempotency';
 import { MerchantWallet } from './payments/merchant-wallet';
 import { HoldViewService } from './holds/hold-view.service';
 import { MoneyHoldsController } from './holds/money-holds.controller';
+import { AdminAuthModule } from '../admin/auth/admin-auth.module';
+import { AdminEarningsController } from './earnings/admin-earnings.controller';
 import { EarningSettlementService } from './earnings/earning-settlement.service';
 import { EarningsViewService } from './earnings/earnings-view.service';
 import { MoneyEarningsController } from './earnings/money-earnings.controller';
@@ -230,6 +232,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
 @Module({
   imports: [
     ConfigModule,
+    // Only the admin guards, for the unswept-sales list (WALLET-16).
+    AdminAuthModule,
     WalletProviderModule,
     LedgerModule,
     WawuAuthModule,
@@ -261,6 +265,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyBanksController,
     MoneyHoldsController,
     MoneyEarningsController,
+    AdminEarningsController,
     MoneyReceiptController,
     PublicReceiptController,
     MoneyRecipientController,

@@ -34,6 +34,8 @@ import {
   waitingAfterRefusal,
 } from './earning-rules';
 
+import type { UnsweptSalesPage } from './earning-review.type';
+
 type SettlementRow = Prisma.EarningSettlementGetPayload<object>;
 
 const MINUTE = 60_000;
@@ -238,25 +240,18 @@ export class EarningSettlementService {
    */
   private async adopt(): Promise<number> {
     let made = 0;
+    const start = await this.sweepStart();
     // Sales the database refused in this pass: left out of the next pages, so
     // one sale cannot keep the others from being taken.
     const refused: string[] = [];
     for (let page = 0; page < EARNING_ADOPT_MAX_PAGES; page += 1) {
       const sales = await this.prisma.walletPayment.findMany({
         where: {
+          ...this.saleFilter(),
           id: { notIn: refused },
-          status: 'completed',
-          completedAt: { not: null },
-          payeeWawuUserId: { not: null },
-          payeeShareKobo: { gt: 0n },
-          payeeSettledAt: null,
-          openKey: null,
-          reviewSince: null,
-          chargeReviewSince: null,
-          provider: this.provider.name,
-          kind: { notIn: [...NOT_SETTLED_HERE] },
-          hold: { is: null },
-          earning: { is: null },
+          // Only sales made on or after the start (lead ruling 17 Oct):
+          // an older unsettled sale is never paid by the sweep.
+          completedAt: { gte: start.at },
         },
         orderBy: [{ completedAt: 'asc' }, { id: 'asc' }],
         take: EARNING_ADOPT_PAGE,
@@ -299,6 +294,116 @@ export class EarningSettlementService {
       if (sales.length < EARNING_ADOPT_PAGE) break;
     }
     return made;
+  }
+
+  /**
+   * The sales the sweep may turn into earnings, apart from when they were
+   * made: finished (completed, delivered, no review mark), of the running
+   * provider, with a payee and a share, not held, and with no earning yet.
+   */
+  private saleFilter(): Prisma.WalletPaymentWhereInput {
+    return {
+      status: 'completed',
+      payeeWawuUserId: { not: null },
+      payeeShareKobo: { gt: 0n },
+      payeeSettledAt: null,
+      openKey: null,
+      reviewSince: null,
+      chargeReviewSince: null,
+      provider: this.provider.name,
+      kind: { notIn: [...NOT_SETTLED_HERE] },
+      hold: { is: null },
+      earning: { is: null },
+    };
+  }
+
+  /**
+   * The time from which the sweep pays sales (lead ruling 17 Oct 2026, the
+   * owner may override): the setting EARNINGS_SWEEP_START when it is set,
+   * else the moment this code first reached the environment, stored once in
+   * `EarningSweepStart` (the migration writes the row; a missing row is
+   * written here, by whoever gets there first, and never changed after).
+   * A sale completed before it is never paid by the sweep; it is listed for
+   * an admin (`unsweptBeforeStart`).
+   */
+  async sweepStart(): Promise<{ at: Date; source: 'config' | 'first_run' }> {
+    const configured = this.settings.earningsSweepStart;
+    if (configured) return { at: configured, source: 'config' };
+    let row = await this.prisma.earningSweepStart.findUnique({
+      where: { id: 1 },
+    });
+    if (!row) {
+      await this.prisma.earningSweepStart.createMany({
+        data: [{ id: 1, startedAt: new Date() }],
+        skipDuplicates: true,
+      });
+      row = await this.prisma.earningSweepStart.findUniqueOrThrow({
+        where: { id: 1 },
+      });
+    }
+    return { at: row.startedAt, source: 'first_run' };
+  }
+
+  /**
+   * Finished sales with a payee that were made before the sweep's start and
+   * have no earning: the ones the sweep will never pay, for an admin to look
+   * at (oldest first, a page at a time by the last payment id seen).
+   */
+  async unsweptBeforeStart(
+    opts: { limit?: number; after?: string } = {},
+  ): Promise<UnsweptSalesPage> {
+    const start = await this.sweepStart();
+    const limit = Math.min(Math.max(opts.limit ?? 50, 1), 100);
+    const where: Prisma.WalletPaymentWhereInput = {
+      ...this.saleFilter(),
+      completedAt: { lt: start.at },
+    };
+    const total = await this.prisma.walletPayment.count({ where });
+    let cursor: Prisma.WalletPaymentWhereInput = {};
+    if (opts.after) {
+      const seen = await this.prisma.walletPayment.findUnique({
+        where: { id: opts.after },
+        select: { completedAt: true },
+      });
+      if (seen?.completedAt) {
+        cursor = {
+          OR: [
+            { completedAt: { gt: seen.completedAt } },
+            { completedAt: seen.completedAt, id: { gt: opts.after } },
+          ],
+        };
+      }
+    }
+    const rows = await this.prisma.walletPayment.findMany({
+      where: { AND: [where, cursor] },
+      orderBy: [{ completedAt: 'asc' }, { id: 'asc' }],
+      take: limit + 1,
+      select: {
+        id: true,
+        kind: true,
+        targetId: true,
+        title: true,
+        payeeWawuUserId: true,
+        payeeShareKobo: true,
+        completedAt: true,
+      },
+    });
+    const page = rows.slice(0, limit);
+    return {
+      startsAt: start.at.toISOString(),
+      source: start.source,
+      total,
+      items: page.map((r) => ({
+        paymentId: r.id,
+        kind: r.kind,
+        targetId: r.targetId,
+        title: r.title,
+        payeeWawuUserId: r.payeeWawuUserId!,
+        payeeShareKobo: koboNumber(r.payeeShareKobo),
+        completedAt: r.completedAt!.toISOString(),
+      })),
+      nextAfter: rows.length > limit ? page[page.length - 1].id : null,
+    };
   }
 
   /**

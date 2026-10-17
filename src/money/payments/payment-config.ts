@@ -30,7 +30,16 @@ export const PAYMENT_CONFIG_KEYS = {
   idempotencyKeyHours: 'IDEMPOTENCY_KEY_HOURS',
   reviewAfterHours: 'PAYMENT_REVIEW_AFTER_HOURS',
   chargeReviewAboveKobo: 'PAYMENT_CHARGE_REVIEW_ABOVE_KOBO',
+  earningsSweepStart: 'EARNINGS_SWEEP_START',
 } as const;
+
+/**
+ * A moment with its zone, as an operator writes it: `2026-10-25T09:00:00Z` or
+ * `2026-10-25T10:00:00+01:00`. No zone is refused, because a time read in the
+ * server's own zone would mean a different moment on each machine.
+ */
+const ISO_WITH_ZONE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
 
 /**
  * PROVISIONAL(PAYMENT-REVIEW-AFTER-HOURS, owner=YOU, why=no ruling names how long a payment whose outcome Fintava has not settled is asked about before a person looks at it)
@@ -77,8 +86,31 @@ export class PaymentSettings {
   readonly idempotencyKeyHours: number;
   readonly reviewAfterHours: number;
   readonly chargeReviewAboveKobo: number;
+  /**
+   * PROVISIONAL(EARNINGS-SWEEP-START, owner=YOU, why=the lead's ruling of 17 Oct 2026 is a default the owner may override: the sweep that lands a creator's 85% pays only sales made on or after a start time, so sales unsettled before this code ran are never paid by surprise)
+   *
+   * The moment from which the earnings sweep pays sales (WALLET-16): null
+   * means the moment the code first ran in this environment, which the
+   * database holds (`EarningSweepStart`, written by its migration). Set it
+   * (EARNINGS_SWEEP_START, ISO 8601 with a zone) to pay sales from an earlier
+   * time, or to hold the sweep back to a later one.
+   */
+  readonly earningsSweepStart: Date | null;
 
   constructor(config: ConfigService) {
+    const startKey = PAYMENT_CONFIG_KEYS.earningsSweepStart;
+    const startRaw = config.get<string>(startKey)?.trim();
+    if (startRaw) {
+      const at = ISO_WITH_ZONE.test(startRaw) ? new Date(startRaw) : null;
+      if (at === null || Number.isNaN(at.getTime())) {
+        throw new FeeConfigError(
+          `${startKey} must be a moment with its zone, like 2026-10-25T09:00:00Z.`,
+        );
+      }
+      this.earningsSweepStart = at;
+    } else {
+      this.earningsSweepStart = null;
+    }
     const review = PAYMENT_CONFIG_KEYS.reviewAfterHours;
     try {
       this.reviewAfterHours = koboSetting(
