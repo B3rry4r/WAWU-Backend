@@ -5179,11 +5179,11 @@ model EarningSettlement {
   /// share of spent credits (WALLET-17): exactly one of `paymentId` and
   /// `creditSpendEarningId` is set.
   paymentId                String?       @unique
-  payment                  WalletPayment? @relation(fields: [paymentId], references: [id])
+  payment                  WalletPayment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
   /// The host's share of one spent credit (CreditSpendEarning.hostShareKobo),
   /// paid once; it travels in the host's daily move like a sale's share.
   creditSpendEarningId     String?       @unique
-  creditSpendEarning       CreditSpendEarning? @relation(fields: [creditSpendEarningId], references: [id])
+  creditSpendEarning       CreditSpendEarning? @relation(fields: [creditSpendEarningId], references: [id], onDelete: Restrict)
   /// Who is owed it. COUNTERPARTY at account deletion: the payer's record survives.
   payeeWawuUserId          String
   /// What was paid for: the payment's kind, its target and its title.
