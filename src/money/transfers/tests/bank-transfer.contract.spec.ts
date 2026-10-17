@@ -1379,6 +1379,12 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
     expect(toSaved.status).toBe(201);
 
     const payout = account('PAYOUT ONE');
+    // No BVN name is kept for this person: the wallet's own name is the
+    // verified name a payout account must be in (R-51).
+    await prisma.fintavaWallet.update({
+      where: { wawuUserId: me.id },
+      data: { accountName: 'Payout One' },
+    });
     const put = await request(app.getHttpServer())
       .put(`${BASE}/payout-account`)
       .set('Authorization', me.auth)
@@ -1549,7 +1555,7 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
     expect((await send(me, body0, key)).status).toBe(201);
   });
 
-  it('WALLET-37: a bank send to someone else still works and still confirms the name; a person with no BVN name to compare with is not refused', async () => {
+  it('WALLET-37: a bank send to someone else still works and still confirms the name', async () => {
     const me = await person(5_000_000);
     await withBvnName(me, 'Ada', 'Sandbox');
     const own = account('SANDBOX ADA');
@@ -1568,19 +1574,112 @@ describe('Send to a bank account (WALLET-09) over HTTP', () => {
       sendBody(q2, { number: account('CHIDI TWO') }, { nameToken: undefined }),
     );
     expect(noToken.status).toBe(400);
+  });
 
-    // Nobody to compare with (no passed BVN check on record): the account
-    // is saved and withdrawn to, as before.
-    const noName = await person(5_000_000);
-    const theirs = account('ANY NAME AT ALL');
-    expect((await putPayoutTo(noName, theirs)).status).toBe(200);
-    const w = await send(
-      noName,
-      await ready(noName, { number: theirs }, 100_000, {
-        nameToken: undefined,
-      }),
-    );
-    expect(w.status).toBe(201);
+  // Round 2 (R-51): with no BVN name kept (every wallet opened under Nuvion),
+  // the verified name is the wallet's own account name as the provider gave
+  // it; with neither, there is no withdrawal.
+  it('WALLET-37: with no BVN name kept, a withdrawal goes only to the wallet account name: saved in it, sent to it, refused before the PIN once the bank names another', async () => {
+    const me = await person(5_000_000);
+    await prisma.fintavaWallet.update({
+      where: { wawuUserId: me.id },
+      data: { accountName: 'Okoro Chidinma' },
+    });
+    const number = account('CHIDINMA ADAEZE OKORO');
+    const saved = await putPayoutTo(me, number);
+    expect(saved.status).toBe(200);
+    expect(
+      body<{ matchesBvnName: null }>(saved).data?.matchesBvnName,
+    ).toBeNull();
+
+    // Another name is not saved.
+    const other = account('MALLORY NEW');
+    const refusedSave = await putPayoutTo(me, other);
+    expect(refusedSave.status).toBe(409);
+    expect(body(refusedSave).reason).toMatchObject({
+      code: 'account_not_in_your_name',
+      accountName: 'MALLORY NEW',
+      bankName: GTB.name,
+      verifiedName: 'Okoro Chidinma',
+    });
+
+    // The saved account, once the bank names someone else: refused before
+    // the PIN, no PIN try used, the key comes back.
+    bank.holders.set(holderKey(GTB.code, number), 'MALLORY NEW');
+    await prisma.moneyPayoutAccount.update({
+      where: { wawuUserId: me.id },
+      data: { accountName: 'MALLORY NEW' },
+    });
+    const triesBefore = await triesLeft(me);
+    const key = randomUUID();
+    const body0 = await ready(me, { number }, 100_000, {
+      nameToken: undefined,
+    });
+    const refused = await send(me, body0, key, WRONG_PIN);
+    expect(refused.status).toBe(409);
+    expect(body(refused).reason).toMatchObject({
+      code: 'account_not_in_your_name',
+      accountName: 'MALLORY NEW',
+      verifiedName: 'Okoro Chidinma',
+    });
+    expect(await triesLeft(me)).toBe(triesBefore);
+    expect(sendsFrom(me)).toHaveLength(0);
+    expect(balance(me)).toBe(5_000_000);
+
+    // The bank names the person again: the key that was refused sends it.
+    bank.holders.set(holderKey(GTB.code, number), 'CHIDINMA ADAEZE OKORO');
+    await prisma.moneyPayoutAccount.update({
+      where: { wawuUserId: me.id },
+      data: { accountName: 'CHIDINMA ADAEZE OKORO' },
+    });
+    expect((await send(me, body0, key)).status).toBe(201);
+    expect(sendsFrom(me)).toHaveLength(1);
+  });
+
+  it('WALLET-37: with neither a BVN name nor a wallet account name, a withdrawal to a payout account is refused before the PIN and the key comes back', async () => {
+    const me = await person(5_000_000);
+    const number = account('ANY NAME AT ALL');
+    // The save is refused in plain words.
+    await prisma.fintavaWallet.update({
+      where: { wawuUserId: me.id },
+      data: { accountName: null },
+    });
+    const refusedSave = await putPayoutTo(me, number);
+    expect(refusedSave.status).toBe(409);
+    expect(body(refusedSave).reason?.code).toBe('account_not_in_your_name');
+    expect(body(refusedSave).reason?.message).not.toContain('—');
+    expect(
+      await prisma.moneyPayoutAccount.count({ where: { wawuUserId: me.id } }),
+    ).toBe(0);
+
+    // An account kept from before: the withdrawal is refused the same way.
+    await prisma.moneyPayoutAccount.create({
+      data: {
+        wawuUserId: me.id,
+        bankCode: GTB.code,
+        bankName: GTB.name,
+        accountNumber: number,
+        accountName: 'ANY NAME AT ALL',
+      },
+    });
+    const triesBefore = await triesLeft(me);
+    const key = randomUUID();
+    const body0 = await ready(me, { number }, 100_000, {
+      nameToken: undefined,
+    });
+    const refused = await send(me, body0, key, WRONG_PIN);
+    expect(refused.status).toBe(409);
+    expect(body(refused).reason?.code).toBe('account_not_in_your_name');
+    expect(await triesLeft(me)).toBe(triesBefore);
+    expect(sendsFrom(me)).toHaveLength(0);
+    expect(balance(me)).toBe(5_000_000);
+
+    // Sends to someone else's account are unchanged for this person.
+    const friend = account('CHIDI OKORO');
+    expect(
+      (await send(me, sendBody(await quoted(me, 100_000), { number: friend })))
+        .status,
+    ).toBe(201);
   });
 
   it('WALLET-37: the name check answers 429 after 30 an hour for one person with the minutes left, and a second person is not blocked', async () => {

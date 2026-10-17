@@ -221,7 +221,7 @@ Every refusal is the envelope this backend already answers with
 | `quote_changed` | 409 | `expectedTotalKobo` differs from the server's total | `feeQuote` or `paymentQuote` |
 | `name_check_failed` | 422 | the bank did not confirm the account | |
 | `account_name_changed` | 409 | a saved bank account whose holder's name, or whose bank's name, at the bank is no longer the one kept, or an account that is not saved whose holder at the bank is no longer the one the name check showed (WALLET-09, section 24): `accountName` and `bankName` as they stand now; nothing was sent. A saved account is confirmed by saving it again with `confirmCurrentName: true`; an unsaved one by a new name check |
-| `account_not_in_your_name` | 409 | a payout account whose holder at the bank is not the person's verified name (the `matchesBvnName` rule), on `PUT /money/payout-account`; or a withdrawal (a bank send to the saved payout account) while its holder is not, on `POST /money/transfers/bank`, answered before the PIN (no try used, the Idempotency-Key given back). Nothing is saved or sent. `accountName` and `bankName` are the bank's; `verifiedName` is the name on the person's wallet, left out when the wallet holds none. Sends to anyone else's account are unchanged (WALLET-37, R-51, G-765) | `accountName`, `bankName`, `verifiedName` |
+| `account_not_in_your_name` | 409 | a payout account whose holder at the bank is not the person's verified name (the BVN name kept by the check, else the wallet's own account name; with neither, the answer is the same code with a plain reason and no `verifiedName`), on `PUT /money/payout-account`; or a withdrawal (a bank send to the saved payout account) while its holder is not, on `POST /money/transfers/bank`, answered before the PIN (no try used, the Idempotency-Key given back). Nothing is saved or sent. `accountName` and `bankName` are the bank's; `verifiedName` is the name on the person's wallet, left out when the wallet holds none. Sends to anyone else's account are unchanged (WALLET-37, R-51, G-765) | `accountName`, `bankName`, `verifiedName` |
 | `name_check_rate_limited` | 429 | the person has run `name_check_per_hour` (launch value 30; config key `NAME_CHECK_PER_HOUR` until the admin-settings registry lands) bank name checks in the hour, counted per signed-in person and never per address: `POST /money/banks/name-check`, `PUT /money/payout-account` and `POST /money/beneficiaries` for a bank account share the count. No check is made. The message gives the minutes left in plain words; also sent as the `Retry-After` header (WALLET-37, R-51, G-764) | `retryAfterSeconds` |
 | `recipient_not_found` | 404 | no such WAWU user | |
 | `recipient_has_no_wallet` | 409 | they have not opened a wallet | |
@@ -1209,9 +1209,14 @@ this applies and every answer is as in section 9.
   (`409 account_not_in_your_name`, the bank's name beside the name on the
   wallet, nothing stored) and a withdrawal to a saved one that reads `false`
   is refused before the PIN with the same code; only a row saved before the
-  rule can read `false`. With `null` the account is saved, as before: a
-  refusal needs a name known to differ. `null` when there is nothing to compare
-  with: no passed check, no name kept, `IDENTITY_HASH_KEY` unset, the
+  rule can read `false`. With `null` there is no BVN name, and the
+  verified name is the wallet's own account name as the provider gave it (a
+  wallet opened under Nuvion keeps no BVN name; the provider verified the
+  identity when it opened it): the account is saved when every word of that
+  name is a word of the bank's account name, in any order, and refused with
+  the same code otherwise; with no wallet account name either it is refused
+  with a plain reason (WALLET-37 round 2). The flag itself stays `null`.
+  `null` when there is no BVN name to compare with: no passed check, no name kept, `IDENTITY_HASH_KEY` unset, the
   wallet opened under a different BVN check (`FintavaWalletOpening.bvnHash`)
   than the one that kept the name, or keys that cannot be compared (the
   first scheme's unbound `{ first, last }`, or a `check` that does not
@@ -2641,8 +2646,10 @@ route of its own. Reading one send, of either kind, is `GET
 - **A withdrawal goes only to the person's own name** (WALLET-37, R-51,
   G-765). A withdrawal is a bank send to the saved payout account. The bank
   is asked as for any send; when the holder it gives is not the person's
-  verified name the answer is `409 account_not_in_your_name` before the PIN,
-  the key given back, nothing sent. A holder that differs from the one kept
+  verified name (the BVN name kept by the check, else the wallet's own
+  account name; with neither, nothing vouches for the account) the answer is
+  `409 account_not_in_your_name` before the PIN, the key given back, nothing
+  sent. A holder that differs from the one kept
   is `409 account_name_changed` first, as above. Sends to other accounts (W8)
   are unchanged.
 - **The request.** Headers `Idempotency-Key` (required, section 4) and

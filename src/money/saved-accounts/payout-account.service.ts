@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { accountNameMatches, readBvnNameKeys } from '../identity/bvn-name';
+import {
+  accountNameMatches,
+  nameWords,
+  readBvnNameKeys,
+} from '../identity/bvn-name';
 import { IdentityHasher } from '../identity/identity-config';
 import type { PayoutAccountDto } from '../dto/money-request.dto';
 import type { PayoutAccountView } from '../money-view.type';
@@ -56,9 +60,16 @@ export function notYourNameMessage(
  * `409 account_not_in_your_name`, with the bank's name beside the name on the
  * wallet and nothing stored; a withdrawal to a saved account that is not in
  * the person's name any more is refused the same way before the PIN
- * (`PayoutOwnNameGuard`). With nothing to compare with (`null`) the account
- * is saved, as before: a refusal needs a name that is known to differ. A row
- * saved before this rule keeps reading `false` and cannot be withdrawn to.
+ * (`PayoutOwnNameGuard`). A row saved before this rule keeps reading `false`
+ * and cannot be withdrawn to.
+ *
+ * The verified name has three sources, in this order (WALLET-37 round 2):
+ * the BVN name kept by the check; else, when none is kept (every wallet
+ * opened under Nuvion keeps none), the wallet's own account name as the
+ * provider gave it, which the provider verified when the wallet opened,
+ * compared by the same rule (every word of it is a word of the bank's name,
+ * in any order); else nothing, and the account is refused with a plain
+ * reason (a person without an opened wallet cannot withdraw anyway).
  */
 @Injectable()
 export class PayoutAccountService {
@@ -119,20 +130,33 @@ export class PayoutAccountService {
 
   /**
    * The refusal for an account whose holder is not the person's verified
-   * name, or null when it is (or there is no verified name to compare with).
-   * `account` is what the bank just said, not anything the app sent.
+   * name, or null when it is. `account` is what the bank just said, not
+   * anything the app sent. With no BVN name kept the wallet's account name is
+   * the verified name; with neither the answer is a refusal in plain words.
    */
   async notYourNameRefusal(
     wawuUserId: string,
     account: { accountName: string; bankName: string },
   ): Promise<MoneyError | null> {
-    const matches = await this.matchesBvnName(wawuUserId, account.accountName);
-    if (matches !== false) return null;
+    const bvn = await this.matchesBvnName(wawuUserId, account.accountName);
+    if (bvn === true) return null;
     const wallet = await this.prisma.fintavaWallet.findUnique({
       where: { wawuUserId },
       select: { accountName: true },
     });
     const verifiedName = wallet?.accountName?.trim() || null;
+    if (bvn === null) {
+      if (verifiedName !== null && nameWords(verifiedName).length > 0) {
+        const held = new Set(nameWords(account.accountName));
+        if (nameWords(verifiedName).every((w) => held.has(w))) return null;
+      } else {
+        return new MoneyError(
+          'account_not_in_your_name',
+          'We cannot check the name on your wallet yet, so we cannot tell whether this account is yours. You can only be paid to an account in your own name.',
+          { accountName: account.accountName, bankName: account.bankName },
+        );
+      }
+    }
     return new MoneyError(
       'account_not_in_your_name',
       notYourNameMessage(account.accountName, verifiedName),

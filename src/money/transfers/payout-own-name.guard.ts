@@ -17,7 +17,8 @@ import { BANK_TARGET_KEY, type TargetRequest } from './bank-send-target';
  * It runs after `BankSendTargetGuard`, which has just asked the bank for the
  * holder's name now and left it on the request: when that account is the
  * person's payout account and its holder is not the name on their verified
- * identity (the rule `matchesBvnName` uses), the send is `409
+ * identity (the BVN name kept by the check, else the wallet's own account
+ * name; with neither, nothing vouches for the account), the send is `409
  * account_not_in_your_name`, answered before the PIN is looked at, so it
  * uses no PIN try and the Idempotency-Key is given back (the WALLET-09
  * pattern, G-762). A holder the bank now names differently from the one kept
