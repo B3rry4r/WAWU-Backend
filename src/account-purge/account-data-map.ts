@@ -272,6 +272,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'Community', column: 'hostWawuId', disposition: 'OWNED' },
   { model: 'Event', column: 'hostWawuId', disposition: 'OWNED' },
   { model: 'DirectMessage', column: 'senderWawuId', disposition: 'OWNED' },
+  // An unpaid paid question waits here for its payment (INBOX-17): the asker's, gone with them.
+  { model: 'PaidDmDraft', column: 'senderWawuId', disposition: 'OWNED' },
   { model: 'BillPayment', column: 'buyerWawuId', disposition: 'OWNED' },
   { model: 'ShopOrder', column: 'buyerWawuId', disposition: 'OWNED' },
   { model: 'EventOrder', column: 'buyerWawuId', disposition: 'OWNED' },
@@ -586,6 +588,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'COUNTERPARTY',
   },
   {
+    model: 'PaidDmDraft',
+    column: 'creatorWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  {
     model: 'FollowRelationship',
     column: 'followingWawuId',
     disposition: 'COUNTERPARTY',
@@ -685,6 +692,24 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // payer's hold, and the share it owes, survive.
   {
     model: 'WalletHold',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
+  // Somebody else's sale that pays this account (WALLET-16): the payer's
+  // payment, and the share it owes, survive, and so does the record of that
+  // share waiting for this account's wallet or landing in it. An account is
+  // deleted only with an empty wallet (R-17); what is still owed stays in
+  // WAWU's account with no one to land it to (BACKEND_GAPS G-702).
+  {
+    model: 'EarningSettlement',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
+  // The creator's move of the day (WALLET-16, R-55): the same record of what
+  // is owed to this account, one transfer for several sales. It survives for
+  // the same reason.
+  {
+    model: 'EarningMove',
     column: 'payeeWawuUserId',
     disposition: 'COUNTERPARTY',
   },

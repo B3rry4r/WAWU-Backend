@@ -87,7 +87,11 @@ import { PlansModule } from './plans/plans.module';
 import { PlanPurchasesModule } from './plans/purchases/plan-purchases.module';
 import { WalletBillsModule } from './wallet-bills/wallet-bills.module';
 import { CreditWalletModule } from './credit-purchase/wallet/credit-wallet.module';
+import { UnlockWalletModule } from './content-piece/wallet/unlock-wallet.module';
+import { LegalFeeWalletModule } from './legal/wallet/legal-fee-wallet.module';
+import { TipWalletModule } from './purchase/wallet/tip-wallet.module';
 import { EventWalletOrdersModule } from './event-ticketing/wallet/event-wallet-orders.module';
+import { PaidDmWalletModule } from './direct-message/wallet/paid-dm-wallet.module';
 import { PointsConvertModule } from './points/convert/points-convert.module';
 import { PointsSpendModule } from './points/spend/points-spend.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
@@ -424,12 +428,30 @@ import { PushModule } from './push/push.module';
     // literals CreditsStateModule's `credits` and CreditPurchaseModule's
     // `credits/purchase` do not declare; listed after PlansModule and MoneyModule.
     CreditWalletModule,
+    // Tip, unlock and pay a legal fee from the wallet (bundle B1). HOME-14: `tips/wallet`
+    // (quote, tip, one tip by id) and the payment kind `tip`. HOME-15:
+    // `content/:id/unlock/wallet` (quote, unlock, one unlock by id) and the kind
+    // `content_unlock`. LEGAL-05: `legal/requests/:id/pay/wallet` (quote, pay, one payment
+    // by id) and the kind `legal_fee`. Every path is a longer literal than the web's
+    // Flutterwave routes under `tips`, `content/:id/unlock` and `legal/requests/:id`
+    // declare; listed after PlansModule and MoneyModule so no route registered before
+    // them moves.
+    TipWalletModule,
+    UnlockWalletModule,
+    LegalFeeWalletModule,
     // Buy event tickets from the wallet (task EVENTS-07): `events/:id/orders/wallet`
     // (POST), `events/orders/wallet/pay`, `events/orders/wallet/:orderId/quote` and
     // `events/orders/wallet/:orderId`, and the `event_ticket` payment kind. Every path is
     // deeper than EventController's `GET :id` and none matches a route of the web's
     // ticketing; listed after MoneyModule so no route registered before it moves.
     EventWalletOrdersModule,
+    // Ask a creator a paid question from the wallet (task INBOX-17): `dm/:creatorWawuId/send/wallet`
+    // (POST), `dm/send/wallet/pay`, `dm/send/wallet/:questionId/quote` and
+    // `dm/send/wallet/:questionId`, and the `paid_dm` payment kind. Every path is a longer
+    // literal than the web's `dm/:creatorWawuId/send` and `dm/:messageId/send/verify`, and none
+    // can be taken for `GET dm/:messageId`; listed after MoneyModule so no route registered
+    // before it moves.
+    PaidDmWalletModule,
     // Convert points to cash (task POINTS-04): `points/convert/quote`,
     // `points/convert` (POST) and `points/convert/{id}`, and the sweep that
     // finishes a conversion whose answer was lost. `points` is a first segment

@@ -46,6 +46,11 @@ import { IdempotencyGuard, IdempotencyService } from './payments/idempotency';
 import { MerchantWallet } from './payments/merchant-wallet';
 import { HoldViewService } from './holds/hold-view.service';
 import { MoneyHoldsController } from './holds/money-holds.controller';
+import { AdminAuthModule } from '../admin/auth/admin-auth.module';
+import { AdminEarningsController } from './earnings/admin-earnings.controller';
+import { EarningSettlementService } from './earnings/earning-settlement.service';
+import { EarningsViewService } from './earnings/earnings-view.service';
+import { MoneyEarningsController } from './earnings/money-earnings.controller';
 import { WalletHoldService } from './holds/wallet-hold.service';
 import { MoneyPaymentsController } from './payments/money-payments.controller';
 import { MoneyTransfersController } from './transfers/money-transfers.controller';
@@ -166,6 +171,16 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
  * A sweep every minute settles a move whose answer was lost and tries again
  * what is waiting (a wallet not opened yet, a frozen one, the provider out of
  * reach); it runs where ScheduleModule.forRoot() is loaded.
+ * WALLET-16: earnings land in the wallet by themselves (R-11). A sale of a
+ * kind that is not held (an unlock, a tip, a legal fee, school fees) is paid
+ * into WAWU's own account; when it is finished, `EarningSettlementService`
+ * (exported; a sweep every minute, where ScheduleModule.forRoot() is loaded)
+ * moves the payee's 85% from there into the payee's wallet: ONCE A DAY, in
+ * one transfer per creator (R-55), and a day's total under N200 waits for
+ * the next. A payee with no wallet keeps earning: the shares wait and are
+ * moved the day the wallet opens. `GET /money/earnings` and `/money/earnings/content` read
+ * what was earned from our records of the sales (not behind the wallet gate,
+ * never a balance).
  * WALLET-18: receipts. The owner's routes (`/money/transactions/{id}/receipt`,
  * its image and its PDF) sit behind the wallet gate and read the row through
  * the history's detail; the public check (`/r/{code}`, no sign-in,
@@ -218,6 +233,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
 @Module({
   imports: [
     ConfigModule,
+    // Only the admin guards, for the unswept-sales list (WALLET-16).
+    AdminAuthModule,
     WalletProviderModule,
     LedgerModule,
     WawuAuthModule,
@@ -248,6 +265,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyTransfersController,
     MoneyBanksController,
     MoneyHoldsController,
+    MoneyEarningsController,
+    AdminEarningsController,
     MoneyReceiptController,
     PublicReceiptController,
     MoneyRecipientController,
@@ -298,6 +317,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletTransferService,
     HoldViewService,
     WalletHoldService,
+    EarningSettlementService,
+    EarningsViewService,
     ReceiptSettings,
     ReceiptService,
     RecipientService,
@@ -334,6 +355,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     // send inside the send's claim; the recipient check answers before the PIN.
     WalletTransferService,
     TransferRecipients,
+    EarningSettlementService,
   ],
 })
 export class MoneyModule {}

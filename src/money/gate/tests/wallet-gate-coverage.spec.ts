@@ -58,6 +58,13 @@ const NOT_GATED: Record<string, string> = {
     'Open your wallet: opening the account (A7, MONEY-12)',
   'GET money/wallet':
     'Answers 200 with state not_open or opening: how the Wallet tab finds out (MONEY-12)',
+  // WALLET-16 (R-11): a creator with no wallet keeps earning, and has to be
+  // able to read what they earned and that it is waiting for them. Both read
+  // our own records of the sales and never the provider.
+  'GET money/earnings':
+    'Earnings: what a creator earned and what waits for their wallet (W39, R-11, WALLET-16)',
+  'GET money/earnings/content':
+    'Earnings: one month piece by piece, for a creator with no wallet yet (W39, R-11, WALLET-16)',
   // Declared, not served: Nigeria's bank list and a name check need no wallet.
   'GET money/banks': 'the bank list (WALLET-09) reads no wallet',
   'POST money/banks/name-check':
@@ -212,9 +219,15 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'DELETE money/beneficiaries/:id',
       'DELETE money/device',
       'GET bills/wallet/:id/quote',
+      // HOME-15: the pay sheet of an unlock.
+      'GET content/:id/unlock/wallet/quote',
       // INBOX-16: the pay sheet of a credit pack.
       'GET credits/purchase/wallet/quote',
+      // INBOX-17: the pay sheet of a paid question.
+      'GET dm/send/wallet/:questionId/quote',
       'GET events/orders/wallet/:orderId/quote',
+      // LEGAL-05: the pay sheet of a legal fee.
+      'GET legal/requests/:id/pay/wallet/quote',
       'GET money/beneficiaries',
       'GET money/device',
       'GET money/fees/quote',
@@ -239,13 +252,22 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       // TIER-03: the pay sheet of a tier.
       'GET plans/purchases/quote',
       'GET points/convert/quote',
+      // HOME-14: the pay sheet of a tip.
+      'GET tips/wallet/quote',
       'POST bills/wallet',
       'POST bills/wallet/pay',
       'POST chats/:chatId/money-requests',
       'POST chats/:chatId/money-requests/:requestId/pay',
+      // HOME-15: an unlock pays from the wallet.
+      'POST content/:id/unlock/wallet',
       // INBOX-16: a credit pack pays from the wallet.
       'POST credits/purchase/wallet',
+      // INBOX-17: a paid question is drafted and priced, then pays from the wallet.
+      'POST dm/:creatorWawuId/send/wallet',
+      'POST dm/send/wallet/pay',
       'POST events/orders/wallet/pay',
+      // LEGAL-05: a legal fee pays from the wallet.
+      'POST legal/requests/:id/pay/wallet',
       'POST money/approval/verify',
       'POST money/beneficiaries',
       'POST money/device/challenge',
@@ -262,6 +284,8 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST plans/purchases',
       'POST points/convert',
       'POST points/shortfall',
+      // HOME-14: a tip pays from the wallet.
+      'POST tips/wallet',
       'PUT money/device',
       'PUT money/payout-account',
       'PUT money/pin',
@@ -275,8 +299,11 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     expect(pinRoutes.map((r) => r.key).sort()).toEqual([
       'POST bills/wallet/pay',
       'POST chats/:chatId/money-requests/:requestId/pay',
+      'POST content/:id/unlock/wallet',
       'POST credits/purchase/wallet',
+      'POST dm/send/wallet/pay',
       'POST events/orders/wallet/pay',
+      'POST legal/requests/:id/pay/wallet',
       'POST money/approval/verify',
       'POST money/payments',
       'POST money/pin/verify',
@@ -285,6 +312,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST plans/purchases',
       'POST points/convert',
       'POST points/shortfall',
+      'POST tips/wallet',
       'PUT money/device',
       'PUT money/pin',
     ]);
