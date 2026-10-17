@@ -709,6 +709,14 @@ export function buildRegistry(
     'POINTS-JOB-MAX-RUN',
   );
   other(
+    'ai.voiceover_chars_per_minute',
+    'Characters of text that make one minute of VoiceOver',
+    'count',
+    ['PT2 (the minutes a script is priced in), POST /ai-tools/voiceover/jobs'],
+    count,
+    'AITOOLS-CHARS-PER-MINUTE',
+  );
+  other(
     'tgif_notification_time',
     'Morning time of the TGIF notification (Africa/Lagos)',
     'time',

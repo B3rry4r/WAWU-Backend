@@ -7235,3 +7235,48 @@ model NuvionReconcileFinding {
   @@unique([kind, subject])
   @@index([resolvedAt, lastSeenAt])
 }
+
+/// Where an AI tool job is (AITOOLS-01, PT2). `working` until the voice provider
+/// answers; then `done` (the points were kept) or `failed` (every held point
+/// went back).
+enum AiJobState {
+  working
+  done
+  failed
+}
+
+/// One run of an AI tool for one person (AITOOLS-01, R-43). The points it
+/// costs are held by POINTS-03 (`PointHold`, purpose `ai_job`, reference
+/// `<id>:1`) before the provider is asked, kept when the audio is stored, and
+/// given back when it is not. The text a person typed is NEVER stored: it
+/// lives in the request that runs the job. `requestHash` is an HMAC of the
+/// request, so the same Idempotency-Key with other words is refused and a read
+/// of this table reveals no text.
+model AiToolJob {
+  id             String     @id @default(uuid())
+  wawuUserId     String
+  /// The plan's action id (`voiceover_per_min`), which names the cost.
+  tool           String
+  /// The person's Idempotency-Key for this job: a lost answer and a retry run one job.
+  idempotencyKey String
+  requestHash    String
+  /// The WAWU voice id the person chose (never the provider's own id).
+  voiceId        String
+  characters     Int
+  /// What the job was priced in (minutes, for VoiceOver) and the points it costs.
+  units          Int
+  costPoints     Int
+  state          AiJobState @default(working)
+  /// The hold that pays for the job, once taken.
+  holdId         String?
+  /// `provider_failed`, `provider_unavailable`, `points_gone`, `timed_out` or `store_failed`, for a failed job.
+  failureCode    String?
+  /// The stored audio's key (a `StorageObject` row), once the job is done.
+  audioKey       String?
+  createdAt      DateTime   @default(now())
+  finishedAt     DateTime?
+
+  @@unique([wawuUserId, idempotencyKey])
+  @@index([wawuUserId, createdAt])
+  @@index([state, createdAt])
+}
