@@ -104,16 +104,21 @@ scripts/dev/stack.sh down   --name <n>
 | wawu-id | `a+1` | `--with id` | the real identity service from `--id`, database `<n>_wawu_id_test` |
 | web | `a+2` | `--with web` | production build of `--web` (`VERCEL_ENV=production`, so `/join` only), pointed at this Hub |
 | mobile | `a+3` | `--with mobile` | web export of `--mobile` with its own Metro cache, then a grep that only this stack's ports are baked in |
+| Nuvion stand-in | `b-1` | yes | `scripts/dev/nuvion-standin.cjs`: the wallet provider the Hub runs on (see below) |
 | mock WAWU ID | `b` | yes | the mock the contract suite uses (`mock-wawu-id/`), on the last port of the range |
 
 - The Hub signs people in through wawu-id when `id` is on, and through the mock
   otherwise. Payments use the repo's own Flutterwave mock (no key is set).
-  Fintava points at a closed port on this machine. `scripts/dev/block-net.cjs`
-  is preloaded into the Hub and wawu-id and refuses any request to a host that
-  is not this machine, so nothing reaches a real provider or a wawuafrica.com host.
-- The range must hold every port asked for and end above them, for example
-  `--ports 6531-6534 --with id,web` (Hub 6531, id 6532, web 6533, mock 6534) or
-  `--ports 6537-6538` (Hub 6537, mock 6538).
+  The Hub always runs `WALLET_PROVIDER=nuvion` (there is no Fintava option);
+  Fintava's settings point at a closed port on this machine and nothing uses
+  them. `scripts/dev/block-net.cjs` is preloaded into the Hub and wawu-id and
+  refuses any request to a host that is not this machine, so nothing reaches a
+  real provider or a wawuafrica.com host.
+- The range must hold every port asked for, the Nuvion stand-in one below the
+  last, and end above them, for example `--ports 6531-6535 --with id,web` (Hub
+  6531, id 6532, web 6533, stand-in 6534, mock 6535) or `--ports 6537-6539`
+  (Hub 6537, stand-in 6538, mock 6539). `status` names the provider and the
+  stand-in's port.
 - Names are lower case letters, digits and `_` (agents use their brief's prefix,
   for example `ostk1`). Each name has its own databases, logs and PIDs.
 - Logs go to `<scratch>/<n>/logs/`, PIDs to `<scratch>/<n>/pids`. `<scratch>` is
@@ -138,6 +143,40 @@ scripts/dev/stack.sh down   --name <n>
   stand-in) points the Hub's object storage at a stand-in on this machine, for a
   spec that must see the Hub's own storage calls. Left unset, storage is a name
   the network guard refuses.
+
+### Nuvion on the stack (STACK-NUV)
+
+The Hub's Nuvion adapter accepts only Nuvion's two real hosts, so the stack gives
+it the sandbox host and `scripts/dev/nuvion-redirect.cjs` (preloaded after
+`block-net.cjs`) sends every request to that one host to the stand-in on
+`127.0.0.1`. Nuvion's production host stays refused. The stand-in answers what the
+adapter calls, in the shapes of the in-process double (`test/nuvion/`): entities,
+documents, the onboarding submission (approved after about a second), the naira
+account and its account details (active with a ten-digit number), accounts and
+balances, book transfers to a `nuvion_ban` (also WAWU's operational account),
+bank sends (bank list, name check, counterparties, payment details, transfers),
+and the webhooks the Hub expects, signed with a test secret the stack sets
+(`x-nuvion-event-signature`, HMAC-SHA256 of `timestamp.body`). A transfer is
+`pending`, debits the payer at once and settles after 1.5 s (`outflows.completed`).
+The Hub reads webhooks on a 30 second tick, so opening a wallet (three webhooks in
+a row) takes about two minutes. The Nuvion fees are the stack's own
+(`STACK_NUVION_FEE_BOOK`, `STACK_NUVION_FEE_BANK`, `STACK_NUVION_FEE_INFLOW`, kobo;
+defaults 0, 2500, 0), given to the Hub and charged by the stand-in alike. The
+stand-in's log is `<scratch>/<n>/logs/nuvion.log`.
+
+```bash
+# 1. A person with an approved, funded wallet, through the Hub's own routes. Prints one JSON line:
+#    token, userId, accountNumber, pin, balanceKobo (the Hub's and the stand-in's). --token for a stack with --with id.
+node scripts/dev/nuvion-tool.cjs seed --name <n> --scratch <dir> [--amount-kobo 5000000] [--pin 4829]
+# 2. A signed webhook from the stand-in to the Hub: money in, or move a transfer on.
+node scripts/dev/nuvion-tool.cjs fire --name <n> --scratch <dir> --inflow <account number> --amount-kobo 250000
+#    also: --settle <transfer id> --status failed|reversed|successful   --event <name> --transfer-id <id>   --state
+```
+
+`fire --state` (or `GET <stand-in>/__standin/state`) lists the stand-in's accounts,
+transfers and webhooks sent; `GET /__standin/account/<id, number or ban>` reads one
+balance, to compare with `GET /api/hub/money/wallet/balance`. The Hub never sees a
+control route.
 
 `scripts/dev/quiet.sh <name> -- <command...>` runs any command with its full
 output in `<scratch>/logs/<name>.log`, appends `EXIT <code>`, prints the last 15
