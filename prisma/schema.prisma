@@ -1246,6 +1246,12 @@ model CreditPurchase {
   amount           Int
   status           TransactionStatus @default(pending)
   purchasedAt      DateTime          @default(now())
+  /// The wallet payment that bought this pack (INBOX-16); null for a
+  /// Flutterwave purchase. Unique: one payment settles at most one purchase,
+  /// so a delivery that runs twice finds its row and writes nothing more.
+  /// `flutterwaveTxRef` carries `wallet:<payment id>` on these rows (it is
+  /// required and unique, and no Flutterwave charge exists to name).
+  walletPaymentId  String?           @unique
   /// The cost-basis lot this purchase opens. Created ONLY when the charge is
   /// verified `completed` — see CreditLot.
   lot              CreditLot?
@@ -3682,6 +3688,27 @@ model StorageObject {
   createdAt   DateTime            @default(now())
   /// When the object was proven to exist in the bucket. Null while pending.
   confirmedAt DateTime?
+  /// When the person gave the file up (POST /uploads/release). Null otherwise.
+  /// A released row stays released: a late file never counts it again.
+  releasedAt  DateTime?
+  /// When the Hub's sweep first looked at a given-up file after its upload
+  /// link had expired (ME-04 round 3). Null until then.
+  sweptAt     DateTime?
+  /// When that sweep deleted a file it found (a file the person released and
+  /// no listing uses). Null when it found none. A file it found on a row the
+  /// person never released is counted instead: the row becomes `confirmed`.
+  sweptRemovedAt DateTime?
+  /// The second look, an hour or more after the first, for a file that
+  /// arrived late. Null until then (ME-04 round 4).
+  sweptHourAt DateTime?
+  /// The third and last look, a day or more after the first. Null until then.
+  sweptDayAt  DateTime?
+  /// When a removal of this file from the bucket began (a release, or the
+  /// sweep). Set under the person's lock, cleared under it when the removal
+  /// ends; no lock or transaction is held while the bucket is called (ME-04
+  /// round 5). A row with this set is also released and `abandoned`, so no
+  /// listing can name its key. Null when no removal is under way.
+  removingAt  DateTime?
 
   @@index([wawuUserId, status])
   @@index([status, createdAt])
@@ -4868,15 +4895,16 @@ model WalletHold {
 /// (no money left the wallet: the provider's own refusal or its failed
 /// record) and `reversed`. The ledger rows (FintavaLedgerEntry) carry this
 /// row's id as `transferId`: the sender's `out` row from the claim on, the
-/// receiver's `in` row once the send is confirmed. `kind` is `wawu_user`;
-/// WALLET-09's bank sends add their own columns, nullable, beside these.
+/// receiver's `in` row once the send is confirmed. `kind` is `wawu_user`, or
+/// `bank_account` for a send to a bank (WALLET-09), which has no receiver's
+/// `in` row and carries the bank columns below, nullable, beside the others.
 ///
 /// Both people's sides are anonymised when their account is purged (the row
 /// is the other person's record too): see src/account-purge.
 /// ─────────────────────────────────────────────────────────────────────────
 model WalletTransfer {
   id                     String    @id @default(uuid())
-  /// wawu_user (WALLET-07); WALLET-09 adds bank_account.
+  /// wawu_user (WALLET-07) or bank_account (WALLET-09).
   kind                   String    @default("wawu_user")
   /// Null once the payer's account is deleted.
   payerWawuUserId        String?
@@ -4898,6 +4926,17 @@ model WalletTransfer {
   customerReference      String    @unique
   payerAccountNumber     String?
   recipientAccountNumber String?
+  /// A send to a bank account (kind `bank_account`, WALLET-09): the bank's
+  /// code in the running provider's list and its name there, the account
+  /// number, and the holder's name as the bank gave it on the name check made
+  /// just before the send (never a name the app typed). All null on a send to
+  /// a WAWU user. `sentToBankAt` is when the provider took the send (W19's
+  /// "sent to your bank").
+  bankCode               String?
+  bankName               String?
+  bankAccountNumber      String?
+  bankAccountName        String?
+  sentToBankAt           DateTime?
   /// The wallet provider that took the send (WALLET_PROVIDER at the time).
   provider               String    @default("fintava")
   status                 String
@@ -5090,11 +5129,12 @@ model School {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  courses SchoolCourse[]
+  courses    SchoolCourse[]
+  enrolments SchoolEnrolment[]
   /// SCHOOLS-10: the code this school's apply link carries. Made the first
   /// time the link is asked for.
-  link    SchoolLink?
-  clicks  SchoolLinkClick[]
+  link       SchoolLink?
+  clicks     SchoolLinkClick[]
 
   @@index([category])
   @@index([name])
@@ -5122,8 +5162,9 @@ model SchoolCourse {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  intakes CourseIntake[]
-  clicks  SchoolLinkClick[]
+  intakes    CourseIntake[]
+  clicks     SchoolLinkClick[]
+  enrolments SchoolEnrolment[]
 
   @@index([schoolId])
 }
@@ -5150,6 +5191,8 @@ model CourseIntake {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  enrolments SchoolEnrolment[]
 
   @@index([courseId, startDate])
 }
@@ -5185,6 +5228,68 @@ model SchoolLinkClick {
   @@index([schoolId, clickedAt])
   @@index([courseId])
   @@index([userWawuId, clickedAt])
+}
+
+/// SCHOOLS-07: one student's place in one intake, and the order that pays for
+/// it. It is the target of a `school_fee` wallet payment (MONEY-17): the
+/// payment's id is `paymentId`, the fee waits in WAWU's merchant wallet in a
+/// hold (R-19) until the intake starts, then goes to the school at 85/15
+/// (R-12, SCHOOLS-11).
+///
+/// `status`: reserved (the seat is claimed, `reservedUntil` is how long it is
+/// kept for an unpaid order), enrolled (paid), released (the reservation was
+/// given up, or ran out, and its seat went back), refunded (paid, but the
+/// class filled in the gap and the fee went back through the hold).
+///
+/// The seat is claimed by one conditional write on CourseIntake
+/// (`seatsTaken < capacity`), the Product.stock pattern, and given back once
+/// when a reserved order is released. The course, school and intake are copied
+/// onto the order, so the receipt reads as it was when the person enrolled
+/// even if the school edits them later. The figures are integer kobo:
+/// `priceKobo` is the course fee that was quoted; `schoolShareKobo` and
+/// `wawuShareKobo` are its 85/15 split (R-12) at that time, `commissionBps`
+/// WAWU's part of it.
+///
+/// A partial unique index (migration SQL, not modelled here) allows one live
+/// order (reserved or enrolled) per student and course, so sending the same
+/// enrol request twice makes one order and takes one seat.
+model SchoolEnrolment {
+  id              String       @id @default(uuid())
+  /// The student. Null once their account is deleted: the money record stays
+  /// (the school's share may still be owed), the person goes.
+  wawuUserId      String?
+  schoolId        String
+  school          School       @relation(fields: [schoolId], references: [id])
+  courseId        String
+  course          SchoolCourse @relation(fields: [courseId], references: [id])
+  intakeId        String
+  intake          CourseIntake @relation(fields: [intakeId], references: [id])
+  status          String       @default("reserved")
+  /// What a person quotes: WAW- and two groups of four characters.
+  reference       String       @unique
+  courseTitle     String
+  schoolName      String
+  intakeStartDate DateTime     @db.Date
+  intakeSchedule  String
+  intakeLocation  String?
+  priceKobo       Int
+  schoolShareKobo Int
+  wawuShareKobo   Int
+  commissionBps   Int
+  reservedUntil   DateTime
+  /// The wallet payment that paid it (WalletPayment.id) and its hold.
+  paymentId       String?      @unique
+  holdId          String?
+  enrolledAt      DateTime?
+  releasedAt      DateTime?
+  refundedAt      DateTime?
+  failureReason   String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([wawuUserId, createdAt])
+  @@index([intakeId, status])
+  @@index([status, reservedUntil])
 }
 
 /// SETTINGS-02: the owner's legal text, one row per document ("terms",
@@ -6455,4 +6560,76 @@ model SearchHistory {
   @@id([userWawuId, queryKey])
   @@index([userWawuId, searchedAt])
   @@index([searchedAt, queryKey])
+}
+
+/// BILLS-04. A bill paid from the wallet: electricity, airtime, data or cable
+/// TV. One row per bill, made before it is paid (`draft`, the target the pay
+/// sheet quotes), paid with a `bill` WalletPayment into WAWU's own account
+/// (R-19), and then bought from the biller at Fintava out of that account.
+/// The row is the feature's own record of the bill; the money is the payment's
+/// and the hold's, and the provider's balance stays the only balance.
+///
+/// `status`: draft (made, not paid), buying (paid; the purchase is not made yet
+/// or its outcome is not known), delivered (the biller delivered; the hold is
+/// released) or failed (the biller did not; the hold is refunded to the payer).
+/// `purchaseSentAt` set means a record may exist at the biller: the purchase is
+/// asked about and never sent again until Fintava's own record says. Fintava's
+/// bill calls take no reference of ours, so this column is the only guard
+/// against buying twice.
+///
+/// Every figure is integer kobo. `amountKobo` is the bill's own amount (what the
+/// biller gets); the payment's price is `amountKobo + billChargeKobo +
+/// serviceFeeKobo`, all moved into WAWU's account in one transfer (R-31).
+model WalletBill {
+  id                   String    @id @default(uuid())
+  /// The buyer. Null once their account is deleted: the money record stays,
+  /// the meter or number and the name on it go with the account.
+  wawuUserId           String?
+  /// electricity, airtime, data or cable.
+  category             String
+  /// The disco code, the mobile network or the cable provider, as Fintava names it.
+  billerCode           String
+  /// What a person reads for the biller ("Ikeja Electric", "MTN", "DStv").
+  title                String
+  /// prepaid or postpaid (electricity only).
+  planType             String?
+  /// A data bundle's or a cable plan's code at Fintava.
+  productCode          String?
+  /// What that code is called ("1.5GB", "Compact").
+  productLabel         String?
+  /// The meter, phone or smartcard number.
+  accountNumber        String?
+  /// The name Fintava holds for the meter, when the buyer had it checked.
+  accountName          String?
+  amountKobo           BigInt
+  billChargeKobo       BigInt
+  serviceFeeKobo       BigInt
+  status               String    @default("draft")
+  /// The reference a person quotes: WAW-BIL- and eight characters.
+  reference            String    @unique
+  /// The wallet payment that paid it (WalletPayment.id) and its hold.
+  paymentId            String?   @unique
+  holdId               String?
+  /// When the purchase was handed to Fintava (see above).
+  purchaseSentAt       DateTime?
+  /// How many times Fintava has been asked what became of an unknown purchase.
+  checks               Int       @default(0)
+  /// Fintava's record of the purchase. Unique, so one history record settles
+  /// at most one bill (a lost purchase is never settled with another bill's).
+  fintavaTransactionId String?   @unique
+  fintavaReference     String?   @unique
+  /// The electricity token and the units bought, as Fintava answered them.
+  token                String?
+  units                String?
+  failureReason        String?
+  paidAt               DateTime?
+  deliveredAt          DateTime?
+  failedAt             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([wawuUserId, createdAt])
+  @@index([status, purchaseSentAt])
+  /// FIX-42: the half-hourly late-success look reads failed bills, newest first.
+  @@index([status, failedAt])
 }

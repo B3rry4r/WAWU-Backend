@@ -169,6 +169,7 @@ const OUT_ROW = {
   tagapayTransRef: true,
   fintavaTransactionId: true,
   sessionId: true,
+  linkKind: true,
   references: { select: { value: true } },
 } satisfies Prisma.FintavaLedgerEntrySelect;
 
@@ -190,7 +191,9 @@ function toOutRow(r: OutRow): LedgerOutRow {
     id: r.id,
     status: r.status,
     amountKobo: r.amountKobo,
-    wawuFeeKobo: r.wawuFeeKobo,
+    // A bill's WAWU fee rides inside the amount moved into WAWU's account; it
+    // is not a charge the provider takes, so there is none to find on its record.
+    wawuFeeKobo: r.linkKind === 'bill' ? null : r.wawuFeeKobo,
     occurredAt: r.occurredAt,
     createdAt: r.createdAt,
     refs: [...refs],

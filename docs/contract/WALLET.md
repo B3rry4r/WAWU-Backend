@@ -35,8 +35,8 @@ caller from the token.
 | `DELETE /money/device` | `ApprovalDeviceView` | | MONEY-14 (served) |
 | `POST /money/device/challenge` | `ApprovalChallengeView` | | MONEY-14 (served) |
 | `POST /money/approval/verify` | `PinStateView` | `X-Transaction-Pin` or `X-Device-Approval` | MONEY-14 (served) |
-| `GET /money/banks` | `BankView[]` | | WALLET-09 |
-| `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 |
+| `GET /money/banks` | `BankView[]` | | WALLET-09 (served; CONVENTIONS.md section 24) |
+| `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 (served; CONVENTIONS.md section 24) |
 | `GET /money/recipients?q=` | `RecipientView[]` (at most 20) | | WALLET-08 (served; CONVENTIONS.md section 13) |
 | `GET /money/recipients/recent` | `RecipientView[]` (at most 10) | | WALLET-08 (served; CONVENTIONS.md section 13) |
 | `GET /money/beneficiaries` | `BeneficiaryView[]` | | WALLET-14 (served; CONVENTIONS.md section 10) |
@@ -46,8 +46,9 @@ caller from the token.
 | `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `GET /money/fees/quote?kind=&amountKobo=&billCategory=` | `FeeQuoteView` | | WALLET-15 (served; CONVENTIONS.md section 11) |
 | `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-07 (served; CONVENTIONS.md section 19) |
-| `POST /money/transfers/bank` | `TransferView` | `BankTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-09 |
+| `POST /money/transfers/bank` | `TransferView` | `BankTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-09 (served; CONVENTIONS.md section 24) |
 | `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 (served; CONVENTIONS.md section 19) |
+| `GET /money/transfers/presets` | `TransferPresetsView` | | WALLET-02 (served; the quick amounts under W9's keypad from `TRANSFER_AMOUNT_PRESETS_KOBO`, a provisional setting owned by YOU, and the note's longest length) |
 | `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 (served; CONVENTIONS.md section 14) |
 | `POST /money/payments` | `PaymentView` | `PaymentDto`, `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | MONEY-17 (served; CONVENTIONS.md section 14) |
 | `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 (served; CONVENTIONS.md section 14a) |
@@ -127,15 +128,43 @@ payment onto the wallet.
 |---|---|---|---|---|
 | `content_unlock` | HOME-15 | the content piece id (`POST /content/:id/unlock`) | no | no |
 | `tip` | HOME-14 | the creator's wawuUserId (`POST /tips` takes `creatorWawuId`); `note` is the tip's message | yes, `amountKobo` | no |
-| `credit_pack` | INBOX-16 | the pack: `starter`, `popular` or `pro` (`POST /credits/purchase`) | no | no |
+| `credit_pack` | INBOX-16 | the pack: `starter`, `popular` or `pro` (`GET /credits/packs` lists them; `POST /credits/purchase` is the web's Flutterwave route and stays as it is) | no | no (WAWU's own sale: the price stays in WAWU's account and the 85/15 split is applied per spent credit, as for a Flutterwave pack) |
 | `verification` | ME-18 | the tick: `creator` or `professional` | no | no |
 | `legal_fee` | LEGAL-05 | the legal request id | no | no |
-| `school_fee` | SCHOOLS-07 | the enrolment order id | no | no |
+| `school_fee` | SCHOOLS-07 | the enrolment order id `POST /schools/enrolments` returns; the price is the course fee quoted when the place was held, and the 85/15 split (R-12) is recorded with the payment and its hold although the school is not on WAWU | no | until the intake starts |
 | `paid_dm` | INBOX-17 | the message id `POST /dm/:creatorWawuId/send` returns | no | until the creator answers |
 | `event_ticket` | EVENTS-07 | the order id `POST /events/:id/orders` returns | no | until the event takes place |
-| `bill` | BILLS-04 | the bill id `POST /bills/init` returns | no | until the biller delivers |
+| `bill` | BILLS-04 | the bill id `POST /bills/wallet` returns (`POST /bills/init` is the web's Flutterwave route and stays as it is); the price moved is the bill, Fintava's bill charge and WAWU's bill fee, in one transfer (R-31) | no | until the biller delivers |
 | `tier`, `tier_bump` | TIER-03 | the terms: `tier-<tierId>`, `renew-<tierId>` or `upgrade-<fromTierId>-<tierId>` (`GET /plans/purchases/quote` builds it; `tier_bump` adds the checkout bump) | no | no (WAWU's own sale, no seller split; a payment whose plan cannot be granted when it confirms is refunded in full, docs/contract/PLANS.md section 8) |
 | `points_cash_out` | POINTS-04 | the conversion id `POST /points/convert` returns | no | no (never paid by a person: it is the ledger link of WAWU's cash paid into the wallet for points, docs/contract/CONVENTIONS.md section 20; a payment for it is `target_not_payable`) |
+
+#### Credits from the wallet (INBOX-16)
+
+A pack is bought with the wallet through four routes, all declared in
+`contract/openapi.json` and all new (the web's `POST /credits/purchase` and
+`/verify` are unchanged):
+
+- `GET /credits/packs`: the server's pack table, cheapest first
+  (`{ pack, credits, priceKobo, badge }`; `badge` is the tag I28 draws:
+  `popular` on the 120-credit pack, `best_value` on the 300-credit one, else
+  null). Needs no wallet. Credits are a count, never
+  naira (R-5).
+- `GET /credits/purchase/wallet/quote?pack=`: the pack and the payment quote
+  (price, the provider's charge on top, total, balance, shortfall, token).
+  For `popular`: ₦1,000 + ₦23.25 = ₦1,023.25.
+- `POST /credits/purchase/wallet` `{ pack, expectedTotalKobo, quoteToken }`
+  with `Idempotency-Key` and the PIN: pays and answers 201 with the purchase
+  (`paid`, `pending` or `failed`). The same key and body answer the first
+  result again and charge once. One payment gives one purchase row, one
+  balance increase and one cost-basis lot, in one database transaction.
+- `GET /credits/purchase/wallet/{id}`: the purchase as it stands now (what the
+  app polls after `pending`). `creditBalance` is the person's count once the
+  purchase had landed; `GET /credits` is the live count.
+
+A payment whose credits cannot be written yet (`payment.delivered` false) is
+`pending`: the sweep writes them once, and no second charge is possible.
+`CreditPurchase.walletPaymentId` (unique) is the link from a purchase to its
+payment; `flutterwaveTxRef` carries `wallet:<payment id>` on these rows.
 
 ## 2. The named schemas (G-1)
 
@@ -385,8 +414,8 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
     The quote's `withinDailyLimit` and `remainingTodayKobo` use the tighter of
     this and WAWU's own daily limit for the kind.
   - The code stays `limit_reached` (NUV-07), not `daily_limit_exceeded`, which
-    the declared transfer routes still list for WALLET-07 and WALLET-09 to
-    decide when they serve them.
+    the send routes list (WALLET-07), and the bank send (WALLET-09, served)
+    does not.
   - Fintava's own refusal for a limit has never been seen in the sandbox
     (`limits.md`), so there is no mapping for it yet; WAWU's early refusal is
     what a person sees.
@@ -394,7 +423,7 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
   `/money/approval/verify`, the `X-Device-Approval` format: a device key's
   signature, CONVENTIONS.md section 5). The declared debits still document
   `X-Transaction-Pin` alone; the tasks that serve them (WALLET-07, served;
-  WALLET-09, MONEY-17, served) put `@RequireApproval()` on the route, which
+  WALLET-09, MONEY-17, all served) put `@RequireApproval()` on the route, which
   documents both headers.
 - **The request that opens a wallet** is served by MONEY-12: `POST
   /money/wallet/open` (CONVENTIONS.md section 9). It carries the BVN, NIN,

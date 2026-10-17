@@ -112,6 +112,15 @@ export const FINISHING_MESSAGE =
 /** What the provider sees on the transfer. Names nobody and nothing personal. */
 export const PAYMENT_NARRATION = 'WAWU purchase';
 
+/**
+ * The limit a payment is counted against (WALLET-23, NUV-07): a bill has its
+ * own limits (`WAWU_LIMIT_BILL_*`, and the ledger counts it as a bill), every
+ * other payment is a purchase. BILLS-04.
+ */
+export function limitKindOf(kind: string): 'bill' | 'purchase' {
+  return kind === 'bill' ? 'bill' : 'purchase';
+}
+
 /** Rows per page of the sweep, and pages per pass. */
 const SWEEP_PAGE = 50;
 const SWEEP_PAGES = 20;
@@ -357,7 +366,7 @@ export class WalletPaymentService implements OnModuleInit {
       q.kind,
       q.targetId,
       target,
-      await this.withStanding(wallet.wawuUserId, fee, target.priceKobo),
+      await this.withStanding(wallet.wawuUserId, fee, target.priceKobo, q.kind),
       balanceKobo,
     );
   }
@@ -371,10 +380,11 @@ export class WalletPaymentService implements OnModuleInit {
     payer: string,
     fee: FeeQuoteView,
     priceKobo: number,
+    kind: PaymentKind,
   ): Promise<FeeQuoteView> {
     const standing = await this.limits.dailyStanding({
       wawuUserId: payer,
-      kind: 'purchase',
+      kind: limitKindOf(kind),
       amountKobo: priceKobo,
     });
     return { ...fee, ...standing };
@@ -425,7 +435,10 @@ export class WalletPaymentService implements OnModuleInit {
     }
 
     const id = randomUUID();
-    const split = splitPrice(price, target.payee !== null);
+    const split = splitPrice(
+      price,
+      target.payee !== null || target.payeeOutsideWawu === true,
+    );
     const now = new Date();
     const data: Prisma.WalletPaymentCreateInput = {
       id,
@@ -436,7 +449,9 @@ export class WalletPaymentService implements OnModuleInit {
       payeeWawuUserId: target.payee?.wawuUserId ?? null,
       priceKobo: BigInt(price),
       providerFeeKobo: BigInt(fee.fee.providerFeeKobo),
-      wawuFeeKobo: BigInt(fee.fee.wawuFeeKobo),
+      // WAWU's fee riding inside the price (a bill's) is recorded here too, so
+      // fee reports see it; the total the person pays is the quote's.
+      wawuFeeKobo: BigInt(fee.fee.wawuFeeKobo + (target.wawuFeeKobo ?? 0)),
       totalKobo: BigInt(fee.totalKobo),
       payeeShareKobo: BigInt(split.payeeShareKobo),
       wawuShareKobo: BigInt(split.wawuShareKobo),
@@ -524,7 +539,7 @@ export class WalletPaymentService implements OnModuleInit {
           await this.limits.assertMayMove(
             {
               wawuUserId: data.payerWawuUserId!,
-              kind: 'purchase',
+              kind: limitKindOf(data.kind),
               amountKobo: koboNumber(BigInt(data.priceKobo)),
             },
             { tx },
@@ -622,7 +637,12 @@ export class WalletPaymentService implements OnModuleInit {
         dto.kind,
         dto.targetId,
         target,
-        await this.withStanding(wallet.wawuUserId, fresh, target.priceKobo),
+        await this.withStanding(
+          wallet.wawuUserId,
+          fresh,
+          target.priceKobo,
+          dto.kind,
+        ),
         await this.balanceOrNull(wallet),
       ),
     });
@@ -2092,7 +2112,12 @@ export class WalletPaymentService implements OnModuleInit {
 
   view(p: PaymentRow, hold: HoldView | null = null): PaymentView {
     const providerFeeKobo = koboNumber(p.providerFeeKobo);
-    const wawuFeeKobo = koboNumber(p.wawuFeeKobo);
+    // A WAWU fee that rides inside the price (a bill's) is not an extra charge
+    // on top of it: the fee shown is the one that adds up to the total.
+    const wawuOnTop =
+      koboNumber(p.priceKobo) + providerFeeKobo + koboNumber(p.wawuFeeKobo) ===
+      koboNumber(p.totalKobo);
+    const wawuFeeKobo = wawuOnTop ? koboNumber(p.wawuFeeKobo) : 0;
     const status = p.status as PaymentStatus;
     // The buyer's claim on the item (`openKey`) is given up exactly when what
     // was paid for is delivered, or when there is nothing to deliver

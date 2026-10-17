@@ -42,6 +42,7 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   amount_out_of_range: 400,
   quote_changed: 409,
   name_check_failed: 422,
+  account_name_changed: 409,
   recipient_not_found: 404,
   recipient_has_no_wallet: 409,
   recipient_blocked: 403,

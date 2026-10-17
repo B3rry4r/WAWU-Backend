@@ -325,6 +325,29 @@ export interface AccountNameView {
   bankName: string;
   accountNumber: string;
   accountName: string;
+  /**
+   * Binds a send to an account that is not saved to this holder's name: send
+   * it back as `nameToken` on `POST /money/transfers/bank`. Signed, for this
+   * person, short-lived (15 minutes).
+   */
+  nameToken: string;
+}
+
+/** One quick amount on W9: whole naira, in kobo. */
+export interface TransferQuickAmountView {
+  amountKobo: number;
+}
+
+/**
+ * GET /money/transfers/presets: what W9 draws that is not the person's own
+ * (task WALLET-02). The quick amounts come from settings, not from the design
+ * (the setting is documented in transfer-presets.ts); the note's length is the send's own limit.
+ */
+export interface TransferPresetsView {
+  /** Smallest first, at most four. */
+  quickAmounts: TransferQuickAmountView[];
+  /** The longest note a send takes, in characters. */
+  noteMaxLength: number;
 }
 
 /** A WAWU user who can be sent money (W7). Only people with an open wallet. */
@@ -543,7 +566,11 @@ export type HoldStatus = 'held' | 'released' | 'refunded';
  * be granted after the payment confirmed, and it is refunded at once.
  */
 export type HoldReleaseCondition =
-  'dm_answered' | 'event_took_place' | 'bill_delivered' | 'plan_granted';
+  | 'dm_answered'
+  | 'event_took_place'
+  | 'bill_delivered'
+  | 'intake_started'
+  | 'plan_granted';
 
 /**
  * Money held between payer and payee in WAWU's merchant wallet (R-19). The

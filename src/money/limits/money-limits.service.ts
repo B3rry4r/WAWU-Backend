@@ -84,8 +84,9 @@ const KIND_WHERE: Record<MoneyLimitKind, Prisma.FintavaLedgerEntryWhereInput> =
  *
  * Unset limits are no limit. What counts toward a day or a month is the
  * person's own movements of that kind out of their wallet, pending or
- * completed (a failed or reversed one gave the money back), by amount before
- * fees, read from the ledger. That is a count of what was moved, never a
+ * completed (a failed or reversed one gave the money back, and so does a
+ * held payment whose refund has completed: FIX-40), by amount before fees,
+ * read from the ledger. That is a count of what was moved, never a
  * balance: the balance is the provider's.
  *
  * Concurrency: it is called with the transaction in which the caller writes
@@ -227,12 +228,30 @@ export class MoneyLimits {
   /**
    * What this person moved of this kind out of their wallet since `since`,
    * pending or completed, before fees, in kobo.
+   *
+   * A held payment (a bill, a paid DM, a ticket) whose hold has been
+   * REFUNDED is not counted: the money came back, so the person has not moved
+   * it (FIX-40). The hold is `refunded` only once the provider has confirmed
+   * the whole price is back (the database allows no other `refunded`); a
+   * refund that is decided, waiting, sent or unconfirmed leaves the hold
+   * `held`, and its payment counts as still moved until the refund completes.
+   * A released hold (the payee was paid) and a payment with no hold count.
    */
   async movedSince(
     db: Db,
     input: Pick<MovementInput, 'wawuUserId' | 'kind'>,
     since: Date,
   ): Promise<bigint> {
+    // A payment counted in this window was made in it, so its refund was
+    // confirmed in it or after it (our clock, later than the payment).
+    const refunded = await db.walletHold.findMany({
+      where: {
+        payerWawuUserId: input.wawuUserId,
+        status: 'refunded',
+        settledAt: { gte: since },
+      },
+      select: { paymentId: true },
+    });
     const sum = await db.fintavaLedgerEntry.aggregate({
       _sum: { amountKobo: true },
       where: {
@@ -245,6 +264,18 @@ export class MoneyLimits {
             occurredAt: { gte: since },
           },
           KIND_WHERE[input.kind],
+          // A send has no payment: the null is spelled out, because a NOT IN
+          // alone would drop every row whose paymentId is null.
+          ...(refunded.length > 0
+            ? [
+                {
+                  OR: [
+                    { paymentId: null },
+                    { paymentId: { notIn: refunded.map((h) => h.paymentId) } },
+                  ],
+                },
+              ]
+            : []),
         ],
       },
     });

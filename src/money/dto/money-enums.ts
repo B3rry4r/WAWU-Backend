@@ -58,7 +58,7 @@ export type FeePartCode = (typeof FEE_PART_CODES)[number];
  *
  *   content_unlock  HOME-15     tip           HOME-14
  *   credit_pack     INBOX-16    verification  ME-18
- *   legal_fee       LEGAL-05    school_fee    SCHOOLS-07
+ *   legal_fee       LEGAL-05    school_fee    SCHOOLS-07 (held)
  *   paid_dm         INBOX-17 (held)
  *   event_ticket    EVENTS-07 (held)
  *   bill            BILLS-04 (held)
@@ -99,6 +99,7 @@ export const HELD_PAYMENT_KINDS: readonly PaymentKind[] = [
   'paid_dm',
   'event_ticket',
   'bill',
+  'school_fee',
 ];
 
 /** The filter chips on W26: All, Money in, Money out, Bills, Content. */
@@ -148,6 +149,8 @@ export const MONEY_ERROR_CODES = [
   'amount_out_of_range',
   'quote_changed',
   'name_check_failed',
+  // A saved bank account whose holder's name at the bank is no longer the one kept (WALLET-09).
+  'account_name_changed',
   'recipient_not_found',
   'recipient_has_no_wallet',
   'recipient_blocked',

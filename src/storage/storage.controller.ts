@@ -6,14 +6,18 @@ import {
   HttpStatus,
   Post,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { StorageService, type UploadAllowanceView } from './storage.service';
 import { PresignUploadDto } from './dto/presign-upload.dto';
+import { ReleaseUploadDto } from './dto/release-upload.dto';
+import { uploadFormatsView, type UploadFormatsView } from './upload-formats';
 import { ConfirmUploadDto } from './dto/confirm-upload.dto';
 import { GatesPublishing } from '../plans/publishing-offers.interceptor';
+import { StorageBusyInterceptor } from './storage-busy.interceptor';
 
 /**
  * POST /uploads/presign — hands the authenticated caller a short-lived PUT
@@ -30,6 +34,7 @@ import { GatesPublishing } from '../plans/publishing-offers.interceptor';
  * with the offers. Every other folder is open to any signed-in account.
  */
 @UseGuards(WawuAuthGuard)
+@UseInterceptors(StorageBusyInterceptor)
 @Controller('uploads')
 export class StorageController {
   constructor(private readonly storage: StorageService) {}
@@ -44,7 +49,20 @@ export class StorageController {
       dto.contentType,
       dto.extension,
       dto.contentLength,
+      dto.format,
     );
+  }
+
+  /**
+   * GET /uploads/formats: what each content format may upload (M20 to M22):
+   * the file types and the most bytes for the full file, and the same for the
+   * separate public preview, with how that preview is shown and, for a clip,
+   * how long it is asked to be. Any signed-in account. The same table
+   * `POST /uploads/presign` applies when it is given a `format`.
+   */
+  @Get('formats')
+  formats(): UploadFormatsView {
+    return uploadFormatsView();
   }
 
   /**
@@ -90,5 +108,23 @@ export class StorageController {
   @Get('allowance')
   allowance(@CurrentUser() user: WawuJwtClaims): Promise<UploadAllowanceView> {
     return this.storage.allowanceFor(user.sub);
+  }
+
+  /**
+   * POST /uploads/release: takes back an upload the caller reserved and no
+   * listing has claimed yet (a file removed or replaced in an unfinished
+   * draft). Deletes the object and frees its space in one step. Only the
+   * caller's own upload in content/preview or content/full; another person's
+   * key, an unknown key and a key in any other folder all get the same 404,
+   * and a key a listing already uses gets a 409. Calling it again for a key
+   * already released answers the same 200.
+   */
+  @Post('release')
+  @HttpCode(HttpStatus.OK)
+  release(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: ReleaseUploadDto,
+  ): Promise<{ released: true }> {
+    return this.storage.releaseUpload(user.sub, dto.key);
   }
 }

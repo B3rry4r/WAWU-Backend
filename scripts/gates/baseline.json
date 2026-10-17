@@ -120,14 +120,6 @@
       "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
       "where": "src/creator-subscription/creator-subscription.service.ts:529"
     },
-    "17eaf7bef75a96e8": {
-      "evidence": "src/content-piece/content-piece.service.ts:48, src/credit-purchase/credit-purchase.service.ts:23, src/purchase/purchase.service.ts:25",
-      "gate": "forks",
-      "message": "interface 'FlutterwaveConfigResponse' is declared in 3 files - one of them is a fork",
-      "owner": "YOU, owner-approved 16 Oct 2026 (R-60)",
-      "reason": "R-1 and CLAUDE.md (Money): the web stays on Flutterwave until after launch, so the per-module copies of FlutterwaveConfigResponse in content-piece, credit-purchase and purchase stay as built; the web's protected routes use them. Merging them changes money code the web calls, so it belongs to the after-launch Flutterwave removal task, which deletes all of them. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or code changed.",
-      "where": "src/content-piece/content-piece.service.ts:48"
-    },
     "19962616ce6035dc": {
       "evidence": "if (params.transactionId === MOCK_FAILURE_TRANSACTION_ID || !initialized) {",
       "gate": "fake_data",
@@ -895,6 +887,14 @@
       "owner": "legacy-app-repair 2026-08-31",
       "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
       "where": "src/admin/auth/decorators/current-admin.decorator.ts:10"
+    },
+    "e67bb3d0f7e3f93e": {
+      "evidence": "src/content-piece/content-piece.service.ts:62, src/credit-purchase/credit-purchase.service.ts:16, src/purchase/purchase.service.ts:25",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveConfigResponse' is declared in 3 files - one of them is a fork",
+      "owner": "YOU, owner-approved 16 Oct 2026 (R-60)",
+      "reason": "R-1 and CLAUDE.md (Money): the web stays on Flutterwave until after launch, so the per-module copies of FlutterwaveConfigResponse in content-piece, credit-purchase and purchase stay as built; the web's protected routes use them. Merging them changes money code the web calls, so it belongs to the after-launch Flutterwave removal task, which deletes all of them. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or code changed.",
+      "where": "src/content-piece/content-piece.service.ts:62"
     },
     "e76f534caa62745f": {
       "evidence": "* diagnosis. `.settle()` on the returned dispatch is never called here \u2014",
