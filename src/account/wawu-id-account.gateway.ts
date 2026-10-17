@@ -10,8 +10,16 @@
  * a deletion method today.
  */
 export interface WawuIdAccountGateway {
-  /** Starts the grace period: pending_deletion, sessions revoked. */
-  scheduleAccountDeletion(wawuUserId: string): Promise<{ scheduled: boolean }>;
+  /**
+   * Starts the grace period: pending_deletion, sessions revoked. `purgeAfter`
+   * is the Hub's own end of the 30 days, so both clocks agree (SETTINGS-08);
+   * WAWU ID ignores a date that is not about 30 days away. Idempotent there,
+   * so it is safe to ask again until it answers.
+   */
+  scheduleAccountDeletion(
+    wawuUserId: string,
+    purgeAfter: Date,
+  ): Promise<{ scheduled: boolean }>;
   /** Ends it: PII scrubbed, row anonymized. */
   finalizeAccountDeletion(wawuUserId: string): Promise<{ finalized: boolean }>;
 }

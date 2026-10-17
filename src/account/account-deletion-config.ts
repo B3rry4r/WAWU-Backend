@@ -30,3 +30,29 @@ export const PASS_OUTAGE_FAILURES = 3;
 export const PASS_BATCH = 50;
 /** How long a claim holds a row; a server that crashed mid-pass lets go of its rows when this runs out. */
 export const PASS_CLAIM_LEASE_MS = 40 * 60 * 1000;
+
+/**
+ * Telling WAWU ID the deletion has started (SETTINGS-08, G-SETTINGS-08-1).
+ * Until WAWU ID confirms its mark-deletion, the Hub does not purge: a sign-in
+ * in WAWU ID could not cancel what WAWU ID does not know is pending. A call
+ * that fails is asked again by the hourly pass, after a wait that doubles with
+ * each failure.
+ */
+/** How long one mark-deletion call may take before it counts as failed. */
+export const IDENTITY_MARK_TIMEOUT_MS = 10 * 1000;
+/** The wait after the first failure; it doubles with each failure up to the cap. */
+export const IDENTITY_RETRY_BASE_MS = 5 * 60 * 1000;
+export const IDENTITY_RETRY_MAX_MS = 6 * 60 * 60 * 1000;
+/** How long a pass holds a row it is about to ask about (a second server leaves it alone). */
+export const IDENTITY_CLAIM_LEASE_MS = 3 * 60 * 1000;
+/** Rows a pass asks WAWU ID about at most. */
+export const IDENTITY_RETRY_BATCH = 50;
+
+/** The wait before the next try, once `failures` calls in a row have failed (1 or more). */
+export function identityRetryDelayMs(failures: number): number {
+  const doublings = Math.max(0, Math.min(failures, 30) - 1);
+  return Math.min(
+    IDENTITY_RETRY_MAX_MS,
+    IDENTITY_RETRY_BASE_MS * 2 ** doublings,
+  );
+}

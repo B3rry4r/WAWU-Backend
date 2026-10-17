@@ -6129,6 +6129,17 @@ model AccountDeletion {
   /// leaves it alone). Past: when the last pass finished with it, so the pass
   /// takes the rows checked longest ago first. Null: never claimed.
   reconcileClaimedUntil DateTime?
+  /// SETTINGS-08 (G-SETTINGS-08-1). When WAWU ID confirmed the Hub's
+  /// mark-deletion call for this deletion (the call carries `purgeAfter`).
+  /// Null: not confirmed yet. The hourly pass asks again (after
+  /// `identityMarkNextAt`, with a wait that grows with `identityMarkAttempts`)
+  /// and the purge does not start while this is null. Cleared when a new
+  /// request takes the row over.
+  identityMarkedAt DateTime?
+  /// Failed mark-deletion calls in a row, and the earliest the next one is
+  /// made (a pass also sets it a few minutes ahead while it holds the row).
+  identityMarkAttempts Int @default(0)
+  identityMarkNextAt DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
