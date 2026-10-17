@@ -53,7 +53,9 @@ import {
   BankSendTargets,
 } from './transfers/bank-send-target';
 import { MoneyBanksController } from './saved-accounts/money-banks.controller';
+import { NameCheckBudget } from './saved-accounts/name-check-budget';
 import { NameCheckTokenService } from './saved-accounts/name-check-token.service';
+import { PayoutOwnNameGuard } from './transfers/payout-own-name.guard';
 import {
   TransferRecipientGuard,
   TransferRecipients,
@@ -267,6 +269,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletOpeningService,
     BankAccountCheckService,
     NameCheckTokenService,
+    NameCheckBudget,
     BeneficiaryService,
     PayoutAccountService,
     SavedAccountTargetService,
@@ -288,6 +291,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     TransferRecipientGuard,
     BankSendTargets,
     BankSendTargetGuard,
+    PayoutOwnNameGuard,
     WalletTransferService,
     HoldViewService,
     WalletHoldService,

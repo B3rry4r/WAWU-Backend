@@ -1319,6 +1319,24 @@ describe('NUV-06: sending to a bank and paying out', () => {
       const payout = moduleRef.get(PayoutAccountService);
       const owner = randomUUID();
       people.push(owner);
+      // R-51 (WALLET-37 round 2): a Nuvion wallet keeps no BVN name, so a
+      // payout account must be in the wallet's own account name. This test is
+      // about the payee ids, so the wallet is named for each account in turn.
+      const walletRef = randomUUID().replace(/-/g, '');
+      const nameWalletAs = (accountName: string) =>
+        prisma.fintavaWallet.upsert({
+          where: { wawuUserId: owner },
+          create: {
+            wawuUserId: owner,
+            customerId: `w37-${walletRef}`,
+            walletId: `w37-${walletRef}-w`,
+            accountNumber: `7${walletRef.slice(0, 9)}`,
+            accountName,
+            provider: 'nuvion',
+          },
+          update: { accountName },
+        });
+      await nameWalletAs(HOLDER);
       // Saved under Nuvion: already matched and checked.
       const view = await payout.set(owner, {
         bankCode: '044',
@@ -1361,6 +1379,7 @@ describe('NUV-06: sending to a bank and paying out', () => {
       });
       // Another number at the same bank takes none of the old account's ids.
       pay.addAccountAtBank('044', '0123456741', 'Third Account');
+      await nameWalletAs('Third Account');
       await payout.set(owner, { bankCode: '044', accountNumber: '0123456741' });
       expect(await targets.forPayoutAccount(owner, 'wawu')).toMatchObject({
         target: { bankCode: '044', payee: null },
@@ -1379,6 +1398,7 @@ describe('NUV-06: sending to a bank and paying out', () => {
       });
       // Another account takes none of the old account's ids.
       pay.addAccountAtBank('058', '0123456740', 'Second Account');
+      await nameWalletAs('Second Account');
       await payout.set(owner, { bankCode: '058', accountNumber: '0123456740' });
       expect(await targets.forPayoutAccount(owner, 'wawu')).toMatchObject({
         target: { bankCode: '058', payee: null },
