@@ -220,6 +220,9 @@ Every refusal is the envelope this backend already answers with
 | `amount_out_of_range` | 400 | below the minimum, or above `MERCHANT_MAX_PER_TXN_KOBO` on money through WAWU's merchant wallet | `minimumKobo`, `maximumKobo` |
 | `quote_changed` | 409 | `expectedTotalKobo` differs from the server's total | `feeQuote` or `paymentQuote` |
 | `name_check_failed` | 422 | the bank did not confirm the account | |
+| `account_name_changed` | 409 | a saved bank account whose holder's name, or whose bank's name, at the bank is no longer the one kept, or an account that is not saved whose holder at the bank is no longer the one the name check showed (WALLET-09, section 24): `accountName` and `bankName` as they stand now; nothing was sent. A saved account is confirmed by saving it again with `confirmCurrentName: true`; an unsaved one by a new name check |
+| `account_not_in_your_name` | 409 | a payout account whose holder at the bank is not the person's verified name (the BVN name kept by the check, else the wallet's own account name; with neither, the answer is the same code with a plain reason and no `verifiedName`), on `PUT /money/payout-account`; or a withdrawal (a bank send to the saved payout account) while its holder is not, on `POST /money/transfers/bank`, answered before the PIN (no try used, the Idempotency-Key given back). Nothing is saved or sent. `accountName` and `bankName` are the bank's; `verifiedName` is the name on the person's wallet, left out when the wallet holds none. Sends to anyone else's account are unchanged (WALLET-37, R-51, G-765) | `accountName`, `bankName`, `verifiedName` |
+| `name_check_rate_limited` | 429 | the person has run `name_check_per_hour` (launch value 30; an admin setting, read at every check) bank name checks in the hour, counted per signed-in person and never per address: `POST /money/banks/name-check`, `PUT /money/payout-account` and `POST /money/beneficiaries` for a bank account share the count, and so does `POST /money/transfers/bank` to an account that is not saved when its `nameToken` is not one this person got for that bank and account number (or is old, or missing). No check is made. The message gives the minutes left in plain words; also sent as the `Retry-After` header (WALLET-37, R-51, G-764) | `retryAfterSeconds` |
 | `recipient_not_found` | 404 | no such WAWU user | |
 | `recipient_has_no_wallet` | 409 | they have not opened a wallet | |
 | `recipient_blocked` | 403 | a block between the two people | |
@@ -244,12 +247,13 @@ Every refusal is the envelope this backend already answers with
 | `reset_codes_exhausted` | 429 | the person or the phone has had today's PIN reset texts (MONEY-14); nothing is sent | `retryAfterSeconds` |
 | `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
 | `payment_in_progress` | 409 | a payment for this item by this person is still being confirmed (or is under review); a second one is not taken, under any Idempotency-Key (MONEY-17) | `paymentId` |
+| `event_order_limit` | 409 | the buyer already holds the most open paid ticket orders one event allows (`events.open_orders_per_buyer` in the admin settings, launch value 10; an order that failed or was refunded does not count, a free order is never counted): refused on `POST /events/{id}/orders/wallet` when they are already at it, and again on `POST /events/orders/wallet/pay` inside the payment's claim, before anything is recorded or sent. "You have reached the order limit for this event." (EVENTS-13) | |
 | `statement_rate_limited` | 429 | the person has asked for 5 statements in the last minute or 30 in the last hour (`STATEMENT_RATE_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-27) | `retryAfterSeconds` |
 | `statement_busy` | 503 | two statements are already being built and no place came free within 5 s (`STATEMENT_CONCURRENCY`, PROVISIONAL) (WALLET-27) | `retryAfterSeconds` |
 | `email_not_verified` | 409 | the account has no email address that WAWU ID says is confirmed (the token's `emailVerified` is not `true`, or its `email` is empty or not an address), so a statement is not emailed (WALLET-35); never counted against the statement limit | |
-| `statement_email_failed` | 503 | the mail could not be handed to WAWU ID's sender (it was unreachable, busy, over its day's cap or refused it, or is not set up on this server); nothing was sent and asking again is right (WALLET-35). The answer never names the address or WAWU ID's reason | |
+| `statement_email_failed` | 503 | the mail could not be handed to WAWU ID's sender (it was unreachable, busy, over its day's cap or refused it, or is not set up on this server), or WAWU ID did not say it took the file (its answer carries `attachments`, the number of files taken, and it must equal the one sent; a relay from before WALLET-35 answers none); asking again is right once WAWU ID is current (WALLET-35). The answer never names the address or WAWU ID's reason | |
 | `recipient_search_rate_limited` | 429 | the person has searched for recipients 20 times in the last minute, 120 in the last hour or 500 in the last day (`RECIPIENT_SEARCH_PERSON_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-08); also sent as the `Retry-After` header | `retryAfterSeconds` |
-| `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
+| `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27). Also on `POST /money/statements/email`: the file is over 12 MiB (`STATEMENT_EMAIL_MAX_BYTES`, WAWU ID's cap), measured before anything is sent; it can never succeed on a retry (WALLET-35) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 | `fees_not_set` | 503 | the running wallet provider's fees are settings not filled in yet (Nuvion's `NUVION_FEE_*`, R-42): every fee quote and every money-moving route answers it before anything is sent to the provider; the balance, the history and the account number are unaffected (NUV-07, section 11) | |
 | `limit_reached` | 403 | the movement passes a limit: WAWU's own setting for its kind (`WAWU_LIMIT_<KIND>_<LIMIT>_KOBO`), checked before anything is sent, or the provider's own (Nuvion's per-transaction, daily or monthly refusal); the same answer either way (NUV-07, section 11) | `limit`: `per_transaction`, `daily` or `monthly` |
@@ -1201,10 +1205,21 @@ this applies and every answer is as in section 9.
   true when every word of the BVN's first name and of its last name is a
   word of the bank's account name, in any order (the middle name is not
   needed; an initial in place of a name does not match). Default (agent),
-  owner may override. `false` is A21's flag: the account is saved and
-  shown as not matching, not refused (mobile repo BACKEND_GAPS G-46 for
-  what a withdrawal does with it). `null` when there is nothing to compare
-  with: no passed check, no name kept, `IDENTITY_HASH_KEY` unset, the
+  owner may override. `false` means the bank's name is not the
+  BVN name: since WALLET-37 (R-51, G-765) such an account is refused on save
+  (`409 account_not_in_your_name`, the bank's name beside the name on the
+  wallet, nothing stored) and a withdrawal to a saved one that reads `false`
+  is refused before the PIN with the same code; only a row saved before the
+  rule can read `false`. With `null` there is no BVN name, and the
+  verified name is the wallet's own account name as the provider gave it (a
+  wallet opened under Nuvion keeps no BVN name; the provider verified the
+  identity when it opened it): the account is saved when every word of the
+  shorter of the two names (the wallet's, the bank's) is a word of the longer,
+  in any order, and at least two words match (either side may leave a middle
+  name out; a different word, or one word alone, does not match), and refused
+  with the same code otherwise (round 4); with no wallet account name either it is refused
+  with a plain reason (WALLET-37 round 2). The flag itself stays `null`.
+  `null` when there is no BVN name to compare with: no passed check, no name kept, `IDENTITY_HASH_KEY` unset, the
   wallet opened under a different BVN check (`FintavaWalletOpening.bvnHash`)
   than the one that kept the name, or keys that cannot be compared (the
   first scheme's unbound `{ first, last }`, or a `check` that does not
@@ -1314,14 +1329,19 @@ this applies and every answer is as in section 9.
   - calls `MoneyLimits.assertMayMove({ wawuUserId, kind, amountKobo }, { tx
     })` in the transaction that writes the movement's pending ledger row,
     before the provider is called: `fees_not_set`, then `403 limit_reached`
-    with `limit` (per transaction, then today, then this month). With `tx`
-    it takes a per-person lock first, so two movements by one person are
-    checked one after the other. That transaction stays at READ COMMITTED
-    (Prisma's default: no `isolationLevel`): the lock orders the reads only
-    there, so with `tx` the check first reads `transaction_isolation` and
-    refuses any other level with an `IsolationLevelError` naming it, a
-    programming error answered as a 500 (FIX-21,
-    `src/money/limits/read-committed.ts`);
+    with `limit` (per transaction, then today, then this month). `tx` is
+    required: the check takes a per-person lock for that transaction, so two
+    movements by one person are checked one after the other. It is the `tx`
+    of `prisma.$transaction(async (tx) => ...)`, never the service's own
+    client: the types refuse the root client, and a check given nothing, the
+    service's own client or any root client throws a `NotInTransactionError`
+    before anything is locked, read or written (FIX-26,
+    `src/money/limits/movement-tx.ts`). That transaction stays at READ
+    COMMITTED (Prisma's default: no `isolationLevel`): the lock orders the
+    reads only there, so the check first reads `transaction_isolation` and
+    refuses any other level with an `IsolationLevelError` naming it (FIX-21,
+    `src/money/limits/read-committed.ts`). Both are programming errors,
+    answered as a 500;
   - answers a provider failure with `error.toHttpException()`: the
     provider's own limit refusal (a `WalletProviderLimitError`; Nuvion's
     `error_transfer_transaction_limit_exceeded`,
@@ -1437,8 +1457,14 @@ this applies and every answer is as in section 9.
     email_not_verified`. The Hub holds no address of its own.
   - Order of answers: the route's own 400s (the period, the body), then the
     409, then the person is counted, then the file is built, then the mail is
-    handed over. `400 statement_too_large` gives the place back; a mail that
-    could not be handed over is `503 statement_email_failed` and counts.
+    handed over. `400 statement_too_large` gives the place back (a file over
+    12 MiB is measured before the mail is built, and is that 400, not a 503);
+    a mail that could not be handed over is `503 statement_email_failed` and
+    counts. WAWU ID answers `200 { id, attachments }` for a mail that carried
+    files, `attachments` being how many it took; the Hub calls the mail sent
+    only when that number is the one it sent (a relay from before WALLET-35
+    drops the file and answers `{ id }`, which is a failure here). A mail with
+    no files (a campaign, the money check's report) is judged as before.
   - `200` answers `StatementEmailView`: `sentTo` (the address masked,
     `a***@example.com`), `from`, `to`, `format`, `fileName`, `rowCount`,
     `sentAt`. `no-store`. An optional `Idempotency-Key` (8 to 128 of
@@ -1876,6 +1902,62 @@ written here because the tasks that sell, spend and cash them out
   lock: this service's own transactions use Prisma's 5 s default, so a
   points call for that person would fail meanwhile.
 
+### 16a. Spending points on AI tools (POINTS-03)
+
+Every cost, cap and rate is an admin setting (R-65), read from the live plan on
+each call: `points.action.<id>` (points for one unit), `points.daily_cap`,
+`points.max_chars_per_job`, `points.max_audio_min_per_job`,
+`points.price_kobo_per_1000` (the pack rate a shortfall is sold at) and
+`points.job_max_run_minutes` (how long an AI job may hold points). Points are
+a count, never naira; money fields end in `Kobo`.
+
+- **The internal service.** `PointsSpendService` (`src/points/spend/`,
+  exported by `PointsSpendModule`) is what the AI tools' server code calls:
+  `hold(input)` before the job, `commit(holdId)` when it worked,
+  `release(holdId)` when it did not. `hold` prices the job (`action`,
+  `units`, `languages` for dubbing, `characters`), checks the caps, and takes
+  the points, all under the person's points lock in ONE database-only
+  transaction with the hold as its last write: two jobs at once never pass
+  the daily cap together and never take the balance below zero. A call that
+  waits on an AI provider must do it OUTSIDE `hold`, holding nothing. Every
+  attempt needs its own `reference` (`jobHoldReference(jobId, attempt)`): a
+  reference that was spent or given back is `409 points_hold_settled`, never
+  returned as a hold. `commit` and `release` settle `ai_job` holds only.
+- **`POST /points/quote`** (PT1 to PT3, PT7), body `{ action, units,
+  languages?, characters? }`: `costPoints`, `balancePoints`, `shortfallPoints`,
+  `canRun`, `useWallet`, `cap` (the cap that stops the job, or null) and
+  `wallet` (with a shortfall and "Use wallet" on: the wallet money for exactly
+  the shortfall at the pack rate, with the wallet payment's own signed quote)
+  or `walletNote` (why not: no wallet yet, a dollar-billed person, fees not
+  set). Always 200; it holds and takes nothing. A cap that stops the job
+  shows no wallet money.
+- **A cap names itself.** `cap` is `daily` (points of AI jobs held or spent
+  since the Lagos day began; a given-back job does not count; `resetsAt` is the
+  next Lagos midnight), `characters_per_job` or `minutes_per_job` (`resetsAt`
+  null). Held, the answer is `422 points_cap_reached` with `cap`, `capLimit`,
+  `capUnit` and, for the day's, `usedPoints`, `remainingPoints`, `resetsAt`;
+  nothing is held.
+- **`POST /points/shortfall`** (PIN, `Idempotency-Key`), body = the quote's
+  job + `expectedTotalKobo` (`wallet.payment.totalKobo`) + `quoteToken`
+  (`wallet.payment.quoteToken`): buys exactly the shortfall from the wallet as
+  a wallet payment of kind `points_shortfall` (target `shortfall-<points>`, the
+  provider's charge on top, WAWU's own sale, not held) and adds one lot
+  (source `shortfall`, keyed by the payment) once, last in a database-only
+  transaction; nothing is held across the provider call. `201` with a
+  `PointsShortfallView` (`paid`, `pending`, `failed`); poll
+  `GET /points/shortfall/{id}`. Points, rate and expiry are the payment's terms:
+  a balance, rate or expiry that changed since the quote is `409 quote_changed`
+  with the new quote, nothing moved. Not short any more (including the same
+  quote sent again under another key) is `409 points_not_short`; a cap is `422
+  points_cap_reached`. "Use wallet" only decides whether the quote offers the
+  money; the PIN is the confirmation. Naira only (R-16): a dollar-billed
+  person is `409 target_not_payable`.
+- **`GET` and `PUT /me/points/settings`**: `{ useWallet }`, off by default, each
+  person's own.
+- **The sweep.** Every five minutes, `ai_job` holds still `held` after
+  `points.job_max_run_minutes` are given back by id. A late commit and the
+  sweep cannot both win: the second is `points_hold_settled` and is skipped.
+
 ---
 
 ## 17. Documents and the hosted selfie (NUV-03)
@@ -2013,7 +2095,8 @@ added up into one.
   (`status: held`), `GET /money/payments/quote` says `willBeHeld: true`, and
   the feature's `onCompleted` is told its id (`CompletedPayment.holdId`).
   What releases each kind is fixed: `paid_dm` `dm_answered`, `event_ticket`
-  `event_took_place`, `bill` `bill_delivered` (`holds/hold-rules.ts`). The
+  `event_took_place`, `bill` `bill_delivered`, `school_fee` `intake_started`
+  (`holds/hold-rules.ts`). The
   buyer's ledger row stays a `purchase`; they paid the price and the
   provider's charge (R-10) and the price is not spendable: it is already in
   WAWU's account.
@@ -2189,8 +2272,8 @@ completed payment).
 ## 19. Send to a WAWU user (WALLET-07)
 
 `POST /money/transfers/wawu` and `GET /money/transfers/{id}`
-(`src/money/transfers/`), served; sending to a bank account (WALLET-09) is
-still declared. Finding the person is WALLET-08.
+(`src/money/transfers/`), served; sending to a bank account is section 24
+(WALLET-09). Finding the person is WALLET-08.
 
 - **The request.** Headers `Idempotency-Key` (required, section 4) and
   `X-Transaction-Pin` or `X-Device-Approval` (section 5). Body
@@ -2577,3 +2660,223 @@ provider the server runs (their `provider` column).
   decimal text.
 - **Rows.** `MoneyCheckRun.report` holds the first 500 mismatches and the first 500 looks
   and counts the rest; finished runs are kept `MONEY_CHECK_KEEP_DAYS` (120).
+
+## 23. Publishing needs a tier (TIER-02)
+
+Publishing a piece, or taking a file for one, answers `402` in this one error
+shape when the person has no way to publish or has used every product they
+may have:
+
+| `reason.code` | HTTP | When | Extra fields |
+|---|---|---|---|
+| `tier_required` | 402 | no running tier and no verification tick that has not ended | `tierState` (`none` or `ended`), `productsUsed`, `productsAllowed`, `currency`, `tiers`, `extraProducts` |
+| `product_limit_reached` | 402 | every product the person may have is published | the same fields |
+| `draft_limit_reached` | 409 | a person already keeps `PRODUCT_DRAFTS_MAX` drafts (`POST /product-drafts`) | `draftsKept`, `draftsAllowed` |
+| `draft_incomplete` | 400 | a draft being published still lacks details | `missing` |
+
+The offers inside `reason` are `GET /plans`' figures in the person's billing
+currency only (`priceMinor` in the minor unit of `currency`). The rules, the
+routes that ask and the drafts are in [`PLANS.md`](PLANS.md) section 6.
+
+## 24. Send to a bank account (WALLET-09)
+
+`GET /money/banks`, `POST /money/banks/name-check` and `POST
+/money/transfers/bank` (`src/money/transfers/`, `src/money/saved-accounts/`),
+served. A withdrawal (W17) is a bank send to the payout account; it has no
+route of its own. Reading one send, of either kind, is `GET
+/money/transfers/{id}` (section 19).
+
+- **The bank list and the name check** read no wallet and move no money. `GET
+  /money/banks` is the provider's list in one unpaged array (`code`, `name`;
+  key on `code`), kept in memory for an hour. `POST /money/banks/name-check`
+  answers `AccountNameView` with the holder's name AS THE BANK GIVES IT, or
+  `422 name_check_failed` with the sentence that says why (CONVENTIONS
+  section 10), or `503 provider_unreachable`. W8's Continue unlocks only after
+  it answers. The answer carries `nameToken`, signed for this person and good
+  for 15 minutes: the send to an account that is not saved sends it back.
+- **Name checks are limited per person** (WALLET-37, R-51, G-764): at most
+  `name_check_per_hour` (launch value 30) an hour for one signed-in person,
+  in one count shared by `POST /money/banks/name-check`, `PUT
+  /money/payout-account` and `POST /money/beneficiaries` for a bank account;
+  the 31st is `429 name_check_rate_limited` with the minutes left, no check
+  made. It is per person, never per address: two people on one address each
+  have their own count. A check the bank could not answer (`503`) is not
+  counted. A bank send's own check just before the money goes is not
+  counted when it is the person's own: a send to a saved account, or to an
+  account that is not saved with a `nameToken` this person got for that bank
+  code and account number (not older than 15 minutes). Any other send to an
+  account that is not saved is a name check (round 5, G-764): it spends one of
+  the 30, and past them it is `429 name_check_rate_limited` before the PIN,
+  the key given back, the bank not asked, no holder name in the answer.
+- **A withdrawal goes only to the person's own name** (WALLET-37, R-51,
+  G-765). A withdrawal is a bank send to the saved payout account. The bank
+  is asked as for any send; when the holder it gives is not the person's
+  verified name (the BVN name kept by the check, else the wallet's own
+  account name; with neither, nothing vouches for the account) the answer is
+  `409 account_not_in_your_name` before the PIN, the key given back, nothing
+  sent. A holder that differs from the one kept
+  is `409 account_name_changed` first, as above. Sends to other accounts (W8)
+  are unchanged.
+- **The request.** Headers `Idempotency-Key` (required, section 4) and
+  `X-Transaction-Pin` or `X-Device-Approval` (section 5). Body
+  `BankTransferDto`: `bankCode`, `accountNumber` (ten digits), `amountKobo`
+  (what the account gets), `expectedTotalKobo` and `quoteToken` (both from
+  `GET /money/fees/quote?kind=bank_transfer`, BACKEND_GAPS G-64), an
+  optional `note` (trimmed, at most 100 characters) and, for an account that
+  is not saved, the `nameToken` of the name check the person saw (required
+  for such an account: without it the answer is `400`, FIX-41). The app
+  never sends a name: the server asks the bank again, just before the send, and sends to
+  the name it gets. Answers `201` with `TransferView` (`kind: bank_account`,
+  `toBankAccount`: the bank's code and name, the account number and the
+  holder's name as the bank gave it, `timeline`: `requested`, `sent_to_bank`
+  once the provider has taken it, then `completed`; a send that `failed` or
+  was `reversed` shows `requested` and that outcome only).
+- **What it costs.** The amount, the provider's charge for a bank send and
+  WAWU's fee on top (R-10, from the fee settings; with Fintava's dashboard
+  rates, ₦40 + ₦25 = ₦65, so a ₦25,000 send debits ₦25,065). The provider
+  collects both in the one transfer; what its own record says it took is the
+  record, as for a send to a WAWU user (section 19). A send has no receiver's
+  ledger row: the money is at another bank.
+- **Before money moves**, in order: `fees_not_set`, the wallet, the key, the
+  ACCOUNT (below), the PIN, the body, the quote (`409 quote_changed`), the
+  provider's available balance (`402 insufficient_funds` with `balanceKobo`,
+  `totalKobo`, `shortfallKobo`), WAWU's limits and the provider's daily limit
+  inside the claim (`403 limit_reached`, WALLET-23's check, section 3). A
+  refusal at any step before the PIN uses no PIN try and gives the key back.
+- **The account, answered before the PIN.** A `bankCode` or `accountNumber`
+  that is not a bank code or ten digits (missing, the wrong type, or the
+  wrong shape) is the route's `400` with the validation sentence for that
+  field, before the bank is asked. Your own wallet at the provider's own
+  bank is `400 self_transfer`. The bank is asked; an account it does not
+  confirm is `422 name_check_failed`. A SAVED account (one of your
+  beneficiaries, or your payout account) goes through the saved-account gate
+  (NUV-06): the bank code the provider knows the bank by, and the payee ids
+  kept after the first send. The kept holder name, and the kept bank name
+  against the provider's name for the code, are compared with the answer of
+  the bank just now; any difference is `409 account_name_changed`, with
+  `reason.accountName` and `reason.bankName` as they stand now, and NOTHING
+  is sent. The person is shown both and confirms them by saving the account
+  again with `confirmCurrentName: true` (`POST /money/beneficiaries`; a
+  payout account is confirmed by `PUT /money/payout-account`, which takes no
+  flag: a plain PUT keeps what the bank says now, and refuses it with
+  `409 account_not_in_your_name` when the name is not theirs). Saving without the flag
+  answers the row as it is, as before. An account that is NOT saved is bound
+  to the name the person was shown: with `nameToken` on the send, a holder
+  or bank that the bank names differently now, or a token that is not this
+  person's, this account's, or is past its 15 minutes, is the same
+  `409 account_name_changed` and nothing is sent; the app shows the names
+  and runs the name check again. A send to an account that is not saved with
+  no token is `400` with one plain sentence, before the PIN: nothing is sent,
+  no PIN try is used and the key is given back (FIX-41). A saved account and
+  a withdrawal to the payout account need no token.
+- **Once per key, written first.** The send, its pending ledger row (with the
+  quoted `providerFeeKobo` and `wawuFeeKobo`) and the key's link to it are
+  written in one transaction BEFORE the provider hears of the send. The
+  provider is called once. A request that provably never left is failed and
+  the key given back; an unknown outcome (a lost answer, a 5xx, a transfer
+  accepted and not finished, a repeated reference, or any refusal that may
+  have created a transfer) is `pending` with the
+  same `statusMessage` as section 19, and is found again by OUR reference
+  (the sweep asks the provider; under Nuvion the sender's transfers are
+  walked, never read as "no money moved"). Nothing sends it a second time.
+  A refusal the provider makes before it takes the money (not enough in the
+  wallet, a frozen wallet, payouts not available) fails the send at once,
+  voids its pending ledger row and gives the key back: `402
+  insufficient_funds` with the figures, `423 wallet_frozen`, `503
+  provider_unreachable`. The same request again is a new send under a new
+  reference.
+- **A failed send is reversed once.** A send the provider reports as failed is
+  `failed`; the provider's reversal of the debit (`debit_transfer_reversal`)
+  then moves it to `reversed`, with `reversal.returnedKobo` and `keptKobo`
+  from the provider's own report, once however often it is reported.
+
+## 25. Delete account: money first, 30 days, cancel (SETTINGS-06)
+
+`DELETE /account` (R-17) asks to delete the signed-in account. It waits 30
+days; signing in during them cancels it (WAWU ID, SETTINGS-08).
+
+- **Money first (Z6).** Refused with `409`, `reason.code`
+  `account_deletion_blocked`, nothing changed, while any of these holds.
+  `reason.blockers` lists them; the app leads with `wallet_balance` (the
+  Withdraw button) and shows `reason.balanceKobo`, the wallet provider's
+  balance, never a sum of our rows. `reason.message` is a sentence to show as
+  it is.
+  - `wallet_balance`: the wallet holds money (available or booked above 0).
+  - `open_hold`: a held payment (paid DM, ticket, bill) where the person is
+    the payer or the payee (R-19). `reason.openHolds` counts them.
+  - `waiting_earnings`: a completed sale whose 85% has not reached their
+    wallet (R-11, `WalletPayment.payeeSettledAt` unset, no hold).
+    `reason.waitingEarnings` counts them. A person with no wallet can have
+    these.
+  - `payment_in_progress`: a payment of theirs with no final answer.
+  - `cash_out_in_flight`: points held for a cash-out.
+  - `wallet_opening`: their wallet is being opened right now.
+- **`503 provider_unreachable`** when the provider does not answer, never a
+  guess that the wallet is empty. A wallet another provider holds (after a
+  rollback) answers the same.
+- **Otherwise `200 { deletionScheduledAt }`**, 30 days out, and: the Naira
+  wallet is frozen at the provider (it can neither send nor receive, so money
+  due to it waits in WAWU's account and is paid on unfreeze, as the hold sweep
+  does, G-10; a provider with no freeze leaves the wallet as it is), the
+  person's content is hidden (`removed`, remembered piece by piece), phone push
+  stops, and WAWU ID starts its grace period. Asking again keeps the date.
+  The money is looked at before the wallet is frozen, and the deletion is
+  recorded before the freeze call, so a freeze whose answer is lost is undone
+  by a cancel or a new request. A request that fails after the freeze lets
+  the wallet go again before it answers.
+- **The wallet follows the row** (round 5, R-1 wallet safety): a deletion in
+  force (`freezing`, `scheduled`, `purging`, `purged`) always has a frozen
+  wallet, and a cancelled or absent one never does. One function
+  (`reconcileWallet`) enforces it: it reads the row and freezes or unfreezes
+  to match, idempotently, acts only on a wallet of the provider the server
+  runs (the person's current wallet, so one opened during the 30 days is
+  frozen too), and never throws. It holds no transaction, no pooled connection
+  and no lock while the provider answers (round 6): it reads the row, asks the
+  provider, reads the row again, and acts again if the row changed (3 rounds at
+  most). Every request that can change the row or the wallet ends with it (a
+  repeat cancel and a refused `DELETE` included), and the hourly sweep runs it
+  for every row in force whatever its age and for every cancelled row until one
+  reconcile was confirmed for it (`AccountDeletion.walletSyncedAt`), so a
+  freeze or unfreeze whose answer was lost, or that the provider refused, is
+  put right within the hour.
+  A repeat `DELETE /account` on a row the purge has finished answers the date
+  it was due and schedules nothing.
+- **`POST /account/cancel-deletion`** (the person's own token; WAWU ID sends
+  the new one when they sign in) unfreezes the wallet, brings back exactly the
+  hidden pieces, resumes push and answers `200 { cancelled, walletUnfrozen,
+  contentRestored }`. With nothing scheduled it changes nothing and answers
+  `cancelled: false`. If the provider does not answer the unfreeze it answers
+  `503` having changed nothing, and can be called again (the wallet is frozen
+  again if that call was applied and only its answer was lost).
+  `walletUnfrozen` is `true` only when the provider confirmed the unfreeze
+  after the cancel; if it could not, the cancel stands with `false` and the
+  hourly sweep lets the wallet go. Once the purge has
+  started it answers `200 { cancelled: false, deletionInProgress: true,
+  message }` (data may already be gone, so it is never answered as restored);
+  the app shows `message` as it is.
+- **After the 30 days** an hourly sweep (`account-deletion-purge`) looks at
+  the money once more (a balance, hold or earning that appeared keeps the
+  account; `AccountDeletion.purgeBlockedBy` says why), then claims the row
+  (`purging`; no cancel from here), releases held points, deletes the Hub's
+  data (`AccountPurgeService`, points first), asks WAWU ID to anonymise the
+  identity, and marks the row `purged` only when all of that worked. A table
+  that would not clear, or WAWU ID not answering, leaves the row `purging`
+  (`purgeBlockedBy` says which) and the next pass carries on; WAWU ID is not
+  asked before the Hub's side is done.
+- **Buyers keep what they paid for, from the DELETE on** (owner ruling, 16 Oct
+  2026; lead rulings 17 Oct 2026). A piece with a completed paid purchase is
+  hidden from everything public (`removed`) the moment the deletion is
+  scheduled, and still opens on `GET /content/:id`, `GET /content/:id/detail`
+  and `GET /content/:id/media` for each buyer with a completed purchase and
+  for nobody else: the creator, a buyer whose purchase is pending, failed or a
+  tip, and a signed-out caller get `404`. A non-buyer also gets `404` on that
+  piece's comments (read, post, like), on save and on rate. Every other
+  removed piece answers exactly as before. A cancel puts the pieces back as
+  they were. At the purge the piece stays whole (title and description as
+  bought, with any email address or phone number in them replaced by
+  `[removed]`; files, lessons and frames), and loses the creator: its creator
+  id becomes `deleted-account`, its slug and tags go. File keys are not
+  renamed (they carry the creator's id in the path but are never shown as
+  text). Pieces with only a pending, failed or tip purchase are stripped to
+  "Removed content" and re-keyed to `deleted-account` too. `AccountDeletion.purgeNote`
+  says how many pieces were kept this way.

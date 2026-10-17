@@ -7,6 +7,10 @@ import {
 import type { Request } from 'express';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { POINTS_LIMITS } from '../points-config';
+import {
+  QUOTE_TOKEN_MAX_LENGTH,
+  QUOTE_TOKEN_MESSAGE,
+} from './points-convert.dto';
 import { PointsConvertService } from './points-convert.service';
 
 const POINTS_MESSAGE = 'points must be a whole number of 1 or more.';
@@ -25,7 +29,9 @@ const POINTS_MESSAGE = 'points must be a whole number of 1 or more.';
  * balance that has since changed never turns a replay into a refusal, and no
  * wallet is the wallet gate's, which runs before all of them. Guards run
  * before pipes, so it reads `points` from the body itself and refuses what
- * is not a whole number of points with the validation pipe's plain 400.
+ * is not a whole number of points with the validation pipe's plain 400, and
+ * the same for a body with no quote token. A quote token that is there but no
+ * longer holds is `409 quote_changed`, also before the PIN.
  */
 @Injectable()
 export class ConvertPrecheckGuard implements CanActivate {
@@ -54,10 +60,19 @@ export class ConvertPrecheckGuard implements CanActivate {
     ) {
       throw new BadRequestException([POINTS_MESSAGE]);
     }
+    const quoteToken = (body as { quoteToken?: unknown }).quoteToken;
+    if (
+      typeof quoteToken !== 'string' ||
+      quoteToken.length < 1 ||
+      quoteToken.length > QUOTE_TOKEN_MAX_LENGTH
+    ) {
+      throw new BadRequestException([QUOTE_TOKEN_MESSAGE]);
+    }
     await this.convert.assertMayConvert(
       user.sub,
       { phone: user.phone, country: user.country },
       points,
+      quoteToken,
     );
     return true;
   }

@@ -372,8 +372,24 @@ model MakerTier {
   pointsIncluded     Int
   /// The tier includes the first Voice Intro, not yet used.
   voiceIntroIncluded Boolean  @default(false)
+  /// The number on a numbered badge ("Founding Maker #128", TIER-07, G-421).
+  /// Allocated once, the first time the person holds a tier whose badge is
+  /// numbered, from BadgeNumberCounter, and never changed or given to anyone
+  /// else, so it survives an ended tier, a renewal and a change to another
+  /// tier (it is only shown while a numbered tier runs). Null until then.
+  badgeNumber        Int?     @unique
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+}
+
+/// The last number given to a numbered badge (TIER-07). One row, `name` is
+/// `numbered_badge`. A number is taken by one statement inside the grant's own
+/// transaction, so two buyers never get the same one, a grant that rolls back
+/// gives its number back (no gaps), and a number of a deleted account is not
+/// handed out again. Holds no person's id.
+model BadgeNumberCounter {
+  name String @id
+  last Int
 }
 
 /// A tier bought, renewed or upgraded from the wallet (TIER-03), written once
@@ -411,6 +427,48 @@ model MakerPurchase {
   @@index([wawuUserId, createdAt])
 }
 
+/// A tier purchase to be paid by bank transfer (TIER-05, VF6 "transfer details
+/// shown"). The person confirmed it with their PIN at checkout, at one quote
+/// (`priceKobo`, `totalKobo` with the Bank charge, and the `terms` of the goods);
+/// it waits as `awaiting` for the money to land in their own wallet, then is paid
+/// from the wallet exactly once (`settling`, then `settled` with the wallet
+/// payment's id), or closes: `expired` (the window lapsed) or `closed` (the item
+/// is no longer payable, the quote changed, or the person paid it another way).
+/// Nothing here is a balance: the provider's available balance decides.
+/// `openKey` is `<person>:<payment kind>:<target>` while `awaiting`, null after,
+/// so a person has one waiting order per item.
+model PlanTransferOrder {
+  id              String    @id @default(uuid())
+  wawuUserId      String
+  /// `tier` or `tier_bump`: the wallet payment kind it settles as.
+  paymentKind     String
+  /// The payment's target (`tier-founding`, `renew-verify`, `upgrade-verify-founding`).
+  targetId        String
+  priceKobo       Int
+  providerFeeKobo Int
+  totalKobo       Int
+  /// What the quote promised beyond its price (the goods), bound to the quote.
+  terms           Json?
+  status          String    @default("awaiting")
+  statusMessage   String?
+  openKey         String?   @unique
+  expiresAt       DateTime
+  /// The wallet payment that paid it; set once, never changed.
+  paymentId       String?   @unique
+  /// When the sweep took it to pay it; null unless `settling`.
+  settlingSince   DateTime?
+  /// The newest money-in row the sweep had looked at when it last checked.
+  creditsSeenAt   DateTime?
+  /// When the balance is next read although no new money-in row came.
+  nextCheckAt     DateTime?
+  checks          Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([wawuUserId, status, createdAt])
+}
+
 /// A pass to the Christmas event, issued with a tier (W44). One row per
 /// purchase that issued one: `purchaseRef` is unique, so a repeated payment
 /// confirmation issues it once. `type` names an event pass in
@@ -423,6 +481,31 @@ model EventPass {
   createdAt   DateTime @default(now())
 
   @@index([wawuUserId])
+}
+
+/// A product being drafted (TIER-02, VF2): everything about it except its files,
+/// kept free for any creator account until they publish it. A draft is not a
+/// product: it holds no file, no storage and no place against the tier's
+/// product count. Publishing it (POST /product-drafts/:id/publish, which needs
+/// a running tier and a free place) creates the ContentPiece and deletes the
+/// draft in one transaction. Every field but the title is nullable because a
+/// draft may be saved half written. Its own table, with no relation to
+/// ContentPiece, so no feed, count or review queue can ever see a draft.
+model ProductDraft {
+  id              String       @id @default(uuid())
+  wawuUserId      String
+  title           String
+  contentType     ContentType?
+  description     String?
+  category        String?
+  specializations String[]     @default([])
+  tags            String[]     @default([])
+  accessType      AccessType?
+  price           Int?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([wawuUserId, createdAt])
 }
 
 /// One featured work on somebody's profile (ME-16): what M33 shows under
@@ -1221,6 +1304,12 @@ model CreditPurchase {
   amount           Int
   status           TransactionStatus @default(pending)
   purchasedAt      DateTime          @default(now())
+  /// The wallet payment that bought this pack (INBOX-16); null for a
+  /// Flutterwave purchase. Unique: one payment settles at most one purchase,
+  /// so a delivery that runs twice finds its row and writes nothing more.
+  /// `flutterwaveTxRef` carries `wallet:<payment id>` on these rows (it is
+  /// required and unique, and no Flutterwave charge exists to name).
+  walletPaymentId  String?           @unique
   /// The cost-basis lot this purchase opens. Created ONLY when the charge is
   /// verified `completed` — see CreditLot.
   lot              CreditLot?
@@ -2350,6 +2439,8 @@ enum AdminOpsResource {
   health_subscription
   /// A person's hold on a BVN during a Nuvion wallet opening (NUV-02 round 3).
   wallet_identity_hold
+  /// A launch figure set in admin settings (TIER-06, R-65).
+  plan_setting
 }
 
 /// Every consequential ops action that used to be anonymous behind
@@ -2381,6 +2472,9 @@ enum AdminOpsAction {
   /// Support released one person's BVN hold at once (NUV-02 round 3). `detail`
   /// carries the opening's state before and after, never a BVN or its hash.
   wallet_identity_hold_released
+  /// One or more launch figures were set, or put back to their default
+  /// (TIER-06, R-65). `detail` carries each key with its old and new value.
+  plan_setting_set
 }
 
 /// Attribution for the operator surfaces that moved from AdminKeyGuard onto
@@ -3277,9 +3371,10 @@ model EventTicketType {
   /// every public and admin read and cannot be bought. Null is on sale.
   retiredAt    DateTime?
 
-  event   Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
-  orders  EventOrder[]
-  tickets EventTicket[]
+  event      Event            @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  orders     EventOrder[]
+  tickets    EventTicket[]
+  orderLines EventOrderLine[]
 
   @@index([eventId])
 }
@@ -3316,13 +3411,63 @@ model EventOrder {
 
   createdAt DateTime @default(now())
 
+  /// EVENTS-07: the order paid from the buyer's WAWU wallet. All of these are
+  /// null on an order the web paid through Flutterwave, whose reference stays
+  /// `flutterwaveTxRef` above until the web follows (after launch). A wallet
+  /// order still fills `flutterwaveTxRef` (the column is required and unique)
+  /// with `wawu-event-wallet-<id>`, which no Flutterwave charge can match.
+  ///
+  /// `paymentProvider` is `wallet` for a wallet order, null for the web's.
+  paymentProvider  String?
+  /// The reference a person quotes, provider-neutral: WAW-EVT- and eight
+  /// characters. Null on the web's orders.
+  paymentReference String?  @unique
+  /// The wallet payment (WalletPayment.id) that paid the order and the hold
+  /// its price sits in until the event (R-19). Set when the payment is
+  /// delivered; EVENTS-10 refunds, WALLET-17 releases, through the hold.
+  walletPaymentId  String?  @unique
+  holdId           String?
+  paidAt           DateTime?
+  /// Why a paid order could not be given its tickets (sold out in between,
+  /// the event called off); the hold is refunded and the order is `failed`.
+  failureReason    String?
+  /// The buyer's optional Idempotency-Key on the order's creation: the same
+  /// key for the same basket answers the same order, never a second one.
+  requestKey       String?
+
   event      Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
   ticketType EventTicketType @relation(fields: [ticketTypeId], references: [id])
   tickets    EventTicket[]
+  /// EVENTS-07: the basket. Empty on the web's orders, which hold one tier in
+  /// `ticketTypeId` and `quantity` above. On a wallet order `ticketTypeId` is
+  /// the first line's tier and `quantity` the tickets in all; the lines are
+  /// the truth of what was bought.
+  lines      EventOrderLine[]
 
+  @@unique([buyerWawuId, requestKey])
   @@index([eventId, status])
   @@index([buyerWawuId])
   @@index([referralCode])
+}
+
+/// EVENTS-07: one tier of a basket order (E2: Regular and VIP in one payment).
+/// The name and the price are snapshotted, like the order's total.
+model EventOrderLine {
+  id             String   @id @default(uuid())
+  orderId        String
+  ticketTypeId   String
+  /// The tier's name when it was bought ("VIP").
+  tierName       String
+  /// Naira for one ticket when it was bought; 0 for a free tier.
+  unitPriceNaira Int
+  quantity       Int
+  createdAt      DateTime @default(now())
+
+  order      EventOrder      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  ticketType EventTicketType @relation(fields: [ticketTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, ticketTypeId])
+  @@index([ticketTypeId])
 }
 
 /// One admittance. One row per seat, not per order, because each is scanned
@@ -3663,6 +3808,27 @@ model StorageObject {
   createdAt   DateTime            @default(now())
   /// When the object was proven to exist in the bucket. Null while pending.
   confirmedAt DateTime?
+  /// When the person gave the file up (POST /uploads/release). Null otherwise.
+  /// A released row stays released: a late file never counts it again.
+  releasedAt  DateTime?
+  /// When the Hub's sweep first looked at a given-up file after its upload
+  /// link had expired (ME-04 round 3). Null until then.
+  sweptAt     DateTime?
+  /// When that sweep deleted a file it found (a file the person released and
+  /// no listing uses). Null when it found none. A file it found on a row the
+  /// person never released is counted instead: the row becomes `confirmed`.
+  sweptRemovedAt DateTime?
+  /// The second look, an hour or more after the first, for a file that
+  /// arrived late. Null until then (ME-04 round 4).
+  sweptHourAt DateTime?
+  /// The third and last look, a day or more after the first. Null until then.
+  sweptDayAt  DateTime?
+  /// When a removal of this file from the bucket began (a release, or the
+  /// sweep). Set under the person's lock, cleared under it when the removal
+  /// ends; no lock or transaction is held while the bucket is called (ME-04
+  /// round 5). A row with this set is also released and `abandoned`, so no
+  /// listing can name its key. Null when no removal is under way.
+  removingAt  DateTime?
 
   @@index([wawuUserId, status])
   @@index([status, createdAt])
@@ -3738,6 +3904,25 @@ model PlatformSettings {
   professionalVerificationPriceNgn Int @default(2000)
 
   updatedAt DateTime @updatedAt
+}
+
+/// A launch figure an admin has set (TIER-06, R-65): one row per setting key,
+/// holding only the keys somebody changed. A key with no row reads its default
+/// from the seed (`plans.config.json` and `plan-settings.defaults.json`).
+///
+/// Key and value are checked by the registry in src/plan-settings before they
+/// are written and again when they are read, so the JSON column is not a
+/// free-form bag: an unknown key or a value of the wrong kind never reaches
+/// a reader. Deleting the row puts the setting back to its default.
+model PlanSetting {
+  key   String @id
+  value Json
+
+  /// Snapshot of the admin who last set it (no foreign key, as AdminOpsAudit).
+  updatedByAdminId String?
+  updatedAt        DateTime @updatedAt
+
+  @@index([updatedAt])
 }
 
 /// The code somebody arrived with, remembered against their account.
@@ -3998,6 +4183,16 @@ model FintavaWallet {
   /// only on rows of the provider it runs, so after a rollback one
   /// provider's ids are never sent to the other (MONEY-20 finding 2).
   provider      String?  @default("fintava")
+  /// The provider's own name for the account's level (`TIER_2`), as its last
+  /// balance read said it (WALLET-23). For ops only: the app is never shown it.
+  accountTier   String?
+  /// What the account may send in a Lagos day, in kobo, as of `limitsReadAt`
+  /// (WALLET-23); null when the provider named no limit. A copy for the
+  /// limit check and the W35 row, refreshed on every balance read; the
+  /// provider stays the one that enforces it.
+  dailyLimitKobo BigInt?
+  /// When `accountTier` and `dailyLimitKobo` were last read. Null: never read.
+  limitsReadAt  DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 }
@@ -4511,7 +4706,9 @@ model FintavaLedgerEntry {
 
   /// WALLET-10: the answer to "was the person told about this credit": one
   /// row once the money-in notice sweep has dealt with it. Only `in` rows of
-  /// category `top_up` on a person's wallet ever get one.
+  /// a person's wallet ever get one: a bank transfer in (`top_up`), money from
+  /// another person (`transfer`), earnings landed (`earning`) and refunds
+  /// (`refund`), since WALLET-39.
   moneyInNotice MoneyInNotice?
 
   @@index([wawuUserId, occurredAt])
@@ -4527,8 +4724,9 @@ model FintavaLedgerEntry {
 /// ─────────────────────────────────────────────────────────────────────────
 /// MONEY IN, TOLD ONCE (task WALLET-10, BACKEND_GAPS G-33)
 ///
-/// One row per credited ledger row (`direction` in, `category` top_up, on a
-/// person's wallet) that the money-in notice sweep has dealt with: the
+/// One row per credited ledger row (`direction` in, `category` top_up, transfer,
+/// earning or refund since WALLET-39, on a person's wallet) that the money-in
+/// notice sweep has dealt with: the
 /// primary key is the exactly-once rule. The row is written in the same
 /// transaction as the Notification it answers (NotificationService.emit takes
 /// the transaction), so there is never a notification without its row here,
@@ -4565,6 +4763,16 @@ model MoneyInNotice {
   outcome        MoneyInNoticeOutcome
   notificationId String?
   createdAt      DateTime             @default(now())
+
+  /// WALLET-39: when the person was told the credit was taken back (the
+  /// ledger row went `reversed` after a `sent` notice). Null until then, and
+  /// always null on a `muted` or `before` mark: nothing was said, so nothing
+  /// needs correcting. The mark and the correction notification are written in
+  /// one transaction, so a reversal is corrected once.
+  correctedAt              DateTime?
+  /// The correction notification written then; null when `correctedAt` was
+  /// set by the migration for a reversal that was already in the ledger.
+  correctionNotificationId String?
 }
 
 /// Every reference one ledger row is known by. The primary key is the
@@ -4706,6 +4914,11 @@ model WalletPayment {
   chargeReviewSince     DateTime?
   /// A tip's message.
   note                  String?
+  /// What the item was quoted with, kept from the claim for the delivery
+  /// (TIER-06 round 2): a tier purchase's goods. A flat JSON object the kind
+  /// wrote (`PayableTarget.terms`); null for a kind that sets none and for
+  /// payments claimed before this column.
+  terms                 Json?
   /// When the debit was first sent to Fintava (the reconcile window).
   sentAt                DateTime?
   completedAt           DateTime?
@@ -4839,15 +5052,16 @@ model WalletHold {
 /// (no money left the wallet: the provider's own refusal or its failed
 /// record) and `reversed`. The ledger rows (FintavaLedgerEntry) carry this
 /// row's id as `transferId`: the sender's `out` row from the claim on, the
-/// receiver's `in` row once the send is confirmed. `kind` is `wawu_user`;
-/// WALLET-09's bank sends add their own columns, nullable, beside these.
+/// receiver's `in` row once the send is confirmed. `kind` is `wawu_user`, or
+/// `bank_account` for a send to a bank (WALLET-09), which has no receiver's
+/// `in` row and carries the bank columns below, nullable, beside the others.
 ///
 /// Both people's sides are anonymised when their account is purged (the row
 /// is the other person's record too): see src/account-purge.
 /// ─────────────────────────────────────────────────────────────────────────
 model WalletTransfer {
   id                     String    @id @default(uuid())
-  /// wawu_user (WALLET-07); WALLET-09 adds bank_account.
+  /// wawu_user (WALLET-07) or bank_account (WALLET-09).
   kind                   String    @default("wawu_user")
   /// Null once the payer's account is deleted.
   payerWawuUserId        String?
@@ -4869,6 +5083,17 @@ model WalletTransfer {
   customerReference      String    @unique
   payerAccountNumber     String?
   recipientAccountNumber String?
+  /// A send to a bank account (kind `bank_account`, WALLET-09): the bank's
+  /// code in the running provider's list and its name there, the account
+  /// number, and the holder's name as the bank gave it on the name check made
+  /// just before the send (never a name the app typed). All null on a send to
+  /// a WAWU user. `sentToBankAt` is when the provider took the send (W19's
+  /// "sent to your bank").
+  bankCode               String?
+  bankName               String?
+  bankAccountNumber      String?
+  bankAccountName        String?
+  sentToBankAt           DateTime?
   /// The wallet provider that took the send (WALLET_PROVIDER at the time).
   provider               String    @default("fintava")
   status                 String
@@ -5061,7 +5286,12 @@ model School {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  courses SchoolCourse[]
+  courses    SchoolCourse[]
+  enrolments SchoolEnrolment[]
+  /// SCHOOLS-10: the code this school's apply link carries. Made the first
+  /// time the link is asked for.
+  link       SchoolLink?
+  clicks     SchoolLinkClick[]
 
   @@index([category])
   @@index([name])
@@ -5089,7 +5319,9 @@ model SchoolCourse {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  intakes CourseIntake[]
+  intakes    CourseIntake[]
+  clicks     SchoolLinkClick[]
+  enrolments SchoolEnrolment[]
 
   @@index([schoolId])
 }
@@ -5117,7 +5349,104 @@ model CourseIntake {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  enrolments SchoolEnrolment[]
+
   @@index([courseId, startDate])
+}
+
+/// SCHOOLS-10: the code on a school's apply link (SC9's `?ref=wawu-7KQ2`), one
+/// per school. It names the school and nobody else: the school's own site sees
+/// this code and never a person (DATA-SAFETY AA-10). It is made the first time
+/// the link is asked for, so a school added by the dashboard needs no step.
+/// SCHOOLS-12 finds the school a sign-up came from by this code.
+model SchoolLink {
+  id        String   @id @default(uuid())
+  schoolId  String   @unique
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  /// "wawu-" and four letters or digits, upper case, no 0, O, 1 or I.
+  code      String   @unique
+  createdAt DateTime @default(now())
+}
+
+/// SCHOOLS-10: one row per tap on "Continue to their site" (SC9): who tapped,
+/// for which course, when. Kept for the commission count (SCHOOLS-12); the
+/// school never sees it. The person's own row, so the account purge deletes it
+/// and the data export lists it. A course removed later leaves the row with no
+/// course (SetNull), so the school's count stays.
+model SchoolLinkClick {
+  id         String        @id @default(uuid())
+  schoolId   String
+  school     School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  courseId   String?
+  course     SchoolCourse? @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  userWawuId String
+  clickedAt  DateTime      @default(now())
+
+  @@index([schoolId, clickedAt])
+  @@index([courseId])
+  @@index([userWawuId, clickedAt])
+}
+
+/// SCHOOLS-07: one student's place in one intake, and the order that pays for
+/// it. It is the target of a `school_fee` wallet payment (MONEY-17): the
+/// payment's id is `paymentId`, the fee waits in WAWU's merchant wallet in a
+/// hold (R-19) until the intake starts, then goes to the school at 85/15
+/// (R-12, SCHOOLS-11).
+///
+/// `status`: reserved (the seat is claimed, `reservedUntil` is how long it is
+/// kept for an unpaid order), enrolled (paid), released (the reservation was
+/// given up, or ran out, and its seat went back), refunded (paid, but the
+/// class filled in the gap and the fee went back through the hold).
+///
+/// The seat is claimed by one conditional write on CourseIntake
+/// (`seatsTaken < capacity`), the Product.stock pattern, and given back once
+/// when a reserved order is released. The course, school and intake are copied
+/// onto the order, so the receipt reads as it was when the person enrolled
+/// even if the school edits them later. The figures are integer kobo:
+/// `priceKobo` is the course fee that was quoted; `schoolShareKobo` and
+/// `wawuShareKobo` are its 85/15 split (R-12) at that time, `commissionBps`
+/// WAWU's part of it.
+///
+/// A partial unique index (migration SQL, not modelled here) allows one live
+/// order (reserved or enrolled) per student and course, so sending the same
+/// enrol request twice makes one order and takes one seat.
+model SchoolEnrolment {
+  id              String       @id @default(uuid())
+  /// The student. Null once their account is deleted: the money record stays
+  /// (the school's share may still be owed), the person goes.
+  wawuUserId      String?
+  schoolId        String
+  school          School       @relation(fields: [schoolId], references: [id])
+  courseId        String
+  course          SchoolCourse @relation(fields: [courseId], references: [id])
+  intakeId        String
+  intake          CourseIntake @relation(fields: [intakeId], references: [id])
+  status          String       @default("reserved")
+  /// What a person quotes: WAW- and two groups of four characters.
+  reference       String       @unique
+  courseTitle     String
+  schoolName      String
+  intakeStartDate DateTime     @db.Date
+  intakeSchedule  String
+  intakeLocation  String?
+  priceKobo       Int
+  schoolShareKobo Int
+  wawuShareKobo   Int
+  commissionBps   Int
+  reservedUntil   DateTime
+  /// The wallet payment that paid it (WalletPayment.id) and its hold.
+  paymentId       String?      @unique
+  holdId          String?
+  enrolledAt      DateTime?
+  releasedAt      DateTime?
+  refundedAt      DateTime?
+  failureReason   String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@index([wawuUserId, createdAt])
+  @@index([intakeId, status])
+  @@index([status, reservedUntil])
 }
 
 /// SETTINGS-02: the owner's legal text, one row per document ("terms",
@@ -5182,9 +5511,25 @@ model TgifShare {
 /// else references it.
 model TgifPreference {
   userWawuId String   @id
-  /// false = the person turned TGIF off on Today.
+  /// false = the person turned TGIF off. HOME-16 (R-59): the switch now means
+  /// "send me TGIF each morning" (Z2); the column and the values are kept.
   show       Boolean  @default(true)
   updatedAt  DateTime @updatedAt
+}
+
+/// HOME-16: the marker that today's TGIF notice was made for this person. One
+/// row per person per day (the primary key), made in the same transaction as the
+/// notification, so a notice is made once per person per day however many hub
+/// instances run the job or however often it runs. `day` is the Lagos calendar
+/// day. Rows older than a few days are deleted by the job itself. Holds no
+/// words: the notice is the Notification row (kind `tgif_daily`).
+model TgifDailyNotice {
+  userWawuId String
+  day        DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@id([userWawuId, day])
+  @@index([day])
 }
 
 /// EXPLORE-03: a creator an admin has chosen to show in Explore's "Featured
@@ -5225,11 +5570,13 @@ model FeaturedCreator {
 // -----------------------------------------------------------------------------
 
 /// Where a sponsored card shows: inside the TGIF reader before the takeaway
-/// (`tgif_card`), or in TGIF's place on Today when the person has TGIF off
-/// (`today_slot`). Adding a placement is an `ALTER TYPE ... ADD VALUE`.
+/// (`tgif_card`), in TGIF's place on Today (`today_slot`), or as a slide in
+/// the Explore slider, which takes turns with events (`explore_slider`, ADS-07,
+/// R-59). Adding a placement is an `ALTER TYPE ... ADD VALUE`.
 enum AdPlacement {
   tgif_card
   today_slot
+  explore_slider
 }
 
 /// Where the team has put a campaign. The window (`startsAt`, `endsAt`) decides
@@ -5315,8 +5662,11 @@ model AdCreative {
   ctaDestinationId String
 
   /// The picture. An http(s) URL from POST /uploads/presign, the same as
-  /// Event.bannerUrl and NotificationCampaign.imageUrl. Null: the card is drawn
-  /// without a picture.
+  /// Event.bannerUrl and NotificationCampaign.imageUrl. REQUIRED for every
+  /// campaign saved from ADS-07 on (R-59): POST and PATCH /admin/ads refuse a
+  /// campaign without it. The column stays nullable for the campaigns saved
+  /// before that; serving skips a campaign whose artwork is null, so no card
+  /// is ever drawn without a picture, and the admin list shows those for fixing.
   artworkUrl String?
 
   createdAt DateTime @default(now())
@@ -5526,6 +5876,91 @@ model PushDelivery {
 model PushStoppedAccount {
   userWawuId String   @id
   createdAt  DateTime @default(now())
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// A DELETION THAT WAITS 30 DAYS (task SETTINGS-06, R-17)
+///
+/// One row per account that asked to be deleted (`DELETE /account`). The
+/// request is refused while money is in the person's wallet, a hold is open or
+/// earnings are waiting (Z6, R-11, R-19); otherwise the person's Naira wallet
+/// is frozen at the provider (it can neither send nor receive, so nothing new
+/// reaches it), their content is hidden, and `purgeAfter` is 30 days out.
+/// `POST /account/cancel-deletion` (WAWU ID calls it when the person signs in
+/// during the 30 days, SETTINGS-08) unfreezes the wallet, brings the content
+/// back and sets `status` to cancelled. After `purgeAfter` the purge sweep
+/// looks at the money once more (a balance, a hold or an earning that
+/// appeared keeps the account, `purgeBlockedBy` says why), releases any held
+/// points, deletes the Hub's data (AccountPurgeService), asks WAWU ID to
+/// anonymise the identity and sets `status` to purged. The row is kept after
+/// the purge as the record that it ran (it holds no personal detail).
+///
+/// `status`: scheduled, cancelled or purged. No balance is stored here: the
+/// provider's balance is the only balance (R-1).
+/// ─────────────────────────────────────────────────────────────────────────
+model AccountDeletion {
+  wawuUserId      String    @id
+  /// freezing: asked, the wallet is being frozen (not in force yet; a cancel
+  /// or a retry lets the wallet go). scheduled: in force for the 30 days.
+  /// purging: the sweep took it and is deleting (no cancel any more).
+  /// cancelled, purged: the end.
+  status          String    @default("scheduled")
+  scheduledAt     DateTime  @default(now())
+  /// The end of the 30 days: the earliest the purge runs.
+  purgeAfter      DateTime
+  /// The wallet frozen for the 30 days, and who froze it. Null: the person had
+  /// no wallet, or the provider cannot freeze (nothing was frozen).
+  walletId        String?
+  walletProvider  String?
+  walletFrozenAt  DateTime?
+  cancelledAt     DateTime?
+  purgedAt        DateTime?
+  /// The purge sweep's last look found money (or the provider unreachable):
+  /// when it first did, what it found, how many looks have been made.
+  purgeBlockedAt  DateTime?
+  purgeBlockedBy  String?
+  purgeAttempts   Int       @default(0)
+  /// What the purge kept on purpose, once it ran: for example content that
+  /// buyers paid for, hidden and stripped of the person's words. No personal
+  /// detail. Null: nothing was kept.
+  purgeNote       String?
+  /// SETTINGS-06 round 6. Set on a cancelled row when a reconcile confirmed the
+  /// person's wallet is unfrozen, so the hourly pass does not ask the provider
+  /// about it again. Null: a confirmation is still owed (a cancelled row is
+  /// checked every hour until it is set; a row in force is checked every hour
+  /// whatever this says). Cleared when a request takes the row over or a
+  /// reconcile of a cancelled row could not be confirmed.
+  walletSyncedAt  DateTime?
+  /// SETTINGS-06 round 7. The hourly pass claims a row before it asks the
+  /// provider about it. Future: a pass holds it until then (a second server
+  /// leaves it alone). Past: when the last pass finished with it, so the pass
+  /// takes the rows checked longest ago first. Null: never claimed.
+  reconcileClaimedUntil DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status, purgeAfter])
+}
+
+/// The content pieces a scheduled deletion hid, with the status each had, so
+/// a cancelled deletion puts back exactly those pieces and no others (a piece
+/// the person had already removed is not listed, so it stays removed). Deleted
+/// when the deletion is cancelled or the account is purged, except the rows of
+/// pieces the purge keeps for their buyers or strips (round 9): those move to
+/// the deleted account (`wawuUserId` = 'deleted-account') with the piece, and
+/// stay, so a reader always finds what the piece was. Only `priorStatus` =
+/// 'live' lets a buyer open a hidden piece.
+model AccountDeletionContent {
+  id             String   @id @default(uuid())
+  wawuUserId     String
+  contentPieceId String
+  /// The piece's `status` before the deletion hid it.
+  priorStatus    String
+  createdAt      DateTime @default(now())
+
+  @@unique([wawuUserId, contentPieceId])
+  @@index([wawuUserId])
+  @@index([contentPieceId])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
@@ -5983,6 +6418,20 @@ model PointHold {
 
   @@unique([purpose, reference])
   @@index([wawuUserId, createdAt])
+  /// POINTS-03's sweep of stale AI holds: the `held` ones older than the job's
+  /// longest run time, oldest first.
+  @@index([state, createdAt])
+}
+
+/// One person's choices about points (task POINTS-03, PT3). A row exists only
+/// once the person has chosen; no row reads as the defaults (`useWallet` off).
+model PointsSetting {
+  wawuUserId String   @id
+  /// "Use wallet": when points run short, the quote shows the wallet money
+  /// that would buy the shortfall. It never spends anything by itself; the
+  /// money moves only on `POST /points/shortfall` with the PIN.
+  useWallet  Boolean  @default(false)
+  updatedAt  DateTime @updatedAt
 }
 
 /// Append-only: one row per change to one lot's points. Never updated; a
@@ -6364,4 +6813,197 @@ model MoneyCheckRun {
   @@unique([provider, night, sequence])
   @@index([provider, status, finishedAt])
   @@index([emailedAt, finishedAt])
+}
+
+/// EXPLORE-05. One person's recent search, kept so the Search landing can show
+/// "Recent" and clear it. One row per person and normalised text: searching the
+/// same thing again moves the row to the top (`searchedAt`), it does not add a
+/// second one. A person keeps their newest few (see search-history.config.ts).
+///
+/// `queryKey` is the text trimmed, with runs of spaces made one, and lowercased:
+/// "Tax  Filing" and "tax filing" are one search. `query` is what the person
+/// last typed, in their own case, and is what the app shows.
+///
+/// "People are searching" is read from this table, never from a count of its
+/// own: a query is popular when enough different people searched it lately.
+/// So Clear takes a person's text out of that too, and nothing about who
+/// searched is stored anywhere else.
+model SearchHistory {
+  userWawuId String
+  queryKey   String
+  query      String
+  searchedAt DateTime @default(now())
+
+  @@id([userWawuId, queryKey])
+  @@index([userWawuId, searchedAt])
+  @@index([searchedAt, queryKey])
+}
+
+/// BILLS-04. A bill paid from the wallet: electricity, airtime, data or cable
+/// TV. One row per bill, made before it is paid (`draft`, the target the pay
+/// sheet quotes), paid with a `bill` WalletPayment into WAWU's own account
+/// (R-19), and then bought from the biller at Fintava out of that account.
+/// The row is the feature's own record of the bill; the money is the payment's
+/// and the hold's, and the provider's balance stays the only balance.
+///
+/// `status`: draft (made, not paid), buying (paid; the purchase is not made yet
+/// or its outcome is not known), delivered (the biller delivered; the hold is
+/// released) or failed (the biller did not; the hold is refunded to the payer).
+/// `purchaseSentAt` set means a record may exist at the biller: the purchase is
+/// asked about and never sent again until Fintava's own record says. Fintava's
+/// bill calls take no reference of ours, so this column is the only guard
+/// against buying twice.
+///
+/// Every figure is integer kobo. `amountKobo` is the bill's own amount (what the
+/// biller gets); the payment's price is `amountKobo + billChargeKobo +
+/// serviceFeeKobo`, all moved into WAWU's account in one transfer (R-31).
+model WalletBill {
+  id                   String    @id @default(uuid())
+  /// The buyer. Null once their account is deleted: the money record stays,
+  /// the meter or number and the name on it go with the account.
+  wawuUserId           String?
+  /// electricity, airtime, data or cable.
+  category             String
+  /// The disco code, the mobile network or the cable provider, as Fintava names it.
+  billerCode           String
+  /// What a person reads for the biller ("Ikeja Electric", "MTN", "DStv").
+  title                String
+  /// prepaid or postpaid (electricity only).
+  planType             String?
+  /// A data bundle's or a cable plan's code at Fintava.
+  productCode          String?
+  /// What that code is called ("1.5GB", "Compact").
+  productLabel         String?
+  /// The meter, phone or smartcard number.
+  accountNumber        String?
+  /// The name Fintava holds for the meter, when the buyer had it checked.
+  accountName          String?
+  amountKobo           BigInt
+  billChargeKobo       BigInt
+  serviceFeeKobo       BigInt
+  status               String    @default("draft")
+  /// The reference a person quotes: WAW-BIL- and eight characters.
+  reference            String    @unique
+  /// The wallet payment that paid it (WalletPayment.id) and its hold.
+  paymentId            String?   @unique
+  holdId               String?
+  /// When the purchase was handed to Fintava (see above).
+  purchaseSentAt       DateTime?
+  /// How many times Fintava has been asked what became of an unknown purchase.
+  checks               Int       @default(0)
+  /// Fintava's record of the purchase. Unique, so one history record settles
+  /// at most one bill (a lost purchase is never settled with another bill's).
+  fintavaTransactionId String?   @unique
+  fintavaReference     String?   @unique
+  /// The electricity token and the units bought, as Fintava answered them.
+  token                String?
+  units                String?
+  failureReason        String?
+  paidAt               DateTime?
+  deliveredAt          DateTime?
+  failedAt             DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([wawuUserId, createdAt])
+  @@index([status, purchaseSentAt])
+  /// FIX-42: the half-hourly late-success look reads failed bills, newest first.
+  @@index([status, failedAt])
+}
+
+// ---------------------------------------------------------------------------
+// REFERRAL POINTS (task REF-02, R-43, R-65)
+//
+// A person has one code and shares it; a new person claims it once; when that
+// person's first paid tier is granted, the person who invited them earns
+// points (never cash) after a hold. Nothing here is money and none of it is
+// the points balance: the points are lots in POINTS-01 (source `referral`),
+// these tables only say who invited whom and what each reward is waiting for.
+//
+// The names start with Person or Referral because ReferralCode is REF-01's
+// table for the /join registration link (a different thing: a price for a
+// community, not a person's own code). The two never share a row.
+// ---------------------------------------------------------------------------
+
+/// Where a reward is: `pending` through the hold, `granted` once its points
+/// are a lot, `cancelled` when it will never be (a refund inside the hold, a
+/// referrer without a tier). Granted and cancelled are final.
+enum ReferralRewardState {
+  pending
+  granted
+  cancelled
+}
+
+/// A person's own code, made the first time they ask for it. One per person.
+/// Upper case letters and digits, 3 to 20; the link is `wawu/r/<code>`.
+model PersonReferralCode {
+  id         String   @id @default(uuid())
+  wawuUserId String   @unique
+  code       String   @unique
+  createdAt  DateTime @default(now())
+}
+
+/// One person who claimed another's code. One row per invited person, so a
+/// person claims once (unique `referredWawuUserId`), and never their own.
+model PersonReferral {
+  id                 String   @id @default(uuid())
+  referrerWawuUserId String
+  referredWawuUserId String   @unique
+  /// The code as it was claimed (upper case).
+  code               String
+  claimedAt          DateTime @default(now())
+
+  reward ReferralReward?
+
+  /// The referrer's list and counts.
+  @@index([referrerWawuUserId, claimedAt])
+}
+
+/// What one invited person's first paid tier earns the person who invited
+/// them. At most one row per referral (unique `referralId`), whatever number
+/// of tier payments or repeated confirmations arrive: the first insert wins.
+/// The figures are copied here when the reward is made, so a setting changed
+/// during the hold changes nothing already pending. The multiplier is kept in
+/// thousandths (1.25 is 1250), points are whole, never money.
+///
+/// `pending` until `availableAt` (the hold), then the sweep makes it
+/// `granted` (a POINTS-01 lot, `sourceRef` = `reward:<id>`) or `cancelled`.
+model ReferralReward {
+  id                 String              @id @default(uuid())
+  referralId         String              @unique
+  referral           PersonReferral      @relation(fields: [referralId], references: [id], onDelete: Restrict)
+  referrerWawuUserId String
+  referredWawuUserId String
+  /// The tier payment this rests on (MakerPurchase.paymentRef).
+  paymentRef         String
+  tierId             String
+  basePoints         Int
+  multiplierMilli    Int
+  points             Int
+  state              ReferralRewardState @default(pending)
+  availableAt        DateTime
+  createdAt          DateTime            @default(now())
+  /// When it became granted or cancelled.
+  settledAt          DateTime?
+  /// Why it was cancelled: `purchase_refunded`, `referrer_no_tier`, `no_points`.
+  cancelReason       String?
+
+  /// The sweep: pending rewards that are due.
+  @@index([state, availableAt])
+  /// The referrer's counts and list.
+  @@index([referrerWawuUserId, state])
+}
+
+/// A milestone a person reached (5 verified, and so on): points granted once
+/// per person and count (unique), as a POINTS-01 lot with `sourceRef` =
+/// `milestone:<referrer>:<count>`.
+model ReferralMilestone {
+  id                 String   @id @default(uuid())
+  referrerWawuUserId String
+  /// Verified referrals the milestone is for.
+  count              Int
+  points             Int
+  grantedAt          DateTime @default(now())
+
+  @@unique([referrerWawuUserId, count])
 }

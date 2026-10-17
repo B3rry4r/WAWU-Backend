@@ -11,19 +11,22 @@ import {
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { ContentPieceService } from './content-piece.service';
-import { CreatorAccountGuard } from './guards/creator-account-guard';
+import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 import { ListContentQueryDto } from './dto/list-content-query.dto';
 import { CreateContentDto } from './dto/create-content.dto';
 import { VerifyUnlockDto } from './dto/verify-unlock.dto';
 import { RateContentDto } from './dto/rate-content.dto';
 import { UpdateContentDto } from './dto/update-content.dto';
 import { MyContentQueryDto } from './dto/my-content-query.dto';
+import { GatesPublishing } from '../plans/publishing-offers.interceptor';
+import { StorageBusyInterceptor } from '../storage/storage-busy.interceptor';
 
 /**
  * registry.json "ContentPiece". Route order deliberately puts literal
@@ -34,6 +37,7 @@ import { MyContentQueryDto } from './dto/my-content-query.dto';
  * no route collision, just adjacent path prefixes.
  */
 @UseGuards(WawuAuthGuard)
+@UseInterceptors(StorageBusyInterceptor)
 @Controller('content')
 export class ContentPieceController {
   constructor(private readonly contentPieceService: ContentPieceService) {}
@@ -124,15 +128,31 @@ export class ContentPieceController {
     await this.contentPieceService.delete(id, user.sub);
   }
 
+  /**
+   * Publishes a piece. Needs a running tier or a tick that has not ended, and
+   * a free place for one more product: otherwise 402 `tier_required` or
+   * `product_limit_reached` with the offers (TIER-02).
+   */
   @Post()
   @UseGuards(CreatorAccountGuard)
+  @GatesPublishing()
   create(@CurrentUser() user: WawuJwtClaims, @Body() dto: CreateContentDto) {
-    return this.contentPieceService.create(user.sub, dto);
+    // The files it names must still be the person's: checked inside the
+    // create transaction, under the storage lock (ME-04 round 4).
+    return this.contentPieceService.create(
+      user.sub,
+      dto,
+      this.contentPieceService.filesUsableIn(user.sub, dto),
+    );
   }
 
-  /** Edit the details or the file of a piece that is pending or rejected. */
+  /**
+   * Edit the details or the file of a piece that is pending or rejected.
+   * Sending a file needs a way to publish (402 `tier_required`, TIER-02).
+   */
   @Patch(':id')
   @UseGuards(CreatorAccountGuard)
+  @GatesPublishing()
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: WawuJwtClaims,
@@ -141,10 +161,14 @@ export class ContentPieceController {
     return this.contentPieceService.updateMine(id, user.sub, dto);
   }
 
-  /** Send a rejected piece for review again. */
+  /**
+   * Send a rejected piece for review again. It takes a place like a new
+   * publish, so it answers the same 402s (TIER-02).
+   */
   @Post(':id/resubmit')
   @HttpCode(HttpStatus.OK)
   @UseGuards(CreatorAccountGuard)
+  @GatesPublishing()
   resubmit(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: WawuJwtClaims,

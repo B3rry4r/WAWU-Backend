@@ -1,5 +1,5 @@
 import { createHash, createHmac, randomInt, randomUUID } from 'node:crypto';
-import { readFileSync, readdirSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspect } from 'node:util';
@@ -146,6 +146,49 @@ function pdf(): Buffer {
   );
 }
 
+/**
+ * The entries under the temporary folder that were not there at `before` and
+ * that hold any of `needles` (in their name or in their bytes). Other
+ * processes on the machine (CI runners) create and remove entries in that
+ * folder while a test runs, so the whole listing can't be compared: only what
+ * could be a copy of a document is looked at. Regular files and folders only
+ * (a socket or a pipe is never read), and an entry that can't be read or that
+ * vanishes while it is read is somebody else's.
+ */
+function tmpEntriesHolding(
+  before: ReadonlySet<string>,
+  needles: readonly string[],
+): string[] {
+  const wanted = needles.map((n) => Buffer.from(n));
+  const hits: string[] = [];
+  let looked = 0;
+  const holds = (path: string, name: string): boolean => {
+    if (needles.some((n) => name.includes(n))) return true;
+    looked += 1;
+    if (looked > 5000) return false;
+    try {
+      const st = lstatSync(path);
+      if (st.isDirectory()) {
+        return readdirSync(path).some((child) =>
+          holds(join(path, child), child),
+        );
+      }
+      if (!st.isFile() || st.size > 32 * 1024 * 1024) return false;
+      const bytes = readFileSync(path);
+      return wanted.some((w) => bytes.includes(w));
+    } catch {
+      return false;
+    }
+  };
+  for (const name of readdirSync(tmpdir())) {
+    looked = 0;
+    if (!before.has(name) && holds(join(tmpdir(), name), name)) {
+      hits.push(name);
+    }
+  }
+  return hits;
+}
+
 type Envelope<T> = {
   statusCode: number;
   message: string;
@@ -171,7 +214,7 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
   let slots: DocumentUploadSlots;
   const users: string[] = [];
   const previous: Record<string, string | undefined> = {};
-  const tmpBefore = readdirSync(tmpdir()).sort();
+  const tmpBefore: ReadonlySet<string> = new Set(readdirSync(tmpdir()));
 
   const http = () => request(app.getHttpServer());
   const body = <T>(res: Response): Envelope<T> => {
@@ -3289,7 +3332,7 @@ describe('NUV-03: documents, proof of address and the hosted selfie on Nuvion', 
           where: { wawuUserId: { in: users } },
         }),
       ).toBe(0);
-      expect(readdirSync(tmpdir()).sort()).toEqual(tmpBefore);
+      expect(tmpEntriesHolding(tmpBefore, needles)).toEqual([]);
       const logs = captured.join('\n');
       const replies = answered.join('\n');
       for (const n of needles) {

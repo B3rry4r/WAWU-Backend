@@ -5,6 +5,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -12,9 +13,14 @@ import { ApiResponse } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
-import { CreatorAccountGuard } from './guards/creator-account-guard';
+import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 import { PaidDmService } from './paid-dm.service';
 import { PaidDmPauseService } from './paid-dm-pause.service';
+import { PaidDmSettingsService } from './paid-dm-settings.service';
+import {
+  PaidDmEarnQueryDto,
+  UpdatePaidDmSettingsDto,
+} from './dto/paid-dm-settings.dto';
 import {
   PaidDmPageQueryDto,
   PaidDmReplyDto,
@@ -24,6 +30,8 @@ import type {
   PaidDmAvailability,
   PaidDmQuestion,
   PaidDmQueuePage,
+  PaidDmEarn,
+  PaidDmSettings,
   PaidDmStanding,
   PaidDmThreadDetail,
   PaidDmThreadPage,
@@ -40,6 +48,7 @@ export class PaidDmController {
   constructor(
     private readonly paidDm: PaidDmService,
     private readonly pause: PaidDmPauseService,
+    private readonly settings: PaidDmSettingsService,
   ) {}
 
   /** The creator's waiting list: soonest deadline first, with the total waiting. */
@@ -61,6 +70,53 @@ export class PaidDmController {
   @UseGuards(CreatorAccountGuard)
   standing(@CurrentUser() user: WawuJwtClaims): Promise<PaidDmStanding> {
     return this.pause.standing(user.sub);
+  }
+
+  /** The creator's paid message settings with everything I21 to I23 draw (price, reply window, share, standing). */
+  @Get('settings')
+  @ApiResponse({
+    status: 403,
+    description: 'The caller is not a creator account.',
+  })
+  @UseGuards(CreatorAccountGuard)
+  getSettings(@CurrentUser() user: WawuJwtClaims): Promise<PaidDmSettings> {
+    return this.settings.get(user.sub);
+  }
+
+  /** What the creator keeps of one message at a price they are typing (I21, R-21). Read only; saves nothing. */
+  @Get('settings/earn')
+  @ApiResponse({
+    status: 400,
+    description:
+      'The price is missing, not an integer, outside the bounds, or not a whole number of naira.',
+  })
+  @ApiResponse({
+    status: 403,
+    description: 'The caller is not a creator account.',
+  })
+  @UseGuards(CreatorAccountGuard)
+  earn(@Query() query: PaidDmEarnQueryDto): PaidDmEarn {
+    return this.settings.earnAt(query.priceKobo);
+  }
+
+  /** Saves the creator's paid message settings. Refused while paid messages are paused (R-13). */
+  @Put('settings')
+  @ApiResponse({
+    status: 400,
+    description:
+      'The price is not a whole number of naira, no price is set, or the reply time is not on offer.',
+  })
+  @ApiResponse({
+    status: 403,
+    description:
+      'The caller is not a creator account, or paid messages are paused (reason.code paid_messages_paused).',
+  })
+  @UseGuards(CreatorAccountGuard)
+  saveSettings(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: UpdatePaidDmSettingsDto,
+  ): Promise<PaidDmSettings> {
+    return this.settings.save(user.sub, dto);
   }
 
   /** Whether a creator's paid messages are switched off, and until when (I8). Any signed-in user. */

@@ -6,6 +6,11 @@ import {
   FREE_STORAGE_BYTES,
   TICK_STORAGE_BYTES,
 } from '../../common/creator-allowance';
+import { TierGateError } from '../../plans/tier-gate-error';
+import {
+  publishingOver,
+  publishingTables,
+} from '../../plans/tests/publishing-fakes';
 
 /**
  * The per-account storage ceiling.
@@ -30,28 +35,25 @@ interface Row {
   folder?: string;
 }
 
-/** The four stored tick columns on UserProfile (verification-state.ts). */
-const TICKED = {
-  creatorVerifiedAt: new Date('2026-01-01T00:00:00Z'),
-  creatorVerifiedUntil: new Date('2099-01-01T00:00:00Z'),
-  professionalVerifiedAt: null,
-  professionalVerifiedUntil: null,
-};
-const UNTICKED = {
-  creatorVerifiedAt: null,
-  creatorVerifiedUntil: null,
-  professionalVerifiedAt: null,
-  professionalVerifiedUntil: null,
-};
+/**
+ * Who is asking. TIER-02 (R-43): a file for a product needs a running tier or
+ * a tick that has not ended, and both get R-7's 10 GB. `none` is an account
+ * with neither: it can be told its free 1 GB (usage), but cannot presign
+ * content at all.
+ */
+type Person = 'none' | 'tier' | 'tick';
 
 function buildService(
   opts: {
     creator?: boolean;
     rows?: Row[];
+    /** A creator tick, kept so older cases read as they did. */
     tick?: boolean;
+    person?: Person;
     slotsUsed?: number;
   } = {},
 ) {
+  const person: Person = opts.person ?? (opts.tick ? 'tick' : 'tier');
   const rows: Row[] = opts.rows ?? [];
   const values: Record<string, string> = {
     STORAGE_ENDPOINT: 'https://example-bucket.t3.storageapi.dev',
@@ -102,31 +104,33 @@ function buildService(
       findMany: async () => [],
       update: async () => ({}),
     },
-    creatorState: {
-      // Read only by allowanceFor, for the upload count.
-      findUnique: () =>
-        Promise.resolve(
-          opts.creator === false
-            ? null
-            : { wawuUserId: 'creator-1', slotsUsed: opts.slotsUsed ?? 0 },
-        ),
-    },
-    userProfile: {
-      // R-7: the storage allowance comes from the tick, not from whether a
-      // CreatorState row exists.
-      findUnique: () => Promise.resolve(opts.tick ? TICKED : UNTICKED),
-    },
+    // The allowance and the gate read these three tables (TIER-02).
+    ...publishingTables(
+      {
+        tier:
+          person === 'tier'
+            ? { endsInDays: 30, productsIncluded: 3 }
+            : undefined,
+        tick: person === 'tick',
+        slotsUsed: opts.creator === false ? undefined : (opts.slotsUsed ?? 0),
+      },
+      'creator-1',
+    ),
   } as unknown as PrismaService;
 
-  return { service: new StorageService(config, prisma), rows };
+  const { allowance, gate } = publishingOver(prisma);
+  return {
+    service: new StorageService(config, prisma, allowance, gate),
+    rows,
+  };
 }
 
 const presign = (s: StorageService, bytes: number) =>
   s.presignUpload('creator-1', 'content/preview', 'image/jpeg', 'jpeg', bytes);
 
 describe('storage quota', () => {
-  it('gives an account with no creator state and no tick the free 1 GB', async () => {
-    const { service } = buildService({ creator: false });
+  it('tells an account with no creator state, no tier and no tick its free 1 GB', async () => {
+    const { service } = buildService({ creator: false, person: 'none' });
     const usage = await service.usageFor('creator-1');
     expect(usage.limitBytes).toBe(FREE_STORAGE_BYTES);
     expect(usage.limitBytes).toBe(1 * GB);
@@ -145,7 +149,7 @@ describe('storage quota', () => {
           id: 'a',
           wawuUserId: 'creator-1',
           key: 'k',
-          bytes: 1.9 * GB,
+          bytes: 9.9 * GB,
           status: 'confirmed',
           createdAt: new Date(),
         },
@@ -163,7 +167,7 @@ describe('storage quota', () => {
           id: 'a',
           wawuUserId: 'creator-1',
           key: 'k',
-          bytes: 1 * GB - 1000,
+          bytes: 10 * GB - 1000,
           status: 'confirmed',
           createdAt: new Date(),
         },
@@ -177,8 +181,8 @@ describe('storage quota', () => {
     // to storage and never calls back, so if only confirmed rows counted, an
     // account could presign its whole allowance repeatedly in one second.
     const { service } = buildService();
-    await presign(service, 0.6 * GB);
-    await expect(presign(service, 0.5 * GB)).rejects.toBeInstanceOf(
+    await presign(service, 6 * GB);
+    await expect(presign(service, 5 * GB)).rejects.toBeInstanceOf(
       PayloadTooLargeException,
     );
   });
@@ -190,7 +194,7 @@ describe('storage quota', () => {
           id: 'a',
           wawuUserId: 'creator-1',
           key: 'k',
-          bytes: 2 * GB,
+          bytes: 11 * GB,
           status: 'abandoned',
           createdAt: new Date(),
         },
@@ -199,7 +203,7 @@ describe('storage quota', () => {
     await expect(presign(service, 1 * GB)).resolves.toHaveProperty('uploadUrl');
   });
 
-  it('an account without a tick cannot store past 1 GB; one with a tick can, up to 10 GB', async () => {
+  it('an account with neither a tier nor a tick cannot presign content at all; a tier and a tick each store up to 10 GB', async () => {
     const rows = (): Row[] => [
       {
         id: 'a',
@@ -210,31 +214,36 @@ describe('storage quota', () => {
         createdAt: new Date(),
       },
     ];
-    const free = buildService({ rows: rows() });
-    await expect(presign(free.service, 0.5 * GB)).rejects.toBeInstanceOf(
-      PayloadTooLargeException,
+    // TIER-02: nothing is signed or recorded for a person who may not publish.
+    const none = buildService({ rows: rows(), person: 'none' });
+    await expect(presign(none.service, 1000)).rejects.toBeInstanceOf(
+      TierGateError,
     );
-    const ticked = buildService({ rows: rows(), tick: true });
-    await expect(presign(ticked.service, 0.5 * GB)).resolves.toHaveProperty(
-      'uploadUrl',
-    );
-    await expect(presign(ticked.service, 8.7 * GB)).resolves.toHaveProperty(
-      'uploadUrl',
-    );
-    await expect(presign(ticked.service, 1 * GB)).rejects.toBeInstanceOf(
-      PayloadTooLargeException,
-    );
+    expect(none.rows).toHaveLength(1);
+    for (const person of ['tier', 'tick'] as const) {
+      const held = buildService({ rows: rows(), person });
+      await expect(presign(held.service, 0.5 * GB)).resolves.toHaveProperty(
+        'uploadUrl',
+      );
+      await expect(presign(held.service, 8.7 * GB)).resolves.toHaveProperty(
+        'uploadUrl',
+      );
+      await expect(presign(held.service, 1 * GB)).rejects.toBeInstanceOf(
+        PayloadTooLargeException,
+      );
+    }
   });
 
-  it('an account already above 1 GB keeps every file; only the new one is refused', async () => {
-    // 2 GB was the free allowance before R-7. The rows stay as they are and
-    // keep counting; nothing is marked abandoned or removed.
+  it('an account already above its storage keeps every file; only the new one is refused', async () => {
+    // Over the limit (the free figure was 2 GB before R-7 lowered it). The
+    // rows stay as they are and keep counting; nothing is marked abandoned or
+    // removed.
     const rows: Row[] = [
       {
         id: 'a',
         wawuUserId: 'creator-1',
         key: 'k',
-        bytes: 1.5 * GB,
+        bytes: 10.5 * GB,
         status: 'confirmed',
         createdAt: new Date(),
       },
@@ -244,29 +253,30 @@ describe('storage quota', () => {
     expect(refusal).toBeInstanceOf(PayloadTooLargeException);
     expect((refusal as PayloadTooLargeException).getResponse()).toEqual({
       message:
-        'This file needs 1000 bytes, but only 0 bytes of your 1GB storage is free. A verification tick raises the limit to 10GB.',
+        'This file needs 1000 bytes, but only 0 bytes of your 10GB storage is free.',
       reason: {
         code: 'storage_limit_reached',
         neededBytes: 1000,
-        usedBytes: 1.5 * GB,
-        limitBytes: 1 * GB,
+        usedBytes: 10.5 * GB,
+        limitBytes: 10 * GB,
         tickHeld: false,
         storageBytesWithTick: 10 * GB,
       },
     });
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ bytes: 1.5 * GB, status: 'confirmed' });
+    expect(rows[0]).toMatchObject({ bytes: 10.5 * GB, status: 'confirmed' });
     const usage = await service.usageFor('creator-1');
     expect(usage).toEqual({
-      usedBytes: 1.5 * GB,
-      limitBytes: 1 * GB,
+      usedBytes: 10.5 * GB,
+      limitBytes: 10 * GB,
       remainingBytes: 0,
     });
   });
 
   it('reports both allowances, used and allowed, for the screens that show them', async () => {
-    const free = buildService({
-      slotsUsed: 3,
+    // A running tier of 3 products (TIER-02): allowed is what the gate allows.
+    const tier = buildService({
+      slotsUsed: 2,
       rows: [
         {
           id: 'a',
@@ -278,15 +288,15 @@ describe('storage quota', () => {
         },
       ],
     });
-    await expect(free.service.allowanceFor('creator-1')).resolves.toEqual({
+    await expect(tier.service.allowanceFor('creator-1')).resolves.toEqual({
       tickHeld: false,
-      uploads: { used: 3, allowed: 5, remaining: 2 },
+      uploads: { used: 2, allowed: 3, remaining: 1 },
       storage: {
         usedBytes: 0.25 * GB,
-        limitBytes: 1 * GB,
-        remainingBytes: 0.75 * GB,
+        limitBytes: 10 * GB,
+        remainingBytes: 9.75 * GB,
       },
-      free: { uploads: 5, storageBytes: 1 * GB },
+      free: { uploads: 0, storageBytes: 1 * GB },
       withTick: { uploads: 25, storageBytes: 10 * GB },
     });
     const ticked = buildService({ slotsUsed: 7, tick: true });
@@ -297,11 +307,13 @@ describe('storage quota', () => {
       uploads: { used: 7, allowed: 25, remaining: 18 },
       storage: { usedBytes: 0, limitBytes: 10 * GB, remainingBytes: 10 * GB },
     });
-    const plain = buildService({ creator: false });
+    // With neither, nothing may be published: 0 allowed, and the free 1 GB.
+    const plain = buildService({ creator: false, person: 'none' });
     await expect(
       plain.service.allowanceFor('creator-1'),
     ).resolves.toMatchObject({
-      uploads: { used: 0, allowed: 5, remaining: 5 },
+      uploads: { used: 0, allowed: 0, remaining: 0 },
+      storage: { limitBytes: 1 * GB },
     });
   });
 
@@ -326,6 +338,7 @@ describe('storage quota', () => {
 
   it('reports usage a person can act on', async () => {
     const { service } = buildService({
+      person: 'none',
       rows: [
         {
           id: 'a',
@@ -354,7 +367,7 @@ describe('storage quota', () => {
           id: 'a',
           wawuUserId: 'creator-1',
           key: 'k',
-          bytes: 0.9 * GB,
+          bytes: 9.9 * GB,
           status: 'confirmed',
           createdAt: new Date(),
         },
@@ -363,51 +376,39 @@ describe('storage quota', () => {
     // Small remainders drop to MB rather than "0.1GB" — a person deciding
     // what to delete needs a number they can compare against a file.
     await expect(presign(service, 0.5 * GB)).rejects.toThrow(
-      /needs 512MB, but only 102MB of your 1GB storage is free/,
+      /needs 512MB, but only 102MB of your 10GB storage is free/,
     );
   });
 
-  it('the 413 text never promises that deleting frees storage, and a ticked account is not told to get a tick', async () => {
-    const free = buildService({
-      rows: [
-        {
-          id: 'a',
-          wawuUserId: 'creator-1',
-          key: 'k',
-          bytes: 1 * GB,
-          status: 'confirmed',
-          createdAt: new Date(),
-        },
-      ],
-    });
-    const ticked = buildService({
-      tick: true,
-      rows: [
-        {
-          id: 'a',
-          wawuUserId: 'creator-1',
-          key: 'k',
-          bytes: 10 * GB,
-          status: 'confirmed',
-          createdAt: new Date(),
-        },
-      ],
-    });
+  it('the 413 text never promises that deleting frees storage, and nobody is told to get a tick', async () => {
+    // A tier holder and a tick holder both have the 10 GB limit; a person with
+    // neither never reaches this refusal (they are told to pick a tier).
     const messages: string[] = [];
-    for (const { service } of [free, ticked]) {
+    for (const person of ['tier', 'tick'] as const) {
+      const { service } = buildService({
+        person,
+        rows: [
+          {
+            id: 'a',
+            wawuUserId: 'creator-1',
+            key: 'k',
+            bytes: 10 * GB,
+            status: 'confirmed',
+            createdAt: new Date(),
+          },
+        ],
+      });
       const e = (await presign(service, 1000).catch(
         (x: unknown) => x,
       )) as PayloadTooLargeException;
       messages.push((e.getResponse() as { message: string }).message);
     }
-    expect(messages[0]).toBe(
-      'This file needs 1000 bytes, but only 0 bytes of your 1GB storage is free. A verification tick raises the limit to 10GB.',
-    );
-    expect(messages[1]).toBe(
+    expect(messages).toEqual([
       'This file needs 1000 bytes, but only 0 bytes of your 10GB storage is free.',
-    );
+      'This file needs 1000 bytes, but only 0 bytes of your 10GB storage is free.',
+    ]);
     for (const m of messages) {
-      expect(m).not.toMatch(/delete|remove/i);
+      expect(m).not.toMatch(/delete|remove|tick/i);
       expect(m).not.toContain('\u2014');
     }
   });
@@ -425,15 +426,15 @@ describe('storage quota', () => {
   ] as const)(
     'an account over its content storage can still upload to %s, and it does not count against content',
     async (folder, contentType, ext) => {
-      for (const tick of [false, true]) {
+      for (const person of ['tier', 'tick', 'none'] as const) {
         const { service } = buildService({
-          tick,
+          person,
           rows: [
             {
               id: 'a',
               wawuUserId: 'creator-1',
               key: 'k',
-              bytes: (tick ? 10 : 1) * GB,
+              bytes: (person === 'none' ? 1 : 10) * GB,
               status: 'confirmed',
               createdAt: new Date(),
             },
@@ -443,8 +444,9 @@ describe('storage quota', () => {
           service.presignUpload('creator-1', folder, contentType, ext, 1000),
         ).resolves.toHaveProperty('uploadUrl');
         const usage = await service.usageFor('creator-1');
-        expect(usage.usedBytes).toBe((tick ? 10 : 1) * GB);
-        // New content is still refused for the same account.
+        expect(usage.usedBytes).toBe((person === 'none' ? 1 : 10) * GB);
+        // New content is still refused for the same account: for storage
+        // when it may publish, because it needs a tier when it may not.
         await expect(
           service.presignUpload(
             'creator-1',
@@ -453,7 +455,9 @@ describe('storage quota', () => {
             'mp4',
             1000,
           ),
-        ).rejects.toBeInstanceOf(PayloadTooLargeException);
+        ).rejects.toBeInstanceOf(
+          person === 'none' ? TierGateError : PayloadTooLargeException,
+        );
       }
     },
   );

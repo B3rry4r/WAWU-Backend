@@ -72,6 +72,7 @@ import {
   PayableRegistry,
   type PayableTarget,
 } from './payable-registry';
+import { type PayableTerms, termsDigest, termsFromJson } from './payable-terms';
 import { isUniqueViolationOn } from '../prisma-unique';
 import { MoneyLimits } from '../limits/money-limits.service';
 import { PaymentSettings, splitPrice } from './payment-config';
@@ -112,6 +113,15 @@ export const FINISHING_MESSAGE =
 /** What the provider sees on the transfer. Names nobody and nothing personal. */
 export const PAYMENT_NARRATION = 'WAWU purchase';
 
+/**
+ * The limit a payment is counted against (WALLET-23, NUV-07): a bill has its
+ * own limits (`WAWU_LIMIT_BILL_*`, and the ledger counts it as a bill), every
+ * other payment is a purchase. BILLS-04.
+ */
+export function limitKindOf(kind: string): 'bill' | 'purchase' {
+  return kind === 'bill' ? 'bill' : 'purchase';
+}
+
 /** Rows per page of the sweep, and pages per pass. */
 const SWEEP_PAGE = 50;
 const SWEEP_PAGES = 20;
@@ -127,6 +137,12 @@ export { BALANCE_CHANGED_MESSAGE, nairaText };
 export function successBody(data: unknown): string {
   return JSON.stringify({ statusCode: 200, message: 'OK', data });
 }
+
+/** What a payment is checked against: the item and the quote the person saw. */
+export type QuoteBinding = Pick<
+  PaymentDto,
+  'kind' | 'targetId' | 'expectedTotalKobo' | 'quoteToken'
+>;
 
 /** One open payment per buyer and item (lead ruling D1.2). */
 export function openKeyOf(
@@ -348,15 +364,77 @@ export class WalletPaymentService implements OnModuleInit {
       wallet.wawuUserId,
       { kind: 'purchase', amountKobo: target.priceKobo },
       new Date(),
-      subjectOf(q.kind, q.targetId),
+      subjectOf(q.kind, q.targetId, target.terms),
     );
+    // The balance first: its answer keeps the account's limit (WALLET-23),
+    // which the standing below is read from.
+    const balanceKobo = await this.balanceOrNull(wallet);
     return this.quoteView(
       q.kind,
       q.targetId,
       target,
-      await this.withStanding(wallet.wawuUserId, fee, target.priceKobo),
-      await this.balanceOrNull(wallet),
+      await this.withStanding(wallet.wawuUserId, fee, target.priceKobo, q.kind),
+      balanceKobo,
     );
+  }
+
+  /**
+   * For a purchase the person will pay by bank transfer (TIER-05): the item
+   * and the quote they saw, checked exactly as `pay` checks them (a changed
+   * price, goods or total is `409 quote_changed` with the new quote), and the
+   * provider's available balance (`503 provider_unreachable` or `423
+   * wallet_frozen` when it cannot be read: there is no figure to show and
+   * nothing is guessed). Moves nothing and keeps nothing.
+   */
+  async vouch(
+    wallet: OpenWallet,
+    dto: QuoteBinding,
+  ): Promise<{
+    target: PayableTarget;
+    fee: FeeQuoteView;
+    availableKobo: number;
+  }> {
+    const { target } = await this.target(
+      wallet.wawuUserId,
+      dto.kind,
+      dto.targetId,
+      undefined,
+    );
+    const fee = await this.checkQuote(wallet, dto, target);
+    const { availableKobo } = await this.balances.balance(wallet);
+    return { target, fee, availableKobo };
+  }
+
+  /**
+   * The item as it stands now with a fresh signed quote for it, and the
+   * provider's available balance: what the settlement of a purchase waiting
+   * for a bank transfer (TIER-05) compares with the quote it was confirmed at
+   * and then pays with. Refuses as `pay` does (an item no longer payable,
+   * fees not set, the provider not answering). Moves nothing.
+   */
+  async currentQuote(
+    wallet: OpenWallet,
+    kind: PaymentKind,
+    targetId: string,
+  ): Promise<{
+    target: PayableTarget;
+    fee: FeeQuoteView;
+    availableKobo: number;
+  }> {
+    const { target } = await this.target(
+      wallet.wawuUserId,
+      kind,
+      targetId,
+      undefined,
+    );
+    const fee = this.fees.quote(
+      wallet.wawuUserId,
+      { kind: 'purchase', amountKobo: target.priceKobo },
+      new Date(),
+      subjectOf(kind, targetId, target.terms),
+    );
+    const { availableKobo } = await this.balances.balance(wallet);
+    return { target, fee, availableKobo };
   }
 
   /**
@@ -368,10 +446,11 @@ export class WalletPaymentService implements OnModuleInit {
     payer: string,
     fee: FeeQuoteView,
     priceKobo: number,
+    kind: PaymentKind,
   ): Promise<FeeQuoteView> {
     const standing = await this.limits.dailyStanding({
       wawuUserId: payer,
-      kind: 'purchase',
+      kind: limitKindOf(kind),
       amountKobo: priceKobo,
     });
     return { ...fee, ...standing };
@@ -422,7 +501,10 @@ export class WalletPaymentService implements OnModuleInit {
     }
 
     const id = randomUUID();
-    const split = splitPrice(price, target.payee !== null);
+    const split = splitPrice(
+      price,
+      target.payee !== null || target.payeeOutsideWawu === true,
+    );
     const now = new Date();
     const data: Prisma.WalletPaymentCreateInput = {
       id,
@@ -433,7 +515,9 @@ export class WalletPaymentService implements OnModuleInit {
       payeeWawuUserId: target.payee?.wawuUserId ?? null,
       priceKobo: BigInt(price),
       providerFeeKobo: BigInt(fee.fee.providerFeeKobo),
-      wawuFeeKobo: BigInt(fee.fee.wawuFeeKobo),
+      // WAWU's fee riding inside the price (a bill's) is recorded here too, so
+      // fee reports see it; the total the person pays is the quote's.
+      wawuFeeKobo: BigInt(fee.fee.wawuFeeKobo + (target.wawuFeeKobo ?? 0)),
       totalKobo: BigInt(fee.totalKobo),
       payeeShareKobo: BigInt(split.payeeShareKobo),
       wawuShareKobo: BigInt(split.wawuShareKobo),
@@ -445,6 +529,8 @@ export class WalletPaymentService implements OnModuleInit {
       openKey,
       nextCheckAt: new Date(now.getTime() + MINUTE),
       note: dto.note?.trim() ? dto.note.trim() : null,
+      // What the item was quoted with, kept for the delivery (TIER-06 round 2).
+      ...(target.terms === undefined ? {} : { terms: target.terms }),
       sentAt: now,
     };
 
@@ -453,7 +539,18 @@ export class WalletPaymentService implements OnModuleInit {
     // send still leaves a payment the sweep settles, and a repeat of the key
     // is answered from this payment). Its unique `openKey` is what makes one
     // buyer and one item one open payment, under any key.
-    const payment = await this.claim(scope, id, data, openKey);
+    const payment = await this.claim(scope, id, data, openKey, (tx) =>
+      handler.beforeClaim
+        ? handler.beforeClaim(
+            {
+              payerWawuUserId: payer,
+              targetId: dto.targetId,
+              amountKobo: dto.amountKobo,
+            },
+            tx,
+          )
+        : Promise.resolve(),
+    );
 
     // The claim is held, and the claim is never given up before what was paid
     // for is delivered (complete / fulfil below), so anything the feature
@@ -509,6 +606,7 @@ export class WalletPaymentService implements OnModuleInit {
     id: string,
     data: Prisma.WalletPaymentCreateInput,
     openKey: string,
+    guard: (tx: Prisma.TransactionClient) => Promise<void>,
   ): Promise<PaymentRow> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
@@ -521,11 +619,15 @@ export class WalletPaymentService implements OnModuleInit {
           await this.limits.assertMayMove(
             {
               wawuUserId: data.payerWawuUserId!,
-              kind: 'purchase',
+              kind: limitKindOf(data.kind),
               amountKobo: koboNumber(BigInt(data.priceKobo)),
             },
             { tx },
           );
+          // The kind's own cross-payment rule (EVENTS-13), on this same
+          // transaction, so two payments claiming at once are checked one
+          // after the other and a refusal records nothing.
+          await guard(tx);
           await this.keys.attach(tx, scope, id);
           const row = await tx.walletPayment.create({ data });
           await this.ledger.record(this.movement(row, 'out', 'pending'), tx);
@@ -581,7 +683,7 @@ export class WalletPaymentService implements OnModuleInit {
   /** The quote the buyer saw, checked against the item as it stands now (G-64). */
   private async checkQuote(
     wallet: OpenWallet,
-    dto: PaymentDto,
+    dto: QuoteBinding,
     target: PayableTarget,
   ): Promise<FeeQuoteView> {
     const payer = wallet.wawuUserId;
@@ -592,7 +694,7 @@ export class WalletPaymentService implements OnModuleInit {
         dto.expectedTotalKobo,
         dto.quoteToken,
         new Date(),
-        subjectOf(dto.kind, dto.targetId),
+        subjectOf(dto.kind, dto.targetId, target.terms),
       );
     } catch (e) {
       if (e instanceof MoneyError && e.code === 'quote_changed') {
@@ -605,21 +707,26 @@ export class WalletPaymentService implements OnModuleInit {
   /** `409 quote_changed` with the payment quote as it stands. */
   private async quoteChanged(
     wallet: OpenWallet,
-    dto: PaymentDto,
+    dto: Pick<QuoteBinding, 'kind' | 'targetId'>,
     target: PayableTarget,
   ): Promise<MoneyError> {
     const fresh = this.fees.quote(
       wallet.wawuUserId,
       { kind: 'purchase', amountKobo: target.priceKobo },
       new Date(),
-      subjectOf(dto.kind, dto.targetId),
+      subjectOf(dto.kind, dto.targetId, target.terms),
     );
     return new MoneyError('quote_changed', QUOTE_CHANGED_MESSAGE, {
       paymentQuote: this.quoteView(
         dto.kind,
         dto.targetId,
         target,
-        await this.withStanding(wallet.wawuUserId, fresh, target.priceKobo),
+        await this.withStanding(
+          wallet.wawuUserId,
+          fresh,
+          target.priceKobo,
+          dto.kind,
+        ),
         await this.balanceOrNull(wallet),
       ),
     });
@@ -1636,6 +1743,17 @@ export class WalletPaymentService implements OnModuleInit {
     };
   }
 
+  /**
+   * The provider's available balance, or null when it did not answer: what a
+   * screen that only shows the figure (a purchase waiting for a transfer,
+   * TIER-05) asks for, where a missing figure is shown as missing.
+   */
+  availableOrNull(
+    wallet: Pick<OpenWallet, 'wawuUserId' | 'walletId'>,
+  ): Promise<number | null> {
+    return this.balanceOrNull(wallet);
+  }
+
   /** The provider's available balance, or null when it did not answer (the quote shows no figure). */
   private async balanceOrNull(
     wallet: Pick<OpenWallet, 'wawuUserId' | 'walletId'>,
@@ -1995,6 +2113,7 @@ export class WalletPaymentService implements OnModuleInit {
         },
       });
       if (claimed.count === 0) return false;
+      const terms = termsFromJson(p.terms);
       await handler.onCompleted({
         paymentId: p.id,
         payerWawuUserId: p.payerWawuUserId,
@@ -2004,6 +2123,7 @@ export class WalletPaymentService implements OnModuleInit {
         payeeWawuUserId: p.payeeWawuUserId,
         note: p.note,
         holdId: hold?.id ?? null,
+        ...(terms === null ? {} : { terms }),
       });
       // Delivered: only now is the buyer's claim on the item given up, so
       // the feature's record of ownership is in place before another
@@ -2089,7 +2209,12 @@ export class WalletPaymentService implements OnModuleInit {
 
   view(p: PaymentRow, hold: HoldView | null = null): PaymentView {
     const providerFeeKobo = koboNumber(p.providerFeeKobo);
-    const wawuFeeKobo = koboNumber(p.wawuFeeKobo);
+    // A WAWU fee that rides inside the price (a bill's) is not an extra charge
+    // on top of it: the fee shown is the one that adds up to the total.
+    const wawuOnTop =
+      koboNumber(p.priceKobo) + providerFeeKobo + koboNumber(p.wawuFeeKobo) ===
+      koboNumber(p.totalKobo);
+    const wawuFeeKobo = wawuOnTop ? koboNumber(p.wawuFeeKobo) : 0;
     const status = p.status as PaymentStatus;
     // The buyer's claim on the item (`openKey`) is given up exactly when what
     // was paid for is delivered, or when there is nothing to deliver
@@ -2125,7 +2250,15 @@ export class WalletPaymentService implements OnModuleInit {
   }
 }
 
-/** What a payment quote is bound to: one kind and one item. */
-export function subjectOf(kind: PaymentKind, targetId: string): string {
-  return `payment:${kind}:${targetId}`;
+/**
+ * What a payment quote is bound to: one kind and one item, and the terms the
+ * item was quoted with when it has any (a changed term is a changed quote).
+ */
+export function subjectOf(
+  kind: PaymentKind,
+  targetId: string,
+  terms?: PayableTerms,
+): string {
+  const base = `payment:${kind}:${targetId}`;
+  return terms === undefined ? base : `${base}:terms:${termsDigest(terms)}`;
 }

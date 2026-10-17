@@ -96,6 +96,26 @@ const MONEY_TIMEOUT_MS = 120_000;
 const WAWU_FEE = 1000;
 const liveFee = (amountKobo: number) => (amountKobo < 500_000 ? 2325 : 1575);
 
+/**
+ * Whether any log line carries `pin` as a number of its own. Not a plain
+ * substring search: a PIN is four digits, and a random reference such as
+ * "wawu-send-e1397f65-..." holds the same four digits by chance, with nothing
+ * leaked (it failed a CI run on 16 Oct). What can hold digits by chance is
+ * taken out first (ids, stack frames, durations); the PIN must then stand
+ * alone, with no letter or digit touching it.
+ */
+function logsCarryPin(lines: string[], pin: string): boolean {
+  const text = lines
+    .join('\n')
+    .replace(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
+      'ID',
+    )
+    .replace(/\.[cm]?[jt]s:\d+(?::\d+)?/g, 'FRAME')
+    .replace(/\d+ ?ms\b/g, 'DURATION');
+  return new RegExp(`(?<![0-9A-Za-z])${pin}(?![0-9A-Za-z])`).test(text);
+}
+
 jest.setTimeout(300_000);
 
 /** Fintava's record by our reference, with ids that belong to ONE transfer. */
@@ -1828,6 +1848,6 @@ describe('Send to a WAWU user (WALLET-07) over HTTP', () => {
       expect([TRANSFER_NARRATION, undefined]).toContain(n);
     }
     // No log line carries a PIN.
-    expect(logger.lines.join('\n')).not.toContain(WRONG_PIN);
+    expect(logsCarryPin(logger.lines, WRONG_PIN)).toBe(false);
   });
 });

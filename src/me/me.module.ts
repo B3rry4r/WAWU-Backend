@@ -4,6 +4,7 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
 import { ContentPieceModule } from '../content-piece/content-piece.module';
 import { StorageModule } from '../storage/storage.module';
 import { PointsModule } from '../points/points.module';
+import { ReferralsModule } from '../referrals/referrals.module';
 import { MeController } from './me.controller';
 import { MeSavedService } from './me-saved.service';
 import { MePurchasesService } from './me-purchases.service';
@@ -24,6 +25,9 @@ import { MeEarningsService } from './me-earnings.service';
     // POINTS-01: GET /me/points and the points expiry job, mounted here so
     // AppModule is not edited (SHARED-CHANGES POINTS-01 #1).
     PointsModule,
+    // REF-02: GET /me/referrals, POST /me/referrals/claim and the reward job,
+    // mounted here so AppModule is not edited (SHARED-CHANGES REF-02 #2).
+    ReferralsModule,
   ],
   controllers: [MeController],
   providers: [

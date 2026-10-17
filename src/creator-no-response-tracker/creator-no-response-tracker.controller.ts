@@ -4,7 +4,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import type { CreatorNoResponseTrackerResponse } from '../common/types';
 import { CreatorNoResponseTrackerService } from './creator-no-response-tracker.service';
-import { CreatorAccountGuard } from './guards/creator-account-guard';
+import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 import { ResponseStatsQueryDto } from './dto/response-stats-query.dto';
 
 /**

@@ -33,6 +33,16 @@ export interface PointsConvertQuoteView {
   canConvert: boolean;
   /** Why not, when `canConvert` is false. */
   blockedBy: ConvertBlockedBy | null;
+  /**
+   * Binds this quote to the conversion that follows: send it back as
+   * `quoteToken` in `POST /points/convert`. Opaque to the app. The server
+   * pays what this quote shows or nothing: if the rate, the minimum, the cap
+   * or the cash changed since, the conversion is `409 quote_changed` with the
+   * new quote (and a new token) in `reason.pointsQuote`, and no points move.
+   */
+  quoteToken: string;
+  /** When the token stops being honoured (ISO 8601). */
+  expiresAt: string;
 }
 
 /**

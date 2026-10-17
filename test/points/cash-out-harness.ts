@@ -416,17 +416,71 @@ export abstract class CashOutBase {
     return ids;
   }
 
-  convert(
+  /**
+   * `POST /points/convert`. The body carries the quote token of the points
+   * quote the person is shown (TIER-06 round 2), so by default this asks for
+   * that quote first, as the app does, and sends it back. A repeat under the
+   * same Idempotency-Key sends the same token (the app resends its request
+   * unchanged). Pass `quoteToken` to send a given token, or `null` for none.
+   * When the quote cannot be had (no wallet, billed in dollars, a malformed
+   * amount) a made-up token goes, so the route's own refusal is what shows.
+   */
+  async convert(
     p: Pick<Person, 'auth'>,
     points: unknown,
-    opts: { key?: string; pin?: string | null } = {},
+    opts: {
+      key?: string;
+      pin?: string | null;
+      quoteToken?: string | null;
+    } = {},
   ) {
+    const token =
+      opts.quoteToken === undefined
+        ? await this.tokenFor(p, points, opts.key)
+        : opts.quoteToken;
     let req = request(this.app.getHttpServer())
       .post(BASE)
       .set('Authorization', p.auth)
       .set('Idempotency-Key', opts.key ?? randomUUID());
     if (opts.pin !== null) req = req.set('X-Transaction-Pin', opts.pin ?? PIN);
-    return req.send({ points });
+    return req.send(
+      token === null ? { points } : { points, quoteToken: token },
+    );
+  }
+
+  /** One token per Idempotency-Key, kept as a promise so taps at once share it. */
+  private readonly quoteTokens = new Map<string, Promise<string>>();
+
+  private tokenFor(
+    p: Pick<Person, 'auth'>,
+    points: unknown,
+    key: string | undefined,
+  ): Promise<string> {
+    if (key === undefined) return this.fetchToken(p, points);
+    let kept = this.quoteTokens.get(key);
+    if (kept === undefined) {
+      kept = this.fetchToken(p, points);
+      this.quoteTokens.set(key, kept);
+    }
+    return kept;
+  }
+
+  private async fetchToken(
+    p: Pick<Person, 'auth'>,
+    points: unknown,
+  ): Promise<string> {
+    let token = 'no-quote-for-this-request';
+    if (
+      typeof points === 'number' &&
+      Number.isSafeInteger(points) &&
+      points >= 1
+    ) {
+      const res = await this.quote(p, `?points=${points}`);
+      const given = (res.body as { data?: { quoteToken?: unknown } } | null)
+        ?.data?.quoteToken;
+      if (typeof given === 'string') token = given;
+    }
+    return token;
   }
 
   quote(p: Pick<Person, 'auth'>, query = '') {

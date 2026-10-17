@@ -23,26 +23,43 @@ export class AdsService {
     viewerWawuId: string,
     placement: AdPlacementName,
   ): Promise<AdCardView | null> {
+    const [first] = await this.eligible(viewerWawuId, placement);
+    return first ?? null;
+  }
+
+  /**
+   * Every card the Explore slider may show, in the serving order (heaviest
+   * first, ties as in AD_TIE_BREAK), or an empty list when there are none. The
+   * same rule as `serve` decides each one; the app interleaves them with the
+   * featured events (R-59). Viewing and tapping a slide is counted by ADS-05
+   * exactly as for any other card.
+   */
+  slider(viewerWawuId: string): Promise<AdCardView[]> {
+    return this.eligible(viewerWawuId, 'explore_slider');
+  }
+
+  private async eligible(
+    viewerWawuId: string,
+    placement: AdPlacementName,
+  ): Promise<AdCardView[]> {
     // One reading of the clock decides the whole answer.
     const now = this.clock();
 
-    const [first] = await servableCampaigns(
+    const found = await servableCampaigns(
       { prisma: this.prisma, blocked: this.blocked },
       viewerWawuId,
       now,
       { placement },
     );
-    if (!first) return null;
-    const creative = first.creative;
-    return {
-      id: first.id,
-      advertiser: first.advertiser,
-      headline: creative.headline,
-      subline: creative.subline,
-      ctaLabel: creative.ctaLabel,
-      ctaDestination: creative.ctaDestination,
-      ctaDestinationId: creative.ctaDestinationId,
-      artworkUrl: creative.artworkUrl,
-    };
+    return found.map((c) => ({
+      id: c.id,
+      advertiser: c.advertiser,
+      headline: c.creative.headline,
+      subline: c.creative.subline,
+      ctaLabel: c.creative.ctaLabel,
+      ctaDestination: c.creative.ctaDestination,
+      ctaDestinationId: c.creative.ctaDestinationId,
+      artworkUrl: c.creative.artworkUrl,
+    }));
   }
 }

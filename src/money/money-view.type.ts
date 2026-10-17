@@ -90,16 +90,19 @@ export interface WalletAccountView {
 }
 
 /**
- * The daily send limit and what is left of it today (limits.md in the
- * mobile repo). The figures come from config per tier, marked provisional
- * there; `tier` is whatever Fintava reports, or null when it reports none.
+ * The daily limit the wallet provider puts on the account, what was moved
+ * today and what is left (W35; task WALLET-23, `AccountLimits`). The limit is
+ * the provider's: Fintava reports the wallet's tier on every balance read and
+ * the tier's daily limit is a setting (limits.md in the mobile repo). `tier`
+ * is always null: the limits row names no tier (BRIEF W35), and the provider's
+ * own name for the level stays on the wallet row for ops.
  */
 export interface WalletLimitsView {
   tier: string | null;
   dailyLimitKobo: number;
   usedTodayKobo: number;
   remainingTodayKobo: number;
-  /** When today's limit starts again. The day boundary is Fintava's policy, read from config. */
+  /** When today's limit starts again: the next midnight in Lagos, where WAWU's own daily limits also turn over. */
   resetsAt: string;
 }
 
@@ -137,7 +140,7 @@ export interface WalletView {
   state: WalletState;
   /** Null while state is not_open or opening. */
   account: WalletAccountView | null;
-  /** Null when no limit is known; the screen hides the row (A8, W35). */
+  /** Null until a balance read has kept the provider's limit, and when it names none; the screen hides the row (A8, W35). */
   limits: WalletLimitsView | null;
   pin: PinStateView;
   bankTransfers: BankTransferAccessView;
@@ -322,6 +325,29 @@ export interface AccountNameView {
   bankName: string;
   accountNumber: string;
   accountName: string;
+  /**
+   * Binds a send to an account that is not saved to this holder's name: send
+   * it back as `nameToken` on `POST /money/transfers/bank`. Signed, for this
+   * person, short-lived (15 minutes).
+   */
+  nameToken: string;
+}
+
+/** One quick amount on W9: whole naira, in kobo. */
+export interface TransferQuickAmountView {
+  amountKobo: number;
+}
+
+/**
+ * GET /money/transfers/presets: what W9 draws that is not the person's own
+ * (task WALLET-02). The quick amounts come from settings, not from the design
+ * (the setting is documented in transfer-presets.ts); the note's length is the send's own limit.
+ */
+export interface TransferPresetsView {
+  /** Smallest first, at most four. */
+  quickAmounts: TransferQuickAmountView[];
+  /** The longest note a send takes, in characters. */
+  noteMaxLength: number;
 }
 
 /** A WAWU user who can be sent money (W7). Only people with an open wallet. */
@@ -540,7 +566,11 @@ export type HoldStatus = 'held' | 'released' | 'refunded';
  * be granted after the payment confirmed, and it is refunded at once.
  */
 export type HoldReleaseCondition =
-  'dm_answered' | 'event_took_place' | 'bill_delivered' | 'plan_granted';
+  | 'dm_answered'
+  | 'event_took_place'
+  | 'bill_delivered'
+  | 'intake_started'
+  | 'plan_granted';
 
 /**
  * Money held between payer and payee in WAWU's merchant wallet (R-19). The

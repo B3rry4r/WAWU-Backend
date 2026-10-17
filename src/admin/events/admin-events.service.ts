@@ -304,7 +304,7 @@ export class AdminEventsService {
 
     if (!t.from.includes(existing.status)) {
       throw new BadRequestException(
-        `An event can only be ${t.action} from ${t.from.join(' or ')} — this one is ${existing.status}.`,
+        `An event can only be ${t.action} from ${t.from.join(' or ')}. This one is ${existing.status}.`,
       );
     }
     if (t.fromFeatured !== undefined && existing.featured !== t.fromFeatured) {

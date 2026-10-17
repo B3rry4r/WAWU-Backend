@@ -7,6 +7,8 @@ import { ContentStatus } from '../../generated/prisma/enums';
 import { Prisma } from '../../generated/prisma/client';
 import { StorageService, objectKeyFrom } from '../storage/storage.service';
 import type { VerificationState } from '../common/verification/verification-state';
+import type { PersonBadgeView } from '../plans/tier-badge/person-badge-view.type';
+import { TierBadgeService } from '../plans/tier-badge/tier-badge.service';
 import { EXPLORE_CATEGORIES, normaliseInterest } from './explore-categories';
 import type {
   ExploreCreatorsQueryDto,
@@ -22,6 +24,11 @@ export interface ExploreCreatorCard {
   field: string | null;
   pieceCount: number;
   verification: VerificationState;
+  /**
+   * Their tier badge while a tier runs, else null (TIER-07): the pill beside
+   * the name, with the Founding Maker number.
+   */
+  badge: PersonBadgeView | null;
   following: boolean;
 }
 
@@ -45,6 +52,7 @@ export class ExploreService {
     private readonly wawuId: WawuIdClient,
     private readonly blockedAccounts: BlockedAccountService,
     private readonly storage: StorageService,
+    private readonly badges: TierBadgeService,
   ) {}
 
   categories() {
@@ -136,7 +144,7 @@ export class ExploreService {
   ): Promise<ExploreCreatorCard[]> {
     if (profiles.length === 0) return [];
     const ids = profiles.map((p) => p.wawuUserId);
-    const [identities, following] = await Promise.all([
+    const [identities, following, badgeBy] = await Promise.all([
       this.wawuId.lookupPublicIdentities(ids),
       viewer
         ? this.prisma.followRelationship.findMany({
@@ -144,6 +152,7 @@ export class ExploreService {
             select: { followingWawuId: true },
           })
         : Promise.resolve([]),
+      this.badges.forMany(ids),
     ]);
     const followingSet = new Set(following.map((f) => f.followingWawuId));
     const avatars = await Promise.all(
@@ -166,6 +175,7 @@ export class ExploreService {
           field: p.interests[0] ?? null,
           pieceCount: counts.get(p.wawuUserId) ?? 0,
           verification: deriveVerificationState(p),
+          badge: badgeBy.get(p.wawuUserId) ?? null,
           following: followingSet.has(p.wawuUserId),
         };
       })

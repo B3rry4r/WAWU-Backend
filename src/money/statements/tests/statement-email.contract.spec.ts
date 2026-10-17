@@ -28,7 +28,9 @@ import { MoneyModule } from '../../money.module';
 import {
   EMAIL_NOT_VERIFIED_MESSAGE,
   STATEMENT_EMAIL_FAILED_MESSAGE,
+  STATEMENT_EMAIL_TOO_BIG_MESSAGE,
 } from '../statement-email.service';
+import { STATEMENT_EMAIL_MAX_BYTES } from '../statement-config';
 import type {
   StatementDeliveryView,
   StatementEmailView,
@@ -41,7 +43,9 @@ import type { StatementView } from '../statement-view.type';
  * Emailing a statement over HTTP (task WALLET-35): the real MoneyModule, a
  * real database, real RS256 tokens checked against the stand-in WAWU ID's
  * JWKS, and a stand-in for WAWU ID's mail relay (`POST /internal/mail/send`)
- * that records every request. Every person is a brand-new wawuUserId with a
+ * that records every request and, like the real one, says how many files it
+ * took (a test can make it answer as the relay from before WALLET-35 did:
+ * 200 { id } and no word of the file). Every person is a brand-new wawuUserId with a
  * brand-new wallet; afterAll deletes their rows.
  */
 
@@ -124,6 +128,9 @@ describe('POST /money/statements/email and GET /money/statements/delivery (WALLE
   let relay: Server;
   let relayCaptured: Relayed[] = [];
   let relayScript: Array<{ status: number; message?: string }> = [];
+  // null: answer like the relay now does. A function: answer with that body.
+  let relayAnswer: ((id: string, files: number | null) => unknown) | null =
+    null;
   const users: string[] = [];
   const accounts: string[] = [];
 
@@ -212,8 +219,19 @@ describe('POST /money/statements/email and GET /money/statements/delivery (WALLE
             Buffer.concat(chunks).toString('utf8'),
           ) as Relayed['body'],
         });
+        const id = `relay-${relayCaptured.length}`;
+        const files = relayCaptured[relayCaptured.length - 1].body.attachments;
+        const took = Array.isArray(files) ? files.length : null;
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ id: `relay-${relayCaptured.length}` }));
+        res.end(
+          JSON.stringify(
+            relayAnswer
+              ? relayAnswer(id, took)
+              : took === null
+                ? { id }
+                : { id, attachments: took },
+          ),
+        );
       });
     });
     await new Promise<void>((r) => relay.listen(0, '127.0.0.1', r));
@@ -250,6 +268,7 @@ describe('POST /money/statements/email and GET /money/statements/delivery (WALLE
   beforeEach(() => {
     relayCaptured = [];
     relayScript = [];
+    relayAnswer = null;
   });
 
   afterAll(async () => {
@@ -458,6 +477,77 @@ describe('POST /money/statements/email and GET /money/statements/delivery (WALLE
         process.env.WAWU_ID_BASE_URL = saved;
       }
       expect(relayCaptured).toHaveLength(0);
+    });
+
+    it('a relay that drops the file (the one from before WALLET-35: 200 { id } and no count) is a failure, never "sent"', async () => {
+      const p = await person();
+      relayAnswer = (id) => ({ id });
+      const res = await post(p.auth, SEPT).expect(503);
+      expect(body(res).reason).toEqual({
+        code: 'statement_email_failed',
+        message: STATEMENT_EMAIL_FAILED_MESSAGE,
+      });
+      expect(JSON.stringify(res.body)).not.toContain(p.email);
+      // The request did carry the file; it was the answer that said nothing of it.
+      expect(relayCaptured).toHaveLength(1);
+      expect(relayCaptured[0].body.attachments).toHaveLength(1);
+    });
+
+    it('a relay that took a different number of files, or said it in another form, is a failure', async () => {
+      // A new person for each try: a failed send still takes one of the five a minute.
+      const answers: Array<(id: string) => unknown> = [
+        (id) => ({ id, attachments: 0 }),
+        (id) => ({ id, attachments: 2 }),
+        (id) => ({ id, attachments: '1' }),
+        (id) => ({ id, attachments: null }),
+        (id) => ({ id, attachments: [{}] }),
+        (id) => ({ id, attachments: true }),
+      ];
+      for (const answer of answers) {
+        const p = await person();
+        relayAnswer = answer;
+        const res = await post(p.auth, SEPT).expect(503);
+        expect(body(res).reason?.code).toBe('statement_email_failed');
+      }
+      // The right number is the only answer that is "sent".
+      const q = await person();
+      relayAnswer = (id) => ({ id, attachments: 1 });
+      await post(q.auth, SEPT).expect(200);
+    });
+
+    it('a statement whose file is over the relay cap is a final 400 statement_too_large before anything is sent, and gives its place back', async () => {
+      const p = await person();
+      const real = await statements.statement(
+        { wawuUserId: p.id, accountNumber: p.account },
+        { ...SEPT, format: 'csv' },
+      );
+      // Over the cap, counted in bytes not characters: 6 MiB + 1 two-byte letters is 12 MiB + 2 bytes.
+      const over = 'é'.repeat(STATEMENT_EMAIL_MAX_BYTES / 2 + 1);
+      expect(over.length).toBeLessThan(STATEMENT_EMAIL_MAX_BYTES);
+      const spy = jest
+        .spyOn(statements, 'statement')
+        .mockResolvedValue({ ...real, content: over });
+      try {
+        for (let i = 0; i < 8; i += 1) {
+          const res = await post(p.auth, SEPT).expect(400);
+          expect(body(res).reason).toEqual({
+            code: 'statement_too_large',
+            message: STATEMENT_EMAIL_TOO_BIG_MESSAGE,
+          });
+          expect(JSON.stringify(res.body)).not.toContain(p.email);
+        }
+        expect(relayCaptured).toHaveLength(0);
+        // Exactly the cap is allowed (and 8 refusals above did not use up the 5 a minute).
+        spy.mockResolvedValue({
+          ...real,
+          content: 'x'.repeat(STATEMENT_EMAIL_MAX_BYTES),
+        });
+        await post(p.auth, SEPT).expect(200);
+        expect(relayCaptured).toHaveLength(1);
+        expect(relayCaptured[0].body.attachments).toHaveLength(1);
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it('a repeat with the same Idempotency-Key reaches the sender under the same key; another person’s key, or none, does not', async () => {

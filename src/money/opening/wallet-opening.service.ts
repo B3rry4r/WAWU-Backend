@@ -28,6 +28,7 @@ import {
   WalletIdentityService,
 } from '../identity/wallet-identity.service';
 import { walletStateOf } from '../gate/wallet-gate';
+import { AccountLimits } from '../limits/account-limits.service';
 import { MoneyError } from '../money-error';
 import type { WalletState, WalletView } from '../money-view.type';
 import { TransactionPinService } from '../pin/transaction-pin.service';
@@ -35,6 +36,7 @@ import type { OpenNairaWalletDto } from './dto/open-wallet.dto';
 import { visibleBeneficiaries } from '../saved-accounts/beneficiary.service';
 import { type IdentityStop, stoppedOnIdentity } from './opening-stops';
 import { ReviewedOpening } from './reviewed-opening';
+import { tellWalletReady } from './wallet-ready-notice';
 import { accountOnItsWay } from './review-stage';
 import {
   WALLET_OPENING_DEFAULTS,
@@ -206,6 +208,8 @@ export class WalletOpeningService {
     // NUV-02 round 3: tells a person whose opening expired (kind
     // `identity_review`). Absent in a module without notifications.
     @Optional() private readonly notifications?: NotificationService,
+    // WALLET-23: W35's limits row. Absent: no row.
+    @Optional() private readonly accountLimits?: AccountLimits,
   ) {
     this.reviewed = new ReviewedOpening({
       prisma,
@@ -310,8 +314,13 @@ export class WalletOpeningService {
             openedAt: wallet.createdAt.toISOString(),
           }
         : null,
-      // No limit figure is known yet (BACKEND_GAPS G-7): null hides the row.
-      limits: null,
+      // The provider's limit on the account, as its last balance read said it
+      // (WALLET-23); null hides the row (nothing read yet, or the provider
+      // names none). Read from what is on file: this never calls the provider.
+      limits:
+        wallet && isRowOf(this.provider.name, wallet.provider)
+          ? ((await this.accountLimits?.view(wawuUserId)) ?? null)
+          : null,
       pin,
       // W18 is not built (R-28): a wallet only exists after the BVN and
       // selfie checks, so nothing blocks a bank send for its owner.
@@ -606,7 +615,9 @@ export class WalletOpeningService {
       for (const found of due) {
         try {
           const row = await this.unstick(found, await this.dbNow());
-          counts[await this.reconcile(row)] += 1;
+          // The sweep runs when nobody is looking at the open request: a
+          // wallet it records is announced (WALLET-40).
+          counts[await this.reconcile(row, true)] += 1;
         } catch (e) {
           this.logger.error(
             `wallet opening: a lost answer could not be reconciled (${(e as Error).name ?? 'Error'}); tried again on the next sweep`,
@@ -633,8 +644,17 @@ export class WalletOpeningService {
    * the row is `failed` and a new attempt may start), `wait`, or
    * `nothing_to_do` (not `unknown`, or another request is asking right now).
    * Times are the database's.
+   *
+   * `announce` (WALLET-40): true only from the sweep, so a wallet it records
+   * tells the person their account number is ready. A request that
+   * reconciles while a person is opening (`open`) does not announce: they
+   * are looking at the answer.
+
    */
-  async reconcile(row: OpeningRow): Promise<OpeningReconciliation> {
+  async reconcile(
+    row: OpeningRow,
+    announce = false,
+  ): Promise<OpeningReconciliation> {
     if (row.state !== 'unknown') return 'nothing_to_do';
     if (!isRowOf(this.provider.name, row.provider)) return 'nothing_to_do';
     // NUV-02: a reviewing provider's lost create is settled from its
@@ -705,6 +725,7 @@ export class WalletOpeningService {
         row.wawuUserId,
         row.attempts,
         seen.customer,
+        announce,
       );
       if (recorded === 'conflict') {
         await this.prisma.fintavaWalletOpening.updateMany({
@@ -853,11 +874,17 @@ export class WalletOpeningService {
    * still on this attempt. `conflict` when another WAWU account already
    * holds that Fintava account; `taken` when this person's wallet was
    * recorded by another request (or the attempt moved on).
+   *
+   * `announce` (WALLET-40): write the person's "your account number is ready"
+   * notice in the same transaction as the wallet row (src/money/opening/
+   * wallet-ready-notice.ts). False in the request that opens the wallet,
+   * where the person sees the number at once; true from the sweep.
    */
   private async record(
     wawuUserId: string,
     attempt: number,
     customer: ProviderCustomer,
+    announce = false,
   ): Promise<'recorded' | 'taken' | 'conflict'> {
     try {
       await this.prisma.$transaction(async (tx) => {
@@ -881,6 +908,15 @@ export class WalletOpeningService {
             provider: this.provider.name,
           },
         });
+        if (announce) {
+          if (this.notifications) {
+            await tellWalletReady(this.notifications, tx, wawuUserId);
+          } else {
+            this.logger.warn(
+              'wallet opening: no notification service here; the person was not told their account number is ready',
+            );
+          }
+        }
       });
       this.logger.log('wallet opening: account recorded');
       return 'recorded';

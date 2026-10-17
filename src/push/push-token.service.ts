@@ -94,4 +94,26 @@ export class PushTokenService {
       await tx.pushToken.deleteMany({ where: { userWawuId } });
     });
   }
+
+  /**
+   * The deletion was cancelled (SETTINGS-06): removes the mark `stopAccount`
+   * made, so a phone the person registers from now on is stored and pushed
+   * to again. The tokens deleted when the deletion was asked for are not
+   * brought back (the app registers its phone again when it opens). Under the
+   * same per-person lock as `register`. Idempotent.
+   */
+  async resumeAccount(
+    userWawuId: string,
+    tx?: Pick<PrismaService, '$executeRaw'>,
+  ): Promise<void> {
+    const run = async (db: Pick<PrismaService, '$executeRaw'>) => {
+      await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'push-token:' + userWawuId}, 0))`;
+      await db.$executeRaw`DELETE FROM "PushStoppedAccount" WHERE "userWawuId" = ${userWawuId}`;
+    };
+    if (tx) {
+      await run(tx);
+      return;
+    }
+    await this.prisma.$transaction(async (t) => run(t));
+  }
 }

@@ -4,6 +4,7 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
 import { ContentPieceModule } from '../content-piece/content-piece.module';
 import { StorageModule } from '../storage/storage.module';
 import { WalletModule } from '../wallet/wallet.module';
+import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
 import { UserProfileController } from './user-profile.controller';
 import { PublicUserProfileController } from './public-user-profile.controller';
 import { UserProfileService } from './user-profile.service';
@@ -39,6 +40,8 @@ import { ProfileAudienceService } from './profile-audience.service';
     WalletModule,
     // BlockedAccountService, so a hidden profile answers 404 (SETTINGS-04).
     BlockedAccountModule,
+    // The tier badge on the profile fields (TIER-07), a leaf with no routes.
+    TierBadgeModule,
   ],
   controllers: [
     UserProfileController,

@@ -104,13 +104,20 @@ export class BeneficiaryService {
   ): Promise<BeneficiaryView> {
     const mixed =
       dto.kind === 'wawu_user'
-        ? dto.bankCode !== undefined || dto.accountNumber !== undefined
+        ? dto.bankCode !== undefined ||
+          dto.accountNumber !== undefined ||
+          dto.confirmCurrentName !== undefined
         : dto.wawuUserId !== undefined;
     if (mixed) throw new BadRequestException(BENEFICIARY_MIXED_MESSAGE);
     if (dto.kind === 'wawu_user') {
       return this.addWawuUser(owner, dto.wawuUserId!);
     }
-    return this.addBankAccount(owner, dto.bankCode!, dto.accountNumber!);
+    return this.addBankAccount(
+      owner,
+      dto.bankCode!,
+      dto.accountNumber!,
+      dto.confirmCurrentName === true,
+    );
   }
 
   async remove(owner: string, id: string): Promise<void> {
@@ -178,6 +185,7 @@ export class BeneficiaryService {
     owner: string,
     bankCode: string,
     accountNumber: string,
+    confirmCurrentName: boolean,
   ): Promise<BeneficiaryView> {
     const existing = await this.prisma.moneyBeneficiary.findUnique({
       where: {
@@ -187,8 +195,11 @@ export class BeneficiaryService {
           accountNumber,
         },
       },
-      select: ROW_SELECT,
+      select: { ...ROW_SELECT, nuvionBankCode: true },
     });
+    if (existing && confirmCurrentName) {
+      return this.confirmCurrentName(owner, existing);
+    }
     if (existing) return this.one(existing);
     // Refused before the bank is asked when the list is full.
     await this.assertRoom(owner);
@@ -201,6 +212,45 @@ export class BeneficiaryService {
       ...account,
       ...this.banks.checkedStamp(account.bankCode),
     });
+  }
+
+  /**
+   * The person confirmed the bank and the name the bank gives for a saved
+   * account now (WALLET-09, `account_name_changed`): the bank is asked, with
+   * the provider's own code for the bank when the row kept one, and the row
+   * keeps what it says. The place, the account and its payee ids stay; only
+   * the names (and the time the provider's name was confirmed) change.
+   */
+  private async confirmCurrentName(
+    owner: string,
+    row: BeneficiaryRow & { nuvionBankCode: string | null },
+  ): Promise<BeneficiaryView> {
+    if (row.bankCode === null || row.accountNumber === null) {
+      return this.one(row);
+    }
+    const account: BankAccountView = await this.banks.check(
+      row.nuvionBankCode ?? row.bankCode,
+      row.accountNumber,
+    );
+    const stamp = this.banks.checkedStamp(account.bankCode);
+    await this.prisma.moneyBeneficiary.updateMany({
+      where: {
+        id: row.id,
+        ownerWawuId: owner,
+        bankCode: row.bankCode,
+        accountNumber: row.accountNumber,
+      },
+      data: {
+        bankName: account.bankName,
+        accountName: account.accountName,
+        ...(stamp.nuvionCheckedAt === null ? {} : stamp),
+      },
+    });
+    const fresh = await this.prisma.moneyBeneficiary.findFirst({
+      where: { id: row.id, ownerWawuId: owner },
+      select: ROW_SELECT,
+    });
+    return this.one(fresh ?? row);
   }
 
   /**

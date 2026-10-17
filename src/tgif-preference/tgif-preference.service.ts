@@ -2,13 +2,16 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 
 export interface TgifPreferenceView {
-  /** Whether TGIF shows on Today. True until the person turns it off. */
+  /** Whether to send this person TGIF each morning (Z2). True until they turn it off. */
   show: boolean;
 }
 
 /**
- * HOME-11: the per-account "show TGIF on Today" preference. GET never writes
- * (no row = the default, shown). PATCH is one upsert on the primary key, so
+ * HOME-11: the per-account TGIF switch. HOME-16 (R-59): it now means "send me
+ * TGIF each morning" (Z2); the route, the shape and every saved value are
+ * unchanged. The daily notice job (src/scheduler/tgif-daily-notice.service.ts),
+ * the notification service and the push sender all read it. GET never writes
+ * (no row = the default, on). PATCH is one upsert on the primary key, so
  * parallel writes cannot make two rows or fail; the last one wins.
  */
 @Injectable()

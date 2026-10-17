@@ -32,6 +32,14 @@
       "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
       "where": "src/direct-message/flutterwave-client.interface.ts:72"
     },
+    "11dede1fa5cff62e": {
+      "evidence": "* belongs to the role that is already accountable for the platform.",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "YOU, owner-approved 16 Oct 2026 (R-60)",
+      "reason": "False positive of the deferral check. 'belongs to the role that is already accountable for the platform' is ordinary English in a doc comment that explains why dispatching a campaign is a capability held by one role. It hands nothing off and leaves nothing open. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or comment changed.",
+      "where": "src/admin/notifications/admin-notifications.controller.ts:40"
+    },
     "125d7419783e363f": {
       "evidence": "export const MOCK_FLUTTERWAVE_FAIL_TXN_ID = 'MOCK_TXN_FAIL';",
       "gate": "fake_data",
@@ -47,6 +55,14 @@
       "owner": "legacy-app-repair 2026-08-31",
       "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
       "where": "src/common/guards/admin-key.guard.ts:28"
+    },
+    "138626341238c925": {
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:36, src/credit-purchase/flutterwave-client.interface.ts:43, src/direct-message/flutterwave-client.interface.ts:35, src/purchase/flutterwave-client.int",
+      "gate": "forks",
+      "message": "interface 'VerifyChargeParams' is declared in 4 files - one of them is a fork",
+      "owner": "owner-approved 16 Oct 2026 (after-launch Flutterwave removal)",
+      "reason": "R-1: the web stays on Flutterwave until after launch, so this per-module copy of the Flutterwave checkout code (VerifyChargeParams) is kept as built; the web's protected routes call it. Merging the copies changes money code the web uses, so it belongs to the after-launch Flutterwave removal task, which deletes all of them.",
+      "where": "src/content-piece/flutterwave-client.interface.ts:36"
     },
     "1396b66b3933993a": {
       "evidence": "* events and is out of scope for this module.",
@@ -216,6 +232,14 @@
       "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
       "where": "src/account/wawu-id-account.client.ts:12"
     },
+    "44f399696c2264b6": {
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:15, src/credit-purchase/flutterwave-client.interface.ts:22, src/direct-message/flutterwave-client.interface.ts:14, src/purchase/flutterwave-client.int",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveChargeInit' is declared in 5 files - one of them is a fork",
+      "owner": "owner-approved 16 Oct 2026 (after-launch Flutterwave removal)",
+      "reason": "R-1: the web stays on Flutterwave until after launch, so this per-module copy of the Flutterwave checkout code (FlutterwaveChargeInit) is kept as built; the web's protected routes call it. Merging the copies changes money code the web uses, so it belongs to the after-launch Flutterwave removal task, which deletes all of them.",
+      "where": "src/content-piece/flutterwave-client.interface.ts:15"
+    },
     "4931d7321443c29b": {
       "evidence": "inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],",
       "gate": "fake_data",
@@ -223,6 +247,14 @@
       "owner": "legacy-app-repair 2026-08-31",
       "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
       "where": "src/content-piece/content-piece.module.ts:38"
+    },
+    "4994dca35d52e465": {
+      "evidence": "* What it deliberately does NOT say is anything in the future tense. \"We",
+      "gate": "deferrals",
+      "message": "deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "YOU, owner-approved 16 Oct 2026 (R-60)",
+      "reason": "False positive of the deferral check. 'does NOT say anything in the future tense' is a copy rule on the verification-badge notification text (DECISIONS D17b): the text promises nothing, because no event is emitted on approval. It defers no work. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or comment changed.",
+      "where": "src/notification/notification-event.ts:496"
     },
     "4bee7a62a8d3a40e": {
       "evidence": "if (params.flutterwaveCustomerRef === MOCK_RETRY_FAILURE_CUSTOMER_REF) {",
@@ -247,6 +279,14 @@
       "owner": "legacy-app-repair 2026-08-31",
       "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
       "where": "src/direct-message/mock-flutterwave.adapter.ts:91"
+    },
+    "55b6204daaff345d": {
+      "evidence": "import { FlutterwaveWalletMock } from './flutterwave-wallet.mock';",
+      "gate": "fake_data",
+      "message": "production file imports a 'mock' source",
+      "owner": "owner-approved 16 Oct 2026 (after-launch Flutterwave removal)",
+      "reason": "R-1: the Flutterwave creator wallet stays as built for the web until after launch. The module picks FlutterwaveWalletMock only when shouldUseMockFlutterwave() is true, and that throws in production when FLUTTERWAVE_SECRET_KEY is missing, so the mock cannot serve real traffic. Same pattern as the accepted mock adapters in the other money modules. Removed with Flutterwave after launch.",
+      "where": "src/wallet/wallet.module.ts:7"
     },
     "57cd8f45c5d37de0": {
       "evidence": "export interface EnrolResponse extends LearnEntitlement {",
@@ -319,6 +359,14 @@
       "owner": "legacy-app-repair 2026-08-31",
       "reason": "Third-party (Flutterwave/Gemini) response shape declared beside its adapter. The adapter IS the data layer boundary for an external API; hoisting it to common/types would put a vendor's schema in this platform's own type surface.",
       "where": "src/verification-submission/verification-submission.service.ts:6"
+    },
+    "61b40ca9329e0d68": {
+      "evidence": "src/content-piece/real-flutterwave.adapter.ts:33, src/credit-purchase/real-flutterwave.adapter.ts:34, src/direct-message/real-flutterwave.adapter.ts:46, src/purchase/real-flutterwave.adapter.ts:32, sr",
+      "gate": "forks",
+      "message": "class 'RealFlutterwaveAdapter' is declared in 5 files - one of them is a fork",
+      "owner": "owner-approved 16 Oct 2026 (after-launch Flutterwave removal)",
+      "reason": "R-1: the web stays on Flutterwave until after launch, so this per-module copy of the Flutterwave checkout code (RealFlutterwaveAdapter) is kept as built; the web's protected routes call it. Merging the copies changes money code the web uses, so it belongs to the after-launch Flutterwave removal task, which deletes all of them.",
+      "where": "src/content-piece/real-flutterwave.adapter.ts:33"
     },
     "6295c70f3cdd7ffa": {
       "evidence": "MockFlutterwaveAdapter,",
@@ -480,6 +528,14 @@
       "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
       "where": "src/creator-subscription/mock-flutterwave.adapter.ts:42"
     },
+    "8de42748c2d89d55": {
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:41, src/credit-purchase/flutterwave-client.interface.ts:48, src/direct-message/flutterwave-client.interface.ts:66, src/purchase/flutterwave-client.int",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveClient' is declared in 5 files - one of them is a fork",
+      "owner": "owner-approved 16 Oct 2026 (after-launch Flutterwave removal)",
+      "reason": "R-1: the web stays on Flutterwave until after launch, so this per-module copy of the Flutterwave checkout code (FlutterwaveClient) is kept as built; the web's protected routes call it. Merging the copies changes money code the web uses, so it belongs to the after-launch Flutterwave removal task, which deletes all of them.",
+      "where": "src/content-piece/flutterwave-client.interface.ts:41"
+    },
     "90fd38906fad1132": {
       "evidence": "MockFlutterwaveAdapter,",
       "gate": "fake_data",
@@ -511,6 +567,14 @@
       "owner": "legacy-app-repair 2026-08-31",
       "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
       "where": "src/creator-subscription/flutterwave-client.interface.ts:136"
+    },
+    "99af48e12a2bc475": {
+      "evidence": "src/content-piece/mock-flutterwave.adapter.ts:20, src/credit-purchase/mock-flutterwave.adapter.ts:28, src/direct-message/mock-flutterwave.adapter.ts:38, src/purchase/mock-flutterwave.adapter.ts:28, sr",
+      "gate": "forks",
+      "message": "class 'MockFlutterwaveAdapter' is declared in 5 files - one of them is a fork",
+      "owner": "owner-approved 16 Oct 2026 (after-launch Flutterwave removal)",
+      "reason": "R-1: the web stays on Flutterwave until after launch, so this per-module copy of the Flutterwave checkout code (MockFlutterwaveAdapter) is kept as built; the web's protected routes call it. Merging the copies changes money code the web uses, so it belongs to the after-launch Flutterwave removal task, which deletes all of them.",
+      "where": "src/content-piece/mock-flutterwave.adapter.ts:20"
     },
     "9a31396fc48188a8": {
       "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",
@@ -560,6 +624,14 @@
       "reason": "Fixture reference under review \u2014 see .legacy-repair/repair-order.md for its rank.",
       "where": "src/purchase/flutterwave-client.interface.ts:52"
     },
+    "a81720cd63532720": {
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:22, src/credit-purchase/flutterwave-client.interface.ts:29, src/direct-message/flutterwave-client.interface.ts:21, src/purchase/flutterwave-client.int",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveVerifyResult' is declared in 4 files - one of them is a fork",
+      "owner": "owner-approved 16 Oct 2026 (after-launch Flutterwave removal)",
+      "reason": "R-1: the web stays on Flutterwave until after launch, so this per-module copy of the Flutterwave checkout code (FlutterwaveVerifyResult) is kept as built; the web's protected routes call it. Merging the copies changes money code the web uses, so it belongs to the after-launch Flutterwave removal task, which deletes all of them.",
+      "where": "src/content-piece/flutterwave-client.interface.ts:22"
+    },
     "aadc71a989745365": {
       "evidence": "export const MOCK_FAILURE_TRANSACTION_ID = 'mock-flw-tx-fail';",
       "gate": "fake_data",
@@ -600,6 +672,14 @@
       "reason": "Same-named interface declared in a client module and its server counterpart. Not a fork of one component; two sides of a wire contract. Drains when the dashboard's generated contract is extended to the app client.",
       "where": "src/content-piece/mock-flutterwave.adapter.ts:20"
     },
+    "b224de3bdec938a4": {
+      "evidence": "src/content-piece/real-flutterwave.adapter.ts:13, src/credit-purchase/real-flutterwave.adapter.ts:13, src/direct-message/real-flutterwave.adapter.ts:25, src/purchase/real-flutterwave.adapter.ts:13",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveVerifyApiResponse' is declared in 4 files - one of them is a fork",
+      "owner": "owner-approved 16 Oct 2026 (after-launch Flutterwave removal)",
+      "reason": "R-1: the web stays on Flutterwave until after launch, so this per-module copy of the Flutterwave checkout code (FlutterwaveVerifyApiResponse) is kept as built; the web's protected routes call it. Merging the copies changes money code the web uses, so it belongs to the after-launch Flutterwave removal task, which deletes all of them.",
+      "where": "src/content-piece/real-flutterwave.adapter.ts:13"
+    },
     "b28d37d1c85f18b0": {
       "evidence": "export class MockFlutterwaveAdapter implements FlutterwaveClient {",
       "gate": "fake_data",
@@ -615,6 +695,14 @@
       "owner": "legacy-app-repair 2026-08-31",
       "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
       "where": "src/creator-subscription/mock-flutterwave.adapter.ts:28"
+    },
+    "b6ca426b0090921e": {
+      "evidence": "src/bill-payment/flutterwave-bills.client.ts:56, src/wallet/flutterwave-wallet.client.ts:14",
+      "gate": "forks",
+      "message": "interface 'FlwEnvelope' is declared in 2 files - one of them is a fork",
+      "owner": "owner-approved 16 Oct 2026 (after-launch Flutterwave removal)",
+      "reason": "R-1: two Flutterwave clients (bill payments and creator wallets) each declare their own response envelope, with different optional fields (all optional in bills, required in the wallet client). Both clients are kept for the web until after launch and both are deleted by the after-launch Flutterwave removal task, so the pair is not merged now.",
+      "where": "src/bill-payment/flutterwave-bills.client.ts:56"
     },
     "b6cc90cd59d0df9f": {
       "evidence": "MockFlutterwaveAdapter,",
@@ -640,6 +728,14 @@
       "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
       "where": "src/content-piece/content-piece.service.ts:76"
     },
+    "badfb1520349f7c3": {
+      "evidence": "src/content-piece/content-piece.service.ts:46, src/credit-purchase/credit-purchase.service.ts:23, src/purchase/purchase.service.ts:25",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveConfigResponse' is declared in 3 files - one of them is a fork",
+      "owner": "owner-approved 16 Oct 2026 (after-launch Flutterwave removal)",
+      "reason": "R-1: the web stays on Flutterwave until after launch, so this per-module copy of the Flutterwave checkout code (FlutterwaveConfigResponse) is kept as built; the web's protected routes call it. Merging the copies changes money code the web uses, so it belongs to the after-launch Flutterwave removal task, which deletes all of them.",
+      "where": "src/content-piece/content-piece.service.ts:46"
+    },
     "bbbd7cca101d1363": {
       "evidence": "mock: MockFlutterwaveAdapter,",
       "gate": "fake_data",
@@ -655,6 +751,14 @@
       "owner": "legacy-app-repair 2026-08-31",
       "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
       "where": "src/creator-subscription/creator-subscription.service.ts:204"
+    },
+    "c29f56072d78a67b": {
+      "evidence": "*           390px; past ~70 nobody reads the end of it anyway.",
+      "gate": "deferrals",
+      "message": "known dead code left as prose - resolve it or baseline it with a reason",
+      "owner": "YOU, owner-approved 16 Oct 2026 (R-60)",
+      "reason": "False positive of the deferral check. 'nobody reads the end of it anyway' is the stated reason for the 70 character cap on a campaign title, in a doc comment on the DTO bounds. It is not a note about dead code. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or comment changed.",
+      "where": "src/admin/notifications/dto/compose-campaign.dto.ts:44"
     },
     "c38ce6a7f5f51dca": {
       "evidence": "export interface FlutterwaveConfigResponse {",
@@ -736,6 +840,14 @@
       "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
       "where": "src/purchase/mock-flutterwave.adapter.ts:28"
     },
+    "da96f6e5b113ff0b": {
+      "evidence": "src/content-piece/content-piece.service.ts:67, src/credit-purchase/credit-purchase.service.ts:16, src/purchase/purchase.service.ts:25",
+      "gate": "forks",
+      "message": "interface 'FlutterwaveConfigResponse' is declared in 3 files - one of them is a fork",
+      "owner": "YOU, owner-approved 16 Oct 2026 (R-60)",
+      "reason": "R-1 and CLAUDE.md (Money): the web stays on Flutterwave until after launch, so the per-module copies of FlutterwaveConfigResponse in content-piece, credit-purchase and purchase stay as built; the web's protected routes use them. Merging them changes money code the web calls, so it belongs to the after-launch Flutterwave removal task, which deletes all of them. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or code changed.",
+      "where": "src/content-piece/content-piece.service.ts:67"
+    },
     "db56191c6eeea388": {
       "evidence": "inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],",
       "gate": "fake_data",
@@ -792,6 +904,14 @@
       "reason": "Explanatory prose in a doc comment, not an open item. This gate matches phrases like 'not yet' and 'never called' which this codebase uses to EXPLAIN deliberate design. Sampled 10; the one that looked like a real defect (community-message 402 gate) was verified correct. Re-audit if the comment style changes.",
       "where": "src/admin/payments/admin-payments.service.ts:246"
     },
+    "eb5efea3b1ef1bb0": {
+      "evidence": "src/content-piece/flutterwave-client.interface.ts:30, src/credit-purchase/flutterwave-client.interface.ts:37, src/direct-message/flutterwave-client.interface.ts:29, src/purchase/flutterwave-client.int",
+      "gate": "forks",
+      "message": "interface 'InitChargeParams' is declared in 4 files - one of them is a fork",
+      "owner": "owner-approved 16 Oct 2026 (after-launch Flutterwave removal)",
+      "reason": "R-1: the web stays on Flutterwave until after launch, so this per-module copy of the Flutterwave checkout code (InitChargeParams) is kept as built; the web's protected routes call it. Merging the copies changes money code the web uses, so it belongs to the after-launch Flutterwave removal task, which deletes all of them.",
+      "where": "src/content-piece/flutterwave-client.interface.ts:30"
+    },
     "f095a6edf452f5d7": {
       "evidence": "//   - the 402 gate is never reached, so a host can never be locked out",
       "gate": "deferrals",
@@ -807,6 +927,14 @@
       "owner": "legacy-app-repair 2026-08-31",
       "reason": "DI-token test double. shouldUseMockFlutterwave() THROWS when NODE_ENV=production with no real key, so this cannot be selected in production. Verified on the live droplet: the guard refused boot until a real FLWSECK key was present.",
       "where": "src/direct-message/mock-flutterwave.adapter.ts:28"
+    },
+    "f43c5de9ed35d5c5": {
+      "evidence": "/** Confirms an account number belongs to the name we are about to pay. */",
+      "gate": "deferrals",
+      "message": "ownership deferral left as prose - resolve it or baseline it with a reason",
+      "owner": "YOU, owner-approved 16 Oct 2026 (R-60)",
+      "reason": "False positive of the deferral check. 'an account number belongs to the name we are about to pay' describes what the account-name lookup (resolveAccount) confirms. It is a method description, not an ownership deferral. Recorded on the owner's instruction (R-60, 16 Oct 2026); no gate, test or comment changed.",
+      "where": "src/wallet/flutterwave-wallet.gateway.ts:72"
     },
     "f5582aba775b715f": {
       "evidence": "import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';",

@@ -486,6 +486,37 @@ describe('Data export (contract)', () => {
       .expect(200);
   });
 
+  it('a repeated token opens nothing and answers the 404 every failed link gets, byte for byte (FIX-18)', async () => {
+    const req = await ask();
+    await fulfil.fulfil(req.id);
+    const mail = await mailFor(req.id);
+    const good = new URL(mail.downloadUrl).searchParams.get('token') as string;
+    const route = '/settings/privacy/export/download';
+
+    const failed = await request(app.getHttpServer())
+      .get(`${route}?token=nonsense`)
+      .expect(404);
+    for (const query of [
+      'token=a&token=b',
+      'token=&token=',
+      'token=a&token=',
+      `token=${good}&token=${good}`,
+      `token=${good}&token=nonsense`,
+      `token=nonsense&token=${good}`,
+      'token=a&token=b&token=c',
+    ]) {
+      const res = await request(app.getHttpServer())
+        .get(`${route}?${query}`)
+        .expect(404);
+      expect(res.text).toBe(failed.text);
+      expect(res.headers['content-type']).toBe(failed.headers['content-type']);
+    }
+    // One genuine token is still the link, and still downloads.
+    await request(app.getHttpServer())
+      .get(`${route}?token=${good}`)
+      .expect(200);
+  });
+
   it('a link stops working when the request is gone, as it is when the account is deleted', async () => {
     const req = await ask();
     await fulfil.fulfil(req.id);

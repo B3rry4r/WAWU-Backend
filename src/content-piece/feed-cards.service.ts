@@ -6,6 +6,9 @@ import {
   type VerificationState,
 } from '../common/verification/verification-state';
 import { StorageService } from '../storage/storage.service';
+import type { PersonBadgeView } from '../plans/tier-badge/person-badge-view.type';
+import { TierBadgeService } from '../plans/tier-badge/tier-badge.service';
+import { DELETED_CREATOR_ID, DELETED_CREATOR_NAME } from './deleted-creator';
 
 /**
  * PROVISIONAL(FEED-CARD-EVERY, owner=YOU, why=H9 and H10 draw cards among content without saying how often one appears)
@@ -68,6 +71,11 @@ export interface CreatorCard {
   /** The wide image behind the profile; the card falls back to the avatar. */
   coverUrl: string | null;
   verification: VerificationState;
+  /**
+   * Their tier badge while a tier runs, else null (TIER-07): the pill beside
+   * the name, with the Founding Maker number.
+   */
+  badge: PersonBadgeView | null;
   followers: number;
   /** Live pieces. */
   posts: number;
@@ -94,6 +102,11 @@ export interface ProfessionalCard {
   avatarUrl: string | null;
   coverUrl: string | null;
   verification: VerificationState;
+  /**
+   * Their tier badge while a tier runs, else null (TIER-07): the pill beside
+   * the name, with the Founding Maker number.
+   */
+  badge: PersonBadgeView | null;
   category: string;
   /** What they help with: the chips. */
   services: string[];
@@ -137,12 +150,30 @@ export class FeedCardsService {
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
     private readonly storage: StorageService,
+    private readonly badges: TierBadgeService,
   ) {}
 
   /** Name, avatar and ticks for a set of creators, in two reads. */
   async creatorsFor(ids: string[]): Promise<Map<string, FeedCreator>> {
     const unique = [...new Set(ids)];
     const out = new Map<string, FeedCreator>();
+    // A piece whose creator deleted their account (owner ruling, 16 Oct 2026,
+    // SETTINGS-06): nobody is asked about it, and no name is shown.
+    if (unique.includes(DELETED_CREATOR_ID)) {
+      out.set(DELETED_CREATOR_ID, {
+        wawuId: DELETED_CREATOR_ID,
+        displayName: DELETED_CREATOR_NAME,
+        handle: null,
+        avatarUrl: null,
+        verification: deriveVerificationState({
+          creatorVerifiedAt: null,
+          creatorVerifiedUntil: null,
+          professionalVerifiedAt: null,
+          professionalVerifiedUntil: null,
+        }),
+      });
+      unique.splice(unique.indexOf(DELETED_CREATOR_ID), 1);
+    }
     if (unique.length === 0) return out;
     const [profiles, identities] = await Promise.all([
       this.prisma.userProfile.findMany({
@@ -375,6 +406,7 @@ export class FeedCardsService {
     const mutualPeople = await this.creatorsFor(shownMutuals);
 
     const works = await this.worksFor(viewerWawuId, ids);
+    const badgeBy = await this.badges.forMany(ids);
 
     for (const id of ids) {
       const who = creators.get(id);
@@ -390,6 +422,7 @@ export class FeedCardsService {
         avatarUrl: who.avatarUrl,
         coverUrl: await this.storage.freshUrlFor(profile?.coverUrl ?? null),
         verification: who.verification,
+        badge: badgeBy.get(id) ?? null,
         followers: followersBy.get(id) ?? 0,
         posts: postsBy.get(id) ?? 0,
         rating: roundToOneDecimal(
@@ -502,6 +535,9 @@ export class FeedCardsService {
         { avg: r._avg.stars, count: r._count._all },
       ]),
     );
+    const badgeBy = await this.badges.forMany(
+      listings.map((l) => l.wawuUserId),
+    );
     for (const l of listings) {
       const who = creators.get(l.wawuUserId);
       const state = stateBy.get(l.wawuUserId);
@@ -517,6 +553,7 @@ export class FeedCardsService {
           coverBy.get(l.wawuUserId) ?? null,
         ),
         verification: who.verification,
+        badge: badgeBy.get(l.wawuUserId) ?? null,
         category: l.category,
         services: l.services,
         ratingAvg: roundToOneDecimal(ratingBy.get(l.id)?.avg ?? null),

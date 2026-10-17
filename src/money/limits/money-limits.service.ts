@@ -8,10 +8,22 @@ import {
 } from '../../wallet-provider/wallet-provider.interface';
 import { feesNotSet } from '../fees/fees-not-set';
 import { unsetFeeSettings } from '../fees/provider-fee-schedule';
+import { AccountLimits } from './account-limits.service';
 import { lagosDayStart, lagosMonthStart } from './lagos-window';
 import { limitReached } from './limit-reached';
 import { type MoneyLimitKind, MoneyLimitSettings } from './money-limit-config';
+import { assertOwnTransaction, type MovementTx } from './movement-tx';
 import { assertReadCommitted } from './read-committed';
+
+/**
+ * How a movement is checked: in the transaction in which the caller writes
+ * its pending ledger row, always (FIX-26). `now` is for specs.
+ */
+export interface MovementCheckOptions {
+  /** The `tx` of `prisma.$transaction(async (tx) => ...)`; never the service's own client. */
+  tx: MovementTx;
+  now?: Date;
+}
 
 /** One movement about to be sent to the provider. */
 export interface MovementInput {
@@ -65,24 +77,32 @@ const KIND_WHERE: Record<MoneyLimitKind, Prisma.FintavaLedgerEntryWhereInput> =
  *      above the per-transaction limit for its kind;
  *   3. `limit: daily` when what the person moved of that kind today, in
  *      Lagos, plus this amount is above the daily limit;
- *   4. `limit: monthly` the same over the Lagos calendar month.
+ *   4. `limit: monthly` the same over the Lagos calendar month;
+ *   5. `limit: daily` again, with the limit shown, when what the person moved
+ *      of every kind today plus this amount is above the daily limit the
+ *      wallet provider puts on the account (WALLET-23, `AccountLimits`).
  *
  * Unset limits are no limit. What counts toward a day or a month is the
  * person's own movements of that kind out of their wallet, pending or
- * completed (a failed or reversed one gave the money back), by amount before
- * fees, read from the ledger. That is a count of what was moved, never a
+ * completed (a failed or reversed one gave the money back, and so does a
+ * held payment whose refund has completed: FIX-40), by amount before fees,
+ * read from the ledger. That is a count of what was moved, never a
  * balance: the balance is the provider's.
  *
- * Concurrency: called with the transaction in which the caller writes the
- * movement's pending ledger row, it first takes a per-person lock for that
+ * Concurrency: it is called with the transaction in which the caller writes
+ * the movement's pending ledger row, and takes a per-person lock for that
  * transaction, so two movements by one person are checked one after the
- * other and the second sees the first. That holds only at READ COMMITTED
- * (Prisma's default), so given a transaction it first reads that
+ * other and the second sees the first. The transaction is required (task
+ * FIX-26): the lock ends with the transaction, so outside one it would end
+ * with its own statement and order nothing. `tx` is typed as a transaction
+ * client, which the service's own client is not (`movement-tx.ts`), and at
+ * run time anything that is not the caller's own transaction (nothing, the
+ * service's own client, any root client) is refused with a
+ * NotInTransactionError, before anything is locked, read or written. That
+ * holds only at READ COMMITTED (Prisma's default), so it then reads that
  * transaction's isolation level and refuses any other with an
- * IsolationLevelError naming it (task FIX-21, `read-committed.ts`): a
- * programming error, before anything is locked, read or written. Called
- * without one it reads, and two movements at the same instant could each
- * pass.
+ * IsolationLevelError naming it (task FIX-21, `read-committed.ts`). Both are
+ * programming errors, never an answer a person reads.
  *
  * The provider's own limit refusals answer the same `limit_reached`
  * (`WalletProviderLimitError.toHttpException()`,
@@ -98,6 +118,8 @@ export class MoneyLimits {
     private readonly prisma: PrismaService,
     @Inject(WALLET_PROVIDER) provider: Pick<WalletProvider, 'name'>,
     config: ConfigService,
+    /** The provider's own limit on the account (WALLET-23). Absent: only WAWU's limits. */
+    private readonly accounts?: AccountLimits,
   ) {
     this.unsetFees = unsetFeeSettings(provider.name, (key) =>
       config.get<string>(key),
@@ -111,23 +133,29 @@ export class MoneyLimits {
    */
   async assertMayMove(
     input: MovementInput,
-    opts: { tx?: Prisma.TransactionClient; now?: Date } = {},
+    opts: MovementCheckOptions,
   ): Promise<void> {
+    // A programming error, whatever the settings: refused before fees_not_set
+    // so it is met in the caller's own specs and not only once fees are set.
+    assertOwnTransaction(opts?.tx, this.prisma);
     if (this.unsetFees.length > 0) throw feesNotSet();
     await this.assertWithinLimits(input, opts);
   }
 
   /**
-   * The limits alone: per transaction, then today, then this month. Given
-   * the caller's transaction, its isolation level is checked first, whatever
-   * limits are set, so a caller at the wrong level fails in its own specs
-   * and not only where a daily or monthly limit happens to be set.
+   * The limits alone: per transaction, then today, then this month. The
+   * caller's transaction is required and its isolation level is checked
+   * first, whatever limits are set, so a caller at the wrong level fails in
+   * its own specs and not only where a daily or monthly limit happens to be
+   * set.
    */
   async assertWithinLimits(
     input: MovementInput,
-    opts: { tx?: Prisma.TransactionClient; now?: Date } = {},
+    opts: MovementCheckOptions,
   ): Promise<void> {
-    if (opts.tx) await assertReadCommitted(opts.tx);
+    assertOwnTransaction(opts?.tx, this.prisma);
+    const { tx } = opts;
+    await assertReadCommitted(tx);
     const amount = this.amountOf(input);
     const { kind } = input;
     const perTransaction = this.settings.limitOf(kind, 'per_transaction');
@@ -136,21 +164,30 @@ export class MoneyLimits {
     }
     const daily = this.settings.limitOf(kind, 'daily');
     const monthly = this.settings.limitOf(kind, 'monthly');
-    if (daily === null && monthly === null) return;
-
     const now = opts.now ?? new Date();
-    const db: Db = opts.tx ?? this.prisma;
-    if (opts.tx) {
-      await opts.tx
-        .$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`money-limits:${input.wawuUserId}`}, 0))`;
-    }
+    // The provider's limit on the account, as its last balance read said it.
+    const account = this.accounts
+      ? ((await this.accounts.stored(input.wawuUserId, tx))?.dailyKobo ?? null)
+      : null;
+    if (daily === null && monthly === null && account === null) return;
+
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`money-limits:${input.wawuUserId}`}, 0))`;
     if (daily !== null) {
-      const used = await this.movedSince(db, input, lagosDayStart(now));
+      const used = await this.movedSince(tx, input, lagosDayStart(now));
       if (used + amount > BigInt(daily)) throw limitReached('daily');
     }
     if (monthly !== null) {
-      const used = await this.movedSince(db, input, lagosMonthStart(now));
+      const used = await this.movedSince(tx, input, lagosMonthStart(now));
       if (used + amount > BigInt(monthly)) throw limitReached('monthly');
+    }
+    if (account !== null && this.accounts) {
+      await this.accounts.assertWithin(
+        tx,
+        input.wawuUserId,
+        amount,
+        account,
+        now,
+      );
     }
   }
 
@@ -164,13 +201,26 @@ export class MoneyLimits {
   ): Promise<DailyStanding> {
     const amount = this.amountOf(input);
     const daily = this.settings.limitOf(input.kind, 'daily');
-    if (daily === null) {
+    // What is left of the provider's limit on the account, when one is known;
+    // the standing is the tighter of the two.
+    const account = this.accounts
+      ? await this.accounts.remainingToday(input.wawuUserId, now)
+      : null;
+    let left: bigint | null = null;
+    if (daily !== null) {
+      const used = await this.movedSince(
+        this.prisma,
+        input,
+        lagosDayStart(now),
+      );
+      left = BigInt(daily) - used;
+    }
+    if (account !== null && (left === null || account < left)) left = account;
+    if (left === null) {
       return { withinDailyLimit: true, remainingTodayKobo: null };
     }
-    const used = await this.movedSince(this.prisma, input, lagosDayStart(now));
-    const left = BigInt(daily) - used;
     return {
-      withinDailyLimit: used + amount <= BigInt(daily),
+      withinDailyLimit: amount <= left,
       remainingTodayKobo: left > 0n ? Number(left) : 0,
     };
   }
@@ -178,12 +228,30 @@ export class MoneyLimits {
   /**
    * What this person moved of this kind out of their wallet since `since`,
    * pending or completed, before fees, in kobo.
+   *
+   * A held payment (a bill, a paid DM, a ticket) whose hold has been
+   * REFUNDED is not counted: the money came back, so the person has not moved
+   * it (FIX-40). The hold is `refunded` only once the provider has confirmed
+   * the whole price is back (the database allows no other `refunded`); a
+   * refund that is decided, waiting, sent or unconfirmed leaves the hold
+   * `held`, and its payment counts as still moved until the refund completes.
+   * A released hold (the payee was paid) and a payment with no hold count.
    */
   async movedSince(
     db: Db,
     input: Pick<MovementInput, 'wawuUserId' | 'kind'>,
     since: Date,
   ): Promise<bigint> {
+    // A payment counted in this window was made in it, so its refund was
+    // confirmed in it or after it (our clock, later than the payment).
+    const refunded = await db.walletHold.findMany({
+      where: {
+        payerWawuUserId: input.wawuUserId,
+        status: 'refunded',
+        settledAt: { gte: since },
+      },
+      select: { paymentId: true },
+    });
     const sum = await db.fintavaLedgerEntry.aggregate({
       _sum: { amountKobo: true },
       where: {
@@ -196,6 +264,18 @@ export class MoneyLimits {
             occurredAt: { gte: since },
           },
           KIND_WHERE[input.kind],
+          // A send has no payment: the null is spelled out, because a NOT IN
+          // alone would drop every row whose paymentId is null.
+          ...(refunded.length > 0
+            ? [
+                {
+                  OR: [
+                    { paymentId: null },
+                    { paymentId: { notIn: refunded.map((h) => h.paymentId) } },
+                  ],
+                },
+              ]
+            : []),
         ],
       },
     });

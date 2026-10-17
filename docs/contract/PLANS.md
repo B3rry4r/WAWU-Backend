@@ -105,6 +105,7 @@ null), and every number in both answers is `integer`
 With `tier` (`id`, and `name` and `badge` from the config; both null if the
 config no longer names that tier), `activeFrom`, `activeUntil`,
 `productsAllowed` (the tier's products when bought plus `extraProducts`),
+`productsUsed` (products published now, the count the publishing gate checks),
 `pointsIncluded`, `firstVoiceIntroIncluded` and `eventPass` (the highest pass
 the person holds, in the order of the config's `event_passes`).
 
@@ -124,7 +125,125 @@ takes away what a person paid for. `MakerTierService` is the one reader: GET
 it. All four tables are in the account purge (OWNED) and the data export
 (without payment references).
 
-## 6. Granting a tier (JOIN-03)
+## 6. Publishing needs a tier (TIER-02)
+
+Task TIER-02, R-43: "Anyone can sign up, build a profile and draft products
+free. Publishing, or uploading any file, needs an active tier, and published
+products never exceed the tier's products plus any extra products bought."
+
+**What a person may publish** (`PublishingAllowanceService.of`, the one place
+that answers it; the gate, `GET /me/tier` `productsUsed`, `GET /creator/state`
+`slotsTotal`, `GET /uploads/allowance` and the admin creator, KYC and content
+screens all read it):
+
+| they hold | products allowed | storage for content |
+|---|---|---|
+| a running tier (`active` or `ending`) | the tier's products plus `extraProducts` | 10 GB |
+| a verification tick that has not ended | 25 (the tick-era cap, kept for people who paid before tiers) | 10 GB |
+| both | the larger of the two, not the sum | 10 GB |
+| neither (never had a tier, the tier ended, the tick lapsed) | 0: `tier_required` | 1 GB (nothing can be uploaded) |
+
+An ended tier or a lapsed tick only stops the next publish or file. Nothing
+published is unpublished or hidden, and it still counts in `productsUsed`.
+Storage for a person on a tier is R-7's with-a-tick figure: tiers replace
+the tick and nothing in the plan sizes storage (Default (agent), owner may
+override).
+
+**What counts.** A product is a content piece waiting for review or live
+(`CreatorState.slotsUsed`, the counter every publish claims against with a
+conditional update, so two publishes at once cannot pass the limit). A draft
+does not count. A piece that is removed (`DELETE /content/:id`), turned down
+or taken down gives its place back; sending a turned-down piece again takes
+one. Removal is the unpublish: there is no route that turns a live piece back
+into a draft, because a draft holds no file. A piece gives its place back
+once, however many requests remove it at the same moment: the removal changes
+the row conditionally on the status it read, only the request that changed it
+frees the place, and the others answer `404`, as a repeat removal does. The
+admin decisions keep the same rule (round 3): a take-down reads the piece's
+status inside its transaction and changes the row only if it is still in that
+status, a reject or an approve only if it is still waiting, and a request that
+finds the status moved reads again and acts on what is true. So a turned-down
+piece that is then taken down returns no second place, and a turned-down piece
+the creator sent again, then taken down, returns the place it took. A
+person's counter row is made insert-or-nothing before the first claim, so two
+first publishes sent together both succeed.
+
+**The refusal.** `402`, the contract's one error shape (CONVENTIONS section
+3), `reason.code`:
+
+- `tier_required`: no running tier and no tick that has not ended.
+  `tierState` is `none` or `ended`. A person who still has products up (the
+  tick or the tier ended) and for whom no tier would leave a place is not told
+  to pick one: "You have 12 products up and no plan has room for another.
+  Remove some to publish." (with "Your tier has ended." in front when it
+  has), and `tiers` is empty (round 4, D7). A person whose tier has ended is
+  told to renew it ("Your tier has ended. Renew it to publish or upload
+  files. Everything you published stays up.") only when that tier is among
+  the `tiers` offered; otherwise the sentence says what would work, with the
+  tier's name and the products up from the data: "Your Verify plan has ended.
+  You have 5 products up, and a bigger plan has room for them." (round 5,
+  D8; renewing a tier that holds no more than the products already up would
+  have been refused). The tier that ended is not in the body.
+- `product_limit_reached`: every product they may have is published. The
+  `message` names only the ways on that the answer carries: both ("Add more
+  products or move up a tier") while a higher tier and extra products are
+  offered, one of them when only that one is, and the limit alone ("You've
+  used all 25 of your product places.") for a tick holder at the tick-era cap,
+  where nothing can be bought. The number is the allowance. A person with MORE
+  products published than they are now allowed (a tick ended with 25 up, then
+  Verify was bought) is told both numbers: "You have 25 products and your plan
+  allows 3. To publish another, remove some." with ", or add more places"
+  only while an offer in the answer would really let another go up (round 3).
+
+`reason` is flat: `code`, `message`, `tierState`, `productsUsed`,
+`productsAllowed`, and the offers `currency`, `tiers`, `extraProducts` (absent
+only when the Hub could not read the plan at that moment; the app then shows
+`message` alone). The
+offers are the figures `GET /plans` answers, in the person's billing currency
+only, and only what would let another product go up: the tiers that, once
+bought, leave more places than the person has products published (extras
+bought carried over). For `tier_required` that is every tier for someone with
+nothing published, and only the tiers big enough for everything they have for
+someone who still has products up, often none (round 4, D7; round 3 offered
+every tier). For `product_limit_reached`, at the limit, it is the tiers above
+the one they hold, and none when they hold the top one or only a tick; above
+their allowance, only the tiers big enough for everything they have, often
+none. `extraProducts` (`count`, `priceMinor`) while they hold
+a running tier and the pack lifts it above what is published, else `null`. The routes' interceptor
+(`PublishingOffersInterceptor`) adds them, because only the route knows whose
+token, and so whose currency, asked.
+
+**The routes** (`publishing-gate-coverage.spec.ts` holds this list to the
+code):
+
+| Route | Asks |
+|---|---|
+| `POST /content` | a way to publish, then a free place |
+| `POST /content/:id/resubmit` | the same (it takes a place) |
+| `PATCH /content/:id` | a way to publish, when the body carries `previewAsset` or `fullAsset` (the piece has its place already) |
+| `POST /uploads/presign` | the same as `POST /content`, when `folder` is `content/preview` or `content/full`. Every other folder (an avatar, a cover, an identity or professional document, a banner, a chat or community picture, a featured work) is not a product and is never asked |
+| `POST /product-drafts/:id/publish` | the same as `POST /content` |
+
+Not gated, and why: `PUT /content/:id/media` and `/preview` take links to
+files `POST /uploads/presign` already accepted; events (E21's tier is its own
+task); featured works and the professional listing are profile content, not
+products; the shop has no creator route (R-2); learn guides are written by
+admins.
+
+**Drafts** (`src/content-piece/product-draft.*`, creator accounts, free, no
+tier asked): `POST /product-drafts` (a title; everything else optional),
+`GET /product-drafts`, `GET`, `PATCH` and `DELETE /product-drafts/:id`, and
+`POST /product-drafts/:id/publish` (the two file links). A draft has no
+file, holds no place and is shown to nobody else. `missing` lists what
+publishing still needs (`contentType`, `description`, `category`,
+`accessType`, and `price` for a paid product). Publishing asks the gate first
+(so Publish opens the offers), then finishes the draft check
+(`400 draft_incomplete`), then creates the piece and deletes the draft in one
+transaction. A person keeps at most `PRODUCT_DRAFTS_MAX` drafts
+(`PROVISIONAL(PRODUCT-DRAFTS-MAX)`; `409 draft_limit_reached`), counted under
+a per-person lock, so drafts sent together cannot pass it.
+
+## 7. Granting a tier (JOIN-03)
 
 `TierGrantService.grant(tx, { wawuUserId, tierId, sourceRef, days?, now? })`
 (`src/plans/tier-grant.service.ts`, exported by `PlansModule`) is the one place
@@ -182,7 +301,7 @@ and the PIN is MONEY-09's (five wrong tries lock it).
 | Route | Does |
 |---|---|
 | `GET /plans/purchases/quote?kind=&tierId=&bump=` | The pay sheet (VF6) before the PIN. `kind` is `tier` (a first purchase, or after the last one ended), `renew` (the tier held, again) or `upgrade` (to a bigger tier than the one running). `bump=true` adds the checkout bump (extra points, `GET /plans` `checkoutBump`). Answers `PlanPurchaseQuoteView`: the plan priced (`planMinor`, `bumpMinor`, `bumpPoints`), the `paymentKind` and `payment`, the wallet payment's own quote (price, the provider's charge, total, balance, shortfall and the signed `quoteToken`). Nothing is reserved. |
-| `POST /plans/purchases` | Pays. Headers `Idempotency-Key` (required) and `X-Transaction-Pin` (or a biometric approval, MONEY-14). Body: `kind`, `tierId`, optional `bump`, `method: "wallet"`, `expectedTotalKobo` and `quoteToken` from the quote. Answers 201 with a `PlanPurchaseView`. |
+| `POST /plans/purchases` | Pays. Headers `Idempotency-Key` (required) and `X-Transaction-Pin` (or a biometric approval, MONEY-14). Body: `kind`, `tierId`, optional `bump`, `method: "wallet"` or `"transfer"` (below), `expectedTotalKobo` and `quoteToken` from the quote. Answers 201 with a `PlanPurchaseView`. |
 | `GET /plans/purchases/{id}` | One purchase as it stands now; `id` is the purchase's id (below). The caller's own only: another person's purchase, a payment of another kind and an id nobody holds are the same `404 not_found`. Reads WAWU's records only. `Cache-Control: no-store`. |
 
 `POST` pays through `POST /money/payments`' own code (quote check, balance
@@ -222,6 +341,56 @@ asked (a later renewal moves `activeUntil`); the lots and the pass are this
 payment's own, read by its reference. Amounts are `amountMinor` (the plan's
 price, or the upgrade's difference, plus the bump's, in the minor unit of
 `currency`; never the provider's charge) and the payment's kobo fields.
+
+### Paying by bank transfer (`method: "transfer"`, TIER-05)
+
+VF6 "transfer details shown" and PT4. `POST /plans/purchases` with `method:
+"transfer"` takes the same body, headers and checks as `wallet` (the PIN, the
+quote token and `expectedTotalKobo`; `409 quote_changed`, `409
+target_not_payable`, `503 provider_unreachable` when the balance cannot be
+read) and moves no money. It answers 201 with a `PlanTransferOrderView`:
+
+| Field | Meaning |
+|---|---|
+| `status` | `awaiting_transfer` (the money has not covered the total yet), `pending` (it landed and the wallet payment is being made), `expired` (the time to send ran out), `failed` (it cannot be made any more; `statusMessage` says why). `payment`, `grant` and `paidAt` are null. |
+| `transfer` | While `awaiting_transfer`: the person's OWN wallet account (`accountNumber`, `accountName`, `bankName`, `bankCode`; R-42: money in is a transfer into the person's own account number, WAWU has no collection account), `priceKobo`, `bankChargeKobo` (the label is "Bank charge", R-10, R-53), `totalKobo` (price plus Bank charge), `balanceKobo` (the provider's available balance now; null when it did not answer), `amountNeededKobo` (total less balance, never below 0; null when the balance is unknown) and `expiresAt`. |
+
+The purchase is paid from the wallet, once, through the same wallet payment as
+`method: "wallet"` (so the grant, the checks and the refund path are the same),
+when the provider's available balance covers the total. The Hub looks within
+seconds of a credit reaching the wallet (a money-in row of the ledger, WALLET-10)
+and again every few minutes; a balance is never a sum of our rows. Rules:
+
+- **One payment per purchase.** Several transfers, one landing twice, a sweep
+  and another server finding it together, or a later transfer pay it once.
+  Money that arrives after it is paid stays in the wallet.
+- **The quote binds.** The order keeps the price, the Bank charge total and
+  the goods confirmed with the PIN. If any differs when the money lands (the
+  price or the goods were changed in admin settings) the purchase is closed
+  (`failed`, "The price or what comes with it changed...") and nothing is taken.
+- **The window** is the admin setting `plan.transfer_window_hours` (default 24,
+  PROVISIONAL(PLAN-TRANSFER-WINDOW)). After it the purchase is `expired`; the
+  money stays in the wallet and nothing is taken. A purchase whose payment was
+  already made is never expired: it reads `paid`.
+- **Every waiting purchase is looked at.** However many purchases wait, one
+  whose money has landed is settled on the next pass, not after the older ones
+  expire.
+- **A refused payment waits again.** When the wallet payment is refused and
+  nothing moved, the purchase stays `awaiting_transfer` (`statusMessage` says
+  so) and is tried again later, once, as a payment of its own; if the window
+  has run out by then it is `expired`.
+- **Oldest first.** One person's waiting purchases are paid oldest first, each
+  only while the balance, read again before each, covers its total.
+- **One waiting purchase per item.** Asking again for the same item closes the
+  first (`failed`, "You started this purchase again..."); paying the item from
+  the wallet meanwhile closes it too ("You paid for this another way...").
+- **Nothing is taken without the PIN given at checkout**: the order is placed
+  behind the PIN, and what is paid later is exactly that quote.
+
+`GET /plans/purchases/{id}` reads the order under the id it was given; once the
+wallet payment exists the same id reads a `PlanPurchaseView` with `method:
+"transfer"` (`paid`, or `pending` while the provider confirms), and the payment's
+own id reads it too.
 
 ### What a purchase is paid as
 
@@ -337,7 +506,129 @@ tier. The whole price then goes back to the payer through MONEY-18's refund
 
 ### Not built here
 
-Paying by bank transfer at checkout (TIER-05), extra products (TIER-04),
-points packs (POINTS-02), the Voice Intro itself, the Founding Maker's badge
+Extra products (TIER-04), the Voice Intro itself, the Founding Maker's badge
 number (BACKEND_GAPS G-421) and the dollar wallet path (NUV-09).
 
+
+---
+
+## 9. Referral points: invite, claim and earn (REF-02)
+
+A person shares `wawu/r/<code>`; someone new uses it; when that person's first
+paid tier is granted, the person who invited them earns points (never cash)
+after a hold. Code: `src/referrals/`, mounted through `MeModule` (as
+`me/points`) and imported by `PlanPurchasesModule` for the hook. Not to be
+confused with REF-01's `ReferralCode` (the `/join` registration link, a price
+for a community): the two tables never share a row, and a person's code is
+never one a `/join` code already uses.
+
+- **`GET /me/referrals`** (RF1, RF3, RF4; `no-store`; the token is the person):
+  `link`, `code` (made the first time, from the first name), `brought`,
+  `verified` (rewards past the hold), `pending` and `pendingPoints` (in the
+  hold), `pointsEarned` (rewards plus milestones; not the balance),
+  `multiplier` (what a new reward earns now), `level` (levels reached, 0 before
+  the first), `ladder` (`verified`, `multiplier`, `reached` per level),
+  `nextMilestone` (`verified`, `points`, `remaining`, or null), `milestones`
+  (all, with `reached`, `grantedAt`), `holdDays`, `claimDays`, and the newest
+  20 `rewards` (`name`, `tierName`, `basePoints`, `multiplier`, `points`,
+  `state` `pending|available|cancelled`, `availableAt`, `settledAt`). The
+  reward becoming `available` is how the Hub says points arrived (RF3, RF3a).
+- **`POST /me/referrals/claim`** `{ code }` (the code or the link, any case):
+  200 `{ code, claimedAt }`. Once per person (the same code again answers the
+  first claim; another is `409 referral_already_claimed`), within
+  `referral.claim_days` of sign-up (`409 referral_claim_closed` with
+  `claimDays`), before any tier was paid (`409 referral_not_new`), never your
+  own (`400 referral_own_code`), never the code of someone you invited
+  (`409 referral_loop`), `404 referral_code_unknown`. One level only: only the
+  person whose code was used can earn from the claim.
+- **The reward** (`ReferralReward`, at most one per referral, enforced by a
+  unique key): made by `ReferralRewardService.onTierPaid` after the purchase
+  commits (and by the job's catch-up for one it missed), for the invited
+  person's earliest paid tier: base points of that tier times the multiplier at
+  the referrer's `verified` count then, whole points. The figures are copied
+  onto the row, so a setting changed during the hold changes nothing pending.
+  A referrer with no running tier gets a row already `cancelled`
+  (`referrer_no_tier`): "only a referrer with an active tier earns".
+- **Paid after the hold** by the minute job (`ReferralSweepService`): under the
+  referrer's lock, a reward is `cancelled` when the tier payment was refunded
+  (a refund hold written for it, the payment `reversed`, the purchase row gone,
+  or `cancelForPurchase(paymentRef)` called by a refund path) or the referrer
+  held no tier when the hold ended; otherwise `granted` with a POINTS-01 lot
+  (`source` `referral`, `sourceRef` `reward:<id>`, ends after
+  `points.expiry_months`), then the milestones the new `verified` count
+  reaches, each once per person (`sourceRef` `milestone:<referrer>:<count>`).
+  The points are the last writes of the transaction. Nothing waits on a
+  provider or any network while a transaction or lock is held.
+- **Settings** (TIER-06, `/admin/plan-settings`, read live): `referral.multipliers`,
+  `referral.milestones` (launch: 5 verified +500, 10 verified +1,500; the
+  25-verified step is off), `referral.hold_days`, `referral.claim_days`,
+  `referral.base_points.<tier>`, `points.expiry_months`.
+- **Default (agent), owner may override:** `verified` counts rewards past the
+  hold (RF1 draws Verified and Pending apart); a code is refused to someone who
+  already paid for a tier; a referrer whose tier ended before the hold did
+  loses the reward; the claim window runs from the profile's creation.
+
+## 10. Buying a points pack (POINTS-02)
+
+Task POINTS-02, R-43, R-44, R-65. A person buys a points pack (PT4) from their
+wallet or by bank transfer, on the routes section 8 describes, with
+`kind: "points_pack"` and a `packId` (a `GET /plans` `packs[].id`) in place of
+`tierId`. It is WAWU's own sale: one debit into WAWU's own account, no seller
+split, nothing held, and the provider's charge on top, shown as the Bank
+charge (R-10). The pack's price, its points, how long bought points last and
+the Founding bonus are admin settings (TIER-06): `plan.pack.<id>.price_kobo`,
+`plan.pack.<id>.points`, `points.expiry_months` and
+`plan.tier.<id>.pack_bonus_pct`. None is written in code.
+
+| Route | Does |
+|---|---|
+| `GET /plans/purchases/quote?kind=points_pack&packId=` | The pay sheet (PT4) before the PIN. Answers a `PointsPackQuoteView`: `packMinor` (the price), `points`, `bonusPercent` and `bonusPoints` (the Founding Maker's extra points; 0 for anyone else), `totalPoints`, `expiryDays`, `paymentKind` (`points_pack`) and `payment`, the wallet payment's own quote. Sending a `tierId` or `bump` with it is `400`; so is a `packId` on a tier kind. A pack the file does not name is `404 target_not_found`. |
+| `POST /plans/purchases` | Pays, with the quote's `expectedTotalKobo` and `quoteToken`, `method: "wallet"` or `"transfer"`, `Idempotency-Key` and the PIN, exactly as for a tier. Answers 201 with a `PointsPackPurchaseView`. |
+| `GET /plans/purchases/{id}` | The same purchase as it stands now (the app polls it after `pending`). |
+
+`PointsPackPurchaseView` (`kind: "points_pack"`) is one shape from the ask to
+the points being added: `id`, `packId`, `method`, `currency`, `amountMinor`
+(the price, never the provider's charge), `points` and `bonusPoints` (as
+quoted), `status`, `statusMessage`, `payment` (null until the money is taken),
+`transfer` (set while `awaiting_transfer`: the same `PlanPurchaseTransferView`
+section 8 describes), `grant` and `paidAt`. `status`:
+`awaiting_transfer` (bought by transfer, the money has not landed),
+`pending` (confirming, or the points are being added, or the money landed and
+the wallet is being charged), `paid`, `failed`, `reversed`, `expired`. `grant`
+(once `paid`): `points`, `bonusPoints`, `totalPoints` and `expiresAt`.
+
+- **The payment.** Kind `points_pack`, `targetId` `pack-<packId>`. The same
+  payment is reachable through `GET /money/payments/quote` and `POST
+  /money/payments`.
+- **The bonus.** A person whose tier is running (`active` or `ending`) and
+  whose tier has `pack_bonus_pct` above 0 gets that percent of the pack's
+  points on top, rounded down to a whole point ("Founding shows +10%"). A
+  person with no tier, an ended tier or a tier with 0 gets none. The price is
+  the pack's: the bonus costs nothing more.
+- **The quote binds price and goods.** The pack, its points, the bonus and the
+  expiry are the payment's terms. A quote whose price, points, bonus or
+  expiry changed since it was given is `409 quote_changed`, before anything
+  moves. The payment keeps them from the claim, so a setting changed while it
+  confirms, or while a transfer waits, does not change what is added; a
+  transfer whose terms changed before the money lands is closed with nothing
+  taken.
+- **Once.** The lot is keyed (`pack`, the payment's id) in the points
+  service: a repeated delivery, a replayed key or two servers add nothing
+  more. The lot is the size of `totalPoints` and ends after the bought-points
+  expiry; it is added last in a transaction that does nothing but write the
+  database, so nothing is held across a provider call. A first purchase also
+  fixes the person's billing currency (section 2).
+- **By transfer.** TIER-05's order: it waits for the money to reach the
+  person's own wallet account and is paid from the wallet, once, when the
+  balance covers the total. A pack order and a plan order wait side by side;
+  a wallet purchase of the same pack closes a waiting order.
+- **Naira only at launch (R-16).** Only naira packs are sold. A person billed
+  in dollars is priced from the file's dollar column and refused `409
+  target_not_payable` by the payment service until a dollar wallet can pay
+  (NUV-09); no dollar pack is drawn or sold.
+- **The cash rate counts the bonus.** The rule that stops points being cashed
+  out for more than they were sold for (`points.cash_rate_kobo_per_1000`, the
+  cheapest sale decides) counts a pack with the largest bonus any tier gives:
+  a rate that fits the pack alone but pays more than a Founding buyer paid for
+  the same points is refused, naming the percent setting. A change to any
+  tier's percent is judged by the same rule.

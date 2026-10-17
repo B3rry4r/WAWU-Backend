@@ -17,6 +17,7 @@ import { AdminFeaturedCreatorsModule } from './admin/featured-creators/admin-fea
 import { ExploreModule } from './explore/explore.module';
 import { AdminLegalDocumentsModule } from './admin/legal-documents/admin-legal-documents.module';
 import { AdminSchoolsModule } from './admin/schools/admin-schools.module';
+import { AdminPlanSettingsModule } from './admin/plan-settings/admin-plan-settings.module';
 import { AboutModule } from './about/about.module';
 import { AdsModule } from './ads/ads.module';
 import { PrismaModule } from './common/prisma/prisma.module';
@@ -83,7 +84,11 @@ import { InboxModule } from './inbox/inbox.module';
 import { MeModule } from './me/me.module';
 import { PlansModule } from './plans/plans.module';
 import { PlanPurchasesModule } from './plans/purchases/plan-purchases.module';
+import { WalletBillsModule } from './wallet-bills/wallet-bills.module';
+import { CreditWalletModule } from './credit-purchase/wallet/credit-wallet.module';
+import { EventWalletOrdersModule } from './event-ticketing/wallet/event-wallet-orders.module';
 import { PointsConvertModule } from './points/convert/points-convert.module';
+import { PointsSpendModule } from './points/spend/points-spend.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { NuvionWebhookModule } from './nuvion/webhook/nuvion-webhook.module';
@@ -372,6 +377,9 @@ import { PushModule } from './push/push.module';
     AboutModule,
     AdminLegalDocumentsModule,
     AdminSchoolsModule,
+    // TIER-06: the launch figures as admin settings, under `admin/plan-settings`
+    // (one exact path, so it cannot shadow or be shadowed).
+    AdminPlanSettingsModule,
     // EXPLORE-03: the superadmin write that features a creator, under
     // `admin/featured-creators`.
     AdminFeaturedCreatorsModule,
@@ -399,11 +407,35 @@ import { PushModule } from './push/push.module';
     // and `tier_bump` registered with the wallet payments. `plans/purchases` is a
     // path nothing else declares, listed after PlansModule and MoneyModule.
     PlanPurchasesModule,
+    // Pay a bill from the wallet (task BILLS-04): `bills/wallet` (start a bill and its
+    // quote, pay, the quote again, one bill by id), and the payment kind `bill`
+    // registered with the wallet payments. `bills/wallet` sits under the web's `bills`
+    // controllers but declares only literal paths no `bills/:id/...` route matches;
+    // listed after PlansModule and MoneyModule so no route registered before it moves.
+    WalletBillsModule,
+    // Buy WAWU Credits from the wallet (task INBOX-16): `credits/packs` and
+    // `credits/purchase/wallet` (the quote, the purchase and one purchase by id), and
+    // the payment kind `credit_pack` registered with the wallet payments. The paths are
+    // literals CreditsStateModule's `credits` and CreditPurchaseModule's
+    // `credits/purchase` do not declare; listed after PlansModule and MoneyModule.
+    CreditWalletModule,
+    // Buy event tickets from the wallet (task EVENTS-07): `events/:id/orders/wallet`
+    // (POST), `events/orders/wallet/pay`, `events/orders/wallet/:orderId/quote` and
+    // `events/orders/wallet/:orderId`, and the `event_ticket` payment kind. Every path is
+    // deeper than EventController's `GET :id` and none matches a route of the web's
+    // ticketing; listed after MoneyModule so no route registered before it moves.
+    EventWalletOrdersModule,
     // Convert points to cash (task POINTS-04): `points/convert/quote`,
     // `points/convert` (POST) and `points/convert/{id}`, and the sweep that
     // finishes a conversion whose answer was lost. `points` is a first segment
     // nothing else declares; it sits after PlansModule and MoneyModule.
     PointsConvertModule,
+    // Spend points on AI tools (task POINTS-03): `points/quote`,
+    // `points/shortfall` (POST, and GET by id) and `me/points/settings`, the
+    // internal hold, commit and release the AI tools call, and the sweep of
+    // stale AI holds. After PointsConvertModule; `quote` and `shortfall` are
+    // segments of `points` no other controller declares.
+    PointsSpendModule,
     // The event registration link (task JOIN-01): `waitlist/offers/current`,
     // `waitlist/registrations` (register, verify, status) and the team's
     // `admin/waitlist/registrations` (list, export). `waitlist` and

@@ -26,6 +26,7 @@ import {
   type HoldSettlement,
   type HoldSettlementState,
   type HoldSweepCursor,
+  type RefundOptions,
   type HoldWaiting,
   holdReference,
   REFUND_NARRATION,
@@ -123,8 +124,12 @@ export class WalletHoldService {
   }
 
   /** The payer gets the price back (the condition will not be met). Safe to ask again. */
-  refund(ref: HoldRef, reason?: string): Promise<HoldSettlement> {
-    return this.request('refund', ref, reason);
+  refund(
+    ref: HoldRef,
+    reason?: string,
+    opts: RefundOptions = {},
+  ): Promise<HoldSettlement> {
+    return this.request('refund', ref, reason, opts);
   }
 
   /**
@@ -154,6 +159,7 @@ export class WalletHoldService {
     action: HoldAction,
     ref: HoldRef,
     reason?: string,
+    opts: RefundOptions = {},
   ): Promise<HoldSettlement> {
     const hold = await this.find(ref);
     if (!hold) {
@@ -170,7 +176,11 @@ export class WalletHoldService {
     }
     if (!hold.action) {
       const now = new Date();
-      const amount = transferFor(action, hold);
+      const amount =
+        transferFor(action, hold) +
+        (action === 'refund' && opts.returnCharge
+          ? await this.chargePaid(hold)
+          : 0n);
       const nothingToMove =
         amount <= 0n || (action === 'release' && !hold.payeeWawuUserId);
       const base = {
@@ -208,6 +218,17 @@ export class WalletHoldService {
       }
     }
     return this.drive(hold.id);
+  }
+
+  /** What the payment took on top of the price (the provider's charge and WAWU's fee), in kobo; never below nothing. */
+  private async chargePaid(hold: HoldRow): Promise<bigint> {
+    const paid = await this.prisma.walletPayment.findUnique({
+      where: { id: hold.paymentId },
+      select: { totalKobo: true, priceKobo: true },
+    });
+    if (!paid) return 0n;
+    const extra = paid.totalKobo - paid.priceKobo;
+    return extra > 0n ? extra : 0n;
   }
 
   private find(ref: HoldRef): Promise<HoldRow | null> {

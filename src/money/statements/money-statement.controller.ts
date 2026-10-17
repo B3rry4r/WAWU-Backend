@@ -122,7 +122,9 @@ export class MoneyStatementController {
    * person's own confirmed address: the request carries none, so a statement
    * cannot be sent to anyone else. No confirmed email is `409
    * email_not_verified`; a mail that could not be handed to WAWU ID's sender
-   * is `503 statement_email_failed`. The limits of `GET /money/statements`
+   * (or whose file WAWU ID did not confirm taking) is `503
+   * statement_email_failed`; a file over 12 MiB, WAWU ID's cap, is `400
+   * statement_too_large` before anything is sent. The limits of `GET /money/statements`
    * apply and are shared with it: an emailed statement is one statement.
    * An optional `Idempotency-Key` makes a repeat answer the first mail
    * instead of sending a second.

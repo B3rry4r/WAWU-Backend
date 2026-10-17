@@ -107,6 +107,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'CartItem', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventGoing', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'EventSave', column: 'userWawuId', disposition: 'OWNED' },
+  // A tap on a school's "Continue to their site" (SCHOOLS-10): who, which
+  // course, when. The person's own record of what they opened, so it goes
+  // with them. The school's code needs no person and stays.
+  { model: 'SchoolLinkClick', column: 'userWawuId', disposition: 'OWNED' },
   // This person's saved creators and finished course lessons (ME-10): their
   // own bookmarks and their own progress. Both go with them.
   { model: 'SavedCreator', column: 'userWawuId', disposition: 'OWNED' },
@@ -141,6 +145,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PrivacySettings', column: 'userWawuId', disposition: 'OWNED' },
   // Whether this person wants TGIF on Today (HOME-11): theirs alone.
   { model: 'TgifPreference', column: 'userWawuId', disposition: 'OWNED' },
+  // HOME-16: the marker that today's TGIF notice was made. Goes with the account.
+  { model: 'TgifDailyNotice', column: 'userWawuId', disposition: 'OWNED' },
+  // What this person searched, kept for Recent on the Search landing (EXPLORE-05): theirs alone.
+  { model: 'SearchHistory', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'DataExportRequest', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'BlockedAccount', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person had read in each chat: theirs alone.
@@ -169,6 +177,15 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // link anyone follows once the account is gone.
   { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
+  // A tier purchase this account chose to pay by bank transfer (TIER-05): the
+  // item, the quote it was confirmed at and where it stands. OWNED, like
+  // MakerPurchase above: it exists only because this account placed it and
+  // names no counterparty. The wallet payment that paid it, if any, stays as
+  // the money's record (WalletPayment, anonymised).
+  { model: 'PlanTransferOrder', column: 'wawuUserId', disposition: 'OWNED' },
+  // A product this person was still drafting (TIER-02): its details, no file.
+  // It exists only because this account does and is shown to nobody else.
+  { model: 'ProductDraft', column: 'wawuUserId', disposition: 'OWNED' },
   // An event registration this account claimed in the app (JOIN-01; claimed by
   // JOIN-03, POST /waitlist/claims): its name, phone, email and the payment that
   // bought the plan. It names this account only after the claim, so it goes
@@ -374,6 +391,26 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'ANONYMISED',
     clear: ['destinationAccountNumber'],
   },
+  // A bill paid from the wallet (BILLS-04) is the record of money that moved
+  // and of what the biller delivered, so the row stays when the account goes;
+  // their side is anonymised, and so are the meter, phone or smartcard number
+  // and the name Fintava held for it (the token is for the meter, not a person).
+  {
+    model: 'WalletBill',
+    column: 'wawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['accountNumber', 'accountName'],
+  },
+  // A place in a school's class and the order that paid for it (SCHOOLS-07).
+  // The school's share of the fee may still be owed when the person leaves
+  // (it is paid at the intake's start), so the row stays with the person
+  // cut off. It holds the course, school and class, which are the school's,
+  // and no personal detail of its own.
+  {
+    model: 'SchoolEnrolment',
+    column: 'wawuUserId',
+    disposition: 'ANONYMISED',
+  },
   // The codes this person made to share their receipts (WALLET-18). They go
   // with them, and each code then opens the plain "not found" page.
   { model: 'MoneyReceipt', column: 'wawuUserId', disposition: 'OWNED' },
@@ -386,7 +423,18 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     model: 'WalletTransfer',
     column: 'payerWawuUserId',
     disposition: 'ANONYMISED',
-    clear: ['payerAccountNumber', 'payerName', 'note'],
+    // A send to a bank account (WALLET-09) names a third party's account and
+    // holder as the SENDER's record of where the money went, so it goes with
+    // the sender: the bank, the account number and the holder's name.
+    clear: [
+      'payerAccountNumber',
+      'payerName',
+      'note',
+      'bankCode',
+      'bankName',
+      'bankAccountNumber',
+      'bankAccountName',
+    ],
   },
   {
     model: 'WalletTransfer',
@@ -407,6 +455,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PointLedger', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointHold', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'PointLot', column: 'wawuUserId', disposition: 'OWNED' },
+  // "Use wallet" (POINTS-03, PT3): this person's choice about points; theirs alone.
+  { model: 'PointsSetting', column: 'wawuUserId', disposition: 'OWNED' },
   // Points turned into cash (POINTS-04): each row is WAWU's own movement of
   // cash from its account to this person's wallet, and the provider's record
   // of it (our reference, the amount, whether it was confirmed) must outlive
@@ -421,6 +471,39 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'ANONYMISED',
     clear: ['destinationAccountNumber'],
   },
+
+  // ── referral points (REF-02) ────────────────────────────────────────────
+  // This person's own code, the code they used, and the rewards and milestones
+  // that rest on those. A reward and a claim name two people, and either one's
+  // deletion removes the row: the other keeps the points already granted (they
+  // are lots, mapped above), not the record of who was invited. Rewards go
+  // first (they point at the claim), then milestones, claims and the code.
+  {
+    model: 'ReferralReward',
+    column: 'referrerWawuUserId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'ReferralReward',
+    column: 'referredWawuUserId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'ReferralMilestone',
+    column: 'referrerWawuUserId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'PersonReferral',
+    column: 'referrerWawuUserId',
+    disposition: 'OWNED',
+  },
+  {
+    model: 'PersonReferral',
+    column: 'referredWawuUserId',
+    disposition: 'OWNED',
+  },
+  { model: 'PersonReferralCode', column: 'wawuUserId', disposition: 'OWNED' },
 
   // The city on this person's professional card (PROS-02). Theirs, and
   // public only beside a listing that goes with them.
@@ -452,6 +535,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // The mark that this account's deletion was asked for, which stops push
   // until the purge: the purge is that deletion, so the mark goes too.
   { model: 'PushStoppedAccount', column: 'userWawuId', disposition: 'OWNED' },
+  // The content pieces a scheduled deletion hid (SETTINGS-06): their ids and
+  // the status each had, so a cancel can put them back. The pieces go in this
+  // same purge, so the list goes too.
+  {
+    model: 'AccountDeletionContent',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
 
   // Last: everything above may reference these.
   // An admin's choice to feature this creator in Explore (EXPLORE-03): a
@@ -561,6 +652,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   },
 
   // ── admin audit trail, kept on purpose ──────────────────────────────────
+  // The record that this account's deletion was scheduled and ran (SETTINGS-06):
+  // dates, the wallet's provider id and a status. It holds no personal detail,
+  // and the purge sweep reads it to know the deletion is done, so it stays.
+  { model: 'AccountDeletion', column: 'wawuUserId', disposition: 'AUDIT' },
   { model: 'AdminKycAudit', column: 'subjectWawuUserId', disposition: 'AUDIT' },
   {
     model: 'AdminVerificationAudit',
@@ -599,6 +694,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'WalletPayment', column: 'wawuShareKobo' },
   // WAWU's 15% share in kobo on a hold (MONEY-18), not a person.
   { model: 'WalletHold', column: 'wawuShareKobo' },
+  // WAWU's 15% share in kobo on a school enrolment (SCHOOLS-07), not a person.
+  { model: 'SchoolEnrolment', column: 'wawuShareKobo' },
   // WAWU's fee in kobo on a send between two people (WALLET-07), not a person.
   { model: 'WalletTransfer', column: 'wawuFeeKobo' },
 ];

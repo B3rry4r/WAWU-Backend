@@ -275,6 +275,45 @@ describe('FIX-21: at any other level the check refuses, naming the level, before
     expect((refused as IsolationLevelError).level).toBe('repeatable read');
   });
 
+  it('the level comes before the per-transaction limit and before the amount is read (FIX-26): at REPEATABLE READ an amount above the limit, or of 0, is the level error, and at READ COMMITTED the same amounts are the refusals they are', async () => {
+    const PER = {
+      [limitConfigKey('wawu_transfer', 'per_transaction')]: String(
+        EACH_KOBO - 1,
+      ),
+    };
+    const check = (
+      amountKobo: number,
+      isolationLevel?: Prisma.TransactionIsolationLevel,
+    ) =>
+      prisma
+        .$transaction(
+          (tx) =>
+            limits(PER).assertMayMove(
+              { wawuUserId: person(), kind: 'wawu_transfer', amountKobo },
+              { tx, now: NOW },
+            ),
+          isolationLevel ? { isolationLevel } : undefined,
+        )
+        .then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+    for (const amountKobo of [EACH_KOBO, 0]) {
+      for (const isolationLevel of [
+        LEVELS.RepeatableRead,
+        LEVELS.Serializable,
+      ]) {
+        const refused = await check(amountKobo, isolationLevel);
+        expect(refused).toBeInstanceOf(IsolationLevelError);
+      }
+    }
+    expect(reasonOf(await check(EACH_KOBO))).toMatchObject({
+      code: 'limit_reached',
+      limit: 'per_transaction',
+    });
+    expect(await check(0)).toBeInstanceOf(RangeError);
+  });
+
   it('fees_not_set still comes first, before any read (NUV-07): under nuvion with no fee set, at any level', async () => {
     const a = person();
     const refused = await prisma
