@@ -332,6 +332,8 @@ describe('EVENTS-07 round 2', () => {
   describe('a tier edit over a failed wallet order', () => {
     it('replaces the tiers once the failed order is back with its buyer, and waits while it is on its way', async () => {
       const e = await summit(100, { hostId: randomUUID() });
+      // EVENTS-11 (R-40): setting tickets needs a verified host. Setup only.
+      await h.tick(e.hostId);
       const p = await h.buyer(START);
       const q = await start(p, e);
       h.wallets.mode = 'timeout';

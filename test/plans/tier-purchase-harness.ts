@@ -37,13 +37,20 @@ import {
   type NuvionSeamStandIn,
 } from '../payments/nuvion-seam-standin';
 import { mintToken, QuietLogger } from '../payments/poll-helpers';
+import {
+  NuvionHarnessRig,
+  runsOnFintavaDouble,
+} from '../nuvion/harness-wallets';
 
 /**
  * TIER-03's stand-ins in one place: the real Hub modules for money, plans and
  * points, a real database, real RS256 tokens for the stand-in WAWU ID, and
- * the real MONEY-06 Fintava client over a socket to FintavaDouble (the
- * sandbox's own bodies) with a small book of wallets behind it. No Fintava,
- * Nuvion or wawuafrica.com host is called.
+ * WALLET_PROVIDER=nuvion with Nuvion stood in at the seam (HARNESS-NUV, 17 Oct
+ * 2026: `test/nuvion/harness-wallets.ts` says how `h.wallets` and `h.double`
+ * are served), unless the spec passes its own Nuvion stand-in (`nuvion`) or is
+ * on FINTAVA_BOUND_SPECS, which still get the real MONEY-06 Fintava client
+ * over a socket to FintavaDouble (the sandbox's own bodies) with a small book
+ * of wallets behind it. No Fintava, Nuvion or wawuafrica.com host is called.
  */
 
 export const PIN = '4826';
@@ -251,17 +258,27 @@ export async function bootTierApp(
     memoryCost: 1024,
     parallelism: 1,
   });
-  const double = new FintavaDouble();
-  await double.start();
+  // The default is Nuvion (`nuv`); a spec's own stand-in or the Fintava-bound
+  // list keeps the Fintava double running beside it, as it always did.
+  const nuv =
+    opts.nuvion || runsOnFintavaDouble() ? null : new NuvionHarnessRig();
+  const fintava = nuv ? null : new FintavaDouble();
+  if (fintava) await fintava.start();
+  const double = nuv ? nuv.double : fintava!;
+  const seam = opts.nuvion ?? nuv?.standin;
   const logger = new QuietLogger();
-  const wallets = new Wallets();
+  const wallets = nuv ? nuv.wallets : new Wallets();
   const previous: Record<string, string | undefined> = {};
   const env: Record<string, string> = {
-    FINTAVA_BASE_URL: double.baseUrl,
-    FINTAVA_API_KEY: `live_test_${tag}_0123456789FAKEKEY`,
-    FINTAVA_TIMEOUT_MS: '120000',
-    FINTAVA_MONEY_TIMEOUT_MS: '120000',
-    FINTAVA_CHECK_TIMEOUT_MS: '120000',
+    ...(fintava
+      ? {
+          FINTAVA_BASE_URL: fintava.baseUrl,
+          FINTAVA_API_KEY: `live_test_${tag}_0123456789FAKEKEY`,
+          FINTAVA_TIMEOUT_MS: '120000',
+          FINTAVA_MONEY_TIMEOUT_MS: '120000',
+          FINTAVA_CHECK_TIMEOUT_MS: '120000',
+        }
+      : (nuv?.env ?? {})),
     FEE_QUOTE_KEY: `${tag}-test-fee-quote-key-0123456789abcdef0123`,
     MERCHANT_MAX_PER_TXN_KOBO: '1000000000',
     PIN_LOCK_MINUTES: '',
@@ -279,7 +296,7 @@ export async function bootTierApp(
     previous[k] = process.env[k];
     process.env[k] = v;
   }
-  installFintava(double, wallets);
+  if (fintava) installFintava(fintava, wallets);
   let builder = Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
@@ -292,8 +309,7 @@ export async function bootTierApp(
     ],
     providers: [WawuJwtStrategy, WawuIdClient],
   });
-  if (opts.nuvion)
-    builder = builder.overrideProvider(WALLET_PROVIDER).useValue(opts.nuvion);
+  if (seam) builder = builder.overrideProvider(WALLET_PROVIDER).useValue(seam);
   const moduleRef = await builder.setLogger(logger).compile();
   const app = moduleRef.createNestApplication<INestApplication<App>>({
     ...HUB_APP_OPTIONS,
@@ -333,9 +349,11 @@ export async function bootTierApp(
       users.push(id);
       accountSeq += 1;
       const accountNumber = `31${String(Date.now()).slice(-6)}${String(accountSeq).padStart(2, '0')}`;
-      if (opts.nuvion) {
+      if (seam) {
         // An approved Nuvion account holding `kobo`, as NUV-04 will record it.
-        const account = opts.nuvion.openAccount(BigInt(kobo), accountNumber);
+        const account = nuv
+          ? nuv.openAccount(kobo, accountNumber)
+          : seam.openAccount(BigInt(kobo), accountNumber);
         await prisma.fintavaWallet.create({
           data: {
             wawuUserId: id,
@@ -442,7 +460,7 @@ export async function bootTierApp(
       });
       for (const id of users) await purgePersonPoints(prisma, id);
       await app.close();
-      await double.stop();
+      await fintava?.stop();
       for (const [k, v] of Object.entries(previous)) {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
