@@ -20,6 +20,10 @@ import { MoneyModule } from '../../src/money/money.module';
 import { WalletPaymentService } from '../../src/money/payments/wallet-payment.service';
 import { WALLET_PROVIDER } from '../../src/wallet-provider/wallet-provider.interface';
 import { FintavaDouble } from '../fintava/fintava-double';
+import {
+  NuvionHarnessRig,
+  runsOnFintavaDouble,
+} from '../nuvion/harness-wallets';
 import type { NuvionSeamStandIn } from '../payments/nuvion-seam-standin';
 import { mintToken, QuietLogger } from '../payments/poll-helpers';
 import {
@@ -32,9 +36,12 @@ import {
 /**
  * INBOX-16's stand-ins in one place: the real Hub modules for money and for
  * credits, a real database, real RS256 tokens for the stand-in WAWU ID, and
- * the real MONEY-06 Fintava client over a socket to FintavaDouble (the
- * sandbox's own bodies) with a small book of wallets behind it, the same one
- * TIER-03 uses. No Fintava, Nuvion or wawuafrica.com host is called.
+ * WALLET_PROVIDER=nuvion with Nuvion stood in at the seam (HARNESS-NUV, 17 Oct
+ * 2026: `test/nuvion/harness-wallets.ts` says how `h.wallets` and `h.double`
+ * are served), unless the spec passes its own Nuvion stand-in (`nuvion`) or is
+ * on FINTAVA_BOUND_SPECS, which still get the real MONEY-06 Fintava client
+ * over a socket to FintavaDouble with the tier harness's small book of
+ * wallets behind it. No Fintava, Nuvion or wawuafrica.com host is called.
  */
 
 export interface CreditBootOptions {
@@ -74,17 +81,27 @@ export async function bootCreditApp(
     memoryCost: 1024,
     parallelism: 1,
   });
-  const double = new FintavaDouble();
-  await double.start();
+  // HARNESS-NUV: Nuvion by default; a spec's own stand-in or the Fintava-bound
+  // list keeps the Fintava double beside it, as it always did.
+  const nuv =
+    opts.nuvion || runsOnFintavaDouble() ? null : new NuvionHarnessRig();
+  const fintava = nuv ? null : new FintavaDouble();
+  if (fintava) await fintava.start();
+  const double = nuv ? nuv.double : fintava!;
+  const seam = opts.nuvion ?? nuv?.standin;
   const logger = new QuietLogger();
-  const wallets = new Wallets();
+  const wallets = nuv ? nuv.wallets : new Wallets();
   const previous: Record<string, string | undefined> = {};
   const env: Record<string, string> = {
-    FINTAVA_BASE_URL: double.baseUrl,
-    FINTAVA_API_KEY: `live_test_${tag}_0123456789FAKEKEY`,
-    FINTAVA_TIMEOUT_MS: '120000',
-    FINTAVA_MONEY_TIMEOUT_MS: '120000',
-    FINTAVA_CHECK_TIMEOUT_MS: '120000',
+    ...(fintava
+      ? {
+          FINTAVA_BASE_URL: fintava.baseUrl,
+          FINTAVA_API_KEY: `live_test_${tag}_0123456789FAKEKEY`,
+          FINTAVA_TIMEOUT_MS: '120000',
+          FINTAVA_MONEY_TIMEOUT_MS: '120000',
+          FINTAVA_CHECK_TIMEOUT_MS: '120000',
+        }
+      : (nuv?.env ?? {})),
     FEE_QUOTE_KEY: `${tag}-test-fee-quote-key-0123456789abcdef0123`,
     MERCHANT_MAX_PER_TXN_KOBO: '1000000000',
     PIN_LOCK_MINUTES: '',
@@ -103,7 +120,7 @@ export async function bootCreditApp(
     previous[k] = process.env[k];
     process.env[k] = v;
   }
-  installFintava(double, wallets);
+  if (fintava) installFintava(fintava, wallets);
   let builder = Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
@@ -116,8 +133,7 @@ export async function bootCreditApp(
     ],
     providers: [WawuJwtStrategy, WawuIdClient],
   });
-  if (opts.nuvion)
-    builder = builder.overrideProvider(WALLET_PROVIDER).useValue(opts.nuvion);
+  if (seam) builder = builder.overrideProvider(WALLET_PROVIDER).useValue(seam);
   const moduleRef = await builder.setLogger(logger).compile();
   const app = moduleRef.createNestApplication<INestApplication<App>>({
     ...HUB_APP_OPTIONS,
@@ -158,9 +174,11 @@ export async function bootCreditApp(
       await prisma.transactionPin.create({
         data: { wawuUserId: id, pinHash: cheapPinHash },
       });
-      if (opts.nuvion) {
+      if (seam) {
         // An approved Nuvion account holding `kobo`, as NUV-04 will record it.
-        const account = opts.nuvion.openAccount(BigInt(kobo), accountNumber);
+        const account = nuv
+          ? nuv.openAccount(kobo, accountNumber)
+          : seam.openAccount(BigInt(kobo), accountNumber);
         await prisma.fintavaWallet.create({
           data: {
             wawuUserId: id,
@@ -247,7 +265,7 @@ export async function bootCreditApp(
         where: { userWawuId: { in: users } },
       });
       await app.close();
-      await double.stop();
+      await fintava?.stop();
       for (const [k, v] of Object.entries(previous)) {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
