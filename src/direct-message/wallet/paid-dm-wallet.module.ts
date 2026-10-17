@@ -5,6 +5,7 @@ import { MoneyModule } from '../../money/money.module';
 import { NotificationModule } from '../../notification/notification.module';
 import { WalletProviderModule } from '../../wallet-provider/wallet-provider.module';
 import { DirectMessageModule } from '../direct-message.module';
+import { PaidDmCreatorEarningService } from './paid-dm-creator-earning.service';
 import { PaidDmWalletController } from './paid-dm-wallet.controller';
 import { PaidDmWalletService } from './paid-dm-wallet.service';
 
@@ -24,6 +25,6 @@ import { PaidDmWalletService } from './paid-dm-wallet.service';
     DirectMessageModule,
   ],
   controllers: [PaidDmWalletController],
-  providers: [PaidDmWalletService],
+  providers: [PaidDmWalletService, PaidDmCreatorEarningService],
 })
 export class PaidDmWalletModule {}
