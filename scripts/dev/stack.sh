@@ -36,6 +36,10 @@
 # machine (for example http://127.0.0.1:7184), so a spec can see the Hub's own storage calls (deletes included).
 # Left unset, the endpoint is a name block-net.cjs refuses, which is what a spec that never reaches storage wants.
 #
+# A service is UP only when its own process (or a child of it) is the listener on its port, not merely when the
+# port answers (FIX-57; scripts/dev/stack-ports.sh). `up` refuses when any port of the range is already listening,
+# `status` says NOT OURS for a port another process holds, and scripts/dev/stack-selftest.sh checks all of it.
+#
 # The stand-in's control routes, and how to seed a funded wallet and fire a webhook:
 # README.md, "Local test stack", and scripts/dev/nuvion-tool.cjs.
 #
@@ -90,27 +94,16 @@ DB_HUB="${NAME}_wawu_hub_test"
 DB_ID="${NAME}_wawu_id_test"
 
 # ---------------------------------------------------------------- helpers
-port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+# port_open, port_listening, listener_pids, owns_port, wait_owned and descendants (FIX-57: a port that
+# answers is not proof the service holds it; its own process must be the listener).
+# shellcheck source=scripts/dev/stack-ports.sh
+. "$DEV_DIR/stack-ports.sh"
 
 # Field 22 of /proc/<pid>/stat: when the process started. A PID that was reused
 # by another process has a different value, so a recorded PID is only trusted
 # when this still matches.
 proc_ticks() { awk '{ sub(/^.*\) /, ""); print $20 }' "/proc/$1/stat" 2>/dev/null; }
 alive_same() { [ -d "/proc/$1" ] && [ "$(proc_ticks "$1")" = "$2" ]; }
-
-# Every descendant of a PID, one per line.
-descendants() {
-  ps -e -o pid= -o ppid= | awk -v root="$1" '
-    { ppid[$1] = $2; ids[NR] = $1 }
-    END {
-      keep[root] = 1; changed = 1
-      while (changed) {
-        changed = 0
-        for (i in ids) { p = ids[i]; if (!(p in keep) && (ppid[p] in keep)) { keep[p] = 1; changed = 1 } }
-      }
-      for (p in keep) if (p != root) print p
-    }'
-}
 
 # Stops a PID and its children: TERM, up to 8 seconds of grace, then KILL.
 stop_tree() {
@@ -140,14 +133,24 @@ rand_hex() { node -p 'require("crypto").randomBytes(24).toString("hex")'; }
 # ---------------------------------------------------------------- status
 cmd_status() {
   if [ ! -f "$PIDS" ]; then say "stack $NAME: not running (no pids in $STATE)"; return 0; fi
-  local bad=0 name pid port ticks state
+  local bad=0 name pid port ticks state alive foreign=""
   while read -r name pid port ticks; do
     [ -n "$name" ] || continue
-    if port_open "$port"; then state="listening"
-    elif alive_same "$pid" "$ticks"; then state="NOT listening (process alive)"; bad=1
+    alive=0; alive_same "$pid" "$ticks" && alive=1
+    # UP means this service's own process holds the port, not just that the port answers.
+    if (( alive )) && owns_port "$pid" "$port"; then state="listening"
+    elif port_listening "$port"; then
+      state="NOT OURS: port held by $(holder_text "$port") ($( (( alive )) && echo "this process alive, not the listener" || echo "this process gone"))"
+      bad=1; foreign="$foreign $name"
+    elif (( alive )); then state="NOT listening (process alive)"; bad=1
     else state="NOT listening (process gone)"; bad=1; fi
     printf '%-9s :%-5s pid %-7s %s\n' "$name" "$port" "$pid" "$state"
   done < "$PIDS"
+  for name in $foreign; do
+    [ -f "$LOGS/$name.log" ] || continue
+    say "last 10 lines of $LOGS/$name.log:"
+    tail -n 10 "$LOGS/$name.log" | cut -c1-200 | sed 's/^/  | /'
+  done
   local prov="" nport=""
   [ -f "$ENVF" ] && prov="$(sed -n 's/^WALLET_PROVIDER=//p' "$ENVF")" && nport="$(sed -n 's/^NUV_PORT=//p' "$ENVF")"
   [ -n "$prov" ] && printf 'provider  %s (stand-in on :%s)\n' "$prov" "$nport"
@@ -247,9 +250,19 @@ FREE="$(free_gb)"
 [[ "$FREE" =~ ^[0-9]+$ ]] || die "cannot read free memory from \`free -g\`"
 (( FREE >= MIN_FREE_GB )) || die "only ${FREE} GB of memory available; a stack needs at least $MIN_FREE_GB GB. Wait a minute and try again. Nothing was started."
 
+# Every port of the range, not only the ones this stack uses (FIX-57): a listener anywhere in the range means
+# two stacks were given overlapping ranges.
+[ -r /proc/net/tcp ] || die "this needs Linux (/proc/net/tcp) to tell which process holds a port"
 BUSY=""
-for pair in "${USED_PORTS[@]}"; do
-  port_open "${pair%%:*}" && BUSY="$BUSY ${pair%%:*} (${pair#*:})"
+LISTENING=" $(listening_hexes | tr '\n' ' ')"
+for (( p = PORT_A; p <= PORT_B; p++ )); do
+  printf -v hex '%04X' "$p"
+  if [[ "$LISTENING" == *" $hex "* ]] || port_open "$p"; then
+    label="in the range"
+    for pair in "${USED_PORTS[@]}"; do [ "${pair%%:*}" = "$p" ] && label="${pair#*:}"; done
+    BUSY="$BUSY $p ($label)"
+    printf 'stack.sh: port %s is held by %s\n' "$p" "$(holder_text "$p")" >&2
+  fi
 done
 [ -z "$BUSY" ] || die "already in use:$BUSY. Choose other ports with --ports, or stop what uses them. Nothing was started."
 
@@ -300,7 +313,7 @@ mkdir -p "$LOGS" || die "cannot create $LOGS"
 : > "$PIDS"
 
 SUMMARY=()   # name|url|pid|state
-FAIL_NAME=""; FAIL_LOG=""
+FAIL_NAME=""; FAIL_LOG=""; FAIL_WHY=""
 
 # A Ctrl-C or kill during `up` stops what it started.
 on_signal() { echo; echo "interrupted: stopping stack $NAME"; cmd_down >/dev/null 2>&1; exit 130; }
@@ -319,15 +332,10 @@ launch() {
   LAST_PID=$pid
 }
 
-# wait_up <name> <url> <seconds>: 0 when the URL answers 2xx, 1 when the process died or time ran out.
+# wait_up <name> <port> <url> <seconds>: 0 when the URL answers 2xx and this service's own process (LAST_PID) holds
+# the port, 1 when the process died or time ran out. An answer from another process on the port does not count (FIX-57).
 wait_up() {
-  local name="$1" url="$2" secs="$3" i
-  for i in $(seq 1 "$secs"); do
-    curl -sf -m 3 -o /dev/null "$url" 2>/dev/null && return 0
-    [ -d "/proc/$LAST_PID" ] || return 1
-    sleep 1
-  done
-  return 1
+  wait_owned "$LAST_PID" "$2" "$3" "$4"
 }
 
 # run_step <log-name> <cwd> <command...>: full output to the log; 0 on success.
@@ -340,12 +348,12 @@ run_step() {
 service() {
   local name="$1" port="$2" cwd="$3" url="$4" secs="$5"; shift 5
   launch "$name" "$port" "$cwd" "$@"
-  if wait_up "$name" "$url" "$secs"; then
+  if wait_up "$name" "$port" "$url" "$secs"; then
     SUMMARY+=("$name|$url|$LAST_PID|UP")
     return 0
   fi
   SUMMARY+=("$name|$url|$LAST_PID|FAILED")
-  FAIL_NAME="$name"; FAIL_LOG="$LOGS/$name.log"
+  FAIL_NAME="$name"; FAIL_LOG="$LOGS/$name.log"; FAIL_WHY="$WAIT_WHY"
   return 1
 }
 
@@ -523,6 +531,7 @@ for row in "${SUMMARY[@]}"; do
 done
 if [ "$RESULT" -ne 0 ]; then
   say ""
+  [ -z "$FAIL_WHY" ] || say "  why: $FAIL_WHY"
   say "FAILED at ${FAIL_NAME:-?}. Last 15 lines of ${FAIL_LOG:-the log}:"
   [ -f "$FAIL_LOG" ] && tail -n 15 "$FAIL_LOG" | cut -c1-200 | sed 's/^/  | /'
   say "What is running stays up. Stop it: scripts/dev/stack.sh down --name $NAME${SCRATCH_ARG:+ --scratch $SCRATCH}"

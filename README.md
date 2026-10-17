@@ -129,7 +129,14 @@ scripts/dev/stack.sh down   --name <n>
 - `. <scratch>/<n>/env.sh` points one spec at the stack (`DATABASE_URL` and the
   mock WAWU ID's URLs), e.g. `npm run test:contract -- <spec>`.
 - `up` refuses to start when `free -g` shows under 5 GB available
-  (`STACK_MIN_FREE_GB`) or when any of its ports is in use, and changes nothing.
+  (`STACK_MIN_FREE_GB`) or when any port of the range is already listening
+  (it names the process holding it), and changes nothing.
+- A service is `UP` only when its own process (or a child of it) is the listener
+  on its port. A port that answers because another stack holds it does not count:
+  `up` prints the service as `FAILED`, a `why:` line and the last lines of its log,
+  and exits non-zero; `status` says `NOT OURS` for it. Check it with
+  `scripts/dev/stack-selftest.sh [base-port]` (default `7850`; it uses eight ports
+  from the base, needs no database and ends with `EXIT 0` or `EXIT 1`).
 - `down` stops every recorded PID and its children, confirms the ports are
   closed with a connect test and drops the databases. Running it twice is safe.
 - `--id`, `--web` and `--mobile` take a checkout of your own (a worktree): the
