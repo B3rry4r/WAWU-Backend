@@ -590,7 +590,12 @@ describe('POST /money/pin/reset/confirm with an Idempotency-Key', () => {
       state: 'done',
       responseStatus: 200,
     });
-    expect(scannable(row)).not.toContain(reset.code);
+    // The whole row, fingerprint included, is scanned as it is stored (not
+    // through scannable()): a reset code in clear inside a shape-valid
+    // fingerprint must fail here. A six-digit code turning up by chance in the
+    // row's random hex is about 0.00033% (3 in a million), taken as steady.
+    expect(JSON.stringify(row)).not.toContain(reset.code);
+    expect(row.fingerprint).not.toContain(reset.code);
     expect(row.fingerprint).toMatch(/^hmac-sha256:v1:/);
   });
 

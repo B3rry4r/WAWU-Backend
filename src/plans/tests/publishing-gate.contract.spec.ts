@@ -504,6 +504,8 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       const first = config.tiers[0].products;
       for (let n = 1; n < first; n += 1) await publish(id).expect(201);
       const together = STORAGE_LOCK_WAITERS_PER_PERSON + 1;
+      // Fewer than two at once would not race at all (waiters set to 0).
+      expect(together).toBeGreaterThan(1);
       const results = await Promise.all(
         Array.from({ length: together }, () => publish(id)),
       );
