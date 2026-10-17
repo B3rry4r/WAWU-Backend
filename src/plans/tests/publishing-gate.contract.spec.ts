@@ -20,6 +20,7 @@ import { ContentPieceService } from '../../content-piece/content-piece.service';
 import { PRODUCT_DRAFTS_MAX } from '../../content-piece/product-draft.service';
 import { CreatorStateModule } from '../../creator-state/creator-state.module';
 import { StorageModule } from '../../storage/storage.module';
+import { STORAGE_LOCK_WAITERS_PER_PERSON } from '../../storage/storage-lock';
 import { TICK_UPLOADS } from '../../common/creator-allowance';
 import { PLANS_CONFIG, type PlansConfig } from '../plans-config';
 import { PlansModule } from '../plans.module';
@@ -487,14 +488,46 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       });
     });
 
+    // One person's publishes take their storage turn one at a time: one runs,
+    // STORAGE_LOCK_WAITERS_PER_PERSON wait in memory, and one more at that
+    // moment is refused at once with 429 storage_busy (storage-lock.ts, ME-04
+    // round 6). So the most that can be sent together and never meet that
+    // refusal is the waiters plus the one running. Four sent together got a
+    // 429 for the fourth on every burst once the Hub was warm (measured: 147 of
+    // 150 bursts; after twelve parallel requests as a warm-up, every one). It
+    // passed only while the Hub was cold, and failed on CI whenever it was
+    // not (FIX-45). This sends what the queue admits, so the answer does not
+    // depend on timing. The crowd past that is the next case.
     it('cannot be sent past the limit by two publishes at once', async () => {
       const id = await creator();
       await giveTier(id, 0);
       const first = config.tiers[0].products;
       for (let n = 1; n < first; n += 1) await publish(id).expect(201);
-      const results = await Promise.all([1, 2, 3, 4].map(() => publish(id)));
+      const together = STORAGE_LOCK_WAITERS_PER_PERSON + 1;
+      const results = await Promise.all(
+        Array.from({ length: together }, () => publish(id)),
+      );
       const codes = results.map((r) => r.status).sort();
-      expect(codes).toEqual([201, 402, 402, 402]);
+      expect(codes).toEqual([201, ...Array<number>(together - 1).fill(402)]);
+      expect((await myTier(id)).productsUsed).toBe(first);
+    });
+
+    it('a crowd of publishes at once for the last place makes one piece, and the rest are told the limit or to wait', async () => {
+      const id = await creator();
+      await giveTier(id, 0);
+      const first = config.tiers[0].products;
+      for (let n = 1; n < first; n += 1) await publish(id).expect(201);
+      const crowd = 3 * (STORAGE_LOCK_WAITERS_PER_PERSON + 1);
+      const results = await Promise.all(
+        Array.from({ length: crowd }, () => publish(id)),
+      );
+      expect(results.filter((r) => r.status === 201)).toHaveLength(1);
+      for (const r of results.filter((x) => x.status !== 201)) {
+        expect([402, 429]).toContain(r.status);
+        expect(body(r).reason.code).toBe(
+          r.status === 402 ? 'product_limit_reached' : 'storage_busy',
+        );
+      }
       expect((await myTier(id)).productsUsed).toBe(first);
     });
 

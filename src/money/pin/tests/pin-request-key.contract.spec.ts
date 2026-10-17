@@ -119,6 +119,48 @@ const fingerprintOf = (
   body: unknown,
 ) => fingerprints().of({ wawuUserId: who.id, method, route, key }, body);
 
+/**
+ * A reserved PIN that is not, by chance, a run of its own four digits inside
+ * the fingerprint its PUT will be stored under (FIX-45). The fingerprint is
+ * 64 random hex characters, so a given four-digit PIN sits inside one about 1
+ * time in 1,070 (61 places, each 1 in 65,536), and "the PIN is not in the
+ * fingerprint" failed on that chance alone (TIER-06's CI, "Expected substring:
+ * not 7497" against "...ca7497698582"). The fingerprint is a pure function of
+ * the person, the route, the key and the body, so it is worked out before the
+ * request is sent and a PIN that would land in it is not used. The assertion
+ * itself is unchanged and now holds every time; a Hub that put the PIN itself
+ * into the fingerprint makes every candidate fail, and this throws.
+ */
+function pinOutsideFingerprint(who: Person, key: string): string {
+  for (let tried = 1; tried <= 12; tried += 1) {
+    const candidate = pin();
+    const stored = fingerprintOf(who, 'PUT', PIN_CHANGE_ROUTE, key, {
+      newPin: candidate,
+      newPinConfirmation: candidate,
+    });
+    if (!stored.includes(candidate)) return candidate;
+  }
+  throw new Error(
+    'twelve PINs in a row were found inside their own fingerprint: the fingerprint carries the PIN',
+  );
+}
+
+const UUID_TEXT =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * A stored key row as text for a leak scan, with the random tokens in it set
+ * aside: its ids (random UUIDs) and its keyed fingerprint (a random 64-digit
+ * hex digest, whose own scan for the PIN is `pinOutsideFingerprint`). A PIN is
+ * four digits and a code six, and any random token holds such a run by chance
+ * (a PIN as one UUID group or part of a digest: about 1 scan in 1,000, FIX-45),
+ * which is no leak. Everything else in the row, the answer included, stays.
+ */
+const scannable = (row: object) =>
+  JSON.stringify(row)
+    .replace(UUID_TEXT, 'ID')
+    .replace(/hmac-sha256:v1:[0-9a-f]{64}/g, 'FINGERPRINT');
+
 /** The form written before round 3 (argon2id): what a row made by an older Hub carries. */
 const legacyFingerprintOf = (
   who: Person,
@@ -193,9 +235,9 @@ describe('PUT /money/pin with an Idempotency-Key', () => {
 
   it('the stored answer is the PIN state and nothing else: no PIN, and the body only as a keyed fingerprint (N3)', async () => {
     const first = pin();
-    const next = pin();
     const who = await holder(first);
     const key = newKey();
+    const next = pinOutsideFingerprint(who, key);
     await change(who, first, next, key).expect(200);
     const [row] = await rowsFor(who);
     expect(row.fingerprint).toMatch(/^hmac-sha256:v1:[0-9a-f]{64}$/);
@@ -213,9 +255,7 @@ describe('PUT /money/pin with an Idempotency-Key', () => {
     ]);
     for (const secret of [first, next]) {
       expect(row.responseBody).not.toContain(`"${secret}"`);
-      expect(JSON.stringify(row)).not.toMatch(
-        new RegExp(`(^|\\D)${secret}(\\D|$)`),
-      );
+      expect(scannable(row)).not.toMatch(new RegExp(`(^|\\D)${secret}(\\D|$)`));
     }
     // The fingerprint is the request's own, keyed with the server's secret and carrying person, route and key: the
     // same request always gives the same text (the store compares them as text), another body or another key never does.
@@ -550,7 +590,7 @@ describe('POST /money/pin/reset/confirm with an Idempotency-Key', () => {
       state: 'done',
       responseStatus: 200,
     });
-    expect(JSON.stringify(row)).not.toContain(reset.code);
+    expect(scannable(row)).not.toContain(reset.code);
     expect(row.fingerprint).toMatch(/^hmac-sha256:v1:/);
   });
 
