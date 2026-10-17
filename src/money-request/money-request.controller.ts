@@ -98,7 +98,9 @@ export class MoneyRequestController {
    * request is then `paid`), pending (not confirmed yet: the request shows
    * `paying`, and is never paid again), or failed (nothing moved; the request
    * is still `pending`). The same Idempotency-Key and body answer the first
-   * result again (`Idempotent-Replayed: true`) without checking the PIN. A
+   * result again (`Idempotent-Replayed: true`) without checking the PIN. The
+   * key is tied to the request it was first used on: the same key on another
+   * request is `409 idempotency_key_reused`, never that request's receipt. A
    * request that is not the caller's, no longer pending, or already being paid
    * is answered before the PIN is looked at: `403 money_request_not_yours`,
    * `409 money_request_not_pending`, `409 money_request_being_paid`.

@@ -300,6 +300,7 @@ export class MoneyRequestService implements OnModuleInit {
           status: true,
           transferId: true,
           conversationId: true,
+          requesterWawuId: true,
         },
       });
       if (!r || r.status !== 'pending' || r.transferId === null) return;
@@ -321,15 +322,60 @@ export class MoneyRequestService implements OnModuleInit {
           });
         }
       } else if (t.status === 'failed' || t.status === 'reversed') {
-        await this.prisma.moneyRequest.updateMany({
+        const { count } = await this.prisma.moneyRequest.updateMany({
           where: { id: r.id, status: 'pending', transferId: r.transferId },
           data: { transferId: null },
         });
+        // Freed for the asker to pay again, unless the asker has been erased
+        // since: nobody is left to be paid, so it closes (round 2). Checked
+        // AFTER the freeing, so a purge that started in between has either
+        // been seen here or finds the freed request in its own sweep.
+        if (count === 1) {
+          await this.closeIfAskerErased(
+            r.id,
+            r.conversationId,
+            r.requesterWawuId,
+          );
+        }
       }
     } catch (e) {
       this.logger.error(
         `money request ${requestId}: could not settle it from its send (${e instanceof Error ? e.name : 'error'})`,
       );
+    }
+  }
+
+  // ── a request whose asker was erased (round 2) ───────────────────────────
+
+  /**
+   * A request that has just been freed (its send failed) closes when its asker
+   * is being or has been erased (`eraseAskerRequests` leaves a request being
+   * paid to its send). The deletion row says so: `purging` is set before the
+   * purge's first step, so a request freed after that is seen here.
+   */
+  private async closeIfAskerErased(
+    requestId: string,
+    chatId: string,
+    askerWawuId: string,
+  ): Promise<void> {
+    const erased = await this.prisma.accountDeletion.findFirst({
+      where: {
+        wawuUserId: askerWawuId,
+        status: { in: ['purging', 'purged'] },
+      },
+      select: { wawuUserId: true },
+    });
+    if (!erased) return;
+    const { count } = await this.prisma.moneyRequest.updateMany({
+      where: { id: requestId, status: 'pending', transferId: null },
+      data: { status: 'cancelled', changedAt: new Date(), memo: null },
+    });
+    if (count === 1) {
+      await this.live.publish({
+        kind: 'money_request.updated',
+        chatId,
+        requestId,
+      });
     }
   }
 
