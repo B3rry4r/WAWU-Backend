@@ -1066,6 +1066,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
         'A send log: every notification it names is already in the Notifications section.',
     },
     {
+      model: 'TgifDailyNotice',
+      reason:
+        'A marker that the TGIF notice of a day was made, kept a few days: the notice itself is in the Notifications section.',
+    },
+    {
       model: 'PushStoppedAccount',
       reason:
         'A switch the server keeps after the person asked to delete the account: it holds nothing but the time of that request.',
