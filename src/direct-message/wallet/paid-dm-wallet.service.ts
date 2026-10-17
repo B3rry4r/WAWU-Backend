@@ -102,9 +102,11 @@ type Db = Prisma.TransactionClient | PrismaService;
  *   `awaiting_response` to `responded` with one conditional write; the window
  *   passing flips it to `refunded` with another. They cannot both match, and
  *   each then asks the hold for its one outcome: the answer RELEASES the
- *   creator's 85% (R-5, R-11: it waits for a wallet they have not opened), the
- *   expiry REFUNDS the price, never the provider's charge on the payment
- *   (R-10). The hold itself refuses the second outcome after the first. Both
+ *   creator's 85% as an earning that goes in their one move a day (R-5, R-11,
+ *   R-55: it waits for a wallet they have not opened), the expiry REFUNDS
+ *   every naira, the payment's charge included (the fan did not cause it;
+ *   lead ruling 17 Oct 2026) with WAWU bearing the refund's own charge. The
+ *   hold itself refuses the second outcome after the first. Both
  *   are asked after the flip commits, holding nothing, and the minute sweep
  *   asks again for any the request did not finish.
  * - **One question waits per creator** (G-75). A fan with a question still
@@ -490,7 +492,9 @@ export class PaidDmWalletService implements OnModuleInit {
     const paymentId = paymentIdOfTxRef(message.flutterwaveTxRef);
     if (!paymentId) return;
     try {
-      await this.holds.release({ paymentId }, ANSWERED_REASON);
+      await this.holds.release({ paymentId }, ANSWERED_REASON, {
+        asEarning: true,
+      });
     } catch (e) {
       if (e instanceof HoldRequestError) {
         this.logger.error(
@@ -617,9 +621,13 @@ export class PaidDmWalletService implements OnModuleInit {
         if (!confirmed && r.action === null) {
           const paymentId = paymentIdOfTxRef(r.ref)!;
           try {
+            // The fan did not cause this: every naira comes back, the
+            // payment's charge included, and WAWU bears the refund's own
+            // charge (lead ruling 17 Oct 2026, as Q-03 and EVENTS-10).
             const settlement = await this.holds.refund(
               { paymentId },
               UNANSWERED_REASON,
+              { returnCharge: true },
             );
             confirmed = settlement.status === 'refunded';
           } catch (e) {

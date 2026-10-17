@@ -123,9 +123,8 @@ export function feeDue(r: LegalRequest, now = new Date()): FeeDue {
  *   request (`wallet:<payment id>`, unique); a repeat writes nothing.
  * - **A fee that cannot be applied is paid back** (the request was cancelled,
  *   the booked hour was given up while the debit was confirming, or the same
- *   fee was paid another way): the price goes back through MONEY-18's refund,
- *   the charge does not, decided in one short transaction that excludes the
- *   grant.
+ *   fee was paid another way): the price and the charge go back through MONEY-18's refund,
+ *   decided in one short transaction that excludes the grant.
  */
 @Injectable()
 export class LegalFeeWalletService implements OnModuleInit {

@@ -33,8 +33,8 @@ export interface PaidQuestionQuoteView {
 /**
  * A paid question as it stands. `asked`: sent, held by WAWU until the creator
  * answers or `deadlineAt` passes. `answered`: the creator's 85% is on its way
- * to their wallet (R-11). `refunding` and `refunded`: the price goes back to
- * the payer's wallet, never the provider's charge on the payment (R-10).
+ * to their wallet in their move of the day (R-11, R-55). `refunding` and
+ * `refunded`: the price and the payment's charge go back to the payer's wallet.
  */
 export interface PaidQuestionWalletView {
   /** The question's id (also the message id once it is sent). */

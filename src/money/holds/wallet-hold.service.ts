@@ -18,6 +18,7 @@ import type { LedgerMovementInput } from '../ledger/ledger.interface';
 import { koboNumber, LedgerService } from '../ledger/ledger.service';
 import { PaymentSettings } from '../payments/payment-config';
 import { joinNotes } from '../payments/payment-figures';
+import { earningReference } from '../earnings/earning-rules';
 import {
   type HoldAction,
   type HoldRef,
@@ -27,6 +28,7 @@ import {
   type HoldSettlementState,
   type HoldSweepCursor,
   type RefundOptions,
+  type ReleaseOptions,
   type HoldWaiting,
   holdReference,
   REFUND_NARRATION,
@@ -58,10 +60,18 @@ function restMs(count: number): number {
  * - **`release`** (a DM answered, an event that took place, a bill
  *   delivered): the payee's 85% moves from WAWU's account to the payee's
  *   wallet. The 15% is WAWU's and stays where it is; with no payee (a bill)
- *   nothing moves and the whole price is WAWU's (R-5).
+ *   nothing moves and the whole price is WAWU's (R-5). Asked with
+ *   `asEarning` (a paid question, an event ticket; R-55, lead ruling 17 Oct
+ *   2026) the share is not a transfer of its own: the release is one
+ *   database write that settles the hold and makes the payee's
+ *   `EarningSettlement`, which goes to their wallet in their ONE move a day
+ *   with their other earnings (`EarningSettlementService`).
  * - **`refund`** (no answer in time, an event called off, a biller failure):
  *   the price moves back to the payer's wallet. The provider's charge on the
- *   original payment is not returned (R-10).
+ *   original payment is not returned (R-10), unless the payer did not cause
+ *   the refund and the owning feature asks `returnCharge` (the question
+ *   that lapsed, a tip or unlock that could not be delivered, an event
+ *   called off): then every naira comes back and WAWU bears the charge.
  *
  * The provider's charge on either move is WAWU's, paid from its 15% (R-31);
  * the payee and the payer receive the full figure.
@@ -118,9 +128,17 @@ export class WalletHoldService {
   // What an owning feature calls
   // -------------------------------------------------------------------------
 
-  /** The payee gets the payee's share (the condition was met). Safe to ask again. */
-  release(ref: HoldRef, reason?: string): Promise<HoldSettlement> {
-    return this.request('release', ref, reason);
+  /**
+   * The payee gets the payee's share (the condition was met). Safe to ask
+   * again. With `asEarning` the share becomes an earning of the payee that
+   * travels in their one move a day (R-55) instead of a transfer of its own.
+   */
+  release(
+    ref: HoldRef,
+    reason?: string,
+    opts: ReleaseOptions = {},
+  ): Promise<HoldSettlement> {
+    return this.request('release', ref, reason, opts);
   }
 
   /** The payer gets the price back (the condition will not be met). Safe to ask again. */
@@ -159,7 +177,7 @@ export class WalletHoldService {
     action: HoldAction,
     ref: HoldRef,
     reason?: string,
-    opts: RefundOptions = {},
+    opts: RefundOptions & ReleaseOptions = {},
   ): Promise<HoldSettlement> {
     const hold = await this.find(ref);
     if (!hold) {
@@ -173,6 +191,25 @@ export class WalletHoldService {
         'other_action_chosen',
         `This hold was already ${hold.action === 'release' ? 'released' : 'refunded'} or is being; it cannot also be ${action === 'release' ? 'released' : 'refunded'}.`,
       );
+    }
+    if (
+      !hold.action &&
+      action === 'release' &&
+      opts.asEarning &&
+      hold.payeeWawuUserId &&
+      hold.payeeShareKobo > 0n
+    ) {
+      // The payee's share is an earning, moved with the rest of their day
+      // (R-55): decided in one short database write, no provider call at all.
+      await this.releaseAsEarning(hold, reason);
+      const again = await this.load(hold.id);
+      if (again.action && again.action !== action) {
+        throw new HoldRequestError(
+          'other_action_chosen',
+          'This hold was settled the other way a moment ago.',
+        );
+      }
+      return this.drive(hold.id);
     }
     if (!hold.action) {
       const now = new Date();
@@ -218,6 +255,49 @@ export class WalletHoldService {
       }
     }
     return this.drive(hold.id);
+  }
+
+  /**
+   * Decides a release as an earning (R-55): in ONE short transaction, holding
+   * nothing across a call, the hold becomes `released` (the conditional write
+   * is the decision: the first request wins) and the payee's
+   * `EarningSettlement` for the payment is made with it, for exactly the
+   * payee's share, owed in WAWU's account. The hold's `transferKobo` and
+   * reference stay null: nothing is sent here, the daily move sends. Nothing
+   * is written when another request decided first.
+   */
+  private async releaseAsEarning(
+    hold: HoldRow,
+    reason?: string,
+  ): Promise<void> {
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.walletHold.updateMany({
+        where: { id: hold.id, status: 'held', action: null },
+        data: {
+          action: 'release',
+          actionReason: reason ? reason.slice(0, 200) : null,
+          actionAt: now,
+          status: 'released',
+          settledAt: now,
+        },
+      });
+      if (count === 0) return;
+      await tx.earningSettlement.create({
+        data: {
+          paymentId: hold.paymentId,
+          payeeWawuUserId: hold.payeeWawuUserId!,
+          kind: hold.kind,
+          targetId: hold.targetId,
+          title: hold.title,
+          earnedAt: now,
+          amountKobo: hold.payeeShareKobo,
+          merchantAccountNumber: hold.merchantAccountNumber,
+          provider: hold.provider,
+          customerReference: earningReference(hold.paymentId, 1),
+        },
+      });
+    });
   }
 
   /** What the payment took on top of the price (the provider's charge and WAWU's fee), in kobo; never below nothing. */

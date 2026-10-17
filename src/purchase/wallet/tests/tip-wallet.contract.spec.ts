@@ -308,7 +308,7 @@ describe('Tip a creator from the wallet (HOME-14), Nuvion stood in', () => {
     await h.expectLedgerEqualsStandIn([payer, c]);
   });
 
-  it('a tip that cannot be delivered is paid back: the price returns, the charge does not, and no earning is made', async () => {
+  it('a tip that cannot be delivered is paid back whole: the price and the charge return, and no earning is made', async () => {
     const payer = await h.person(5_000_000);
     const c = await creator();
     const q = await quoted(payer, c);
@@ -338,8 +338,9 @@ describe('Tip a creator from the wallet (HOME-14), Nuvion stood in', () => {
         where: { paymentId: pending.id },
       }),
     ).toBe(0);
-    // The price came back; the provider's charge on the payment did not (R-10).
-    expect(balance(payer)).toBe(5_000_000n - BigInt(FEE));
+    // Every naira came back, the payment's charge included: the payer did
+    // not cause it (lead ruling 17 Oct 2026). WAWU bears the refund's own charge.
+    expect(balance(payer)).toBe(5_000_000n);
     expect(balance(c)).toBe(0n);
     const read = body<TipWalletView>(
       await h.get(payer, `/tips/wallet/${pending.id}`),

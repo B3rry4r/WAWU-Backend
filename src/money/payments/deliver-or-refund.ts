@@ -26,8 +26,11 @@ import type { CompletedPayment } from './payable-registry';
  *   transaction or connection is open across the provider call. The refund is
  *   asked under one reference of ours that the provider refuses to repeat.
  *
- * The provider's charge on the original payment is not returned (R-10). The
- * payment keeps no earning: the sweep never adopts a payment that has a hold.
+ * The refund returns everything the payment took, the provider's charge and
+ * WAWU's fee included (lead ruling 17 Oct 2026, as Q-03 and EVENTS-10): the
+ * payer did not cause it, and WAWU bears the refund transfer's own charge.
+ * The payment keeps no earning: the sweep never adopts a payment that has a
+ * hold.
  */
 export interface DeliverOrRefund<G> {
   /** The hold's `releaseCondition` for a payment that is being paid back. */
@@ -89,6 +92,9 @@ export async function deliverOrRefund<G>(
     await holds.refund(
       { paymentId: payment.paymentId },
       `not delivered: ${decided.why}`.slice(0, 200),
+      // The payer did not cause this: everything the payment took comes back,
+      // the provider's charge included, and WAWU bears the refund's own charge.
+      { returnCharge: true },
     );
   }
   return decided;

@@ -51,6 +51,49 @@ const SLOT_HOLDING_STATUSES = [
 ] as const;
 
 /**
+ * Statuses a matter is in once its price is agreed and signed for: the quote
+ * cannot be changed from any of them (LEGAL-06 F1).
+ */
+const REQUOTE_LOCKED_STATUSES = [
+  'contract_signed',
+  'awaiting_service_payment',
+  'in_progress',
+  'delivered',
+] as const;
+
+const REQUOTE_SIGNED =
+  'The client has already signed the engagement letter at the current price, so the quote can no longer be changed.';
+const REQUOTE_PAID =
+  'This work is already paid for, so its quote can no longer be changed.';
+const REQUOTE_CHANGED =
+  'This request changed while the quote was being saved, so the quote was not changed. Open it again to see where it stands.';
+
+/**
+ * Why a request can no longer be re-quoted, or null when it still can: the
+ * letter is signed, or the work is paid or under way (LEGAL-06 F1).
+ */
+function requoteRefusal(r: {
+  status: string;
+  contractSignedAt: Date | null;
+  servicePaidAt: Date | null;
+}): string | null {
+  if (
+    r.servicePaidAt ||
+    r.status === 'in_progress' ||
+    r.status === 'delivered'
+  ) {
+    return REQUOTE_PAID;
+  }
+  if (
+    r.contractSignedAt ||
+    (REQUOTE_LOCKED_STATUSES as readonly string[]).includes(r.status)
+  ) {
+    return REQUOTE_SIGNED;
+  }
+  return null;
+}
+
+/**
  * How long an unpaid booking holds its hour.
  *
  * Booking and paying are two calls, and plenty of people never make the
@@ -495,13 +538,34 @@ export class LegalRequestsService {
         'This request cannot be quoted until its consultation has been paid for.',
       );
     }
-    const updated = await this.prisma.legalRequest.update({
-      where: { id },
+    // A quote is the price the client signs and then pays (LEGAL-06 F1). Once
+    // the letter is signed, or the work is paid or under way, a new quote
+    // would strand the matter (the fee is no longer asked, signing again is
+    // refused), and on paid work it would move the status back to `quoted`.
+    // Refused here, and again in the write itself so a client signing at the
+    // same moment cannot slip between the check and the update.
+    const locked = requoteRefusal(record);
+    if (locked) throw new ConflictException(locked);
+    const { count } = await this.prisma.legalRequest.updateMany({
+      where: {
+        id,
+        contractSignedAt: null,
+        servicePaidAt: null,
+        status: { notIn: [...REQUOTE_LOCKED_STATUSES] },
+      },
       data: {
         quoteAmount: dto.amountNaira,
         quoteNote: dto.note ?? null,
         status: 'quoted',
       },
+    });
+    if (count === 0) {
+      const now = await this.prisma.legalRequest.findUnique({ where: { id } });
+      if (!now) throw new NotFoundException('Legal request not found.');
+      throw new ConflictException(requoteRefusal(now) ?? REQUOTE_CHANGED);
+    }
+    const updated = await this.prisma.legalRequest.findUniqueOrThrow({
+      where: { id },
     });
     // The price a client is billed used to be set anonymously behind a shared
     // key. The naira figure is recorded with it, not just the fact of a quote.

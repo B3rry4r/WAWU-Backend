@@ -561,6 +561,26 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    key: 'paidQuestionDrafts',
+    models: ['PaidDmDraft'],
+    // The words of a paid question the requester wrote and has not paid for
+    // (INBOX-17): their own writing, kept until paid or removed after a
+    // fortnight. The idempotency key of the request that made it is a
+    // technical mark and is not selected.
+    load: (prisma, me) =>
+      prisma.paidDmDraft.findMany({
+        where: { senderWawuId: me },
+        select: {
+          id: true,
+          creatorWawuId: true,
+          text: true,
+          responseWindowHours: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  {
     key: 'paidMessageRepliesWritten',
     models: ['DmReply'],
     load: (prisma, me) =>

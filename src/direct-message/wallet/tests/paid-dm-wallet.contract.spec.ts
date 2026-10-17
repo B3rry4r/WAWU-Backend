@@ -7,7 +7,9 @@ import {
   STAND_IN_FEE_KOBO,
 } from '../../../../test/payments/wallet-pay-harness';
 import { body, until } from '../../../../test/payments/poll-helpers';
+import { AccountDeletionMoneyService } from '../../../account/account-deletion-money.service';
 import { HoldRequestError } from '../../../money/holds/hold-rules';
+import type { EarningsView } from '../../../money/money-view.type';
 import { NotificationService } from '../../../notification/notification.service';
 import { SchedulerService } from '../../../scheduler/scheduler.service';
 import { DmRefundService } from '../../dm-refund.service';
@@ -160,6 +162,12 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
       where: { paymentId: m.flutterwaveTxRef.slice('wallet:'.length) },
     });
   };
+  const earningOf = async (id: string) => {
+    const m = await messageOf(id);
+    return h.prisma.earningSettlement.findUniqueOrThrow({
+      where: { paymentId: m.flutterwaveTxRef.slice('wallet:'.length) },
+    });
+  };
   const respond = (c: PayPerson, id: string, text = 'Use a fast lens.') =>
     h.post(c, `/dm/${id}/respond`, { text }, { pin: null });
   /** Moves a question's deadline, as time passing would. */
@@ -239,16 +247,42 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
       }),
     ).toBe(1);
 
-    // The creator answers: 85% is released to them; WAWU keeps 15%.
+    // The creator answers: the hold is released at once as an earning (R-55),
+    // and the 85% reaches them in their one move of the day; WAWU keeps 15%.
     const reply = await respond(c, v.id);
     expect(reply.status).toBe(201);
+    expect(await holdOf(v.id)).toMatchObject({
+      status: 'released',
+      action: 'release',
+      transferKobo: null,
+      customerReference: null,
+    });
+    const earning = await earningOf(v.id);
+    expect(earning).toMatchObject({
+      kind: 'paid_dm',
+      payeeWawuUserId: c.id,
+      amountKobo: BigInt(SHARE),
+    });
+    // Nothing was sent by the release itself.
+    expect(paidOut(c)).toHaveLength(0);
+    // The creator reads it once, as earned and waiting for the move: the
+    // hold and the earning are one amount, not two.
+    const owed = body<EarningsView>(await h.get(c, '/money/earnings')).data!;
+    expect(owed.allTime.earnedKobo).toBe(SHARE);
+    expect(owed.allTime.sales).toBe(1);
+    expect(owed.waiting).toEqual({ count: 1, amountKobo: SHARE });
+    expect(owed.held).toEqual({ count: 0, amountKobo: 0 });
     await until(async () => {
       await h.pass();
-      return (await holdOf(v.id)).status === 'released';
-    }, 'the hold to be released');
+      return (await earningOf(v.id)).status === 'landed';
+    }, "the earning to land in the creator's move");
     expect(balance(c)).toBe(BigInt(SHARE));
     expect(paidOut(c)).toHaveLength(1);
     expect(paidOut(c)[0].request.amount).toBe(SHARE);
+    expect(paidOut(c)[0].request.unique_reference).toMatch(/^wawu-earn-d-/);
+    const landed = body<EarningsView>(await h.get(c, '/money/earnings')).data!;
+    expect(landed.allTime.earnedKobo).toBe(SHARE);
+    expect(landed.waiting).toEqual({ count: 0, amountKobo: 0 });
     const read = body<PaidQuestionWalletView>(
       await h.get(fan, `/dm/send/wallet/${v.id}`),
     ).data!;
@@ -265,7 +299,7 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
     await operationalAgrees();
   });
 
-  it('no answer in time: the price goes back once, never the charge, and the fan is told once', async () => {
+  it('no answer in time: the price and the charge go back once, and the fan is told once', async () => {
     const fan = await h.person(RICH);
     const c = await creator();
     const v = await asked(fan, c);
@@ -283,8 +317,9 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
       await questions.sweep();
       return (await messageOf(v.id)).refundStatus === 'settled';
     }, 'the refund to be confirmed');
-    // The price is back with the fan; the charge on the payment is not.
-    expect(balance(fan)).toBe(BigInt(RICH - FEE));
+    // Every naira is back with the fan, the payment's charge included: the
+    // fan did not cause the lapse (lead ruling 17 Oct 2026).
+    expect(balance(fan)).toBe(BigInt(RICH));
     expect(balance(c)).toBe(0n);
     expect((await holdOf(v.id)).status).toBe('refunded');
     // Twice more changes nothing, and the fan is told once.
@@ -295,7 +330,7 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
       .sendsFrom(h.nuvion.operational.accountId)
       .filter((t) => t.toAccountId === fan.account!.accountId);
     expect(back).toHaveLength(1);
-    expect(back[0].request.amount).toBe(PRICE);
+    expect(back[0].request.amount).toBe(PRICE + FEE);
     expect(
       await h.prisma.notification.count({
         where: { userWawuId: fan.id, kind: 'dm_refunded' },
@@ -304,8 +339,10 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
     // The creator can no longer answer it.
     const late = await respond(c, v.id);
     expect(late.status).toBe(409);
+    // WAWU's account gave back the price and the charge, and bore the refund
+    // transfer's own charge on top.
     expect(h.nuvion.operational.availableKobo - op0).toBe(
-      -(BigInt(PRICE) + BigInt(FEE)),
+      -(BigInt(PRICE) + 2n * BigInt(FEE)),
     );
     const read = body<PaidQuestionWalletView>(
       await h.get(fan, `/dm/send/wallet/${v.id}`),
@@ -596,10 +633,27 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
     });
     creators.push(c.id);
     const v = await asked(fan, c);
+    const sent0 = h.nuvion.sendsFrom(h.nuvion.operational.accountId).length;
     expect((await respond(c, v.id)).status).toBe(201);
     await h.pass();
-    expect((await holdOf(v.id)).status).toBe('held');
-    expect((await holdOf(v.id)).action).toBe('release');
+    await h.pass();
+    // The question is answered and the hold released as an earning; the
+    // earning keeps owed, in WAWU's account, until a wallet exists.
+    expect(await holdOf(v.id)).toMatchObject({
+      status: 'released',
+      action: 'release',
+    });
+    expect(await earningOf(v.id)).toMatchObject({
+      status: 'owed',
+      moveId: null,
+      waiting: 'payee_wallet',
+    });
+    expect(h.nuvion.sendsFrom(h.nuvion.operational.accountId)).toHaveLength(
+      sent0,
+    );
+    // Money waits for them, so deleting the account is not allowed yet.
+    const deletion = new AccountDeletionMoneyService(h.nuvion, h.prisma);
+    expect((await deletion.check(c.id)).blockers).toContain('waiting_earnings');
 
     // The wallet opens.
     const opened = await h.person(0);
@@ -609,7 +663,7 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
     });
     await until(async () => {
       await h.pass();
-      return (await holdOf(v.id)).status === 'released';
+      return (await earningOf(v.id)).status === 'landed';
     }, 'the share to land');
     expect(
       h.nuvion.accounts.get(opened.account!.accountId)!.availableKobo,
@@ -620,6 +674,71 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
         .sendsFrom(h.nuvion.operational.accountId)
         .filter((t) => t.toAccountId === opened.account!.accountId),
     ).toHaveLength(1);
+  });
+
+  it("two answers in a day land in the creator's one move, once; a later answer waits for the next day's (R-55)", async () => {
+    const c = await creator();
+    const fans = [
+      await h.person(RICH),
+      await h.person(RICH),
+      await h.person(RICH),
+    ];
+    const qs: PaidQuestionWalletView[] = [];
+    for (const f of fans) qs.push(await asked(f, c));
+    const op0 = h.nuvion.operational.availableKobo;
+    const sent0 = paidOut(c).length;
+
+    // Two creators' answers before any sweep: both holds are released at
+    // once, neither sends anything of its own.
+    for (const q of qs.slice(0, 2))
+      expect((await respond(c, q.id)).status).toBe(201);
+    expect(paidOut(c)).toHaveLength(sent0);
+    for (const q of qs.slice(0, 2)) {
+      expect(await holdOf(q.id)).toMatchObject({
+        status: 'released',
+        transferKobo: null,
+      });
+      expect((await earningOf(q.id)).status).toBe('owed');
+    }
+
+    // The sweeps, run again and twice at once: ONE transfer carries both.
+    await until(async () => {
+      await h.pass();
+      return (await earningOf(qs[0].id)).status === 'landed';
+    }, "the day's move to land");
+    await Promise.all([h.pass(), h.pass(), questions.sweep()]);
+    await h.pass();
+    expect(paidOut(c)).toHaveLength(sent0 + 1);
+    expect(paidOut(c)[sent0].request.amount).toBe(2 * SHARE);
+    expect(balance(c)).toBe(BigInt(2 * SHARE));
+    const first = await earningOf(qs[0].id);
+    const second = await earningOf(qs[1].id);
+    expect(first.moveId).not.toBeNull();
+    expect(second.moveId).toBe(first.moveId);
+    expect(
+      await h.prisma.earningMove.count({ where: { payeeWawuUserId: c.id } }),
+    ).toBe(1);
+    // WAWU's account paid out the two shares and the charge ONCE for the move
+    // (not once per answer); the 15% of each stayed in it.
+    expect(h.nuvion.operational.availableKobo - op0).toBe(
+      -(BigInt(2 * SHARE) + BigInt(FEE)),
+    );
+
+    // A third answer the same day: its earning waits for the next day's move.
+    expect((await respond(c, qs[2].id)).status).toBe(201);
+    await h.pass();
+    await h.pass();
+    expect((await earningOf(qs[2].id)).status).toBe('owed');
+    expect(paidOut(c)).toHaveLength(sent0 + 1);
+    await until(async () => {
+      await h.pass(24 * HOUR);
+      return (await earningOf(qs[2].id)).status === 'landed';
+    }, "the next day's move to land");
+    expect(paidOut(c)).toHaveLength(sent0 + 2);
+    expect(paidOut(c)[sent0 + 1].request.amount).toBe(SHARE);
+    expect(balance(c)).toBe(BigInt(3 * SHARE));
+    await h.expectLedgerEqualsStandIn([...fans, c]);
+    await operationalAgrees();
   });
 
   it("a wrong PIN, a short balance, someone else's question and a changed price move nothing", async () => {

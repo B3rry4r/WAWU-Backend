@@ -69,7 +69,7 @@ export const unlockTxRef = (paymentId: string) => `wallet:${paymentId}`;
  *   nothing. A debited-but-not-granted state fixes itself: the sweep grants it.
  * - **An unlock that cannot be granted is paid back** (the piece was taken
  *   down since the quote, or the person already owned it by another payment):
- *   the price goes back through MONEY-18's refund, the charge does not,
+ *   the price and the charge go back through MONEY-18's refund,
  *   decided in one short transaction that excludes the grant.
  */
 @Injectable()

@@ -336,7 +336,7 @@ describe('Pay a legal fee from the wallet (LEGAL-05), Nuvion stood in', () => {
     await h.expectLedgerEqualsStandIn([payer]);
   });
 
-  it('a fee that cannot be applied is paid back: the price returns, the charge does not', async () => {
+  it('a fee that cannot be applied is paid back whole: the price and the charge return', async () => {
     const payer = await h.person(RICH);
     const id = await consultation(payer);
     const q = await quoted(payer, id);
@@ -370,7 +370,8 @@ describe('Pay a legal fee from the wallet (LEGAL-05), Nuvion stood in', () => {
     const r = await row(id);
     expect(r.consultationPaidAt).toBeNull();
     expect(r.status).toBe('cancelled');
-    expect(balance(payer)).toBe(BigInt(RICH - FEE));
+    // Every naira came back, the payment's charge included (lead ruling 17 Oct 2026).
+    expect(balance(payer)).toBe(BigInt(RICH));
     const read = body<LegalFeeWalletView>(
       await h.get(payer, `${url(id)}/${pending.id}`),
     ).data!;

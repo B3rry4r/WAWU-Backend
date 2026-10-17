@@ -191,7 +191,9 @@ earnings, the admin streams and the "you were tipped" notification read it as
 they read a Flutterwave tip. The creator's 85% lands by itself (WALLET-16,
 R-11); WAWU keeps 15%. A tip that cannot be delivered (the creator's account
 is gone, or they blocked the payer since) is paid back through MONEY-18's
-refund: the price returns, the charge does not (R-10).
+refund: the price and everything the payment took return, the provider's
+charge included, and WAWU bears the refund's own charge (lead ruling 17 Oct
+2026, as Q-03 and EVENTS-10; the payer did not cause it).
 
 #### Unlocks from the wallet (HOME-15)
 
@@ -281,13 +283,18 @@ and a deadline of the creator's reply window from that moment.
 
 - **The creator answers** (either reply route): the answer flips the question
   `awaiting_response` to `responded` with one conditional write, and then the
-  hold is released: the creator's 85% (R-5) lands in their wallet, or waits for
-  the wallet they have not opened (R-11); WAWU keeps 15%. Further reply bubbles
+  hold is released as an earning (R-55): in one database write the hold is
+  `released` and the creator's 85% (R-5) becomes an earning of kind `paid_dm`
+  that goes to their wallet in their ONE move of the day with their other
+  earnings (a day's total under ₦200 waits; WAWU carries the charge, R-31), or
+  waits for the wallet they have not opened (R-11); WAWU keeps 15%. The money
+  stays in WAWU's account until that move lands (R-19). Further reply bubbles
   ask nothing more.
 - **The window passes** with no answer: the question is flipped to `refunded`
-  by one conditional write and the hold is refunded: the fan gets the price
-  back, never the provider's charge on the payment (R-10). `dm_refunded` is
-  sent once, when the provider has confirmed the refund.
+  by one conditional write and the hold is refunded: the fan gets back every
+  naira, the price and the charge the payment took (the fan did not cause it;
+  lead ruling 17 Oct 2026), and WAWU bears the refund transfer's own charge.
+  `dm_refunded` is sent once, when the provider has confirmed the refund.
 - **Never both.** The two writes cannot both match one question, and the hold
   refuses the second outcome after the first (`other_action_chosen`). A
   minute sweep asks again for anything a request did not finish.
@@ -299,8 +306,8 @@ and a deadline of the creator's reply window from that moment.
 
 #### Hosts' shares: community credits and event tickets (WALLET-17)
 
-No new route: both shares reach the host's wallet by themselves (R-11) and show
-in the earnings reads (`GET /money/earnings`) and the history like any earning.
+No new route: both shares reach the host's wallet by themselves (R-11), in the
+host's one move a day (R-55), and show in the earnings reads (`GET /money/earnings`) and the history like any earning.
 A host without a wallet keeps the share and it lands once, within a minute of
 the wallet opening.
 
@@ -319,12 +326,14 @@ the wallet opening.
   `held` `event_ticket` hold with the host as payee (EVENTS-07). When the
   event has taken place (`endsAt ?? startsAt` gone by, plus
   `EVENT_PAYOUT_DELAY_HOURS` if set, none by default), each paid order's hold
-  is RELEASED: the host's 85% moves from WAWU's account to their wallet and
-  WAWU keeps 15%. The hold decides once and one way, so the job running twice,
-  on two servers or at the moment the event is called off pays once or refunds
-  once. An event called off, removed or not over, and an order that is not
-  paid, pays nobody. One release is one transfer per order (the hold's own
-  move, MONEY-18), not part of the daily move of a host's other earnings.
+  is RELEASED as an earning (R-55): the hold becomes `released` and the host's
+  85% becomes an earning of kind `event_ticket` that goes to their wallet in
+  their ONE move of the day with their other earnings (one transfer a day, a
+  day's total under ₦200 waits, WAWU carries the charge, R-31); WAWU keeps
+  15%. The money stays in WAWU's account until that move lands (R-19). The
+  hold decides once and one way, so the job running twice, on two servers or
+  at the moment the event is called off pays once or refunds once. An event
+  called off, removed or not over, and an order that is not paid, pays nobody.
 
 ## 2. The named schemas (G-1)
 
@@ -521,7 +530,11 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
 6. **Refunds return the price, and reversals may keep a charge.** The canvas
    says "Nothing was taken" and "The full ₦25,010 is back" (W14), and refund
    copy elsewhere promises everything back. R-10's default: a refund returns
-   the price, Fintava's charge is not returned. For a failed bank send, two
+   the price, Fintava's charge is not returned. A refund the person did not
+   cause returns every naira, the charge included, and WAWU bears the refund
+   transfer's own charge (lead ruling 17 Oct 2026: a lapsed paid question, a
+   tip, unlock or legal fee that cannot be delivered, a ticket order for an
+   event called off). For a failed bank send, two
    things are open: whether Fintava's reversal (`debit_transfer_reversal`,
    payload unseen) returns its own ₦40, and whether WAWU's ₦25 comes back
    (R-10 does not say). The contract reports what actually came back

@@ -45,6 +45,7 @@ const SENTINELS = {
   otherReply: 'SENTINEL_OTHER_PERSON_REPLY',
   dmAnswer: 'SENTINEL_CREATOR_ANSWER',
   inboundDm: 'SENTINEL_MESSAGE_SENT_TO_USER',
+  inboundDraft: 'SENTINEL_UNPAID_QUESTION_TO_USER',
   strangerComment: 'SENTINEL_STRANGER_COMMENT',
   pinHash: 'SENTINEL_PIN_HASH_$argon2',
   bankNumber: '0099887766',
@@ -52,6 +53,8 @@ const SENTINELS = {
 };
 const OWN_COMMENT_TEXT = 'S04 export: my own comment';
 const OWN_DM_TEXT = 'S04 export: what I paid to ask';
+// INBOX-17: the words of a paid question the requester wrote and has not paid for.
+const OWN_DRAFT_TEXT = 'S04 export: a question I have not paid for';
 
 const ID = {
   ownComment: '5b040000-0000-4000-8000-000000000001',
@@ -62,6 +65,8 @@ const ID = {
   block: '5b040000-0000-4000-8000-000000000007',
   follower: '5b040000-0000-4000-8000-000000000008',
   following: '5b040000-0000-4000-8000-00000000000a',
+  draftOwn: '5b040000-0000-4000-8000-00000000000b',
+  draftToUser: '5b040000-0000-4000-8000-00000000000c',
 };
 
 async function waitForHealth(url: string, timeoutMs = 15000): Promise<boolean> {
@@ -177,6 +182,9 @@ describe('Data export (contract)', () => {
     await prisma.directMessage.deleteMany({
       where: { id: { in: [ID.dmSent, ID.dmReceived] } },
     });
+    await prisma.paidDmDraft.deleteMany({
+      where: { id: { in: [ID.draftOwn, ID.draftToUser] } },
+    });
     await prisma.comment.deleteMany({
       where: { id: { in: [ID.ownComment, ID.strangerComment] } },
     });
@@ -218,6 +226,25 @@ describe('Data export (contract)', () => {
           amount: 300,
           flutterwaveTxRef: 's04-export-dm-received',
           deadlineAt: soon,
+        },
+      ],
+    });
+    await prisma.paidDmDraft.createMany({
+      data: [
+        {
+          id: ID.draftOwn,
+          senderWawuId: USER,
+          creatorWawuId: OTHER,
+          text: OWN_DRAFT_TEXT,
+          responseWindowHours: 24,
+          requestKey: 's04-export-draft-key',
+        },
+        {
+          id: ID.draftToUser,
+          senderWawuId: OTHER,
+          creatorWawuId: USER,
+          text: SENTINELS.inboundDraft,
+          responseWindowHours: 24,
         },
       ],
     });
@@ -277,6 +304,9 @@ describe('Data export (contract)', () => {
     await prisma.dmReply.deleteMany({ where: { id: ID.dmReply } });
     await prisma.directMessage.deleteMany({
       where: { id: { in: [ID.dmSent, ID.dmReceived] } },
+    });
+    await prisma.paidDmDraft.deleteMany({
+      where: { id: { in: [ID.draftOwn, ID.draftToUser] } },
     });
     await prisma.comment.deleteMany({
       where: { id: { in: [ID.ownComment, ID.strangerComment] } },
@@ -374,6 +404,16 @@ describe('Data export (contract)', () => {
     const text = (rows: unknown) => JSON.stringify(rows);
     expect(text(file.data.comments)).toContain(OWN_COMMENT_TEXT);
     expect(text(file.data.paidMessagesSent)).toContain(OWN_DM_TEXT);
+    // INBOX-17: the person's own unpaid question is in their file, and the
+    // technical idempotency key and somebody else's unpaid question to them
+    // are not.
+    expect(text(file.data.paidQuestionDrafts)).toContain(OWN_DRAFT_TEXT);
+    expect(text(file.data.paidQuestionDrafts)).not.toContain(
+      's04-export-draft-key',
+    );
+    expect(text(file.data.paidQuestionDrafts)).not.toContain(
+      SENTINELS.inboundDraft,
+    );
     const followedInDb = (
       await prisma.followRelationship.findMany({
         where: { followerWawuId: USER },

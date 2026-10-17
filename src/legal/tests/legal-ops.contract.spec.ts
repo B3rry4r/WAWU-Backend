@@ -376,6 +376,90 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
         .send({ amountNaira: 1000 })
         .expect(404);
     });
+
+    // LEGAL-06 F1: a quote changed after the letter is signed, or on work that
+    // is paid, stranded the matter (the fee was no longer asked, signing again
+    // was refused) and on paid work moved the status back to `quoted`.
+    describe('a late re-quote (LEGAL-06 F1)', () => {
+      const requote = (id: string, amountNaira = 52_000) =>
+        request(app.getHttpServer())
+          .post(`/api/hub/legal/ops/requests/${id}/quote`)
+          .set(bearer(tokens.finance))
+          .send({ amountNaira });
+      const row = (id: string) =>
+        prisma.legalRequest.findUniqueOrThrow({ where: { id } });
+      // The repro of F1: the consultation was paid for, then quoted and signed.
+      const consulted = {
+        consultationPaidAt: new Date('2026-10-01T09:00:00Z'),
+      };
+
+      it('still re-prices a quote the client has not signed yet', async () => {
+        const record = await seed({
+          ...consulted,
+          status: 'quoted',
+          quoteAmount: 45_000,
+        });
+        const res = await requote(record.id).expect(200);
+        const data = (res.body as { data: Record<string, unknown> }).data;
+        expect(data).toMatchObject({ status: 'quoted', quoteAmount: 52_000 });
+      });
+
+      it('refuses once the letter is signed: 409, the matter stays as it was', async () => {
+        const signedAt = new Date('2026-10-10T09:00:00Z');
+        const record = await seed({
+          ...consulted,
+          status: 'contract_signed',
+          quoteAmount: 45_000,
+          quoteNote: 'As agreed.',
+          contractSignedAs: 'Ada Obi',
+          contractSignedAt: signedAt,
+        });
+        const res = await requote(record.id).expect(409);
+        expect(JSON.stringify(res.body)).toContain(
+          'signed the engagement letter',
+        );
+        expect(JSON.stringify(res.body)).not.toContain('\u2014');
+        expect(await row(record.id)).toMatchObject({
+          status: 'contract_signed',
+          quoteAmount: 45_000,
+          quoteNote: 'As agreed.',
+          contractSignedAt: signedAt,
+        });
+      });
+
+      it('refuses on a matter waiting for its payment, and never moves paid or running work back to quoted', async () => {
+        const waiting = await seed({
+          ...consulted,
+          status: 'awaiting_service_payment',
+          quoteAmount: 45_000,
+          contractSignedAs: 'Ada Obi',
+          contractSignedAt: new Date(),
+          serviceTxRef: `wawu-legal-${crypto.randomUUID()}`,
+        });
+        await requote(waiting.id).expect(409);
+        expect(await row(waiting.id)).toMatchObject({
+          status: 'awaiting_service_payment',
+          quoteAmount: 45_000,
+        });
+
+        const paidAt = new Date('2026-10-12T09:00:00Z');
+        const running = await seed({
+          ...consulted,
+          status: 'in_progress',
+          quoteAmount: 45_000,
+          contractSignedAs: 'Ada Obi',
+          contractSignedAt: new Date(),
+          servicePaidAt: paidAt,
+        });
+        const res = await requote(running.id).expect(409);
+        expect(JSON.stringify(res.body)).toContain('already paid for');
+        expect(await row(running.id)).toMatchObject({
+          status: 'in_progress',
+          quoteAmount: 45_000,
+          servicePaidAt: paidAt,
+        });
+      });
+    });
   });
 
   describe('POST /legal/ops/requests/:id/consultation/complete', () => {

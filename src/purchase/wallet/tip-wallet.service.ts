@@ -70,7 +70,7 @@ export const tipTxRef = (paymentId: string) => `wallet:${paymentId}`;
  *   a repeat writes nothing.
  * - **A tip that cannot be delivered is paid back.** If the creator's account
  *   is gone or has blocked the payer since the quote, the price goes back to
- *   the payer through MONEY-18's refund (the charge does not), decided in one
+ *   the payer through MONEY-18's refund, the charge included, decided in one
  *   short transaction that excludes the delivery (`deliverOrRefund`).
  */
 @Injectable()

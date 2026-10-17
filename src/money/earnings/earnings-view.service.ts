@@ -59,9 +59,12 @@ function kobo(text: string | null | undefined): number {
  * - an ordinary sale, once it is finished: an `EarningSettlement` (owed until
  *   the provider confirmed the move into the wallet, then landed);
  * - a held kind (paid DM, ticket), once the owning feature has released its
- *   hold to the payee (`action` is `release`): earned at once, landed when
- *   the move is confirmed. A hold whose owner has not decided is `held`, not
- *   earned; a refunded one is the payer's.
+ *   hold to the payee (`action` is `release`): earned at once. A release made
+ *   as an earning (R-55) is an `EarningSettlement` like a sale's and travels
+ *   in the payee's move of the day; one made as a transfer of its own (the
+ *   hold service's plain release) is landed when the move is confirmed. A
+ *   hold whose owner has not decided is `held`, not earned; a refunded one is
+ *   the payer's.
  * `at` is when it was earned: the sale's completion, or the release.
  */
 function earned(person: string): Prisma.Sql {
@@ -76,7 +79,10 @@ function earned(person: string): Prisma.Sql {
            (h."status" = 'released')
       FROM "WalletHold" h
      WHERE h."payeeWawuUserId" = ${person}::text
-       AND h."action" = 'release' AND h."payeeShareKobo" > 0`;
+       AND h."action" = 'release' AND h."payeeShareKobo" > 0
+       -- A release that became an earning (R-55) is the earning's row above.
+       AND NOT EXISTS (SELECT 1 FROM "EarningSettlement" s
+                        WHERE s."paymentId" = h."paymentId")`;
 }
 
 type SectionRow = {

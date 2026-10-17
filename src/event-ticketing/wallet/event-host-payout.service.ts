@@ -122,7 +122,9 @@ export class EventHostPayoutService {
     holdId: string,
   ): Promise<'released' | 'refunded_first' | 'later'> {
     try {
-      await this.holds.release({ holdId }, EVENT_TOOK_PLACE_REASON);
+      await this.holds.release({ holdId }, EVENT_TOOK_PLACE_REASON, {
+        asEarning: true,
+      });
       return 'released';
     } catch (e) {
       if (e instanceof HoldRequestError) {

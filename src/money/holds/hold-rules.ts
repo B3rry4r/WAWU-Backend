@@ -134,6 +134,19 @@ export interface RefundOptions {
   returnCharge?: boolean;
 }
 
+/**
+ * How a release differs from the plain one. `asEarning` (R-55, lead ruling 17
+ * Oct 2026): the payee's share does not travel as a transfer of its own. The
+ * release is one database write that settles the hold and makes the payee's
+ * `EarningSettlement` for the payment, and the share then goes to their
+ * wallet in their ONE move a day with every other earning they have. The
+ * money stays in WAWU's account until that move lands (R-19), and the hold is
+ * `released` from the moment the owning feature decided.
+ */
+export interface ReleaseOptions {
+  asEarning?: boolean;
+}
+
 /** A request to release or refund that cannot be honoured. Not an HTTP answer: the feature decides what to do. */
 export class HoldRequestError extends Error {
   constructor(

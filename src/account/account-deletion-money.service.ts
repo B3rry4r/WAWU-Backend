@@ -180,15 +180,17 @@ export class AccountDeletionMoneyService {
             ],
           },
         }),
-        // A completed sale whose share has not landed: no hold (a held kind is
-        // counted above), not refunded, and the payee's share is more than 0.
+        // A completed sale whose share has not landed: no hold, or a hold
+        // that was released as an earning (R-55) and whose move has not
+        // landed (an open hold is counted above, a refunded one is the
+        // payer's), and the payee's share is more than 0.
         this.prisma.walletPayment.count({
           where: {
             status: 'completed',
             payeeWawuUserId: wawuUserId,
             payeeShareKobo: { gt: 0 },
             payeeSettledAt: null,
-            hold: { is: null },
+            OR: [{ hold: { is: null } }, { hold: { status: 'released' } }],
           },
         }),
         this.prisma.walletPayment.count({

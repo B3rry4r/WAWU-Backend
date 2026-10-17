@@ -2109,8 +2109,19 @@ added up into one.
     (a bill) or a share under a kobo nothing moves and the hold is over.
     The payment's `payeeSettledAt` is set when it is paid, so WALLET-16 never
     lands the same share again (WALLET-16 skips a payment that has a hold).
+    **Asked with `asEarning`** (a paid question, an event ticket; R-55, lead
+    ruling 17 Oct 2026) the share is not a transfer of its own: the release is
+    one database write that makes the hold `released` (no `transferKobo`, no
+    reference) and makes the payee's `EarningSettlement` for the payment, which
+    goes to their wallet in their ONE move a day with their other earnings
+    (section 26); `payeeSettledAt` is set when that move lands. The money stays
+    in WAWU's account until then (R-19).
   - `refund(...)`: the **price** moves back to the payer's wallet. The
-    provider's charge on the original payment is not returned (R-10).
+    provider's charge on the original payment is not returned (R-10), unless
+    the owning feature asks `returnCharge` because the payer did not cause the
+    refund (a lapsed paid question, a tip, unlock or legal fee that could not
+    be delivered, a called-off event, a failed bill): every naira comes back
+    and WAWU bears the charge of the refund transfer (lead ruling 17 Oct 2026).
   - The provider's charge on either move is WAWU's, paid from its 15% (R-31):
     the person receives the whole figure. It is recorded on the hold
     (`providerFeeKobo`) and on the merchant-side ledger row.

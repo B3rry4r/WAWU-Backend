@@ -96,6 +96,20 @@ describe('Unlock content from the wallet (HOME-15), Nuvion stood in', () => {
     expectedTotalKobo: q.payment.totalKobo,
     quoteToken: q.payment.quoteToken,
   });
+  /** The net the ledger holds for WAWU's own account: completed money in minus completed money out, charge included. */
+  async function operationalLedger(): Promise<bigint> {
+    const rows = await h.prisma.fintavaLedgerEntry.findMany({
+      where: {
+        accountNumber: h.nuvion.operational.nuvionBan,
+        status: 'completed',
+      },
+      select: { direction: true, amountKobo: true, totalKobo: true },
+    });
+    let net = 0n;
+    for (const r of rows)
+      net += r.direction === 'in' ? r.amountKobo : -r.totalKobo;
+    return net;
+  }
   const unlockUrl = (contentId: string) =>
     `/content/${contentId}/unlock/wallet`;
   const grants = (contentId: string) =>
@@ -291,12 +305,14 @@ describe('Unlock content from the wallet (HOME-15), Nuvion stood in', () => {
     await h.expectLedgerEqualsStandIn([payer, creator]);
   });
 
-  it('an unlock that cannot be granted is paid back: the price returns, the charge does not, no access and no earning', async () => {
+  it('an unlock that cannot be granted is paid back whole: the price and the charge return, no access and no earning', async () => {
     const payer = await h.person(RICH);
     const creator = await h.person(0);
     const id = await piece(creator);
     const q = await quoted(payer, id);
     h.nuvion.mode = 'pending';
+    const operationalBefore = h.nuvion.operational.availableKobo;
+    const ledgerBefore = await operationalLedger();
     const res = await h.post(payer, unlockUrl(id), request(q));
     const pending = body<UnlockWalletView>(res).data!;
     expect(pending.status).toBe('pending');
@@ -325,13 +341,30 @@ describe('Unlock content from the wallet (HOME-15), Nuvion stood in', () => {
         where: { paymentId: pending.id },
       }),
     ).toBe(0);
-    expect(balance(payer)).toBe(BigInt(RICH - FEE));
+    // Every naira came back, the payment's charge included: the payer did
+    // not cause it (lead ruling 17 Oct 2026). WAWU bears the refund's own charge.
+    expect(balance(payer)).toBe(BigInt(RICH));
     expect(balance(creator)).toBe(0n);
+    // One transfer back, for the price and the charge together; WAWU's account
+    // took the price in and gave both back, and bore the refund's own charge.
+    const back = h.nuvion
+      .sendsFrom(h.nuvion.operational.accountId)
+      .filter((t) => t.toAccountId === payer.account!.accountId);
+    expect(back).toHaveLength(1);
+    expect(back[0].request.amount).toBe(PRICE + FEE);
+    expect(h.nuvion.operational.availableKobo - operationalBefore).toBe(
+      -BigInt(FEE) - BigInt(FEE),
+    );
     const read = body<UnlockWalletView>(
       await h.get(payer, `${unlockUrl(id)}/${pending.id}`),
     ).data!;
     expect(read).toMatchObject({ status: 'refunded', purchased: false });
     await h.expectLedgerEqualsStandIn([payer, creator]);
+    // WAWU's own account agrees too: what the ledger recorded for it since
+    // this test began is what the stand-in's account moved by.
+    expect((await operationalLedger()) - ledgerBefore).toBe(
+      h.nuvion.operational.availableKobo - operationalBefore,
+    );
   });
 
   it('refuses a free piece, your own, one that is gone, and one only another person can pay for', async () => {

@@ -14,10 +14,11 @@ import type {
 
 /**
  * WALLET-17, event tickets, on the wallet provider seam with NUVION stood in:
- * the host's 85% of the tickets sold (R-5) is paid from WAWU's own account
- * through the tickets' holds once the event has taken place, once, however
- * many times the job runs; a host with no wallet keeps it (R-11); an event
- * called off pays nobody. After each, the ledger agrees with the stand-in,
+ * the host's 85% of the tickets sold (R-5) is released from the tickets' holds
+ * once the event has taken place, once, however many times the job runs, as
+ * an earning that goes to the host in their ONE move a day (R-55) from WAWU's
+ * own account; a host with no wallet keeps it (R-11); an event called off pays
+ * nobody. After each, the ledger agrees with the stand-in,
  * WAWU's operational account included. No Nuvion, Fintava or wawuafrica.com
  * host is called.
  */
@@ -143,12 +144,23 @@ describe('Hosts receive their share of ticket sales (WALLET-17), Nuvion stood in
       held += r.direction === 'in' ? r.amountKobo : -r.totalKobo;
     expect(h.nuvion.operational.availableKobo).toBe(held);
   }
+  const earningOfOrder = async (orderId: string) => {
+    const o = await h.prisma.eventOrder.findUniqueOrThrow({
+      where: { id: orderId },
+    });
+    return h.prisma.earningSettlement.findUniqueOrThrow({
+      where: { paymentId: o.walletPaymentId! },
+    });
+  };
+  /** The holds are released and every earning has landed in the host's move. */
   async function settleHolds(orderIds: string[]) {
     await until(async () => {
       await h.pass();
       const holds = await Promise.all(orderIds.map(holdOfOrder));
-      return holds.every((x) => x.status === 'released');
-    }, 'the holds to be released');
+      if (!holds.every((x) => x.status === 'released')) return false;
+      const earnings = await Promise.all(orderIds.map(earningOfOrder));
+      return earnings.every((x) => x.status === 'landed');
+    }, 'the holds to be released and their earnings to land');
   }
 
   it("after the event the host's wallet receives 85% of the tickets once, even if the payout job runs twice", async () => {
@@ -172,18 +184,24 @@ describe('Hosts receive their share of ticket sales (WALLET-17), Nuvion stood in
     await settleHolds([first, second]);
     const share = (held * 85) / 100;
     expect(balance(host)).toBe(BigInt(share));
-    expect(paidTo(host)).toHaveLength(2);
-    expect(paidTo(host).reduce((n, t) => n + t.request.amount, 0)).toBe(share);
-    // WAWU kept its 15% and carries the charge on each release (R-31).
+    // Both orders' shares travel in the host's ONE move of the day (R-55),
+    // not one transfer per order.
+    expect(paidTo(host)).toHaveLength(1);
+    expect(paidTo(host)[0].request.amount).toBe(share);
+    expect(paidTo(host)[0].request.unique_reference).toMatch(/^wawu-earn-d-/);
+    expect(
+      await h.prisma.earningMove.count({ where: { payeeWawuUserId: host.id } }),
+    ).toBe(1);
+    // WAWU kept its 15% and carries the charge ONCE for the move (R-31).
     expect(op0 - h.nuvion.operational.availableKobo).toBe(
-      BigInt(share) + 2n * 2325n,
+      BigInt(share) + 2325n,
     );
 
     // The job again, twice at once, and the sweeps: nothing more is paid.
     expect(await payout.sweep()).toEqual({ released: 0, refundedFirst: 0 });
     await Promise.all([payout.sweep(), payout.sweep()]);
     await h.pass();
-    expect(paidTo(host)).toHaveLength(2);
+    expect(paidTo(host)).toHaveLength(1);
     expect(balance(host)).toBe(BigInt(share));
     // The host sees it as earned.
     const earned = await h.prisma.walletHold.count({
@@ -207,9 +225,15 @@ describe('Hosts receive their share of ticket sales (WALLET-17), Nuvion stood in
     expect((await payout.sweep()).released).toBe(1);
     await h.pass();
     await h.pass();
+    // Released as an earning that waits, owed in WAWU's account, for a wallet.
     const hold = await holdOfOrder(order);
-    expect(hold.status).toBe('held');
+    expect(hold.status).toBe('released');
     expect(hold.action).toBe('release');
+    expect(await earningOfOrder(order)).toMatchObject({
+      status: 'owed',
+      moveId: null,
+      waiting: 'payee_wallet',
+    });
 
     const opened = await h.person(0);
     await h.prisma.fintavaWallet.update({
@@ -270,7 +294,13 @@ describe('Hosts receive their share of ticket sales (WALLET-17), Nuvion stood in
     await until(async () => {
       await h.pass();
       const hold = await holdOfOrder(order);
-      return hold.status === 'released' || hold.status === 'refunded';
+      if (hold.status === 'refunded') return true;
+      // A release is settled at once; its share has reached the host when the
+      // earning has landed in the host's move.
+      return (
+        hold.status === 'released' &&
+        (await earningOfOrder(order)).status === 'landed'
+      );
     }, 'the hold to settle');
     const hold = await holdOfOrder(order);
     expect(hold.action).toBe(
