@@ -177,6 +177,12 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // link anyone follows once the account is gone.
   { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'EventPass', column: 'wawuUserId', disposition: 'OWNED' },
+  // A tier purchase this account chose to pay by bank transfer (TIER-05): the
+  // item, the quote it was confirmed at and where it stands. OWNED, like
+  // MakerPurchase above: it exists only because this account placed it and
+  // names no counterparty. The wallet payment that paid it, if any, stays as
+  // the money's record (WalletPayment, anonymised).
+  { model: 'PlanTransferOrder', column: 'wawuUserId', disposition: 'OWNED' },
   // A product this person was still drafting (TIER-02): its details, no file.
   // It exists only because this account does and is shown to nobody else.
   { model: 'ProductDraft', column: 'wawuUserId', disposition: 'OWNED' },

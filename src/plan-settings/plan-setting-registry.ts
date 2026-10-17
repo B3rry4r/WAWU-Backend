@@ -691,6 +691,14 @@ export function buildRegistry(
     kobo,
   );
   other(
+    'plan.transfer_window_hours',
+    'Hours a bank-transfer purchase waits for the money before it lapses',
+    'hours',
+    ['POST /plans/purchases method transfer (TIER-05, VF6)'],
+    hours,
+    'PLAN-TRANSFER-WINDOW',
+  );
+  other(
     'earnings.refused_review_hours',
     'Hours after the first refusal before a refused earning goes to review',
     'hours',

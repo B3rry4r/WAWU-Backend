@@ -138,6 +138,12 @@ export function successBody(data: unknown): string {
   return JSON.stringify({ statusCode: 200, message: 'OK', data });
 }
 
+/** What a payment is checked against: the item and the quote the person saw. */
+export type QuoteBinding = Pick<
+  PaymentDto,
+  'kind' | 'targetId' | 'expectedTotalKobo' | 'quoteToken'
+>;
+
 /** One open payment per buyer and item (lead ruling D1.2). */
 export function openKeyOf(
   payer: string,
@@ -373,6 +379,65 @@ export class WalletPaymentService implements OnModuleInit {
   }
 
   /**
+   * For a purchase the person will pay by bank transfer (TIER-05): the item
+   * and the quote they saw, checked exactly as `pay` checks them (a changed
+   * price, goods or total is `409 quote_changed` with the new quote), and the
+   * provider's available balance (`503 provider_unreachable` or `423
+   * wallet_frozen` when it cannot be read: there is no figure to show and
+   * nothing is guessed). Moves nothing and keeps nothing.
+   */
+  async vouch(
+    wallet: OpenWallet,
+    dto: QuoteBinding,
+  ): Promise<{
+    target: PayableTarget;
+    fee: FeeQuoteView;
+    availableKobo: number;
+  }> {
+    const { target } = await this.target(
+      wallet.wawuUserId,
+      dto.kind,
+      dto.targetId,
+      undefined,
+    );
+    const fee = await this.checkQuote(wallet, dto, target);
+    const { availableKobo } = await this.balances.balance(wallet);
+    return { target, fee, availableKobo };
+  }
+
+  /**
+   * The item as it stands now with a fresh signed quote for it, and the
+   * provider's available balance: what the settlement of a purchase waiting
+   * for a bank transfer (TIER-05) compares with the quote it was confirmed at
+   * and then pays with. Refuses as `pay` does (an item no longer payable,
+   * fees not set, the provider not answering). Moves nothing.
+   */
+  async currentQuote(
+    wallet: OpenWallet,
+    kind: PaymentKind,
+    targetId: string,
+  ): Promise<{
+    target: PayableTarget;
+    fee: FeeQuoteView;
+    availableKobo: number;
+  }> {
+    const { target } = await this.target(
+      wallet.wawuUserId,
+      kind,
+      targetId,
+      undefined,
+    );
+    const fee = this.fees.quote(
+      wallet.wawuUserId,
+      { kind: 'purchase', amountKobo: target.priceKobo },
+      new Date(),
+      subjectOf(kind, targetId, target.terms),
+    );
+    const { availableKobo } = await this.balances.balance(wallet);
+    return { target, fee, availableKobo };
+  }
+
+  /**
    * The quote with where today's purchase limit stands (NUV-07, G-410 (3)):
    * `withinDailyLimit` and `remainingTodayKobo` from WAWU's own limits, the
    * same figures `assertMayMove` holds the payment to inside its claim.
@@ -602,7 +667,7 @@ export class WalletPaymentService implements OnModuleInit {
   /** The quote the buyer saw, checked against the item as it stands now (G-64). */
   private async checkQuote(
     wallet: OpenWallet,
-    dto: PaymentDto,
+    dto: QuoteBinding,
     target: PayableTarget,
   ): Promise<FeeQuoteView> {
     const payer = wallet.wawuUserId;
@@ -626,7 +691,7 @@ export class WalletPaymentService implements OnModuleInit {
   /** `409 quote_changed` with the payment quote as it stands. */
   private async quoteChanged(
     wallet: OpenWallet,
-    dto: PaymentDto,
+    dto: Pick<QuoteBinding, 'kind' | 'targetId'>,
     target: PayableTarget,
   ): Promise<MoneyError> {
     const fresh = this.fees.quote(
@@ -1660,6 +1725,17 @@ export class WalletPaymentService implements OnModuleInit {
       quoteToken: fee.quoteToken,
       expiresAt: fee.expiresAt,
     };
+  }
+
+  /**
+   * The provider's available balance, or null when it did not answer: what a
+   * screen that only shows the figure (a purchase waiting for a transfer,
+   * TIER-05) asks for, where a missing figure is shown as missing.
+   */
+  availableOrNull(
+    wallet: Pick<OpenWallet, 'wawuUserId' | 'walletId'>,
+  ): Promise<number | null> {
+    return this.balanceOrNull(wallet);
   }
 
   /** The provider's available balance, or null when it did not answer (the quote shows no figure). */

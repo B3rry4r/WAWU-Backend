@@ -29958,7 +29958,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PlanPurchaseView"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/PlanPurchaseView"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PlanTransferOrderView"
+                    }
+                  ]
                 }
               }
             }
@@ -30039,7 +30046,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Pays for a tier from the wallet, once: the tier and its dates, the bonus\npoints as one lot with its expiry, the event pass and the first Voice\nIntro are granted when the payment is confirmed, and the checkout bump's\npoints with them when it was bought. Answers 201 with the purchase:\n`paid`, `pending` while the provider has not confirmed the debit yet\n(poll `GET /plans/purchases/{id}`; it is never sent again), or `failed`\nwhen the provider refused it and nothing moved. The same Idempotency-Key\nand body answer the first result again (`Idempotent-Replayed: true`)\nwithout checking the PIN. Not enough money is `402 insufficient_funds`\nwith the shortfall; no wallet is `409 wallet_not_open`.",
+        "summary": "Pays for a tier from the wallet, once: the tier and its dates, the bonus\npoints as one lot with its expiry, the event pass and the first Voice\nIntro are granted when the payment is confirmed, and the checkout bump's\npoints with them when it was bought. Answers 201 with the purchase:\n`paid`, `pending` while the provider has not confirmed the debit yet\n(poll `GET /plans/purchases/{id}`; it is never sent again), or `failed`\nwhen the provider refused it and nothing moved. The same Idempotency-Key\nand body answer the first result again (`Idempotent-Replayed: true`)\nwithout checking the PIN. Not enough money is `402 insufficient_funds`\nwith the shortfall; no wallet is `409 wallet_not_open`.\n\n`method: transfer` (TIER-05, VF6 \"transfer details shown\") confirms the\npurchase with the PIN at the quote the person saw and takes nothing. It\nanswers 201 with a `PlanTransferOrderView`, `awaiting_transfer`: the\nwallet's own account number, bank and account name, the Bank charge and\nthe amount still needed (the total less the available balance, never\nbelow 0). The purchase is paid from the wallet, once, the moment the\nbalance covers the total, and then reads like any other purchase under\nthe same id. A quote that changed is `409 quote_changed`; the time to send\nthe money (an admin setting) runs out as `expired`, with nothing taken.\nTwo requests for one item leave one waiting purchase.",
         "tags": [
           "PlanPurchases"
         ]
@@ -30064,7 +30071,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PlanPurchaseView"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/PlanPurchaseView"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PlanTransferOrderView"
+                    }
+                  ]
                 }
               }
             }
@@ -30085,7 +30099,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "One purchase as it stands now: what the app polls after `pending`.\nOnly the buyer reads it; another person's purchase and an id nobody\nholds are the same `404 not_found`. It reads our own records only.",
+        "summary": "One purchase as it stands now: what the app polls after `pending`, and\nwhile it waits for a bank transfer (`awaiting_transfer`, with the amount\nstill needed read from the provider's balance; `null` when the provider\ndoes not answer). Only the buyer reads it; another person's purchase and\nan id nobody holds are the same `404 not_found`.",
         "tags": [
           "PlanPurchases"
         ]
@@ -37460,11 +37474,12 @@
             "description": "Buy the checkout bump's extra points with it. Default: no."
           },
           "method": {
-            "type": "string",
-            "description": "How it is paid: from the wallet.",
+            "description": "How it is paid: `wallet` from the balance now, or `transfer`: the answer\ncarries the wallet's own account number and the amount still needed, and\nthe purchase is paid from the wallet when the money lands.",
             "enum": [
-              "wallet"
-            ]
+              "wallet",
+              "transfer"
+            ],
+            "type": "string"
           },
           "expectedTotalKobo": {
             "type": "integer",
@@ -54685,6 +54700,7 @@
           "method": {
             "type": "string",
             "enum": [
+              "transfer",
               "wallet"
             ]
           },
@@ -54743,6 +54759,158 @@
           "status",
           "statusMessage",
           "payment",
+          "grant",
+          "createdAt",
+          "paidAt"
+        ]
+      },
+      "PlanPurchaseTransferView": {
+        "type": "object",
+        "properties": {
+          "accountNumber": {
+            "type": "string"
+          },
+          "accountName": {
+            "type": "string"
+          },
+          "bankName": {
+            "type": "string"
+          },
+          "bankCode": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "bankChargeKobo": {
+            "type": "integer"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "balanceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "amountNeededKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "accountNumber",
+          "accountName",
+          "bankName",
+          "bankCode",
+          "priceKobo",
+          "bankChargeKobo",
+          "totalKobo",
+          "balanceKobo",
+          "amountNeededKobo",
+          "expiresAt"
+        ]
+      },
+      "PlanTransferOrderView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tier",
+              "renew",
+              "upgrade"
+            ]
+          },
+          "tierId": {
+            "type": "string"
+          },
+          "fromTierId": {
+            "type": "string",
+            "nullable": true
+          },
+          "bump": {
+            "type": "boolean"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "transfer"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN",
+              "USD"
+            ]
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "expired",
+              "awaiting_transfer"
+            ]
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaymentView"
+              }
+            ],
+            "nullable": true
+          },
+          "transfer": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanPurchaseTransferView"
+              }
+            ],
+            "nullable": true
+          },
+          "grant": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanPurchaseGrantView"
+              }
+            ],
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "tierId",
+          "fromTierId",
+          "bump",
+          "method",
+          "currency",
+          "amountMinor",
+          "status",
+          "statusMessage",
+          "payment",
+          "transfer",
           "grant",
           "createdAt",
           "paidAt"

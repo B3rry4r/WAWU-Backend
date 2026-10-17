@@ -427,6 +427,48 @@ model MakerPurchase {
   @@index([wawuUserId, createdAt])
 }
 
+/// A tier purchase to be paid by bank transfer (TIER-05, VF6 "transfer details
+/// shown"). The person confirmed it with their PIN at checkout, at one quote
+/// (`priceKobo`, `totalKobo` with the Bank charge, and the `terms` of the goods);
+/// it waits as `awaiting` for the money to land in their own wallet, then is paid
+/// from the wallet exactly once (`settling`, then `settled` with the wallet
+/// payment's id), or closes: `expired` (the window lapsed) or `closed` (the item
+/// is no longer payable, the quote changed, or the person paid it another way).
+/// Nothing here is a balance: the provider's available balance decides.
+/// `openKey` is `<person>:<payment kind>:<target>` while `awaiting`, null after,
+/// so a person has one waiting order per item.
+model PlanTransferOrder {
+  id              String    @id @default(uuid())
+  wawuUserId      String
+  /// `tier` or `tier_bump`: the wallet payment kind it settles as.
+  paymentKind     String
+  /// The payment's target (`tier-founding`, `renew-verify`, `upgrade-verify-founding`).
+  targetId        String
+  priceKobo       Int
+  providerFeeKobo Int
+  totalKobo       Int
+  /// What the quote promised beyond its price (the goods), bound to the quote.
+  terms           Json?
+  status          String    @default("awaiting")
+  statusMessage   String?
+  openKey         String?   @unique
+  expiresAt       DateTime
+  /// The wallet payment that paid it; set once, never changed.
+  paymentId       String?   @unique
+  /// When the sweep took it to pay it; null unless `settling`.
+  settlingSince   DateTime?
+  /// The newest money-in row the sweep had looked at when it last checked.
+  creditsSeenAt   DateTime?
+  /// When the balance is next read although no new money-in row came.
+  nextCheckAt     DateTime?
+  checks          Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([wawuUserId, status, createdAt])
+}
+
 /// A pass to the Christmas event, issued with a tier (W44). One row per
 /// purchase that issued one: `purchaseRef` is unique, so a repeated payment
 /// confirmation issues it once. `type` names an event pass in
