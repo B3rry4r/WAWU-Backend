@@ -86,6 +86,14 @@ const EVENTS: NotificationEvent[] = [
   { kind: 'dm_deadline', userWawuId: 'u', hoursLeft: 3 },
   { kind: 'dm_refunded', userWawuId: 'u', amount: 2000 },
   { kind: 'new_follower', userWawuId: 'u' },
+  // HOME-16: the morning TGIF notice (added with the kind: this list must name every pushed kind).
+  {
+    kind: 'tgif_daily',
+    userWawuId: 'u',
+    day: '2026-10-17',
+    series: 'SONS, NOT SLAVES',
+    verseReference: 'Romans 8:15 (NIV)',
+  },
   { kind: 'content_published', userWawuId: 'u', contentTitle: 'Night shoot' },
   {
     kind: 'content_rejected',
