@@ -523,7 +523,11 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       opts.email === undefined ? `nuv02-${id}@example.com` : opts.email;
     const bvn = opts.bvn ?? digits(11);
     const nin = digits(11);
-    const idNumber = `A${digits(8)}`;
+    // FIX-58: `Q`, not `A`. The stand-in's ids are 5 prefix characters and 21
+    // uppercase hex digits, which hold `A` + 8 digits now and then, and the
+    // stored-column scan below would find such a run inside an id. `Q` is
+    // not a hex digit and starts no id prefix, so no stored id can hold it.
+    const idNumber = `Q${digits(8)}`;
     secrets.push(bvn, nin, idNumber);
     const b: Body = {
       bvn,

@@ -422,6 +422,35 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
         delivered.push(p);
       },
     });
+    // FIX-58: the one kind whose quote is refused while the payer's payment
+    // for the item is open (QUOTE_REFUSES_OPEN_KINDS). The school itself is
+    // paid later, so there is no payee here (SCHOOLS-07).
+    registry.register({
+      kind: 'school_fee',
+      resolve: async ({ targetId, payerWawuUserId }) => {
+        await Promise.resolve();
+        if (owned.has(`${payerWawuUserId}:${targetId}`)) {
+          throw new MoneyError(
+            'target_not_payable',
+            'You already have a place.',
+          );
+        }
+        if (!targetId.startsWith('n-')) {
+          throw new MoneyError('target_not_found', 'That place is gone.');
+        }
+        return {
+          title: `Place ${targetId}`,
+          priceKobo: PRICE,
+          payee: null,
+          payeeOutsideWawu: true,
+        };
+      },
+      onCompleted: async (p) => {
+        await Promise.resolve();
+        owned.add(`${p.payerWawuUserId}:${p.targetId}`);
+        delivered.push(p);
+      },
+    });
     registry.register({
       kind: 'tip',
       resolve: async ({ amountKobo }) => {
@@ -767,12 +796,13 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect(sendsFrom(p)).toHaveLength(1);
   });
 
-  // FIX-58 (G-SCHOOLS-06-1): the quote of an item the SAME payer already
-  // has an open payment for is the answer the payment gives, so a second
-  // phone is never shown a live Pay.
-  it('FIX-58: the quote of an item this payer has an open payment for is 409 payment_in_progress with that payment id; nothing is stored or sent', async () => {
+  // FIX-58 (G-SCHOOLS-06-1): the quote of a SCHOOL FEE the SAME payer
+  // already has an open payment for is the answer the payment gives, so a
+  // second phone is never shown a live Pay. Every other kind keeps quoting
+  // while a payment is open (QUOTE_REFUSES_OPEN_KINDS).
+  it('FIX-58: the quote of a school fee this payer has an open payment for is 409 payment_in_progress with that payment id; nothing is stored or sent', async () => {
     const p = await buyer(500_000);
-    const q = await quoted(p, 'content_unlock', 'n-open-quote');
+    const q = await quoted(p, 'school_fee', 'n-open-quote');
     nuvion.mode = 'processing';
     const paid = body<PaymentView>(await pay(p, q)).data!;
     expect(paid.status).toBe('pending');
@@ -783,7 +813,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     const rows = (await ledgerRows(paid.reference)).length;
     const balance = p.account.availableKobo;
 
-    const second = await quote(p, 'content_unlock', 'n-open-quote');
+    const second = await quote(p, 'school_fee', 'n-open-quote');
     expect(second.status).toBe(409);
     expect(body(second).data).toBeNull();
     expect(body(second).message).toBe(STILL_CONFIRMING_MESSAGE);
@@ -803,25 +833,25 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     expect(p.account.availableKobo).toBe(balance);
   });
 
-  it('FIX-58: the quote is unchanged for anyone else, for another item, after the open payment ends, and for the features that quote through the service', async () => {
+  it('FIX-58: the school fee quote is unchanged for anyone else, for another place, after the open payment ends, and for the features that quote through the service', async () => {
     const p = await buyer(500_000);
     const other = await buyer(500_000);
-    const q = await quoted(p, 'content_unlock', 'n-open-quote-b');
+    const q = await quoted(p, 'school_fee', 'n-open-quote-b');
     nuvion.mode = 'processing';
     const paid = body<PaymentView>(await pay(p, q)).data!;
     expect(paid.status).toBe('pending');
-    const open = await quote(p, 'content_unlock', 'n-open-quote-b');
+    const open = await quote(p, 'school_fee', 'n-open-quote-b');
     expect(open.status).toBe(409);
 
-    // Another person's quote of the same item.
-    const theirs = await quote(other, 'content_unlock', 'n-open-quote-b');
+    // Another person's quote of the same place.
+    const theirs = await quote(other, 'school_fee', 'n-open-quote-b');
     expect(theirs.status).toBe(200);
     expect(body<PaymentQuoteView>(theirs).data!.totalKobo).toBe(q.totalKobo);
-    // The same payer's quote of another item.
-    const another = await quote(p, 'content_unlock', 'n-open-quote-c');
+    // The same payer's quote of another place.
+    const another = await quote(p, 'school_fee', 'n-open-quote-c');
     expect(another.status).toBe(200);
-    // An item that is not there, or not payable, keeps its own answer first.
-    const gone = await quote(p, 'content_unlock', 'not-a-piece');
+    // A place that is not there keeps its own answer first.
+    const gone = await quote(p, 'school_fee', 'not-a-place');
     expect(gone.status).toBe(404);
     expect(body(gone).reason).toMatchObject({ code: 'target_not_found' });
     // The quote the features ask the service for (their own routes) is not
@@ -833,7 +863,7 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
         walletId: p.account.accountId,
         accountNumber: p.account.accountNumber!,
       },
-      { kind: 'content_unlock', targetId: 'n-open-quote-b' },
+      { kind: 'school_fee', targetId: 'n-open-quote-b' },
     );
     expect(viaFeature.totalKobo).toBe(q.totalKobo);
 
@@ -841,9 +871,27 @@ describe('Pay from wallet (MONEY-17) on the provider seam, Nuvion stood in', () 
     nuvion.settle(paid.reference, 'failed');
     await sweepLater();
     expect((await rowOf(paid.id)).openKey).toBeNull();
-    const again = await quote(p, 'content_unlock', 'n-open-quote-b');
+    const again = await quote(p, 'school_fee', 'n-open-quote-b');
     expect(again.status).toBe(200);
     expect(body<PaymentQuoteView>(again).data!.totalKobo).toBe(q.totalKobo);
+  });
+
+  it('FIX-58: every other kind still quotes 200 while the payer has an open payment for the item (the 409 meets the payer at the PIN tap)', async () => {
+    const p = await buyer(500_000);
+    const q = await quoted(p, 'content_unlock', 'n-open-quote-e');
+    nuvion.mode = 'processing';
+    const paid = body<PaymentView>(await pay(p, q)).data!;
+    expect(paid.status).toBe('pending');
+    const again = await quote(p, 'content_unlock', 'n-open-quote-e');
+    expect(again.status).toBe(200);
+    expect(body<PaymentQuoteView>(again).data!.totalKobo).toBe(q.totalKobo);
+    // The payment itself still meets the open one at the PIN tap.
+    const tap = await pay(p, q);
+    expect(tap.status).toBe(409);
+    expect(body(tap).reason).toMatchObject({
+      code: 'payment_in_progress',
+      paymentId: paid.id,
+    });
   });
 
   it('FIX-58: a delivered purchase keeps its own answer at the quote (target_not_payable), not payment_in_progress', async () => {
