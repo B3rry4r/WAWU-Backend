@@ -19675,7 +19675,7 @@
             }
           }
         },
-        "summary": "Asks to delete the account (R-17: it waits 30 days). Refused with\n`409 account_deletion_blocked` while the wallet holds money, a hold is\nopen or earnings are waiting (SETTINGS-06). `503 provider_unreachable`\nwhen the wallet provider does not answer, so \"empty\" is never guessed.",
+        "summary": "Asks to delete the account (R-17: it waits 30 days). The body may carry\n`reason`, why the person is leaving (Z7, SETTINGS-05), kept on the\ndeletion row. Refused with\n`409 account_deletion_blocked` while the wallet holds money, a hold is\nopen or earnings are waiting (SETTINGS-06). `503 provider_unreachable`\nwhen the wallet provider does not answer, so \"empty\" is never guessed.",
         "tags": [
           "Account"
         ]
@@ -36636,7 +36636,19 @@
       },
       "DeleteAccountDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "reason": {
+            "description": "Why the person is leaving; left out when they did not say.",
+            "enum": [
+              "not_using_enough",
+              "another_account",
+              "privacy",
+              "too_many_notifications",
+              "something_else"
+            ],
+            "type": "string"
+          }
+        }
       },
       "AccountDeletionBlockedReason": {
         "type": "object",

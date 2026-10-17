@@ -6140,6 +6140,13 @@ model AccountDeletion {
   /// made (a pass also sets it a few minutes ahead while it holds the row).
   identityMarkAttempts Int @default(0)
   identityMarkNextAt DateTime?
+  /// SETTINGS-05. Why the person is leaving, as the app's list gives it (one of
+  /// `LEAVING_REASONS` in src/account/dto/delete-account.dto.ts; a string, so a
+  /// new choice needs no migration). Optional: null when they did not say. Set
+  /// when a request records the deletion and replaced when a later request
+  /// takes over a cancelled one. A choice from a list, never free text, so it
+  /// holds no personal detail.
+  leavingReason   String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
