@@ -10,7 +10,16 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { OptionalWawuAuthGuard } from './guards/optional-wawu-auth.guard';
 import { SearchResponseService } from './search-response.service';
+import {
+  SearchPeopleService,
+  type SearchPeople,
+} from './search-people.service';
 import { SearchQueryDto } from './dto/search-query.dto';
+import {
+  MAX_PEOPLE_PER_CALL,
+  PERSON_ID_PATTERN,
+  SearchPeopleQueryDto,
+} from './dto/search-people-query.dto';
 import { ClosestSearchQueryDto } from './dto/closest-search-query.dto';
 import { refuseUnsearchableQuery } from './searchable-query';
 
@@ -25,7 +34,10 @@ import { refuseUnsearchableQuery } from './searchable-query';
 @UseGuards(OptionalWawuAuthGuard)
 @Controller('search')
 export class SearchResponseController {
-  constructor(private readonly searchResponseService: SearchResponseService) {}
+  constructor(
+    private readonly searchResponseService: SearchResponseService,
+    private readonly searchPeople: SearchPeopleService,
+  ) {}
 
   @Get()
   search(
@@ -69,6 +81,31 @@ export class SearchResponseController {
     return this.searchResponseService.suggestions(user?.sub, {
       recent: include === 'recent',
     });
+  }
+
+  /**
+   * EXPLORE-02. The names the app draws on result rows and "Creators to know":
+   * for each account asked about, who they are (real name or handle, picture,
+   * what they do, both ticks) and whether the caller follows them. A person
+   * the caller may not see is left out of the answer. New route: nothing the
+   * web calls changes.
+   */
+  @Get('people')
+  people(
+    @Query() query: SearchPeopleQueryDto,
+    @CurrentUser() user: WawuJwtClaims | undefined,
+  ): Promise<SearchPeople> {
+    const ids = query.ids.split(',').filter((id) => id !== '');
+    if (
+      ids.length === 0 ||
+      ids.length > MAX_PEOPLE_PER_CALL ||
+      ids.some((id) => !PERSON_ID_PATTERN.test(id))
+    ) {
+      throw new BadRequestException(
+        `ids must name 1 to ${MAX_PEOPLE_PER_CALL} accounts`,
+      );
+    }
+    return this.searchPeople.people(ids, user?.sub);
   }
 
   @Get('closest')

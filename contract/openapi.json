@@ -26577,6 +26577,40 @@
         ]
       }
     },
+    "/api/hub/search/people": {
+      "get": {
+        "operationId": "SearchResponseController_people",
+        "parameters": [
+          {
+            "name": "ids",
+            "required": true,
+            "in": "query",
+            "description": "The accounts to describe, as a comma-separated list of ids (1 to 50), in\nthe order the answer should keep.",
+            "schema": {
+              "maxLength": 3250,
+              "pattern": "^[A-Za-z0-9_,-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPeople"
+                }
+              }
+            }
+          }
+        },
+        "summary": "EXPLORE-02. The names the app draws on result rows and \"Creators to know\":\nfor each account asked about, who they are (real name or handle, picture,\nwhat they do, both ticks) and whether the caller follows them. A person\nthe caller may not see is left out of the answer. New route: nothing the\nweb calls changes.",
+        "tags": [
+          "SearchResponse"
+        ]
+      }
+    },
     "/api/hub/search/closest": {
       "get": {
         "operationId": "SearchResponseController_closest",
@@ -55073,6 +55107,58 @@
           "recentSearches",
           "popularSearches",
           "suggestedCreators"
+        ]
+      },
+      "SearchPerson": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "field": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "following": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "avatarUrl",
+          "field",
+          "verification",
+          "following"
+        ]
+      },
+      "SearchPeople": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchPerson"
+            }
+          }
+        },
+        "required": [
+          "items"
         ]
       },
       "ClosestSearchResult": {
