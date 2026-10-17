@@ -304,6 +304,43 @@ describe('AITOOLS-01: the AI tools catalogue and VoiceOver (contract)', () => {
     expect(holds[0].state).toBe('released');
   });
 
+  it("AITOOLS-01 L2 (race): a request that loses the unique index to the same key with other words gets 409 and leaves the winner's hold alone; the winner finishes done and commits", async () => {
+    await h.grant(PLAIN, COST_1);
+    const key = randomUUID();
+    const first = await h.create(PLAIN, body(`${SCRIPT} [[slow:1200]]`), key);
+    expect(first.status).toBe(202);
+    const id = data<AiJobView>(first).id;
+    expect((await holdsOf(PLAIN))[0].state).toBe('held');
+
+    // The second request misses the early lookup (it ran before the first
+    // job's row was visible), so it reaches the unique index and loses there.
+    const lookup = jest
+      .spyOn(h.prisma.aiToolJob, 'findUnique')
+      .mockResolvedValueOnce(null);
+    const loser = await h.create(
+      PLAIN,
+      body('A different script entirely.'),
+      key,
+    );
+    lookup.mockRestore();
+    expect(loser.status).toBe(409);
+    expect(reasonOf(loser).code).toBe('idempotency_key_reused');
+
+    // The hold belongs to the winner: still held, one job, one hold.
+    const mid = await holdsOf(PLAIN);
+    expect(mid).toHaveLength(1);
+    expect(mid[0].state).toBe('held');
+    expect(await jobsOf(PLAIN)).toHaveLength(1);
+
+    const done = await h.finish(PLAIN, id);
+    expect(done.state).toBe('done');
+    expect(done.audioUrl).toEqual(expect.any(String));
+    const [hold] = await holdsOf(PLAIN);
+    expect(hold.state).toBe('committed');
+    expect(await h.balance(PLAIN)).toBe(0);
+    expect(h.store.files.has(audioKeyFor(PLAIN, id))).toBe(true);
+  });
+
   // ---------------------------------------------------------------------------
   // Check 4: two jobs at once never take points below zero
   // ---------------------------------------------------------------------------
