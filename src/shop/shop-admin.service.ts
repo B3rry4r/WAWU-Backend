@@ -193,6 +193,7 @@ export class ShopAdminService {
   }) {
     const page = Math.max(1, query.page ?? 1);
     const perPage = Math.min(100, Math.max(1, query.perPage ?? 25));
+    refuseUnreadableOrdersQuery(query.fulfilment, page, perPage);
     const where: Prisma.ShopOrderWhereInput = {
       status: { in: ['paid', 'refunded'] },
       ...(query.fulfilment ? { fulfilment: query.fulfilment } : {}),
@@ -241,4 +242,45 @@ export class ShopAdminService {
       },
     });
   }
+}
+
+/** Every fulfilment state; TypeScript checks the keys against the enum. */
+const SHOP_FULFILMENTS: Record<ShopFulfilment, true> = {
+  awaiting_dispatch: true,
+  dispatched: true,
+  delivered: true,
+};
+
+/**
+ * FIX-17. `GET /admin/shop/orders` reads `fulfilment`, `page` and `perPage`
+ * as raw strings, and four of their values made Prisma refuse the query
+ * (500): a `fulfilment` outside the enum (or sent twice), a `page` or
+ * `perPage` that is not a number (or sent twice), and a `page` whose offset
+ * passes what Postgres can count (a 64-bit integer; `page=Infinity`,
+ * `page=1e18`). Each is now a 400 naming the field, before the query.
+ *
+ * Every value that answered 200 still does, read the way it always was: an
+ * empty `fulfilment` filters nothing, and `page=0`, `page=1.5` or
+ * `perPage=1000` are clamped above as before.
+ */
+function refuseUnreadableOrdersQuery(
+  fulfilment: unknown,
+  page: number,
+  perPage: number,
+): void {
+  const states = Object.keys(SHOP_FULFILMENTS);
+  if (
+    fulfilment &&
+    !(typeof fulfilment === 'string' && states.includes(fulfilment))
+  ) {
+    throw new BadRequestException(
+      `fulfilment must be one of the following values: ${states.join(', ')}`,
+    );
+  }
+  if (Number.isNaN(page))
+    throw new BadRequestException('page must be a number');
+  if (Number.isNaN(perPage))
+    throw new BadRequestException('perPage must be a number');
+  if (!((page - 1) * perPage < 2 ** 63))
+    throw new BadRequestException('page must be a smaller number');
 }
