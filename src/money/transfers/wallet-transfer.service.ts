@@ -27,6 +27,7 @@ import {
 import type { LedgerMovementInput } from '../ledger/ledger.interface';
 import {
   koboNumber,
+  LEDGER_BANK_SEND_FAILURE,
   LEDGER_FINTAVA_FAILURE,
   LedgerService,
 } from '../ledger/ledger.service';
@@ -83,6 +84,12 @@ export const TRANSFER_NOT_FOUND_MESSAGE = 'We could not find that send.';
 /** Only when the provider refused the transfer or said it failed: its word, not our inference. */
 export const TRANSFER_FAILED_REASON =
   'The send did not go through. No money left your wallet.';
+/**
+ * A bank send the provider took and then failed (FIX-54): the money left the
+ * wallet and the provider gave it back, so "no money left" would not be true.
+ */
+export const BANK_SEND_RETURNED_REASON =
+  'The bank did not complete this transfer. The money is back in your wallet.';
 /** A send the provider reversed. Never says what came back: only the provider's own record knows. */
 export const TRANSFER_REVERSED_REASON =
   'This send was reversed. Check your balance for what came back.';
@@ -706,6 +713,14 @@ export class WalletTransferService implements OnModuleInit {
     }
     // The provider took it: W19's "sent to your bank".
     await this.markSentToBank(transfer, new Date());
+    if (receipt.pending) {
+      // Taken, not finished (FIX-54): the money has left the wallet and the
+      // bank may still refuse it, so the send is NOT done. It stays pending
+      // until the provider says completed (its delivery settles the sender's
+      // ledger row, or the sweep reads the transfer), failed, or reversed.
+      // Read again, so a delivery that beat this answer is not hidden.
+      return this.answer(scope, await this.reload(transfer));
+    }
     let row: TransferRow;
     try {
       row = await this.completeFromRecord(transfer, {
@@ -1057,13 +1072,32 @@ export class WalletTransferService implements OnModuleInit {
         reference: `${t.customerReference}${FEE_RETURN_SUFFIX}`,
         narration: TRANSFER_NARRATION,
       });
-      return 'done';
     } catch (e) {
       this.logger.warn(
         `send ${t.id}: WAWU's fee could not be given back yet (${e instanceof WalletProviderError ? e.kind : 'error'}); asked again`,
       );
       return 'pending';
     }
+    // FIX-54 round 2: what came back is what the provider's credit gave plus
+    // this fee, so a reversed send's figures say both. The transfer above is
+    // made once however often it is asked, and so is this note.
+    if (t.payerWawuUserId) {
+      try {
+        await this.ledger.noteFeeReturned(
+          {
+            customerReference: t.customerReference,
+            wawuUserId: t.payerWawuUserId,
+          },
+          owed,
+        );
+      } catch (e) {
+        this.logger.error(
+          `send ${t.id}: the fee given back could not be noted on the ledger (${e instanceof Error ? e.name : 'error'}); asked again`,
+        );
+        return 'pending';
+      }
+    }
+    return 'done';
   }
 
   /**
@@ -1119,10 +1153,11 @@ export class WalletTransferService implements OnModuleInit {
   /**
    * A completed send that Nuvion reversed afterwards: its sender's row says
    * so, and the send follows it once (`completed` to `reversed`) and gives
-   * the fee back with the rest (FIX-52). Only a send that had a fee leg.
+   * the fee back with the rest when it had a fee leg (FIX-52). Every send of
+   * the running provider follows, fee leg or not (FIX-54).
    */
   private async followLateReversal(t: TransferRow): Promise<TransferRow> {
-    if (t.status !== 'completed' || !this.feeLegDue(t)) return t;
+    if (t.status !== 'completed' || t.provider !== this.provider.name) return t;
     const row = await this.prisma.fintavaLedgerEntry.findFirst({
       where: {
         customerReference: t.customerReference,
@@ -1203,6 +1238,12 @@ export class WalletTransferService implements OnModuleInit {
       ).status as TransferStatus;
     }
     await this.markSentToBank(t, now);
+    if (receipt.pending) {
+      // Taken, not finished (FIX-54): as in `afterReceipt`, the send waits for
+      // the provider's word and is asked again by the sweep.
+      await this.reschedule(t, now);
+      return (await this.reload(t)).status as TransferStatus;
+    }
     return (
       await this.completeFromRecord(t, {
         amountKobo: receipt.amountKobo,
@@ -1440,9 +1481,12 @@ export class WalletTransferService implements OnModuleInit {
     }
     if (
       row?.status === 'failed' &&
-      row.failureReason === LEDGER_FINTAVA_FAILURE
+      (row.failureReason === LEDGER_FINTAVA_FAILURE ||
+        row.failureReason === LEDGER_BANK_SEND_FAILURE)
     ) {
-      return (await this.markFailed(t, TRANSFER_FAILED_REASON, false))
+      // The provider's own word (Fintava's, or Nuvion's `outflows.failed` for
+      // a bank send it had taken: FIX-54).
+      return (await this.markFailed(t, this.failureReasonOf(t), false))
         .status as TransferStatus;
     }
     // Pending, a disagreement held for review, or failed only because the
@@ -1498,7 +1542,8 @@ export class WalletTransferService implements OnModuleInit {
       }
       if (found.outcome === 'failed') {
         await this.recordSighting(t, 'failed', found, answer.source);
-        return (await this.markFailed(t, TRANSFER_FAILED_REASON, false))
+        // The provider holds a record of it, so the money moved and came back.
+        return (await this.markFailed(t, this.failureReasonOf(t, true), false))
           .status as TransferStatus;
       }
       if (found.outcome === 'reversed') {
@@ -1586,7 +1631,7 @@ export class WalletTransferService implements OnModuleInit {
           ),
           source,
           occurredAt: occurredOf(found),
-          failureReason: status === 'failed' ? LEDGER_FINTAVA_FAILURE : null,
+          failureReason: status === 'failed' ? this.ledgerFailureOf(t) : null,
         },
         undefined,
         { quiet: true },
@@ -1596,6 +1641,18 @@ export class WalletTransferService implements OnModuleInit {
         `send ${t.id}: the ledger could not record ${this.provider.label}'s record (${e instanceof Error ? e.name : 'error'})`,
       );
     }
+  }
+
+  /**
+   * The reason a failed ledger row carries when the sweep's own reading
+   * failed it: a Nuvion bank send says what the webhook path says
+   * (`outflows.failed`), the provider-neutral bank text; any other send keeps
+   * Fintava's, as before.
+   */
+  private ledgerFailureOf(t: TransferRow): string {
+    return t.kind === 'bank_account' && t.provider === 'nuvion'
+      ? LEDGER_BANK_SEND_FAILURE
+      : LEDGER_FINTAVA_FAILURE;
   }
 
   /** Still unknown: asked again later, or sent to review past the bound. */
@@ -1720,7 +1777,13 @@ export class WalletTransferService implements OnModuleInit {
     };
   }
 
-  /** What came back after a reversal, from the provider's own report on the sender's row; null when it gave none. */
+  /**
+   * What came back after a reversal, from the sender's row; null when the
+   * provider gave no report. The row's total is the provider's credit plus
+   * WAWU's fee once it was given back (LedgerService.noteFeeReturned), so
+   * the figures equal what moved back to the wallet and the kept part is
+   * only what no transfer returned.
+   */
   private reversalOf(
     t: TransferRow,
     row: { reversalTotalKobo: bigint | null; reversedAt: Date | null } | null,
@@ -1996,6 +2059,18 @@ export class WalletTransferService implements OnModuleInit {
     if (row.status === 'reversed' && t.status === 'pending')
       await this.owe(row);
     return row;
+  }
+
+  /**
+   * What the person reads on a send the provider failed. A bank send the
+   * provider had taken (`sentToBankAt`) moved money that then came back, so it
+   * says that; any other send moved nothing (FIX-54).
+   */
+  private failureReasonOf(t: TransferRow, providerHasIt = false): string {
+    return t.kind === 'bank_account' &&
+      (providerHasIt || t.sentToBankAt !== null)
+      ? BANK_SEND_RETURNED_REASON
+      : TRANSFER_FAILED_REASON;
   }
 
   private async markFailed(
