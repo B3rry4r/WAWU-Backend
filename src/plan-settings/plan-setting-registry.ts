@@ -241,7 +241,11 @@ const TIER_USED = {
     'the publishing allowance',
   ],
   bonus_points: ['VF1', 'VF5', 'VF7', 'GET /plans', 'the tier grant'],
-  pack_bonus_pct: ['PT4 (the Founding bonus)', 'GET /plans'],
+  pack_bonus_pct: [
+    'PT4 (the Founding bonus)',
+    'POST /plans/purchases (points_pack)',
+    'GET /plans',
+  ],
 } as const;
 
 /**

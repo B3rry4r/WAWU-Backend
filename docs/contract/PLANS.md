@@ -506,7 +506,70 @@ tier. The whole price then goes back to the payer through MONEY-18's refund
 
 ### Not built here
 
-Paying by bank transfer at checkout (TIER-05), extra products (TIER-04),
-points packs (POINTS-02), the Voice Intro itself, the Founding Maker's badge
+Extra products (TIER-04), the Voice Intro itself, the Founding Maker's badge
 number (BACKEND_GAPS G-421) and the dollar wallet path (NUV-09).
 
+## 9. Buying a points pack (POINTS-02)
+
+Task POINTS-02, R-43, R-44, R-65. A person buys a points pack (PT4) from their
+wallet or by bank transfer, on the routes section 8 describes, with
+`kind: "points_pack"` and a `packId` (a `GET /plans` `packs[].id`) in place of
+`tierId`. It is WAWU's own sale: one debit into WAWU's own account, no seller
+split, nothing held, and the provider's charge on top, shown as the Bank
+charge (R-10). The pack's price, its points, how long bought points last and
+the Founding bonus are admin settings (TIER-06): `plan.pack.<id>.price_kobo`,
+`plan.pack.<id>.points`, `points.expiry_months` and
+`plan.tier.<id>.pack_bonus_pct`. None is written in code.
+
+| Route | Does |
+|---|---|
+| `GET /plans/purchases/quote?kind=points_pack&packId=` | The pay sheet (PT4) before the PIN. Answers a `PointsPackQuoteView`: `packMinor` (the price), `points`, `bonusPercent` and `bonusPoints` (the Founding Maker's extra points; 0 for anyone else), `totalPoints`, `expiryDays`, `paymentKind` (`points_pack`) and `payment`, the wallet payment's own quote. Sending a `tierId` or `bump` with it is `400`; so is a `packId` on a tier kind. A pack the file does not name is `404 target_not_found`. |
+| `POST /plans/purchases` | Pays, with the quote's `expectedTotalKobo` and `quoteToken`, `method: "wallet"` or `"transfer"`, `Idempotency-Key` and the PIN, exactly as for a tier. Answers 201 with a `PointsPackPurchaseView`. |
+| `GET /plans/purchases/{id}` | The same purchase as it stands now (the app polls it after `pending`). |
+
+`PointsPackPurchaseView` (`kind: "points_pack"`) is one shape from the ask to
+the points being added: `id`, `packId`, `method`, `currency`, `amountMinor`
+(the price, never the provider's charge), `points` and `bonusPoints` (as
+quoted), `status`, `statusMessage`, `payment` (null until the money is taken),
+`transfer` (set while `awaiting_transfer`: the same `PlanPurchaseTransferView`
+section 8 describes), `grant` and `paidAt`. `status`:
+`awaiting_transfer` (bought by transfer, the money has not landed),
+`pending` (confirming, or the points are being added, or the money landed and
+the wallet is being charged), `paid`, `failed`, `reversed`, `expired`. `grant`
+(once `paid`): `points`, `bonusPoints`, `totalPoints` and `expiresAt`.
+
+- **The payment.** Kind `points_pack`, `targetId` `pack-<packId>`. The same
+  payment is reachable through `GET /money/payments/quote` and `POST
+  /money/payments`.
+- **The bonus.** A person whose tier is running (`active` or `ending`) and
+  whose tier has `pack_bonus_pct` above 0 gets that percent of the pack's
+  points on top, rounded down to a whole point ("Founding shows +10%"). A
+  person with no tier, an ended tier or a tier with 0 gets none. The price is
+  the pack's: the bonus costs nothing more.
+- **The quote binds price and goods.** The pack, its points, the bonus and the
+  expiry are the payment's terms. A quote whose price, points, bonus or
+  expiry changed since it was given is `409 quote_changed`, before anything
+  moves. The payment keeps them from the claim, so a setting changed while it
+  confirms, or while a transfer waits, does not change what is added; a
+  transfer whose terms changed before the money lands is closed with nothing
+  taken.
+- **Once.** The lot is keyed (`pack`, the payment's id) in the points
+  service: a repeated delivery, a replayed key or two servers add nothing
+  more. The lot is the size of `totalPoints` and ends after the bought-points
+  expiry; it is added last in a transaction that does nothing but write the
+  database, so nothing is held across a provider call. A first purchase also
+  fixes the person's billing currency (section 2).
+- **By transfer.** TIER-05's order: it waits for the money to reach the
+  person's own wallet account and is paid from the wallet, once, when the
+  balance covers the total. A pack order and a plan order wait side by side;
+  a wallet purchase of the same pack closes a waiting order.
+- **Naira only at launch (R-16).** Only naira packs are sold. A person billed
+  in dollars is priced from the file's dollar column and refused `409
+  target_not_payable` by the payment service until a dollar wallet can pay
+  (NUV-09); no dollar pack is drawn or sold.
+- **The cash rate counts the bonus.** The rule that stops points being cashed
+  out for more than they were sold for (`points.cash_rate_kobo_per_1000`, the
+  cheapest sale decides) counts a pack with the largest bonus any tier gives:
+  a rate that fits the pack alone but pays more than a Founding buyer paid for
+  the same points is refused, naming the percent setting. A change to any
+  tier's percent is judged by the same rule.

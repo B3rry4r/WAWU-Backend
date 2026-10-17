@@ -37,12 +37,10 @@ import {
 import {
   PLAN_PURCHASE_ROUTE,
   PlanPurchaseService,
+  type PurchaseAnswer,
 } from './plan-purchase.service';
-import type {
-  PlanPurchaseQuoteView,
-  PlanPurchaseView,
-  PlanTransferOrderView,
-} from './plan-purchase-view.type';
+import type { PlanPurchaseQuoteView } from './plan-purchase-view.type';
+import type { PointsPackQuoteView } from './points-pack-view.type';
 
 /**
  * Buy, renew or upgrade a tier from the wallet (task TIER-03, VF5 to VF7).
@@ -61,6 +59,9 @@ export class PlanPurchasesController {
    * billing currency (an upgrade is the difference of the two prices), the
    * wallet provider's charge on top, the total, the wallet's balance and the
    * shortfall, and the signed quote `POST /plans/purchases` sends back.
+   * `kind=points_pack&packId=` is a points pack (POINTS-02, PT4): answers a
+   * `PointsPackQuoteView` with the pack's price and points, the Founding
+   * Maker's bonus points (0 for anyone else) and how long the points last.
    * Nothing is reserved. A purchase that does not fit what the caller holds
    * is `target_not_payable` with the reason in words; a plan payment still
    * going through is `payment_in_progress`.
@@ -80,7 +81,7 @@ export class PlanPurchasesController {
   quote(
     @CurrentWallet() wallet: OpenWallet,
     @Query() query: PlanPurchaseQuoteQueryDto,
-  ): Promise<PlanPurchaseQuoteView> {
+  ): Promise<PlanPurchaseQuoteView | PointsPackQuoteView> {
     return this.purchases.quote(wallet, query);
   }
 
@@ -106,6 +107,12 @@ export class PlanPurchasesController {
    * the same id. A quote that changed is `409 quote_changed`; the time to send
    * the money (an admin setting) runs out as `expired`, with nothing taken.
    * Two requests for one item leave one waiting purchase.
+   *
+   * `kind: points_pack` with a `packId` buys a points pack the same way
+   * (POINTS-02, PT4 to PT4c), from the wallet or by transfer: one lot of the
+   * pack's points (plus the Founding Maker's bonus) is added once, ending
+   * after the bought-points expiry, and the answer is a `PointsPackPurchaseView`
+   * (`kind: "points_pack"`).
    */
   @Post()
   @HttpCode(201)
@@ -123,7 +130,7 @@ export class PlanPurchasesController {
     @CurrentWallet() wallet: OpenWallet,
     @CurrentIdempotencyScope() scope: IdempotencyScope,
     @Body() dto: PlanPurchaseDto,
-  ): Promise<PlanPurchaseView | PlanTransferOrderView> {
+  ): Promise<PurchaseAnswer> {
     return this.purchases.buy(wallet, scope, dto);
   }
 
@@ -140,7 +147,7 @@ export class PlanPurchasesController {
   read(
     @CurrentUser() user: WawuJwtClaims,
     @Param('id', ParseUUIDPipe) id: string,
-  ): Promise<PlanPurchaseView | PlanTransferOrderView> {
+  ): Promise<PurchaseAnswer> {
     return this.purchases.read(user.sub, id);
   }
 }

@@ -1,4 +1,10 @@
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+  type OnModuleInit,
+} from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { OpenWallet } from '../../money/gate/wallet-gate';
 import { nairaText } from '../../money/insufficient-funds';
@@ -61,6 +67,9 @@ import {
   PLAN_PURCHASE_ROUTE,
   paymentKindOf,
   type PlanPaymentKind,
+  POINTS_PACK_KIND,
+  PURCHASE_PAYMENT_KINDS,
+  type PurchasePaymentKind,
   type PurchaseTerms,
   targetIdOf,
   termsOf,
@@ -81,6 +90,11 @@ import {
   SETTLING_MESSAGE,
 } from './plan-transfer-order';
 import { PlanTransferService } from './plan-transfer.service';
+import { PointsPackService } from './points-pack.service';
+import type {
+  PointsPackPurchaseView,
+  PointsPackQuoteView,
+} from './points-pack-view.type';
 
 export { PLAN_PURCHASE_ROUTE };
 
@@ -177,10 +191,13 @@ export class PlanPurchaseService implements OnModuleInit {
     private readonly holds: WalletHoldService,
     private readonly transfers: PlanTransferService,
     private readonly opening: WalletOpeningService,
+    private readonly packs: PointsPackService,
   ) {}
 
   onModuleInit(): void {
     this.assertTargetsFit();
+    // The tier kinds are registered here; `points_pack` registers itself
+    // (PointsPackService), and both are answered by `present` below.
     for (const kind of PLAN_PAYMENT_KINDS)
       this.registry.register(this.handlerFor(kind));
     this.payments.presentRoute(PLAN_PURCHASE_ROUTE, (view) =>
@@ -221,7 +238,9 @@ export class PlanPurchaseService implements OnModuleInit {
   async quote(
     wallet: OpenWallet,
     q: PlanPurchaseQuoteQueryDto,
-  ): Promise<PlanPurchaseQuoteView> {
+  ): Promise<PlanPurchaseQuoteView | PointsPackQuoteView> {
+    refuseMixedRequest(q);
+    if (q.kind === POINTS_PACK_KIND) return this.packs.quote(wallet, q);
     const terms = await this.termsFor(wallet.wawuUserId, q);
     const targetId = this.targetOf(terms);
     const plan = await this.priced(wallet.wawuUserId, terms);
@@ -254,10 +273,9 @@ export class PlanPurchaseService implements OnModuleInit {
     wallet: OpenWallet,
     scope: IdempotencyScope,
     dto: PlanPurchaseDto,
-  ): Promise<PlanPurchaseView | PlanTransferOrderView> {
-    const terms = await this.termsFor(wallet.wawuUserId, dto);
-    const kind = paymentKindOf(terms.bump);
-    const targetId = this.targetOf(terms);
+  ): Promise<PurchaseAnswer> {
+    refuseMixedRequest(dto);
+    const { kind, targetId } = await this.whatIsBought(wallet.wawuUserId, dto);
     if (dto.method === 'transfer')
       return this.buyByTransfer(wallet, scope, dto, kind, targetId);
     const payment = await this.payments.pay(
@@ -277,8 +295,22 @@ export class PlanPurchaseService implements OnModuleInit {
         .closeWaiting(wallet.wawuUserId, targetId)
         .catch(() => undefined);
     return (
-      (scope.answered as PlanPurchaseView | undefined) ?? this.present(payment)
+      (scope.answered as PurchaseAnswer | undefined) ?? this.present(payment)
     );
+  }
+
+  /** The payment kind and target a request buys, and nothing else: no wallet is read. */
+  private async whatIsBought(
+    wawuUserId: string,
+    dto: PlanPurchaseDto,
+  ): Promise<{ kind: PurchasePaymentKind; targetId: string }> {
+    if (dto.kind === POINTS_PACK_KIND)
+      return {
+        kind: POINTS_PACK_KIND,
+        targetId: this.packs.targetOf(dto.packId),
+      };
+    const terms = await this.termsFor(wawuUserId, dto);
+    return { kind: paymentKindOf(terms.bump), targetId: this.targetOf(terms) };
   }
 
   /**
@@ -291,9 +323,9 @@ export class PlanPurchaseService implements OnModuleInit {
     wallet: OpenWallet,
     scope: IdempotencyScope,
     dto: PlanPurchaseDto,
-    kind: PlanPaymentKind,
+    kind: PurchasePaymentKind,
     targetId: string,
-  ): Promise<PlanTransferOrderView> {
+  ): Promise<PlanTransferOrderView | PointsPackPurchaseView> {
     const { target, fee, availableKobo } = await this.payments.vouch(wallet, {
       kind,
       targetId,
@@ -310,21 +342,18 @@ export class PlanPurchaseService implements OnModuleInit {
     });
     const view = await this.presentOrder(order, availableKobo);
     await this.transfers.answer(scope, view);
-    return view as PlanTransferOrderView;
+    return view as PlanTransferOrderView | PointsPackPurchaseView;
   }
 
   /** One purchase as it stands now. Only the buyer reads it. */
-  async read(
-    wawuUserId: string,
-    id: string,
-  ): Promise<PlanPurchaseView | PlanTransferOrderView> {
+  async read(wawuUserId: string, id: string): Promise<PurchaseAnswer> {
     const order = await this.transfers.find(wawuUserId, id);
     if (order) return this.presentOrder(order);
     const payment = await this.prisma.walletPayment.findFirst({
       where: {
         id,
         payerWawuUserId: wawuUserId,
-        kind: { in: [...PLAN_PAYMENT_KINDS] },
+        kind: { in: [...PURCHASE_PAYMENT_KINDS] },
       },
     });
     if (!payment) throw new MoneyError('not_found', PURCHASE_NOT_FOUND_MESSAGE);
@@ -340,17 +369,26 @@ export class PlanPurchaseService implements OnModuleInit {
   private async presentOrder(
     order: PlanTransferOrder,
     knownAvailableKobo?: number,
-  ): Promise<PlanPurchaseView | PlanTransferOrderView> {
-    const kind = order.paymentKind as PlanPaymentKind;
-    const terms = termsOf(kind, order.targetId);
-    if (terms === null)
-      throw new Error(`Order ${order.id} is not a tier purchase.`);
+  ): Promise<PurchaseAnswer> {
+    const kind = order.paymentKind as PurchasePaymentKind;
     if (order.status === ORDER_STATUS.settled && order.paymentId) {
       const payment = await this.prisma.walletPayment.findUnique({
         where: { id: order.paymentId },
       });
       if (payment) return this.present(this.payments.view(payment, null));
     }
+    if (kind === POINTS_PACK_KIND) {
+      const waiting =
+        order.status === ORDER_STATUS.awaiting && !lapsed(order, new Date());
+      return this.packs.presentOrder(
+        order,
+        waiting,
+        waiting ? await this.transferView(order, knownAvailableKobo) : null,
+      );
+    }
+    const terms = termsOf(kind, order.targetId);
+    if (terms === null)
+      throw new Error(`Order ${order.id} is not a tier purchase.`);
     const base = {
       id: order.id,
       kind: terms.kind,
@@ -490,6 +528,7 @@ export class PlanPurchaseService implements OnModuleInit {
     const other = await this.prisma.walletPayment.findFirst({
       where: {
         payerWawuUserId: wawuUserId,
+        // A tier is one at a time across its targets; a points pack is not in it.
         kind: { in: [...PLAN_PAYMENT_KINDS] },
         OR: OPEN_PAYMENT_STATES,
         NOT: { kind, targetId },
@@ -711,7 +750,9 @@ export class PlanPurchaseService implements OnModuleInit {
   // -------------------------------------------------------------------------
 
   /** The purchase a payment is, as the routes answer it and the key stores it. */
-  async present(view: PaymentView): Promise<PlanPurchaseView> {
+  async present(view: PaymentView): Promise<PurchaseAnswer> {
+    if (view.kind === POINTS_PACK_KIND)
+      return this.packs.present(view, await this.transfers.byPayment(view.id));
     const terms = termsOf(view.kind, view.targetId);
     if (terms === null)
       throw new Error(`Payment ${view.id} is not a tier payment.`);
@@ -815,14 +856,17 @@ export class PlanPurchaseService implements OnModuleInit {
     req: Pick<PlanPurchaseQuoteQueryDto, 'kind' | 'tierId' | 'bump'>,
   ): Promise<PurchaseTerms> {
     const bump = req.bump === true;
+    const tierId = req.tierId;
+    if (req.kind === POINTS_PACK_KIND || tierId === undefined)
+      throw new BadRequestException('tierId is not a valid tier id');
     if (req.kind !== 'upgrade')
-      return { kind: req.kind, tierId: req.tierId, fromTierId: null, bump };
+      return { kind: req.kind, tierId, fromTierId: null, bump };
     const held = await this.tiers.tierOf(wawuUserId);
     if (!isRunning(held) || held.tierId === null)
       throw new MoneyError('target_not_payable', NOTHING_TO_UPGRADE_MESSAGE);
     return {
       kind: 'upgrade',
-      tierId: req.tierId,
+      tierId,
       fromTierId: held.tierId,
       bump,
     };
@@ -833,6 +877,33 @@ export class PlanPurchaseService implements OnModuleInit {
     if (id === null)
       throw new MoneyError('target_not_found', PLAN_NOT_FOUND_MESSAGE);
     return id;
+  }
+}
+
+/** What `POST /plans/purchases` and `GET /plans/purchases/{id}` answer: a tier purchase or a points pack's. */
+export type PurchaseAnswer =
+  PlanPurchaseView | PlanTransferOrderView | PointsPackPurchaseView;
+
+/**
+ * A request names what it buys with the field of its own kind: a `tierId` for
+ * a plan, a `packId` for a points pack. A body that mixes them is refused, so
+ * nothing is bought that the person did not mean to.
+ */
+function refuseMixedRequest(req: {
+  kind: string;
+  tierId?: string;
+  packId?: string;
+  bump?: boolean;
+}): void {
+  if (req.kind === POINTS_PACK_KIND) {
+    if (req.tierId !== undefined || req.bump === true)
+      throw new BadRequestException(
+        'A points pack is bought with a packId only. Do not send a tierId or bump.',
+      );
+  } else if (req.packId !== undefined) {
+    throw new BadRequestException(
+      'A packId is for a points pack. Send a tierId for a plan.',
+    );
   }
 }
 

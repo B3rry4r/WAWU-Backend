@@ -16559,6 +16559,7 @@
                 "bill",
                 "tier",
                 "tier_bump",
+                "points_pack",
                 "points_cash_out"
               ]
             }
@@ -29666,21 +29667,32 @@
             "name": "kind",
             "required": true,
             "in": "query",
-            "description": "`tier` (a first purchase, or after the last ended), `renew` (the tier held) or `upgrade` (to a bigger tier).",
+            "description": "`tier` (a first purchase, or after the last ended), `renew` (the tier\nheld), `upgrade` (to a bigger tier) or `points_pack` (a points pack,\nPOINTS-02).",
             "schema": {
               "type": "string",
               "enum": [
                 "tier",
                 "renew",
-                "upgrade"
+                "upgrade",
+                "points_pack"
               ]
             }
           },
           {
             "name": "tierId",
-            "required": true,
+            "required": false,
             "in": "query",
-            "description": "A tier in the plans file (`GET /plans`).",
+            "description": "A tier in the plans file (`GET /plans`). Required for a tier purchase; not sent for a points pack.",
+            "schema": {
+              "pattern": "^[a-z][a-z0-9_]{0,63}$",
+              "type": "string"
+            }
+          },
+          {
+            "name": "packId",
+            "required": false,
+            "in": "query",
+            "description": "A pack in the plans file (`GET /plans` `packs`). Required for `points_pack`; not sent for a tier purchase.",
             "schema": {
               "pattern": "^[a-z][a-z0-9_]{0,63}$",
               "type": "string"
@@ -29690,7 +29702,7 @@
             "name": "bump",
             "required": false,
             "in": "query",
-            "description": "Buy the checkout bump's extra points with it (VF6).",
+            "description": "Buy the checkout bump's extra points with it (VF6). Not for a points pack.",
             "schema": {
               "type": "boolean"
             }
@@ -29702,7 +29714,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PlanPurchaseQuoteView"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/PlanPurchaseQuoteView"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PointsPackQuoteView"
+                    }
+                  ]
                 }
               }
             }
@@ -29763,7 +29782,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "The pay sheet (VF6) before the PIN: the purchase priced in the caller's\nbilling currency (an upgrade is the difference of the two prices), the\nwallet provider's charge on top, the total, the wallet's balance and the\nshortfall, and the signed quote `POST /plans/purchases` sends back.\nNothing is reserved. A purchase that does not fit what the caller holds\nis `target_not_payable` with the reason in words; a plan payment still\ngoing through is `payment_in_progress`.",
+        "summary": "The pay sheet (VF6) before the PIN: the purchase priced in the caller's\nbilling currency (an upgrade is the difference of the two prices), the\nwallet provider's charge on top, the total, the wallet's balance and the\nshortfall, and the signed quote `POST /plans/purchases` sends back.\n`kind=points_pack&packId=` is a points pack (POINTS-02, PT4): answers a\n`PointsPackQuoteView` with the pack's price and points, the Founding\nMaker's bonus points (0 for anyone else) and how long the points last.\nNothing is reserved. A purchase that does not fit what the caller holds\nis `target_not_payable` with the reason in words; a plan payment still\ngoing through is `payment_in_progress`.",
         "tags": [
           "PlanPurchases"
         ]
@@ -29826,6 +29845,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/PlanTransferOrderView"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PointsPackPurchaseView"
                     }
                   ]
                 }
@@ -29908,7 +29930,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Pays for a tier from the wallet, once: the tier and its dates, the bonus\npoints as one lot with its expiry, the event pass and the first Voice\nIntro are granted when the payment is confirmed, and the checkout bump's\npoints with them when it was bought. Answers 201 with the purchase:\n`paid`, `pending` while the provider has not confirmed the debit yet\n(poll `GET /plans/purchases/{id}`; it is never sent again), or `failed`\nwhen the provider refused it and nothing moved. The same Idempotency-Key\nand body answer the first result again (`Idempotent-Replayed: true`)\nwithout checking the PIN. Not enough money is `402 insufficient_funds`\nwith the shortfall; no wallet is `409 wallet_not_open`.\n\n`method: transfer` (TIER-05, VF6 \"transfer details shown\") confirms the\npurchase with the PIN at the quote the person saw and takes nothing. It\nanswers 201 with a `PlanTransferOrderView`, `awaiting_transfer`: the\nwallet's own account number, bank and account name, the Bank charge and\nthe amount still needed (the total less the available balance, never\nbelow 0). The purchase is paid from the wallet, once, the moment the\nbalance covers the total, and then reads like any other purchase under\nthe same id. A quote that changed is `409 quote_changed`; the time to send\nthe money (an admin setting) runs out as `expired`, with nothing taken.\nTwo requests for one item leave one waiting purchase.",
+        "summary": "Pays for a tier from the wallet, once: the tier and its dates, the bonus\npoints as one lot with its expiry, the event pass and the first Voice\nIntro are granted when the payment is confirmed, and the checkout bump's\npoints with them when it was bought. Answers 201 with the purchase:\n`paid`, `pending` while the provider has not confirmed the debit yet\n(poll `GET /plans/purchases/{id}`; it is never sent again), or `failed`\nwhen the provider refused it and nothing moved. The same Idempotency-Key\nand body answer the first result again (`Idempotent-Replayed: true`)\nwithout checking the PIN. Not enough money is `402 insufficient_funds`\nwith the shortfall; no wallet is `409 wallet_not_open`.\n\n`method: transfer` (TIER-05, VF6 \"transfer details shown\") confirms the\npurchase with the PIN at the quote the person saw and takes nothing. It\nanswers 201 with a `PlanTransferOrderView`, `awaiting_transfer`: the\nwallet's own account number, bank and account name, the Bank charge and\nthe amount still needed (the total less the available balance, never\nbelow 0). The purchase is paid from the wallet, once, the moment the\nbalance covers the total, and then reads like any other purchase under\nthe same id. A quote that changed is `409 quote_changed`; the time to send\nthe money (an admin setting) runs out as `expired`, with nothing taken.\nTwo requests for one item leave one waiting purchase.\n\n`kind: points_pack` with a `packId` buys a points pack the same way\n(POINTS-02, PT4 to PT4c), from the wallet or by transfer: one lot of the\npack's points (plus the Founding Maker's bonus) is added once, ending\nafter the bought-points expiry, and the answer is a `PointsPackPurchaseView`\n(`kind: \"points_pack\"`).",
         "tags": [
           "PlanPurchases"
         ]
@@ -29939,6 +29961,9 @@
                     },
                     {
                       "$ref": "#/components/schemas/PlanTransferOrderView"
+                    },
+                    {
+                      "$ref": "#/components/schemas/PointsPackPurchaseView"
                     }
                   ]
                 }
@@ -34853,6 +34878,7 @@
               "bill",
               "tier",
               "tier_bump",
+              "points_pack",
               "points_cash_out"
             ],
             "type": "string"
@@ -37177,17 +37203,24 @@
             "enum": [
               "tier",
               "renew",
-              "upgrade"
+              "upgrade",
+              "points_pack"
             ],
             "type": "string"
           },
           "tierId": {
             "type": "string",
+            "description": "Required for a tier purchase; not sent for a points pack.",
+            "pattern": "^[a-z][a-z0-9_]{0,63}$"
+          },
+          "packId": {
+            "type": "string",
+            "description": "Required for `points_pack`; not sent for a tier purchase.",
             "pattern": "^[a-z][a-z0-9_]{0,63}$"
           },
           "bump": {
             "type": "boolean",
-            "description": "Buy the checkout bump's extra points with it. Default: no."
+            "description": "Buy the checkout bump's extra points with it. Default: no. Not for a points pack."
           },
           "method": {
             "description": "How it is paid: `wallet` from the balance now, or `transfer`: the answer\ncarries the wallet's own account number and the amount still needed, and\nthe purchase is paid from the wallet when the money lands.",
@@ -37212,7 +37245,6 @@
         },
         "required": [
           "kind",
-          "tierId",
           "method",
           "expectedTotalKobo",
           "quoteToken"
@@ -37844,6 +37876,7 @@
               "event_ticket",
               "tier",
               "tier_bump",
+              "points_pack",
               "points_cash_out"
             ]
           },
@@ -39059,6 +39092,7 @@
               "event_ticket",
               "tier",
               "tier_bump",
+              "points_pack",
               "points_cash_out"
             ]
           },
@@ -39156,6 +39190,7 @@
               "event_ticket",
               "tier",
               "tier_bump",
+              "points_pack",
               "points_cash_out"
             ]
           },
@@ -39244,6 +39279,7 @@
               "event_ticket",
               "tier",
               "tier_bump",
+              "points_pack",
               "points_cash_out"
             ]
           },
@@ -54126,6 +54162,67 @@
           "payment"
         ]
       },
+      "PointsPackQuoteView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "points_pack"
+            ]
+          },
+          "packId": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN",
+              "USD"
+            ]
+          },
+          "packMinor": {
+            "type": "integer"
+          },
+          "points": {
+            "type": "integer"
+          },
+          "bonusPercent": {
+            "type": "integer"
+          },
+          "bonusPoints": {
+            "type": "integer"
+          },
+          "totalPoints": {
+            "type": "integer"
+          },
+          "expiryDays": {
+            "type": "integer"
+          },
+          "paymentKind": {
+            "type": "string",
+            "enum": [
+              "points_pack"
+            ]
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          }
+        },
+        "required": [
+          "kind",
+          "packId",
+          "currency",
+          "packMinor",
+          "points",
+          "bonusPercent",
+          "bonusPoints",
+          "totalPoints",
+          "expiryDays",
+          "paymentKind",
+          "payment"
+        ]
+      },
       "PlanPurchaseGrantView": {
         "type": "object",
         "properties": {
@@ -54414,6 +54511,132 @@
           "method",
           "currency",
           "amountMinor",
+          "status",
+          "statusMessage",
+          "payment",
+          "transfer",
+          "grant",
+          "createdAt",
+          "paidAt"
+        ]
+      },
+      "PointsPackGrantView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "integer"
+          },
+          "bonusPoints": {
+            "type": "integer"
+          },
+          "totalPoints": {
+            "type": "integer"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "points",
+          "bonusPoints",
+          "totalPoints",
+          "expiresAt"
+        ]
+      },
+      "PointsPackPurchaseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "points_pack"
+            ]
+          },
+          "packId": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "transfer",
+              "wallet"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN",
+              "USD"
+            ]
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "points": {
+            "type": "integer"
+          },
+          "bonusPoints": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "reversed",
+              "expired",
+              "paid",
+              "awaiting_transfer"
+            ]
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaymentView"
+              }
+            ],
+            "nullable": true
+          },
+          "transfer": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PlanPurchaseTransferView"
+              }
+            ],
+            "nullable": true
+          },
+          "grant": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PointsPackGrantView"
+              }
+            ],
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "packId",
+          "method",
+          "currency",
+          "amountMinor",
+          "points",
+          "bonusPoints",
           "status",
           "statusMessage",
           "payment",

@@ -1,7 +1,7 @@
 import type { PlanTransferOrder } from '../../../generated/prisma/client';
 import { termsDigest, termsFromJson } from '../../money/payments/payable-terms';
 import type { PayableTerms } from '../../money/payments/payable-terms';
-import type { PlanPaymentKind } from './plan-purchase-terms';
+import type { PurchasePaymentKind } from './plan-purchase-terms';
 
 /**
  * Pay a purchase by bank transfer at checkout (task TIER-05, VF6 "transfer
@@ -87,7 +87,7 @@ export function settleKeyOf(orderId: string): string {
 /** One waiting order per person and item: unique while the order is open. */
 export function orderOpenKey(
   wawuUserId: string,
-  paymentKind: PlanPaymentKind,
+  paymentKind: PurchasePaymentKind,
   targetId: string,
 ): string {
   return `${wawuUserId}:${paymentKind}:${targetId}`;
