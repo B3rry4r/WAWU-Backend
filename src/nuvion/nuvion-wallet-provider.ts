@@ -99,7 +99,7 @@ export function nuvionAreas(
  * | accounts.ts | NUV-04 | getWalletAccount, getBalance |
  * | book.ts | NUV-05 | getPlatformAccount, walletToWallet, isSameAccount, and for book transfers findTransactionByReference, findTransactionById, reconcileSend, decideRetry, confirmMovement, secondaryReferenceOf |
  * | payouts.ts | NUV-06 | listBanks, checkAccountName, bankTransfer |
- * | reconcile.ts | NUV-08 | deliveries, listTransactions (the statement); NUV-08 widens the lookups above to every rail |
+ * | reconcile.ts | NUV-08 | deliveries, listTransactions (the statement); the lookups above are widened to every rail by id (findTransactionById, confirmMovement) |
  *
  * A method whose area has no Nuvion call yet answers `not_supported`:
  * nothing is sent and nothing moves.
@@ -158,6 +158,15 @@ export class NuvionWalletProvider implements WalletProvider {
     const area = this.areas.documents;
     if (!(area instanceof NuvionDocumentsArea)) {
       throw new Error("The documents area of this adapter is not Nuvion's.");
+    }
+    return area;
+  }
+
+  /** The reconciliation area (NUV-08): statements, the sweep's reads, the subscription and fee simulations. */
+  get reconcile(): NuvionReconcileArea {
+    const area = this.areas.reconcile;
+    if (!(area instanceof NuvionReconcileArea)) {
+      throw new Error("The reconcile area of this adapter is not Nuvion's.");
     }
     return area;
   }
@@ -236,8 +245,17 @@ export class NuvionWalletProvider implements WalletProvider {
   findTransactionByReference(reference: string) {
     return this.areas.book.findTransactionByReference(reference);
   }
-  findTransactionById(id: string) {
-    return this.areas.book.findTransactionById(id);
+  /**
+   * A book transfer is found through the book log (NUV-05). An id the log
+   * never held (a payout, an inflow, a refund) is asked of Nuvion as WAWU's
+   * own entity by the reconciliation area (NUV-08); a person's transfer
+   * needs its entity, so there the answer stays `unknown`, never `absent`.
+   */
+  async findTransactionById(id: string) {
+    const book = await this.areas.book.findTransactionById(id);
+    return book.state === 'unknown'
+      ? this.areas.reconcile.findTransactionById(id)
+      : book;
   }
   listTransactions(holder: ProviderHolder, query: ProviderPageQuery) {
     return this.areas.reconcile.listTransactions(holder, query);
@@ -273,14 +291,19 @@ export class NuvionWalletProvider implements WalletProvider {
   ) {
     return this.areas.book.decideRetry(kind, reconciliation, clock);
   }
-  confirmMovement(input: {
+  async confirmMovement(input: {
     references: readonly string[];
     sender: ProviderHolder | null;
     amountKobo: number;
     around: Date;
     limits: ProviderConfirmLimits;
   }) {
-    return this.areas.book.confirmMovement(input);
+    const book = await this.areas.book.confirmMovement(input);
+    return book.state === 'unknown'
+      ? this.areas.reconcile
+          .confirmMovement(input)
+          .then((r) => (r.state === 'found' ? r : book))
+      : book;
   }
   secondaryReferenceOf(t: ProviderTransaction) {
     return this.areas.book.secondaryReferenceOf(t);

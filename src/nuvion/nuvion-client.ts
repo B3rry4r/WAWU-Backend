@@ -185,11 +185,9 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** `data.meta.pagination`, read field by field; null when it is not one. */
-function readPagination(meta: unknown): NuvionPagination | null {
-  if (!isRecord(meta) || !isRecord(meta.pagination)) return null;
-  const p = meta.pagination;
-  if (typeof p.has_next !== 'boolean') return null;
+/** A `pagination` object, read field by field; null when it is not one. */
+function readPaginationObject(p: unknown): NuvionPagination | null {
+  if (!isRecord(p) || typeof p.has_next !== 'boolean') return null;
   const text = (v: unknown) => (typeof v === 'string' && v !== '' ? v : null);
   return {
     order: p.order === 'asc' || p.order === 'desc' ? p.order : null,
@@ -199,6 +197,11 @@ function readPagination(meta: unknown): NuvionPagination | null {
     nextCursor: text(p.next_cursor),
     previousCursor: text(p.previous_cursor),
   };
+}
+
+/** `data.meta.pagination` (pagination.md), the shape of every list but a statement. */
+function readPagination(meta: unknown): NuvionPagination | null {
+  return isRecord(meta) ? readPaginationObject(meta.pagination) : null;
 }
 
 /**
@@ -305,6 +308,43 @@ export class NuvionClient {
     }
     return {
       items: data.data as T[],
+      pagination,
+      requestId: answer.requestId,
+    };
+  }
+
+  /**
+   * One page of an account statement. Not the shape of the other lists: the
+   * lines are `data.transactions` and the paging is `data.pagination`
+   * (api-reference__accounts.md, "Get account statements", response fields
+   * `transactions` and `pagination` and the example body beneath them).
+   */
+  async statementPage<T = unknown>(
+    op: NuvionOp,
+    path: string,
+    query: NuvionListQuery = {},
+  ): Promise<NuvionListPage<T> & { requestId: string | null }> {
+    if (
+      query.limit !== undefined &&
+      (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100)
+    ) {
+      throw new RangeError('limit is 1 to 100');
+    }
+    const answer = await this.get<unknown>(op, path, query);
+    const data = answer.data;
+    const pagination = isRecord(data)
+      ? readPaginationObject(data.pagination)
+      : null;
+    if (!isRecord(data) || !Array.isArray(data.transactions) || !pagination) {
+      throw this.fail(op, {
+        kind: 'bad_response',
+        status: answer.httpStatus,
+        messages: ['the answer is not a statement page'],
+        requestId: answer.requestId,
+      });
+    }
+    return {
+      items: data.transactions as T[],
       pagination,
       requestId: answer.requestId,
     };

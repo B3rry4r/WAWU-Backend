@@ -7022,3 +7022,38 @@ model ReferralMilestone {
 
   @@unique([referrerWawuUserId, count])
 }
+
+// -----------------------------------------------------------------------------
+// NUV-08: what the reconciliation with Nuvion found and could not settle itself
+// -----------------------------------------------------------------------------
+
+/// One thing the reconciliation reports for a person at WAWU to look at
+/// (task NUV-08): a difference between Nuvion's fee simulation and the fee
+/// setting (both figures kept, the setting is never changed), a webhook
+/// subscription that is missing or could not be renewed, a sweep that could
+/// not read everything. One row per (kind, subject): seen again, it is
+/// updated; no longer true, it is resolved, and a later sighting reopens it.
+/// No person column, no name, no account number, no Nuvion text: our own
+/// words and kobo figures.
+model NuvionReconcileFinding {
+  id           String    @id @default(uuid())
+  /// `fee_differs`, `subscription_missing`, `subscription_renewal_failed`,
+  /// `subscription_expiring`, `sweep_incomplete`.
+  kind         String
+  /// What it is about: a fee setting's name, a subscription id, `sweep`.
+  subject      String
+  detail       String
+  /// The figure on WAWU's side (the setting), in kobo, when there is one.
+  settingKobo  BigInt?
+  /// The figure on Nuvion's side (the simulation), in kobo, when there is one.
+  providerKobo BigInt?
+  /// The amount the two figures were compared at, in kobo.
+  amountKobo   BigInt?
+  firstSeenAt  DateTime  @default(now())
+  lastSeenAt   DateTime  @default(now())
+  seenCount    Int       @default(1)
+  resolvedAt   DateTime?
+
+  @@unique([kind, subject])
+  @@index([resolvedAt, lastSeenAt])
+}

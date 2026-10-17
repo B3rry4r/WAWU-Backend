@@ -479,6 +479,18 @@ export interface ProviderTransaction {
    * not say, which is not the same as zero.
    */
   merchantChargeKobo?: bigint | null;
+  /**
+   * Which way the money went on the holder's account, when the provider's
+   * record says (NUV-08: Nuvion's statement lines). Absent or null: the
+   * record does not say.
+   */
+  direction?: 'in' | 'out' | null;
+  /**
+   * The holder's balance right after this movement, in kobo, when the
+   * provider's record says (NUV-08: a statement's running balance). Only
+   * the provider's own figure: never one added up from our records.
+   */
+  balanceAfterKobo?: bigint | null;
 }
 
 export type ProviderTransactionKind = 'transfer' | 'charge' | 'other';

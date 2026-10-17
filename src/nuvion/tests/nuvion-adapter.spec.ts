@@ -407,6 +407,9 @@ describe('NUV-01: the Nuvion adapter behind WALLET_PROVIDER', () => {
         'listBanks',
         'checkAccountName',
         'bankTransfer',
+        // NUV-08 (nuvion-reconcile-area.spec.ts): the statement behind
+        // listTransactions is a real call now.
+        'listTransactions',
       ];
       await expect(
         provider.openWallet({ firstName: 'A' } as never),
