@@ -1873,10 +1873,15 @@ money routes included:
   and every other character (control characters, U+FFFD, U+FFFE, emoji) is
   accepted.
 - **Where, with no line per route:** every query and path value of every
-  route, every method. `checkStorableTextOnEveryRoute(app)` in `src/main.ts`
-  puts one pipe last on every argument of every route the app mounts, so a
-  route added later is covered automatically. A test app that should answer
-  as the Hub does calls it too, before `app.init()`.
+  route, every method. `checkStorableTextOnEveryRoute(app)` puts one pipe last
+  on every argument of every route the app mounts, so a route added later is
+  covered automatically. It is called from `configureHubApp(app)`
+  (`src/hub-app-config.ts`), the one function `src/main.ts` calls between
+  creating the app and listening, and it must run before `app.init()` or
+  `app.listen()` (Nest reads each handler's arguments then). A test app that
+  should answer as the Hub does calls `configureHubApp(app)` too (the Hub spec
+  in `src/storable-text/tests` does, and pins that `main.ts` calls it first and
+  never calls `init()` itself).
 - **What answers first, unchanged:** a guard (`401`, `403`, `409
   wallet_not_open`, `423`), every check that already refused the value (the
   ValidationPipe's `MaxLength`, `IsUUID`, `IsIn` and so on, the argument's
