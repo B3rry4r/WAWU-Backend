@@ -143,6 +143,10 @@ scripts/dev/stack.sh down   --name <n>
   stand-in) points the Hub's object storage at a stand-in on this machine, for a
   spec that must see the Hub's own storage calls. Left unset, storage is a name
   the network guard refuses.
+- `STACK_RESEND_API_KEY` (any text, with `RESEND_BASE_URL` set in the same shell)
+  gives wawu-id a mail transport; `node scripts/dev/mail-standin.cjs <port> <file>`
+  is a stand-in for it that records each mail it is given. Left unset, wawu-id has
+  no transport and an email route answers 503 (FIX-53, the data-export email).
 
 ### Nuvion on the stack (STACK-NUV)
 
@@ -770,8 +774,8 @@ enforces it in its own service (INBOX-06). A signed-out reader sees everyone.
 **Data export.** `POST /settings/privacy/export` records a request (asking
 again while one is pending returns that one). `DataExportFulfilmentService`
 sweeps pending requests every minute and asks WAWU ID to email a signed link
-(`POST /internal/users/:id/data-export`, the mock in `mock-wawu-id` records it
-in `GET /internal/mail-outbox`). `GET /settings/privacy/export/download?token=`
+(`POST /internal/users/:id/data-export`, built in wawu-id by FIX-53; the mock in
+`mock-wawu-id` records it in `GET /internal/mail-outbox`). `GET /settings/privacy/export/download?token=`
 builds the file when the link is opened, from `data-export-sections.ts`: every
 section names its fields, nothing is exported by default, and
 `data-export-map.spec.ts` fails when a table the account purge deletes is in
