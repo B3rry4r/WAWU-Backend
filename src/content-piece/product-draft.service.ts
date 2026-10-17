@@ -222,7 +222,10 @@ export class ProductDraftService {
       previewAsset: dto.previewAsset,
       fullAsset: dto.fullAsset,
     };
+    const filesUsable = this.content.filesUsableIn(wawuUserId, piece);
     return this.content.create(wawuUserId, piece, async (tx) => {
+      // The files it names must still be the person's (ME-04 round 4).
+      await filesUsable(tx);
       const gone = await tx.productDraft.deleteMany({
         where: { id, wawuUserId },
       });

@@ -134,6 +134,10 @@ scripts/dev/stack.sh down   --name <n>
   lockfile is the same, and runs `npm ci` otherwise. `dist/` is rebuilt only when
   the source is newer (`--rebuild` forces it), so do not rebuild the Hub checkout
   while a stack from it is running.
+- `STACK_STORAGE_ENDPOINT` (with `STACK_STORAGE_PATH_STYLE=true` for a path-style
+  stand-in) points the Hub's object storage at a stand-in on this machine, for a
+  spec that must see the Hub's own storage calls. Left unset, storage is a name
+  the network guard refuses.
 
 `scripts/dev/quiet.sh <name> -- <command...>` runs any command with its full
 output in `<scratch>/logs/<name>.log`, appends `EXIT <code>`, prints the last 15

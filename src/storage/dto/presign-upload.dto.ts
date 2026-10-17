@@ -1,6 +1,7 @@
 import {
   IsIn,
   IsInt,
+  IsOptional,
   IsString,
   Matches,
   Max,
@@ -55,6 +56,21 @@ export const UPLOAD_FOLDERS = [
   // their own id, and the work routes check exactly that.
   'profile/work',
 ] as const;
+
+/**
+ * The content formats a presign call may name (ME-04). Defined here, not in
+ * upload-formats.ts, which imports this file: the rules table reads
+ * MAX_UPLOAD_BYTES when it loads.
+ */
+export const UPLOAD_FORMAT_IDS = [
+  'video',
+  'course',
+  'audio',
+  'pdf',
+  'image',
+  'template',
+] as const;
+export type UploadFormatId = (typeof UPLOAD_FORMAT_IDS)[number];
 
 /** The folders a client may name on POST /uploads/presign. */
 export type PublicUploadFolder = (typeof UPLOAD_FOLDERS)[number];
@@ -224,4 +240,15 @@ export class PresignUploadDto {
   @Min(1)
   @Max(MAX_UPLOAD_BYTES)
   contentLength: number;
+
+  /**
+   * Optional, ME-04: the content format the file is for (`video`, `pdf`...).
+   * Only for `content/full` and `content/preview`. Naming one adds that
+   * format's rules (GET /uploads/formats) to the checks below: the types it
+   * takes in that folder and its own size cap. Left out, the call is checked
+   * exactly as before.
+   */
+  @IsOptional()
+  @IsIn(UPLOAD_FORMAT_IDS)
+  format?: UploadFormatId;
 }

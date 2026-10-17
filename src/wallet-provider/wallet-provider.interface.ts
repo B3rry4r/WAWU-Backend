@@ -568,6 +568,14 @@ export interface ProviderPayee {
   paymentDetailId: string | null;
 }
 
+/**
+ * How the reference of a send to a bank account begins (WALLET-09): ours,
+ * `wawu-bank-<id>`, so an adapter can tell a bank send from a send to another
+ * WAWU user (`wawu-send-<id>`) by the reference alone when it must find the
+ * send again.
+ */
+export const BANK_SEND_REFERENCE_PREFIX = 'wawu-bank-';
+
 export interface ProviderBankTransferInput {
   /** Whose money: a person's (their customerId) or WAWU's own account. */
   from: ProviderHolder;

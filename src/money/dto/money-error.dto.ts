@@ -80,6 +80,14 @@ export class MoneyErrorReason {
   /** payment_in_progress: the payment for this item still being confirmed (MONEY-17). */
   paymentId?: string;
 
+  /**
+   * account_name_changed: the name the bank gives for the account now (the
+   * name to show for the person to confirm), and the bank's name for it.
+   */
+  accountName?: string;
+
+  bankName?: string;
+
   /** bank_transfers_blocked: why (W18). */
   @ApiPropertyOptional({
     enum: ['kyc_pending', 'kyc_rejected', 'kyc_not_submitted'],

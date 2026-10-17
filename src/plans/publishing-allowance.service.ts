@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import type { Prisma } from '../../generated/prisma/client';
 import {
   FREE_STORAGE_BYTES,
   TICK_COLUMNS,
@@ -9,6 +10,12 @@ import {
 } from '../common/creator-allowance';
 import { MakerTierService, type HeldTierRow } from './maker-tier.service';
 import type { MyTierState } from './plans-view.type';
+
+/** The tables the allowance reads: the Hub's client, or a transaction's. */
+export type AllowanceDb = Pick<
+  Prisma.TransactionClient,
+  'makerTier' | 'userProfile' | 'creatorState'
+>;
 
 /**
  * What lets a person publish (TIER-02, R-43): a tier that is running, or, for
@@ -109,11 +116,17 @@ export class PublishingAllowanceService {
     private readonly tiers: MakerTierService,
   ) {}
 
+  /**
+   * `db` is the client to read with. A caller inside a transaction passes its
+   * own, so the read does not take a second pooled connection while the
+   * transaction holds the first (ME-04 round 6).
+   */
   async of(
     wawuUserId: string,
     now: Date = new Date(),
+    db: AllowanceDb = this.prisma,
   ): Promise<PublishingAllowance> {
-    const all = await this.ofMany([wawuUserId], now);
+    const all = await this.ofMany([wawuUserId], now, db);
     return all.get(wawuUserId)!;
   }
 
@@ -121,19 +134,20 @@ export class PublishingAllowanceService {
   async ofMany(
     wawuUserIds: readonly string[],
     now: Date = new Date(),
+    db: AllowanceDb = this.prisma,
   ): Promise<Map<string, PublishingAllowance>> {
     const ids = [...new Set(wawuUserIds)];
     const [held, profiles, states] = await Promise.all([
-      this.tiers.heldRowsOf(ids, now),
+      this.tiers.heldRowsOf(ids, now, db),
       ids.length === 0
         ? Promise.resolve([])
-        : this.prisma.userProfile.findMany({
+        : db.userProfile.findMany({
             where: { wawuUserId: { in: ids } },
             select: { wawuUserId: true, ...TICK_COLUMNS },
           }),
       ids.length === 0
         ? Promise.resolve([])
-        : this.prisma.creatorState.findMany({
+        : db.creatorState.findMany({
             where: { wawuUserId: { in: ids } },
             select: { wawuUserId: true, slotsUsed: true },
           }),
