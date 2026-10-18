@@ -265,7 +265,11 @@ export class LiveDispatcher {
       type: 'community.message',
       cursor: encodeLiveCursor(row.sentAt),
       communityId,
-      message: { ...row, sender: senders.get(sender) },
+      // Links signed fresh, as the list signs them (FIX-71).
+      message: {
+        ...(await this.communityMessages.withFreshMedia(row)),
+        sender: senders.get(sender),
+      },
     };
     for (const wawuId of allowed) this.connections.send(wawuId, event);
   }

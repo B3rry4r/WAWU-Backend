@@ -8,6 +8,7 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { LivePublisherModule } from '../live/live-publisher.module';
 import { CommunityPassAccessModule } from '../community/pass/community-pass-access.module';
 import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
+import { StorageModule } from '../storage/storage.module';
 
 /**
  * CommunityMessage resource module. PrismaService comes from the globally
@@ -32,6 +33,9 @@ import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
     BlockedAccountModule,
     CommunityPassAccessModule,
     PlanSettingsModule,
+    // StorageService, to sign a message's photo, video and voice note links
+    // again on the way out (FIX-71).
+    StorageModule,
   ],
   controllers: [CommunityMessageController],
   providers: [CommunityMessageService],

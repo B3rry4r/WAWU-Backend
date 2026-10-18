@@ -30,6 +30,7 @@ import {
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import type { Prisma } from '../../generated/prisma/client';
+import { CHAT_UPLOAD_FOLDERS } from '../chat/chat-limits';
 import { PrismaService } from '../common/prisma/prisma.service';
 import {
   FREE_STORAGE_BYTES,
@@ -189,6 +190,26 @@ export function storedKeyProblem(stored: unknown): string | null {
 }
 
 /**
+ * Folders the Hub itself writes to with `putGenerated` (not offered to a
+ * client). `ai/voiceover` is AITOOLS-01's audio (AI_AUDIO_FOLDER in
+ * src/ai-tools/audio/ai-audio-store.ts, which a spec keeps equal to this).
+ */
+export const GENERATED_KEY_FOLDERS = ['ai/voiceover'] as const;
+
+/**
+ * Every folder a key this server wrote can start with: the public upload
+ * folders, the chat folders (which POST /uploads/presign does not offer) and
+ * the folders the Hub writes itself. `objectKeyFrom` matches a stored link
+ * against this list, so a folder missing from it is a folder whose links are
+ * never recognised, never re-signed and never found for a purge (FIX-71).
+ */
+export const KEY_FOLDERS: readonly string[] = [
+  ...UPLOAD_FOLDERS,
+  ...CHAT_UPLOAD_FOLDERS,
+  ...GENERATED_KEY_FOLDERS,
+];
+
+/**
  * Recovers the object key from whatever is stored on a row.
  *
  * `presignUpload().fileUrl` is `readUrlFor(key)` — an absolute,
@@ -198,7 +219,7 @@ export function storedKeyProblem(stored: unknown): string | null {
  * points at is still sitting in the bucket untouched. Re-signing on the way
  * out needs the key back, and this is how: the grammar is closed and
  * server-generated — `<folder>/<wawuId>/<uuid>.<ext>` with `folder` drawn
- * from UPLOAD_FOLDERS (presignUpload) — so this is a match against a known
+ * from KEY_FOLDERS (presignUpload, the chat folders and the Hub's own) — so this is a match against a known
  * shape, not a guess at bucket layout. Anything that does not match is
  * passed through unchanged; nothing stored is ever rewritten.
  */
@@ -219,7 +240,7 @@ export function objectKeyFrom(stored: string): string {
   // from it. Reading a bad stored row must never throw.
   if (storedKeyProblem(stored) !== null) return stored;
 
-  for (const folder of UPLOAD_FOLDERS) {
+  for (const folder of KEY_FOLDERS) {
     const marker = `/${folder}/`;
     const at = pathname.indexOf(marker);
     if (at !== -1) return pathname.slice(at + 1);
