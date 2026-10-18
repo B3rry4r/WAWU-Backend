@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -322,7 +322,10 @@ export async function bootSchoolNuvion(
       const id = randomUUID();
       users.push(id);
       accountSeq += 1;
-      const accountNumber = `84${String(Date.now()).slice(-6)}${String(accountSeq).padStart(2, '0')}`;
+      // Ten digits, unique on a database other processes also use: the six
+      // middle digits are random (the clock's last six digits met a second
+      // process asking in the same millisecond with the same counter).
+      const accountNumber = `84${String(randomInt(1_000_000)).padStart(6, '0')}${String(accountSeq).padStart(2, '0')}`;
       const account = nuvion.openAccount(BigInt(kobo), accountNumber);
       await prisma.fintavaWallet.create({
         data: {
