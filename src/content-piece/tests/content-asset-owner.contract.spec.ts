@@ -397,6 +397,67 @@ describe('A listing names only the person’s own files (SWEEP-APP-5, ME-04 R2-4
       expect(await statusOf(full.key)).toBe('abandoned');
     });
 
+    it('counts a late file named by an edit (PATCH /content/:id) before the edit is checked (SWEEP-APP-5 L1)', async () => {
+      const ownPreview = await reserve(MAKER, 'content/preview');
+      const ownFull = await reserve(MAKER, 'content/full');
+      const created = await post(MAKER, ownPreview.fileUrl, ownFull.fileUrl)
+        .expect(201)
+        .then((r) => (r.body as { data: { id: string } }).data);
+      // The replacement upload finished after the wait: its row was given up, the file is in the bucket.
+      const next = await reserve(MAKER, 'content/full');
+      await givenUpByTheWait(next.key);
+      inBucket = new Set([next.key]);
+      asked = [];
+
+      await request(server())
+        .patch(`/content/${created.id}`)
+        .set('Authorization', bearer(MAKER))
+        .send({ fullAsset: next.fileUrl })
+        .expect(200);
+
+      expect(asked).toEqual([next.key]);
+      expect(await statusOf(next.key)).toBe('confirmed');
+      const piece = await prisma.contentPiece.findUnique({
+        where: { id: created.id },
+        select: { fullAssetUrl: true },
+      });
+      expect(piece?.fullAssetUrl).toBe(next.fileUrl);
+    });
+
+    it('counts a late file named when a draft is published (POST /product-drafts/:id/publish) before the draft is checked (SWEEP-APP-5 L1)', async () => {
+      const draft = await request(server())
+        .post('/product-drafts')
+        .set('Authorization', bearer(MAKER))
+        .send({
+          title: 'SWEEP-APP-5 draft spec',
+          contentType: 'pdf',
+          description: 'A draft that names two uploads when it is published',
+          category: 'business_entrepreneurship',
+          accessType: 'paid',
+          price: 2000,
+        })
+        .expect(201)
+        .then((r) => (r.body as { data: { id: string } }).data);
+      const preview = await reserve(MAKER, 'content/preview');
+      const full = await reserve(MAKER, 'content/full');
+      await givenUpByTheWait(preview.key);
+      await givenUpByTheWait(full.key);
+      inBucket = new Set([preview.key, full.key]);
+      asked = [];
+      const before = await counts(MAKER);
+
+      await request(server())
+        .post(`/product-drafts/${draft.id}/publish`)
+        .set('Authorization', bearer(MAKER))
+        .send({ previewAsset: preview.fileUrl, fullAsset: full.fileUrl })
+        .expect(201);
+
+      expect(asked.sort()).toEqual([full.key, preview.key].sort());
+      expect(await statusOf(preview.key)).toBe('confirmed');
+      expect(await statusOf(full.key)).toBe('confirmed');
+      expect((await counts(MAKER)).pieces).toBe(before.pieces + 1);
+    });
+
     it('answers as it always did when the bucket cannot be asked, and a retry then works', async () => {
       const preview = await reserve(MAKER, 'content/preview');
       const full = await reserve(MAKER, 'content/full');
