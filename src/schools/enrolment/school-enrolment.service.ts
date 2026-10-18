@@ -174,7 +174,14 @@ export class SchoolEnrolmentService implements OnModuleInit {
             data: { reservedUntil: reservedUntil(now, this.minutes()) },
           });
         }
-        return this.viewOf(await this.byId(live.id));
+        const same = await this.byId(live.id);
+        // The release sweep may have given this place back while the update
+        // above waited on its row (FIX-69 L1): then it is not the answer;
+        // look again and make the place anew.
+        if (same.status === 'reserved' || same.status === 'enrolled') {
+          return this.viewOf(same);
+        }
+        continue;
       }
       if (live?.status === 'enrolled') {
         throw new SchoolEnrolmentError(
@@ -366,6 +373,7 @@ export class SchoolEnrolmentService implements OnModuleInit {
         },
       });
       if (live) {
+        let otherClass = true;
         if (live.intakeId === intake.id) {
           // A twin request made this order a moment ago: it is the answer,
           // its place kept a while longer.
@@ -375,23 +383,33 @@ export class SchoolEnrolmentService implements OnModuleInit {
               data: { reservedUntil: reservedUntil(now, this.minutes()) },
             });
           }
-          return tx.schoolEnrolment.findUniqueOrThrow({
+          const same = await tx.schoolEnrolment.findUniqueOrThrow({
             where: { id: live.id },
           });
-        }
-        if (live.status === 'enrolled') {
+          // The release sweep does not take the student's lock, so it may
+          // have given this very place back while the update above waited on
+          // its row: the order is then `released`, and answering with it
+          // sends the student round again (FIX-69 L1). A place paid for or
+          // still held is the answer; a released one is made again below.
+          if (same.status === 'reserved' || same.status === 'enrolled') {
+            return same;
+          }
+          otherClass = false;
+        } else if (live.status === 'enrolled') {
           throw new SchoolEnrolmentError(
             'already_enrolled',
             ENROLMENT_MESSAGES.alreadyEnrolled,
             { enrolmentId: live.id },
           );
         }
-        // Another class is held: give it back for this one. Only a payment
-        // that has started keeps it.
-        const gone = await this.releaseIds(tx, [live.id], now, [intake.id]);
-        if (gone === 0) {
-          const open = await this.openPayment(tx, live.id);
-          if (open) throw this.inProgress(open);
+        if (otherClass) {
+          // Another class is held: give it back for this one. Only a payment
+          // that has started keeps it.
+          const gone = await this.releaseIds(tx, [live.id], now, [intake.id]);
+          if (gone === 0) {
+            const open = await this.openPayment(tx, live.id);
+            if (open) throw this.inProgress(open);
+          }
         }
       }
       if (price > 0) {

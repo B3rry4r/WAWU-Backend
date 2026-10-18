@@ -31,6 +31,7 @@ import {
 } from '../../wallet-provider/wallet-provider.interface';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import { WalletProviderLimitError } from '../../wallet-provider/wallet-provider-limit';
+import { describeDatabaseFailure } from '../enrolment/school-enrolment-failure';
 import {
   decodeListCursor,
   encodeListCursor,
@@ -140,7 +141,7 @@ export class SchoolSettlementService {
       await this.run();
     } catch (e) {
       this.logger.error(
-        `school settlement sweep failed (${e instanceof Error ? e.name : 'error'})`,
+        `school settlement sweep failed (${describeDatabaseFailure(e)})`,
       );
     } finally {
       this.sweeping = false;
@@ -173,7 +174,7 @@ export class SchoolSettlementService {
         out.started += 1;
       } catch (e) {
         this.logger.error(
-          `school settlement ${id}: could not decide the payout (${e instanceof Error ? e.name : 'error'})`,
+          `school settlement ${id}: could not decide the payout (${describeDatabaseFailure(e)})`,
         );
       }
     }
@@ -194,7 +195,7 @@ export class SchoolSettlementService {
         out.started += 1;
       } catch (e) {
         this.logger.error(
-          `school settlement ${id}: could not decide the refund (${e instanceof Error ? e.name : 'error'})`,
+          `school settlement ${id}: could not decide the refund (${describeDatabaseFailure(e)})`,
         );
       }
     }
@@ -215,7 +216,7 @@ export class SchoolSettlementService {
         out.driven += 1;
       } catch (e) {
         this.logger.error(
-          `school settlement ${id}: the sweep could not drive it (${e instanceof Error ? e.name : 'error'})`,
+          `school settlement ${id}: the sweep could not drive it (${describeDatabaseFailure(e)})`,
         );
       }
     }
@@ -987,7 +988,7 @@ export class SchoolSettlementService {
       await this.ledger.record(movement, undefined, { quiet: true });
     } catch (e) {
       this.logger.error(
-        `school settlement ${row.id}: the ledger could not record the payout (${e instanceof Error ? e.name : 'error'})`,
+        `school settlement ${row.id}: the ledger could not record the payout (${describeDatabaseFailure(e)})`,
       );
     }
   }
@@ -1023,7 +1024,7 @@ export class SchoolSettlementService {
       await this.ledger.record(movement, undefined, { quiet: true });
     } catch (e) {
       this.logger.error(
-        `school settlement ${row.id}: the ledger could not record that the payout ${status === 'failed' ? 'did not leave' : 'came back'} (${e instanceof Error ? e.name : 'error'})`,
+        `school settlement ${row.id}: the ledger could not record that the payout ${status === 'failed' ? 'did not leave' : 'came back'} (${describeDatabaseFailure(e)})`,
       );
     }
   }
@@ -1043,7 +1044,7 @@ export class SchoolSettlementService {
       );
     } catch (e) {
       this.logger.error(
-        `school settlement ${row.id}: the ledger could not take the provider's charge (${e instanceof Error ? e.name : 'error'})`,
+        `school settlement ${row.id}: the ledger could not take the provider's charge (${describeDatabaseFailure(e)})`,
       );
     }
   }
