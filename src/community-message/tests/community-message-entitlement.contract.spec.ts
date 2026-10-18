@@ -16,7 +16,9 @@ import { ResponseInterceptor } from '../../common/interceptors/response.intercep
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
+import { StorageService } from '../../storage/storage.service';
 import { CommunityMessageModule } from '../community-message.module';
+import { PhotoUploads, useTestBucket } from './photo-upload';
 
 /**
  * WHO PAYS TO POST IN A COMMUNITY.
@@ -43,6 +45,10 @@ import { CommunityMessageModule } from '../community-message.module';
  * seeded accounts, whose balance other specs mutate (README § Why
  * not parallel).
  */
+
+// A photo must be the sender's own upload (FIX-77): each sender below gets one
+// in beforeAll, and every send of theirs carries it.
+const restoreBucket = useTestBucket();
 
 const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
   ? new URL(process.env.WAWU_ID_JWKS_URL).port
@@ -117,6 +123,9 @@ describe('CommunityMessage entitlements (contract)', () => {
 
   const ownedSubs: string[] = [];
   const createdCommunityIds: string[] = [];
+  let photos: PhotoUploads;
+  /** The sender's own photo link, by their token. */
+  const photoOf = new Map<string, string>();
 
   let openRoomId: string;
   let privateRoomId: string;
@@ -146,10 +155,7 @@ describe('CommunityMessage entitlements (contract)', () => {
       .set('Authorization', `Bearer ${token}`)
       // INBOX-22 (R-62): text is free, a photo costs 1 credit. This file is
       // about who pays for a message, so each send carries a photo.
-      .send({
-        text,
-        imageUrl: 'http://storage.test/community/message/photo.png',
-      });
+      .send({ text, imageUrl: photoOf.get(token) });
 
   beforeAll(async () => {
     const alreadyUp = await waitForHealth(`${MOCK_WAWU_ID_BASE}/health`, 1000);
@@ -202,6 +208,14 @@ describe('CommunityMessage entitlements (contract)', () => {
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
+    photos = new PhotoUploads(
+      prisma,
+      moduleRef.get(StorageService, { strict: false }),
+    );
+    photoOf.set(hostToken, await photos.link(hostSub));
+    photoOf.set(subscriberToken, await photos.link(subscriberSub));
+    photoOf.set(lapsedToken, await photos.link(lapsedSub));
+    photoOf.set(plainToken, await photos.link(plainSub));
 
     // Creator accounts, KYC still pending: KYC gates EARNING, never sending
     // (CLAUDE.md). Having a CreatorState row must buy nothing here — that is
@@ -278,7 +292,9 @@ describe('CommunityMessage entitlements (contract)', () => {
         where: { wawuUserId: { in: ownedSubs } },
       });
     }
+    await photos?.clean();
     await app?.close();
+    restoreBucket();
     if (ownedMockWawuId && mockWawuId) {
       mockWawuId.kill();
     }
@@ -365,12 +381,18 @@ describe('CommunityMessage entitlements (contract)', () => {
       await setCredits(subscriberSub, 3);
       const spendsBefore = await spendCount(subscriberSub, openRoomId);
 
-      const res = await post(openRoomId, subscriberToken, 'Charged like anyone.');
+      const res = await post(
+        openRoomId,
+        subscriberToken,
+        'Charged like anyone.',
+      );
       expect([200, 201]).toContain(res.status);
       expect(res.body.data.costInCredits).toBe(1);
 
       expect(await balanceOf(subscriberSub)).toBe(2);
-      expect(await spendCount(subscriberSub, openRoomId)).toBe(spendsBefore + 1);
+      expect(await spendCount(subscriberSub, openRoomId)).toBe(
+        spendsBefore + 1,
+      );
     });
 
     it('hits the same 402 wall at zero balance', async () => {

@@ -9,7 +9,9 @@ import { ResponseInterceptor } from '../../common/interceptors/response.intercep
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
+import { StorageService } from '../../storage/storage.service';
 import { CommunityMessageModule } from '../community-message.module';
+import { PhotoUploads, useTestBucket } from './photo-upload';
 
 // Seeded WAWU IDs / community — mirror mock-wawu-id/server.js and
 // prisma/seed.ts exactly (see credit-spend's own contract spec, which
@@ -23,8 +25,9 @@ const NONEXISTENT_COMMUNITY_ID = '20000000-0000-4000-8000-00000000dead';
 
 // INBOX-22 (R-62): text is free, a photo costs 1 credit. The sends in this
 // file that are about spending credits carry a photo, so they still cost the
-// 1 credit they always asserted; INBOX-22's own spec covers every kind.
-const PHOTO = { imageUrl: 'http://storage.test/community/message/photo.png' };
+// 1 credit they always asserted; INBOX-22's own spec covers every kind. A
+// photo must be the sender's own upload (FIX-77), so each send makes one.
+const restoreBucket = useTestBucket();
 
 const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
   ? new URL(process.env.WAWU_ID_JWKS_URL).port
@@ -77,6 +80,7 @@ describe('CommunityMessage (contract)', () => {
   let ownedMockWawuId = false;
 
   let userToken: string;
+  let photos: PhotoUploads;
 
   // Rows this suite creates — deleted in afterAll (test hygiene).
   const createdMessageIds: string[] = [];
@@ -116,7 +120,7 @@ describe('CommunityMessage (contract)', () => {
     const res = await request(app.getHttpServer())
       .post(`/communities/${SEEDED_COMMUNITY_ID}/messages`)
       .set('Authorization', `Bearer ${userToken}`)
-      .send({ text, ...PHOTO });
+      .send({ text, imageUrl: await photos.link(USER_PLAIN) });
 
     if (res.body?.data?.id) {
       createdMessageIds.push(res.body.data.id);
@@ -197,6 +201,10 @@ describe('CommunityMessage (contract)', () => {
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
+    photos = new PhotoUploads(
+      prisma,
+      moduleRef.get(StorageService, { strict: false }),
+    );
 
     originalCreditsState = await prisma.creditsState.findUnique({
       where: { userWawuId: USER_PLAIN },
@@ -217,8 +225,10 @@ describe('CommunityMessage (contract)', () => {
       });
     }
     await restoreCreditsState();
+    await photos?.clean();
 
     await app?.close();
+    restoreBucket();
     if (ownedMockWawuId && mockWawuId) {
       mockWawuId.kill();
     }
@@ -342,7 +352,10 @@ describe('CommunityMessage (contract)', () => {
       const res = await request(app.getHttpServer())
         .post(`/communities/${SEEDED_COMMUNITY_ID}/messages`)
         .set('Authorization', `Bearer ${userToken}`)
-        .send({ text: 'Trial-covered message', ...PHOTO })
+        .send({
+          text: 'Trial-covered message',
+          imageUrl: await photos.link(USER_PLAIN),
+        })
         .expect(402);
 
       expect(res.body.data).toBeNull();
@@ -376,7 +389,10 @@ describe('CommunityMessage (contract)', () => {
       const res = await request(app.getHttpServer())
         .post(`/communities/${SEEDED_COMMUNITY_ID}/messages`)
         .set('Authorization', `Bearer ${userToken}`)
-        .send({ text: 'This should be rejected', ...PHOTO })
+        .send({
+          text: 'This should be rejected',
+          imageUrl: await photos.link(USER_PLAIN),
+        })
         .expect(402);
 
       expect(res.body.data).toBeNull();

@@ -16,6 +16,11 @@ import { MOCK_FAILURE_TRANSACTION_ID } from '../../credit-purchase/mock-flutterw
 import { CreditsStateModule } from '../../credits-state/credits-state.module';
 import { CommunityMessageModule } from '../../community-message/community-message.module';
 import { CommunityMessageService } from '../../community-message/community-message.service';
+import {
+  PhotoUploads,
+  useTestBucket,
+} from '../../community-message/tests/photo-upload';
+import { StorageService } from '../../storage/storage.service';
 import { CreatorEarningsModule } from '../../creator-earnings/creator-earnings.module';
 import { CreditSpendModule } from '../credit-spend.module';
 import {
@@ -98,7 +103,12 @@ async function login(identifier: string): Promise<string> {
   return body.accessToken;
 }
 
+// A photo must be the sender's own upload (FIX-77): the sends below that spend a
+// credit make one for their buyer.
+const restoreBucket = useTestBucket();
+
 describe('Credit host earnings (contract)', () => {
+  let photos: PhotoUploads;
   let app: INestApplication;
   let prisma: PrismaService;
   let creditPurchases: CreditPurchaseService;
@@ -183,6 +193,10 @@ describe('Credit host earnings (contract)', () => {
     creditPurchases = moduleRef.get(CreditPurchaseService);
     creditSpends = moduleRef.get(CreditSpendService);
     communityMessages = moduleRef.get(CommunityMessageService);
+    photos = new PhotoUploads(
+      prisma,
+      moduleRef.get(StorageService, { strict: false }),
+    );
   });
 
   afterAll(async () => {
@@ -213,7 +227,9 @@ describe('Credit host earnings (contract)', () => {
         where: { id: { in: createdCommunityIds } },
       });
     }
+    await photos?.clean();
     await app?.close();
+    restoreBucket();
     if (ownedMockWawuId) mockWawuId?.kill();
   });
 
@@ -516,7 +532,7 @@ describe('Credit host earnings (contract)', () => {
       await communityMessages.create(SEEDED_COMMUNITY_ID, buyer, {
         text: 'Paying for this one with a real credit.',
         // INBOX-22 (R-62): text is free; a photo costs the 1 credit this test is about.
-        imageUrl: 'http://storage.test/community/message/photo.png',
+        imageUrl: await photos.link(buyer),
       });
 
       const spend = await prisma.creditSpend.findFirstOrThrow({
@@ -558,7 +574,7 @@ describe('Credit host earnings (contract)', () => {
       await communityMessages.create(SEEDED_COMMUNITY_ID, buyer, {
         text: 'Sent with a credit nobody ever paid for.',
         // INBOX-22 (R-62): text is free; a photo costs the 1 credit this test is about.
-        imageUrl: 'http://storage.test/community/message/photo.png',
+        imageUrl: await photos.link(buyer),
       });
 
       const state = await prisma.creditsState.findUniqueOrThrow({
