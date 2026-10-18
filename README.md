@@ -182,6 +182,9 @@ documents, the onboarding submission (approved after about a second), the naira
 account and its account details (active with a ten-digit number), accounts and
 balances, book transfers to a `nuvion_ban` (also WAWU's operational account),
 bank sends (bank list, name check, counterparties, payment details, transfers),
+an account's month statement (`GET /accounts/{id}/statements`, FIX-67: built from the
+transfers it records, so `npm run money:check` can read every wallet on a stack; its
+spec is `src/nuvion/tests/nuvion-standin-statements.spec.ts`),
 and the webhooks the Hub expects, signed with a test secret the stack sets
 (`x-nuvion-event-signature`, HMAC-SHA256 of `timestamp.body`). A transfer is
 `pending`, debits the payer at once and settles after 1.5 s (`outflows.completed`).
