@@ -15,7 +15,7 @@ import {
   type CreditSpendPrismaClient,
 } from '../credit-spend/credit-spend.service';
 import { PlanSettingsService } from '../plan-settings/plan-settings.service';
-import { objectKeyFrom } from '../storage/storage.service';
+import { StorageService, deliverableKeyFrom } from '../storage/storage.service';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { CommunityKind } from '../../generated/prisma/enums';
 import type { CommunityMessage, CommunityMessageSender } from '../common/types';
@@ -196,6 +196,7 @@ export class CommunityMessageService {
     private readonly blockedAccounts: BlockedAccountService,
     private readonly passAccess: CommunityPassAccess,
     private readonly settings: PlanSettingsService,
+    private readonly storage: StorageService,
   ) {}
 
   private readonly logger = new Logger(CommunityMessageService.name);
@@ -549,11 +550,14 @@ export class CommunityMessageService {
    * through the presign and confirm path into that kind's own folder
    * (`community/message-video`, `community/message-voice`) and that has
    * landed (`POST /uploads/confirm` made its `StorageObject` row
-   * `confirmed`). The key is read out of the link and must be exactly
-   * `<folder>/<sender>/<uuid>.<ext>`; another person's file, another
-   * folder's file and a link to anywhere else are refused. Only database
-   * reads: no network call and no lock, and it runs before anything is
-   * charged, so a refused file costs nothing.
+   * `confirmed`). The link must be one of THIS bucket's own (its origin and
+   * key prefix, read from the storage client: another host, a look-alike
+   * host, userinfo, a `%` escape or a backslash is refused) and its key must
+   * be exactly `<folder>/<sender>/<uuid>.<ext>`; another person's file,
+   * another folder's file and a link to anywhere else are refused. No
+   * network call (the bucket's address is worked out by signing a link
+   * locally) and no lock, and it runs before anything is charged, so a
+   * refused file costs nothing.
    */
   private async assertUploaded(
     senderWawuId: string,
@@ -564,7 +568,13 @@ export class CommunityMessageService {
     const unusable = new BadRequestException(
       `That ${words} could not be used. Upload it again, then send it.`,
     );
-    const key = objectKeyFrom(url);
+    // The strict check LEGAL-03 uses: this bucket's own host and prefix, the
+    // kind's own folder, two plain segments after it. A storage that is not
+    // configured has no address, so nothing passes there.
+    const key = deliverableKeyFrom(url, await this.storage.bucketLocation(), [
+      folder,
+    ]);
+    if (key === null) throw unusable;
     const parts = key.split('/');
     const folderParts = folder.split('/');
     const ownFile =

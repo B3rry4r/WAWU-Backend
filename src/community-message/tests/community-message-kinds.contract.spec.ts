@@ -4,6 +4,17 @@ process.env.DATABASE_URL =
   process.env.DATABASE_URL ??
   'postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public';
 
+// A bucket that exists only in this process: links are signed locally (nothing
+// is sent to it), and the Hub reads this bucket's own address from them to
+// tell its links from anybody else's (INBOX-22 round 2). Virtual-hosted style,
+// as the real bucket is.
+process.env.STORAGE_ENDPOINT = 'https://storage.test.invalid';
+process.env.STORAGE_BUCKET = 'wawu-kinds-test';
+process.env.STORAGE_ACCESS_KEY_ID = 'test-key';
+process.env.STORAGE_SECRET_ACCESS_KEY = 'test-secret';
+process.env.STORAGE_REGION = 'auto';
+delete process.env.STORAGE_FORCE_PATH_STYLE;
+
 import { ChildProcess, spawn } from 'child_process';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
@@ -22,6 +33,10 @@ import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { CreditSpendService } from '../../credit-spend/credit-spend.service';
 import { NotificationService } from '../../notification/notification.service';
 import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
+import {
+  StorageService,
+  type BucketLocation,
+} from '../../storage/storage.service';
 import { CommunityMessageModule } from '../community-message.module';
 import { CommunityMessageService } from '../community-message.service';
 
@@ -118,14 +133,17 @@ interface Answer {
 }
 const answer = (res: { body: unknown }): Answer => res.body as Answer;
 
-type Folder = 'community/message-video' | 'community/message-voice';
+type Folder =
+  'community/message-video' | 'community/message-voice' | 'community/message';
 const EXTENSION: Record<Folder, string> = {
   'community/message-video': 'mp4',
   'community/message-voice': 'm4a',
+  'community/message': 'png',
 };
 const CONTENT_TYPE: Record<Folder, string> = {
   'community/message-video': 'video/mp4',
   'community/message-voice': 'audio/mp4',
+  'community/message': 'image/png',
 };
 
 describe('Community credits by kind of message (INBOX-22, contract)', () => {
@@ -134,6 +152,8 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
   let prisma: PrismaService;
   let settings: PlanSettingsService;
   let messages: CommunityMessageService;
+  let storage: StorageService;
+  let bucket: BucketLocation;
   let creditSpend: CreditSpendService;
   let notifications: NotificationService;
   let mockWawuId: ChildProcess | undefined;
@@ -179,8 +199,8 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       orderBy: { sentAt: 'asc' },
     });
 
-  /** An upload the way presign then confirm leave it: the sender's own, in the kind's folder. */
-  async function upload(
+  /** An upload row the way presign then confirm leave it: the sender's own, in the kind's folder. Returns its key. */
+  async function uploadRow(
     who: string,
     folder: Folder,
     status: 'confirmed' | 'pending' = 'confirmed',
@@ -197,9 +217,21 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
         confirmedAt: status === 'confirmed' ? new Date() : null,
       },
     });
-    // What presign hands back: a signed read link whose path is the key.
-    return `http://storage.test/${key}?X-Amz-Signature=abc`;
+    return key;
   }
+
+  /** What presign hands back for an upload: this bucket's signed read link (535 to 560 characters). */
+  async function upload(
+    who: string,
+    folder: Folder,
+    status: 'confirmed' | 'pending' = 'confirmed',
+  ): Promise<string> {
+    return storage.readUrlFor(await uploadRow(who, folder, status));
+  }
+
+  /** A link to a key on this bucket's own host, written by hand (a short one, with a made-up signature). */
+  const bucketLink = (key: string) =>
+    `${bucket.origin}${bucket.pathPrefix}${key}?X-Amz-Signature=abc`;
 
   function post(
     on: INestApplication,
@@ -269,6 +301,10 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
     prisma = first.get(PrismaService);
     settings = first.get(PlanSettingsService);
     messages = first.get(CommunityMessageService);
+    storage = first.get(StorageService);
+    const at = await storage.bucketLocation();
+    if (!at) throw new Error('the spec bucket has no address');
+    bucket = at;
     creditSpend = first.get(CreditSpendService);
     notifications = first.get(NotificationService);
     // A second application, its own connection pool: "two servers".
@@ -720,7 +756,9 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
         [
           'a file nobody uploaded',
           {
-            videoUrl: `http://storage.test/community/message-video/${who.sub}/${randomUUID()}.mp4`,
+            videoUrl: bucketLink(
+              `community/message-video/${who.sub}/${randomUUID()}.mp4`,
+            ),
           },
         ],
         [
@@ -749,6 +787,161 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       );
       expect(await balanceOf(who.sub)).toBe(10);
       expect(await messagesOf(who.sub)).toHaveLength(0);
+    });
+
+    it("refuses a link on any other host, even with the sender's own confirmed key, and charges nothing", async () => {
+      const who = await member('foreign');
+      await setBalance(who.sub, 10);
+      const videoKey = await uploadRow(who.sub, 'community/message-video');
+      const voiceKey = await uploadRow(who.sub, 'community/message-voice');
+      const host = new URL(bucket.origin).host;
+      const foreign = (key: string): Array<[string, string]> => [
+        ['another host', `https://evil.example/${key}?X-Amz-Signature=abc`],
+        ['another host, key under a path', `https://evil.example/a/b/${key}`],
+        [
+          "this bucket's name as the login of another host",
+          `http://${host}@evil.example/${key}`,
+        ],
+        [
+          'a longer host that starts with the bucket host',
+          `${bucket.origin}.evil.example/${key}`,
+        ],
+        ['the bucket host on another port', `${bucket.origin}:8443/${key}`],
+        [
+          'the bucket host on the other scheme',
+          `${bucket.origin.replace('https:', 'http:')}/${key}`,
+        ],
+      ];
+      for (const [name, link] of foreign(videoKey)) {
+        const res = await post(app, who.accessToken, { videoUrl: link });
+        expect(['video', name, res.status]).toEqual(['video', name, 400]);
+        expect(answer(res).message).toBe(
+          'That video could not be used. Upload it again, then send it.',
+        );
+      }
+      for (const [name, link] of foreign(voiceKey)) {
+        const res = await post(app, who.accessToken, { voiceUrl: link });
+        expect(['voice', name, res.status]).toEqual(['voice', name, 400]);
+        expect(answer(res).message).toBe(
+          'That voice note could not be used. Upload it again, then send it.',
+        );
+      }
+      // Nothing was stored, charged or served to the room.
+      expect(await balanceOf(who.sub)).toBe(10);
+      expect(await messagesOf(who.sub)).toHaveLength(0);
+      expect(await spendsOf(who.sub)).toHaveLength(0);
+      // The same keys on this bucket's own host are fine: the key was never the problem.
+      const video = await post(app, who.accessToken, {
+        videoUrl: bucketLink(videoKey),
+      });
+      expect([video.status, answer(video).data?.costInCredits]).toEqual([
+        201, 3,
+      ]);
+      const voice = await post(app, who.accessToken, {
+        voiceUrl: await storage.readUrlFor(voiceKey),
+      });
+      expect([voice.status, answer(voice).data?.costInCredits]).toEqual([
+        201, 3,
+      ]);
+      expect(await balanceOf(who.sub)).toBe(4);
+    });
+
+    it("refuses a link on this bucket whose key is not exactly the kind's folder, the sender and one file, and charges nothing", async () => {
+      const who = await member('shape');
+      await setBalance(who.sub, 10);
+      const videoKey = await uploadRow(who.sub, 'community/message-video');
+      const photoKey = await uploadRow(who.sub, 'community/message');
+      const [folder, sender, file] = [
+        'community/message-video',
+        who.sub,
+        videoKey.split('/').pop() as string,
+      ];
+      const refusals: Array<[string, Record<string, unknown>]> = [
+        [
+          'the folder buried under another path on this bucket',
+          { videoUrl: bucketLink(`legal/document/x/${videoKey}`) },
+        ],
+        [
+          'the folder buried under one more segment',
+          { videoUrl: bucketLink(`x/${videoKey}`) },
+        ],
+        [
+          'a photo-folder file sent as a video',
+          { videoUrl: await storage.readUrlFor(photoKey) },
+        ],
+        [
+          'a video file sent as a voice note',
+          { voiceUrl: await storage.readUrlFor(videoKey) },
+        ],
+        [
+          'an extra segment between the sender and the file',
+          { videoUrl: bucketLink(`${folder}/${sender}/x/${file}`) },
+        ],
+        [
+          'the slash after the folder written as %2F',
+          { videoUrl: bucketLink(`${folder}%2F${sender}/${file}`) },
+        ],
+        [
+          'a dot segment',
+          { videoUrl: bucketLink(`${folder}/${sender}/../${sender}/${file}`) },
+        ],
+        [
+          'a backslash',
+          { videoUrl: bucketLink(`${folder}/${sender}\\${file}`) },
+        ],
+      ];
+      for (const [name, body] of refusals) {
+        const res = await post(app, who.accessToken, body);
+        expect([name, res.status]).toEqual([name, 400]);
+      }
+      expect(await balanceOf(who.sub)).toBe(10);
+      expect(await messagesOf(who.sub)).toHaveLength(0);
+      expect(await spendsOf(who.sub)).toHaveLength(0);
+    });
+
+    it("refuses another person's confirmed key on every link, this bucket's own included, and charges nothing", async () => {
+      const who = await member('mine');
+      const stranger = await member('theirs');
+      await setBalance(who.sub, 10);
+      const theirs = await uploadRow(stranger.sub, 'community/message-video');
+      const theirVoice = await uploadRow(
+        stranger.sub,
+        'community/message-voice',
+      );
+      const refusals: Array<[string, Record<string, unknown>]> = [
+        ['their link on this bucket', { videoUrl: bucketLink(theirs) }],
+        [
+          'their signed link from presign',
+          { videoUrl: await storage.readUrlFor(theirs) },
+        ],
+        [
+          'their key on another host',
+          { videoUrl: `https://evil.example/${theirs}` },
+        ],
+        [
+          'their voice note on this bucket',
+          { voiceUrl: await storage.readUrlFor(theirVoice) },
+        ],
+        [
+          'their voice note on another host',
+          { voiceUrl: `https://evil.example/${theirVoice}` },
+        ],
+        [
+          'their key with the sender id swapped in (no such file)',
+          {
+            videoUrl: bucketLink(theirs.replace(stranger.sub, who.sub)),
+          },
+        ],
+      ];
+      for (const [name, body] of refusals) {
+        const res = await post(app, who.accessToken, body);
+        expect([name, res.status]).toEqual([name, 400]);
+      }
+      expect(await balanceOf(who.sub)).toBe(10);
+      expect(await messagesOf(who.sub)).toHaveLength(0);
+      expect(await spendsOf(who.sub)).toHaveLength(0);
+      // The room is never served a foreign link.
+      expect(await messagesOf(stranger.sub)).toHaveLength(0);
     });
 
     it('refuses a message with more than one attachment, and one with a link that is not a link', async () => {
