@@ -1206,7 +1206,9 @@ describe('A fee given back that Nuvion accepts and then fails is given back unde
       await transfers.sweep(later(25 * HOUR));
       const held = await rowOf(view.id);
       expect(held.reviewSince).not.toBeNull();
-      expect(held.discrepancy).toContain('the fee transfer could not be found');
+      expect(held.discrepancy).toContain(
+        'the fee transfer could not be found or read at',
+      );
       expect(held.discrepancy).not.toContain('has not said whether');
       expect(held.nextCheckAt).toBeNull();
       expect(backPosts(view.reference)).toEqual([]);
@@ -1222,6 +1224,86 @@ describe('A fee given back that Nuvion accepts and then fails is given back unde
       readable();
       restore();
     }
+  });
+
+  // SWEEP-MONEY-5a round 2, F2: whether a fee transfer was due is what the send
+  // recorded when it was made, never today's fee schedule.
+  for (const recorded of [true, null] as const) {
+    it(`a send whose fee transfer was made, the fee schedule changed after and the read fails (${recorded === null ? 'nothing recorded' : 'recorded as due'}): asked again for a day, then a person with the fee owed (SWEEP-MONEY-5a round 2, F2)`, async () => {
+      const { me, view } = await sendNuvionFails();
+      expect((await rowOf(view.id)).feeTransferDue).toBe(true);
+      if (recorded === null) {
+        await prisma.walletTransfer.update({
+          where: { id: view.id },
+          data: { feeTransferDue: null },
+        });
+      }
+      const owing = available(me);
+      expect(owing).toBe(PERSON_START - WAWU_FEE);
+      const readable = unreadable(
+        book.byReference(`${view.reference}-fee`)[0].id,
+      );
+      // After the send, the schedule changes: today no fee transfer is due.
+      const scheduleBack = feeNeverDue();
+      const restore = reviewBound(72);
+      try {
+        await giveFeeBack(view);
+        for (const ms of [2 * 60_000, 30 * 60_000, 3 * HOUR]) {
+          await transfers.sweep(later(ms));
+        }
+        const asking = await rowOf(view.id);
+        expect(asking.status).toBe('failed');
+        expect(asking.nextCheckAt).not.toBeNull();
+        expect(asking.reviewSince).toBeNull();
+
+        await transfers.sweep(later(25 * HOUR));
+        const held = await rowOf(view.id);
+        expect(held.reviewSince).not.toBeNull();
+        expect(held.discrepancy).toContain(
+          'the fee transfer could not be found or read at',
+        );
+        expect(held.nextCheckAt).toBeNull();
+        expect(backPosts(view.reference)).toEqual([]);
+        expect(available(me)).toBe(owing);
+        await ledgerEqualsNuvion();
+      } finally {
+        readable();
+        scheduleBack();
+        restore();
+      }
+    });
+  }
+
+  it('a send recorded as having no fee transfer due closes at once when the schedule later says one is due: nobody is called and nothing is sent (SWEEP-MONEY-5a round 2, F2)', async () => {
+    const scheduleBack = feeNeverDue();
+    let me: Person;
+    let bad: TransferView;
+    let before = 0;
+    try {
+      me = await person(PERSON_START);
+      const to = await person(0);
+      bad = body<TransferView>(
+        await post(me, await prepare(me, to, AMOUNT)),
+      ).data!;
+      expect((await rowOf(bad.id)).feeTransferDue).toBe(false);
+      expect(book.byReference(`${bad.reference}-fee`)).toHaveLength(0);
+      before = available(me);
+      book.settle(bad.reference, 'failed');
+    } finally {
+      scheduleBack();
+    }
+    await giveFeeBack(bad);
+    for (const ms of [2 * 60_000, 3 * HOUR, 25 * HOUR]) {
+      await transfers.sweep(later(ms));
+    }
+    const after = await rowOf(bad.id);
+    expect(after.status).toBe('failed');
+    expect(after.nextCheckAt).toBeNull();
+    expect(after.reviewSince).toBeNull();
+    expect(after.discrepancy ?? '').not.toContain('fee transfer');
+    expect(backPosts(bad.reference)).toEqual([]);
+    expect(available(me)).toBe(before + AMOUNT + WAWU_FEE);
+    await ledgerEqualsNuvion();
   });
 
   it('after every scenario of this spec WAWU operational ledger still equals Nuvion', async () => {

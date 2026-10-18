@@ -605,7 +605,9 @@ export class WalletTransferService implements OnModuleInit {
         { tx },
       );
       await this.keys.attach(tx, scope, data.id!);
-      const row = await tx.walletTransfer.create({ data });
+      const row = await tx.walletTransfer.create({
+        data: { ...data, feeTransferDue: this.feeTransferDueNow(data) },
+      });
       await this.ledger.record(this.movement(row, 'out', 'pending'), tx);
       // A feature that sends on someone's behalf (INBOX-15: paying a money
       // request) ties its own record to this send HERE, in the claim, so a
@@ -992,14 +994,32 @@ export class WalletTransferService implements OnModuleInit {
   }
 
   /**
-   * Whether a transfer of WAWU's fee was due, and so made, for this send: the
-   * fee is more than the provider's charge for moving it (`takeFee` makes no
-   * transfer otherwise). A lookup of the fee transfer that answers `unknown`
-   * means "not found" for a send where none was due, and "unsure" where one
-   * was (SWEEP-MONEY-5a, G2 and G3).
+   * Whether a transfer of WAWU's fee is due for a send made now (the fee is
+   * more than the provider's charge for moving it); written with the send in
+   * the claim, so a later schedule cannot change it. Null: no such transfer
+   * on this provider (SWEEP-MONEY-5a round 2, F2).
+   */
+  private feeTransferDueNow(
+    data: Prisma.WalletTransferCreateInput,
+  ): boolean | null {
+    if (this.provider.wawuFeeLeg !== true) return null;
+    const fee = BigInt(data.wawuFeeKobo);
+    return (
+      data.payerAccountNumber != null &&
+      fee > 0n &&
+      this.feeLegKobo(koboNumber(fee)) > 0
+    );
+  }
+
+  /**
+   * Whether a transfer of WAWU's fee may have been made for this send, from
+   * what the send recorded, never today's schedule: only "none due" is false,
+   * and a send with nothing recorded counts as due. A lookup that answers
+   * `unknown` means "not found" for the first and "unsure" for the rest
+   * (SWEEP-MONEY-5a, G2, G3, F2).
    */
   private feeTransferDue(t: TransferRow): boolean {
-    return this.feeLegDue(t) && this.feeLegKobo(koboNumber(t.wawuFeeKobo)) > 0;
+    return this.feeLegDue(t) && t.feeTransferDue !== false;
   }
 
   /**
@@ -1511,7 +1531,7 @@ export class WalletTransferService implements OnModuleInit {
       await this.holdFeeReturn(
         t,
         now,
-        `WAWU's fee could not be given back: the fee transfer could not be found at ${this.provider.label}, a day after the fee became owed`,
+        `WAWU's fee could not be given back: the fee transfer could not be found or read at ${this.provider.label}, a day after the fee became owed`,
       );
       return;
     }
