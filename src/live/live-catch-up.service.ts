@@ -229,12 +229,13 @@ export class LiveCatchUpService {
         kind: 'p' as const,
         at: row.sentAt,
         id: row.id,
-        build: (): LiveEvent => ({
+        build: async (): Promise<LiveEvent> => ({
           type: 'community.message',
           cursor: encodeLiveCursor(row.sentAt),
           communityId: row.communityId,
-          // `sender` is filled in below, once for the whole page.
-          message: row,
+          // `sender` is filled in below, once for the whole page. The links
+          // are signed fresh, as the list signs them (FIX-71).
+          message: await this.communityMessages.withFreshMedia(row),
         }),
       })),
       // Each list already comes in time-then-id order, and the sort is stable,

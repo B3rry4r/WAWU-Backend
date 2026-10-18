@@ -35,6 +35,9 @@ import { StorageModule } from '../storage/storage.module';
     BlockedAccountModule,
     CommunityPassAccessModule,
     PlanSettingsModule,
+    // StorageService: the bucket's own address for the link check (INBOX-22), and
+    // to sign a message's photo, video and voice note links again on the way out
+    // (FIX-71).
     StorageModule,
   ],
   controllers: [CommunityMessageController],

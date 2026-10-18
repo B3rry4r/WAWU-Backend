@@ -16,6 +16,7 @@ import {
 } from '../credit-spend/credit-spend.service';
 import { PlanSettingsService } from '../plan-settings/plan-settings.service';
 import { StorageService, deliverableKeyFrom } from '../storage/storage.service';
+import { withFreshMedia, type MessageMediaRow } from './message-media';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { CommunityKind } from '../../generated/prisma/enums';
 import type { CommunityMessage, CommunityMessageSender } from '../common/types';
@@ -200,6 +201,22 @@ export class CommunityMessageService {
   ) {}
 
   private readonly logger = new Logger(CommunityMessageService.name);
+
+  /**
+   * FIX-71. The message with its photo, video and voice note links signed
+   * fresh (see message-media.ts). Every path that returns a stored message
+   * passes it through here: the list, the answer to a send, the live event, the
+   * catch-up page and the last message of "my communities". Only database-free
+   * work: signing is a local computation, never a network call.
+   */
+  withFreshMedia<T extends MessageMediaRow>(row: T): Promise<T> {
+    return withFreshMedia(this.storage, row);
+  }
+
+  /** `withFreshMedia` for a page of messages, in the same order. */
+  withFreshMediaAll<T extends MessageMediaRow>(rows: T[]): Promise<T[]> {
+    return Promise.all(rows.map((row) => this.withFreshMedia(row)));
+  }
 
   /**
    * Batch sender-identity lookup for a page of messages — same shape as
@@ -422,8 +439,11 @@ export class CommunityMessageService {
       this.prisma.communityMessage.count({ where }),
     ]);
 
-    const senders = await this.lookupSenders(items.map((m) => m.senderWawuId));
-    const enriched: CommunityMessage[] = items.map((m) => ({
+    const [senders, fresh] = await Promise.all([
+      this.lookupSenders(items.map((m) => m.senderWawuId)),
+      this.withFreshMediaAll(items),
+    ]);
+    const enriched: CommunityMessage[] = fresh.map((m) => ({
       ...m,
       sender: senders.get(m.senderWawuId),
     }));
@@ -499,7 +519,8 @@ export class CommunityMessageService {
         messageId: sent.message.id,
       });
     }
-    return sent;
+    // The answer carries links that load today, as the list does (FIX-71).
+    return { ...sent, message: await this.withFreshMedia(sent.message) };
   }
 
   /**

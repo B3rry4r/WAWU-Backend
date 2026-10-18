@@ -330,16 +330,20 @@ export class CommunityRoomsService {
           this.communities.withDerivedFields(row.community),
           this.ensureLink(row.community.id, row.community.name),
         ]);
-        const lastMessage: CommunityLastMessage | null = row.last
+        // The links are signed fresh, as the room's list signs them (FIX-71).
+        const last = row.last
+          ? await this.messages.withFreshMedia(row.last)
+          : null;
+        const lastMessage: CommunityLastMessage | null = last
           ? {
-              id: row.last.id,
-              text: row.last.text,
-              imageUrl: row.last.imageUrl,
-              videoUrl: row.last.videoUrl,
-              voiceUrl: row.last.voiceUrl,
-              sentAt: row.last.sentAt,
-              senderWawuId: row.last.senderWawuId,
-              sender: senders.get(row.last.senderWawuId) ?? null,
+              id: last.id,
+              text: last.text,
+              imageUrl: last.imageUrl,
+              videoUrl: last.videoUrl,
+              voiceUrl: last.voiceUrl,
+              sentAt: last.sentAt,
+              senderWawuId: last.senderWawuId,
+              sender: senders.get(last.senderWawuId) ?? null,
             }
           : null;
         return {
