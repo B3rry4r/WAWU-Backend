@@ -1,4 +1,9 @@
-import { objectKeyFrom, type StorageService } from '../storage/storage.service';
+import {
+  deliverableKeyFrom,
+  objectKeyFrom,
+  type BucketLocation,
+  type StorageService,
+} from '../storage/storage.service';
 
 /**
  * FIX-71 (G-INBOX-22-2). The photo, the video and the voice note of a
@@ -44,8 +49,24 @@ export function ownMediaKey(
   stored: string,
   field: MessageMediaField,
   senderWawuId: string,
+  location?: BucketLocation | null,
 ): string | null {
   const key = objectKeyFrom(stored);
+  // FIX-71 L1: a link is the sender's own only when it is a link on THIS
+  // bucket (its origin and path prefix, a key spelled out, no `%` escape).
+  // `objectKeyFrom` finds the folder anywhere in the path and ignores the
+  // host, so a link on another host that spells the right folder would
+  // otherwise be signed and replace what was stored. A bare key has no host
+  // to check. Without a `location` (the pure shape check) the host is not
+  // looked at.
+  if (location !== undefined && key !== stored) {
+    if (
+      deliverableKeyFrom(stored, location, [MESSAGE_MEDIA_FOLDERS[field]]) !==
+      key
+    ) {
+      return null;
+    }
+  }
   const prefix = `${MESSAGE_MEDIA_FOLDERS[field]}/${senderWawuId}/`;
   if (!key.startsWith(prefix)) return null;
   const file = key.slice(prefix.length);
@@ -61,13 +82,17 @@ export function ownMediaKey(
  * leaves the stored link, as every other re-signing does.
  */
 export async function withFreshMedia<T extends MessageMediaRow>(
-  storage: Pick<StorageService, 'freshUrlFor'>,
+  storage: Pick<StorageService, 'freshUrlFor' | 'bucketLocation'>,
   row: T,
 ): Promise<T> {
   const fresh: Partial<Record<MessageMediaField, string | null>> = {};
+  let location: BucketLocation | null | undefined;
   for (const field of MEDIA_FIELDS) {
     const stored = row[field];
-    if (!stored || ownMediaKey(stored, field, row.senderWawuId) === null)
+    if (!stored) continue;
+    // Asked once, and only for a row that has a link to look at.
+    location ??= await storage.bucketLocation();
+    if (ownMediaKey(stored, field, row.senderWawuId, location) === null)
       continue;
     fresh[field] = await storage.freshUrlFor(stored);
   }

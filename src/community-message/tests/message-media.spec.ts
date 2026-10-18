@@ -19,11 +19,13 @@ import {
  * database and no bucket: a presigned link is computed locally.
  */
 const HOST = 'https://fix71-bucket.test.invalid';
+/** Where this bucket's own links point (virtual-hosted: the bucket is in the host). */
+const OWN = 'https://fix71-bucket.fix71-bucket.test.invalid';
 const SENDER = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const FILE = '0a1b2c3d-0a1b-4c3d-8a1b-0a1b2c3d4e5f';
 
-function storage(configured = true): StorageService {
+function storage(configured = true, pathStyle = false): StorageService {
   const values: Record<string, string> = configured
     ? {
         STORAGE_ENDPOINT: HOST,
@@ -31,6 +33,7 @@ function storage(configured = true): StorageService {
         STORAGE_SECRET_ACCESS_KEY: 'secret_test',
         STORAGE_BUCKET: 'fix71-bucket',
         STORAGE_REGION: 'sjc',
+        ...(pathStyle ? { STORAGE_FORCE_PATH_STYLE: 'true' } : {}),
       }
     : {};
   const config = { get: (k: string) => values[k] } as unknown as ConfigService;
@@ -50,7 +53,7 @@ function eightDayOldLink(key: string): string {
       .replace(/[-:]/g, '')
       .slice(0, 15) + 'Z';
   return (
-    `${HOST}/${key}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=${stamp}` +
+    `${OWN}/${key}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=${stamp}` +
     `&X-Amz-Expires=604800&X-Amz-Signature=dead0000beef`
   );
 }
@@ -123,9 +126,16 @@ describe('community message media, signed again on read (FIX-71)', () => {
     });
 
     it('works for a path-style link as well (the bucket name before the key)', async () => {
-      const stored = `https://storage.test.invalid/fix71-bucket/${imageKey}?X-Amz-Signature=dead0000beef`;
-      const out = await withFreshMedia(storage(), row({ imageUrl: stored }));
-      expectSignedNowFor(out.imageUrl, imageKey);
+      // FIX-71 L1 (SWEEP-LATE) changed this fixture: it was a link on
+      // storage.test.invalid, a host that is not the bucket's, which the code
+      // signed. A path-style link is now one on the bucket's own host.
+      const stored = `${HOST}/fix71-bucket/${imageKey}?X-Amz-Signature=dead0000beef`;
+      const out = await withFreshMedia(
+        storage(true, true),
+        row({ imageUrl: stored }),
+      );
+      // signed path-style too: the bucket name stays before the key
+      expectSignedNowFor(out.imageUrl, `fix71-bucket/${imageKey}`);
     });
 
     it('works when the row holds the bare key', async () => {
@@ -229,14 +239,48 @@ describe('community message media, signed again on read (FIX-71)', () => {
       const s = storage();
       const sign = jest.spyOn(s, 'freshUrlFor');
       for (const stored of [
-        `${HOST}/community/message/${SENDER}/../${OTHER}/${FILE}.jpg?sig=1`,
-        `${HOST}/community/message/${SENDER}/%2e%2e/${OTHER}/${FILE}.jpg?sig=1`,
+        `${OWN}/community/message/${SENDER}/../${OTHER}/${FILE}.jpg?sig=1`,
+        `${OWN}/community/message/${SENDER}/%2e%2e/${OTHER}/${FILE}.jpg?sig=1`,
         `community/message/${SENDER}/../${OTHER}/${FILE}.jpg`,
       ]) {
         const out = await withFreshMedia(s, row({ imageUrl: stored }));
         expect(out.imageUrl).toBe(stored);
       }
       expect(sign).not.toHaveBeenCalled();
+    });
+
+    // FIX-71 L1 (SWEEP-LATE). `objectKeyFrom` finds the folder anywhere in
+    // the path and ignores the host, so a stored link on ANOTHER host that
+    // spells <folder>/<sender>/<file> was signed and replaced. Only a link on
+    // this bucket is the sender's own upload.
+    it('never signs a link on another host, or one that spells the key with escapes, and leaves it as it was', async () => {
+      const s = storage();
+      const sign = jest.spyOn(s, 'freshUrlFor');
+      const key = imageKey;
+      for (const stored of [
+        `https://evil.example/${key}`,
+        `https://evil.example/${key}?X-Amz-Signature=dead0000beef`,
+        `${HOST}/${key}`, // the endpoint host, not the bucket's own
+        `https://evil.example/bucket/${key}`,
+        `${OWN}.evil.example/${key}`,
+        `https://${OWN.replace('https://', '')}@evil.example/${key}`,
+        `${OWN}/community%2Fmessage/${SENDER}/${FILE}.jpg`,
+        `${OWN}/community/message%2F${SENDER}/${FILE}.jpg`,
+        `${OWN}/community/message/${SENDER.replace('-', '%2D')}/${FILE}.jpg`,
+        `http://${OWN.replace('https://', '')}/${key}`,
+      ]) {
+        const out = await withFreshMedia(s, row({ imageUrl: stored }));
+        expect(out.imageUrl).toBe(stored);
+      }
+      expect(sign).not.toHaveBeenCalled();
+    });
+
+    it('still signs the sender own link on this bucket, with or without a query', async () => {
+      const out = await withFreshMedia(
+        storage(),
+        row({ imageUrl: `${OWN}/${imageKey}` }),
+      );
+      expectSignedNowFor(out.imageUrl, imageKey);
     });
 
     it('does not mistake a sender id for a prefix of another', async () => {
