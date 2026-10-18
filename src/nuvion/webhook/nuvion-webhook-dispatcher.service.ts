@@ -22,11 +22,13 @@ const MINUTE = 60_000;
 
 /**
  * How the stored deliveries are handed to their handlers. Not a fee, a
- * limit or a promise: how many per pass, how long a worker holds one, and
+ * limit or a promise: how many per batch, how long one sweep keeps taking
+ * batches (well under the 30 second tick), how long a worker holds one, and
  * how long a waiting one rests (1, 2, 4 ... minutes, at most an hour).
  */
 export const NUVION_DISPATCH = {
   batch: 20,
+  budgetMs: 20_000,
   leaseMs: 5 * MINUTE,
   maxRestMs: 60 * MINUTE,
 } as const;
@@ -35,7 +37,10 @@ export const NUVION_DISPATCH = {
  * Hands Nuvion's stored deliveries to the handlers of their event (task
  * NUV-01): a sweep every 30 seconds over the `pending` rows of the events
  * some handler lists, oldest first, never on receipt (the receiver answers
- * once the row is stored, as Nuvion asks).
+ * once the row is stored, as Nuvion asks). A sweep drains what is due: it
+ * keeps taking batches while rows remain and NUVION_DISPATCH.budgetMs is not
+ * spent (FIX-86), and never takes a row twice in one sweep, so a burst of
+ * payments settles in one tick and a row that waited is left to its rest.
  *
  * One worker at a time per delivery: a conditional update claims it for
  * NUVION_DISPATCH.leaseMs, so two servers never run its handlers together;
@@ -73,20 +78,32 @@ export class NuvionWebhookDispatcher {
     if (this.sweeping || events.length === 0) return counts;
     this.sweeping = true;
     try {
-      const due = await this.prisma.nuvionWebhookEvent.findMany({
-        where: {
-          processingStatus: 'pending',
-          event: { in: events },
-          AND: [
-            { OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }] },
-            { OR: [{ claimedUntil: null }, { claimedUntil: { lt: now } }] },
-          ],
-        },
-        orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
-        take: NUVION_DISPATCH.batch,
-        select: { id: true },
-      });
-      for (const { id } of due) counts[await this.dispatch(id, now)] += 1;
+      const started = Date.now();
+      const taken: string[] = [];
+      for (;;) {
+        const due = await this.prisma.nuvionWebhookEvent.findMany({
+          where: {
+            processingStatus: 'pending',
+            event: { in: events },
+            id: { notIn: taken },
+            AND: [
+              {
+                OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+              },
+              { OR: [{ claimedUntil: null }, { claimedUntil: { lt: now } }] },
+            ],
+          },
+          orderBy: [{ receivedAt: 'asc' }, { id: 'asc' }],
+          take: NUVION_DISPATCH.batch,
+          select: { id: true },
+        });
+        for (const { id } of due) {
+          taken.push(id);
+          counts[await this.dispatch(id, now)] += 1;
+        }
+        if (due.length < NUVION_DISPATCH.batch) break;
+        if (Date.now() - started >= NUVION_DISPATCH.budgetMs) break;
+      }
       if (counts.processed + counts.failed > 0) {
         this.logger.log(
           `nuvion webhooks: ${counts.processed} processed, ${counts.failed} failed, ${counts.waiting} waiting`,
