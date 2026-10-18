@@ -320,9 +320,66 @@ describe('Community rooms: mine, links, read, join decisions (contract)', () => 
       expect(await prisma.community.count({ where: { name } })).toBe(0);
     });
 
-    it('creates a private room with a cover and answers with its share link', async () => {
+    // SWEEP-INBOX (INBOX-24 L3): R-63 has no host approval step, so the app's
+    // create refuses a private room with no monthly price.
+    it('refuses a private room with a cover but no monthly price, and creates nothing', async () => {
+      const name = `No Price ${runTag}`;
       const res = await request(server())
         .post('/communities/rooms')
+        .set(auth(hostToken))
+        .send({
+          name,
+          description: 'Private, no price.',
+          kind: 'private',
+          imageUrl: COVER,
+        })
+        .expect(400);
+      expect(envelope<null>(res)).toEqual({
+        statusCode: 400,
+        message: 'A private room needs a monthly price.',
+        data: null,
+      });
+      expect(await prisma.community.count({ where: { name } })).toBe(0);
+    });
+
+    it('creates a private room with a cover and a monthly price, and answers with its share link', async () => {
+      const name = `Priced Circle ${runTag}`;
+      const res = await request(server())
+        .post('/communities/rooms')
+        .set(auth(hostToken))
+        .send({
+          name,
+          description: 'Tailors in Aba, swapping patterns.',
+          kind: 'private',
+          imageUrl: COVER,
+          passPriceKobo: 100_000,
+        })
+        .expect(201);
+      const room = dataOf<Wire<CommunityRoom>>(res);
+      expect(room).toMatchObject({
+        name,
+        kind: 'private',
+        hostWawuId: hostSub,
+        imageUrl: COVER,
+        memberCount: 0,
+        messagesToday: 0,
+        slug: `priced-circle-${runTag}`,
+        link: `wawu/c/priced-circle-${runTag}`,
+      });
+      const price = await prisma.communityPassPrice.findUniqueOrThrow({
+        where: { communityId: room.id },
+      });
+      expect(price.priceKobo).toBe(100_000n);
+      // The later tests count the host's rooms: this one is not left behind.
+      await prisma.community.delete({ where: { id: room.id } });
+    });
+
+    // The private room the join-request tests use is made the web's way
+    // (POST /communities, no price, host approval), because the app's create
+    // no longer makes one. Its share link is made on the first ask.
+    it("a private room made the web's way (no price) is given its share link when asked for", async () => {
+      const made = await request(server())
+        .post('/communities')
         .set(auth(hostToken))
         .send({
           name: privateName,
@@ -331,19 +388,18 @@ describe('Community rooms: mine, links, read, join decisions (contract)', () => 
           imageUrl: COVER,
         })
         .expect(201);
-      const room = dataOf<Wire<CommunityRoom>>(res);
-      expect(room).toMatchObject({
-        name: privateName,
-        kind: 'private',
-        hostWawuId: hostSub,
-        imageUrl: COVER,
-        memberCount: 0,
-        messagesToday: 0,
+      const created = dataOf<Wire<CommunityRoom>>(made);
+      const res = await request(server())
+        .get(`/communities/${created.id}/link`)
+        .set(auth(hostToken))
+        .expect(200);
+      expect(dataOf<CommunityLinkView>(res)).toEqual({
+        communityId: created.id,
         slug: `aba-tailors-circle-${runTag}`,
         link: `wawu/c/aba-tailors-circle-${runTag}`,
       });
-      privateRoomId = room.id;
-      privateSlug = room.slug;
+      privateRoomId = created.id;
+      privateSlug = `aba-tailors-circle-${runTag}`;
     });
 
     it('gives a second room with the same name its own slug', async () => {
