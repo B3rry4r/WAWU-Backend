@@ -657,7 +657,16 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     prisma = moduleRef.get(PrismaService);
     // Tries an earlier run left in an hour's window (it died before its afterAll)
     // would count against a fresh draw; the keys are hashes, so every recent
-    // address-keyed try goes. A test database only (SWEEP-APP-1, FIX-33 L3).
+    // address-keyed try goes. A test database only (SWEEP-APP-1, FIX-33 L3): the delete refuses to run on a database whose
+    // name does not say it is one (SWEEP-APP-4, SWEEP-APP-1 L1).
+    const [{ name: databaseName }] = await prisma.$queryRaw<
+      { name: string }[]
+    >`SELECT current_database() AS name`;
+    if (!/test/i.test(databaseName)) {
+      throw new Error(
+        `nuvion-opening spec refuses to clear BvnCheckAttempt on "${databaseName}": not a test database`,
+      );
+    }
     await prisma.bvnCheckAttempt.deleteMany({
       where: {
         addressKey: { not: null },

@@ -76,6 +76,9 @@ export class SearchHistoryService {
   async record(userWawuId: string, raw: string): Promise<SearchTextList> {
     const { query, queryKey } = normaliseSearch(raw);
     await this.prisma.$transaction(async (tx) => {
+      // One person's searches are written one at a time, so the cap below is read after the others have landed: with many at
+      // once each saw the old rows only and the list grew past it (same lock as PushTokenService.register; SWEEP-APP-4, EXPLORE-05 V1-4).
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'search-recent:' + userWawuId}, 0))`;
       const now = new Date();
       await tx.searchHistory.upsert({
         where: { userWawuId_queryKey: { userWawuId, queryKey } },

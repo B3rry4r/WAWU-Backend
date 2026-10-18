@@ -40,8 +40,10 @@ export class SearchHistoryController {
   }
 
   /**
-   * What many different people searched lately, most first. May be empty:
-   * only searches made by enough people appear.
+   * The names of public things (a creator or professional, a community, a
+   * category) that many different people searched lately, most first. Each is
+   * the thing's own name, never what a person typed. May be empty: only names
+   * searched by enough people appear.
    */
   @Get('popular')
   @UseGuards(OptionalWawuAuthGuard)

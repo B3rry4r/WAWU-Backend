@@ -27245,7 +27245,7 @@
             }
           }
         },
-        "summary": "What many different people searched lately, most first. May be empty:\nonly searches made by enough people appear.",
+        "summary": "The names of public things (a creator or professional, a community, a\ncategory) that many different people searched lately, most first. Each is\nthe thing's own name, never what a person typed. May be empty: only names\nsearched by enough people appear.",
         "tags": [
           "SearchHistory"
         ]
