@@ -39,6 +39,11 @@ import {
 } from '../../storage/storage.service';
 import { CommunityMessageModule } from '../community-message.module';
 import { CommunityMessageService } from '../community-message.service';
+import {
+  expectLinkSignedAgain,
+  moveClockForward,
+  restoreClock,
+} from './fresh-link';
 
 /**
  * INBOX-22 (R-62): COMMUNITY CREDITS BY KIND OF MESSAGE.
@@ -1211,24 +1216,35 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       );
     });
 
+    // Every answer signs the photo's link again (FIX-71), so a link read back is
+    // the sender's own file with a new signature, never the string that was sent
+    // (FIX-84). The clock is moved two seconds before each send and read so every
+    // run meets that, and the real clock is put back after each test.
+    afterEach(() => {
+      restoreClock();
+    });
+
     it("takes the sender's own presigned photo that was never confirmed (the web's path), and charges it once", async () => {
       const who = await member('photo-web');
       await setBalance(who.sub, 10);
       const imageUrl = await upload(who.sub, 'community/message', 'pending');
       const key = newKey();
+      moveClockForward();
       const first = await post(app, who.accessToken, { imageUrl }, key);
       expect(first.status).toBe(201);
       expect(answer(first).data).toMatchObject({
         costInCredits: 1,
-        imageUrl,
         videoUrl: null,
         voiceUrl: null,
       });
+      expectLinkSignedAgain(answer(first).data?.imageUrl, imageUrl);
       expect(await balanceOf(who.sub)).toBe(9);
       // The same request sent again is the same message: nothing more is taken.
+      moveClockForward();
       const again = await post(app, who.accessToken, { imageUrl }, key);
       expect(again.status).toBe(201);
       expect(answer(again).data?.id).toBe(answer(first).data?.id);
+      expectLinkSignedAgain(answer(again).data?.imageUrl, imageUrl);
       expect(await balanceOf(who.sub)).toBe(9);
       expect(await spendsOf(who.sub)).toHaveLength(1);
       expect(await messagesOf(who.sub)).toHaveLength(1);
@@ -1238,6 +1254,7 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       const who = await member('photo-app');
       await setBalance(who.sub, 10);
       const imageUrl = await upload(who.sub, 'community/message', 'confirmed');
+      moveClockForward();
       const sent = await post(app, who.accessToken, {
         imageUrl,
         text: 'Fresh batch',
@@ -1245,12 +1262,13 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       expect(sent.status).toBe(201);
       expect(answer(sent).data).toMatchObject({
         costInCredits: 1,
-        imageUrl,
         text: 'Fresh batch',
       });
+      expectLinkSignedAgain(answer(sent).data?.imageUrl, imageUrl);
       expect(await balanceOf(who.sub)).toBe(9);
       expect(await spendsOf(who.sub)).toHaveLength(1);
-      // The room is served the link as sent.
+      // The room is served the sender's photo, its link signed again (FIX-71).
+      moveClockForward();
       const list = await request(app.getHttpServer() as App)
         .get(`/communities/${roomId}/messages`)
         .set('Authorization', `Bearer ${who.accessToken}`)
@@ -1260,7 +1278,8 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
           data: Array<{ senderWawuId: string; imageUrl: string | null }>;
         }
       ).data.filter((m) => m.senderWawuId === who.sub);
-      expect(mine.map((m) => m.imageUrl)).toEqual([imageUrl]);
+      expect(mine).toHaveLength(1);
+      expectLinkSignedAgain(mine[0].imageUrl, imageUrl);
     });
 
     it('leaves a text message alone: a null or missing photo is not checked and costs nothing', async () => {
