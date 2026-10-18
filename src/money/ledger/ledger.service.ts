@@ -799,6 +799,56 @@ export class LedgerService {
   }
 
   /**
+   * FIX-70 round 2: the fee WAWU took before a send that then did not stand,
+   * while it is owed, is a `completed` OUT row of its own on the sender's
+   * wallet (the provider's balance is short of it). When a fee-back has
+   * landed, the row becomes `reversed`, whole: what the fee transfer moved and
+   * the charge on it came back, and a reversed debit moves nothing. Only a
+   * `completed` row turns; a row already reversed, or not there, is left
+   * alone. Returns whether it turned.
+   */
+  async noteFeeLegReturned(
+    leg: { customerReference: string; wawuUserId: string },
+    back: { reference: string; at: Date },
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      const found = await tx.fintavaLedgerEntry.findFirst({
+        where: {
+          customerReference: leg.customerReference,
+          wawuUserId: leg.wawuUserId,
+          walletKind: 'user',
+          direction: 'out',
+        },
+        select: { id: true },
+      });
+      if (!found) return false;
+      await tx.$queryRaw`SELECT "id" FROM "FintavaLedgerEntry" WHERE "id" = ${found.id} FOR UPDATE`;
+      const row = await tx.fintavaLedgerEntry.findUnique({
+        where: { id: found.id },
+        select: {
+          status: true,
+          amountKobo: true,
+          feeKobo: true,
+          totalKobo: true,
+        },
+      });
+      if (!row || row.status !== 'completed') return false;
+      await tx.fintavaLedgerEntry.update({
+        where: { id: found.id },
+        data: {
+          status: 'reversed',
+          reversedAt: back.at,
+          reversalReference: back.reference,
+          reversalAmountKobo: row.amountKobo,
+          reversalChargesKobo: row.feeKobo,
+          reversalTotalKobo: row.totalKobo,
+        },
+      });
+      return true;
+    });
+  }
+
+  /**
    * MONEY-08: records a disagreement with Fintava on a row without changing
    * anything else (the stored figures and status stand; MONEY-16 reports
    * it). A note already on the row is not written twice.
