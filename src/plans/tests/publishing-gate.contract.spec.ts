@@ -1457,6 +1457,44 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       await publish(id).expect(201);
     });
 
+    it('T14: a tier the config does not name that has ended is told plainly at the route: no name, "another plan", and its id is never said', async () => {
+      // A row for a tier the plans file no longer names (a retired tier). It
+      // cannot be renewed (the grant throws for it), so it is never told to
+      // renew, and the sentence has no name to say.
+      const id = await creator();
+      const until = Date.now() - DAY;
+      await prisma.makerTier.create({
+        data: {
+          wawuUserId: id,
+          tierId: 'retired-tier',
+          activeFrom: new Date(until - 30 * DAY),
+          activeUntil: new Date(until),
+          productsIncluded: config.tiers[0].products,
+          extraProducts: 0,
+          pointsIncluded: 0,
+          voiceIntroIncluded: false,
+        },
+      });
+      const used = config.tiers[0].products + 1;
+      await prisma.creatorState.create({
+        data: { wawuUserId: id, slotsUsed: used },
+      });
+      const res = await publish(id).expect(402);
+      expect(body(res).reason).toMatchObject({
+        code: 'tier_required',
+        tierState: 'ended',
+      });
+      expect(tiersOf(res).map((t) => t.id)).toEqual(
+        config.tiers.filter((t) => t.products > used).map((t) => t.id),
+      );
+      expect(body(res).message).toBe(
+        `Your plan has ended. You have ${used} products up, and another plan has room for them.`,
+      );
+      expect(body(res).message).not.toContain('retired-tier');
+      expect(body(res).message).not.toMatch(/renew/i);
+      expect(body(res).reason.message).toBe(body(res).message);
+    });
+
     it('"Renew it" is said exactly when the ended tier is on offer, and renewing it then lets the next publish through', async () => {
       const top = Math.max(...config.tiers.map((t) => t.products));
       const sizes = [0, ...config.tiers.map((t) => t.products), top + 2];
