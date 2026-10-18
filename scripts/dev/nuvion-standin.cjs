@@ -16,6 +16,8 @@
 //   account_details.created) -> active with a ten-digit number after STANDIN_DETAILS_MS (account_details.updated).
 //   Transfers (book transfers to a nuvion_ban, bank sends to a payment detail) are accepted as pending,
 //   debit the payer at once and settle after STANDIN_SETTLE_MS (outflows.completed).
+//   GET /accounts/{id}/statements (FIX-67) answers the month statement of an account, built from the transfers
+//   above: every move appears once on each account it touched (see "statements" below).
 //   A bank send that is reversed after it completed sends `outflows.refunded` as Nuvion's docs
 //   define it: a CREDIT record (type inflow, meta.source_payment_id naming the send), not the send itself.
 //
@@ -137,6 +139,8 @@ const operational = addAccount(PARENT_ENTITY, {
     overdraft_used: 0,
   },
 });
+// What every account held before its first move, for a statement's opening balance: only this one starts above zero.
+const OPENING_KOBO = new Map([[operational.id, operational.balance.current]]);
 
 // ---------------------------------------------------------------- shapes
 const masked = (last4) => `***${last4}`;
@@ -671,6 +675,193 @@ on('GET', '/transfers', (req) => {
     .filter((t) => !req.query.status || t.status === req.query.status)
     .sort((a, b) => b.created - a.created || (a.id < b.id ? 1 : -1));
   return { status: 200, body: envelope(paged(rows, req), 'Transfers retrieved successfully') };
+});
+
+// ---- statements: GET /accounts/{account_id}/statements (FIX-67)
+// The shape is Nuvion's docs, saved as nuvion-docs/api-reference__accounts.md, "Get account statements":
+//   :692 the path; :705-:729 the parameters (year and month required, limit 1 to 100 default 20, include_pending
+//   default false, entity_id); :739-:801 the summary (account_id, account_holder, account_currency, ban, address,
+//   generated_at, period{start_date,end_date}, balances{opening_balance,closing_balance,total_credits,total_debits,
+//   total_fees}); :803-:891 each transaction (transaction_id, date, type credit|debit, description, counterparty{name,
+//   account_number masked}, amount before the fee, fee, net_amount, running_balance, reference, status, currency, fx
+//   only on a conversion, which this stand-in never makes); :893-:925 pagination (order, has_next, has_previous,
+//   limit, next_cursor, previous_cursor, total_transactions); the whole body sits under `data` in the usual envelope
+//   (:929-:931). Lines run oldest to newest (:804) and a pending line does not move running_balance or the totals
+//   (:736). The months are UTC, as the example's period (:947 "2026-05-01T00:00:00.000Z").
+//   The docs list no `cursor` parameter for this call, but its `pagination` answers next_cursor; pagination.md:21
+//   names `cursor` for any list, so the stand-in takes it (the Hub's reader sends it, reconcile.ts statementOfMonth).
+//   The docs' example moves running_balance by amount plus fee on a debit (447893 to 437868 on amount 5000, fee
+//   5025) and gives net_amount as amount minus fee; both are kept. Errors follow errors.md:34-72 and :79: a
+//   parameter out of range is 400 error_validation_error with a `validations` entry.
+//
+// It is built from the transfers this stand-in already records, nothing else, so a statement and
+// GET /transfers/{id} always agree:
+//   - an outflow is a debit line on its payer (amount, the fee, its own reference, id and time);
+//   - a book transfer that landed is also a credit line on its payee (same reference, the time it landed);
+//   - an inflow (add money, or the bank-return credit of a reversed bank send) is a credit line;
+//   - a reversed book transfer has no record of its return, so its two return lines are derived: the money back to
+//     the payer and out of the payee (id 01RTN + the transfer's id, reference "<reference>_reversal");
+//   - a failed outflow is one line with status failed that moved nothing (debited, then given back).
+// A completed line moves running_balance by what this stand-in really moved: a debit by amount plus fee, a credit by
+// its amount (the stand-in does not take an inflow's fee off the account, so neither does the statement).
+const monthStart = (y, mo) => Date.UTC(y, mo - 1, 1);
+const maskedNumber = (n) => (n ? `XXXXXX${String(n).slice(-4)}` : null);
+const lineStatus = (s) => (s === 'successful' ? 'completed' : s === 'pending' || s === 'processing' ? 'pending' : s);
+
+function statementRows(a) {
+  const rows = [];
+  const other = (id) => accounts.get(id);
+  for (const { t, toAccountId } of transfers.values()) {
+    const total = t.amount + t.applicable_fee;
+    const done = t.status === 'successful';
+    const reversed = t.status === 'reversed';
+    if (t.account_id === a.id) {
+      if (t.type === 'inflow') {
+        const bankReturn = t.meta && t.meta.source === 'bank_return';
+        rows.push({
+          id: t.id, at: t.created, credit: true, amount: t.amount, fee: t.applicable_fee, ref: t.unique_reference,
+          status: lineStatus(t.status), delta: done ? t.amount : 0, description: t.narration || 'Money in',
+          name: bankReturn ? 'Returned by the bank' : 'Bank transfer', number: null,
+        });
+        continue;
+      }
+      const to = toAccountId ? other(toAccountId) : null;
+      const detail = paymentDetails.get(t.payment_detail_id);
+      rows.push({
+        id: t.id, at: t.created, credit: false, amount: t.amount, fee: t.applicable_fee, ref: t.unique_reference,
+        status: reversed ? 'completed' : lineStatus(t.status), delta: done || reversed ? -total : 0,
+        description: t.narration || (toAccountId ? 'Book transfer' : 'Bank transfer'),
+        name: to ? to.display_name : detail ? detail.account_holder_name : 'Bank account',
+        number: maskedNumber(to ? to.nuvion_ban : detail && detail.account_number),
+      });
+      if (reversed && toAccountId) {
+        rows.push({
+          id: `01RTN${t.id.slice(5)}`.slice(0, 26), at: t.updated, credit: true, amount: total, fee: 0,
+          ref: `${t.unique_reference}_reversal`, status: 'completed', delta: total, description: `REVERSAL | ${t.id}`,
+          name: to ? to.display_name : 'Reversed', number: maskedNumber(to && to.nuvion_ban),
+        });
+      }
+    }
+    if (toAccountId === a.id && t.type === 'outflow' && (done || reversed)) {
+      const payer = other(t.account_id);
+      const landed = reversed ? Math.min(t.updated, t.created + SETTLE_MS) : t.updated;
+      rows.push({
+        id: t.id, at: landed, credit: true, amount: t.amount, fee: 0, ref: t.unique_reference, status: 'completed',
+        delta: t.amount, description: t.narration || 'Book transfer', name: payer ? payer.display_name : 'Sender',
+        number: maskedNumber(payer && payer.nuvion_ban),
+      });
+      if (reversed) {
+        rows.push({
+          id: `01RTN${t.id.slice(5)}`.slice(0, 26), at: t.updated, credit: false, amount: t.amount, fee: 0,
+          ref: `${t.unique_reference}_reversal`, status: 'completed', delta: -t.amount, description: `REVERSAL | ${t.id}`,
+          name: payer ? payer.display_name : 'Sender', number: maskedNumber(payer && payer.nuvion_ban),
+        });
+      }
+    }
+  }
+  rows.sort((x, y) => x.at - y.at || (x.id < y.id ? -1 : x.id > y.id ? 1 : x.credit === y.credit ? 0 : x.credit ? -1 : 1));
+  let running = OPENING_KOBO.get(a.id) || 0;
+  for (const r of rows) {
+    if (r.status === 'completed') running += r.delta;
+    r.balance = running;
+  }
+  return rows;
+}
+
+const invalidParam = (field, message, type = 'error_validation_value_out_of_range') => ({
+  status: 400,
+  body: {
+    ...errorBody('error_validation_error', 'Validation failed for one or more fields'),
+    validations: [{ [field]: { type, message } }],
+  },
+});
+
+on('GET', /^\/accounts\/[A-Za-z0-9]+\/statements$/, (req) => {
+  const a = accounts.get(m(req, 2));
+  if (!a || !readEntityScoped(req, a)) return notFound();
+  const q = req.query;
+  const whole = (v) => (/^-?\d+$/.test(String(v)) ? Number(v) : null);
+  const year = q.year === undefined ? null : whole(q.year);
+  const month = q.month === undefined ? null : whole(q.month);
+  if (year === null || year < 1970 || year > 9999) {
+    return invalidParam('year', "The value for 'year' is required and should be a year such as 2026.");
+  }
+  if (month === null || month < 1 || month > 12) {
+    return invalidParam('month', "The value for 'month' is required and should be between 1 and 12.");
+  }
+  const limit = q.limit === undefined ? 20 : whole(q.limit);
+  if (limit === null || limit < 1 || limit > 100) {
+    return invalidParam('limit', "The value for 'limit' should be between 1 and 100.");
+  }
+  if (q.include_pending !== undefined && q.include_pending !== 'true' && q.include_pending !== 'false') {
+    return invalidParam('include_pending', "The value for 'include_pending' should be true or false.", 'error_validation_invalid_value');
+  }
+  const pending = q.include_pending === 'true';
+
+  const from = monthStart(year, month);
+  const until = month === 12 ? monthStart(year + 1, 1) : monthStart(year, month + 1);
+  const all = statementRows(a);
+  const before = all.filter((r) => r.at < from);
+  const inMonth = all.filter((r) => r.at >= from && r.at < until);
+  const done = inMonth.filter((r) => r.status === 'completed');
+  const opening = before.length ? before[before.length - 1].balance : OPENING_KOBO.get(a.id) || 0;
+  const closing = (inMonth.length ? inMonth[inMonth.length - 1] : before[before.length - 1] || { balance: opening }).balance;
+  const lines = inMonth.filter((r) => pending || r.status !== 'pending');
+
+  const at = q.cursor === undefined ? -1 : lines.findIndex((r) => r.id === q.cursor);
+  if (q.cursor !== undefined && at < 0) {
+    return invalidParam('cursor', "The value for 'cursor' is not a cursor of this statement.", 'error_validation_invalid_value');
+  }
+  const start = at + 1;
+  const page = lines.slice(start, start + limit);
+  const hasNext = start + limit < lines.length;
+  const entity = a.id === operational.id ? null : entities.get(a.entity_id);
+  const generated = now();
+  return {
+    status: 200,
+    body: envelope(
+      {
+        account_id: a.id,
+        account_holder: entity ? entity.name : 'WAWU operational',
+        account_currency: a.currency,
+        ban: a.nuvion_ban,
+        address: { line_1: '1 Stand-in Street', line_2: null, line_3: null, city: 'Lagos', state: 'Lagos', postal_code: '100001', country_code: 'NG' },
+        generated_at: new Date(generated).toISOString(),
+        period: { start_date: new Date(from).toISOString(), end_date: new Date(Math.min(generated, until - 1)).toISOString() },
+        balances: {
+          opening_balance: opening,
+          closing_balance: closing,
+          total_credits: done.filter((r) => r.credit).reduce((n, r) => n + r.amount, 0),
+          total_debits: done.filter((r) => !r.credit).reduce((n, r) => n + r.amount, 0),
+          total_fees: done.reduce((n, r) => n + r.fee, 0),
+        },
+        transactions: page.map((r) => ({
+          transaction_id: r.id,
+          date: new Date(r.at).toISOString(),
+          type: r.credit ? 'credit' : 'debit',
+          description: r.description,
+          counterparty: { name: r.name, account_number: r.number },
+          amount: r.amount,
+          fee: r.fee,
+          net_amount: r.amount - r.fee,
+          running_balance: r.balance,
+          reference: r.ref,
+          status: r.status,
+          currency: a.currency,
+        })),
+        pagination: {
+          order: 'asc',
+          has_next: hasNext,
+          has_previous: start > 0,
+          limit,
+          next_cursor: hasNext && page.length > 0 ? page[page.length - 1].id : null,
+          previous_cursor: start > 0 ? lines[start - 1].id : null,
+          total_transactions: lines.length,
+        },
+      },
+      'Account statement retrieved successfully',
+    ),
+  };
 });
 
 // ---- bank sends: the bank list, the name check, counterparties, payment details

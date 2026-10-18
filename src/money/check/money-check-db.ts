@@ -28,6 +28,13 @@ export interface DbCheckContext {
   /** Movements younger than this are left to tomorrow. */
   settleMs: number;
   sink: FindingSink;
+  /**
+   * Ledger rows already found to be explained this run (FIX-67): their note
+   * only says the provider charged other than the quote, and their figures
+   * are the provider's own record. They are counted apart, not reported as
+   * rows the ledger marked as disagreeing.
+   */
+  explained?: ReadonlySet<string>;
 }
 
 const HOUR = 3_600_000;
@@ -90,7 +97,22 @@ export async function checkLedgerRows(ctx: DbCheckContext): Promise<void> {
   const { prisma, now, sink } = ctx;
   const old = new Date(now.getTime() - ctx.confirmWindowMs);
 
-  const stopped = ledgerRows(ctx, { discrepancy: { not: null } });
+  const explained = [...(ctx.explained ?? [])];
+  const stopped = ledgerRows(ctx, {
+    discrepancy: { not: null },
+    ...(explained.length > 0 ? { id: { notIn: explained } } : {}),
+  });
+  if (explained.length > 0) {
+    ctx.sink.notice(
+      'ledger_charge_explained',
+      await prisma.fintavaLedgerEntry.count({
+        where: ledgerRows(ctx, {
+          discrepancy: { not: null },
+          id: { in: explained },
+        }),
+      }),
+    );
+  }
   sink.compared(
     'ledger_rows',
     await prisma.fintavaLedgerEntry.count({ where: ledgerRows(ctx, {}) }),

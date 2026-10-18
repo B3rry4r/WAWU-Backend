@@ -17,12 +17,16 @@ import { ledgerConfirmWindowMs } from '../ledger/ledger-config';
 import { LEDGER_ABSENT_FAILURE } from '../ledger/ledger.service';
 import { PaymentSettings } from '../payments/payment-config';
 import {
+  compareAccountBalance,
   compareBalance,
+  compareFeeLeg,
   compareMerchantCharge,
   compareMovements,
+  isExplainedCharge,
   type LedgerGroup,
   type LedgerOutRow,
   type LedgerSums,
+  openingBalanceOf,
   requiredInAccount,
   sameLedger,
   sumLedger,
@@ -137,6 +141,15 @@ interface FeeCandidate {
   rowId: string;
   providerId: string;
   expectedKobo: bigint;
+  /**
+   * Set for a provider that moves WAWU's fee as a transfer of its own
+   * (`wawuFeeLeg`): that transfer as the history showed it, or null when it
+   * showed none. Absent: the fee is read from the provider's record of the
+   * send (a by-id lookup).
+   */
+  leg?: ProviderTransaction | null;
+  /** The history the leg was looked for in was read in full. */
+  historyComplete?: boolean;
 }
 
 interface RunState {
@@ -156,6 +169,8 @@ interface RunState {
   };
   stopped: boolean;
   feeCandidates: FeeCandidate[];
+  /** Ledger rows whose note only says the provider charged other than the quote, and whose figures are the provider's (FIX-67). */
+  explained: Set<string>;
 }
 
 /** The ledger rows of a wallet's history comparison, with the references each is known by. */
@@ -172,6 +187,8 @@ const OUT_ROW = {
   fintavaTransactionId: true,
   sessionId: true,
   linkKind: true,
+  discrepancy: true,
+  providerFeeKobo: true,
   references: { select: { value: true } },
 } satisfies Prisma.FintavaLedgerEntrySelect;
 
@@ -199,6 +216,8 @@ function toOutRow(r: OutRow): LedgerOutRow {
     occurredAt: r.occurredAt,
     createdAt: r.createdAt,
     refs: [...refs],
+    discrepancy: r.discrepancy,
+    providerFeeKobo: r.providerFeeKobo,
   };
 }
 
@@ -697,6 +716,7 @@ export class MoneyCheckService {
       unreadable: { balance: 0, history: 0, moving: 0, long: 0 },
       stopped: false,
       feeCandidates: [],
+      explained: new Set(),
     };
     const held = {
       openCount: 0,
@@ -736,6 +756,7 @@ export class MoneyCheckService {
       reviewAfterMs: this.payments.reviewAfterHours * HOUR,
       settleMs: this.settings.settleMs,
       sink,
+      explained: st.explained,
     };
     await checkLedgerRows(db);
     await this.beat(run);
@@ -1064,62 +1085,119 @@ export class MoneyCheckService {
     return { rows: [...seen.values()], complete: false };
   }
 
-  /** One wallet's debits against the ledger. Returns whether the history was read in full. */
-  private async checkMovements(st: RunState, w: WalletRef): Promise<boolean> {
+  /** The ledger rows of one direction that a movement comparison reads. */
+  private async movementRows(
+    st: RunState,
+    where: Prisma.FintavaLedgerEntryWhereInput,
+    direction: 'in' | 'out',
+  ): Promise<OutRow[]> {
     const loadFrom = st.windowFrom
       ? new Date(st.windowFrom.getTime() - 24 * HOUR)
       : null;
-    const rows = await this.prisma.fintavaLedgerEntry.findMany({
+    return this.prisma.fintavaLedgerEntry.findMany({
       where: {
         AND: [
           rowsOf(this.provider.name),
-          {
-            walletKind: 'user',
-            accountNumber: w.accountNumber,
-            direction: 'out',
-            ...(loadFrom ? { occurredAt: { gte: loadFrom } } : {}),
-          },
+          where,
+          { direction, ...(loadFrom ? { occurredAt: { gte: loadFrom } } : {}) },
         ],
       },
       select: OUT_ROW,
     });
+  }
+
+  /** One wallet's movements against the ledger. Returns whether the history was read in full. */
+  private async checkMovements(st: RunState, w: WalletRef): Promise<boolean> {
+    const where: Prisma.FintavaLedgerEntryWhereInput = {
+      walletKind: 'user',
+      accountNumber: w.accountNumber,
+    };
+    const rows = await this.movementRows(st, where, 'out');
     const hist = await this.history(st, {
       kind: 'customer',
       customerId: w.customerId,
     });
-    this.takeMovements(st, 'movements', rows, hist);
+    await this.takeMovements(st, 'movements', where, rows, hist);
     return hist.complete;
   }
 
-  private takeMovements(
+  /**
+   * Compares the provider's lines with the ledger's rows: its debits with the
+   * `out` rows and, when its lines state which way the money went (Nuvion's
+   * statement does, Fintava's history does not), its credits with the `in`
+   * rows. A credit is not taken for a debit (FIX-67).
+   */
+  private async takeMovements(
     st: RunState,
     check: 'movements' | 'merchant_movements',
-    rows: readonly OutRow[],
+    where: Prisma.FintavaLedgerEntryWhereInput,
+    outRows: readonly OutRow[],
     hist: { rows: ProviderTransaction[]; complete: boolean },
-  ): void {
-    const result = compareMovements({
+  ): Promise<void> {
+    const feeLegs = this.provider.wawuFeeLeg === true;
+    const out = outRows.map(toOutRow);
+    const statesDirection = hist.rows.some(
+      (p) => p.direction === 'in' || p.direction === 'out',
+    );
+    const ins = statesDirection
+      ? (await this.movementRows(st, where, 'in')).map(toOutRow)
+      : [];
+    const base = {
       check,
-      ledger: rows.map(toOutRow),
       provider: hist.rows,
       now: st.now,
       settleMs: this.settings.settleMs,
       windowFrom: st.windowFrom,
       historyComplete: hist.complete,
+      feeLegs,
+    };
+    const debits = compareMovements({
+      ...base,
+      ledger: out,
+      related: ins,
+      direction: 'out',
     });
-    st.sink.addAll(result.findings);
-    st.sink.mergeNotices(result.notices);
-    st.sink.compared(check, result.compared);
-    for (const { row, provider } of result.matched) {
+    const results = [debits];
+    if (statesDirection) {
+      results.push(
+        compareMovements({
+          ...base,
+          ledger: ins,
+          related: out,
+          direction: 'in',
+        }),
+      );
+    }
+    for (const result of results) {
+      st.sink.addAll(result.findings);
+      st.sink.mergeNotices(result.notices);
+      st.sink.compared(check, result.compared);
+      for (const { row, provider } of result.matched) {
+        if (
+          isExplainedCharge(this.provider.label, row, provider) &&
+          row.discrepancy
+        ) {
+          st.explained.add(row.id);
+        }
+      }
+    }
+    for (const { row, provider } of debits.matched) {
       if (
         row.status === 'completed' &&
         provider.outcome === 'completed' &&
         row.wawuFeeKobo !== null &&
         row.wawuFeeKobo > 0n
       ) {
+        const legOf = row.refs
+          .map((ref) => debits.legs.get(ref))
+          .find((leg) => leg !== undefined);
         st.feeCandidates.push({
           rowId: row.id,
           providerId: provider.id,
           expectedKobo: row.wawuFeeKobo,
+          ...(feeLegs
+            ? { leg: legOf ?? null, historyComplete: hist.complete }
+            : {}),
         });
       }
     }
@@ -1170,27 +1248,15 @@ export class MoneyCheckService {
     }
     held.merchantAvailableKobo = account.availableKobo;
 
-    // WAWU's debits.
+    // WAWU's movements.
+    let hist: { rows: ProviderTransaction[]; complete: boolean } | null = null;
     try {
-      const loadFrom = st.windowFrom
-        ? new Date(st.windowFrom.getTime() - 24 * HOUR)
-        : null;
-      const rows = await this.prisma.fintavaLedgerEntry.findMany({
-        where: {
-          AND: [
-            rowsOf(this.provider.name),
-            this.scope.ledgerWhere(),
-            {
-              walletKind: 'merchant',
-              direction: 'out',
-              ...(loadFrom ? { occurredAt: { gte: loadFrom } } : {}),
-            },
-          ],
-        },
-        select: OUT_ROW,
-      });
-      const hist = await this.history(st, { kind: 'merchant' });
-      this.takeMovements(st, 'merchant_movements', rows, hist);
+      const where: Prisma.FintavaLedgerEntryWhereInput = {
+        AND: [this.scope.ledgerWhere(), { walletKind: 'merchant' }],
+      };
+      const rows = await this.movementRows(st, where, 'out');
+      hist = await this.history(st, { kind: 'merchant' });
+      await this.takeMovements(st, 'merchant_movements', where, rows, hist);
       if (!hist.complete) {
         st.sink.cannot(
           'merchant_movements',
@@ -1207,7 +1273,133 @@ export class MoneyCheckService {
           ? `Not checked on this provider: ${this.provider.label} cannot list WAWU's debits yet.`
           : "WAWU's debits could not be read.",
       );
+      return;
     }
+
+    // WAWU's balance against its ledger (FIX-67).
+    try {
+      await this.checkAccountBalance(st, hist);
+    } catch (e) {
+      if (!(e instanceof WalletProviderError)) throw e;
+      if (e.kind !== 'not_supported') {
+        st.sink.cannot(
+          'balances',
+          'incomplete',
+          "WAWU's account balance could not be read.",
+        );
+      }
+    }
+  }
+
+  /** WAWU's own account: the merchant rows of the ledger, summed. */
+  private async merchantLedgerSums(): Promise<LedgerSums> {
+    const base: Prisma.FintavaLedgerEntryWhereInput = {
+      AND: [
+        rowsOf(this.provider.name),
+        this.scope.ledgerWhere(),
+        { walletKind: 'merchant' },
+      ],
+    };
+    // A bank send that failed and has not been shown to come back (the same
+    // rule as a wallet's `uncertain`).
+    const uncertain: Prisma.FintavaLedgerEntryWhereInput = {
+      status: 'failed',
+      direction: 'out',
+      reversedAt: null,
+      counterpartyKind: 'bank_account',
+      OR: [
+        { failureReason: null },
+        { failureReason: { not: LEDGER_ABSENT_FAILURE } },
+      ],
+    };
+    const groups: LedgerGroup[] = [];
+    for (const isUncertain of [false, true]) {
+      const found = await this.prisma.fintavaLedgerEntry.groupBy({
+        by: ['direction', 'status'],
+        where: {
+          AND: [base, isUncertain ? uncertain : { NOT: uncertain }],
+        },
+        _sum: { totalKobo: true },
+        _count: { _all: true },
+        _max: { updatedAt: true },
+      });
+      for (const g of found) {
+        groups.push({
+          direction: g.direction === 'in' ? 'in' : 'out',
+          status: g.status,
+          uncertain: isUncertain,
+          totalKobo: g._sum.totalKobo ?? 0n,
+          rows: g._count._all,
+          touchedMs: g._max.updatedAt ? g._max.updatedAt.getTime() : null,
+        });
+      }
+    }
+    return sumLedger(groups);
+  }
+
+  /**
+   * WAWU's own account at the provider against the merchant ledger (FIX-67):
+   * what the provider says the account held when its statement began, plus
+   * the ledger's completed money in less out, may be anywhere the unsettled
+   * rows allow. The opening figure is the provider's own, read off its
+   * statement, so it needs a provider whose lines state the running balance
+   * and a history read in full; a provider that states none is not compared
+   * (nothing to say), and one that does but cannot give the opening says so.
+   * A difference is reported only when the ledger stood still while the
+   * provider was asked, twice running, as a wallet's is.
+   */
+  private async checkAccountBalance(
+    st: RunState,
+    hist: { rows: ProviderTransaction[]; complete: boolean },
+  ): Promise<void> {
+    if (hist.rows.every((p) => p.balanceAfterKobo == null)) return;
+    const opening = hist.complete ? openingBalanceOf(hist.rows) : null;
+    if (opening === null) {
+      st.sink.notice('wawu_balance_not_compared', 1);
+      return;
+    }
+    let confirmed = 0;
+    let last: {
+      expectedKobo: bigint;
+      availableKobo: bigint;
+      differenceKobo: bigint;
+    } | null = null;
+    const waits = this.settings.recheckMs;
+    for (let i = 0; i <= waits.length; i += 1) {
+      const before = await this.merchantLedgerSums();
+      const account = await this.ask(() => this.provider.getPlatformAccount());
+      const after = await this.merchantLedgerSums();
+      if (sameLedger(before, after)) {
+        const cmp = compareAccountBalance(after, opening, account);
+        if (cmp.match) {
+          st.sink.compared('balances', 1);
+          return;
+        }
+        confirmed += 1;
+        last = {
+          expectedKobo: opening + cmp.baseKobo,
+          availableKobo: account.availableKobo,
+          differenceKobo: cmp.differenceKobo,
+        };
+        if (confirmed >= 2) break;
+      }
+      if (i < waits.length) await sleep(waits[i]);
+    }
+    if (last === null) {
+      st.sink.notice('wawu_balance_moving', 1);
+      return;
+    }
+    st.sink.compared('balances', 1);
+    const more = last.differenceKobo > 0n;
+    st.sink.add({
+      check: 'balances',
+      severity: 'mismatch',
+      kind: 'balance_differs',
+      ref: 'wawu-account',
+      detail: `The provider has ${(more ? last.differenceKobo : -last.differenceKobo).toString()} kobo ${more ? 'more' : 'less'} in WAWU's account than its opening balance and the ledger account for.`,
+      amountKobo: last.expectedKobo.toString(),
+      otherKobo: last.availableKobo.toString(),
+    });
   }
 
   /** The held money figures, and the shortfall check against WAWU's account. */
@@ -1240,9 +1432,66 @@ export class MoneyCheckService {
     });
   }
 
-  /** For each send that carries a WAWU fee, whether the provider's record shows it paid. */
+  /** The sends whose WAWU fee is a transfer of its own, judged by that transfer. */
+  private legCharges(st: RunState): void {
+    const { sink } = st;
+    let unread = 0;
+    for (const c of st.feeCandidates) {
+      if (c.leg === undefined) continue;
+      const verdict = compareFeeLeg(
+        c.expectedKobo,
+        c.leg,
+        c.historyComplete === true,
+      );
+      if (verdict === 'unknown') {
+        unread += 1;
+        continue;
+      }
+      sink.compared('merchant_charges', 1);
+      if (verdict === 'ok') continue;
+      const took =
+        c.leg === null || c.leg === undefined
+          ? undefined
+          : c.leg.amountKobo + (c.leg.feeKobo ?? 0n);
+      sink.add({
+        check: 'merchant_charges',
+        severity: 'mismatch',
+        kind:
+          verdict === 'missing'
+            ? 'merchant_charge_missing'
+            : 'merchant_charge_differs',
+        ref: c.rowId,
+        detail:
+          verdict === 'missing'
+            ? "The ledger says WAWU's fee was charged on this send and the provider shows no completed transfer of it."
+            : "The provider's transfer of WAWU's fee on this send moved a different sum than the ledger's fee.",
+        amountKobo: c.expectedKobo.toString(),
+        ...(verdict === 'differs' && took !== undefined
+          ? { otherKobo: took.toString() }
+          : {}),
+      });
+    }
+    if (unread > 0) {
+      sink.cannot(
+        'merchant_charges',
+        'incomplete',
+        `${unread} sends with a WAWU fee were not checked: the history their fee transfer would be in was not read in full.`,
+      );
+    }
+  }
+
+  /**
+   * For each send that carries a WAWU fee, whether the provider shows it paid.
+   * A provider that moves the fee as a transfer of its own (`wawuFeeLeg`) is
+   * judged by that transfer, found in the history already read (FIX-67): no
+   * record of the send carries a charge for WAWU, so a by-id lookup would call
+   * every such send missing. Any other provider is asked for its record of
+   * the send.
+   */
   private async feeCharges(st: RunState): Promise<void> {
-    const { sink, feeCandidates } = st;
+    const { sink } = st;
+    const feeCandidates = st.feeCandidates.filter((c) => c.leg === undefined);
+    this.legCharges(st);
     if (feeCandidates.length === 0) return;
     const cap = this.settings.feeLookups;
     const todo = feeCandidates.slice(0, cap);

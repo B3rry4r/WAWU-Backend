@@ -23,6 +23,7 @@ import {
   type BookTransferRow,
   type NuvionBookStore,
 } from '../areas/book-store';
+import { FEE_LEG_SUFFIX, sendReferenceOfFee } from '../fee-legs';
 import { nuvionTransferStatus } from '../nuvion-ledger-delivery';
 import { NUVION_ACCOUNTS_WAIT_MS } from './accounts';
 import type {
@@ -39,16 +40,9 @@ const failed = (note: string): NuvionHandlerResult => ({
 /** The ledger's two sides of a transfer, the sender's debit first. */
 const SIDES: readonly LedgerDirection[] = ['out', 'in'];
 
-/** Added to a send's reference for the transfer that moves WAWU's fee (FIX-52). */
-export const FEE_LEG_SUFFIX = '-fee';
-
-/** The send a fee transfer's reference belongs to, or null when it is not one. */
-export function sendReferenceOfFee(reference: string): string | null {
-  return reference.endsWith(FEE_LEG_SUFFIX) &&
-    reference.length > FEE_LEG_SUFFIX.length
-    ? reference.slice(0, -FEE_LEG_SUFFIX.length)
-    : null;
-}
+// The words of a fee transfer's reference live in ../fee-legs (FIX-67), where the
+// statement reader reads them too; they stay importable from here.
+export { FEE_LEG_SUFFIX, sendReferenceOfFee };
 
 /** What each event expects Nuvion's own record to say now. */
 const EXPECTED: Record<string, readonly TransferStatus[] | null> = {
