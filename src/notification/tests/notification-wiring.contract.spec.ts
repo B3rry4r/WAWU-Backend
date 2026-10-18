@@ -404,13 +404,21 @@ describe('Notification wiring (contract)', () => {
         await request(app.getHttpServer())
           .post(`/communities/${COMMUNITY_FOUNDERS}/messages`)
           .set('Authorization', `Bearer ${plainToken}`)
-          .send({ text: 'Still plenty of credits here.' });
+          // INBOX-22 (R-62): text is free, a photo costs the 1 credit this test spends.
+          .send({
+            text: 'Still plenty of credits here.',
+            imageUrl: 'http://storage.test/community/message/photo.png',
+          });
         expect(await emittedFor(USER_PLAIN, 'credits_low')).toHaveLength(0);
 
         await request(app.getHttpServer())
           .post(`/communities/${COMMUNITY_FOUNDERS}/messages`)
           .set('Authorization', `Bearer ${plainToken}`)
-          .send({ text: 'And now I am running low.' });
+          // INBOX-22 (R-62): text is free, a photo costs the 1 credit this test spends.
+          .send({
+            text: 'And now I am running low.',
+            imageUrl: 'http://storage.test/community/message/photo.png',
+          });
 
         const [row] = await emittedFor(USER_PLAIN, 'credits_low');
         expect(row).toBeDefined();

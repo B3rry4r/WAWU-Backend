@@ -368,15 +368,34 @@ describe('Communities for the app: room view, message cost, suggestions (contrac
     });
 
     it('states the price a send then charges', async () => {
-      const cost = dataOf<{ creditsPerMessage: number }>(
+      // INBOX-22 (R-62): `creditsPerMessage` is what a plain message (text and
+      // emoji) costs, which is nothing; `creditsByKind` adds the other kinds.
+      const cost = dataOf<{
+        creditsPerMessage: number;
+        creditsByKind: Record<string, number>;
+      }>(
         await request(server())
           .get('/communities/message-cost')
           .set(auth(viewer))
           .expect(200),
       );
-      expect(Object.keys(cost)).toEqual(['creditsPerMessage']);
+      expect(Object.keys(cost).sort()).toEqual([
+        'creditsByKind',
+        'creditsPerMessage',
+      ]);
+      expect(Object.keys(cost.creditsByKind).sort()).toEqual([
+        'photo',
+        'text',
+        'video',
+        'voice',
+      ]);
       expect(Number.isInteger(cost.creditsPerMessage)).toBe(true);
-      expect(cost.creditsPerMessage).toBeGreaterThan(0);
+      expect(cost.creditsPerMessage).toBe(cost.creditsByKind.text);
+      expect(cost.creditsByKind.text).toBe(0);
+      for (const kind of ['photo', 'video', 'voice']) {
+        expect(Number.isInteger(cost.creditsByKind[kind])).toBe(true);
+        expect(cost.creditsByKind[kind]).toBeGreaterThan(0);
+      }
 
       const before = await prisma.creditsState.findUniqueOrThrow({
         where: { userWawuId: viewer.sub },
@@ -394,6 +413,25 @@ describe('Communities for the app: room view, message cost, suggestions (contrac
       });
       expect(before.creditBalance - after.creditBalance).toBe(
         cost.creditsPerMessage,
+      );
+
+      // And a photo charges the photo price it states.
+      const photo = await request(server())
+        .post(`/communities/${rooms.joined}/messages`)
+        .set(auth(viewer))
+        .send({
+          text: 'Priced as stated, with a photo.',
+          imageUrl: 'http://storage.test/community/message/photo.png',
+        })
+        .expect(201);
+      expect(dataOf<{ costInCredits: number }>(photo).costInCredits).toBe(
+        cost.creditsByKind.photo,
+      );
+      const last = await prisma.creditsState.findUniqueOrThrow({
+        where: { userWawuId: viewer.sub },
+      });
+      expect(after.creditBalance - last.creditBalance).toBe(
+        cost.creditsByKind.photo,
       );
     });
   });

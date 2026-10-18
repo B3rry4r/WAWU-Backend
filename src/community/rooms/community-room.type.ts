@@ -26,6 +26,10 @@ export interface CommunityLastMessage {
   id: string;
   text: string | null;
   imageUrl: string | null;
+  /** INBOX-22. Set when the newest message is a video, so the preview can name it. */
+  videoUrl: string | null;
+  /** INBOX-22. Set when the newest message is a voice note. */
+  voiceUrl: string | null;
   sentAt: Date;
   senderWawuId: string;
   /** Null only when the sender could not be looked up at all. */
@@ -79,16 +83,38 @@ export enum CommunityViewerRole {
 export type CommunityRoomView = CommunityRoom & {
   role: CommunityViewerRole;
   /**
-   * WAWU Credits the caller spends to send one message here: 0 for the host,
-   * the metered cost for anyone else. A count, never naira.
+   * WAWU Credits the caller spends to send one plain message (text and emoji)
+   * here. 0 for everyone since INBOX-22 (R-62): the host sends free in their
+   * room and text is free for all. A photo, a video or a voice note costs
+   * what `GET /communities/message-cost` says (`creditsByKind`), and the
+   * host pays none of them. A count, never naira.
    */
   messageCostInCredits: number;
 };
 
 /** INBOX-05, GET /communities/message-cost: the Communities card's price line (I24). */
 export interface CommunityMessageCost {
-  /** WAWU Credits one message costs a member. Reading costs nothing. */
+  /**
+   * WAWU Credits a plain message (text and emoji) costs a member. Reading costs
+   * nothing. Since INBOX-22 (R-62) that is 0: text is free, and a photo, a
+   * video or a voice note costs what `creditsByKind` says. Kept, as a count,
+   * for the readers that already read it.
+   */
   creditsPerMessage: number;
+  /** INBOX-22. WAWU Credits each kind of message costs a member, from admin settings. A count, never naira. */
+  creditsByKind: CommunityCreditsByKind;
+}
+
+/** INBOX-22 (R-62). The price of each kind of message in a community, in WAWU Credits. */
+export interface CommunityCreditsByKind {
+  /** Text and emoji: 0. No setting prices it. */
+  text: number;
+  /** A photo: the `community_credit_cost_photo` setting. */
+  photo: number;
+  /** A video: the `community_credit_cost_video` setting. */
+  video: number;
+  /** A voice note: the `community_credit_cost_voice` setting. */
+  voice: number;
 }
 
 /**

@@ -21,6 +21,11 @@ const USER_CREATOR_PRO = '00000000-0000-4000-8000-000000000003'; // seeded commu
 const SEEDED_COMMUNITY_ID = '20000000-0000-4000-8000-000000000001'; // "WAWU Founders Circle", host = USER_CREATOR_PRO
 const NONEXISTENT_COMMUNITY_ID = '20000000-0000-4000-8000-00000000dead';
 
+// INBOX-22 (R-62): text is free, a photo costs 1 credit. The sends in this
+// file that are about spending credits carry a photo, so they still cost the
+// 1 credit they always asserted; INBOX-22's own spec covers every kind.
+const PHOTO = { imageUrl: 'http://storage.test/community/message/photo.png' };
+
 const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
   ? new URL(process.env.WAWU_ID_JWKS_URL).port
   : '4001';
@@ -111,7 +116,7 @@ describe('CommunityMessage (contract)', () => {
     const res = await request(app.getHttpServer())
       .post(`/communities/${SEEDED_COMMUNITY_ID}/messages`)
       .set('Authorization', `Bearer ${userToken}`)
-      .send({ text });
+      .send({ text, ...PHOTO });
 
     if (res.body?.data?.id) {
       createdMessageIds.push(res.body.data.id);
@@ -337,7 +342,7 @@ describe('CommunityMessage (contract)', () => {
       const res = await request(app.getHttpServer())
         .post(`/communities/${SEEDED_COMMUNITY_ID}/messages`)
         .set('Authorization', `Bearer ${userToken}`)
-        .send({ text: 'Trial-covered message' })
+        .send({ text: 'Trial-covered message', ...PHOTO })
         .expect(402);
 
       expect(res.body.data).toBeNull();
@@ -371,7 +376,7 @@ describe('CommunityMessage (contract)', () => {
       const res = await request(app.getHttpServer())
         .post(`/communities/${SEEDED_COMMUNITY_ID}/messages`)
         .set('Authorization', `Bearer ${userToken}`)
-        .send({ text: 'This should be rejected' })
+        .send({ text: 'This should be rejected', ...PHOTO })
         .expect(402);
 
       expect(res.body.data).toBeNull();

@@ -487,10 +487,11 @@ describe('Community images (contract)', () => {
         expect.objectContaining({
           text: 'No photo on this one.',
           imageUrl: null,
-          costInCredits: 1,
+          // INBOX-22 (R-62): text is free. This used to cost 1 credit.
+          costInCredits: 0,
         }),
       );
-      expect(await balanceOf(posterSub)).toBe(9);
+      expect(await balanceOf(posterSub)).toBe(10);
     });
 
     it('400s a message with neither text nor an image, and charges nothing for it', async () => {

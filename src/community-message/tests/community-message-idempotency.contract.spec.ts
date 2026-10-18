@@ -30,6 +30,7 @@ const HOST = '00000000-0000-4000-8000-000000000003';
 
 const ROOM = '20000000-0000-4000-8000-00000000a051';
 const OTHER_ROOM = '20000000-0000-4000-8000-00000000a052';
+const PHOTO_URL = 'http://storage.test/community/message/photo.png';
 
 const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
   ? new URL(process.env.WAWU_ID_JWKS_URL).port
@@ -161,7 +162,10 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
       .post(`/communities/${room}/messages`)
       .set('Authorization', `Bearer ${token}`);
     if (key !== undefined) req = req.set('Idempotency-Key', key);
-    return req.send(body);
+    // INBOX-22 (R-62): text is free, a photo costs 1 credit. Every send in this
+    // file is about being charged once, so each carries a photo (1 credit, from
+    // the admin setting's default) unless the test names its own attachment.
+    return req.send({ imageUrl: PHOTO_URL, ...body });
   }
 
   beforeAll(async () => {
@@ -570,6 +574,8 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
           'senderWawuId',
           'sentAt',
           'text',
+          'videoUrl',
+          'voiceUrl',
         ].sort(),
       );
       const list = await request(app.getHttpServer() as App)

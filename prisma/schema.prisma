@@ -1326,7 +1326,7 @@ model CommunityMembership {
   @@index([communityId, status])
 }
 
-/// A message is TEXT, an IMAGE, or both — never neither. `text` was
+/// A message is TEXT, an IMAGE, a VIDEO or a VOICE NOTE (INBOX-22), or text with one of them, never neither. `text` was
 /// NOT NULL, so a member could not post a photo at all on a platform whose
 /// categories are fashion, food, crafts, art and beauty. Both columns are
 /// nullable so either half can be absent; the "not both null" invariant is
@@ -1340,6 +1340,12 @@ model CommunityMessage {
   text          String?
   /// Photo posted in the room — a `community/message` presigned upload URL.
   imageUrl      String?
+  /// INBOX-22 (R-62). A video posted in the room: the `fileUrl` of a `community/message-video` upload. Null for every
+  /// message before it and for every message that carries no video. A message carries at most ONE of imageUrl, videoUrl
+  /// and voiceUrl (the `CommunityMessage_one_attachment` CHECK), so what it costs is that one kind's price.
+  videoUrl      String?
+  /// INBOX-22 (R-62). A voice note posted in the room — the `fileUrl` of a `community/message-voice` upload. Null otherwise.
+  voiceUrl      String?
   costInCredits Int       @default(1)
   sentAt        DateTime  @default(now())
   /// INBOX-05 round 5. The row of `CommunityMessageKey` for the key this message was sent with, when the sender gave one.

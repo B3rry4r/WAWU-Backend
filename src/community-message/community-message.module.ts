@@ -7,6 +7,7 @@ import { NotificationModule } from '../notification/notification.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { LivePublisherModule } from '../live/live-publisher.module';
 import { CommunityPassAccessModule } from '../community/pass/community-pass-access.module';
+import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 
 /**
  * CommunityMessage resource module. PrismaService comes from the globally
@@ -19,6 +20,8 @@ import { CommunityPassAccessModule } from '../community/pass/community-pass-acce
  * instead (see community-message.service.ts's doc comment). WawuAuthModule
  * supplies WawuIdClient, which list() batch-calls to attach each message's
  * sender identity (same source CreatorDiscoveryService already uses).
+ * PlanSettingsModule gives it the price of each kind of message (INBOX-22,
+ * R-62): the prices are admin settings, read at send time.
  */
 @Module({
   imports: [
@@ -28,6 +31,7 @@ import { CommunityPassAccessModule } from '../community/pass/community-pass-acce
     LivePublisherModule,
     BlockedAccountModule,
     CommunityPassAccessModule,
+    PlanSettingsModule,
   ],
   controllers: [CommunityMessageController],
   providers: [CommunityMessageService],
