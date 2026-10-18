@@ -110,7 +110,7 @@ function bump(
 }
 
 /** The provider's references to one movement, in the order they are tried. */
-function providerRefs(p: ProviderTransaction): string[] {
+export function providerRefs(p: ProviderTransaction): string[] {
   return [
     p.ourReference,
     p.providerReference,
@@ -756,70 +756,187 @@ export function openingBalanceOf(
 }
 
 /**
- * The balance WAWU's account held at `cutMs`, from the provider's own
- * statement (FIX-80): what it held before the oldest completed line from that
- * moment on, or, when nothing completed since, what it stated right after the
- * newest completed line before it. Null when the statement does not give it
- * (no completed line at all, a line with no time, no direction or no balance,
- * or lines sharing one time that would give two figures).
+ * One place in a statement from which WAWU's account is compared (FIX-80 round
+ * 2): the account held `openingKobo` right after the cut line, and the lines
+ * `after` it are what moved the balance since. Both halves of the comparison
+ * are tied to that one line, and the ledger's rows are put on one side or the
+ * other by the references their provider lines carry, never by the time on
+ * either side, so a row and its line dated hours apart still land together.
  */
-export function balanceAt(
-  lines: readonly ProviderTransaction[],
-  cutMs: number,
-): bigint | null {
-  const done = lines.filter((p) => p.outcome === 'completed');
-  const after = done.filter((p) => Date.parse(p.createdAt) >= cutMs);
-  if (after.length > 0) return openingBalanceOf(after);
-  let newest = Number.NEGATIVE_INFINITY;
-  const last: ProviderTransaction[] = [];
-  for (const p of done) {
-    const at = Date.parse(p.createdAt);
-    if (!Number.isFinite(at)) return null;
-    if (at > newest) {
-      newest = at;
-      last.length = 0;
-    }
-    if (at === newest) last.push(p);
-  }
-  if (last.length === 0) return null;
-  const figures = new Set<bigint>();
-  for (const p of last) {
-    if (p.balanceAfterKobo == null) return null;
-    figures.add(p.balanceAfterKobo);
-  }
-  return figures.size === 1 ? [...figures][0] : null;
+export interface StatementCut {
+  /** The provider's own balance right after the cut line. */
+  openingKobo: bigint;
+  /** The time of the cut line, in ms; null: the cut is before the first line. */
+  atMs: number | null;
+  /** The lines after the cut line, whatever their status. */
+  after: readonly ProviderTransaction[];
+  /** The cut line and every older line that was read. */
+  before: readonly ProviderTransaction[];
+}
+
+interface Placed {
+  p: ProviderTransaction;
+  t: number;
+  /** Position in the statement, newest first. */
+  pos: number;
+}
+
+/** A statement newest first. Lines at one moment keep the provider's own order. */
+function placeLines(lines: readonly ProviderTransaction[]): Placed[] | null {
+  const timed = lines.map((p, index) => ({
+    p,
+    index,
+    t: Date.parse(p.createdAt),
+  }));
+  if (timed.some((x) => !Number.isFinite(x.t))) return null;
+  const listedNewestFirst =
+    timed.length < 2 || timed[0].t >= timed[timed.length - 1].t;
+  timed.sort(
+    (a, b) =>
+      b.t - a.t || (listedNewestFirst ? a.index - b.index : b.index - a.index),
+  );
+  return timed.map((x, pos) => ({ p: x.p, t: x.t, pos }));
+}
+
+function statedOf(
+  p: ProviderTransaction,
+): { effect: bigint; after: bigint } | null {
+  const effect = effectOf(p);
+  if (effect === null || p.balanceAfterKobo == null) return null;
+  return { effect, after: p.balanceAfterKobo };
 }
 
 /**
- * Where to cut a long history in two (FIX-80): the middle of the longest
- * stretch between `lo` and `hi` in which nothing happened, if that stretch is
- * at least `minGapMs`. Money before the cut is left to the opening balance and
- * money after it is compared line by line, and the ledger's time for a move
- * and the provider's can differ by a little, so a cut is only safe where no
- * move on either side is near it. Null when there is no such stretch: the
- * account's balance is then not compared this night.
+ * Where WAWU's account is compared from, taken off the provider's statement
+ * (each completed line states the balance right after it). With `fromMs` null
+ * the whole history was read: the cut is before its first line. Otherwise it
+ * is the newest completed line that happened before `fromMs` and sits alone at
+ * its moment, with its two completed neighbours stating balances that follow
+ * from it (a line out of its place in the statement would not). Null when
+ * there is no such line: no time on a line, no completed line, or no line that
+ * states a balance and a direction. The account is then not compared.
  */
-export function quietCut(
-  events: readonly number[],
-  lo: number,
-  hi: number,
-  minGapMs: number,
-): number | null {
-  const points = [
-    lo,
-    ...events.filter((t) => Number.isFinite(t) && t > lo && t < hi),
-    hi,
-  ].sort((a, b) => a - b);
-  let widest = -1;
-  let at: number | null = null;
-  for (let i = 1; i < points.length; i += 1) {
-    const gap = points[i] - points[i - 1];
-    if (gap >= widest) {
-      widest = gap;
-      at = points[i - 1] + Math.floor(gap / 2);
+export function cutStatement(
+  lines: readonly ProviderTransaction[],
+  fromMs: number | null,
+): StatementCut | null {
+  const placed = placeLines(lines);
+  if (placed === null) return null;
+  const done = placed.filter((x) => x.p.outcome === 'completed');
+  if (done.length === 0) return null;
+  if (fromMs === null) {
+    const oldest = statedOf(done[done.length - 1].p);
+    if (oldest === null) return null;
+    const newer = done.length > 1 ? done[done.length - 2] : null;
+    if (newer !== null) {
+      const n = statedOf(newer.p);
+      if (n === null || n.after - n.effect !== oldest.after) return null;
+    }
+    return {
+      openingKobo: oldest.after - oldest.effect,
+      atMs: null,
+      after: placed.map((x) => x.p),
+      before: [],
+    };
+  }
+  for (let d = 0; d < done.length; d += 1) {
+    const at = done[d];
+    if (!(at.t < fromMs)) continue;
+    if (at.pos > 0 && placed[at.pos - 1].t <= at.t) continue;
+    const here = statedOf(at.p);
+    if (here === null) continue;
+    if (d > 0) {
+      const n = statedOf(done[d - 1].p);
+      if (n === null || n.after - n.effect !== here.after) continue;
+    }
+    if (d + 1 < done.length) {
+      const o = statedOf(done[d + 1].p);
+      if (o === null || here.after - here.effect !== o.after) continue;
+    }
+    return {
+      openingKobo: here.after,
+      atMs: at.t,
+      after: placed.slice(0, at.pos).map((x) => x.p),
+      before: placed.slice(at.pos).map((x) => x.p),
+    };
+  }
+  return null;
+}
+
+/** One merchant ledger row, as the account's sums need it (FIX-80 round 2). */
+export interface AccountRow {
+  direction: 'in' | 'out';
+  status: TransferStatus;
+  /** A failed bank send nobody has seen come back (as `LedgerGroup.uncertain`). */
+  uncertain: boolean;
+  totalKobo: bigint;
+  /** Every reference the row is known by. */
+  refs: readonly string[];
+  /** The reference the ledger kept of the money coming back, once reversed. */
+  reversalRef: string | null;
+  occurredAt: Date;
+}
+
+/**
+ * The merchant ledger's sums for the stretch after the cut: the rows whose
+ * provider line comes after the cut line, found by reference, and the rows
+ * with no provider line (pending ones whatever their age; the others when they
+ * are no older than the cut line). A row whose line is before the cut is in
+ * the opening balance already. A reversed row whose debit line is before the
+ * cut but whose money came back after it counts as the money coming back: the
+ * balance moved by it after the cut.
+ */
+export function accountLedgerSums(
+  rows: readonly AccountRow[],
+  cut: StatementCut,
+): LedgerSums {
+  const after = new Set<string>();
+  const before = new Set<string>();
+  const returnedOf = new Set<string>();
+  for (const p of cut.after) {
+    for (const r of providerRefs(p)) after.add(r);
+    if (typeof p.returnOf === 'string' && p.returnOf !== '') {
+      returnedOf.add(p.returnOf);
     }
   }
-  return widest >= minGapMs ? at : null;
+  for (const p of cut.before) {
+    for (const r of providerRefs(p)) before.add(r);
+  }
+  const since = cut.atMs ?? Number.NEGATIVE_INFINITY;
+  const groups: LedgerGroup[] = [];
+  const add = (
+    row: AccountRow,
+    direction: 'in' | 'out',
+    status: TransferStatus,
+  ): void => {
+    groups.push({
+      direction,
+      status,
+      uncertain: status === 'failed' && row.uncertain,
+      totalKobo: row.totalKobo,
+      rows: 1,
+      touchedMs: null,
+    });
+  };
+  for (const row of rows) {
+    const lineAfter = row.refs.some((r) => after.has(r));
+    if (row.status === 'reversed') {
+      const returnAfter =
+        row.refs.some((r) => returnedOf.has(r)) ||
+        (row.reversalRef !== null && after.has(row.reversalRef));
+      if (returnAfter && !lineAfter) {
+        add(row, row.direction === 'out' ? 'in' : 'out', 'completed');
+      }
+      continue;
+    }
+    const lineBefore = !lineAfter && row.refs.some((r) => before.has(r));
+    const counted =
+      lineAfter ||
+      row.status === 'pending' ||
+      (!lineBefore && row.occurredAt.getTime() >= since);
+    if (counted) add(row, row.direction, row.status);
+  }
+  return sumLedger(groups);
 }
 
 /**

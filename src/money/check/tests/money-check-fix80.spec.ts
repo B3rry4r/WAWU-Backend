@@ -1,10 +1,12 @@
 import type { ProviderTransaction } from '../../../wallet-provider/wallet-provider.interface';
 import {
-  balanceAt,
+  type AccountRow,
+  accountLedgerSums,
+  compareAccountBalance,
   compareMovements,
+  cutStatement,
   isExplainedByRow,
   type LedgerOutRow,
-  quietCut,
 } from '../money-check-compare';
 import { chargeDifferenceNote } from '../../ledger/ledger-notes';
 import { referenceOfReturn } from '../../../nuvion/fee-legs';
@@ -88,74 +90,260 @@ function inPass(
   });
 }
 
-describe('quietCut', () => {
-  const H = 3_600_000;
-  it('cuts in the middle of the longest quiet stretch', () => {
-    expect(quietCut([1 * H, 2 * H, 8 * H], 0, 10 * H, 60_000)).toBe(5 * H);
+/** A completed line that states the balance right after it, `minutes` ago. */
+function stated(
+  id: string,
+  minutes: number,
+  direction: 'in' | 'out',
+  amount: bigint,
+  after: bigint | null,
+  over: Partial<ProviderTransaction> = {},
+): ProviderTransaction {
+  return line({
+    id,
+    createdAt: ago(minutes).toISOString(),
+    direction,
+    amountKobo: amount,
+    feeKobo: 0n,
+    balanceAfterKobo: after,
+    ...over,
   });
-  it('counts the stretch up to the end of the range, and from its start', () => {
-    expect(quietCut([1 * H], 0, 10 * H, 60_000)).toBe(5.5 * H);
-    expect(quietCut([9 * H], 0, 10 * H, 60_000)).toBe(4.5 * H);
+}
+
+describe('cutStatement', () => {
+  // Newest first, as a statement is read: balances 1,500 -> 1,200 -> 1,700.
+  const statement = () => [
+    stated('c', 10, 'in', 500n, 1_700n),
+    stated('b', 20, 'out', 300n, 1_200n),
+    stated('a', 30, 'in', 1_000n, 1_500n),
+    stated('z', 40, 'in', 500n, 500n),
+  ];
+
+  it('cuts at the newest completed line before the window, and takes the balance it states', () => {
+    const cut = cutStatement(statement(), ago(25).getTime());
+    expect(cut?.openingKobo).toBe(1_500n);
+    expect(cut?.atMs).toBe(ago(30).getTime());
+    expect(cut?.after.map((p) => p.id)).toEqual(['c', 'b']);
+    expect(cut?.before.map((p) => p.id)).toEqual(['a', 'z']);
   });
-  it('takes the later of two equal stretches', () => {
-    expect(quietCut([5 * H], 0, 10 * H, 60_000)).toBe(7.5 * H);
+
+  it('has nothing after the cut when the window starts after the newest line', () => {
+    const cut = cutStatement(statement(), ago(5).getTime());
+    expect(cut?.openingKobo).toBe(1_700n);
+    expect(cut?.after).toEqual([]);
   });
-  it('ignores moves outside the range', () => {
-    expect(quietCut([-5 * H, 20 * H], 0, 10 * H, 60_000)).toBe(5 * H);
+
+  it('cuts before the first line when the whole history was read', () => {
+    const cut = cutStatement(statement(), null);
+    expect(cut?.openingKobo).toBe(0n);
+    expect(cut?.atMs).toBeNull();
+    expect(cut?.after).toHaveLength(4);
+    expect(cut?.before).toEqual([]);
   });
-  it('gives no cut when no stretch is long enough', () => {
-    const dense = Array.from({ length: 100 }, (_, i) => (i + 1) * 100_000);
-    expect(quietCut(dense, 0, 101 * 100_000, 120_000)).toBeNull();
+
+  it('needs no quiet moment: lines every thirty seconds are cut like any other', () => {
+    const lines = Array.from({ length: 400 }, (_, i) =>
+      stated(`l${i}`, 0.5 * (i + 1), 'in', 10n, BigInt(4_000 - 10 * i)),
+    );
+    const cut = cutStatement(lines, ago(100).getTime());
+    // Line l200 (100.5 minutes ago) is the newest before the window.
+    expect(cut?.after).toHaveLength(200);
+    expect(cut?.openingKobo).toBe(BigInt(4_000 - 10 * 200));
+  });
+
+  it('does not cut between lines that share one moment', () => {
+    const lines = [
+      stated('d', 10, 'in', 500n, 2_200n),
+      stated('c', 20, 'in', 500n, 1_700n),
+      stated('b', 20, 'in', 200n, 1_200n),
+      stated('a', 30, 'in', 1_000n, 1_000n),
+    ];
+    // A cut at line c would leave line b, at the same moment, on the other side.
+    // The window starts 15 minutes ago: the lines before it are c, b and a, and
+    // the newest, c, shares its moment with the line just older, b: the chain
+    // from c to b still follows, so c is a fair cut; but a cut at d is not
+    // offered, as d is after the window.
+    const cut = cutStatement(lines, ago(15).getTime());
+    expect(cut?.openingKobo).toBe(1_700n);
+    expect(cut?.after.map((p) => p.id)).toEqual(['d']);
+    // Two lines sharing the newest moment before the window: the one listed
+    // newer cannot be a cut, as the other is just after it in time.
+    const tied = [
+      stated('y', 20, 'in', 500n, 1_700n),
+      stated('x', 20, 'in', 200n, 1_200n),
+      stated('w', 30, 'in', 1_000n, 1_000n),
+    ];
+    expect(cutStatement(tied, ago(15).getTime())?.openingKobo).toBe(1_700n);
+  });
+
+  it('passes over a line whose neighbours do not follow from it, for an older one that fits', () => {
+    const lines = [
+      stated('c', 10, 'in', 500n, 1_700n),
+      // b states a balance that does not lead to c's: out of its place.
+      stated('b', 20, 'out', 300n, 900n),
+      stated('a', 30, 'in', 1_000n, 1_500n),
+      stated('z', 40, 'in', 500n, 500n),
+    ];
+    // a is the newest before the window but b, just after it, does not follow
+    // from it; z, whose neighbour a does follow from it, is the cut.
+    const cut = cutStatement(lines, ago(25).getTime());
+    expect(cut?.openingKobo).toBe(500n);
+    expect(cut?.after.map((p) => p.id)).toEqual(['c', 'b', 'a']);
+    // With nothing older that fits, there is no cut.
+    expect(cutStatement(lines.slice(0, 3), ago(25).getTime())).toBeNull();
+  });
+
+  it('is not given when the statement does not state what it needs', () => {
+    expect(cutStatement([], ago(5).getTime())).toBeNull();
+    expect(
+      cutStatement([stated('a', 30, 'in', 1_000n, null)], ago(5).getTime()),
+    ).toBeNull();
+    expect(
+      cutStatement(
+        [stated('a', 30, 'in', 1_000n, 5n, { direction: undefined })],
+        null,
+      ),
+    ).toBeNull();
+    expect(
+      cutStatement(
+        [stated('a', 30, 'in', 1_000n, 5n, { createdAt: '' })],
+        ago(5).getTime(),
+      ),
+    ).toBeNull();
+    expect(
+      cutStatement(
+        [
+          stated('a', 30, 'in', 1_000n, 5n, {
+            outcome: 'pending',
+            status: 'pending',
+          }),
+        ],
+        ago(5).getTime(),
+      ),
+    ).toBeNull();
+  });
+
+  it('puts a pending line on a side but never cuts at it', () => {
+    const lines = [
+      stated('p', 5, 'out', 100n, 1_700n, {
+        outcome: 'pending',
+        status: 'pending',
+      }),
+      stated('c', 10, 'in', 500n, 1_700n),
+      stated('a', 30, 'in', 1_000n, 1_200n),
+    ];
+    const cut = cutStatement(lines, ago(7).getTime());
+    expect(cut?.openingKobo).toBe(1_700n);
+    expect(cut?.after.map((p) => p.id)).toEqual(['p']);
+    expect(cut?.before.map((p) => p.id)).toEqual(['c', 'a']);
   });
 });
 
-describe('balanceAt', () => {
-  const at = (minutes: number) => ago(minutes).toISOString();
-  const mine = (
-    id: string,
-    minutes: number,
-    direction: 'in' | 'out',
-    amount: bigint,
-    after: bigint | null,
-  ) =>
-    line({
-      id,
-      createdAt: at(minutes),
-      direction,
-      amountKobo: amount,
-      feeKobo: 0n,
-      balanceAfterKobo: after,
-    });
+describe('accountLedgerSums', () => {
+  const lines = [
+    stated('new', 10, 'in', 500n, 1_700n, { ourReference: 'ref-new' }),
+    stated('mid', 20, 'out', 300n, 1_200n, { ourReference: 'ref-mid' }),
+    stated('old', 30, 'in', 1_000n, 1_500n, { ourReference: 'ref-old' }),
+  ];
+  const cut = cutStatement(lines, ago(25).getTime())!;
+  const r = (over: Partial<AccountRow> & { refs: string[] }): AccountRow => ({
+    direction: 'in',
+    status: 'completed',
+    uncertain: false,
+    totalKobo: 100n,
+    reversalRef: null,
+    occurredAt: ago(15),
+    ...over,
+  });
 
-  it('is the balance before the oldest completed line from the cut on', () => {
-    const lines = [
-      mine('c', 10, 'in', 500n, 1_700n),
-      mine('b', 20, 'out', 300n, 1_200n),
-      mine('a', 30, 'in', 1_000n, 1_500n),
-    ];
-    // The cut is 25 minutes ago: line b is the first after it, and the account
-    // held 1,200 + 300 before it.
-    expect(balanceAt(lines, ago(25).getTime())).toBe(1_500n);
-  });
-  it('is the balance stated after the newest line before the cut when nothing came after it', () => {
-    const lines = [
-      mine('b', 20, 'out', 300n, 1_200n),
-      mine('a', 30, 'in', 1_000n, 1_500n),
-    ];
-    expect(balanceAt(lines, ago(5).getTime())).toBe(1_200n);
-  });
-  it('is not given when the statement does not state it', () => {
+  it('counts a row whose line is after the cut, and leaves one whose line is before it', () => {
+    const sums = accountLedgerSums(
+      [
+        r({ refs: ['ref-new'], totalKobo: 500n }),
+        r({ refs: ['ref-mid'], direction: 'out', totalKobo: 300n }),
+        r({ refs: ['ref-old'], totalKobo: 1_000n }),
+      ],
+      cut,
+    );
+    expect(sums.completedIn).toBe(500n);
+    expect(sums.completedOut).toBe(300n);
+    // And the account balances: 1,500 at the cut, +500 -300 since.
     expect(
-      balanceAt([mine('a', 30, 'in', 1_000n, null)], ago(5).getTime()),
-    ).toBeNull();
-    expect(balanceAt([], ago(5).getTime())).toBeNull();
+      compareAccountBalance(sums, cut.openingKobo, {
+        availableKobo: 1_700n,
+        bookedKobo: 1_700n,
+      }).match,
+    ).toBe(true);
   });
-  it('is not given when two lines at the last moment state two figures', () => {
-    const lines = [
-      mine('b', 20, 'out', 300n, 1_200n),
-      mine('a', 20, 'in', 1_000n, 1_500n),
-    ];
-    expect(balanceAt(lines, ago(5).getTime())).toBeNull();
+
+  it('places a row by its reference even when its own date is hours from its line', () => {
+    const sums = accountLedgerSums(
+      [
+        r({ refs: ['ref-new'], totalKobo: 500n, occurredAt: ago(60 * 9) }),
+        r({
+          refs: ['ref-old'],
+          totalKobo: 1_000n,
+          occurredAt: ago(1),
+        }),
+      ],
+      cut,
+    );
+    expect(sums.completedIn).toBe(500n);
+  });
+
+  it('counts a row with no line when it is pending, whatever its age, or no older than the cut', () => {
+    const sums = accountLedgerSums(
+      [
+        r({ refs: ['gone'], totalKobo: 40n, occurredAt: ago(15) }),
+        r({ refs: ['old-gone'], totalKobo: 90n, occurredAt: ago(60 * 40) }),
+        r({
+          refs: ['slow'],
+          status: 'pending',
+          totalKobo: 7n,
+          occurredAt: ago(60 * 40),
+        }),
+      ],
+      cut,
+    );
+    expect(sums.completedIn).toBe(40n);
+    expect(sums.pendingIn).toBe(7n);
+  });
+
+  it('counts the money coming back after the cut for a debit from before it', () => {
+    const back = (after: bigint) =>
+      stated('back', 12, 'in', 500n, after, {
+        ourReference: 'ref-sent_reversal',
+        returnOf: 'ref-sent',
+      });
+    const sent = r({
+      refs: ['ref-sent'],
+      status: 'reversed',
+      direction: 'out',
+      totalKobo: 500n,
+    });
+    // The debit is before the cut (it is in the opening balance), the return after.
+    const early = cutStatement(
+      [
+        back(1_700n),
+        stated('mid', 20, 'out', 300n, 1_200n),
+        stated('sent', 28, 'out', 500n, 1_500n, { ourReference: 'ref-sent' }),
+        stated('old', 30, 'in', 1_000n, 2_000n),
+      ],
+      ago(25).getTime(),
+    )!;
+    expect(early.openingKobo).toBe(1_500n);
+    expect(accountLedgerSums([sent], early).completedIn).toBe(500n);
+    // The debit and its return both after the cut: nothing to count.
+    const both = cutStatement(
+      [
+        back(1_500n),
+        stated('sent', 15, 'out', 500n, 1_000n, { ourReference: 'ref-sent' }),
+        stated('old', 30, 'in', 1_000n, 1_500n),
+      ],
+      ago(25).getTime(),
+    )!;
+    const none = accountLedgerSums([sent], both);
+    expect(none.completedIn + none.completedOut).toBe(0n);
   });
 });
 

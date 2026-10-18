@@ -37,6 +37,8 @@ import type { Finding, MoneyCheckReport } from '../money-check-types';
 const RUN = `f67r2${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 const PREFIX = `f67r2-${RUN}-`;
 const HOUR = 3_600_000;
+/** Nights this run makes are in a year of its own, and it deletes only those. */
+const NIGHT_YEAR = 2200 + Math.floor(Math.random() * 7000);
 const OPENING = 100_000_000n;
 const MERCHANT_ACCOUNT = `7${Math.floor(Math.random() * 900_000_000 + 100_000_000)}`;
 
@@ -87,6 +89,8 @@ interface Line {
 /** The provider's side: accounts with an opening balance and their lines. */
 class Books {
   readonly accounts = new Map<string, { opening: number; lines: Line[] }>();
+  /** False: the statement's lines carry no running balance. */
+  statesBalance = true;
   open(key: string, opening = 0): void {
     this.accounts.set(key, { opening, lines: [] });
   }
@@ -125,7 +129,7 @@ class Books {
           direction: l.direction,
           amountKobo: l.amount,
           feeKobo: l.fee,
-          balanceAfterKobo: running,
+          balanceAfterKobo: this.statesBalance ? running : null,
           status: l.status ?? 'completed',
           outcome:
             (l.status ?? 'completed') === 'completed' ? 'completed' : 'pending',
@@ -145,6 +149,7 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
   let moduleRef: TestingModule;
   let prisma: PrismaService;
   let service: MoneyCheckService;
+  let cfg: MoneyCheckSettings;
   let seq = 0;
   let nightNo = 0;
   let clock = 0;
@@ -162,9 +167,12 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
       }
     }
   };
+  const nightsMade = new Set<string>();
   const night = (): string => {
     nightNo += 1;
-    return `${2200 + Math.floor(nightNo / 336)}-${String(1 + (Math.floor(nightNo / 28) % 12)).padStart(2, '0')}-${String(1 + (nightNo % 28)).padStart(2, '0')}`;
+    const made = `${NIGHT_YEAR + Math.floor(nightNo / 336)}-${String(1 + (Math.floor(nightNo / 28) % 12)).padStart(2, '0')}-${String(1 + (nightNo % 28)).padStart(2, '0')}`;
+    nightsMade.add(made);
+    return made;
   };
   const ref = (): string => `${PREFIX}${(seq += 1)}`;
   /** Each move is one second after the last, ten hours ago: oldest first, all settled. */
@@ -241,6 +249,12 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
     /** Leave one side unwritten, to plant a difference. */
     ledger?: boolean;
     line?: boolean;
+    /**
+     * The date the ledger row carries, when it is not the provider's line's:
+     * a row recorded long after the move, say. The row is then also left
+     * untouched since that date.
+     */
+    ledgerAt?: number;
   }
 
   /** One side of a move: its ledger row and the provider's line. */
@@ -272,8 +286,11 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
           customerReference: s.reference,
           discrepancy: s.discrepancy ?? null,
           source: 'send',
-          occurredAt: new Date(s.at),
-          createdAt: new Date(s.at),
+          occurredAt: new Date(s.ledgerAt ?? s.at),
+          createdAt: new Date(s.ledgerAt ?? s.at),
+          ...(s.ledgerAt === undefined
+            ? {}
+            : { updatedAt: new Date(s.ledgerAt) }),
           provider: 'nuvion',
           references: {
             create: [
@@ -306,9 +323,12 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
     from: Wallet | null,
     to: Wallet | null,
     amount: number,
+    ledgerOffsetMs?: number,
   ): Promise<string> {
     const reference = ref();
     const at = tick();
+    const ledgerAt =
+      ledgerOffsetMs === undefined ? undefined : at + ledgerOffsetMs;
     await side({
       who: from,
       direction: 'out',
@@ -316,8 +336,9 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
       fee: 100,
       reference,
       at,
+      ledgerAt,
     });
-    await side({ who: to, direction: 'in', amount, reference, at });
+    await side({ who: to, direction: 'in', amount, reference, at, ledgerAt });
     return reference;
   }
 
@@ -410,7 +431,7 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
   beforeAll(async () => {
     clock = Date.now() - 10 * HOUR;
     books.open('merchant', Number(OPENING));
-    const cfg = new MoneyCheckSettings({
+    cfg = new MoneyCheckSettings({
       get: (key: string) =>
         ({
           MONEY_CHECK_CALL_GAP_MS: '0',
@@ -441,8 +462,10 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
   });
 
   async function wipe(): Promise<void> {
+    // Only what this run made: its own nights, its own references, its own
+    // wallets and accounts (G-FIX-80 F4: another spec shares this database).
     await prisma.moneyCheckRun.deleteMany({
-      where: { provider: 'nuvion', night: { gte: '2200' } },
+      where: { provider: 'nuvion', night: { in: [...nightsMade] } },
     });
     await prisma.fintavaLedgerEntry.deleteMany({
       where: { customerReference: { startsWith: PREFIX } },
@@ -450,7 +473,13 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
     await prisma.fintavaWallet.deleteMany({
       where: { wawuUserId: { in: scope.users } },
     });
+    // Whatever sits on an account this spec made, by account as well as by
+    // reference, so nothing of it is left for another spec's database to read.
+    await prisma.fintavaLedgerEntry.deleteMany({
+      where: { accountNumber: { in: [...usedAccounts, MERCHANT_ACCOUNT] } },
+    });
     scope.users = [];
+    books.statesBalance = true;
     books.accounts.clear();
     walletOf.clear();
     books.open('merchant', Number(OPENING));
@@ -458,7 +487,22 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
   }
 
   afterAll(async () => {
-    if (prisma) await wipe();
+    if (prisma) {
+      await wipe();
+      // Nothing of this run may be left in the database for another spec.
+      const left = await prisma.fintavaLedgerEntry.count({
+        where: {
+          OR: [
+            { customerReference: { startsWith: PREFIX } },
+            { accountNumber: { in: [...usedAccounts, MERCHANT_ACCOUNT] } },
+          ],
+        },
+      });
+      const runs = await prisma.moneyCheckRun.count({
+        where: { provider: 'nuvion', night: { in: [...nightsMade] } },
+      });
+      expect({ left, runs }).toEqual({ left: 0, runs: 0 });
+    }
     if (moduleRef) await moduleRef.close();
   });
 
@@ -842,7 +886,164 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
     ).toContain('21000 kobo more in WAWU');
   });
 
-  it("says it did not compare WAWU's account, and makes no false difference, when no quiet moment lets it", async () => {
+  /**
+   * Many payments to WAWU in one go, both sides written in bulk. `skewMs`
+   * dates the ledger row that far from its provider line, per payment.
+   */
+  async function bulkPayments(
+    from: Wallet,
+    count: number,
+    firstAt: number,
+    stepMs: number,
+    skewMs: (i: number) => number = () => 0,
+  ): Promise<void> {
+    const entries: Prisma.FintavaLedgerEntryCreateManyInput[] = [];
+    const references: Prisma.FintavaLedgerReferenceCreateManyInput[] = [];
+    for (let i = 0; i < count; i += 1) {
+      const reference = ref();
+      const at = Math.round(firstAt + i * stepMs);
+      const amount = 1_000 + (i % 50);
+      const ledgerAt = new Date(at + skewMs(i));
+      for (const out of [true, false]) {
+        const id = randomUUID();
+        const account = out ? from.accountNumber : MERCHANT_ACCOUNT;
+        entries.push({
+          id,
+          walletKind: out ? 'user' : 'merchant',
+          wawuUserId: out ? from.wawuUserId : null,
+          accountNumber: account,
+          direction: out ? 'out' : 'in',
+          status: 'completed',
+          category: 'transfer',
+          amountKobo: BigInt(amount),
+          feeKobo: 0n,
+          wawuFeeKobo: out ? 0n : null,
+          totalKobo: BigInt(amount),
+          customerReference: reference,
+          source: 'send',
+          occurredAt: ledgerAt,
+          createdAt: ledgerAt,
+          updatedAt: ledgerAt,
+          provider: 'nuvion',
+        });
+        references.push({
+          accountNumber: account,
+          direction: out ? 'out' : 'in',
+          value: reference,
+          kind: 'ours',
+          entryId: id,
+        });
+      }
+      books.add(from.customerId, {
+        at,
+        direction: 'out',
+        amount,
+        fee: 0,
+        reference,
+      });
+      books.add('merchant', {
+        at,
+        direction: 'in',
+        amount,
+        fee: 0,
+        reference,
+      });
+    }
+    await prisma.fintavaLedgerEntry.createMany({ data: entries });
+    await prisma.fintavaLedgerReference.createMany({ data: references });
+  }
+
+  /**
+   * WAWU's account at launch volume: one payment every 30 seconds for the
+   * 8 hours before the 12 hour window opens, so that in the part of the
+   * statement that is read there is never a quiet minute, and two moves inside
+   * the window. `skewed`: the ledger dates the last 30 payments 9 hours after
+   * their lines, and the two moves 9 hours before theirs.
+   */
+  async function busy(skewed = false): Promise<{ a: Wallet; b: Wallet }> {
+    const a = await wallet();
+    const b = await wallet();
+    await side({
+      who: a,
+      direction: 'in',
+      amount: 90_000_000,
+      reference: ref(),
+      at: Date.now() - 60 * HOUR,
+    });
+    const windowFrom = Date.now() - 12 * HOUR;
+    await bulkPayments(
+      a,
+      960,
+      windowFrom - 8 * HOUR,
+      30_000,
+      skewed ? (i) => (i >= 930 ? 9 * HOUR : 0) : undefined,
+    );
+    await move(a, null, 200_000, skewed ? -9 * HOUR : undefined);
+    await move(null, b, 150_000, skewed ? -9 * HOUR : undefined);
+    return { a, b };
+  }
+
+  it("reads WAWU's account clean, and compares it, when it is busy every 30 seconds (G-FIX-80-1)", async () => {
+    await busy();
+    const r = await run(12);
+    expect(r.mismatches).toEqual([]);
+    expect(r.verdict).toBe('clean');
+    // Two wallets and WAWU's account were all compared.
+    expect(r.checks.find((c) => c.id === 'balances')?.checked).toBe(3);
+    expect(r.notices.wawu_balance_not_compared).toBeUndefined();
+  });
+
+  it("names a shortfall in a busy account's compared stretch", async () => {
+    await busy();
+    await side({
+      who: null,
+      direction: 'in',
+      amount: 33_000,
+      reference: ref(),
+      at: tick(),
+      line: false,
+    });
+    const r = await run(12);
+    expect(r.verdict).toBe('differences');
+    expect(kinds(r)).toEqual([
+      'balances:balance_differs',
+      'merchant_movements:ledger_only',
+    ]);
+    expect(
+      r.mismatches.find((f) => f.ref === 'wawu-account')?.detail,
+    ).toContain('33000 kobo less in WAWU');
+  });
+
+  it("names a surplus in a busy account's compared stretch", async () => {
+    await busy();
+    books.add('merchant', {
+      at: tick(),
+      direction: 'in',
+      amount: 21_000,
+      fee: 0,
+      reference: ref(),
+    });
+    const r = await run(12);
+    expect(r.verdict).toBe('differences');
+    expect(kinds(r)).toEqual([
+      'balances:balance_differs',
+      'merchant_movements:provider_only',
+    ]);
+    expect(
+      r.mismatches.find((f) => f.ref === 'wawu-account')?.detail,
+    ).toContain('21000 kobo more in WAWU');
+  });
+
+  it('reads clean when the ledger dates rows hours from their provider lines, either side of the cut (G-FIX-67 F3)', async () => {
+    await busy(true);
+    const r = await run(12);
+    expect(r.mismatches).toEqual([]);
+    expect(r.verdict).toBe('clean');
+    expect(r.checks.find((c) => c.id === 'balances')?.checked).toBe(3);
+    expect(r.notices.wawu_balance_not_compared).toBeUndefined();
+  });
+
+  it("reads a payout the bank returned days after it, from before the window, as clean for WAWU's account", async () => {
     const a = await wallet();
     await side({
       who: a,
@@ -851,17 +1052,62 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
       reference: ref(),
       at: Date.now() - 60 * HOUR,
     });
-    // 80 payments much older than the window, then one every 100 seconds
-    // for the 8 hours up to the moment it opens: in the part of the statement
-    // that is read there are never two minutes without a move.
-    await payments(a, 80, Date.now() - 40 * HOUR, 60_000);
-    const windowFrom = Date.now() - 12 * HOUR;
-    await payments(a, 300, windowFrom - 299 * 100_000, 100_000);
-    await move(a, null, 200_000);
+    await payments(a, 130, Date.now() - 36 * HOUR, 60_000);
+    // WAWU's bank payout 30 hours ago, returned inside the window.
+    const sent = ref();
+    await side({
+      who: null,
+      direction: 'out',
+      amount: 100_000,
+      fee: 2_500,
+      providerFee: 2_500,
+      reference: sent,
+      at: Date.now() - 30 * HOUR,
+      bank: true,
+      status: 'reversed',
+    });
+    books.add('merchant', {
+      at: tick(),
+      direction: 'in',
+      amount: 102_500,
+      fee: 0,
+      reference: `${sent}_reversal`,
+    });
     const r = await run(12);
-    expect(kinds(r)).not.toContain('balances:balance_differs');
     expect(r.mismatches).toEqual([]);
+    expect(r.verdict).toBe('clean');
+    expect(r.checks.find((c) => c.id === 'balances')?.checked).toBe(2);
+  });
+
+  it("says the night is incomplete, never clean, when the statement states no balance for WAWU's account", async () => {
+    await aDay();
+    books.statesBalance = false;
+    const r = await run();
+    expect(r.mismatches).toEqual([]);
+    expect(r.verdict).toBe('incomplete');
+    const balances = r.checks.find((c) => c.id === 'balances');
+    expect(balances?.state).toBe('incomplete');
+    expect(balances?.note).toContain("WAWU's account balance was not compared");
     expect(r.notices.wawu_balance_not_compared).toEqual({ count: 1 });
+  });
+
+  it("says the night is incomplete, never clean, when WAWU's statement is longer than the pages read", async () => {
+    await busy();
+    const pages = cfg.historyPages;
+    // Two pages are 200 lines, 100 minutes of the burst: they do not reach back
+    // past the start of the window.
+    (cfg as { historyPages: number }).historyPages = 2;
+    try {
+      const r = await run(12);
+      expect(r.verdict).toBe('incomplete');
+      const balances = r.checks.find((c) => c.id === 'balances');
+      expect(balances?.state).toBe('incomplete');
+      expect(balances?.note).toContain(
+        "WAWU's account balance was not compared: its statement is longer than the pages read",
+      );
+    } finally {
+      (cfg as { historyPages: number }).historyPages = pages;
+    }
   });
 
   /** A wallet-to-wallet send that was reversed: both lines, both returns. */

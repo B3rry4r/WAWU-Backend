@@ -17,6 +17,8 @@ import { ledgerConfirmWindowMs } from '../ledger/ledger-config';
 import { LEDGER_ABSENT_FAILURE } from '../ledger/ledger.service';
 import { PaymentSettings } from '../payments/payment-config';
 import {
+  type AccountRow,
+  accountLedgerSums,
   compareAccountBalance,
   compareBalance,
   compareFeeLeg,
@@ -27,9 +29,9 @@ import {
   type LedgerGroup,
   type LedgerOutRow,
   type LedgerSums,
-  balanceAt,
-  openingBalanceOf,
-  quietCut,
+  type StatementCut,
+  cutStatement,
+  providerRefs,
   requiredInAccount,
   sameLedger,
   sumLedger,
@@ -73,15 +75,6 @@ const MINUTE = 60_000;
  * seconds, and a row on the edge must find its pair.
  */
 const HISTORY_MARGIN_MS = 6 * HOUR;
-
-/**
- * WAWU's account balance on a history longer than the window is compared from
- * a cut inside the part read (FIX-80). The cut is placed where neither the
- * provider nor the ledger has a move for at least this long, so the two
- * sides' slightly different times for one move cannot put it on opposite
- * sides of the cut.
- */
-const BALANCE_QUIET_MS = 2 * MINUTE;
 
 /** What the provider's history of a holder gave. */
 interface History {
@@ -214,6 +207,25 @@ const OUT_ROW = {
 } satisfies Prisma.FintavaLedgerEntrySelect;
 
 type OutRow = Prisma.FintavaLedgerEntryGetPayload<{ select: typeof OUT_ROW }>;
+
+/** A merchant row, as WAWU's account balance needs it (FIX-80 round 2). */
+const ACCOUNT_ROW = {
+  id: true,
+  direction: true,
+  status: true,
+  totalKobo: true,
+  occurredAt: true,
+  reversalReference: true,
+  reversedAt: true,
+  counterpartyKind: true,
+  failureReason: true,
+  customerReference: true,
+  fintavaReference: true,
+  tagapayTransRef: true,
+  fintavaTransactionId: true,
+  sessionId: true,
+  references: { select: { value: true } },
+} satisfies Prisma.FintavaLedgerEntrySelect;
 
 function toOutRow(r: OutRow): LedgerOutRow {
   const refs = new Set<string>();
@@ -1387,152 +1399,203 @@ export class MoneyCheckService {
   }
 
   /**
-   * WAWU's own account: the merchant rows of the ledger, summed. From a cut
-   * (FIX-80) only the rows from that moment on, and the rows still pending
-   * whatever their age (what they will do is not in the opening balance).
+   * Where WAWU's account is compared from, and what it held there (FIX-80
+   * round 2). Both come off one line of the provider's statement.
+   * - A history read to the first line the account ever had: the cut is
+   *   before that line.
+   * - A history read back past the window (it stops there, as the movements
+   *   need no more): the cut is a statement line from before the window, and
+   *   the ledger side is the rows whose provider line comes after it (see
+   *   `accountLedgerSums`). No time on either side decides where a row falls.
+   * Otherwise the reason it cannot be compared tonight, in a sentence for the
+   * report.
    */
-  private async merchantLedgerSums(from: Date | null): Promise<LedgerSums> {
-    const base: Prisma.FintavaLedgerEntryWhereInput = {
-      AND: [
-        rowsOf(this.provider.name),
-        this.scope.ledgerWhere(),
-        { walletKind: 'merchant' },
-        ...(from
-          ? [
-              {
-                OR: [
-                  { occurredAt: { gte: from } },
-                  { status: 'pending' as const },
-                ],
-              },
-            ]
-          : []),
-      ],
-    };
-    // A bank send that failed and has not been shown to come back (the same
-    // rule as a wallet's `uncertain`).
-    const uncertain: Prisma.FintavaLedgerEntryWhereInput = {
-      status: 'failed',
-      direction: 'out',
-      reversedAt: null,
-      counterpartyKind: 'bank_account',
-      OR: [
-        { failureReason: null },
-        { failureReason: { not: LEDGER_ABSENT_FAILURE } },
-      ],
-    };
-    const groups: LedgerGroup[] = [];
-    for (const isUncertain of [false, true]) {
-      const found = await this.prisma.fintavaLedgerEntry.groupBy({
-        by: ['direction', 'status'],
-        where: {
-          AND: [base, isUncertain ? uncertain : { NOT: uncertain }],
-        },
-        _sum: { totalKobo: true },
-        _count: { _all: true },
-        _max: { updatedAt: true },
-      });
-      for (const g of found) {
-        groups.push({
-          direction: g.direction === 'in' ? 'in' : 'out',
-          status: g.status,
-          uncertain: isUncertain,
-          totalKobo: g._sum.totalKobo ?? 0n,
-          rows: g._count._all,
-          touchedMs: g._max.updatedAt ? g._max.updatedAt.getTime() : null,
-        });
-      }
+  private accountBasis(
+    st: RunState,
+    hist: History,
+  ): { cut: StatementCut } | { why: string } {
+    if (!hist.complete) {
+      return { why: 'its statement is longer than the pages read' };
     }
-    return sumLedger(groups);
+    const fromMs =
+      hist.reachedStart || st.windowFrom === null
+        ? null
+        : st.windowFrom.getTime();
+    const cut = cutStatement(hist.rows, fromMs);
+    return cut === null
+      ? {
+          why: 'its statement gives no completed line stating a balance to start from',
+        }
+      : { cut };
   }
 
   /**
-   * What WAWU's account held at the start of the stretch the ledger is summed
-   * over, and where that stretch starts (FIX-80). The two must be the same
-   * moment on both sides: an opening taken off a partial history, against the
-   * ledger's sums since the beginning, is a difference that is not there.
-   * - A history read to the first line the account ever had: the opening
-   *   before that line, and the whole ledger.
-   * - A history read back past the window (it stops there, as the movements
-   *   need no more): the balance at a cut inside the part read, placed where
-   *   nothing happened on either side for a while, and the ledger from the
-   *   cut. A difference older than the cut is not this account check's; the
-   *   movements of the window are compared line by line.
-   * - Any other history, or no quiet moment to cut at: null, and the account's
-   *   balance is not compared tonight.
+   * How many merchant rows were written or changed since the cut, and when
+   * the latest was. Two reads of it around a provider call that are the same
+   * mean the ledger stood still while the provider was asked.
    */
-  private async accountBasis(
-    st: RunState,
-    hist: History,
-  ): Promise<{ openingKobo: bigint; from: Date | null } | null> {
-    if (hist.reachedStart) {
-      const opening = openingBalanceOf(hist.rows);
-      return opening === null ? null : { openingKobo: opening, from: null };
-    }
-    if (!hist.complete || st.windowFrom === null) return null;
-    const times = hist.rows.map((p) => Date.parse(p.createdAt));
-    if (times.length === 0 || times.some((t) => !Number.isFinite(t))) {
-      return null;
-    }
-    const lo = Math.min(...times);
-    const hi = st.windowFrom.getTime();
-    if (hi <= lo) return null;
-    const rows = await this.prisma.fintavaLedgerEntry.findMany({
+  private async accountSignature(cut: StatementCut): Promise<string> {
+    const found = await this.prisma.fintavaLedgerEntry.aggregate({
       where: {
         AND: [
           rowsOf(this.provider.name),
           this.scope.ledgerWhere(),
           { walletKind: 'merchant' },
-          {
-            OR: [
-              { occurredAt: { gte: new Date(lo), lte: new Date(hi) } },
-              { createdAt: { gte: new Date(lo), lte: new Date(hi) } },
-              { completedAt: { gte: new Date(lo), lte: new Date(hi) } },
-            ],
-          },
+          ...(cut.atMs === null
+            ? []
+            : [{ updatedAt: { gte: new Date(cut.atMs) } }]),
         ],
       },
-      select: { occurredAt: true, createdAt: true, completedAt: true },
+      _count: { _all: true },
+      _max: { updatedAt: true },
     });
-    const events = [
-      ...times,
-      ...rows.flatMap((r) =>
-        [r.occurredAt, r.createdAt, r.completedAt]
-          .filter((d): d is Date => d !== null)
-          .map((d) => d.getTime()),
-      ),
-    ];
-    const cut = quietCut(events, lo, hi, BALANCE_QUIET_MS);
-    if (cut === null) return null;
-    const opening = balanceAt(hist.rows, cut);
-    return opening === null
-      ? null
-      : { openingKobo: opening, from: new Date(cut) };
+    return `${found._count._all}:${found._max.updatedAt?.getTime() ?? 0}`;
+  }
+
+  /**
+   * The merchant rows that can fall after the cut: those written or touched
+   * since it and the pending ones, and then, by reference, the rows named by
+   * any line after the cut that none of those answered (a row dated hours
+   * from its line is found that way, whatever its date).
+   */
+  private async accountRows(cut: StatementCut): Promise<AccountRow[]> {
+    const base: Prisma.FintavaLedgerEntryWhereInput = {
+      AND: [
+        rowsOf(this.provider.name),
+        this.scope.ledgerWhere(),
+        { walletKind: 'merchant' },
+      ],
+    };
+    const found = new Map<string, AccountRow>();
+    const known = new Set<string>();
+    const load = async (where: Prisma.FintavaLedgerEntryWhereInput) => {
+      const PAGE = 2000;
+      let last: string | undefined;
+      for (;;) {
+        const rows = await this.prisma.fintavaLedgerEntry.findMany({
+          where: {
+            AND: [
+              base,
+              where,
+              ...(last === undefined ? [] : [{ id: { gt: last } }]),
+            ],
+          },
+          select: ACCOUNT_ROW,
+          orderBy: { id: 'asc' },
+          take: PAGE,
+        });
+        for (const r of rows) {
+          const refs = new Set<string>();
+          for (const v of [
+            r.customerReference,
+            r.fintavaReference,
+            r.tagapayTransRef,
+            r.fintavaTransactionId,
+            r.sessionId,
+            ...r.references.map((x) => x.value),
+          ]) {
+            if (typeof v === 'string' && v !== '') refs.add(v);
+          }
+          for (const v of refs) known.add(v);
+          if (r.reversalReference) known.add(r.reversalReference);
+          found.set(r.id, {
+            direction: r.direction === 'in' ? 'in' : 'out',
+            status: r.status,
+            uncertain:
+              r.status === 'failed' &&
+              r.direction === 'out' &&
+              r.reversedAt === null &&
+              r.counterpartyKind === 'bank_account' &&
+              r.failureReason !== LEDGER_ABSENT_FAILURE,
+            totalKobo: r.totalKobo,
+            refs: [...refs],
+            reversalRef: r.reversalReference,
+            occurredAt: r.occurredAt,
+          });
+        }
+        if (rows.length < PAGE) return;
+        last = rows[rows.length - 1].id;
+      }
+    };
+    if (cut.atMs === null) {
+      await load({});
+      return [...found.values()];
+    }
+    const since = new Date(cut.atMs);
+    await load({
+      OR: [
+        { occurredAt: { gte: since } },
+        { createdAt: { gte: since } },
+        { updatedAt: { gte: since } },
+        { status: 'pending' },
+      ],
+    });
+    // By reference: a line after the cut that no loaded row names, and the
+    // move a return line gives back, when no loaded row names that either.
+    const wanted = new Set<string>();
+    for (const p of cut.after) {
+      const refs = providerRefs(p);
+      if (!refs.some((r) => known.has(r))) for (const r of refs) wanted.add(r);
+      if (
+        typeof p.returnOf === 'string' &&
+        p.returnOf !== '' &&
+        !known.has(p.returnOf)
+      ) {
+        wanted.add(p.returnOf);
+      }
+    }
+    const names = [...wanted];
+    for (let i = 0; i < names.length; i += 500) {
+      const chunk = names.slice(i, i + 500);
+      await load({
+        OR: [
+          { customerReference: { in: chunk } },
+          { fintavaReference: { in: chunk } },
+          { tagapayTransRef: { in: chunk } },
+          { fintavaTransactionId: { in: chunk } },
+          { sessionId: { in: chunk } },
+          { reversalReference: { in: chunk } },
+          { references: { some: { value: { in: chunk } } } },
+        ],
+      });
+    }
+    return [...found.values()];
   }
 
   /**
    * WAWU's own account at the provider against the merchant ledger (FIX-67):
-   * what the provider says the account held when its statement began, plus
-   * the ledger's completed money in less out, may be anywhere the unsettled
-   * rows allow. The opening figure is the provider's own, read off its
-   * statement, so it needs a provider whose lines state the running balance;
-   * a provider that states none is not compared (nothing to say), and one
-   * that does but cannot give the opening says so. The opening and the
-   * ledger's sums are of the same stretch (`accountBasis`, FIX-80).
-   * A difference is reported only when the ledger stood still while the
+   * what the provider says the account held at the cut (`accountBasis`), plus
+   * the ledger's completed money in less out since, may be anywhere the
+   * unsettled rows allow. The opening figure is the provider's own, read off
+   * its statement. A provider whose history states neither a direction nor a
+   * balance (Fintava's) has nothing to compare it with and is left out, as it
+   * always was. Where it is compared on a statement that states them and
+   * cannot be tonight, the check says so and the night is `incomplete`, never
+   * clean. A difference is reported only when the ledger stood still while the
    * provider was asked, twice running, as a wallet's is.
    */
   private async checkAccountBalance(
     st: RunState,
     hist: History,
   ): Promise<void> {
-    if (hist.rows.every((p) => p.balanceAfterKobo == null)) return;
-    const basis = await this.accountBasis(st, hist);
-    if (basis === null) {
+    const states = hist.rows.some(
+      (p) =>
+        p.balanceAfterKobo != null ||
+        p.direction === 'in' ||
+        p.direction === 'out',
+    );
+    if (!states) return;
+    const basis = this.accountBasis(st, hist);
+    if (!('cut' in basis)) {
       st.sink.notice('wawu_balance_not_compared', 1);
+      st.sink.cannot(
+        'balances',
+        'incomplete',
+        `WAWU's account balance was not compared: ${basis.why}.`,
+      );
       return;
     }
-    const opening = basis.openingKobo;
+    const { cut } = basis;
     let confirmed = 0;
     let last: {
       expectedKobo: bigint;
@@ -1541,18 +1604,23 @@ export class MoneyCheckService {
     } | null = null;
     const waits = this.settings.recheckMs;
     for (let i = 0; i <= waits.length; i += 1) {
-      const before = await this.merchantLedgerSums(basis.from);
+      const before = await this.accountSignature(cut);
+      const rows = await this.accountRows(cut);
       const account = await this.ask(() => this.provider.getPlatformAccount());
-      const after = await this.merchantLedgerSums(basis.from);
-      if (sameLedger(before, after)) {
-        const cmp = compareAccountBalance(after, opening, account);
+      const after = await this.accountSignature(cut);
+      if (before === after) {
+        const cmp = compareAccountBalance(
+          accountLedgerSums(rows, cut),
+          cut.openingKobo,
+          account,
+        );
         if (cmp.match) {
           st.sink.compared('balances', 1);
           return;
         }
         confirmed += 1;
         last = {
-          expectedKobo: opening + cmp.baseKobo,
+          expectedKobo: cut.openingKobo + cmp.baseKobo,
           availableKobo: account.availableKobo,
           differenceKobo: cmp.differenceKobo,
         };
@@ -1562,6 +1630,11 @@ export class MoneyCheckService {
     }
     if (last === null) {
       st.sink.notice('wawu_balance_moving', 1);
+      st.sink.cannot(
+        'balances',
+        'incomplete',
+        "WAWU's account balance was not compared: its ledger kept moving while it was read.",
+      );
       return;
     }
     st.sink.compared('balances', 1);
