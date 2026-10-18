@@ -317,6 +317,13 @@ export class NuvionSeamStandIn implements WalletProvider {
   feeKobo: (amountKobo: bigint) => bigint = () => 0n;
   /** References whose record the adapter cannot read yet (Nuvion lagging). */
   readonly unseen = new Set<string>();
+  /**
+   * Holds the answer to a question about a send (`reconcileSend`) until the
+   * promise this returns settles: a spec decides which of several overlapping
+   * sweeps gets its answer first. The question is recorded in `calls` when it
+   * arrives, before the wait. Unset: answered at once (FIX-76).
+   */
+  holdLook: ((reference: string) => Promise<void> | undefined) | null = null;
   /** WAWU's operational account. */
   readonly operational: NuvionAccount;
   /** The answer `getPlatformAccount` gives instead of the operational account. */
@@ -719,6 +726,17 @@ export class NuvionSeamStandIn implements WalletProvider {
       method: 'reconcileSend',
       args: { reference, holder, since },
     });
+    const held = this.holdLook?.(reference);
+    if (held) {
+      return held.then(() => this.answerLook(reference, holder));
+    }
+    return this.answerLook(reference, holder);
+  }
+
+  private answerLook(
+    reference: string,
+    holder: ProviderHolder,
+  ): Promise<ProviderReconciliation> {
     if (this.unseen.has(reference)) {
       return Promise.resolve({ state: 'unknown', why: 'too_soon' });
     }
