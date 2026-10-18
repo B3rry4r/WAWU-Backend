@@ -615,6 +615,11 @@ of Hub processes make one run a night.
 - **Reading a night**: `MoneyCheckRun.report` (kobo as text, references only).
   The verdict is `clean` only when every comparison was made and nothing was
   found. What the provider's adapter cannot answer is `not_checked`, never clean.
+- **On Nuvion** (FIX-67): a statement line states which way it went, so credits are
+  compared with the ledger's `in` rows and debits with its `out` rows; WAWU's fee,
+  which Nuvion moves as a transfer of its own (`<send>-fee`), is matched to its send;
+  and WAWU's account is compared with its ledger from the opening balance the
+  provider's statement states.
 - The settings are in `.env.example`; what it does and does not compare is in
   `docs/contract/CONVENTIONS.md` section 19.
 - Run `npx prisma migrate deploy` so `MoneyCheckRun` exists.

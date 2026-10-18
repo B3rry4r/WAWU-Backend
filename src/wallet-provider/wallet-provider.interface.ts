@@ -491,6 +491,18 @@ export interface ProviderTransaction {
    * the provider's own figure: never one added up from our records.
    */
   balanceAfterKobo?: bigint | null;
+  /**
+   * Set when this record is the transfer that moved WAWU's fee on a send (a
+   * provider with `wawuFeeLeg`): the reference of the send it belongs to.
+   * The nightly check (FIX-67) matches the leg to its send by this, never by
+   * parsing a reference itself. Absent or null: it is not a fee transfer.
+   */
+  feeLegOf?: string | null;
+  /**
+   * Set when this record is the transfer that gave a send's fee back (the
+   * send did not stand): the reference of that send. Absent or null: it is not.
+   */
+  feeReturnOf?: string | null;
 }
 
 export type ProviderTransactionKind = 'transfer' | 'charge' | 'other';

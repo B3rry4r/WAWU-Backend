@@ -4,6 +4,7 @@ import type {
   LedgerRecordResult,
   LedgerWallet,
 } from '../../money/ledger/ledger.interface';
+import { chargeDifferenceNote } from '../../money/ledger/ledger-notes';
 import {
   LEDGER_BANK_SEND_FAILURE,
   type LedgerService,
@@ -510,7 +511,7 @@ export class NuvionBankOutflowRecorder {
         where: { id: entryId },
         data: { providerFeeKobo: BigInt(stated) },
       });
-      const note = `Nuvion charged ${stated} kobo, the quote was ${quoted} kobo; Nuvion's figure is recorded`;
+      const note = chargeDifferenceNote('Nuvion', stated, quoted);
       await this.ledger.noteDiscrepancy(entryId, note, tx);
       return note;
     });
