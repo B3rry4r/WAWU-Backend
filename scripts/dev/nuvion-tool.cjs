@@ -5,7 +5,8 @@
 //       Makes one person with an APPROVED, FUNDED Nuvion wallet through the Hub's own routes: registers them in the
 //       stack's mock WAWU ID, opens the wallet (POST /money/wallet/open), uploads the two documents, waits (about two
 //       minutes: the Hub reads webhooks every 30 seconds) for the approval and the account number, sets the PIN, and sends the money in as a signed
-//       inflows.completed webhook. Prints one JSON line: token, userId, accountNumber, pin, balanceKobo (the Hub's
+//       inflows.completed webhook. With the hosted selfie on (STACK_NUVION_LIVENESS=on) it also starts the selfie and
+//       approves it through the stand-in's control route. Prints one JSON line: token, userId, accountNumber, pin, balanceKobo (the Hub's
 //       and the stand-in's). With a stack that runs the real wawu-id, pass --token <a wawu-id token> (the mock
 //       cannot sign for it).
 //
@@ -119,6 +120,28 @@ async function seed() {
     form.append('file', new Blob([PNG], { type: 'image/png' }), `${kind}.png`);
     const up = await call(HUB, 'POST', '/money/identity/documents', { token, form });
     if (up.status >= 300) die(`upload ${kind}: ${up.status} ${JSON.stringify(up.json).slice(0, 300)}`);
+  }
+  // With the hosted selfie on (the stack started with STACK_NUVION_LIVENESS=on) the opening waits for it: start it and
+  // let the stand-in's page approve it, as a person tapping "Take my selfie" would.
+  const live = await call(HUB, 'GET', '/money/identity/liveness', { token });
+  const liveView = live.json.data || live.json;
+  if (liveView && liveView.enabled === true) {
+    const started = await call(HUB, 'POST', '/money/identity/liveness', { token, body: {} });
+    const url = (started.json.data || started.json || {}).url;
+    const session = typeof url === 'string' ? url.split('/').pop() : null;
+    if (started.status >= 300 || !session) die(`start selfie: ${started.status} ${JSON.stringify(started.json).slice(0, 300)}`);
+    const done = await call(NUV, 'POST', `/__standin/liveness/${encodeURIComponent(session)}/finish`, {
+      body: { capture_status: 'completed', verification_status: 'approved' },
+    });
+    if (done.status >= 300) die(`approve selfie: ${done.status} ${JSON.stringify(done.json).slice(0, 300)}`);
+    // The Hub reads the result from Nuvion when it is asked for it (there is no webhook for the selfie).
+    let state = null;
+    for (let i = 0; i < 30 && state !== 'passed'; i += 1) {
+      const r = await call(HUB, 'GET', '/money/identity/liveness', { token });
+      state = (r.json.data || r.json || {}).state ?? null;
+      if (state !== 'passed') await sleep(500);
+    }
+    if (state !== 'passed') die(`the selfie reads ${state} after it was approved`);
   }
   let wallet = null;
   // The Hub reads Nuvion's webhooks on a 30 second tick, and opening is three of them in a row: about two minutes.

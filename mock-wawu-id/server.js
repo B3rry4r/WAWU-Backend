@@ -294,6 +294,34 @@ app.post("/auth/refresh", (req, res) => {
   }
 });
 
+// The sign-up sequence (AUTH-05). The app reads where a signed-in account stands before it opens Home
+// (GET /auth/signup/progress). An account made here (POST /auth/register) did not come through the mobile sign-up,
+// so it is in no sequence: the real service answers one with no progress row as step `done`, `inSequence: false`
+// (wawu-id src/auth/signup-sequence.service.ts, `view`), and refuses a step with 409 SIGNUP_ALREADY_FINISHED.
+// Before this the mock answered 404 and every stack walk of the app logged one console 404 (SWEEP-APP-6, DV2-05 L2).
+function accountForBearer(req, res) {
+  const header = req.header("Authorization") || "";
+  try {
+    const decoded = jwt.verify(header.replace(/^Bearer /i, ""), PUBLIC_KEY, { algorithms: ["RS256"] });
+    const user = decoded.type === "refresh" ? null : Object.values(USERS).find((u) => u.sub === decoded.sub);
+    if (user) return user;
+  } catch {
+    // falls through to the 401
+  }
+  res.status(401).json({ statusCode: 401, code: "SESSION_INVALID", message: "Sign in again." });
+  return null;
+}
+app.get("/auth/signup/progress", (req, res) => {
+  const user = accountForBearer(req, res);
+  if (!user) return;
+  res.json({ data: { step: "done", inSequence: false, accountType: null, steps: [], emailProven: false } });
+});
+app.post("/auth/signup/progress", (req, res) => {
+  const user = accountForBearer(req, res);
+  if (!user) return;
+  res.status(409).json({ statusCode: 409, code: "SIGNUP_ALREADY_FINISHED", message: "Your sign-up is already finished." });
+});
+
 // Internal service-to-service surface — same X-Service-Key pattern as
 // the real WAWU ID.
 function requireServiceKey(req, res, next) {
