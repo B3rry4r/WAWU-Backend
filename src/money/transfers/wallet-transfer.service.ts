@@ -1364,7 +1364,13 @@ export class WalletTransferService implements OnModuleInit {
     const rec = await this.legRecord(t, FEE_LEG_SUFFIX);
     const old =
       Date.now() - (t.sentAt ?? t.createdAt).getTime() > FEE_RETURN_GIVE_UP_MS;
-    if (rec === 'unknown' || (rec !== null && rec.outcome === 'pending')) {
+    // A record in a status word we do not know (`outcome` null) says neither
+    // that the fee was taken nor that it was not: asked again, like a pending
+    // one, and never closed as "no fee was taken" (SWEEP-MONEY-4 C1).
+    if (
+      rec === 'unknown' ||
+      (rec !== null && (rec.outcome === 'pending' || rec.outcome === null))
+    ) {
       if (old) {
         this.logger.error(
           `send ${t.id}: WAWU's fee transfer is still not known after a day; a person looks`,

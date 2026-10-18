@@ -694,4 +694,274 @@ describe('A school payout that Nuvion accepts and then fails is paid once, under
     // The money left the account as the pending transfer says, and the ledger agrees.
     await ledgerEqualsNuvion([s.id], before);
   });
+
+  // -------------------------------------------------------------------------
+  // SWEEP-MONEY-4 C2 and L1 (FIX-72). The retry rule held for every way the
+  // provider's answer can be unclear: each confirmed provider failure gets
+  // one new try under a new reference; a timeout, a 5xx, an unreadable record
+  // or a word we do not know asks again and never sends again; never two
+  // transfers in flight; and a payout Nuvion refuses, or that waits for
+  // funds, is asked again under the SAME reference, which cannot pay twice.
+  // -------------------------------------------------------------------------
+
+  /** Transfers Nuvion holds for this payout that are not finished: never more than one. */
+  const inFlight = (id: string) =>
+    transfersOf(id).filter(
+      (t) => t.status === 'pending' || t.status === 'processing',
+    ).length;
+
+  /**
+   * Nuvion's list of transfers (the read that finds a payout's record by its
+   * reference) answers `how` for as long as it is held. Returns the way back.
+   */
+  const unreadable = (how: 'a 5xx' | 'a cut connection'): (() => void) => {
+    const handler = () =>
+      how === 'a 5xx'
+        ? {
+            status: 503,
+            body: errorBody('error_service_unavailable', 'Try again later.'),
+          }
+        : { status: 0, hangUp: true };
+    standin.on('GET', /^\/transfers$/, handler);
+    return () => {
+      const routes = (
+        standin as unknown as { routes: Array<{ handler: unknown }> }
+      ).routes;
+      routes.splice(
+        routes.findIndex((r) => r.handler === handler),
+        1,
+      );
+    };
+  };
+
+  it('a failed payout whose record cannot be read, read after read for hours, never starts a new reference or sends again; the readable failed record then starts exactly one (C2)', async () => {
+    const before = available();
+    const p = await payable();
+    pay.failCreateNext(1);
+    const t0 = later(MINUTE);
+    let back = unreadable('a 5xx');
+    let s: { id: string; ref1: string; ref2: string };
+    try {
+      s = await start(p, t0);
+      // Nuvion made the transfer and failed it; the Hub cannot read that, so
+      // the failure is not proven and the reference is not given up.
+      expect(postsOf(s.id)).toEqual([s.ref1]);
+      expect(transferOf(s.ref1).status).toBe('failed');
+      let step = 0;
+      for (const ms of [
+        30_000,
+        5 * MINUTE,
+        70 * MINUTE,
+        6 * HOUR,
+        12 * HOUR,
+        20 * HOUR,
+      ]) {
+        // The first looks meet a 5xx, the later ones a cut connection.
+        if (step === 3) {
+          back();
+          back = unreadable('a cut connection');
+        }
+        step += 1;
+        await settlements.run(at(t0, ms));
+        expect(postsOf(s.id)).toEqual([s.ref1]);
+        expect(transfersOf(s.id)).toHaveLength(1);
+        expect(inFlight(s.id)).toBe(0);
+        expect(await settlementOf(p.enrolmentId)).toMatchObject({
+          status: 'sent',
+          attempt: 1,
+          customerReference: s.ref1,
+        });
+      }
+    } finally {
+      back();
+    }
+    expect(available()).toBe(before);
+
+    // Readable at last: the record says failed. The pass that reads it only
+    // marks the new reference; the one new try follows after the rest.
+    const t1 = at(t0, 21 * HOUR);
+    await settlements.run(t1);
+    expect(await settlementOf(p.enrolmentId)).toMatchObject({
+      status: 'pending',
+      attempt: 2,
+      customerReference: s.ref2,
+    });
+    expect(postsOf(s.id)).toEqual([s.ref1]);
+    await settlements.run(at(t1, 10 * MINUTE));
+    expect(postsOf(s.id)).toEqual([s.ref1, s.ref2]);
+    expect(inFlight(s.id)).toBe(1);
+    pay.settle(transferOf(s.ref2).id, 'successful');
+    await settlements.run(at(t1, 80 * MINUTE));
+    await settlements.run(at(t1, 200 * MINUTE));
+    expect((await settlementOf(p.enrolmentId)).status).toBe('paid');
+    expect(postsOf(s.id)).toEqual([s.ref1, s.ref2]);
+    expect(inFlight(s.id)).toBe(0);
+    expect(available()).toBe(before - BigInt(SCHOOL_SHARE + FEE));
+    const rows = await ledgerEqualsNuvion([s.id], before);
+    expect(rows.map((r) => [r.customerReference, r.status]).sort()).toEqual(
+      [
+        [s.ref1, 'failed'],
+        [s.ref2, 'completed'],
+      ].sort(),
+    );
+  });
+
+  it('a failed payout whose record stays unreadable past the review bound goes to a person and is never sent again, even when the record is readable later (C2)', async () => {
+    const before = available();
+    const p = await payable();
+    pay.failCreateNext(1);
+    const t0 = later(MINUTE);
+    const back = unreadable('a 5xx');
+    let s: { id: string; ref1: string; ref2: string };
+    try {
+      s = await start(p, t0);
+      await settlements.run(at(t0, 10 * HOUR));
+      expect((await settlementOf(p.enrolmentId)).status).toBe('sent');
+      await settlements.run(at(t0, (REVIEW_HOURS + 1) * HOUR));
+    } finally {
+      back();
+    }
+    const row = await settlementOf(p.enrolmentId);
+    expect(row.status).toBe('review');
+    expect(row.nextAttemptAt).toBeNull();
+    // It left the sweep: a readable record changes nothing now.
+    await settlements.run(at(t0, 100 * HOUR));
+    expect(postsOf(s.id)).toEqual([s.ref1]);
+    expect(transfersOf(s.id)).toHaveLength(1);
+    expect(inFlight(s.id)).toBe(0);
+    expect(available()).toBe(before);
+  });
+
+  it('a payout Nuvion refuses (nothing made) is asked again under the SAME reference after the rest: one transfer at Nuvion, the school paid once (L1)', async () => {
+    const before = available();
+    const p = await payable();
+    pay.answerNext('POST', /^\/transfers$/, {
+      status: 422,
+      body: errorBody('error_validation_error', 'A field is invalid'),
+    });
+    const t0 = later(MINUTE);
+    const s = await start(p, t0);
+
+    expect(postsOf(s.id)).toEqual([s.ref1]);
+    expect(transfersOf(s.id)).toHaveLength(0);
+    expect(await settlementOf(p.enrolmentId)).toMatchObject({
+      status: 'pending',
+      attempt: 1,
+      waiting: 'refused',
+      customerReference: s.ref1,
+    });
+    expect(available()).toBe(before);
+
+    // A sweep inside the rest sends nothing; after it the same reference is used.
+    await settlements.run(at(t0, 30_000));
+    expect(postsOf(s.id)).toEqual([s.ref1]);
+    await settlements.run(at(t0, 10 * MINUTE));
+    expect(postsOf(s.id)).toEqual([s.ref1, s.ref1]);
+    expect(transfersOf(s.id)).toHaveLength(1);
+    pay.settle(transferOf(s.ref1).id, 'successful');
+    await settlements.run(at(t0, 80 * MINUTE));
+    await settlements.run(at(t0, 200 * MINUTE));
+    expect((await settlementOf(p.enrolmentId)).status).toBe('paid');
+    expect(transfersOf(s.id)).toHaveLength(1);
+    expect(available()).toBe(before - BigInt(SCHOOL_SHARE + FEE));
+    const rows = await ledgerEqualsNuvion([s.id], before);
+    expect(rows.map((r) => [r.customerReference, r.status])).toEqual([
+      [s.ref1, 'completed'],
+    ]);
+  });
+
+  it('a payout that waits for funds is asked again under the SAME reference at each rest; when WAWU account is topped up it is made once and the school paid once (L1)', async () => {
+    const before = available();
+    const p = await payable();
+    // WAWU's account cannot cover the send and its charge.
+    pay.operational.balance = {
+      available: SCHOOL_SHARE + FEE - 1,
+      current: SCHOOL_SHARE + FEE - 1,
+      overdraft_used: 0,
+    };
+    const t0 = later(MINUTE);
+    let s: { id: string; ref1: string; ref2: string };
+    try {
+      s = await start(p, t0);
+      expect(await settlementOf(p.enrolmentId)).toMatchObject({
+        status: 'pending',
+        waiting: 'funds',
+        customerReference: s.ref1,
+      });
+      for (const ms of [10 * MINUTE, 70 * MINUTE, 3 * HOUR]) {
+        await settlements.run(at(t0, ms));
+      }
+      // Asked each time it was due, always under the one reference; nothing made.
+      expect(new Set(postsOf(s.id))).toEqual(new Set([s.ref1]));
+      expect(postsOf(s.id).length).toBeGreaterThanOrEqual(3);
+      expect(transfersOf(s.id)).toHaveLength(0);
+      expect((await settlementOf(p.enrolmentId)).attempt).toBe(1);
+    } finally {
+      pay.operational.balance = {
+        available: before,
+        current: before,
+        overdraft_used: 0,
+      };
+    }
+    const asked = postsOf(s.id).length;
+    await settlements.run(at(t0, 6 * HOUR));
+    expect(postsOf(s.id)).toHaveLength(asked + 1);
+    expect(new Set(postsOf(s.id))).toEqual(new Set([s.ref1]));
+    expect(transfersOf(s.id)).toHaveLength(1);
+    pay.settle(transferOf(s.ref1).id, 'successful');
+    await settlements.run(at(t0, 8 * HOUR));
+    await settlements.run(at(t0, 10 * HOUR));
+    expect((await settlementOf(p.enrolmentId)).status).toBe('paid');
+    expect(transfersOf(s.id)).toHaveLength(1);
+    expect(available()).toBe(before - BigInt(SCHOOL_SHARE + FEE));
+    await ledgerEqualsNuvion([s.id], before);
+  });
+
+  it('even if a refusal were wrong (Nuvion made the transfer and then answered a refusal), asking again under the SAME reference returns that transfer and the school is paid once (L1, the worst case)', async () => {
+    const before = available();
+    const p = await payable();
+    // The transfer is made and the connection answers a refusal.
+    (
+      pay as unknown as { overrides: Array<Record<string, unknown>> }
+    ).overrides.push({
+      match: /^\/transfers$/,
+      method: 'POST',
+      what: {
+        after: {
+          status: 422,
+          body: errorBody('error_validation_error', 'A field is invalid'),
+        },
+      },
+    });
+    const t0 = later(MINUTE);
+    const s = await start(p, t0);
+
+    expect(postsOf(s.id)).toEqual([s.ref1]);
+    expect(transfersOf(s.id)).toHaveLength(1);
+    expect(await settlementOf(p.enrolmentId)).toMatchObject({
+      status: 'pending',
+      waiting: 'refused',
+      customerReference: s.ref1,
+    });
+    // The money left WAWU's account once, as Nuvion's pending transfer says.
+    expect(available()).toBe(before - BigInt(SCHOOL_SHARE + FEE));
+
+    await settlements.run(at(t0, 10 * MINUTE));
+    expect(postsOf(s.id)).toEqual([s.ref1, s.ref1]);
+    // Nuvion answered the repeat with the original: still one transfer, one debit.
+    expect(transfersOf(s.id)).toHaveLength(1);
+    expect(inFlight(s.id)).toBe(1);
+    expect(available()).toBe(before - BigInt(SCHOOL_SHARE + FEE));
+    pay.settle(transferOf(s.ref1).id, 'successful');
+    await settlements.run(at(t0, 80 * MINUTE));
+    await settlements.run(at(t0, 200 * MINUTE));
+    expect((await settlementOf(p.enrolmentId)).status).toBe('paid');
+    expect(postsOf(s.id)).toEqual([s.ref1, s.ref1]);
+    expect(transfersOf(s.id)).toHaveLength(1);
+    expect(available()).toBe(before - BigInt(SCHOOL_SHARE + FEE));
+    const rows = await ledgerEqualsNuvion([s.id], before);
+    expect(rows.map((r) => [r.customerReference, r.status])).toEqual([
+      [s.ref1, 'completed'],
+    ]);
+  });
 });
