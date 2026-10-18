@@ -1,6 +1,8 @@
 // FIX-65: every kind of file a person can upload has a decision at purge, and
 // the table cannot fall behind the code that writes the files.
 import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { UPLOAD_FOLDERS } from '../../storage/dto/presign-upload.dto';
 import { CHAT_UPLOAD_FOLDERS } from '../../chat/chat-limits';
@@ -11,6 +13,36 @@ import {
   OWNER_FOLDERS,
   purgeNoteOf,
 } from '../purge-files';
+
+/**
+ * Every way a file in this code can put an object in the bucket (FIX-65 I2,
+ * and SWEEP-LATE V2: `@aws-sdk/lib-storage` `Upload` is a way too, and is
+ * named by its package, because its class name is too common to search for).
+ */
+const BUCKET_WRITERS =
+  'PutObjectCommand|CreateMultipartUploadCommand|createPresignedPost|UploadPartCommand|@aws-sdk/lib-storage';
+
+/** The files under `dir` (not specs, not `tests/`) that match an extended regular expression. */
+function filesMatching(pattern: string, dir: string): string[] {
+  const found = spawnSync(
+    'grep',
+    [
+      '-rlE',
+      pattern,
+      dir,
+      '--include=*.ts',
+      '--exclude=*.spec.ts',
+      '--exclude-dir=tests',
+    ],
+    { encoding: 'utf8' },
+  );
+  return found.stdout
+    .trim()
+    .split('\n')
+    .filter((f) => f !== '')
+    .map((f) => relative(dir, f))
+    .sort();
+}
 
 describe('FIX-65: what the purge does with each kind of upload', () => {
   const written = [
@@ -59,26 +91,39 @@ describe('FIX-65: what the purge does with each kind of upload', () => {
   // storage.service.ts may put an object, so a new file that does fails here
   // until its folder has a decision in FILE_KINDS and this list names it.
   it('has no file that puts an object in the bucket besides storage.service.ts', () => {
-    const src = join(__dirname, '../..');
-    const found = spawnSync(
-      'grep',
-      [
-        '-rlE',
-        'PutObjectCommand|CreateMultipartUploadCommand|createPresignedPost|UploadPartCommand',
-        src,
-        '--include=*.ts',
-        '--exclude=*.spec.ts',
-        '--exclude-dir=tests',
-      ],
-      { encoding: 'utf8' },
-    );
-    expect(
-      found.stdout
-        .trim()
-        .split('\n')
-        .map((f) => relative(src, f))
-        .sort(),
-    ).toEqual(['storage/storage.service.ts']);
+    expect(filesMatching(BUCKET_WRITERS, join(__dirname, '../..'))).toEqual([
+      'storage/storage.service.ts',
+    ]);
+  });
+
+  // SWEEP-LATE V2: the guard above passes on the code as it stands, so it
+  // proves nothing until a file that does the thing is put in front of it.
+  // Each way of putting an object is planted in a folder of its own here, and
+  // the guard must name that file.
+  it('names a planted file for each way of putting an object in the bucket', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wawu-purge-guard-'));
+    try {
+      const ways: Array<[string, string]> = [
+        ['put.ts', "new PutObjectCommand({ Bucket: 'b', Key: 'k' });"],
+        ['multipart.ts', 'new CreateMultipartUploadCommand({});'],
+        ['post.ts', 'await createPresignedPost(client, {});'],
+        ['part.ts', 'new UploadPartCommand({});'],
+        [
+          'lib.ts',
+          "import { Upload } from '@aws-sdk/lib-storage'; new Upload({});",
+        ],
+      ];
+      mkdirSync(join(dir, 'planted'));
+      for (const [name, text] of ways) {
+        writeFileSync(join(dir, 'planted', name), text);
+      }
+      writeFileSync(join(dir, 'planted', 'harmless.ts'), 'export const a = 1;');
+      expect(filesMatching(BUCKET_WRITERS, dir)).toEqual(
+        ways.map(([name]) => `planted/${name}`).sort(),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('keeps for the owner exactly the identity and verification folders', () => {
