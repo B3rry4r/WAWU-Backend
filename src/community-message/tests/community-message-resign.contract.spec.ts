@@ -373,14 +373,10 @@ describe('Community message media is signed again on read (FIX-71, contract)', (
 
   it('the answer to a send, and to its repeat, carries a link that loads today', async () => {
     const key = `community/message/${host.sub}/${randomUUID()}.jpg`;
-    // FIX-77 (two branches met): a message photo must be the sender's own
-    // upload on this bucket, so the old link is on the bucket's own host (the
-    // endpoint's host with the bucket in front, as the SDK signs it) and its
-    // key has the row presign writes.
-    const old = eightDayOldLink(key).replace(
-      HOST,
-      'https://fix71-bucket.fix71-bucket.test.invalid',
-    );
+    // FIX-77: a message photo must be the sender's own upload on this bucket,
+    // so the old link is on the bucket's own host (SWEEP-LATE's eightDayOldLink
+    // now builds it there) and its key has the row presign writes.
+    const old = eightDayOldLink(key);
     await prisma.storageObject.create({
       data: {
         wawuUserId: host.sub,
