@@ -16,7 +16,15 @@ import { ResponseInterceptor } from '../../common/interceptors/response.intercep
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
+import {
+  PhotoUploads,
+  useTestBucket,
+} from '../../community-message/tests/photo-upload';
+import { StorageService } from '../../storage/storage.service';
 import { CommunityModule } from '../community.module';
+
+// A photo must be the sender's own upload (FIX-77): the photo send below makes one.
+const restoreBucket = useTestBucket();
 
 /** The success envelope, typed for what each route answers. */
 interface Envelope<T> {
@@ -136,6 +144,7 @@ describe('Communities for the app: room view, message cost, suggestions (contrac
   let otherHost: Person;
   let blockedHost: Person;
   let viewer: Person;
+  let photos: PhotoUploads;
   const joiners: Person[] = [];
 
   const runTag = Date.now().toString(36);
@@ -257,6 +266,10 @@ describe('Communities for the app: room view, message cost, suggestions (contrac
     await app.init();
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
+    photos = new PhotoUploads(
+      prisma,
+      moduleRef.get(StorageService, { strict: false }),
+    );
 
     const fixture = 'Fixture for community-discover.contract.spec.ts.';
     await prisma.userProfile.createMany({
@@ -358,7 +371,9 @@ describe('Communities for the app: room view, message cost, suggestions (contrac
         where: { wawuUserId: { in: ownedSubs } },
       });
     }
+    await photos?.clean();
     await app?.close();
+    restoreBucket();
     if (ownedMockWawuId && mockWawuId) mockWawuId.kill();
   });
 
@@ -421,7 +436,7 @@ describe('Communities for the app: room view, message cost, suggestions (contrac
         .set(auth(viewer))
         .send({
           text: 'Priced as stated, with a photo.',
-          imageUrl: 'http://storage.test/community/message/photo.png',
+          imageUrl: await photos.link(viewer.sub),
         })
         .expect(201);
       expect(dataOf<{ costInCredits: number }>(photo).costInCredits).toBe(

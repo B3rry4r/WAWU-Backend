@@ -31,6 +31,11 @@ import { ContentPieceModule } from '../../content-piece/content-piece.module';
 import { DirectMessageModule } from '../../direct-message/direct-message.module';
 import { FollowRelationshipModule } from '../../follow-relationship/follow-relationship.module';
 import { CommunityMessageModule } from '../../community-message/community-message.module';
+import {
+  PhotoUploads,
+  useTestBucket,
+} from '../../community-message/tests/photo-upload';
+import { StorageService } from '../../storage/storage.service';
 import { DmRefundService } from '../../direct-message/dm-refund.service';
 import { SchedulerService } from '../../scheduler/scheduler.service';
 import { MOCK_FAILURE_TRANSACTION_ID } from '../../purchase/mock-flutterwave.adapter';
@@ -109,7 +114,11 @@ async function login(identifier: string): Promise<string> {
   return ((await res.json()) as { accessToken: string }).accessToken;
 }
 
+// A photo must be the sender's own upload (FIX-77): the photo sends below make one.
+const restoreBucket = useTestBucket();
+
 describe('Notification wiring (contract)', () => {
+  let photos: PhotoUploads;
   let moduleRef: TestingModule;
   let app: INestApplication;
   let prisma: PrismaService;
@@ -173,6 +182,10 @@ describe('Notification wiring (contract)', () => {
 
     prisma = moduleRef.get(PrismaService);
     notifications = moduleRef.get(NotificationService);
+    photos = new PhotoUploads(
+      prisma,
+      moduleRef.get(StorageService, { strict: false }),
+    );
     // Constructed directly rather than via SchedulerModule so no @Cron is
     // ever registered by a test run — the sweeps are invoked explicitly.
     scheduler = new SchedulerService(
@@ -198,8 +211,10 @@ describe('Notification wiring (contract)', () => {
     });
     await prisma.creditsState.deleteMany({ where: { userWawuId: SYNTHETIC_TRIAL_USER } });
     await prisma.notificationSettings.deleteMany({ where: { userWawuId: { in: SYNTHETIC_USERS } } });
+    await photos?.clean();
     await app?.close();
     await moduleRef?.close();
+    restoreBucket();
     if (ownedMockWawuId && mockWawuId) mockWawuId.kill();
   }, 30000);
 
@@ -407,7 +422,7 @@ describe('Notification wiring (contract)', () => {
           // INBOX-22 (R-62): text is free, a photo costs the 1 credit this test spends.
           .send({
             text: 'Still plenty of credits here.',
-            imageUrl: 'http://storage.test/community/message/photo.png',
+            imageUrl: await photos.link(USER_PLAIN),
           });
         expect(await emittedFor(USER_PLAIN, 'credits_low')).toHaveLength(0);
 
@@ -417,7 +432,7 @@ describe('Notification wiring (contract)', () => {
           // INBOX-22 (R-62): text is free, a photo costs the 1 credit this test spends.
           .send({
             text: 'And now I am running low.',
-            imageUrl: 'http://storage.test/community/message/photo.png',
+            imageUrl: await photos.link(USER_PLAIN),
           });
 
         const [row] = await emittedFor(USER_PLAIN, 'credits_low');

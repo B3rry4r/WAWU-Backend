@@ -409,7 +409,7 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       const who = await member('kinds');
       await setBalance(who.sub, 10);
       const photo = await post(app, who.accessToken, {
-        imageUrl: 'http://storage.test/community/message/p1.png',
+        imageUrl: await upload(who.sub, 'community/message'),
       });
       expect(photo.status).toBe(201);
       expect(answer(photo).data!.costInCredits).toBe(1);
@@ -442,7 +442,7 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       await setBalance(who.sub, 5);
       const res = await post(app, who.accessToken, {
         text: 'Fresh batch this morning',
-        imageUrl: 'http://storage.test/community/message/p2.png',
+        imageUrl: await upload(who.sub, 'community/message'),
       });
       expect(res.status).toBe(201);
       expect(answer(res).data!.costInCredits).toBe(1);
@@ -467,7 +467,7 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
           voice: 4,
         });
         await post(app, who.accessToken, {
-          imageUrl: 'http://storage.test/community/message/p3.png',
+          imageUrl: await upload(who.sub, 'community/message'),
         }).expect(201);
         expect(await balanceOf(who.sub)).toBe(18);
         await post(app, who.accessToken, {
@@ -496,7 +496,7 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       const files = [
         { videoUrl: await upload(host.sub, 'community/message-video') },
         { voiceUrl: await upload(host.sub, 'community/message-voice') },
-        { imageUrl: 'http://storage.test/community/message/p4.png' },
+        { imageUrl: await upload(host.sub, 'community/message') },
         { text: 'Welcome' },
       ];
       for (const body of files) {
@@ -529,7 +529,7 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       expect(await spendsOf(who.sub)).toHaveLength(0);
 
       const photo = await post(app, who.accessToken, {
-        imageUrl: 'http://storage.test/community/message/p5.png',
+        imageUrl: await upload(who.sub, 'community/message'),
       });
       expect(photo.status).toBe(201);
       expect(await balanceOf(who.sub)).toBe(1);
@@ -548,7 +548,7 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       expect(await messagesOf(who.sub)).toHaveLength(0);
 
       const photo = await post(app, who.accessToken, {
-        imageUrl: 'http://storage.test/community/message/p6.png',
+        imageUrl: await upload(who.sub, 'community/message'),
       });
       expect(photo.status).toBe(402);
       expect(answer(photo).message).toBe(
@@ -622,7 +622,7 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       await post(
         app,
         who.accessToken,
-        { imageUrl: 'http://storage.test/community/message/p7.png' },
+        { imageUrl: await upload(who.sub, 'community/message') },
         key,
       ).expect(201);
       const other = await post(
@@ -724,7 +724,7 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
     it('a failure of the low-credits notice after the commit does not turn a paid message into an error', async () => {
       const who = await member('notice-fails');
       await setBalance(who.sub, 6);
-      const body = { imageUrl: 'http://storage.test/community/message/p8.png' };
+      const body = { imageUrl: await upload(who.sub, 'community/message') };
       const key = newKey();
       jest
         .spyOn(notifications, 'emit')
@@ -967,9 +967,7 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
         `${url}&X-Amz-Signature=${'a'.repeat(520)}`;
       const video = longer(await upload(who.sub, 'community/message-video'));
       const voice = longer(await upload(who.sub, 'community/message-voice'));
-      const photo = longer(
-        'http://storage.test/community/message/long.png?x=1',
-      );
+      const photo = longer(await upload(who.sub, 'community/message'));
       expect(
         Math.min(video.length, voice.length, photo.length),
       ).toBeGreaterThan(500);
@@ -1030,6 +1028,264 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
   });
 
   // -------------------------------------------------------------------
+  describe('what a photo may be (FIX-77)', () => {
+    const REFUSED = 'That photo could not be sent. Choose it again.';
+
+    /** A photo send that must be refused with the photo sentence, and the room, the ledger and the balance left alone. */
+    async function expectRefused(
+      token: string,
+      who: string,
+      cases: Array<[string, unknown]>,
+      balance: number,
+    ) {
+      for (const [name, imageUrl] of cases) {
+        const res = await post(app, token, { imageUrl });
+        expect([name, res.status]).toEqual([name, 400]);
+        expect([name, answer(res).message]).toEqual([name, REFUSED]);
+        expect(answer(res).message).not.toMatch(LONG_DASH);
+      }
+      expect(await balanceOf(who)).toBe(balance);
+      expect(await messagesOf(who)).toHaveLength(0);
+      expect(await spendsOf(who)).toHaveLength(0);
+    }
+
+    it("refuses a link that is not this bucket's own, even with the sender's own key, and charges nothing", async () => {
+      const who = await member('photo-foreign');
+      await setBalance(who.sub, 10);
+      const key = await uploadRow(who.sub, 'community/message');
+      const host = new URL(bucket.origin).host;
+      await expectRefused(
+        who.accessToken,
+        who.sub,
+        [
+          ['example.com', `https://example.com/${key}`],
+          [
+            'another host with a signature',
+            `https://evil.example/${key}?X-Amz-Signature=abc`,
+          ],
+          ['another host, key under a path', `https://evil.example/a/b/${key}`],
+          [
+            "this bucket's name as the login of another host",
+            `http://${host}@evil.example/${key}`,
+          ],
+          [
+            'a longer host that starts with the bucket host',
+            `${bucket.origin}.evil.example/${key}`,
+          ],
+          ['the bucket host on another port', `${bucket.origin}:8443/${key}`],
+          [
+            'the bucket host on the other scheme',
+            `${bucket.origin.replace('https:', 'http:')}/${key}`,
+          ],
+          [
+            'a made-up photo link on a made-up host (what the old tests sent)',
+            'http://storage.test/community/message/photo.png',
+          ],
+          ['a link to a picture anywhere', 'https://i.imgur.com/abc.png'],
+        ],
+        10,
+      );
+      // The same key on this bucket's own host is fine: the key was never the problem.
+      const ok = await post(app, who.accessToken, {
+        imageUrl: bucketLink(key),
+      });
+      expect([ok.status, answer(ok).data?.costInCredits]).toEqual([201, 1]);
+      expect(await balanceOf(who.sub)).toBe(9);
+    });
+
+    it("refuses another person's key on every link, this bucket's own included, and charges nothing", async () => {
+      const who = await member('photo-mine');
+      const stranger = await member('photo-theirs');
+      await setBalance(who.sub, 10);
+      const theirs = await uploadRow(stranger.sub, 'community/message');
+      const theirPending = await uploadRow(
+        stranger.sub,
+        'community/message',
+        'pending',
+      );
+      await expectRefused(
+        who.accessToken,
+        who.sub,
+        [
+          ['their link on this bucket', bucketLink(theirs)],
+          ['their signed link from presign', await storage.readUrlFor(theirs)],
+          [
+            'their presigned, unconfirmed photo',
+            await storage.readUrlFor(theirPending),
+          ],
+          ['their key on another host', `https://evil.example/${theirs}`],
+          [
+            'their key with the sender id swapped in (no such file)',
+            bucketLink(theirs.replace(stranger.sub, who.sub)),
+          ],
+        ],
+        10,
+      );
+      // The room is never served a foreign link.
+      expect(await messagesOf(stranger.sub)).toHaveLength(0);
+    });
+
+    it('refuses a file from another folder, and a key that is not exactly the folder, the sender and one file, and charges nothing', async () => {
+      const who = await member('photo-folder');
+      await setBalance(who.sub, 10);
+      const photoKey = await uploadRow(who.sub, 'community/message');
+      const videoKey = await uploadRow(who.sub, 'community/message-video');
+      const voiceKey = await uploadRow(who.sub, 'community/message-voice');
+      // The sender's own confirmed upload in a folder that is not a message photo's.
+      const avatarKey = `avatars/${who.sub}/${randomUUID()}.png`;
+      await prisma.storageObject.create({
+        data: {
+          wawuUserId: who.sub,
+          key: avatarKey,
+          bytes: 1000,
+          contentType: 'image/png',
+          folder: 'avatars',
+          status: 'confirmed',
+          confirmedAt: new Date(),
+        },
+      });
+      const [folder, sender, file] = [
+        'community/message',
+        who.sub,
+        photoKey.split('/').pop() as string,
+      ];
+      await expectRefused(
+        who.accessToken,
+        who.sub,
+        [
+          ['a video file sent as a photo', await storage.readUrlFor(videoKey)],
+          ['a voice note sent as a photo', await storage.readUrlFor(voiceKey)],
+          ['an avatar sent as a photo', await storage.readUrlFor(avatarKey)],
+          [
+            'a community cover folder file',
+            bucketLink(`community/image/${sender}/${file}`),
+          ],
+          [
+            'the folder buried under another path on this bucket',
+            bucketLink(`legal/document/x/${photoKey}`),
+          ],
+          [
+            'the folder buried under one more segment',
+            bucketLink(`x/${photoKey}`),
+          ],
+          [
+            'an extra segment between the sender and the file',
+            bucketLink(`${folder}/${sender}/x/${file}`),
+          ],
+          [
+            'the slash after the folder written as %2F',
+            bucketLink(`${folder}%2F${sender}/${file}`),
+          ],
+          [
+            'a dot segment',
+            bucketLink(`${folder}/${sender}/../${sender}/${file}`),
+          ],
+          ['a backslash', bucketLink(`${folder}/${sender}\\${file}`)],
+        ],
+        10,
+      );
+    });
+
+    it('refuses a key that has no upload row, and a photo that was given up, and charges nothing', async () => {
+      const who = await member('photo-norow');
+      await setBalance(who.sub, 10);
+      // Right folder, right sender, right shape, but never presigned.
+      const unknown = `community/message/${who.sub}/${randomUUID()}.png`;
+      const gaveUp = await uploadRow(who.sub, 'community/message');
+      await prisma.storageObject.update({
+        where: { key: gaveUp },
+        data: { status: 'abandoned', releasedAt: new Date() },
+      });
+      await expectRefused(
+        who.accessToken,
+        who.sub,
+        [
+          ['a key nobody presigned', bucketLink(unknown)],
+          [
+            'a key nobody presigned, signed link shape',
+            `${bucket.origin}${bucket.pathPrefix}${unknown}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc`,
+          ],
+          ['a photo the sender gave up', await storage.readUrlFor(gaveUp)],
+        ],
+        10,
+      );
+    });
+
+    it("takes the sender's own presigned photo that was never confirmed (the web's path), and charges it once", async () => {
+      const who = await member('photo-web');
+      await setBalance(who.sub, 10);
+      const imageUrl = await upload(who.sub, 'community/message', 'pending');
+      const key = newKey();
+      const first = await post(app, who.accessToken, { imageUrl }, key);
+      expect(first.status).toBe(201);
+      expect(answer(first).data).toMatchObject({
+        costInCredits: 1,
+        imageUrl,
+        videoUrl: null,
+        voiceUrl: null,
+      });
+      expect(await balanceOf(who.sub)).toBe(9);
+      // The same request sent again is the same message: nothing more is taken.
+      const again = await post(app, who.accessToken, { imageUrl }, key);
+      expect(again.status).toBe(201);
+      expect(answer(again).data?.id).toBe(answer(first).data?.id);
+      expect(await balanceOf(who.sub)).toBe(9);
+      expect(await spendsOf(who.sub)).toHaveLength(1);
+      expect(await messagesOf(who.sub)).toHaveLength(1);
+    });
+
+    it("takes the sender's own confirmed photo (the app's path), and charges it once", async () => {
+      const who = await member('photo-app');
+      await setBalance(who.sub, 10);
+      const imageUrl = await upload(who.sub, 'community/message', 'confirmed');
+      const sent = await post(app, who.accessToken, {
+        imageUrl,
+        text: 'Fresh batch',
+      });
+      expect(sent.status).toBe(201);
+      expect(answer(sent).data).toMatchObject({
+        costInCredits: 1,
+        imageUrl,
+        text: 'Fresh batch',
+      });
+      expect(await balanceOf(who.sub)).toBe(9);
+      expect(await spendsOf(who.sub)).toHaveLength(1);
+      // The room is served the link as sent.
+      const list = await request(app.getHttpServer() as App)
+        .get(`/communities/${roomId}/messages`)
+        .set('Authorization', `Bearer ${who.accessToken}`)
+        .expect(200);
+      const mine = (
+        list.body as {
+          data: Array<{ senderWawuId: string; imageUrl: string | null }>;
+        }
+      ).data.filter((m) => m.senderWawuId === who.sub);
+      expect(mine.map((m) => m.imageUrl)).toEqual([imageUrl]);
+    });
+
+    it('leaves a text message alone: a null or missing photo is not checked and costs nothing', async () => {
+      const who = await member('photo-text');
+      await setBalance(who.sub, 10);
+      for (const body of [
+        { text: 'Plain words' },
+        { text: 'With a null photo', imageUrl: null },
+      ]) {
+        const res = await post(app, who.accessToken, body);
+        expect([JSON.stringify(body), res.status]).toEqual([
+          JSON.stringify(body),
+          201,
+        ]);
+        expect(answer(res).data).toMatchObject({
+          costInCredits: 0,
+          imageUrl: null,
+        });
+      }
+      expect(await balanceOf(who.sub)).toBe(10);
+      expect(await spendsOf(who.sub)).toHaveLength(0);
+    });
+  });
+
+  // -------------------------------------------------------------------
   describe("the host's 85% is computed on credits actually spent", () => {
     it('free messages add nothing; a photo and a video add exactly what was spent', async () => {
       const who = await member('earns');
@@ -1066,7 +1322,7 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       ).toBe(0);
 
       await post(app, who.accessToken, {
-        imageUrl: 'http://storage.test/community/message/p10.png',
+        imageUrl: await upload(who.sub, 'community/message'),
       }).expect(201);
       await post(app, who.accessToken, {
         videoUrl: await upload(who.sub, 'community/message-video'),
