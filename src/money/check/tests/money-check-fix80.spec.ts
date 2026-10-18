@@ -513,3 +513,30 @@ describe('isExplainedByRow', () => {
     }
   });
 });
+
+// SWEEP-MONEY-4 FIX-80 N1: an entirely empty statement for WAWU's account is
+// the one way a provider that states directions and balances falls into the
+// balance skip (there is no line to read a direction from). It does not read
+// clean: every ledger row of the window is named, on the way out and on the
+// way in.
+describe('an empty statement', () => {
+  it('names every ledger row of the window, so the night is never clean', () => {
+    const sent = [
+      row({ id: 'a', amountKobo: 100_000n }),
+      row({ id: 'b', amountKobo: 250_000n }),
+      row({ id: 'c', amountKobo: 75_000n }),
+    ];
+    const o = outPass(sent, []);
+    expect(o.findings.map((f) => f.kind)).toEqual([
+      'ledger_only',
+      'ledger_only',
+      'ledger_only',
+    ]);
+    const i = inPass(sent, []);
+    expect(i.findings.map((f) => f.kind)).toEqual([
+      'ledger_only',
+      'ledger_only',
+      'ledger_only',
+    ]);
+  });
+});
