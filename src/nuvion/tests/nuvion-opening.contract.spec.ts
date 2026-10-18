@@ -12,6 +12,7 @@ import type { ModuleRef } from '@nestjs/core';
 import { PassportModule } from '@nestjs/passport';
 import { Test, type TestingModule } from '@nestjs/testing';
 import * as jwt from 'jsonwebtoken';
+import { Client } from 'pg';
 import request, { type Response } from 'supertest';
 import type { App } from 'supertest/types';
 import {
@@ -205,6 +206,23 @@ type HeldAccount = {
   created: number;
 };
 
+/**
+ * The name of the database this run would write to, asked of the server itself. A run on anything but a test database
+ * stops here (SWEEP-APP-4 row 168, FIX-82): nothing is started and no row is read, written or deleted.
+ */
+async function databaseNameOfRun(): Promise<string> {
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  try {
+    const res = await client.query<{ name: string }>(
+      'SELECT current_database() AS name',
+    );
+    return res.rows[0].name;
+  } finally {
+    await client.end();
+  }
+}
+
 describe('NUV-02: opening a wallet on Nuvion', () => {
   const logger = new ConsoleLogger({
     logLevels: ['log', 'error', 'warn', 'debug', 'verbose', 'fatal'],
@@ -217,6 +235,10 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   let prisma: PrismaService;
   let handler: NuvionOpeningHandler;
   const users: string[] = [];
+  /** The webhook events this file stored itself: the only ones its clean-up may delete. */
+  const storedEvents: string[] = [];
+  /** True once the database was shown to be a test database. Every hook that touches data waits on it (FIX-82). */
+  let testDatabase = false;
   const previous: Record<string, string | undefined> = {};
 
   let entities: Held[] = [];
@@ -600,6 +622,15 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   });
 
   beforeAll(async () => {
+    // First, before anything starts: a database whose name does not say it is a test database is never touched. The
+    // other hooks do nothing until this has passed (SWEEP-APP-1 FIX-33 L3, SWEEP-APP-4 row 168, FIX-82).
+    const databaseName = await databaseNameOfRun();
+    if (!/test/i.test(databaseName)) {
+      throw new Error(
+        `nuvion-opening spec refuses to run on "${databaseName}": not a test database`,
+      );
+    }
+    testDatabase = true;
     capture(process.stdout, 'write');
     capture(process.stderr, 'write');
     for (const m of ['log', 'info', 'warn', 'error', 'debug', 'trace'])
@@ -657,16 +688,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     prisma = moduleRef.get(PrismaService);
     // Tries an earlier run left in an hour's window (it died before its afterAll)
     // would count against a fresh draw; the keys are hashes, so every recent
-    // address-keyed try goes. A test database only (SWEEP-APP-1, FIX-33 L3): the delete refuses to run on a database whose
-    // name does not say it is one (SWEEP-APP-4, SWEEP-APP-1 L1).
-    const [{ name: databaseName }] = await prisma.$queryRaw<
-      { name: string }[]
-    >`SELECT current_database() AS name`;
-    if (!/test/i.test(databaseName)) {
-      throw new Error(
-        `nuvion-opening spec refuses to clear BvnCheckAttempt on "${databaseName}": not a test database`,
-      );
-    }
+    // address-keyed try goes. A test database only: the check at the top of this hook has passed.
     await prisma.bvnCheckAttempt.deleteMany({
       where: {
         addressKey: { not: null },
@@ -677,6 +699,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   });
 
   beforeEach(() => {
+    if (!testDatabase) return;
     standin.reset();
     entities = [];
     accounts = [];
@@ -688,6 +711,8 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   });
 
   afterAll(async () => {
+    // The check at the top of beforeAll failed: nothing was started and no row is this file's to delete.
+    if (!testDatabase) return;
     if (prisma) {
       const where = { wawuUserId: { in: users } };
       await prisma.fintavaWalletOpening.deleteMany({ where });
@@ -696,8 +721,9 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       await prisma.notification.deleteMany({
         where: { userWawuId: { in: users } },
       });
+      // Only the events this file stored, never every 'entities.*' row in the database.
       await prisma.nuvionWebhookEvent.deleteMany({
-        where: { event: { startsWith: 'entities.' } },
+        where: { id: { in: storedEvents } },
       });
     }
     if (app) await app.close();
@@ -1237,6 +1263,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
           payload,
         },
       });
+      storedEvents.push(stored.id);
       const outcome = await moduleRef
         .get(NuvionWebhookDispatcher)
         .dispatch(stored.id);
