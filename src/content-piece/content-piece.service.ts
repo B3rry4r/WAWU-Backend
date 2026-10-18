@@ -6,7 +6,6 @@ import {
   Injectable,
   Logger,
   NotFoundException,
-  ServiceUnavailableException,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -65,13 +64,6 @@ const DELETE_ATTEMPTS = 3;
 const GIVEN_UP_FILE =
   'One of these files was released or never arrived. Upload it again.';
 
-/**
- * Said when a listing names a file another person uploaded (SWEEP-APP-5, row
- * ME-04 R2-4): a key of ours is a claim on a file, and only its uploader may
- * make it. A link elsewhere matches no row and still passes, as before.
- */
-const NOT_YOUR_FILE = 'One of these files is not yours. Upload your own.';
-
 export interface FlutterwaveConfigResponse {
   flutterwaveConfig: {
     txRef: string;
@@ -116,6 +108,16 @@ class PlaceNotClaimed extends Error {
     super('No place was free to claim.');
   }
 }
+
+// Imported here, after the exported types, so they stay where they were.
+import { ServiceUnavailableException } from '@nestjs/common';
+
+/**
+ * Said when a listing names a file another person uploaded (SWEEP-APP-5, row
+ * ME-04 R2-4): a key of ours is a claim on a file, and only its uploader may
+ * make it. A link elsewhere matches no row and still passes, as before.
+ */
+const NOT_YOUR_FILE = 'One of these files is not yours. Upload your own.';
 
 /**
  * ContentPiece resource — registry.json "ContentPiece". Owns content
