@@ -44,6 +44,7 @@ import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interf
 import { MoneyModule } from '../../money.module';
 import type { FeeQuoteView, TransferView } from '../../money-view.type';
 import {
+  FEE_RETURN_RETRY_MS,
   feeBackReference,
   sendReferenceOfFeeBack,
   WalletTransferService,
@@ -243,6 +244,19 @@ describe('A fee given back that Nuvion accepts and then fails is given back unde
       operational() - OPERATIONAL_START,
     );
     expect(outsideHits).toEqual([]);
+  };
+  /**
+   * The sender's ledger = Nuvion for the sender: what the ledger counts as
+   * money moved (completed rows; a failed or reversed row moves nothing, as
+   * the money check counts them) is what Nuvion's balance has moved.
+   */
+  const senderLedgerEqualsNuvion = async (p: Person) => {
+    expect(await ledgerNet(p)).toBe(available(p) - PERSON_START);
+  };
+  /** WAWU's and the sender's ledger both equal Nuvion, at this step. */
+  const bothEqualNuvion = async (p: Person) => {
+    await ledgerEqualsNuvion();
+    await senderLedgerEqualsNuvion(p);
   };
   const merchantRows = (reference: string, direction: 'in' | 'out') =>
     prisma.fintavaLedgerEntry.findMany({
@@ -476,16 +490,60 @@ describe('A fee given back that Nuvion accepts and then fails is given back unde
     await ledgerEqualsNuvion();
   });
 
-  it('a second failure does not loop: nothing more is sent, it rests, and past the review bound it goes to a person', async () => {
+  it('the second try is never sent in the pass that saw the first fail, and waits at least the sweep interval for a later one (FIX-70 round 2)', async () => {
+    const { me, view } = await sendNuvionFails();
+    failBudget = 1;
+    modeAfter = 'successful';
+    const before = Date.now();
+    await giveFeeBack(view);
+
+    // The pass that saw the first fail sent nothing more.
+    const first = book.byReference(backRef(view.reference));
+    expect(first).toHaveLength(1);
+    expect(first[0].status).toBe('failed');
+    expect(book.byReference(backRef2(view.reference))).toHaveLength(0);
+    const waiting = await rowOf(view.id);
+    expect(waiting.reviewSince).toBeNull();
+    expect(waiting.nextCheckAt!.getTime() - before).toBeGreaterThanOrEqual(
+      FEE_RETURN_RETRY_MS - 1_000,
+    );
+    await bothEqualNuvion(me);
+
+    // A pass inside the interval finds nothing due.
+    await transfers.sweep(new Date(Date.now() + FEE_RETURN_RETRY_MS / 2));
+    expect(book.byReference(backRef2(view.reference))).toHaveLength(0);
+    expect(backsOf(view.reference)).toHaveLength(1);
+
+    // A later pass sends the one new try, and it lands.
+    await transfers.sweep(later());
+    expect(book.byReference(backRef2(view.reference))).toHaveLength(1);
+    expect(book.byReference(backRef2(view.reference))[0].status).toBe(
+      'successful',
+    );
+    expect(backsOf(view.reference)).toHaveLength(2);
+    expect(available(me)).toBe(PERSON_START);
+    await bothEqualNuvion(me);
+    expect((await rowOf(view.id)).nextCheckAt).toBeNull();
+  });
+
+  it('a second failure does not loop: nothing more is sent, it rests, and past the review bound it goes to a person, and the ledger equals Nuvion for the sender and for WAWU at every step', async () => {
     const { me, view } = await sendNuvionFails();
     failBudget = 2;
     modeAfter = 'pending';
     await giveFeeBack(view);
 
+    // Step 1: the first try failed; the fee is still the sender's to be
+    // given back, and the ledger shows it as gone from the wallet.
     const first = book.byReference(backRef(view.reference));
-    const second = book.byReference(backRef2(view.reference));
     expect(first).toHaveLength(1);
     expect(first[0].status).toBe('failed');
+    expect(book.byReference(backRef2(view.reference))).toHaveLength(0);
+    expect(available(me)).toBe(PERSON_START - WAWU_FEE);
+    await bothEqualNuvion(me);
+
+    // Step 2: a later pass makes the one new try, and Nuvion fails that too.
+    await transfers.sweep(later());
+    const second = book.byReference(backRef2(view.reference));
     expect(second).toHaveLength(1);
     expect(second[0].status).toBe('failed');
     // It rests (a long wait, still owed, not in review yet).
@@ -493,13 +551,28 @@ describe('A fee given back that Nuvion accepts and then fails is given back unde
     expect(resting.reviewSince).toBeNull();
     expect(resting.nextCheckAt).not.toBeNull();
     expect(resting.nextCheckAt!.getTime()).toBeGreaterThan(Date.now());
+    await bothEqualNuvion(me);
 
     // Looked at again and again inside the bound: still two transfers, never a third.
-    for (let i = 0; i < 3; i += 1) await transfers.sweep(later(35 * 60_000));
+    for (let i = 0; i < 3; i += 1) {
+      await transfers.sweep(later(35 * 60_000));
+      await bothEqualNuvion(me);
+    }
     expect(backsOf(view.reference)).toHaveLength(2);
     expect((await rowOf(view.id)).reviewSince).toBeNull();
-    // Nothing was invented: the fee is still the sender's to be given back.
+    // Nothing was invented: the fee is still the sender's to be given back,
+    // and the ledger says so (the fee row is money gone, not reversed).
     expect(available(me)).toBe(PERSON_START - WAWU_FEE);
+    const owed = await prisma.fintavaLedgerEntry.findMany({
+      where: {
+        customerReference: `${view.reference}-fee`,
+        walletKind: 'user',
+        direction: 'out',
+      },
+    });
+    expect(owed).toHaveLength(1);
+    expect(owed[0].status).toBe('completed');
+    expect(Number(owed[0].totalKobo)).toBe(WAWU_FEE);
 
     // Past the review bound a person takes it, and the sweep lets it go.
     await transfers.sweep(later(26 * HOUR));
@@ -509,12 +582,69 @@ describe('A fee given back that Nuvion accepts and then fails is given back unde
     expect(held.discrepancy).toMatch(/fee could not be given back/);
     expect(held.discrepancy).not.toContain(String.fromCharCode(0x2014));
     expect(held.status).toBe('failed');
+    await bothEqualNuvion(me);
     for (let i = 0; i < 3; i += 1) await transfers.sweep(later(26 * HOUR));
     expect(backsOf(view.reference)).toHaveLength(2);
     expect(await merchantRows(backRef(view.reference), 'out')).toEqual([]);
     expect(await merchantRows(backRef2(view.reference), 'out')).toEqual([]);
     expect(available(me)).toBe(PERSON_START - WAWU_FEE);
-    await ledgerEqualsNuvion();
+    await bothEqualNuvion(me);
+  });
+
+  it('the sender fee row shows the fee as gone until a fee-back has landed, and turns reversed only then (FIX-70 round 2)', async () => {
+    const { me, view } = await sendNuvionFails();
+    book.mode = 'processing';
+    await giveFeeBack(view);
+    const feeRow = () =>
+      prisma.fintavaLedgerEntry.findFirstOrThrow({
+        where: {
+          customerReference: `${view.reference}-fee`,
+          walletKind: 'user',
+          direction: 'out',
+        },
+      });
+    // The fee-back is made and not finished: the fee is still owed.
+    expect((await feeRow()).status).toBe('completed');
+    await senderLedgerEqualsNuvion(me);
+    book.settle(backRef(view.reference), 'successful');
+    await transfers.sweep(later());
+    const turned = await feeRow();
+    expect(turned.status).toBe('reversed');
+    expect(turned.reversalReference).toBe(backRef(view.reference));
+    expect(Number(turned.reversalTotalKobo)).toBe(WAWU_FEE);
+    expect(available(me)).toBe(PERSON_START);
+    await bothEqualNuvion(me);
+  });
+
+  it('a fee given back that Nuvion leaves unfinished is asked about only until the review bound: then a person looks and it is not asked again (FIX-70 round 2)', async () => {
+    const { me, view } = await sendNuvionFails();
+    book.mode = 'processing';
+    await giveFeeBack(view);
+    expect(book.byReference(backRef(view.reference))).toHaveLength(1);
+    // Inside the bound it is asked every pass and stays in the sweep.
+    await transfers.sweep(later());
+    await transfers.sweep(later());
+    const asking = await rowOf(view.id);
+    expect(asking.reviewSince).toBeNull();
+    expect(asking.nextCheckAt).not.toBeNull();
+
+    // Past the bound a person takes it and the sweep lets it go.
+    await transfers.sweep(later(26 * HOUR));
+    const held = await rowOf(view.id);
+    expect(held.reviewSince).not.toBeNull();
+    expect(held.nextCheckAt).toBeNull();
+    expect(held.discrepancy).toMatch(/has not finished the transfer/);
+    expect(held.discrepancy).not.toContain(String.fromCharCode(0x2014));
+
+    // Not asked again: when Nuvion fails it, no new reference follows, and
+    // nothing is recorded for it.
+    book.settle(backRef(view.reference), 'failed');
+    for (let i = 0; i < 3; i += 1) await transfers.sweep(later(26 * HOUR));
+    expect(backsOf(view.reference)).toHaveLength(1);
+    expect(book.byReference(backRef2(view.reference))).toHaveLength(0);
+    expect(await merchantRows(backRef(view.reference), 'out')).toEqual([]);
+    expect(available(me)).toBe(PERSON_START - WAWU_FEE);
+    await bothEqualNuvion(me);
   });
 
   it('a timeout never starts a new reference: Nuvion took the transfer and the answer was lost, and it is asked about under the same reference until its own record says', async () => {
