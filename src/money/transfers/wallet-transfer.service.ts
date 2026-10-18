@@ -991,6 +991,8 @@ export class WalletTransferService implements OnModuleInit {
         reference: `${t.customerReference}${FEE_LEG_SUFFIX}`,
         narration: TRANSFER_NARRATION,
       });
+      // The money is in WAWU's account: its ledger says so too (FIX-66).
+      await this.recordFeeLeg(t, platform.accountNumber, receipt.amountKobo);
       return { state: 'moved', debitKobo: receipt.totalKobo };
     } catch (e) {
       if (e instanceof WalletProviderError && !e.recordMayExist) {
@@ -1026,6 +1028,11 @@ export class WalletTransferService implements OnModuleInit {
   /** What the fee's transfer took from the sender, or null when it took nothing (read only). */
   private async feeLegDebit(t: TransferRow): Promise<bigint | null> {
     const rec = await this.legRecord(t, FEE_LEG_SUFFIX);
+    if (rec !== null && rec !== 'unknown' && rec.outcome === 'completed') {
+      // The same row `takeFee` wrote, written again when that write was lost
+      // (FIX-66); a row that is there is left as it is.
+      await this.recordFeeLeg(t, null, rec.amountKobo);
+    }
     if (
       rec === null ||
       rec === 'unknown' ||
@@ -1036,6 +1043,112 @@ export class WalletTransferService implements OnModuleInit {
       return null;
     }
     return rec.amountKobo + rec.feeKobo;
+  }
+
+  /**
+   * WAWU's account at the provider, as its ledger names it: the number the
+   * seam gives (read from the provider, never kept). Null when the provider
+   * cannot say now; the caller then leaves the row to its next look.
+   */
+  private async platformNumber(): Promise<string | null> {
+    try {
+      return (await this.provider.getPlatformAccount()).accountNumber;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The ledger's side of the transfer that moved WAWU's fee (FIX-66): money
+   * IN on WAWU's own account, under the fee transfer's reference, the amount
+   * that transfer moved (Nuvion's charge on it is the sender's, so it is not
+   * in WAWU's account). Without it the operational account's ledger was short
+   * of the provider's by the fee of every send. The sender's side is the
+   * send's own row, which already carries the fee in its total. Written once
+   * (the ledger finds the row by account, direction and reference), only after
+   * the provider's record says the transfer completed, and never allowed to
+   * undo what has moved: a failure is logged and the next look writes it.
+   */
+  private async recordFeeLeg(
+    t: TransferRow,
+    platformNumber: string | null,
+    movedKobo: bigint,
+  ): Promise<void> {
+    try {
+      const account = platformNumber ?? (await this.platformNumber());
+      if (!account || movedKobo <= 0n) return;
+      const amount = koboNumber(movedKobo);
+      await this.ledger.record(
+        {
+          wallet: { kind: 'merchant', accountNumber: account },
+          direction: 'in',
+          status: 'completed',
+          category: 'transfer',
+          amountKobo: amount,
+          feeKobo: 0,
+          totalKobo: amount,
+          narration: TRANSFER_NARRATION,
+          references: {
+            customerReference: `${t.customerReference}${FEE_LEG_SUFFIX}`,
+          },
+          counterparty: {
+            kind: 'wawu_user',
+            name: null,
+            wawuUserId: t.payerWawuUserId,
+            accountNumber: t.payerAccountNumber,
+          },
+          source: 'send',
+        },
+        undefined,
+        { quiet: true },
+      );
+    } catch (e) {
+      this.logger.error(
+        `send ${t.id}: the ledger could not record WAWU's fee transfer (${e instanceof Error ? e.name : 'error'}); written at the next look`,
+      );
+    }
+  }
+
+  /**
+   * The ledger's side of the transfer that gave the fee back (FIX-66): money
+   * OUT of WAWU's own account, under the fee-back reference, at what moved
+   * and the charge the provider took from WAWU's account for moving it. The
+   * person's side is the send's own row (failed, or reversed), which nets
+   * what the provider returned.
+   */
+  private async recordFeeBack(
+    t: TransferRow,
+    platformNumber: string,
+    receipt: ProviderTransferReceipt,
+  ): Promise<void> {
+    const amount = koboNumber(receipt.amountKobo);
+    const charge = koboNumber(receipt.feeKobo);
+    await this.ledger.record(
+      {
+        wallet: { kind: 'merchant', accountNumber: platformNumber },
+        direction: 'out',
+        status: 'completed',
+        category: 'refund',
+        amountKobo: amount,
+        feeKobo: charge,
+        totalKobo: amount + charge,
+        providerFeeKobo: charge,
+        wawuFeeKobo: 0,
+        narration: TRANSFER_NARRATION,
+        references: {
+          customerReference: `${t.customerReference}${FEE_RETURN_SUFFIX}`,
+        },
+        counterparty: {
+          kind: 'wawu_user',
+          name: null,
+          wawuUserId: t.payerWawuUserId,
+          accountNumber: t.payerAccountNumber,
+        },
+        source: 'send',
+      },
+      undefined,
+      { quiet: true },
+    );
   }
 
   /**
@@ -1065,13 +1178,18 @@ export class WalletTransferService implements OnModuleInit {
     const owed = rec.amountKobo + (rec.feeKobo ?? 0n);
     try {
       const platform = await this.provider.getPlatformAccount();
-      await this.provider.walletToWallet({
+      // The fee that came in is in the ledger before the fee that goes back
+      // (a write lost at the time is made now), and both leave WAWU's account
+      // as the provider's does (FIX-66).
+      await this.recordFeeLeg(t, platform.accountNumber, rec.amountKobo);
+      const receipt = await this.provider.walletToWallet({
         fromAccountNumber: platform.accountNumber,
         toAccountNumber: t.payerAccountNumber!,
         amountKobo: owed,
         reference: `${t.customerReference}${FEE_RETURN_SUFFIX}`,
         narration: TRANSFER_NARRATION,
       });
+      await this.recordFeeBack(t, platform.accountNumber, receipt);
     } catch (e) {
       this.logger.warn(
         `send ${t.id}: WAWU's fee could not be given back yet (${e instanceof WalletProviderError ? e.kind : 'error'}); asked again`,

@@ -1048,6 +1048,18 @@ export class EarningSettlementService {
     now: Date,
   ): Promise<EarningMoveResult> {
     const refusal = e instanceof WalletProviderError ? e : null;
+    if (refusal?.providerFailed) {
+      // The provider TOOK the move and its own record says it failed (FIX-66):
+      // the money is where it was, but the reference is spent, because the
+      // provider answers a repeat of it with that same failed record. The
+      // provider is asked once more (a read, nothing is sent), and its record
+      // starts the new try under a new reference, the same step a failure
+      // found by the sweep takes (R-55 counts the 72 hours from the first).
+      this.logger.warn(
+        `earning move ${m.id}: ${this.provider.label} took the move and says it failed; reading its record`,
+      );
+      return this.reconcile(m, now);
+    }
     if (!refusal || (refusal.recordMayExist && !refusal.requestNotSent)) {
       // Money may have moved (a lost answer, a transfer accepted and not
       // finished, a repeated reference): asked about, never sent again. A

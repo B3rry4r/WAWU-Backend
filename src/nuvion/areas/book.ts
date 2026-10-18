@@ -804,8 +804,16 @@ export class NuvionBookArea implements NuvionBookMethods {
         messages: [
           `${AREA}: Nuvion reports the transfer failed${t.statusReason ? ` (${t.statusReason})` : ''}`,
         ],
-        // Nuvion's own record says it failed: nothing moved.
+        // Nuvion's own record says it failed (api-reference__transfers.md,
+        // "Transfer statuses": `failed`, "could not be completed"): the money
+        // is where it was, so no record "may" exist. But Nuvion made the
+        // transfer, and a repeat of this reference answers with this same
+        // failed record (`unique_reference` is its idempotency key), so the
+        // reference is spent: a caller that may try again does it under a new
+        // one (FIX-66). Not the same as a refusal at the door, whose
+        // reference is not used up.
         recordMayExist: false,
+        providerFailed: true,
       });
     }
     // Pending, processing, reversed, or a word we do not know: money may
