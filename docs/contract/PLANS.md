@@ -785,3 +785,53 @@ minutes it was priced in), `costPoints`, `audioUrl`, `message`, `createdAt`,
   tools"). **NOT RUN against the real provider**; built and run against
   `scripts/dev/voice-standin.cjs`, a local stand-in with the same wire shape.
   The fact that unblocks the real run: a provider key set on the Hub.
+
+## 13. Hosting an event needs a tier (EVENTS-12)
+
+R-43, E21 "Needs a tier". `POST /events`, `PATCH /events/{id}` and
+`PUT /events/{id}/tickets` (the host gate, `EventService.assertMayHost`, one
+copy) let a person host when they hold:
+
+1. a verification tick that has not ended (either kind), exactly as before, or
+2. a tier that is running, that is `GET /me/tier` state `active` or `ending`
+   (the publishing gate's own test, `MakerTierService`). Any tier of the plan
+   is enough, and so is a tier bought on an account of any type.
+
+A tier whose period has ended stops NEW hosting: a new event, an edit and a
+ticket price change. It never touches an event that is already live: a
+published event stays public and its tickets keep selling, because buying a
+ticket asks nothing of the host's tier. Changing ticket prices on an approved
+event still sends it back to review, and the 409 for sold tickets still comes
+first (R-40).
+
+The refusal is the contract's one error shape (CONVENTIONS section 3), a
+**403** as these routes have always answered a host who may not host, with a
+new additive `reason.code`:
+
+```json
+{
+  "statusCode": 403,
+  "message": "Needs a tier. Pick a tier to host an event.",
+  "data": null,
+  "reason": {
+    "code": "tier_required",
+    "message": "Needs a tier. Pick a tier to host an event.",
+    "tierState": "none",
+    "currency": "NGN",
+    "lowestTier": { "id": "verify", "name": "Verify", "priceMinor": 100000 }
+  }
+}
+```
+
+- `tierState` is `none` (never had a tier) or `ended` (the message then says
+  the tier ended and that events already live keep selling).
+- `currency` and `lowestTier` are the cheapest tier on `GET /plans` in the
+  person's billing currency: the app prints "From ..." from them and never
+  types a price. They are left out only when the Hub could not read the plan
+  at that moment.
+- An account that is neither a creator nor an approved professional, with no
+  tick and no tier, still gets `account_type_required` (with `steps`), as
+  before; it names the tier among its steps.
+- The old `verification_required` is no longer answered by these routes: the
+  tick is not what they ask for any more. The web reads only `reason.code` and
+  `message` from the envelope, and a host with a live tick sees no change.

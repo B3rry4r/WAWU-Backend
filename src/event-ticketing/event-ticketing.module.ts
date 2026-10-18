@@ -9,6 +9,8 @@ import { EventRunningService } from './event-running.service';
 import { EventHeldTicketsController } from './event-held-tickets.controller';
 import { EventHeldTicketsService } from './event-held-tickets.service';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
+import { EventServiceModule } from '../event/event-service.module';
+import { PlansModule } from '../plans/plans.module';
 
 /**
  * Event ticketing.
@@ -24,9 +26,21 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
  *
  * EventRunningController (EVENTS-05) serves the organiser's numbers and the
  * door staff; WawuAuthModule also gives it WawuIdClient for holder names.
+ *
+ * EventServiceModule is imported for EventService's hosting gate (R-40):
+ * PUT /events/:id/tickets refuses the hosts POST and PATCH /events refuse,
+ * with the same check rather than a second copy of it. It has no
+ * controller, so no route moves.
  */
 @Module({
-  imports: [WawuAuthModule, DirectMessageModule, BlockedAccountModule],
+  imports: [
+    WawuAuthModule,
+    DirectMessageModule,
+    BlockedAccountModule,
+    EventServiceModule,
+    // HostTierOffersInterceptor on PUT /events/:id/tickets (EVENTS-12).
+    PlansModule,
+  ],
   controllers: [
     EventTicketingController,
     EventRunningController,

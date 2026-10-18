@@ -32,7 +32,11 @@ import type { DoorCheckInResult } from '../event-running.service';
  *  - the host-only protected scan (`POST /events/:id/check-in`) keeps its own
  *    40 character limit, byte for byte as the web calls it.
  *
- * Fixtures: one event with an `e9000000-...` id, swept in afterAll.
+ * Fixtures: one event with an `e9000000-...` id, swept in afterAll. Since
+ * EVENTS-11 (R-40) PUT /events/:id/tickets needs a verified host and sends the
+ * event back to review, so the host holds a tick for the suite (its tick
+ * columns are snapshotted and written back) and the event is put back to
+ * `published` after the tiers are set. Nothing about the door changed.
  */
 
 const MOCK_WAWU_ID_URL =
@@ -78,6 +82,7 @@ describe('The door answers every scan (EVENTS-09)', () => {
   let hostToken: string;
   let buyerToken: string;
   let ticketCode = '';
+  let tickSnapshot: Record<string, Date | null> | null = null;
 
   const http = () =>
     request(app.getHttpServer() as Parameters<typeof request>[0]);
@@ -122,6 +127,24 @@ describe('The door answers every scan (EVENTS-09)', () => {
     prisma = moduleRef.get(PrismaService);
 
     await sweep();
+    // EVENTS-11 (R-40): setting tickets needs a current tick. The host's tick
+    // columns are kept and written back in afterAll.
+    tickSnapshot = await prisma.userProfile.findUnique({
+      where: { wawuUserId: HOST_SUB },
+      select: {
+        creatorVerifiedAt: true,
+        creatorVerifiedUntil: true,
+        professionalVerifiedAt: true,
+        professionalVerifiedUntil: true,
+      },
+    });
+    await prisma.userProfile.update({
+      where: { wawuUserId: HOST_SUB },
+      data: {
+        creatorVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+        creatorVerifiedUntil: new Date('2099-01-01T00:00:00.000Z'),
+      },
+    });
     await prisma.event.create({
       data: {
         id: EV,
@@ -144,6 +167,14 @@ describe('The door answers every scan (EVENTS-09)', () => {
       })
       .expect(200);
     const tierId = (data<unknown>(tiers) as Array<{ id: string }>)[0].id;
+    // EVENTS-11 (R-40): that PUT sent the event back to review (`pending`).
+    // The door is the subject here, not the review, which event-tickets-review
+    // covers through the admin approve route; so the fixture sets the status
+    // the approval would, directly, and the order below can be placed.
+    await prisma.event.update({
+      where: { id: EV },
+      data: { status: 'published' },
+    });
     const bought = await http()
       .post(`/api/hub/events/${EV}/orders`)
       .set(auth(buyerToken))
@@ -158,6 +189,12 @@ describe('The door answers every scan (EVENTS-09)', () => {
 
   afterAll(async () => {
     if (prisma) await sweep();
+    if (prisma && tickSnapshot) {
+      await prisma.userProfile.update({
+        where: { wawuUserId: HOST_SUB },
+        data: tickSnapshot,
+      });
+    }
     if (app) await app.close();
   });
 

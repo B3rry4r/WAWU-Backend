@@ -47,7 +47,11 @@ import {
  *  - a ticket of this event that was voided (the event was called off) reads
  *    `cancelled`; another event's ticket and made-up text stay the one answer.
  *
- * Fixtures: events with `e9100000-...` ids, swept in afterAll.
+ * Fixtures: events with `e9100000-...` ids, swept in afterAll. Since EVENTS-11
+ * (R-40) PUT /events/:id/tickets needs a verified host and sends the event back
+ * to review, so the host holds a tick for the suite (its tick columns are
+ * snapshotted and written back) and each event is put back to `published`
+ * after its tiers are set. Nothing about the door changed.
  */
 
 const MOCK_WAWU_ID_URL =
@@ -125,6 +129,7 @@ describe('The door answers a scan asked again with the same key (EVENTS-09 round
   let codes: string[] = [];
   let otherCode = '';
   let next = 0;
+  let tickSnapshot: Record<string, Date | null> | null = null;
 
   const http = (a: INestApplication = app) =>
     request(a.getHttpServer() as Parameters<typeof request>[0]);
@@ -170,6 +175,11 @@ describe('The door answers a scan asked again with the same key (EVENTS-09 round
       })
       .expect(200);
     const tierId = (tiers.body as { data: Array<{ id: string }> }).data[0].id;
+    // EVENTS-11 (R-40): that PUT sent the event back to review (`pending`).
+    // The door is the subject here, not the review, which event-tickets-review
+    // covers through the admin approve route; so the fixture sets the status
+    // the approval would, directly, and the order below can be placed.
+    await prisma.event.update({ where: { id }, data: { status: 'published' } });
     const bought = await http()
       .post(`/api/hub/events/${id}/orders`)
       .set(auth(buyerToken))
@@ -194,6 +204,24 @@ describe('The door answers a scan asked again with the same key (EVENTS-09 round
     ({ app, prisma } = await boot());
     ({ app: second } = await boot());
     await sweep();
+    // EVENTS-11 (R-40): setting tickets needs a current tick. The host's tick
+    // columns are kept and written back in afterAll.
+    tickSnapshot = await prisma.userProfile.findUnique({
+      where: { wawuUserId: HOST_SUB },
+      select: {
+        creatorVerifiedAt: true,
+        creatorVerifiedUntil: true,
+        professionalVerifiedAt: true,
+        professionalVerifiedUntil: true,
+      },
+    });
+    await prisma.userProfile.update({
+      where: { wawuUserId: HOST_SUB },
+      data: {
+        creatorVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+        creatorVerifiedUntil: new Date('2099-01-01T00:00:00.000Z'),
+      },
+    });
     codes = await makeEvent(EV, 'Door key fixture');
     otherCode = (await makeEvent(EV_OTHER, 'Door key other fixture'))[0];
     await http()
@@ -205,6 +233,12 @@ describe('The door answers a scan asked again with the same key (EVENTS-09 round
 
   afterAll(async () => {
     if (prisma) await sweep();
+    if (prisma && tickSnapshot) {
+      await prisma.userProfile.update({
+        where: { wawuUserId: HOST_SUB },
+        data: tickSnapshot,
+      });
+    }
     if (app) await app.close();
     if (second) await second.close();
   });
