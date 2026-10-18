@@ -808,6 +808,9 @@ model ContentPiece {
   /// single-column status index still left Postgres sorting the whole
   /// approved set.
   @@index([status, createdAt])
+  // The GIN index 20260921090000_content_specializations created in raw SQL, written here so `prisma migrate diff` on a migrated
+  // database is empty (SWEEP-APP-4 row 90). No migration: the index exists already, under this same name.
+  @@index([specializations], type: Gin)
 }
 
 /// `locked` (registry: "derived from purchase state") intentionally not a
