@@ -207,6 +207,57 @@ describe('Search: recent, popular, communities, ticks (EXPLORE-05)', () => {
       ).not.toBeNull();
     });
 
+    // SWEEP-APP-4 (EXPLORE-05 V1-4): many searches at once used to each read the old rows only, so the list grew past twenty.
+    it('holds the cap of twenty when many searches arrive at once', async () => {
+      // Listening once, so the parallel requests share one server (supertest would otherwise open and close one per request).
+      await app.listen(0, '127.0.0.1');
+      const base = await app.getUrl();
+      const results = await Promise.all(
+        Array.from({ length: 18 }, (_, i) =>
+          request(base)
+            .post('/api/hub/search/recent')
+            .set(auth(basic))
+            .send({ q: `${MARK} p${String(i).padStart(2, '0')}` }),
+        ),
+      );
+      expect(results.map((r) => r.status)).toEqual(Array(18).fill(201));
+      expect(
+        await prisma.searchHistory.count({ where: { userWawuId: USER_BASIC } }),
+      ).toBe(RECENT_SEARCHES_KEPT);
+    });
+
+    // The race itself depends on the connection pool, so this holds the person's lock from outside: the route must wait for it.
+    it("writes one person's searches one at a time: a search waits while that person's lock is held", async () => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let locked!: () => void;
+      const taken = new Promise<void>((resolve) => {
+        locked = resolve;
+      });
+      const holder = prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'search-recent:' + USER_BASIC}, 0))`;
+          locked();
+          await held;
+        },
+        { timeout: 20_000 },
+      );
+      await taken;
+      let answered = false;
+      const waiting = record(basic, `${MARK} waits`).then((r) => {
+        answered = true;
+        return r;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      expect(answered).toBe(false);
+      release();
+      await holder;
+      expect((await waiting).status).toBe(201);
+      expect(answered).toBe(true);
+    });
+
     it("Clear removes the caller's searches and nobody else's", async () => {
       await record(pro, `${MARK} keep me`);
       const res = await http()

@@ -88,6 +88,9 @@ describe('isShowableName (the character rule)', () => {
     "'",
     'Ａfrobeats', // full-width letter
     'Afrоbeats', // Cyrillic o: a lookalike of a Latin word
+    'Chıdi Kitchen', // U+0131 dotless i: folded as i in the search, so never shown (SWEEP-APP-4, R3-2)
+    'ɑfrobeats', // U+0251 latin alpha, folded as a
+    'Big ɡrace', // U+0261 script g, folded as g
     'Afrobeats​', // an invisible character
     'tab\tname',
     'line\nbreak',
@@ -142,6 +145,9 @@ describe('the database and the code read the same way', () => {
     '1 2 3 4 5 stars',
     '́abc',
     'Afrobeats   Mix ',
+    'Chıdi Kitchen', // the three Latin lookalikes the fold reads as plain letters (SWEEP-APP-4, R3-2)
+    'ɑfrobeats',
+    'Big ɡrace',
   ].filter((t) => !ODD_SPACE.test(t));
 
   it('fold: SQL equals the code for every text', async () => {
