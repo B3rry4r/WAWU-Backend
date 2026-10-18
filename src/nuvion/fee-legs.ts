@@ -26,3 +26,18 @@ export function sendReferenceOfFeeBack(reference: string): string | null {
     ? reference.slice(0, -FEE_RETURN_SUFFIX.length)
     : null;
 }
+
+/**
+ * Added to a move's reference for the statement line that gives that move back
+ * (a reversal, or a bank send the bank returned). FIX-80: the nightly check
+ * matches the return to its original by this word, as it matches a fee leg.
+ */
+export const RETURN_SUFFIX = '_reversal';
+
+/** The move a return line's reference gives back, or null when it is not one. */
+export function referenceOfReturn(reference: string): string | null {
+  return reference.endsWith(RETURN_SUFFIX) &&
+    reference.length > RETURN_SUFFIX.length
+    ? reference.slice(0, -RETURN_SUFFIX.length)
+    : null;
+}
