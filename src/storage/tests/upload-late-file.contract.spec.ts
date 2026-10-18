@@ -271,6 +271,11 @@ describe('A file that lands after its upload was released (ME-04 round 3, contra
     storage = moduleRef.get(StorageService);
     timer = moduleRef.get(StorageSweepService);
     registry = moduleRef.get(SchedulerRegistry);
+    // The Hub's real 10-minute timer is not this spec's (FIX-75): a tick that the
+    // wall clock lands inside a test would sweep, or make timer.sweep() skip, at a
+    // moment no test chose. The job stays registered (a test below checks it); its
+    // sweeps here are driven by the spec through timer.sweep().
+    await registry.getCronJob('sweep-late-uploads').stop();
     await prisma.contentPiece.deleteMany({
       where: { creatorWawuId: { in: OWNED } },
     });
