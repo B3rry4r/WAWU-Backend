@@ -30,12 +30,31 @@
 //   POST transfers/<id>/settle     { status: successful | failed | reversed }
 //   POST entities/<id>/approve | reject      (when STANDIN_AUTO_APPROVE=0, or to decide by hand)
 //   POST directory                 { bank_code, account_number, name }: a bank account the name check finds
+//   GET  hold | POST hold          { on: true | false, narration? }: while on, a book transfer INTO WAWU's operational account
+//                                  (what a paid tier, ticket or DM sends) stays pending and is not settled by itself, so the
+//                                  app's "Paid, still confirming" (M15) can be walked (ME-13 L3). `narration` holds only the
+//                                  transfers whose narration contains it. The payer is debited at once, as for any transfer.
+//   POST release                   { transfer_id?, status? }: settle the held transfer (every held one without an id) as
+//                                  successful (default), failed or reversed, through the normal path: the signed webhook
+//                                  (outflows.completed, outflows.failed or outflows.refunded) goes to the Hub
+//   GET  liveness                  the hosted selfie sessions (FIX-47 L2)
+//   POST liveness/<id>/finish      { capture_status?, verification_status? }: decide a session by hand
+//
+// The hosted selfie (FIX-47 L2), to the shape Nuvion's dashboard uses and test/nuvion/documents-standin.ts models:
+//   POST /kyc/liveness/sessions { entity_id?, redirect_url? } -> 201 { url, query_id }; the url is an https address on
+//   STANDIN_SELFIE_ORIGIN (the Hub takes only https), and this server answers its path, GET /capture/<query_id>, with a
+//   small page of three buttons (take the selfie, a face that does not match, a camera error). A browser on this machine
+//   reaches it by sending that https origin to this port (the stack's walks do it in the browser, not here).
+//   GET /kyc/liveness/sessions/<query_id> -> capture_status (pending | completed | image-error | internal-error),
+//   verification_status (pending | approved | not-approved), initiated_at, capture_url. There is no webhook for it.
+//   PATCH /individual-entities/<id> { meta: { liveness_check_id } } saves the link. No image is ever received or kept.
+//   The Hub asks for it only when the stack is started with STACK_NUVION_LIVENESS=on (scripts/dev/stack.sh).
 //
 // Settings (environment): PORT (NUVION_STANDIN_PORT), HUB_WEBHOOK_URL, NUVION_WEBHOOK_SECRET,
 // NUVION_OPERATIONAL_ACCOUNT_ID, STANDIN_PARENT_ENTITY_ID, STANDIN_OPERATIONAL_KOBO (opening balance),
 // NUVION_FEE_BOOK_TRANSFER / NUVION_FEE_BANK_PAYOUT / NUVION_FEE_INFLOW (kobo, as the Hub's settings;
 // a whole number), STANDIN_AUTO_APPROVE (default 1), STANDIN_APPROVE_MS, STANDIN_DETAILS_MS,
-// STANDIN_SETTLE_MS, STANDIN_WEBHOOK_DELAY_MS.
+// STANDIN_SETTLE_MS, STANDIN_WEBHOOK_DELAY_MS, STANDIN_SELFIE_ORIGIN (default https://verify.example.invalid).
 'use strict';
 
 const http = require('node:http');
@@ -62,6 +81,7 @@ const APPROVE_MS = num('STANDIN_APPROVE_MS', 800);
 const DETAILS_MS = num('STANDIN_DETAILS_MS', 600);
 const SETTLE_MS = num('STANDIN_SETTLE_MS', 1500);
 const HOOK_DELAY_MS = num('STANDIN_WEBHOOK_DELAY_MS', 300);
+const SELFIE_ORIGIN = env('STANDIN_SELFIE_ORIGIN', 'https://verify.example.invalid').replace(/\/+$/, '');
 
 // ---------------------------------------------------------------- data
 const BANKS = [
@@ -80,6 +100,8 @@ const paymentDetails = new Map();
 const directory = new Map(); // "bank:number" -> holder name
 const sent = []; // webhooks sent: { event, id, attempts, status }
 const used = new Set(); // generated numbers
+const hold = { on: false, narration: '' }; // POST /__standin/hold: book transfers into the operational account wait
+const sessions = new Map(); // hosted selfie sessions: query_id -> { id, entity_id, redirect_url, capture_status, verification_status, initiated_at }
 
 const now = () => Date.now();
 const ulid = (p) => `${p}${crypto.randomBytes(12).toString('hex').toUpperCase()}`.slice(0, 26);
@@ -372,6 +394,10 @@ function finish(i, to) {
   );
 }
 
+// A book transfer into WAWU's operational account (a purchase) waits while the hold is on.
+const isHeld = (i, b) =>
+  hold.on && i.toAccountId === operational.id && (hold.narration === '' || String(b.narration || '').includes(hold.narration));
+
 function createTransfer(b) {
   const payer = accounts.get(String(b.account_id));
   if (!payer) return notFound();
@@ -456,6 +482,10 @@ function createTransfer(b) {
   transfers.set(t.id, i);
   bump(payer, -(amount + fee)); // the amount and the fee leave `available` at once
   const answered = transferView(i);
+  if (isHeld(i, b)) {
+    i.held = true; // stays pending until POST /__standin/release (or .../settle) decides it
+    return { status: 201, body: envelope(answered, 'Transfer created successfully') };
+  }
   setTimeout(() => {
     try {
       finish(i, 'successful');
@@ -520,6 +550,8 @@ on('PATCH', /^\/individual-entities\/[^/]+$/, (req) => {
   if (!(req.body && req.body.meta)) {
     e.documentStatus = e.addressProofStatus = 'pending';
     e.updated = Math.max(now(), e.updated + 1);
+  } else if (typeof req.body.meta.liveness_check_id === 'string') {
+    e.livenessCheckId = req.body.meta.liveness_check_id; // the link the dashboard saves; it changes nothing else
   }
   return { status: 200, body: envelope(fullEntity(e), 'Individual entity updated successfully') };
 });
@@ -958,6 +990,72 @@ on('GET', /^\/counterparties\/[A-Za-z0-9]+\/payment-details$/, (req) => {
   return { status: 200, body: envelope(paged(rows, req, 'asc'), 'Payment details retrieved successfully') };
 });
 
+// ---- hosted selfie (FIX-47 L2): Nuvion's /kyc/liveness/sessions, and the page its url opens
+const CAPTURE = ['pending', 'completed', 'image-error', 'internal-error'];
+const VERIFICATION = ['pending', 'approved', 'not-approved'];
+const sessionUrl = (id) => `${SELFIE_ORIGIN}/capture/${id}`;
+on('POST', '/kyc/liveness/sessions', (req) => {
+  const b = req.body && typeof req.body === 'object' ? req.body : {};
+  if (b.entity_id !== undefined && !entities.has(String(b.entity_id))) return notFound();
+  if (b.redirect_url !== undefined && typeof b.redirect_url !== 'string') return invalid('redirect_url: an address');
+  const s = {
+    id: ulid('01LIV'),
+    entity_id: b.entity_id === undefined ? null : String(b.entity_id),
+    redirect_url: b.redirect_url === undefined ? null : b.redirect_url,
+    capture_status: 'pending',
+    verification_status: 'pending',
+    initiated_at: now(),
+  };
+  sessions.set(s.id, s);
+  return { status: 201, body: envelope({ url: sessionUrl(s.id), query_id: s.id }, 'Session created successfully') };
+});
+on('GET', /^\/kyc\/liveness\/sessions\/[A-Za-z0-9_-]+$/, (req) => {
+  const s = sessions.get(m(req, 4));
+  if (!s || (req.query.entity_id !== undefined && s.entity_id !== req.query.entity_id)) return notFound();
+  return {
+    status: 200,
+    body: envelope(
+      { capture_status: s.capture_status, verification_status: s.verification_status, initiated_at: s.initiated_at, capture_url: sessionUrl(s.id) },
+      'Session retrieved',
+    ),
+  };
+});
+// The hosted page: three buttons, no camera and no image (the stand-in never receives a face).
+const PAGE_CHOICES = [
+  ['approved', 'Take my selfie'],
+  ['not-approved', 'Face does not match'],
+  ['image-error', 'Camera problem'],
+];
+const page = (html) => ({ status: 200, type: 'text/html; charset=utf-8', body: `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Secure selfie</title><body style="font-family:sans-serif;max-width:360px;margin:40px auto;padding:0 16px">${html}</body>` });
+on('GET', /^\/capture\/[A-Za-z0-9_-]+$/, (req) => {
+  const s = sessions.get(m(req, 2));
+  if (!s) return { status: 404, type: 'text/html; charset=utf-8', body: '<!doctype html><title>Not found</title><p>This selfie link does not exist.</p>' };
+  if (s.capture_status !== 'pending') {
+    return page(`<h1>Selfie ${s.verification_status === 'approved' ? 'received' : 'finished'}</h1><p id="done">You can go back to the app.</p>`);
+  }
+  const buttons = PAGE_CHOICES.map(
+    ([v, label]) => `<form method="post" action="/capture/${s.id}/finish" style="margin:12px 0"><button name="result" value="${v}" style="width:100%;padding:14px;font-size:16px">${label}</button></form>`,
+  ).join('');
+  return page(`<h1>Take a selfie</h1><p>Stand-in page for Nuvion's hosted selfie. Choose what the check finds.</p>${buttons}`);
+});
+on('POST', /^\/capture\/[A-Za-z0-9_-]+\/finish$/, (req) => {
+  const s = sessions.get(m(req, 2));
+  if (!s) return notFound();
+  const raw = typeof req.body === 'string' ? new URLSearchParams(req.body).get('result') : (req.body || {}).result;
+  const to = decideSession(s, raw);
+  if (to === null) return invalid('result: approved, not-approved or image-error');
+  return page(`<h1>Selfie ${raw === 'approved' ? 'received' : 'finished'}</h1><p id="done">You can go back to the app.</p>`);
+});
+// approved: the capture finished and was approved; not-approved: it finished and did not match; image-error: the capture failed.
+function decideSession(s, result) {
+  if (s.capture_status !== 'pending') return s; // a session is decided once
+  if (result === 'approved') Object.assign(s, { capture_status: 'completed', verification_status: 'approved' });
+  else if (result === 'not-approved') Object.assign(s, { capture_status: 'completed', verification_status: 'not-approved' });
+  else if (result === 'image-error') Object.assign(s, { capture_status: 'image-error', verification_status: 'pending' });
+  else return null;
+  return s;
+}
+
 // ---- control routes (a verifier's, local only)
 const accountByRef = (ref) =>
   accounts.get(ref) ||
@@ -977,6 +1075,8 @@ on('GET', '/__standin/state', () => ({
       id: i.t.id, type: i.t.type, payment_type: i.t.payment_type, status: i.t.status, amount: i.t.amount, fee: i.t.applicable_fee, reference: i.t.unique_reference, account_id: i.t.account_id,
     })),
     webhooks: sent.slice(-50),
+    hold: { on: hold.on, narration: hold.narration },
+    liveness: [...sessions.values()].map((x) => ({ id: x.id, entity_id: x.entity_id, capture_status: x.capture_status, verification_status: x.verification_status })),
     fees: FEE,
   },
 }));
@@ -1024,6 +1124,53 @@ on('POST', /^\/__standin\/entities\/[^/]+\/(approve|reject)$/, (req) => {
   else reject(e, (req.body || {}).reason);
   return { status: 200, body: { id: e.id, status: e.status } };
 });
+on('GET', '/__standin/hold', () => ({
+  status: 200,
+  body: { on: hold.on, narration: hold.narration, held: [...transfers.values()].filter((i) => i.held && i.t.status === 'pending').map((i) => i.t.id) },
+}));
+on('POST', '/__standin/hold', (req) => {
+  const b = req.body || {};
+  if (typeof b.on !== 'boolean') return invalid('on: true or false');
+  if (b.narration !== undefined && typeof b.narration !== 'string') return invalid('narration: text');
+  hold.on = b.on;
+  hold.narration = b.narration || '';
+  return { status: 200, body: { on: hold.on, narration: hold.narration } };
+});
+on('POST', '/__standin/release', (req) => {
+  const b = req.body || {};
+  const to = b.status === undefined ? 'successful' : b.status;
+  if (!['successful', 'failed', 'reversed'].includes(to)) return invalid('status: successful, failed or reversed');
+  const held = b.transfer_id === undefined
+    ? [...transfers.values()].filter((i) => i.held && i.t.status === 'pending')
+    : [transfers.get(String(b.transfer_id))].filter((i) => i && i.held);
+  if (held.length === 0) return notFound();
+  const released = [];
+  for (const i of held) {
+    try {
+      if (to === 'reversed') finish(i, 'successful'); // a reversal follows a settled transfer
+      finish(i, to);
+      released.push({ id: i.t.id, status: i.t.status });
+    } catch (e) {
+      return { status: 409, body: { error: e.message, released } };
+    }
+    i.held = false;
+  }
+  return { status: 200, body: { released } };
+});
+on('GET', '/__standin/liveness', () => ({
+  status: 200,
+  body: { sessions: [...sessions.values()].map((s) => ({ ...s, url: sessionUrl(s.id) })) },
+}));
+on('POST', /^\/__standin\/liveness\/[^/]+\/finish$/, (req) => {
+  const s = sessions.get(m(req, 3));
+  if (!s) return notFound();
+  const b = req.body || {};
+  if (b.capture_status !== undefined && !CAPTURE.includes(b.capture_status)) return invalid(`capture_status: ${CAPTURE.join(', ')}`);
+  if (b.verification_status !== undefined && !VERIFICATION.includes(b.verification_status)) return invalid(`verification_status: ${VERIFICATION.join(', ')}`);
+  if (b.capture_status !== undefined) s.capture_status = b.capture_status;
+  if (b.verification_status !== undefined) s.verification_status = b.verification_status;
+  return { status: 200, body: s };
+});
 on('POST', '/__standin/directory', (req) => {
   const b = req.body || {};
   if (!b.bank_code || !/^\d{10}$/.test(String(b.account_number)) || !b.name) return invalid('bank_code, a ten-digit account_number and name');
@@ -1058,7 +1205,7 @@ const server = http.createServer(async (rq, rs) => {
   const answer = route(req);
   const out = typeof answer.body === 'string' ? answer.body : JSON.stringify(answer.body);
   rs.statusCode = answer.status;
-  rs.setHeader('Content-Type', 'application/json');
+  rs.setHeader('Content-Type', answer.type || 'application/json');
   rs.setHeader('X-Request-ID', ulid('01REQ'));
   rs.end(out);
   if (!req.path.startsWith('/__standin') && req.path !== '/health') {
