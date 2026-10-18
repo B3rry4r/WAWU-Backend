@@ -5254,6 +5254,9 @@ model WalletTransfer {
   providerFeeKobo        BigInt
   wawuFeeKobo            BigInt
   totalKobo              BigInt
+  /// Whether a transfer of WAWU's fee was due when the send was made (that
+  /// moment's fee schedule). Null: no such transfer, or a send before this column.
+  feeTransferDue         Boolean?
   /// The sender's own note (W9).
   note                   String?
   /// OUR reference at the wallet provider, derived from this row's id.

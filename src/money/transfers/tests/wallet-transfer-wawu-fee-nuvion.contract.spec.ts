@@ -611,7 +611,7 @@ describe('WAWU fee on a send to a WAWU user, collected on Nuvion (FIX-52)', () =
     expect(PERSON_START - available(me)).toBe(b.quotedTotal);
   });
 
-  it('finding 2: the ledger holds what Nuvion moved on the delivery path too: a send whose fee never moved is written at the send alone', async () => {
+  it('finding 2 (SWEEP-MONEY-5a, G3): a send whose fee transfer was due and cannot be found is not completed at the send alone, on the delivery path too: it waits, asked again, and the fee is not moved after the fact', async () => {
     const me = await person(PERSON_START);
     const to = await person(0);
     const opBefore = operational();
@@ -658,19 +658,21 @@ describe('WAWU fee on a send to a WAWU user, collected on Nuvion (FIX-52)', () =
     const delivered = await deliver('outflows.completed', sent, me);
     expect(delivered).toMatchObject({ outcome: 'done' });
     // The ledger will not complete its row at a charge other than the one
-    // quoted (it keeps it pending and notes it); the send settles it at what
-    // Nuvion moved, and the fee is not moved after the fact.
+    // quoted (it keeps it pending and notes it). A fee transfer was due for
+    // this send and Nuvion has none under its reference: the lookup cannot
+    // tell "never held" from "cannot be read", so the send is not completed
+    // without the fee. It waits, asked again, and a person takes it past the
+    // review bound (this test completed it at the send alone before
+    // SWEEP-MONEY-5a, G3). The fee is not moved after the fact.
     await transfers.settle(id, later(), false);
     await transfers.settle(id, later(), true);
     const out = await ledgerOut(reference);
-    expect(out.status).toBe('completed');
-    expect(Number(out.totalKobo)).toBe(AMOUNT + FEE);
-    expect(await ledgerNet(me)).toBe(-(PERSON_START - available(me)));
-    const done = await rowOf(id);
-    expect(done.status).toBe('completed');
-    expect(Number(done.totalKobo)).toBe(AMOUNT + FEE);
-    expect(done.discrepancy).toMatch(/WAWU/);
-    // The fee is not moved after the fact.
+    expect(out.status).toBe('pending');
+    const waiting = await rowOf(id);
+    expect(waiting.status).toBe('pending');
+    expect(waiting.nextCheckAt).not.toBeNull();
+    expect(waiting.reviewSince).toBeNull();
+    expect(waiting.discrepancy ?? '').not.toContain('not collected');
     expect(feeLegs(reference)).toHaveLength(0);
     expect(operational()).toBe(opBefore);
     expect(fintavaHits).toEqual([]);
