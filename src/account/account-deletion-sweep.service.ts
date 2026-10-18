@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { AccountPurgeService } from '../account-purge/account-purge.service';
+import { purgeNoteOf } from '../account-purge/purge-files';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PointsService } from '../points/points.service';
 import {
@@ -704,10 +705,7 @@ export class AccountDeletionSweepService {
         purgedAt: now,
         purgeBlockedAt: null,
         purgeBlockedBy: null,
-        purgeNote:
-          purged.keptForBuyers > 0
-            ? `${purged.keptForBuyers} content piece(s) that buyers paid for were kept hidden and anonymised`
-            : null,
+        purgeNote: purgeNoteOf(purged),
       },
     });
     return 'purged';
