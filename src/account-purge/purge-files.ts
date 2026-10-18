@@ -216,6 +216,11 @@ export async function refileIdentityFiles(
  * person, told apart by their folder. The two content folders are left out:
  * the sold-content step refiles the files of a piece a buyer paid for there
  * (kept for the buyers, counted as `keptForBuyers`, not as these).
+ *
+ * A client names the folder of an upload, so a bought piece's file can sit
+ * outside those two folders (SWEEP-LATE V1). Such a file is not an identity
+ * file either: any file a kept piece (held by the deleted account, hidden)
+ * still names is left out too.
  */
 export async function countKeptFiles(
   prisma: PrismaService,
@@ -232,10 +237,54 @@ export async function countKeptFiles(
     },
     select: { key: true },
   });
+  const forBuyers = await keysOfKeptPieces(prisma, wawuUserId);
+  const mine = rows.filter((r) => !forBuyers.has(r.key));
   const isEvent = (key: string) =>
     EVENT_FOLDERS.some((f) => key.startsWith(`${f}/`));
-  const eventKept = rows.filter((r) => isEvent(r.key)).length;
-  return { ownerKept: rows.length - eventKept, eventKept };
+  const eventKept = mine.filter((r) => isEvent(r.key)).length;
+  return { ownerKept: mine.length - eventKept, eventKept };
+}
+
+/**
+ * The storage keys, in this person's own folders, that a piece kept for its
+ * buyers still names (preview, full file, photo frames). The piece is held by
+ * the deleted account once the sold-content step has run, so it is found by
+ * what it names, not by its creator.
+ */
+async function keysOfKeptPieces(
+  prisma: PrismaService,
+  wawuUserId: string,
+): Promise<Set<string>> {
+  const named = {
+    contains: `/${wawuUserId}/`,
+    mode: 'insensitive' as const,
+  };
+  const pieces = await prisma.contentPiece.findMany({
+    where: {
+      creatorWawuId: DELETED_CREATOR_ID,
+      OR: [
+        { previewAssetUrl: named },
+        { fullAssetUrl: named },
+        { frames: { some: { url: named } } },
+      ],
+    },
+    select: {
+      previewAssetUrl: true,
+      fullAssetUrl: true,
+      frames: { select: { url: true } },
+    },
+  });
+  const keys = new Set<string>();
+  for (const p of pieces) {
+    for (const stored of [
+      p.previewAssetUrl,
+      p.fullAssetUrl,
+      ...p.frames.map((f) => f.url),
+    ]) {
+      if (stored) keys.add(objectKeyFrom(stored));
+    }
+  }
+  return keys;
 }
 
 /**
