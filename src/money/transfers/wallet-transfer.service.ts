@@ -1205,12 +1205,19 @@ export class WalletTransferService implements OnModuleInit {
    * next look writes it. Never for a send that stands, nor for a reversed one
    * (after or before it completed): its own row carries the fee in its total,
    * less what came back, so a row here would count the fee twice (round 3).
+   * A failed send that then turns reversed (FIX-85) has the row already: it is
+   * turned `reversed` here, whole, because the send's own row carries the fee
+   * from then on (a fee-back that lands later is noted on that row).
    */
   private async recordFeeOwed(
     t: TransferRow,
     leg: ProviderTransaction,
   ): Promise<void> {
     if (!t.payerWawuUserId || !t.payerAccountNumber) return;
+    if (t.status === 'reversed') {
+      await this.noteFeeLegReturned(t, t.customerReference);
+      return;
+    }
     if (t.status !== 'failed') return;
     try {
       const amount = koboNumber(leg.amountKobo);
@@ -2359,14 +2366,17 @@ export class WalletTransferService implements OnModuleInit {
       select: { status: true, reversedAt: true },
     });
     if (row?.status !== 'reversed') return t;
-    await this.prisma.walletTransfer.updateMany({
+    const moved = await this.prisma.walletTransfer.updateMany({
       where: { id: t.id, status: 'failed' },
       data: {
         status: 'reversed',
         reversedAt: row.reversedAt ?? new Date(),
       },
     });
-    return this.reload(t);
+    const fresh = await this.reload(t);
+    // The fee it owed is looked at again as a reversed send's (FIX-85).
+    if (moved.count > 0) await this.owe(fresh);
+    return fresh;
   }
 
   /**
