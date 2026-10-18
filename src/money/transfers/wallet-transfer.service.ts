@@ -1195,22 +1195,23 @@ export class WalletTransferService implements OnModuleInit {
 
   /**
    * The sender's side of the fee while it is owed (FIX-70 round 2): a send
-   * that did not stand (failed, or reversed) counts nothing in the ledger,
-   * yet the fee's own transfer took the fee out of the wallet and the
-   * provider's balance stays short of it until a fee-back lands. So the fee
-   * is a row of its own on the sender's wallet, `completed` money OUT under
-   * the fee transfer's reference, the amount that transfer moved and the
-   * charge on it. It turns `reversed` (a debit that came back, which moves
-   * nothing) only when a fee-back has landed (`noteFeeLegReturned`). Written
-   * once; a failure is logged and the next look writes it. Never for a send
-   * that stands: its own row carries the fee in its total.
+   * that failed counts nothing in the ledger, yet the fee's own transfer took
+   * the fee out of the wallet and the provider's balance stays short of it
+   * until a fee-back lands. So the fee is a row of its own on the sender's
+   * wallet, `completed` money OUT under the fee transfer's reference, the
+   * amount that transfer moved and the charge on it. It turns `reversed` (a
+   * debit that came back, which moves nothing) only when a fee-back has
+   * landed (`noteFeeLegReturned`). Written once; a failure is logged and the
+   * next look writes it. Never for a send that stands, nor for a reversed one
+   * (after or before it completed): its own row carries the fee in its total,
+   * less what came back, so a row here would count the fee twice (round 3).
    */
   private async recordFeeOwed(
     t: TransferRow,
     leg: ProviderTransaction,
   ): Promise<void> {
     if (!t.payerWawuUserId || !t.payerAccountNumber) return;
-    if (t.status !== 'failed' && t.status !== 'reversed') return;
+    if (t.status !== 'failed') return;
     try {
       const amount = koboNumber(leg.amountKobo);
       const charge = koboNumber(leg.feeKobo ?? 0n);
