@@ -708,6 +708,29 @@ export class SchoolSettlementService {
     payee: PayoutPlace,
   ): Promise<void> {
     const refusal = e instanceof WalletProviderError ? e : null;
+    if (refusal?.providerFailed) {
+      // The provider TOOK the payout and its own record says it failed
+      // (FIX-72): the money is back in WAWU's account, but the reference is
+      // spent, because the provider answers a repeat of it with that same
+      // failed record. Sending again under it would be refused for ever (and
+      // would be asked every hour with no end). Nothing is sent: the provider
+      // is asked about the payout (a read), and only its record that the
+      // payout FAILED starts the one new try under a new reference, the step
+      // a failure found by the sweep takes (`reconcile`, `retryAfterFailure`).
+      // A record it cannot read, or that is not finished, is asked again
+      // later and goes to a person past PAYMENT_REVIEW_AFTER_HOURS
+      // (`stillUnknown`). The lease stays: the send is `sent` until then.
+      this.logger.warn(
+        `school settlement ${row.id}: ${this.provider.label} took the payout and says it failed; reading its record`,
+      );
+      await this.reconcile(
+        await this.prisma.schoolSettlement.findUniqueOrThrow({
+          where: { id: row.id },
+        }),
+        now,
+      );
+      return;
+    }
     if (!refusal || (refusal.recordMayExist && !refusal.requestNotSent)) {
       // Money may have moved (a lost answer, an accepted send not finished, a
       // repeated reference): asked about, never sent again.
