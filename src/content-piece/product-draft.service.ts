@@ -222,6 +222,9 @@ export class ProductDraftService {
       previewAsset: dto.previewAsset,
       fullAsset: dto.fullAsset,
     };
+    // A file whose upload outlasted the Hub's wait is counted first, outside
+    // any lock (SWEEP-APP-5, ME-04 R4-5).
+    await this.content.settleSlowUploads(wawuUserId, piece);
     const filesUsable = this.content.filesUsableIn(wawuUserId, piece);
     return this.content.create(wawuUserId, piece, async (tx) => {
       // The files it names must still be the person's (ME-04 round 4).

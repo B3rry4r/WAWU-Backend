@@ -109,6 +109,16 @@ class PlaceNotClaimed extends Error {
   }
 }
 
+// Imported here, after the exported types, so they stay where they were.
+import { ServiceUnavailableException } from '@nestjs/common';
+
+/**
+ * Said when a listing names a file another person uploaded (SWEEP-APP-5, row
+ * ME-04 R2-4): a key of ours is a claim on a file, and only its uploader may
+ * make it. A link elsewhere matches no row and still passes, as before.
+ */
+const NOT_YOUR_FILE = 'One of these files is not yours. Upload your own.';
+
 /**
  * ContentPiece resource — registry.json "ContentPiece". Owns content
  * CRUD/listing, the unlock (paid-content purchase) flow, save-toggle, and
@@ -602,6 +612,53 @@ export class ContentPieceService {
   }
 
   /**
+   * An honest upload slower than the 15 minutes the Hub waits (any usage read
+   * in the middle abandons its pending row) that then lands used to be refused
+   * here, although the file was in the bucket (SWEEP-APP-5, row ME-04 R4-5).
+   * Before the check, each key the listing names whose row is the person's own,
+   * `abandoned` and never released is settled the way `POST /uploads/confirm`
+   * settles it: the bucket is asked, and a file that is there and fits comes
+   * back as `confirmed`. It runs outside any transaction or lock, because the
+   * bucket is a network call: the routes that publish call it just before
+   * `create` (POST /content and a draft's publish), and an edit calls it itself. A file that does not fit is refused with the
+   * storage 413, as a confirm refuses it; a bucket that cannot be asked leaves
+   * the row as it is, and the check below answers as it always did.
+   */
+  async settleSlowUploads(
+    creatorWawuId: string,
+    dto: { previewAsset?: string | null; fullAsset?: string | null },
+  ): Promise<void> {
+    const keys = [
+      ...new Set(
+        [dto.previewAsset, dto.fullAsset]
+          .filter((u): u is string => typeof u === 'string' && u !== '')
+          .map((u) => objectKeyFrom(u))
+          // eslint-disable-next-line no-control-regex -- a control character is in no key we wrote
+          .filter((k) => !/[\u0000-\u001f\u007f]/.test(k)),
+      ),
+    ];
+    if (keys.length === 0) return;
+    const late = await this.prisma.storageObject.findMany({
+      where: {
+        key: { in: keys },
+        wawuUserId: creatorWawuId,
+        status: 'abandoned',
+        releasedAt: null,
+        removingAt: null,
+      },
+      select: { key: true },
+    });
+    for (const row of late) {
+      try {
+        await this.storage.settleUpload(creatorWawuId, row.key);
+      } catch (err) {
+        if (err instanceof ServiceUnavailableException) continue;
+        throw err;
+      }
+    }
+  }
+
+  /**
    * Refuses a listing that names a file its owner released, or whose upload
    * never arrived (the row is `abandoned`): 400, as a photo-set frame is
    * refused. The files of such a row are not counted against the person's
@@ -610,8 +667,10 @@ export class ContentPieceService {
    * lock, so a release or the sweep that is deciding about the same key
    * finishes first: a key released a moment ago is seen here as released, and
    * a key named here is seen by the release (409) and by the sweep as claimed.
-   * A value that is not one of our keys (a link elsewhere) matches no row and
-   * passes, as before.
+   * A key whose row belongs to someone else is refused too (400, SWEEP-APP-5,
+   * ME-04 R2-4): the check is the row's owner, as a photo-set frame's is, so a
+   * piece cannot be built on another person's file. A value that is not one of
+   * our keys (a link elsewhere) matches no row and passes, as before.
    */
   private async assertFilesNotGivenUp(
     tx: Prisma.TransactionClient,
@@ -629,16 +688,18 @@ export class ContentPieceService {
     ];
     if (keys.length === 0) return;
     await lockStorageQuota(tx, creatorWawuId);
-    const given = await tx.storageObject.findFirst({
-      where: {
-        key: { in: keys },
-        // A file being removed is released and abandoned already; the mark is
-        // named too so the rule reads as it is (ME-04 round 5).
-        OR: [{ status: 'abandoned' }, { removingAt: { not: null } }],
-      },
-      select: { id: true },
+    const rows = await tx.storageObject.findMany({
+      where: { key: { in: keys } },
+      select: { wawuUserId: true, status: true, removingAt: true },
     });
-    if (given) throw new BadRequestException(GIVEN_UP_FILE);
+    if (rows.some((row) => row.wawuUserId !== creatorWawuId)) {
+      throw new BadRequestException(NOT_YOUR_FILE);
+    }
+    // A file being removed is released and abandoned already; the mark is
+    // named too so the rule reads as it is (ME-04 round 5).
+    if (rows.some((row) => row.status === 'abandoned' || row.removingAt)) {
+      throw new BadRequestException(GIVEN_UP_FILE);
+    }
   }
 
   /**
@@ -1000,6 +1061,11 @@ export class ContentPieceService {
         'Paid content needs a separate free preview. previewAsset must not be the same file as fullAsset.',
       );
     }
+
+    await this.settleSlowUploads(creatorWawuId, {
+      previewAsset: dto.previewAsset,
+      fullAsset: dto.fullAsset,
+    });
 
     // Conditional on the status read above: a reviewer approving the piece
     // at this instant must win, and the edit must not land on a live piece.

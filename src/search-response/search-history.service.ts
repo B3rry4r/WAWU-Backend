@@ -172,7 +172,10 @@ export class SearchHistoryService {
    * creator handle before a title, then the lower name); the join is equality
    * of the folded forms. A community is a name only while it has enough
    * members (the same count as its row's memberCount: joined, host not
-   * included); another public thing with the same name still is one. People
+   * included); another public thing with the same name still is one. The
+   * members are counted only for the rooms whose folded name is one of the
+   * searched texts (`rooms`, kept as its own step so the count runs after the
+   * match and not for every room: SWEEP-APP-5, EXPLORE-06 L1). People
    * are counted over every spelling that folds to the same name, one count per
    * person. `PushStoppedAccount` is the mark
    * `DELETE /account` leaves on an account whose deletion is scheduled (a
@@ -193,6 +196,12 @@ export class SearchHistoryService {
             SELECT 1 FROM "PushStoppedAccount" p WHERE p."userWawuId" = h."userWawuId")
         GROUP BY h."queryKey"
       ),
+      rooms AS MATERIALIZED (
+        SELECT m.id AS id, m.name AS name, ${foldSql(col('m.name'))} AS fk
+        FROM "Community" m
+        WHERE ${showableNameSql(col('m.name'))}
+          AND ${foldSql(col('m.name'))} IN (SELECT fk FROM keys)
+      ),
       names AS (
         SELECT DISTINCT ON (u.fk) u.fk AS fk, u.shown AS shown
         FROM (
@@ -200,10 +209,9 @@ export class SearchHistoryService {
           FROM "ContentPiece" c
           WHERE c.status = 'live' AND ${showableNameSql(col('c.category'))}
           UNION ALL
-          SELECT ${foldSql(col('m.name'))}, m.name, 2
-          FROM "Community" m
-          WHERE ${showableNameSql(col('m.name'))}
-            AND (SELECT COUNT(*) FROM "CommunityMembership" cm
+          SELECT m.fk, m.name, 2
+          FROM rooms m
+          WHERE (SELECT COUNT(*) FROM "CommunityMembership" cm
                  WHERE cm."communityId" = m.id AND cm.status = 'joined') >= ${minMembers}
           UNION ALL
           SELECT ${foldSql(col('p.handle'))}, p.handle, 3
