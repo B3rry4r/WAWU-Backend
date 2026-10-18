@@ -78,6 +78,41 @@ export const TRANSFER_NARRATION = 'WAWU transfer';
 export const FEE_LEG_SUFFIX = '-fee';
 /** Added to the same reference for the transfer that gives the fee back (FIX-52). */
 export const FEE_RETURN_SUFFIX = '-fee-back';
+/**
+ * Added once more for the one new try at giving the fee back, made only when
+ * the provider's own record says the first transfer failed (FIX-70): the
+ * provider answers a repeat of a reference with that same failed record, so
+ * the first reference is spent.
+ */
+export const FEE_RETURN_RETRY_SUFFIX = '-2';
+
+/**
+ * The reference of the transfer that gives a send's fee back: the first try
+ * `<send>-fee-back`, the one new try `<send>-fee-back-2`. Both begin with the
+ * send's own reference and the first try's suffix, so a fee given back always
+ * links to its send.
+ */
+export function feeBackReference(
+  sendReference: string,
+  attempt: 1 | 2,
+): string {
+  return `${sendReference}${FEE_RETURN_SUFFIX}${
+    attempt === 2 ? FEE_RETURN_RETRY_SUFFIX : ''
+  }`;
+}
+
+/** The send a fee-back transfer's reference belongs to, or null when it is not one. */
+export function sendReferenceOfFeeBack(reference: string): string | null {
+  for (const suffix of [
+    `${FEE_RETURN_SUFFIX}${FEE_RETURN_RETRY_SUFFIX}`,
+    FEE_RETURN_SUFFIX,
+  ]) {
+    if (reference.endsWith(suffix) && reference.length > suffix.length) {
+      return reference.slice(0, -suffix.length);
+    }
+  }
+  return null;
+}
 
 /** Someone else's send is the same 404 as one nobody holds (CONVENTIONS.md section 3). */
 export const TRANSFER_NOT_FOUND_MESSAGE = 'We could not find that send.';
@@ -151,6 +186,12 @@ const FEE_REFUSALS_FINAL: readonly WalletProviderErrorKind[] = [
 const FEE_RETURN_GIVE_UP_MS = 24 * 60 * MINUTE;
 /** The rest between two tries to give a fee back. */
 const FEE_RETURN_RETRY_MS = 2 * MINUTE;
+/**
+ * The rest between two looks at a fee whose give-back the provider failed
+ * twice (FIX-70): nothing is sent in the meantime, and the sweep goes on only
+ * until the review bound, when a person takes it.
+ */
+const FEE_RETURN_REST_MS = 30 * MINUTE;
 
 /**
  * Provider refusals that mean no money moved and the person can fix it, or
@@ -1111,15 +1152,18 @@ export class WalletTransferService implements OnModuleInit {
 
   /**
    * The ledger's side of the transfer that gave the fee back (FIX-66): money
-   * OUT of WAWU's own account, under the fee-back reference, at what moved
-   * and the charge the provider took from WAWU's account for moving it. The
-   * person's side is the send's own row (failed, or reversed), which nets
-   * what the provider returned.
+   * OUT of WAWU's own account, under the reference of the try that landed
+   * (`reference`: the provider's own, so its deliveries find the row), at what
+   * moved and the charge the provider took from WAWU's account for moving it.
+   * Written once, for that try only: a try the provider failed moved nothing
+   * and has no row. The person's side is the send's own row (failed, or
+   * reversed), which nets what the provider returned.
    */
   private async recordFeeBack(
     t: TransferRow,
     platformNumber: string,
     receipt: ProviderTransferReceipt,
+    reference: string,
   ): Promise<void> {
     const amount = koboNumber(receipt.amountKobo);
     const charge = koboNumber(receipt.feeKobo);
@@ -1135,9 +1179,7 @@ export class WalletTransferService implements OnModuleInit {
         providerFeeKobo: charge,
         wawuFeeKobo: 0,
         narration: TRANSFER_NARRATION,
-        references: {
-          customerReference: `${t.customerReference}${FEE_RETURN_SUFFIX}`,
-        },
+        references: { customerReference: reference },
         counterparty: {
           kind: 'wawu_user',
           name: null,
@@ -1152,15 +1194,73 @@ export class WalletTransferService implements OnModuleInit {
   }
 
   /**
+   * The move that gives the fee back, under at most two references (FIX-70).
+   * It is made under `<send>-fee-back`. Only when the provider's OWN record
+   * under that reference says the transfer failed (it took the transfer and
+   * failed it: `providerFailed`, then confirmed by reading the record) is the
+   * reference spent, because the provider answers a repeat of it with that
+   * same failed record; the move is then made once more under
+   * `<send>-fee-back-2`. A timeout, a network error, a 5xx, a transfer the
+   * provider has not finished or a state it does not say never starts a new
+   * reference: those throw, and the same reference is asked about again
+   * later. `rest`: both references failed at the provider, so nothing more is
+   * sent and a person takes it past the review bound.
+   */
+  private async moveFeeBack(
+    t: TransferRow,
+    platformNumber: string,
+    owedKobo: bigint,
+  ): Promise<'landed' | 'rest'> {
+    for (const attempt of [1, 2] as const) {
+      const reference = feeBackReference(t.customerReference, attempt);
+      try {
+        const receipt = await this.provider.walletToWallet({
+          fromAccountNumber: platformNumber,
+          toAccountNumber: t.payerAccountNumber!,
+          amountKobo: owedKobo,
+          reference,
+          narration: TRANSFER_NARRATION,
+        });
+        await this.recordFeeBack(t, platformNumber, receipt, reference);
+        return 'landed';
+      } catch (e) {
+        if (!(e instanceof WalletProviderError) || !e.providerFailed) throw e;
+        // The error is built from the provider's record; the record itself
+        // is read before a new reference is used. Anything but `failed`
+        // (unreadable, none, pending) stands as the error: asked again.
+        const rec = await this.legRecord(
+          t,
+          attempt === 1
+            ? FEE_RETURN_SUFFIX
+            : `${FEE_RETURN_SUFFIX}${FEE_RETURN_RETRY_SUFFIX}`,
+        );
+        if (rec === 'unknown' || rec === null || rec.outcome !== 'failed') {
+          throw e;
+        }
+        this.logger.warn(
+          `send ${t.id}: ${this.provider.label} took the fee given back and failed it (try ${attempt}); ${
+            attempt === 1
+              ? 'trying once more under a new reference'
+              : 'it failed twice, nothing more is sent'
+          }`,
+        );
+      }
+    }
+    return 'rest';
+  }
+
+  /**
    * Gives the fee back to a sender whose send did not stand (failed, or
    * reversed before or after it completed): the person gets every naira back,
    * Nuvion's charges on both transfers are WAWU's. One transfer under the
    * send's reference plus `-fee-back`, from WAWU's account, made once however
-   * often it is asked. `none`: no fee was taken. `pending`: not finished yet.
+   * often it is asked; if the provider took it and failed it, once more under
+   * a new reference (`moveFeeBack`, FIX-70). `none`: no fee was taken.
+   * `pending`: not finished yet. `rest`: failed twice at the provider.
    */
   private async returnFee(
     t: TransferRow,
-  ): Promise<'done' | 'none' | 'pending'> {
+  ): Promise<'done' | 'none' | 'pending' | 'rest'> {
     if (!this.feeLegDue(t)) return 'none';
     const rec = await this.legRecord(t, FEE_LEG_SUFFIX);
     const old =
@@ -1182,14 +1282,8 @@ export class WalletTransferService implements OnModuleInit {
       // (a write lost at the time is made now), and both leave WAWU's account
       // as the provider's does (FIX-66).
       await this.recordFeeLeg(t, platform.accountNumber, rec.amountKobo);
-      const receipt = await this.provider.walletToWallet({
-        fromAccountNumber: platform.accountNumber,
-        toAccountNumber: t.payerAccountNumber!,
-        amountKobo: owed,
-        reference: `${t.customerReference}${FEE_RETURN_SUFFIX}`,
-        narration: TRANSFER_NARRATION,
-      });
-      await this.recordFeeBack(t, platform.accountNumber, receipt);
+      const moved = await this.moveFeeBack(t, platform.accountNumber, owed);
+      if (moved === 'rest') return 'rest';
     } catch (e) {
       this.logger.warn(
         `send ${t.id}: WAWU's fee could not be given back yet (${e instanceof WalletProviderError ? e.kind : 'error'}); asked again`,
@@ -1234,14 +1328,18 @@ export class WalletTransferService implements OnModuleInit {
   }
 
   /** One try at giving a fee back; the mark stays while it is not done. */
-  private async returnOwed(t: TransferRow): Promise<void> {
-    let result: 'done' | 'none' | 'pending' = 'pending';
+  private async returnOwed(t: TransferRow, now = new Date()): Promise<void> {
+    let result: 'done' | 'none' | 'pending' | 'rest' = 'pending';
     try {
       result = await this.returnFee(t);
     } catch (e) {
       this.logger.error(
         `send ${t.id}: giving the fee back failed (${e instanceof Error ? e.name : 'error'}); asked again`,
       );
+    }
+    if (result === 'rest') {
+      await this.restFeeReturn(t, now);
+      return;
     }
     await this.prisma.walletTransfer.updateMany({
       where: { id: t.id },
@@ -1252,6 +1350,48 @@ export class WalletTransferService implements OnModuleInit {
             : null,
       },
     });
+  }
+
+  /**
+   * A fee the provider failed to give back under both references (FIX-70):
+   * nothing is sent. It is looked at again after a long rest and, past the
+   * review bound (counted from when the fee became owed), taken out of the
+   * sweep and put in front of a person, the money still owed to the sender.
+   */
+  private async restFeeReturn(t: TransferRow, now: Date): Promise<void> {
+    const owedSince = (
+      t.failedAt ??
+      t.reversedAt ??
+      t.sentAt ??
+      t.createdAt
+    ).getTime();
+    if (
+      now.getTime() - owedSince <
+      this.settings.reviewAfterHours * 3_600_000
+    ) {
+      await this.prisma.walletTransfer.updateMany({
+        where: { id: t.id },
+        data: { nextCheckAt: new Date(now.getTime() + FEE_RETURN_REST_MS) },
+      });
+      return;
+    }
+    const note = `WAWU's fee could not be given back: ${this.provider.label} failed the transfer twice, under two references`;
+    const flagged = await this.prisma.walletTransfer.updateMany({
+      where: { id: t.id, reviewSince: null },
+      data: {
+        reviewSince: now,
+        discrepancy: (joinNotes(t.discrepancy, note) ?? note).slice(0, 1000),
+      },
+    });
+    await this.prisma.walletTransfer.updateMany({
+      where: { id: t.id },
+      data: { nextCheckAt: null },
+    });
+    if (flagged.count > 0) {
+      this.logger.error(
+        `send ${t.id}: ${note}; held for a person, nothing is sent again`,
+      );
+    }
   }
 
   /** Sends that owe a fee back and are due another try. */
@@ -1265,7 +1405,7 @@ export class WalletTransferService implements OnModuleInit {
       orderBy: { nextCheckAt: 'asc' },
       take: SWEEP_PAGE,
     });
-    for (const t of due) await this.returnOwed(t);
+    for (const t of due) await this.returnOwed(t, now);
   }
 
   /**
