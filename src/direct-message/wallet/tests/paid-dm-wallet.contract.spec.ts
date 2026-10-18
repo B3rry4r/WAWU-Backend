@@ -352,6 +352,64 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
     await operationalAgrees();
   });
 
+  it('I7: the hold of a lapsed question says what really came back, price and charge (2,325 kobo), not the price alone (S3 round 2, F1)', async () => {
+    expect(FEE).toBe(2325);
+    const fan = await h.person(RICH);
+    const c = await creator();
+    const v = await asked(fan, c);
+    // Held: nothing has come back, and the hold view says so.
+    const held = body<PaidQuestionWalletView>(
+      await h.get(fan, `/dm/send/wallet/${v.id}`),
+    ).data!;
+    expect(held.payment?.hold).toMatchObject({
+      status: 'held',
+      amountKobo: PRICE,
+      refundedKobo: null,
+    });
+
+    await setDeadline(v.id, new Date(Date.now() - 1000));
+    await questions.sweep();
+    await until(async () => {
+      await h.pass();
+      await questions.sweep();
+      return (await messageOf(v.id)).refundStatus === 'settled';
+    }, 'the refund to be confirmed');
+
+    // The fan really got price + charge back (the stand-in's own record).
+    const back = h.nuvion
+      .sendsFrom(h.nuvion.operational.accountId)
+      .filter((t) => t.toAccountId === fan.account!.accountId);
+    expect(back).toHaveLength(1);
+    expect(back[0].request.amount).toBe(PRICE + FEE);
+    expect(balance(fan)).toBe(BigInt(RICH));
+
+    // The question's hold serves that figure, not the price.
+    const read = body<PaidQuestionWalletView>(
+      await h.get(fan, `/dm/send/wallet/${v.id}`),
+    ).data!;
+    expect(read.status).toBe('refunded');
+    expect(read.payment?.hold).toMatchObject({
+      status: 'refunded',
+      amountKobo: PRICE,
+      refundedKobo: PRICE + FEE,
+    });
+    // So does the hold's own route, for the fan.
+    const hold = await holdOf(v.id);
+    const route = body<{ refundedKobo: number; amountKobo: number }>(
+      await h.get(fan, `/money/holds/${hold.id}`),
+    ).data!;
+    expect(route).toMatchObject({
+      amountKobo: PRICE,
+      refundedKobo: PRICE + FEE,
+    });
+    // The stored column stays the held price (a database rule); the move
+    // that was made carries the figure the view reads.
+    expect(hold.refundedKobo).toBe(BigInt(PRICE));
+    expect(hold.transferKobo).toBe(BigInt(PRICE + FEE));
+    await h.expectLedgerEqualsStandIn([fan, c]);
+    await operationalAgrees();
+  });
+
   it('the same request twice, and twice in parallel, holds the money once', async () => {
     const fan = await h.person(RICH);
     const c = await creator();

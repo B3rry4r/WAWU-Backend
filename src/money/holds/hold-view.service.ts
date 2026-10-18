@@ -127,7 +127,15 @@ export class HoldViewService {
       payee: person(r.payeeWawuUserId),
       heldAt: r.heldAt.toISOString(),
       settledAt: r.settledAt ? r.settledAt.toISOString() : null,
-      refundedKobo: r.refundedKobo === null ? null : koboNumber(r.refundedKobo),
+      // What came back to the payer: the refund's own move (`transferKobo`,
+      // the figure the provider's record matched), which is the price plus
+      // the payment's charge when the payer did not cause the refund
+      // (`returnCharge`). The stored `refundedKobo` is the held price, pinned
+      // by a database rule, so it is not served as the amount returned.
+      refundedKobo:
+        r.refundedKobo === null
+          ? null
+          : koboNumber(r.transferKobo ?? r.refundedKobo),
     };
   }
 }

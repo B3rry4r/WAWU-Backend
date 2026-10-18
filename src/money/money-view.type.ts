@@ -575,7 +575,9 @@ export type HoldReleaseCondition =
 /**
  * Money held between payer and payee in WAWU's merchant wallet (R-19). The
  * price is held; the provider charge on the original payment is not part of
- * it and is not refunded (R-10: a refund returns the price).
+ * it. A refund the payer caused returns the price (R-10); a refund they did
+ * not cause (a question that lapsed, an order that failed) returns every
+ * naira, the charge too, and `refundedKobo` says which.
  */
 export interface HoldView {
   id: string;
@@ -591,7 +593,7 @@ export interface HoldView {
   heldAt: string;
   /** When it was released or refunded. */
   settledAt: string | null;
-  /** Set when refunded: what came back to the payer. */
+  /** Set when refunded: what really came back to the payer, read from the refund's own move (the price, or the price and the payment's charge). */
   refundedKobo: number | null;
 }
 
