@@ -25,6 +25,7 @@ import { PaymentSettings } from '../../money/payments/payment-config';
 import { isRowOf } from '../../wallet-provider/provider-rows';
 import {
   type ProviderReconciliation,
+  type ProviderTransaction,
   type ProviderTransferReceipt,
   WALLET_PROVIDER,
   type WalletProvider,
@@ -805,6 +806,9 @@ export class SchoolSettlementService {
           );
           return;
         }
+        // A webhook may have completed the row at the quoted total before
+        // this record was read (FIX-74): it takes the provider's own charge.
+        await this.restateCompletedCharge(row, t);
         const payee = {
           bankCode: row.bankCode,
           bankName: row.bankName,
@@ -1044,6 +1048,32 @@ export class SchoolSettlementService {
     } catch (e) {
       this.logger.error(
         `school settlement ${row.id}: the ledger could not take the provider's charge (${e instanceof Error ? e.name : 'error'})`,
+      );
+    }
+  }
+
+  /**
+   * FIX-74: the provider's own record of this very send says it completed, at
+   * its own charge. A ledger row a webhook already completed at the quoted
+   * total takes that charge (once, with an audit note), so the completion
+   * that follows agrees with it instead of putting the row back to pending.
+   * Only the record's own reference and stated charge are passed on. Best
+   * effort, like every ledger write after the money moved.
+   */
+  private async restateCompletedCharge(
+    row: SchoolSettlement,
+    record: ProviderTransaction,
+  ): Promise<void> {
+    if (row.customerReference === null) return;
+    try {
+      await this.ledger.restateCompletedCharge(
+        row.customerReference,
+        BigInt(row.schoolShareKobo),
+        { ourReference: record.ourReference, feeKobo: record.feeKobo ?? null },
+      );
+    } catch (e) {
+      this.logger.error(
+        `school settlement ${row.id}: the ledger could not take the provider's charge on a completed row (${e instanceof Error ? e.name : 'error'})`,
       );
     }
   }
