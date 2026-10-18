@@ -31,6 +31,10 @@ export interface LedgerOutRow {
   discrepancy?: string | null;
   /** The provider's own charge as the row holds it. */
   providerFeeKobo?: bigint | null;
+  /** What left the wallet (out: amount and fees) or arrived (in): the most a return can give back. */
+  totalKobo?: bigint;
+  /** The reference of the provider's record of the money coming back, once the ledger has it (FIX-80). */
+  reversalRef?: string | null;
 }
 
 export interface DebitCompareInput {
@@ -188,6 +192,55 @@ export function compareMovements(input: DebitCompareInput): DebitCompareResult {
   const inWindow = (at: Date): boolean =>
     windowFrom === null || at.getTime() >= windowFrom.getTime();
 
+  // Returns (FIX-80): a completed line that gives back a move the ledger holds
+  // as `reversed`, found by the reference the line states it gives back, or by
+  // the reference the ledger kept of the money coming back. A line of the
+  // other direction than the row, for no less than the row's amount and no
+  // more than it took. A reversed row the provider shows no return for is
+  // still a difference (the judged pair says so); so is a return of a row the
+  // ledger does not call reversed (the line has no row).
+  const reversedByRef = new Map<string, LedgerOutRow>();
+  for (const row of [...input.ledger, ...(input.related ?? [])]) {
+    if (row.status !== 'reversed') continue;
+    for (const ref of row.refs)
+      if (!reversedByRef.has(ref)) reversedByRef.set(ref, row);
+  }
+  const reversedByReturn = new Map<string, LedgerOutRow>();
+  for (const row of reversedByRef.values()) {
+    if (row.reversalRef) reversedByReturn.set(row.reversalRef, row);
+  }
+  const ledgerIds = new Set(input.ledger.map((r) => r.id));
+  const returnedRowOf = (p: ProviderTransaction): LedgerOutRow | null => {
+    if (p.outcome !== 'completed') return null;
+    let row: LedgerOutRow | null = null;
+    if (typeof p.returnOf === 'string' && p.returnOf !== '') {
+      row = reversedByRef.get(p.returnOf) ?? null;
+    }
+    if (row === null) {
+      for (const ref of providerRefs(p)) {
+        const hit = reversedByReturn.get(ref);
+        if (hit) {
+          row = hit;
+          break;
+        }
+      }
+    }
+    if (row === null) return null;
+    // Opposite ways: a row of this pass's direction is given back by a line
+    // of the other, and the other way round.
+    const rowIsThisPass = ledgerIds.has(row.id);
+    const lineDirection = p.direction ?? 'out';
+    if (rowIsThisPass === (lineDirection === direction)) return null;
+    const most = row.totalKobo ?? row.amountKobo;
+    if (p.amountKobo < row.amountKobo || p.amountKobo > most) return null;
+    return row;
+  };
+  const returnedRows = new Set<string>();
+  for (const p of input.provider) {
+    const row = returnedRowOf(p);
+    if (row) returnedRows.add(row.id);
+  }
+
   // Pass 1: which ledger rows the provider has a record for, whatever the
   // record's age, so a row cannot be called missing because of the order the
   // rows came in.
@@ -230,6 +283,11 @@ export function compareMovements(input: DebitCompareInput): DebitCompareResult {
       continue;
     }
     compared += 1;
+    const gaveBack = returnedRowOf(p);
+    if (gaveBack !== null && !ledgerIds.has(gaveBack.id)) {
+      bump(notices, 'reversal_returned', p.amountKobo);
+      continue;
+    }
     if (isLeg(p)) {
       const send = byRef.get(p.feeLegOf as string) ?? null;
       if (send === null) {
@@ -270,7 +328,16 @@ export function compareMovements(input: DebitCompareInput): DebitCompareResult {
       continue;
     }
     matched.push({ row, provider: p });
-    judgePair(check, row, p, now, settleMs, findings, direction);
+    judgePair(
+      check,
+      row,
+      p,
+      now,
+      settleMs,
+      findings,
+      direction,
+      returnedRows.has(row.id),
+    );
   }
 
   // Pass 3: ledger rows the provider has no record of.
@@ -385,6 +452,7 @@ function judgePair(
   settleMs: number,
   findings: Finding[],
   direction: 'out' | 'in' = 'out',
+  returned = false,
 ): void {
   const noun = direction === 'in' ? 'receipt' : 'send';
   const l = row.status;
@@ -430,6 +498,10 @@ function judgePair(
   if (o === 'completed') {
     // A send the ledger calls failed or reversed (the money came back) while
     // the provider lists it completed: the money did not come back.
+    if (l === 'reversed' && returned) {
+      // The provider shows the move and the money coming back (FIX-80).
+      return;
+    }
     if (l === 'failed' || l === 'reversed') {
       differs(
         `The provider shows this ${noun} completed and the ledger shows it ${l}.`,
@@ -681,6 +753,97 @@ export function openingBalanceOf(
     openings.add(p.balanceAfterKobo - effect);
   }
   return openings.size === 1 ? [...openings][0] : null;
+}
+
+/**
+ * The balance WAWU's account held at `cutMs`, from the provider's own
+ * statement (FIX-80): what it held before the oldest completed line from that
+ * moment on, or, when nothing completed since, what it stated right after the
+ * newest completed line before it. Null when the statement does not give it
+ * (no completed line at all, a line with no time, no direction or no balance,
+ * or lines sharing one time that would give two figures).
+ */
+export function balanceAt(
+  lines: readonly ProviderTransaction[],
+  cutMs: number,
+): bigint | null {
+  const done = lines.filter((p) => p.outcome === 'completed');
+  const after = done.filter((p) => Date.parse(p.createdAt) >= cutMs);
+  if (after.length > 0) return openingBalanceOf(after);
+  let newest = Number.NEGATIVE_INFINITY;
+  const last: ProviderTransaction[] = [];
+  for (const p of done) {
+    const at = Date.parse(p.createdAt);
+    if (!Number.isFinite(at)) return null;
+    if (at > newest) {
+      newest = at;
+      last.length = 0;
+    }
+    if (at === newest) last.push(p);
+  }
+  if (last.length === 0) return null;
+  const figures = new Set<bigint>();
+  for (const p of last) {
+    if (p.balanceAfterKobo == null) return null;
+    figures.add(p.balanceAfterKobo);
+  }
+  return figures.size === 1 ? [...figures][0] : null;
+}
+
+/**
+ * Where to cut a long history in two (FIX-80): the middle of the longest
+ * stretch between `lo` and `hi` in which nothing happened, if that stretch is
+ * at least `minGapMs`. Money before the cut is left to the opening balance and
+ * money after it is compared line by line, and the ledger's time for a move
+ * and the provider's can differ by a little, so a cut is only safe where no
+ * move on either side is near it. Null when there is no such stretch: the
+ * account's balance is then not compared this night.
+ */
+export function quietCut(
+  events: readonly number[],
+  lo: number,
+  hi: number,
+  minGapMs: number,
+): number | null {
+  const points = [
+    lo,
+    ...events.filter((t) => Number.isFinite(t) && t > lo && t < hi),
+    hi,
+  ].sort((a, b) => a - b);
+  let widest = -1;
+  let at: number | null = null;
+  for (let i = 1; i < points.length; i += 1) {
+    const gap = points[i] - points[i - 1];
+    if (gap >= widest) {
+      widest = gap;
+      at = points[i - 1] + Math.floor(gap / 2);
+    }
+  }
+  return widest >= minGapMs ? at : null;
+}
+
+/**
+ * Whether the only thing a completed row's ledger note says is that the
+ * provider charged other than the quote, judged from the row alone (FIX-80):
+ * for a row whose provider line has left the window, so the line can no longer
+ * be read beside it. The row holds the provider's own record (its charge is
+ * stated on it) and the note states exactly that charge.
+ */
+export function isExplainedByRow(
+  label: string,
+  row: Pick<
+    LedgerOutRow,
+    'status' | 'amountKobo' | 'discrepancy' | 'providerFeeKobo'
+  >,
+): boolean {
+  if (row.providerFeeKobo === null || row.providerFeeKobo === undefined) {
+    return false;
+  }
+  return isExplainedCharge(label, row, {
+    amountKobo: row.amountKobo,
+    feeKobo: row.providerFeeKobo,
+    outcome: 'completed',
+  });
 }
 
 /**

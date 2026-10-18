@@ -22,11 +22,14 @@ import {
   compareFeeLeg,
   compareMerchantCharge,
   compareMovements,
+  isExplainedByRow,
   isExplainedCharge,
   type LedgerGroup,
   type LedgerOutRow,
   type LedgerSums,
+  balanceAt,
   openingBalanceOf,
+  quietCut,
   requiredInAccount,
   sameLedger,
   sumLedger,
@@ -70,6 +73,24 @@ const MINUTE = 60_000;
  * seconds, and a row on the edge must find its pair.
  */
 const HISTORY_MARGIN_MS = 6 * HOUR;
+
+/**
+ * WAWU's account balance on a history longer than the window is compared from
+ * a cut inside the part read (FIX-80). The cut is placed where neither the
+ * provider nor the ledger has a move for at least this long, so the two
+ * sides' slightly different times for one move cannot put it on opposite
+ * sides of the cut.
+ */
+const BALANCE_QUIET_MS = 2 * MINUTE;
+
+/** What the provider's history of a holder gave. */
+interface History {
+  rows: ProviderTransaction[];
+  /** Read back to the start of the window: only then is a ledger row with no record called missing. */
+  complete: boolean;
+  /** Read to the first line the account ever had. An early stop at the window is complete, but it has not reached the start (FIX-80). */
+  reachedStart: boolean;
+}
 
 /** Provider failures worth asking again about before a wallet is given up on. */
 const ASK_AGAIN = new Set(['rate_limited', 'unavailable', 'bad_response']);
@@ -187,6 +208,8 @@ const OUT_ROW = {
   linkKind: true,
   discrepancy: true,
   providerFeeKobo: true,
+  totalKobo: true,
+  reversalReference: true,
   references: { select: { value: true } },
 } satisfies Prisma.FintavaLedgerEntrySelect;
 
@@ -216,6 +239,8 @@ function toOutRow(r: OutRow): LedgerOutRow {
     refs: [...refs],
     discrepancy: r.discrepancy,
     providerFeeKobo: r.providerFeeKobo,
+    totalKobo: r.totalKobo,
+    reversalRef: r.reversalReference,
   };
 }
 
@@ -759,6 +784,7 @@ export class MoneyCheckService {
       sink,
       explained: st.explained,
     };
+    await this.explainAgedRows(st, windowFrom);
     await checkLedgerRows(db);
     await this.beat(run);
     await checkPayments(db);
@@ -769,6 +795,54 @@ export class MoneyCheckService {
     await this.nameNewWallets(st, wallets);
 
     return this.assemble(st, held);
+  }
+
+  /**
+   * A row whose note only says the provider charged other than the quote was
+   * counted apart while its provider line was inside the window. Once the
+   * line has left it nothing pairs the two any more, so the row is judged from
+   * its own figures: the charge it holds is the one its note states
+   * (FIX-80, G-FIX-67-5). A row whose figures and note do not agree stays a
+   * difference.
+   */
+  private async explainAgedRows(
+    st: RunState,
+    windowFrom: Date | null,
+  ): Promise<void> {
+    if (windowFrom === null) return;
+    const PAGE = 2000;
+    let after: string | undefined;
+    for (;;) {
+      const rows = await this.prisma.fintavaLedgerEntry.findMany({
+        where: {
+          AND: [
+            rowsOf(this.provider.name),
+            this.scope.ledgerWhere(),
+            {
+              status: 'completed',
+              discrepancy: { not: null },
+              occurredAt: { lt: windowFrom },
+              ...(after === undefined ? {} : { id: { gt: after } }),
+            },
+          ],
+        },
+        select: {
+          id: true,
+          status: true,
+          amountKobo: true,
+          discrepancy: true,
+          providerFeeKobo: true,
+        },
+        orderBy: { id: 'asc' },
+        take: PAGE,
+      });
+      for (const row of rows) {
+        if (isExplainedByRow(this.provider.label, row))
+          st.explained.add(row.id);
+      }
+      if (rows.length < PAGE) return;
+      after = rows[rows.length - 1].id;
+    }
   }
 
   /**
@@ -1044,7 +1118,7 @@ export class MoneyCheckService {
   private async history(
     st: RunState,
     holder: ProviderHolder,
-  ): Promise<{ rows: ProviderTransaction[]; complete: boolean }> {
+  ): Promise<History> {
     const seen = new Map<string, ProviderTransaction>();
     let newestFirst = true;
     let oldestSeen = Number.POSITIVE_INFINITY;
@@ -1060,7 +1134,7 @@ export class MoneyCheckService {
       const fresh = res.items.filter((t) => !seen.has(t.id));
       for (const t of res.items) seen.set(t.id, t);
       if (res.items.length === 0 || !res.hasNextPage) {
-        return { rows: [...seen.values()], complete: true };
+        return { rows: [...seen.values()], complete: true, reachedStart: true };
       }
       const inOrder = res.items
         .map((t) => Date.parse(t.createdAt))
@@ -1079,11 +1153,15 @@ export class MoneyCheckService {
           newestFirst &&
           Math.min(...times) < from - HISTORY_MARGIN_MS
         ) {
-          return { rows: [...seen.values()], complete: true };
+          return {
+            rows: [...seen.values()],
+            complete: true,
+            reachedStart: false,
+          };
         }
       }
     }
-    return { rows: [...seen.values()], complete: false };
+    return { rows: [...seen.values()], complete: false, reachedStart: false };
   }
 
   /** The ledger rows of one direction that a movement comparison reads. */
@@ -1100,7 +1178,23 @@ export class MoneyCheckService {
         AND: [
           rowsOf(this.provider.name),
           where,
-          { direction, ...(loadFrom ? { occurredAt: { gte: loadFrom } } : {}) },
+          { direction },
+          // A bank can return a send days after it was made (FIX-80): a row
+          // reversed lately is read whatever its age, so the money coming back
+          // finds the row it gives back.
+          ...(loadFrom
+            ? [
+                {
+                  OR: [
+                    { occurredAt: { gte: loadFrom } },
+                    {
+                      status: 'reversed' as const,
+                      updatedAt: { gte: loadFrom },
+                    },
+                  ],
+                },
+              ]
+            : []),
         ],
       },
       select: OUT_ROW,
@@ -1133,7 +1227,7 @@ export class MoneyCheckService {
     check: 'movements' | 'merchant_movements',
     where: Prisma.FintavaLedgerEntryWhereInput,
     outRows: readonly OutRow[],
-    hist: { rows: ProviderTransaction[]; complete: boolean },
+    hist: History,
   ): Promise<void> {
     const feeLegs = this.provider.wawuFeeLeg === true;
     const out = outRows.map(toOutRow);
@@ -1250,7 +1344,7 @@ export class MoneyCheckService {
     held.merchantAvailableKobo = account.availableKobo;
 
     // WAWU's movements.
-    let hist: { rows: ProviderTransaction[]; complete: boolean } | null = null;
+    let hist: History | null = null;
     try {
       const where: Prisma.FintavaLedgerEntryWhereInput = {
         AND: [this.scope.ledgerWhere(), { walletKind: 'merchant' }],
@@ -1292,13 +1386,27 @@ export class MoneyCheckService {
     }
   }
 
-  /** WAWU's own account: the merchant rows of the ledger, summed. */
-  private async merchantLedgerSums(): Promise<LedgerSums> {
+  /**
+   * WAWU's own account: the merchant rows of the ledger, summed. From a cut
+   * (FIX-80) only the rows from that moment on, and the rows still pending
+   * whatever their age (what they will do is not in the opening balance).
+   */
+  private async merchantLedgerSums(from: Date | null): Promise<LedgerSums> {
     const base: Prisma.FintavaLedgerEntryWhereInput = {
       AND: [
         rowsOf(this.provider.name),
         this.scope.ledgerWhere(),
         { walletKind: 'merchant' },
+        ...(from
+          ? [
+              {
+                OR: [
+                  { occurredAt: { gte: from } },
+                  { status: 'pending' as const },
+                ],
+              },
+            ]
+          : []),
       ],
     };
     // A bank send that failed and has not been shown to come back (the same
@@ -1339,26 +1447,92 @@ export class MoneyCheckService {
   }
 
   /**
+   * What WAWU's account held at the start of the stretch the ledger is summed
+   * over, and where that stretch starts (FIX-80). The two must be the same
+   * moment on both sides: an opening taken off a partial history, against the
+   * ledger's sums since the beginning, is a difference that is not there.
+   * - A history read to the first line the account ever had: the opening
+   *   before that line, and the whole ledger.
+   * - A history read back past the window (it stops there, as the movements
+   *   need no more): the balance at a cut inside the part read, placed where
+   *   nothing happened on either side for a while, and the ledger from the
+   *   cut. A difference older than the cut is not this account check's; the
+   *   movements of the window are compared line by line.
+   * - Any other history, or no quiet moment to cut at: null, and the account's
+   *   balance is not compared tonight.
+   */
+  private async accountBasis(
+    st: RunState,
+    hist: History,
+  ): Promise<{ openingKobo: bigint; from: Date | null } | null> {
+    if (hist.reachedStart) {
+      const opening = openingBalanceOf(hist.rows);
+      return opening === null ? null : { openingKobo: opening, from: null };
+    }
+    if (!hist.complete || st.windowFrom === null) return null;
+    const times = hist.rows.map((p) => Date.parse(p.createdAt));
+    if (times.length === 0 || times.some((t) => !Number.isFinite(t))) {
+      return null;
+    }
+    const lo = Math.min(...times);
+    const hi = st.windowFrom.getTime();
+    if (hi <= lo) return null;
+    const rows = await this.prisma.fintavaLedgerEntry.findMany({
+      where: {
+        AND: [
+          rowsOf(this.provider.name),
+          this.scope.ledgerWhere(),
+          { walletKind: 'merchant' },
+          {
+            OR: [
+              { occurredAt: { gte: new Date(lo), lte: new Date(hi) } },
+              { createdAt: { gte: new Date(lo), lte: new Date(hi) } },
+              { completedAt: { gte: new Date(lo), lte: new Date(hi) } },
+            ],
+          },
+        ],
+      },
+      select: { occurredAt: true, createdAt: true, completedAt: true },
+    });
+    const events = [
+      ...times,
+      ...rows.flatMap((r) =>
+        [r.occurredAt, r.createdAt, r.completedAt]
+          .filter((d): d is Date => d !== null)
+          .map((d) => d.getTime()),
+      ),
+    ];
+    const cut = quietCut(events, lo, hi, BALANCE_QUIET_MS);
+    if (cut === null) return null;
+    const opening = balanceAt(hist.rows, cut);
+    return opening === null
+      ? null
+      : { openingKobo: opening, from: new Date(cut) };
+  }
+
+  /**
    * WAWU's own account at the provider against the merchant ledger (FIX-67):
    * what the provider says the account held when its statement began, plus
    * the ledger's completed money in less out, may be anywhere the unsettled
    * rows allow. The opening figure is the provider's own, read off its
-   * statement, so it needs a provider whose lines state the running balance
-   * and a history read in full; a provider that states none is not compared
-   * (nothing to say), and one that does but cannot give the opening says so.
+   * statement, so it needs a provider whose lines state the running balance;
+   * a provider that states none is not compared (nothing to say), and one
+   * that does but cannot give the opening says so. The opening and the
+   * ledger's sums are of the same stretch (`accountBasis`, FIX-80).
    * A difference is reported only when the ledger stood still while the
    * provider was asked, twice running, as a wallet's is.
    */
   private async checkAccountBalance(
     st: RunState,
-    hist: { rows: ProviderTransaction[]; complete: boolean },
+    hist: History,
   ): Promise<void> {
     if (hist.rows.every((p) => p.balanceAfterKobo == null)) return;
-    const opening = hist.complete ? openingBalanceOf(hist.rows) : null;
-    if (opening === null) {
+    const basis = await this.accountBasis(st, hist);
+    if (basis === null) {
       st.sink.notice('wawu_balance_not_compared', 1);
       return;
     }
+    const opening = basis.openingKobo;
     let confirmed = 0;
     let last: {
       expectedKobo: bigint;
@@ -1367,9 +1541,9 @@ export class MoneyCheckService {
     } | null = null;
     const waits = this.settings.recheckMs;
     for (let i = 0; i <= waits.length; i += 1) {
-      const before = await this.merchantLedgerSums();
+      const before = await this.merchantLedgerSums(basis.from);
       const account = await this.ask(() => this.provider.getPlatformAccount());
-      const after = await this.merchantLedgerSums();
+      const after = await this.merchantLedgerSums(basis.from);
       if (sameLedger(before, after)) {
         const cmp = compareAccountBalance(after, opening, account);
         if (cmp.match) {

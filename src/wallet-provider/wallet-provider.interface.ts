@@ -503,6 +503,13 @@ export interface ProviderTransaction {
    * send did not stand): the reference of that send. Absent or null: it is not.
    */
   feeReturnOf?: string | null;
+  /**
+   * Set when this record gives a move back (the move was reversed, or a bank
+   * send was returned): the reference of the move it gives back. The nightly
+   * check (FIX-80) matches it to that move by this, never by parsing a
+   * reference itself. Absent or null: it is not a return.
+   */
+  returnOf?: string | null;
 }
 
 export type ProviderTransactionKind = 'transfer' | 'charge' | 'other';

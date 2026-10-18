@@ -852,10 +852,11 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
       at: Date.now() - 60 * HOUR,
     });
     // 80 payments much older than the window, then one every 100 seconds
-    // across the 6 hours before it opens: never two minutes without a move.
+    // for the 8 hours up to the moment it opens: in the part of the statement
+    // that is read there are never two minutes without a move.
     await payments(a, 80, Date.now() - 40 * HOUR, 60_000);
     const windowFrom = Date.now() - 12 * HOUR;
-    await payments(a, 242, windowFrom - 6.7 * HOUR, 100_000);
+    await payments(a, 300, windowFrom - 299 * 100_000, 100_000);
     await move(a, null, 200_000);
     const r = await run(12);
     expect(kinds(r)).not.toContain('balances:balance_differs');
