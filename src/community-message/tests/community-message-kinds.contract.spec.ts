@@ -35,6 +35,7 @@ import { NotificationService } from '../../notification/notification.service';
 import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import {
   StorageService,
+  objectKeyFrom,
   type BucketLocation,
 } from '../../storage/storage.service';
 import { CommunityMessageModule } from '../community-message.module';
@@ -145,6 +146,70 @@ const CONTENT_TYPE: Record<Folder, string> = {
   'community/message-voice': 'audio/mp4',
   'community/message': 'image/png',
 };
+
+/**
+ * Every read signs a message's media link again (FIX-71), so the link a list
+ * returns is never the string the sender stored: its X-Amz-Date and its
+ * signature are new. What a listed link must be is (1) a link to the same
+ * object the sender stored, which is the sender's own file in the folder for
+ * that kind, (2) on this bucket, and (3) a signed link that is valid now.
+ * The signature and the date are never compared with the stored link's.
+ */
+function expectFreshLinkToSameObject(
+  listed: string | null | undefined,
+  stored: string,
+  folder: Folder,
+  sender: string,
+  at: BucketLocation,
+): void {
+  expect(typeof listed).toBe('string');
+  const link = listed as string;
+
+  // The sender's own file, in the kind's own folder, read from the stored link
+  // the way the Hub reads it; the listed link names exactly that object.
+  const key = objectKeyFrom(stored);
+  expect(key.startsWith(`${folder}/${sender}/`)).toBe(true);
+  expect(objectKeyFrom(link)).toBe(key);
+
+  // On this bucket, at the key and nowhere else.
+  const url = new URL(link);
+  expect(`${url.origin}${url.pathname}`).toBe(
+    `${at.origin}${at.pathPrefix}${key}`,
+  );
+
+  // Signed (a signature is present), signed no later than now, and not run out.
+  expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[0-9a-f]{64}$/);
+  const expiresInMs = Number(url.searchParams.get('X-Amz-Expires')) * 1000;
+  expect(expiresInMs).toBeGreaterThan(0);
+  const stamp = url.searchParams.get('X-Amz-Date') ?? '';
+  expect(stamp).toMatch(/^\d{8}T\d{6}Z$/);
+  const signedAt = Date.parse(
+    stamp.replace(
+      /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,
+      '$1-$2-$3T$4:$5:$6Z',
+    ),
+  );
+  expect(signedAt).toBeLessThanOrEqual(Date.now());
+  expect(signedAt + expiresInMs).toBeGreaterThan(Date.now());
+}
+
+/** Everything the fake clock leaves real: only `Date` is faked, so the signer's clock can be moved. */
+const ONLY_THE_DATE_IS_FAKED = [
+  'hrtime',
+  'nextTick',
+  'performance',
+  'queueMicrotask',
+  'requestAnimationFrame',
+  'cancelAnimationFrame',
+  'requestIdleCallback',
+  'cancelIdleCallback',
+  'setImmediate',
+  'clearImmediate',
+  'setInterval',
+  'clearInterval',
+  'setTimeout',
+  'clearTimeout',
+] as const;
 
 describe('Community credits by kind of message (INBOX-22, contract)', () => {
   let app: INestApplication;
@@ -327,6 +392,7 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+    jest.useRealTimers();
   });
 
   afterAll(async () => {
@@ -988,6 +1054,16 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
     });
 
     it('lists a video and a voice note with their links, and the other two as null', async () => {
+      // A list signs each link again (FIX-71), so the listed link has a new
+      // X-Amz-Date and signature whenever it is read in a later second than it
+      // was sent. Move the clock two seconds between the send and the list so
+      // every run meets that case, instead of one run in two. (afterEach puts
+      // the real clock back.)
+      jest.useFakeTimers({
+        doNotFake: [...ONLY_THE_DATE_IS_FAKED],
+        advanceTimers: true,
+        now: Date.now(),
+      });
       const who = await member('listed');
       await setBalance(who.sub, 10);
       const videoUrl = await upload(who.sub, 'community/message-video');
@@ -996,6 +1072,8 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
         201,
       );
       await post(app, who.accessToken, { voiceUrl }).expect(201);
+
+      jest.setSystemTime(Date.now() + 2000);
 
       const list = await request(app.getHttpServer() as App)
         .get(`/communities/${roomId}/messages`)
@@ -1016,16 +1094,28 @@ describe('Community credits by kind of message (INBOX-22, contract)', () => {
       const voice = mine.find((m) => m.voiceUrl);
       expect(video).toMatchObject({
         text: 'Watch this',
-        videoUrl,
         imageUrl: null,
         voiceUrl: null,
       });
+      expectFreshLinkToSameObject(
+        video?.videoUrl,
+        videoUrl,
+        'community/message-video',
+        who.sub,
+        bucket,
+      );
       expect(voice).toMatchObject({
-        voiceUrl,
         videoUrl: null,
         imageUrl: null,
         text: null,
       });
+      expectFreshLinkToSameObject(
+        voice?.voiceUrl,
+        voiceUrl,
+        'community/message-voice',
+        who.sub,
+        bucket,
+      );
     });
   });
 
