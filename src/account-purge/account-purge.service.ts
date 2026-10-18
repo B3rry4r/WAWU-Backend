@@ -7,7 +7,11 @@ import { DELETED_CREATOR_ID } from '../content-piece/deleted-creator';
 import { eraseAskerRequests } from '../money-request/money-request-erase';
 import { objectKeyFrom } from '../storage/storage.service';
 import { scrubContactDetails } from './scrub-contact-details';
-import { eraseFiles, findIdentityKeys } from './purge-files';
+import {
+  eraseFiles,
+  findIdentityKeys,
+  refileIdentityFiles,
+} from './purge-files';
 import { StorageRemover } from '../storage/storage-remover';
 
 /** What a bought content piece is called once its creator's account is gone. */
@@ -29,6 +33,21 @@ const DEPENDS_ON_SOLD: ReadonlySet<string> = new Set([
   'StorageObject',
   'AccountDeletionContent',
 ]);
+
+/**
+ * The tables whose rows name an identity or verification file
+ * (`findIdentityKeys`). Their rows are not deleted until those files have been
+ * found and refiled (FIX-65 round 2): the retry could not know them again.
+ */
+const DEPENDS_ON_IDENTITY: ReadonlySet<string> = new Set([
+  'KycSubmission',
+  'VerificationSubmission',
+  'ServiceApplication',
+  'ProfessionalProfile',
+]);
+
+const IDENTITY_KEPT_LABEL =
+  'StorageObject.wawuUserId (identity files kept for the owner)';
 
 /**
  * Removes one account's data from this database, everywhere it lives.
@@ -160,12 +179,25 @@ export class AccountPurgeService {
     }
 
     // The files of the person's identity and verification rows are named by
-    // rows the loop below deletes, so they are read first (FIX-65). Without
-    // that list no file is touched: the retry does it right.
+    // rows the loop below deletes, so they are read first (FIX-65) and refiled
+    // under the deleted account at once (round 2): a pass that stops before the
+    // file step must not leave a later pass to treat them as ordinary files,
+    // for the rows that name them are gone by then. Without the list, those
+    // rows stay and no file is touched: the retry does it right.
     let identityUnknown = false;
     let identityKeys: string[] = [];
+    let identityRefiled = 0;
     try {
       identityKeys = await findIdentityKeys(this.prisma, wawuUserId);
+      identityRefiled = await refileIdentityFiles(
+        this.prisma,
+        wawuUserId,
+        identityKeys,
+      );
+      if (identityRefiled > 0) {
+        deleted[IDENTITY_KEPT_LABEL] = identityRefiled;
+        total += identityRefiled;
+      }
     } catch (e) {
       this.logger.error(
         `Purge could not look for identity files of ${wawuUserId}: ${(e as Error).message}`,
@@ -182,6 +214,10 @@ export class AccountPurgeService {
       // What is kept, and what each piece was, decides these three. Without
       // that list nothing of them is touched: the retry does it right
       // (round 9; a lost list must never cost a buyer a file or a mark).
+      if (identityUnknown && DEPENDS_ON_IDENTITY.has(rule.model)) {
+        failed.push(`${rule.model}.${rule.column}`);
+        continue;
+      }
       if (soldUnknown && DEPENDS_ON_SOLD.has(rule.model)) {
         if (rule.model !== 'ContentPiece') {
           failed.push(`${rule.model}.${rule.column}`);
@@ -323,21 +359,18 @@ export class AccountPurgeService {
           identityKeys,
         });
         files.objectsRemoved = out.objectsRemoved;
-        files.ownerKept = out.ownerKept;
+        files.ownerKept = out.ownerKept + identityRefiled;
         files.eventKept = out.eventKept;
         for (const [label, n] of [
           ['StorageObject.wawuUserId', out.rowsDeleted],
-          [
-            'StorageObject.wawuUserId (identity files kept for the owner)',
-            out.ownerKept,
-          ],
+          [IDENTITY_KEPT_LABEL, out.ownerKept],
           [
             'StorageObject.wawuUserId (event image kept while the event stands)',
             out.eventKept,
           ],
         ] as const) {
           if (n > 0) {
-            deleted[label] = n;
+            deleted[label] = (deleted[label] ?? 0) + n;
             total += n;
           }
         }

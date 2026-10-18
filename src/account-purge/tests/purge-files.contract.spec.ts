@@ -474,4 +474,92 @@ describe('FIX-65: a purged account leaves no file of its own in the bucket', () 
     expect(deletes).not.toContain(foreign);
     expect(await rowsOf(w.p)).toEqual([]);
   });
+
+  describe('round 2: a pass that stops halfway never lets a later pass delete an identity file', () => {
+    /** A person whose verification document sits in an ordinary folder (avatars), as an off-standard client files it. */
+    async function filedElsewhere() {
+      const p = randomUUID();
+      made.people.push(p);
+      await dueDeletion(p);
+      const t = {
+        document: await upload(p, 'avatars'),
+        licence: await upload(
+          p,
+          'professional/document',
+          'pdf',
+          'application/pdf',
+        ),
+        avatar: await upload(p, 'avatars'),
+        chat: await upload(p, 'chat/media'),
+      };
+      await prisma.verificationSubmission.create({
+        data: { wawuUserId: p, tier: 'verified_user', documents: [t.document] },
+      });
+      return { p, t };
+    }
+
+    it('keeps it and refiles it when the first pass fails on one table and the second finishes', async () => {
+      const w = await filedElsewhere();
+      deletes.length = 0;
+      const fail = jest
+        .spyOn(prisma.profileWork, 'deleteMany')
+        .mockRejectedValueOnce(new Error('injected: one table fails'));
+      const first = await purge.purge(w.p);
+      fail.mockRestore();
+      expect(first.failed).toEqual(['ProfileWork.wawuUserId']);
+      // the first pass touched no file, but the rows that named the document are gone
+      expect(deletes).toEqual([]);
+      expect(
+        await prisma.verificationSubmission.count({
+          where: { wawuUserId: w.p },
+        }),
+      ).toBe(0);
+      // and the document is already no longer the person's
+      expect(
+        (
+          await prisma.storageObject.findMany({ where: { key: w.t.document } })
+        ).map((r) => r.wawuUserId),
+      ).toEqual([DELETED_CREATOR_ID]);
+
+      const second = await purge.purge(w.p);
+      expect(second.failed).toEqual([]);
+      expect(deletes).not.toContain(w.t.document);
+      expect(deletes).not.toContain(w.t.licence);
+      expect(holds(w.t.document, w.t.licence)).toBe(true);
+      expect(goneFrom(w.t.avatar, w.t.chat)).toBe(true);
+      expect(
+        (
+          await prisma.storageObject.findMany({
+            where: { key: { in: [w.t.document, w.t.licence] } },
+          })
+        ).map((r) => r.wawuUserId),
+      ).toEqual([DELETED_CREATOR_ID, DELETED_CREATOR_ID]);
+      expect(await rowsOf(w.p)).toEqual([]);
+    });
+
+    it('leaves the identity rows alone when the purge cannot tell which files they name', async () => {
+      const w = await filedElsewhere();
+      deletes.length = 0;
+      const fail = jest
+        .spyOn(prisma.verificationSubmission, 'findMany')
+        .mockRejectedValueOnce(new Error('injected: the look-up fails'));
+      const first = await purge.purge(w.p);
+      fail.mockRestore();
+      expect(first.failed).toContain('VerificationSubmission.wawuUserId');
+      expect(first.failed).toContain('StorageObject.wawuUserId');
+      expect(deletes).toEqual([]);
+      expect(
+        await prisma.verificationSubmission.count({
+          where: { wawuUserId: w.p },
+        }),
+      ).toBe(1);
+
+      const second = await purge.purge(w.p);
+      expect(second.failed).toEqual([]);
+      expect(holds(w.t.document, w.t.licence)).toBe(true);
+      expect(deletes).not.toContain(w.t.document);
+      expect(goneFrom(w.t.avatar, w.t.chat)).toBe(true);
+      expect(await rowsOf(w.p)).toEqual([]);
+    });
+  });
 });

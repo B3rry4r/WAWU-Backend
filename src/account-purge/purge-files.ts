@@ -177,6 +177,29 @@ export async function findIdentityKeys(
 }
 
 /**
+ * Files the person's identity and verification rows name are refiled under the
+ * deleted account the moment they are read, BEFORE those rows are deleted
+ * (FIX-65 round 2). A purge that stops halfway is run again, and the rows that
+ * named these files are gone by then: a document the client filed outside the
+ * identity folders (an avatars/ key, say) would be an ordinary file to the
+ * pass that follows, and be deleted. Refiled, it is no longer the person's, so
+ * no later pass can treat it as theirs. Deletes nothing, so it needs no gate;
+ * only rows of this person are touched. Returns how many rows moved.
+ */
+export async function refileIdentityFiles(
+  prisma: PrismaService,
+  wawuUserId: string,
+  identityKeys: readonly string[],
+): Promise<number> {
+  if (identityKeys.length === 0) return 0;
+  const { count } = await prisma.storageObject.updateMany({
+    where: { wawuUserId, key: { in: [...identityKeys] } },
+    data: { wawuUserId: DELETED_CREATOR_ID },
+  });
+  return count;
+}
+
+/**
  * Whether the deletion lets files go: its row says the purge is under way
  * (`purging`, or `purged` for a repeat), the 30 days are over and WAWU ID has
  * confirmed the deletion started (SETTINGS-06, SETTINGS-08). The sweep only
