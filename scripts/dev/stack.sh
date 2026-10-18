@@ -389,6 +389,11 @@ ADMIN_SECRET="$(rand_hex)"; ADMIN_REFRESH="$(rand_hex)"
 # WAWU's operational account, and the fees (kobo; the stand-in charges what the Hub is told to quote).
 NUVION_SECRET="stack-nuvion-whsec-$(rand_hex)"
 NUVION_OPS_ID="01STACKOPERATIONAL0000001"
+# The hosted selfie (FIX-47 L2): STACK_NUVION_LIVENESS=on gives the Hub NUVION_HOSTED_LIVENESS=on, and the app's return
+# address (a string the Hub compares; nothing is ever sent to it) as the one it may hand the stand-in. Left unset it is off.
+NUVION_LIVENESS="${STACK_NUVION_LIVENESS:-}"
+case "$NUVION_LIVENESS" in ''|off|on) ;; *) echo "STACK_NUVION_LIVENESS must be on or off" >&2; exit 2;; esac
+NUVION_LIVENESS_RETURN=""; [ "$NUVION_LIVENESS" = on ] && NUVION_LIVENESS_RETURN="https://wawuafrica.com/selfie"
 NUVION_FEE_BOOK="${STACK_NUVION_FEE_BOOK:-0}"; NUVION_FEE_BANK="${STACK_NUVION_FEE_BANK:-2500}"; NUVION_FEE_IN="${STACK_NUVION_FEE_INFLOW:-0}"
 HUB_DB_URL="$PG_BASE/$DB_HUB?schema=public"
 ID_DB_URL="$PG_BASE/$DB_ID?schema=public"
@@ -466,6 +471,7 @@ build_all() {
     WALLET_PROVIDER=nuvion NUVION_BASE_URL=https://api.nuvion.dev NUVION_API_KEY=stack-nuvion-key-not-real
     NUVION_WEBHOOK_SECRET="$NUVION_SECRET" NUVION_OPERATIONAL_ACCOUNT_ID="$NUVION_OPS_ID"
     NUVION_FEE_BOOK_TRANSFER="$NUVION_FEE_BOOK" NUVION_FEE_BANK_PAYOUT="$NUVION_FEE_BANK" NUVION_FEE_INFLOW="$NUVION_FEE_IN"
+    NUVION_HOSTED_LIVENESS="$NUVION_LIVENESS" NUVION_LIVENESS_REDIRECT_ORIGINS="$NUVION_LIVENESS_RETURN"
     STACK_NUVION_STANDIN_PORT="$NUV_PORT"
     FINTAVA_WEBHOOK_SECRET="whsec_stack_$NAME" FEE_QUOTE_KEY="stack-fee-quote-key-$SERVICE_KEY"
     MERCHANT_MAX_PER_TXN_KOBO=1000000000 IDENTITY_HASH_KEY="$SERVICE_KEY"
