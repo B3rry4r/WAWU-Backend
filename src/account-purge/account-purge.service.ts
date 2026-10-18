@@ -10,6 +10,7 @@ import { scrubContactDetails } from './scrub-contact-details';
 import {
   eraseFiles,
   findIdentityKeys,
+  countKeptFiles,
   refileIdentityFiles,
 } from './purge-files';
 import { StorageRemover } from '../storage/storage-remover';
@@ -361,6 +362,11 @@ export class AccountPurgeService {
         files.objectsRemoved = out.objectsRemoved;
         files.ownerKept = out.ownerKept + identityRefiled;
         files.eventKept = out.eventKept;
+        // Files an earlier pass refiled are no longer the person's: count
+        // them from where they sit now, for the note of the pass that ends it.
+        const kept = await countKeptFiles(this.prisma, wawuUserId);
+        files.ownerKept = Math.max(files.ownerKept, kept.ownerKept);
+        files.eventKept = Math.max(files.eventKept, kept.eventKept);
         for (const [label, n] of [
           ['StorageObject.wawuUserId', out.rowsDeleted],
           [IDENTITY_KEPT_LABEL, out.ownerKept],

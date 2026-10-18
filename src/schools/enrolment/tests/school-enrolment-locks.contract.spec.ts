@@ -212,6 +212,85 @@ describe('FIX-69 school places: one lock order, and a sweep log that tells a dea
       }
     });
 
+    // FIX-69 L1 (SWEEP-LATE). The release sweep does not take the student's
+    // lock, so it can give a place back while a twin request for the same
+    // class waits on that order's row. The twin must make the place again,
+    // not answer with the released order. Two doors lead to the same row: the
+    // quick look at the top of `enrol`, and `claim` under the student's lock.
+    /** The sweep's release of one order, held open in a transaction of its own. */
+    async function sweepHolding(orderId: string, classId: string) {
+      let commit!: () => void;
+      const gate = new Promise<void>((r) => (commit = r));
+      let held!: () => void;
+      const ready = new Promise<void>((r) => (held = r));
+      const done = h.prisma.$transaction(
+        async (tx) => {
+          await tx.schoolEnrolment.update({
+            where: { id: orderId },
+            data: { status: 'released', releasedAt: new Date() },
+          });
+          await tx.courseIntake.update({
+            where: { id: classId },
+            data: { seatsTaken: { decrement: 1 } },
+          });
+          held();
+          await gate;
+        },
+        { timeout: 60_000, maxWait: 10_000 },
+      );
+      await Promise.race([ready, done]);
+      return {
+        release: async () => {
+          commit();
+          await done;
+        },
+      };
+    }
+
+    it('a request for the class whose place the sweep gives back while it waits gets a new place, not the released one', async () => {
+      const c = await twoClasses(5);
+      const [classId] = c.intakeIds;
+      const student = randomUUID();
+      const made = await svc.enrol(student, { intakeId: classId });
+      const sweep = await sweepHolding(made.id, classId);
+      const again = svc.enrol(student, { intakeId: classId });
+      try {
+        await waitUntilBlocked();
+      } finally {
+        await sweep.release();
+      }
+      const view = await again;
+      expect(view.status).toBe('reserved');
+      expect(view.id).not.toBe(made.id);
+      expect(
+        (
+          await h.prisma.schoolEnrolment.findUniqueOrThrow({
+            where: { id: made.id },
+          })
+        ).status,
+      ).toBe('released');
+      await books(c);
+    });
+
+    it('the claim under the student lock does the same', async () => {
+      const c = await twoClasses(5);
+      const [classId] = c.intakeIds;
+      const student = randomUUID();
+      const made = await svc.enrol(student, { intakeId: classId });
+      const intake = await svc['loadIntake'](classId);
+      const sweep = await sweepHolding(made.id, classId);
+      const claimed = svc['claim'](student, intake, new Date(), {} as never);
+      try {
+        await waitUntilBlocked();
+      } finally {
+        await sweep.release();
+      }
+      const row = await claimed;
+      expect(row.status).toBe('reserved');
+      expect(row.id).not.toBe(made.id);
+      await books(c);
+    });
+
     it('a payment arriving for a released place takes the order row, then the class', async () => {
       const c = await twoClasses(5);
       const [classId] = c.intakeIds;

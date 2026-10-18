@@ -208,6 +208,37 @@ export async function refileIdentityFiles(
 }
 
 /**
+ * How many of this person's files are kept, whichever pass kept them (FIX-65
+ * N1). `purgeNote` is written by the pass that finishes, and a file refiled by
+ * an earlier pass is no longer the person's: only its key still names them
+ * (`<folder>/<their id>/<file>`, the shape every upload is written in). So the
+ * kept files are the rows filed under the deleted account whose key names the
+ * person, told apart by their folder. The two content folders are left out:
+ * the sold-content step refiles the files of a piece a buyer paid for there
+ * (kept for the buyers, counted as `keptForBuyers`, not as these).
+ */
+export async function countKeptFiles(
+  prisma: PrismaService,
+  wawuUserId: string,
+): Promise<{ ownerKept: number; eventKept: number }> {
+  const rows = await prisma.storageObject.findMany({
+    where: {
+      wawuUserId: DELETED_CREATOR_ID,
+      key: { contains: `/${wawuUserId}/`, mode: 'insensitive' },
+      NOT: [
+        { key: { startsWith: 'content/preview/' } },
+        { key: { startsWith: 'content/full/' } },
+      ],
+    },
+    select: { key: true },
+  });
+  const isEvent = (key: string) =>
+    EVENT_FOLDERS.some((f) => key.startsWith(`${f}/`));
+  const eventKept = rows.filter((r) => isEvent(r.key)).length;
+  return { ownerKept: rows.length - eventKept, eventKept };
+}
+
+/**
  * Whether the deletion lets files go: its row says the purge is under way
  * (`purging`, or `purged` for a repeat), the 30 days are over and WAWU ID has
  * confirmed the deletion started (SETTINGS-06, SETTINGS-08). The sweep only

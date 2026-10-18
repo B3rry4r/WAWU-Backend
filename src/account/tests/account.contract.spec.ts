@@ -25,8 +25,14 @@ import {
  * behind an interface so contract tests can stub them" rule) since no live
  * WAWU ID internal deletion endpoint exists in this sandbox.
  */
+// INBOX-18 F7 (SWEEP-LATE): follow WAWU_ID_BASE_URL (a local stack points it at
+// its own mock) before falling back to :4001. The login used to go to :4001
+// whatever the Hub verified against, so on a stack the token came from another
+// mock and every call answered 401.
 const MOCK_WAWU_ID_BASE_URL =
-  process.env.WAWU_ID_BASE_URL_TEST ?? 'http://localhost:4001';
+  process.env.WAWU_ID_BASE_URL_TEST ??
+  process.env.WAWU_ID_BASE_URL ??
+  'http://localhost:4001';
 const PLAIN_USER_IDENTIFIER = 'user@test.wawu.dev';
 const PLAIN_USER_SUB = '00000000-0000-4000-8000-000000000001';
 
