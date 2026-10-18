@@ -190,16 +190,21 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
         bookedKobo: b,
       });
     },
-    listTransactions: (holder: {
-      kind: string;
-      customerId?: string;
-    }): Promise<ProviderPage<ProviderTransaction>> =>
-      Promise.resolve({
-        items: books.statement(
-          holder.kind === 'merchant' ? 'merchant' : holder.customerId!,
-        ),
-        hasNextPage: false,
-      }),
+    listTransactions: (
+      holder: { kind: string; customerId?: string },
+      opts?: { page?: number; take?: number },
+    ): Promise<ProviderPage<ProviderTransaction>> => {
+      const all = books.statement(
+        holder.kind === 'merchant' ? 'merchant' : holder.customerId!,
+      );
+      // Pages of `take` lines, newest first, as the adapter's walk gives them.
+      const take = opts?.take ?? all.length;
+      const page = opts?.page ?? 1;
+      return Promise.resolve({
+        items: all.slice((page - 1) * take, page * take),
+        hasNextPage: page * take < all.length,
+      });
+    },
     findTransactionById: () => Promise.resolve({ state: 'unknown' as const }),
   } as unknown as WalletProvider;
 
@@ -369,10 +374,10 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
     return { reference, sendRow };
   }
 
-  async function run(): Promise<MoneyCheckReport> {
+  async function run(hours = 48): Promise<MoneyCheckReport> {
     const outcome = await service.runNight({
       night: night(),
-      windowFrom: new Date(Date.now() - 48 * HOUR),
+      windowFrom: new Date(Date.now() - hours * HOUR),
     });
     if (outcome.state !== 'finished') {
       throw new Error(`the run ${outcome.state}`);
@@ -734,5 +739,301 @@ describe('FIX-67: the nightly check on Nuvion, credits and fee legs and WAWU acc
     const r = await run();
     expect(r.mismatches).toEqual([]);
     expect(r.notices.fee_given_back).toEqual({ count: 1, amountKobo: '1000' });
+  });
+
+  // -------------------------------------------------------------------------
+  // FIX-80: launch-length history, and a move that was reversed or returned
+  // -------------------------------------------------------------------------
+
+  /** WAWU payments from a wallet, one each `stepMs`, both sides agreeing. */
+  async function payments(
+    from: Wallet,
+    count: number,
+    firstAt: number,
+    stepMs: number,
+  ): Promise<void> {
+    for (let i = 0; i < count; i += 1) {
+      const reference = ref();
+      const at = Math.round(firstAt + i * stepMs);
+      await side({
+        who: from,
+        direction: 'out',
+        amount: 1_000 + i,
+        reference,
+        at,
+      });
+      await side({
+        who: null,
+        direction: 'in',
+        amount: 1_000 + i,
+        reference,
+        at,
+      });
+    }
+  }
+
+  /**
+   * An account that has outlived the window: a wallet funded long ago, 130
+   * payments to WAWU a day and a half back (more than one page of the
+   * statement), then today's moves inside a 12 hour window.
+   */
+  async function longLived(): Promise<{ a: Wallet; b: Wallet }> {
+    const a = await wallet();
+    const b = await wallet();
+    await side({
+      who: a,
+      direction: 'in',
+      amount: 90_000_000,
+      reference: ref(),
+      at: Date.now() - 60 * HOUR,
+    });
+    await payments(a, 130, Date.now() - 36 * HOUR, 60_000);
+    await move(a, null, 200_000);
+    await move(null, b, 150_000);
+    return { a, b };
+  }
+
+  it("reads WAWU's account clean when its history is longer than the window (G-FIX-67 F1)", async () => {
+    await longLived();
+    const r = await run(12);
+    expect(r.mismatches).toEqual([]);
+    expect(r.verdict).toBe('clean');
+    // Two wallets and WAWU's account were all compared.
+    expect(r.checks.find((c) => c.id === 'balances')?.checked).toBe(3);
+    expect(r.notices.wawu_balance_not_compared).toBeUndefined();
+  });
+
+  it("still names a shortfall in WAWU's account inside that window", async () => {
+    await longLived();
+    await side({
+      who: null,
+      direction: 'in',
+      amount: 33_000,
+      reference: ref(),
+      at: tick(),
+      line: false,
+    });
+    const r = await run(12);
+    expect(kinds(r)).toEqual([
+      'balances:balance_differs',
+      'merchant_movements:ledger_only',
+    ]);
+    expect(
+      r.mismatches.find((f) => f.ref === 'wawu-account')?.detail,
+    ).toContain('33000 kobo less in WAWU');
+  });
+
+  it("still names money in WAWU's account the ledger never knew, inside that window", async () => {
+    await longLived();
+    books.add('merchant', {
+      at: tick(),
+      direction: 'in',
+      amount: 21_000,
+      fee: 0,
+      reference: ref(),
+    });
+    const r = await run(12);
+    expect(kinds(r)).toEqual([
+      'balances:balance_differs',
+      'merchant_movements:provider_only',
+    ]);
+    expect(
+      r.mismatches.find((f) => f.ref === 'wawu-account')?.detail,
+    ).toContain('21000 kobo more in WAWU');
+  });
+
+  it("says it did not compare WAWU's account, and makes no false difference, when no quiet moment lets it", async () => {
+    const a = await wallet();
+    await side({
+      who: a,
+      direction: 'in',
+      amount: 90_000_000,
+      reference: ref(),
+      at: Date.now() - 60 * HOUR,
+    });
+    // 80 payments much older than the window, then one every 100 seconds
+    // across the 6 hours before it opens: never two minutes without a move.
+    await payments(a, 80, Date.now() - 40 * HOUR, 60_000);
+    const windowFrom = Date.now() - 12 * HOUR;
+    await payments(a, 242, windowFrom - 6.7 * HOUR, 100_000);
+    await move(a, null, 200_000);
+    const r = await run(12);
+    expect(kinds(r)).not.toContain('balances:balance_differs');
+    expect(r.mismatches).toEqual([]);
+    expect(r.notices.wawu_balance_not_compared).toEqual({ count: 1 });
+  });
+
+  /** A wallet-to-wallet send that was reversed: both lines, both returns. */
+  async function reversedSend(
+    a: Wallet,
+    b: Wallet,
+    opts: { returned?: boolean; returnedKobo?: number } = {},
+  ): Promise<string> {
+    const reference = ref();
+    const at = tick();
+    await side({
+      who: a,
+      direction: 'out',
+      amount: 100_000,
+      fee: 100,
+      reference,
+      at,
+      status: 'reversed',
+    });
+    await side({
+      who: b,
+      direction: 'in',
+      amount: 100_000,
+      reference,
+      at,
+      status: 'reversed',
+    });
+    if (opts.returned !== false) {
+      books.add(a.customerId, {
+        at: at + 1_000,
+        direction: 'in',
+        amount: opts.returnedKobo ?? 100_100,
+        fee: 0,
+        reference: `${reference}_reversal`,
+      });
+      books.add(b.customerId, {
+        at: at + 1_000,
+        direction: 'out',
+        amount: 100_000,
+        fee: 0,
+        reference: `${reference}_reversal`,
+      });
+    }
+    return reference;
+  }
+
+  /** A bank send that Nuvion returned: the debit, then the credit of the money back. */
+  async function returnedBankSend(
+    a: Wallet,
+    opts: {
+      ledger?: 'reversed' | 'completed';
+      returnedKobo?: number | null;
+    } = {},
+  ): Promise<string> {
+    const reference = ref();
+    const at = tick();
+    await side({
+      who: a,
+      direction: 'out',
+      amount: 100_000,
+      fee: 2_500,
+      providerFee: 2_500,
+      reference,
+      at,
+      bank: true,
+      status: opts.ledger ?? 'reversed',
+    });
+    if (opts.returnedKobo !== null) {
+      books.add(a.customerId, {
+        at: at + 60_000,
+        direction: 'in',
+        amount: opts.returnedKobo ?? 102_500,
+        fee: 0,
+        reference: `${reference}_reversal`,
+      });
+    }
+    return reference;
+  }
+
+  it('reads a reversed WAWU send as clean: its lines and the money back (G-FIX-67-4)', async () => {
+    const a = await wallet();
+    const b = await wallet();
+    await inflow(a, 5_000_000);
+    await reversedSend(a, b);
+    const r = await run();
+    expect(r.mismatches).toEqual([]);
+    expect(r.look).toEqual([]);
+    expect(r.verdict).toBe('clean');
+    expect(r.notices.reversal_returned).toEqual({
+      count: 2,
+      amountKobo: '200100',
+    });
+  });
+
+  it('reads a bank send the bank returned as clean (G-FIX-67-4)', async () => {
+    const a = await wallet();
+    await inflow(a, 5_000_000);
+    await returnedBankSend(a);
+    const r = await run();
+    expect(r.mismatches).toEqual([]);
+    expect(r.verdict).toBe('clean');
+    expect(r.notices.reversal_returned).toEqual({
+      count: 1,
+      amountKobo: '102500',
+    });
+  });
+
+  it('names a reversal the provider never returned, on a WAWU send and on a bank send', async () => {
+    const a = await wallet();
+    const b = await wallet();
+    await inflow(a, 5_000_000);
+    await reversedSend(a, b, { returned: false });
+    const sent = await run();
+    expect(sent.verdict).toBe('differences');
+    expect(kinds(sent)).toEqual(
+      [
+        'balances:balance_differs',
+        'balances:balance_differs',
+        'movements:status_differs',
+        'movements:status_differs',
+      ].sort(),
+    );
+    expect(sent.notices.reversal_returned).toBeUndefined();
+
+    await wipe();
+    const c = await wallet();
+    await inflow(c, 5_000_000);
+    await returnedBankSend(c, { returnedKobo: null });
+    const bank = await run();
+    expect(bank.verdict).toBe('differences');
+    expect(kinds(bank)).toEqual([
+      'balances:balance_differs',
+      'movements:status_differs',
+    ]);
+  });
+
+  it('names a bank send that came back for less than it took', async () => {
+    const a = await wallet();
+    await inflow(a, 5_000_000);
+    await returnedBankSend(a, { returnedKobo: 50_000 });
+    const r = await run();
+    expect(r.verdict).toBe('differences');
+    expect(kinds(r)).toContain('movements:status_differs');
+    expect(kinds(r)).toContain('balances:balance_differs');
+  });
+
+  it('names a return the ledger never recorded: the bank sent it back and the row says completed', async () => {
+    const a = await wallet();
+    await inflow(a, 5_000_000);
+    await returnedBankSend(a, { ledger: 'completed' });
+    const r = await run();
+    expect(r.verdict).toBe('differences');
+    expect(kinds(r)).toContain('movements:provider_only');
+    expect(kinds(r)).toContain('balances:balance_differs');
+  });
+
+  it('keeps an explained charge explained after its line has left the window (G-FIX-67-5)', async () => {
+    const a = await wallet();
+    await inflow(a, 5_000_000);
+    await side({
+      who: a,
+      direction: 'out',
+      amount: 80_000,
+      fee: 4_000,
+      providerFee: 4_000,
+      reference: ref(),
+      at: Date.now() - 40 * HOUR,
+      bank: true,
+      discrepancy: chargeDifferenceNote('Nuvion', 4_000, 2_500),
+    });
+    const r = await run(12);
+    expect(r.mismatches).toEqual([]);
+    expect(r.verdict).toBe('clean');
+    expect(r.notices.ledger_charge_explained).toEqual({ count: 1 });
   });
 });
