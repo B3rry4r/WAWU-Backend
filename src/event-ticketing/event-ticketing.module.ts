@@ -10,6 +10,7 @@ import { EventHeldTicketsController } from './event-held-tickets.controller';
 import { EventHeldTicketsService } from './event-held-tickets.service';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { EventServiceModule } from '../event/event-service.module';
+import { PlansModule } from '../plans/plans.module';
 
 /**
  * Event ticketing.
@@ -37,6 +38,8 @@ import { EventServiceModule } from '../event/event-service.module';
     DirectMessageModule,
     BlockedAccountModule,
     EventServiceModule,
+    // HostTierOffersInterceptor on PUT /events/:id/tickets (EVENTS-12).
+    PlansModule,
   ],
   controllers: [
     EventTicketingController,

@@ -3,6 +3,7 @@ import { VerificationStateModule } from '../common/verification/verification-sta
 import { EventController } from './event.controller';
 import { EventServiceModule } from './event-service.module';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
+import { PlansModule } from '../plans/plans.module';
 
 /**
  * Events, app-facing half. Reinstated 22 Aug 2026 by product-owner decision.
@@ -28,7 +29,13 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
  * controller, a guard, or a role assumption.
  */
 @Module({
-  imports: [VerificationStateModule, BlockedAccountModule, EventServiceModule],
+  imports: [
+    VerificationStateModule,
+    BlockedAccountModule,
+    EventServiceModule,
+    // HostTierOffersInterceptor, on the routes that host an event (EVENTS-12).
+    PlansModule,
+  ],
   controllers: [EventController],
   exports: [EventServiceModule],
 })

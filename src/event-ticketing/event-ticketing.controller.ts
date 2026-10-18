@@ -12,6 +12,7 @@ import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { OptionalWawuAuthGuard } from '../search-response/guards/optional-wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
+import { GatesHosting } from '../plans/host-tier-offers.interceptor';
 import { EventTicketingService } from './event-ticketing.service';
 import {
   BuyTicketsDto,
@@ -53,6 +54,7 @@ export class EventTicketingController {
 
   /** Organiser: set the tiers. */
   @UseGuards(WawuAuthGuard)
+  @GatesHosting()
   @Put(':id/tickets')
   setTicketTypes(
     @CurrentUser() user: WawuJwtClaims,

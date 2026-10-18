@@ -355,13 +355,13 @@ describe('PUT /events/:id/tickets: the hosting gate and re-review (EVENTS-11, R-
     ).toEqual([7500]);
   });
 
-  it('the same host with the tick lapsed: 403 verification_required, the error POST and PATCH give, nothing written, still public at the old price', async () => {
+  it('the same host with the tick lapsed: 403 tier_required, the error POST and PATCH give, nothing written, still public at the old price', async () => {
     await setTick(HOST_SUB, LAPSED_TICK);
     const before = await snapshot(EV_LIVE);
 
     const res = await put(hostToken, EV_LIVE).expect(403);
     const body = res.body as ErrorBody;
-    expect(body.reason?.code).toBe('verification_required');
+    expect(body.reason?.code).toBe('tier_required');
 
     // The same body, word for word, as the event routes' own gate.
     const patch = await http()
@@ -385,18 +385,18 @@ describe('PUT /events/:id/tickets: the hosting gate and re-review (EVENTS-11, R-
     await setTick(HOST_SUB, LAPSED_TICK);
     const before = await snapshot(EV_LIVE);
     const res = await put(hostToken, EV_LIVE, [OLD_TIER]).expect(403);
-    expect((res.body as ErrorBody).reason?.code).toBe('verification_required');
+    expect((res.body as ErrorBody).reason?.code).toBe('tier_required');
     expect(await snapshot(EV_LIVE)).toEqual(before);
   });
 
-  it('a never-verified creator: 403 verification_required, nothing written', async () => {
+  it('a never-verified creator: 403 tier_required, nothing written', async () => {
     await fixture(EV_UNVERIFIED, UNVERIFIED_SUB, 'published');
     const before = await snapshot(EV_UNVERIFIED);
 
     const res = await put(unverifiedToken, EV_UNVERIFIED).expect(403);
     const body = res.body as ErrorBody;
     expect(body.statusCode).toBe(403);
-    expect(body.reason?.code).toBe('verification_required');
+    expect(body.reason?.code).toBe('tier_required');
     const post = await http()
       .post('/api/hub/events')
       .set(auth(unverifiedToken))

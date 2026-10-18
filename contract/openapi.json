@@ -13103,6 +13103,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "reason.code: tier_required, account_type_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostTierErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "summary": "Organiser: set the tiers.",
@@ -28640,6 +28650,16 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "reason.code: tier_required, account_type_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostTierErrorEnvelope"
+                }
+              }
+            }
           }
         },
         "summary": "Submit an event. Always lands `pending`; an admin decides whether it is\never visible to anyone else.",
@@ -28813,6 +28833,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EventView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: tier_required, account_type_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HostTierErrorEnvelope"
                 }
               }
             }
@@ -37675,6 +37705,116 @@
         },
         "required": [
           "types"
+        ]
+      },
+      "HostTierLowestDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "priceMinor": {
+            "type": "integer",
+            "description": "Whole minor units of the reason's `currency` (kobo or cents)."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "priceMinor"
+        ]
+      },
+      "HostTierReasonDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "description": "`tier_required`, or `account_type_required` for an account that is\nneither a creator nor a professional (it carries no tier fields).",
+            "enum": [
+              "tier_required",
+              "account_type_required"
+            ],
+            "type": "string"
+          },
+          "tierState": {
+            "description": "`none` (never had a tier) or `ended`. Only on `tier_required`.",
+            "enum": [
+              "none",
+              "ended"
+            ],
+            "type": "string"
+          },
+          "currency": {
+            "description": "The currency of `lowestTier.priceMinor`. Absent only when the Hub could\nnot read the plan at that moment; the app then shows `message` alone.",
+            "enum": [
+              "NGN",
+              "USD"
+            ],
+            "type": "string"
+          },
+          "lowestTier": {
+            "nullable": true,
+            "description": "The lowest-priced tier in `currency`, for \"From ...\".",
+            "type": "object",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HostTierLowestDto"
+              }
+            ]
+          },
+          "steps": {
+            "description": "What to do, in order. Only on `account_type_required`.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "purchasable": {
+            "type": "array",
+            "description": "Kept from the verification refusal this answer replaces so no reader of\nit breaks: always empty. Only on `account_type_required`.",
+            "items": {
+              "type": "object"
+            }
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence the app may show as it is. No em-dash."
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ]
+      },
+      "HostTierErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "integer",
+            "description": "403.",
+            "example": 403
+          },
+          "data": {
+            "description": "Always null on an error.",
+            "type": "object",
+            "nullable": true,
+            "example": null
+          },
+          "reason": {
+            "$ref": "#/components/schemas/HostTierReasonDto"
+          },
+          "message": {
+            "type": "string",
+            "description": "Same as reason.message."
+          }
+        },
+        "required": [
+          "statusCode",
+          "data",
+          "reason",
+          "message"
         ]
       },
       "BuyTicketsDto": {

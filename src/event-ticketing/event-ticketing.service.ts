@@ -24,6 +24,7 @@ import type { Prisma } from '../../generated/prisma/client';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import {
   BACK_TO_REVIEW,
+  EVENT_CANCELLED_MESSAGE,
   EventService,
   TAKEN_DOWN_MESSAGE,
 } from '../event/event.service';
@@ -1174,7 +1175,7 @@ async function editableEvent(
     throw new ForbiddenException(TAKEN_DOWN_MESSAGE);
   }
   if (event.cancelledAt) {
-    throw new ConflictException('This event has been cancelled.');
+    throw new ConflictException(EVENT_CANCELLED_MESSAGE);
   }
   return { status: event.status };
 }
@@ -1186,8 +1187,13 @@ async function assertNoneSold(db: Db, eventId: string): Promise<void> {
     select: { id: true, name: true, sold: true },
   });
   if (sold.length > 0) {
+    // Each name once (FIX-12, EVENTS-11 O8): a tier a host re-priced is
+    // retired and a new one of the same name takes its place, and a ticket
+    // can sell on both, so the same name can come back twice from the query
+    // while the host sees only one tier by that name.
+    const names = [...new Set(sold.map((s) => s.name))];
     throw new ConflictException(
-      `Tickets have already sold for ${sold.map((s) => `"${s.name}"`).join(', ')}. Add a new tier instead of editing one people have bought.`,
+      `Tickets have already sold for ${names.map((n) => `"${n}"`).join(', ')}. Add a new tier instead of editing one people have bought.`,
     );
   }
 }
