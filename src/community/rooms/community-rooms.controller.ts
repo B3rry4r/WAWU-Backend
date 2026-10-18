@@ -96,6 +96,8 @@ export class CommunityRoomsController {
    * Create a room, the way the app does. Creator accounts only, like
    * POST /communities. A private room needs a cover image (`imageUrl`):
    * without one the answer is 400 "A private room needs a cover image.".
+   * A private room also needs its monthly price (`passPriceKobo`, R-63):
+   * without one the answer is 400 "A private room needs a monthly price.".
    * The answer carries the room's share link.
    */
   @Post('rooms')
