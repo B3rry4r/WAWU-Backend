@@ -5,7 +5,7 @@ import { lagosToday } from '../schools/enrolment/school-enrolment-rules';
 /**
  * The Me menu's "My courses 1 enrolled" (M7, task ME-03).
  *
- * WHAT COUNTS. A school place the caller has paid for (`enrolled`) whose class
+ * WHAT COUNTS. A school place the caller holds (`enrolled`: paid for, or a free class of price 0, which is created `enrolled` too) whose class
  * has not finished: the courses they are taking, the paid rows of SC8's Current
  * tab. A held place not yet paid (`reserved`), a fee that went back
  * (`refunded`), a place given back (`released`) and a class that is over are
