@@ -515,6 +515,8 @@ describe('Credit host earnings (contract)', () => {
 
       await communityMessages.create(SEEDED_COMMUNITY_ID, buyer, {
         text: 'Paying for this one with a real credit.',
+        // INBOX-22 (R-62): text is free; a photo costs the 1 credit this test is about.
+        imageUrl: 'http://storage.test/community/message/photo.png',
       });
 
       const spend = await prisma.creditSpend.findFirstOrThrow({
@@ -555,6 +557,8 @@ describe('Credit host earnings (contract)', () => {
 
       await communityMessages.create(SEEDED_COMMUNITY_ID, buyer, {
         text: 'Sent with a credit nobody ever paid for.',
+        // INBOX-22 (R-62): text is free; a photo costs the 1 credit this test is about.
+        imageUrl: 'http://storage.test/community/message/photo.png',
       });
 
       const state = await prisma.creditsState.findUniqueOrThrow({

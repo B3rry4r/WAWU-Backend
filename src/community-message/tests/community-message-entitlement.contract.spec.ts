@@ -144,7 +144,12 @@ describe('CommunityMessage entitlements (contract)', () => {
     request(app.getHttpServer())
       .post(`/communities/${communityId}/messages`)
       .set('Authorization', `Bearer ${token}`)
-      .send({ text });
+      // INBOX-22 (R-62): text is free, a photo costs 1 credit. This file is
+      // about who pays for a message, so each send carries a photo.
+      .send({
+        text,
+        imageUrl: 'http://storage.test/community/message/photo.png',
+      });
 
   beforeAll(async () => {
     const alreadyUp = await waitForHealth(`${MOCK_WAWU_ID_BASE}/health`, 1000);

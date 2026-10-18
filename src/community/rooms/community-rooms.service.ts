@@ -335,6 +335,8 @@ export class CommunityRoomsService {
               id: row.last.id,
               text: row.last.text,
               imageUrl: row.last.imageUrl,
+              videoUrl: row.last.videoUrl,
+              voiceUrl: row.last.voiceUrl,
               sentAt: row.last.sentAt,
               senderWawuId: row.last.senderWawuId,
               sender: senders.get(row.last.senderWawuId) ?? null,
@@ -423,7 +425,10 @@ export class CommunityRoomsService {
 
   /** INBOX-05, GET /communities/message-cost. The price line on I24's card. */
   messageCost(): CommunityMessageCost {
-    return { creditsPerMessage: this.messages.meteredMessageCost() };
+    return {
+      creditsPerMessage: this.messages.meteredMessageCost(),
+      creditsByKind: this.messages.costsByKind(),
+    };
   }
 
   /**
