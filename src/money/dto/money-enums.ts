@@ -69,6 +69,16 @@ export type FeePartCode = (typeof FEE_PART_CODES)[number];
  * own account with no seller split, and are not held. Their `targetId` names
  * the terms (docs/contract/PLANS.md section 8).
  *
+ * `points_pack` (POINTS-02) is WAWU's own sale of a points pack (PT4): one
+ * debit into WAWU's own account with no seller split, not held. Its `targetId`
+ * is `pack-<packId>` (docs/contract/PLANS.md section 10).
+ *
+ * `points_shortfall` (POINTS-03) is WAWU's own sale of the points an AI job is
+ * short of (PT3), bought from the wallet at the pack rate on the person's
+ * confirmation: one debit into WAWU's own account with no seller split, not
+ * held. Its `targetId` is `shortfall-<points>` (docs/contract/CONVENTIONS.md
+ * section 16a).
+ *
  * `points_cash_out` (POINTS-04) is not a payment anyone makes from the wallet:
  * it is the link kind of the ledger rows of points turned into cash, WAWU's
  * own movement from its account into the person's wallet (R-43, R-31). It is
@@ -87,6 +97,8 @@ export const PAYMENT_KINDS = [
   'bill',
   'tier',
   'tier_bump',
+  'points_pack',
+  'points_shortfall',
   'points_cash_out',
 ] as const;
 export type PaymentKind = (typeof PAYMENT_KINDS)[number];
@@ -151,6 +163,11 @@ export const MONEY_ERROR_CODES = [
   'name_check_failed',
   // A saved bank account whose holder's name at the bank is no longer the one kept (WALLET-09).
   'account_name_changed',
+  // A payout account, or a withdrawal to one, whose holder at the bank is not
+  // the person's verified name (WALLET-37, R-51); and the 30-an-hour limit on
+  // bank name checks, per person (WALLET-37, R-51).
+  'account_not_in_your_name',
+  'name_check_rate_limited',
   'recipient_not_found',
   'recipient_has_no_wallet',
   'recipient_blocked',
@@ -211,5 +228,12 @@ export const MONEY_ERROR_CODES = [
   'below_minimum',
   'insufficient_points',
   'currency_not_supported',
+  // Buying event tickets (EVENTS-13): the buyer already holds the most open
+  // paid ticket orders one event allows (an admin setting).
+  'event_order_limit',
+  // Spending points on AI tools (POINTS-03): a cap stops the job; the person
+  // has enough points, so there is no shortfall to buy.
+  'points_cap_reached',
+  'points_not_short',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

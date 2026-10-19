@@ -29,6 +29,7 @@ import {
   type ProviderPlatformAccount,
   type ProviderReconciliation,
   type ProviderRetryDecision,
+  type ProviderWalletState,
   type ProviderSelfieInput,
   type ProviderSelfieResult,
   type ProviderSendKind,
@@ -377,6 +378,28 @@ export class FintavaWalletProvider implements WalletProvider {
           ? {}
           : { accountLimits: accountLimitsOf(b.tier, this.tierLimits) }),
       };
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Freezing (SETTINGS-06). A frozen wallet can neither send nor receive;
+  // its balance is still readable (docs/fintava/sandbox/15-freeze-unfreeze.md).
+  // -------------------------------------------------------------------------
+
+  freezeWallet(
+    wallet: { walletId: string },
+    reason: string,
+  ): Promise<ProviderWalletState> {
+    return translated(async () => {
+      const w = await this.client.freezeWallet(wallet.walletId, reason);
+      return { walletId: w.walletId, frozen: w.isFrozen };
+    });
+  }
+
+  unfreezeWallet(wallet: { walletId: string }): Promise<ProviderWalletState> {
+    return translated(async () => {
+      const w = await this.client.unfreezeWallet(wallet.walletId);
+      return { walletId: w.walletId, frozen: w.isFrozen };
     });
   }
 

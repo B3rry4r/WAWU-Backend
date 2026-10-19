@@ -8,6 +8,7 @@ import request from 'supertest';
 import type { App } from 'supertest/types';
 import { WawuIdClient } from '../../src/common/auth/wawu-id.client';
 import { AccountPurgeService } from '../../src/account-purge/account-purge.service';
+import { EventCallOffRefundService } from '../../src/event-ticketing/wallet/event-call-off-refund.service';
 import { EventHostErasureService } from '../../src/event-ticketing/wallet/event-host-erasure.service';
 import { WawuJwtStrategy } from '../../src/common/auth/wawu-jwt.strategy';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
@@ -62,6 +63,7 @@ export interface EventHarness {
   holds: WalletHoldService;
   purge: AccountPurgeService;
   erasure: EventHostErasureService;
+  callOff: EventCallOffRefundService;
   double: FintavaDouble;
   wallets: Wallets;
   logger: QuietLogger;
@@ -156,6 +158,7 @@ export async function bootEventApp(
     holds: moduleRef.get(WalletHoldService),
     purge: moduleRef.get(AccountPurgeService, { strict: false }),
     erasure: moduleRef.get(EventHostErasureService, { strict: false }),
+    callOff: moduleRef.get(EventCallOffRefundService, { strict: false }),
     double,
     wallets,
     logger,

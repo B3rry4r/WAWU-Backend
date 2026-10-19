@@ -3,6 +3,9 @@ import { AccountPurgeModule } from '../../account-purge/account-purge.module';
 import { BlockedAccountModule } from '../../blocked-account/blocked-account.module';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { MoneyModule } from '../../money/money.module';
+import { PlanSettingsModule } from '../../plan-settings/plan-settings.module';
+import { EventTicketingModule } from '../event-ticketing.module';
+import { EventCallOffRefundService } from './event-call-off-refund.service';
 import { EventHostErasureService } from './event-host-erasure.service';
 import { EventWalletOrdersController } from './event-wallet-orders.controller';
 import { EventWalletOrderService } from './event-wallet-order.service';
@@ -16,6 +19,15 @@ import { EventWalletOrderService } from './event-wallet-order.service';
  * It also sends the price of a wallet order back to its buyer before the
  * account purge deletes an erased host's event (EventHostErasureService).
  *
+ * It sends the held price of a called-off event back to every buyer, through
+ * the same hold refund (EventCallOffRefundService, task EVENTS-10). The web's
+ * cancel route reaches it through EventCancelHooks, so EventTicketingModule
+ * never imports this module. EventTicketingModule is imported here only for
+ * that registry; it is already mounted earlier by AppModule.
+ *
+ * The most open paid orders one buyer may hold on one event is an admin setting
+ * (EVENTS-13, `events.open_orders_per_buyer`), read from PlanSettingsModule.
+ *
  * Its own module, mounted by AppModule after MoneyModule: MoneyModule is
  * imported here, and importing it from EventTicketingModule would have
  * registered every money route earlier than it is today. The paths are
@@ -27,8 +39,14 @@ import { EventWalletOrderService } from './event-wallet-order.service';
     MoneyModule,
     BlockedAccountModule,
     AccountPurgeModule,
+    EventTicketingModule,
+    PlanSettingsModule,
   ],
   controllers: [EventWalletOrdersController],
-  providers: [EventWalletOrderService, EventHostErasureService],
+  providers: [
+    EventWalletOrderService,
+    EventHostErasureService,
+    EventCallOffRefundService,
+  ],
 })
 export class EventWalletOrdersModule {}

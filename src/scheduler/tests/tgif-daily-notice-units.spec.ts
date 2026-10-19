@@ -14,12 +14,13 @@ import {
 import { SETTINGS_GATE } from '../../notification/notification.service';
 import type { NotificationService } from '../../notification/notification.service';
 import type { PrismaService } from '../../common/prisma/prisma.service';
+import type { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import { PUSH_ONLY_GATE, PUSH_RULE, pushGateFor } from '../../push/push-policy';
 import { TgifContentService } from '../../tgif/content/tgif-content.service';
 import {
   LAGOS_UTC_OFFSET_MINUTES,
   TGIF_NOTICE_CATCH_UP_MINUTES,
-  TGIF_NOTIFICATION_TIME_DEFAULT,
+  TGIF_NOTIFICATION_TIME_SETTING,
   parseNoticeTime,
 } from '../tgif-daily-notice.config';
 import {
@@ -29,6 +30,15 @@ import {
 
 /** An em-dash or an en-dash, written as escapes so this file has none. */
 const DASHES = new RegExp('[\\u2014\\u2013]');
+
+/** The admin settings, as far as the job reads them: `text(key)`. The registry itself is covered in home-17-settings.contract.spec.ts. */
+const settings = (value = '07:00') =>
+  ({
+    text: (key: string) => {
+      expect(key).toBe(TGIF_NOTIFICATION_TIME_SETTING);
+      return value;
+    },
+  }) as unknown as PlanSettingsService;
 
 const config = (value?: string) =>
   ({ get: () => value }) as unknown as ConfigService;
@@ -48,7 +58,7 @@ const service = (content: Pick<TgifContentService, 'day'>, value?: string) =>
     untouchable as unknown as PrismaService,
     untouchable as unknown as NotificationService,
     content as TgifContentService,
-    config(value),
+    settings(value),
   );
 
 const book = new TgifContentService(config());
@@ -94,12 +104,27 @@ describe('the set time (tgif_notification_time)', () => {
     }
   });
 
-  it('is 07:00 when nothing is set, and when the setting is not a time', () => {
-    expect(TGIF_NOTIFICATION_TIME_DEFAULT).toBe('07:00');
-    expect(service(book, undefined).noticeMinutes()).toBe(420);
-    expect(service(book, '').noticeMinutes()).toBe(420);
-    expect(service(book, 'around eight').noticeMinutes()).toBe(420);
+  it('is the time the admin setting holds, as minutes after midnight in Lagos', () => {
+    expect(TGIF_NOTIFICATION_TIME_SETTING).toBe('tgif_notification_time');
+    expect(service(book, '07:00').noticeMinutes()).toBe(420);
     expect(service(book, '09:30').noticeMinutes()).toBe(9 * 60 + 30);
+    expect(service(book, '00:00').noticeMinutes()).toBe(0);
+    expect(service(book, '23:59').noticeMinutes()).toBe(23 * 60 + 59);
+  });
+
+  it('never guesses a time when the setting is not one (the registry never lets that in)', () => {
+    expect(() => service(book, 'around eight').noticeMinutes()).toThrow(
+      /not a time of day/,
+    );
+  });
+
+  it('does not read the retired environment key', () => {
+    process.env.TGIF_NOTIFICATION_TIME = '03:00';
+    try {
+      expect(service(book, '07:00').noticeMinutes()).toBe(420);
+    } finally {
+      delete process.env.TGIF_NOTIFICATION_TIME;
+    }
   });
 });
 

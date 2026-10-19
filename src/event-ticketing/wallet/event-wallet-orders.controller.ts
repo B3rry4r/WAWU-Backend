@@ -96,7 +96,7 @@ export class EventWalletOrdersController {
   // (wallet-gate-coverage.spec.ts), and one that documents `fees_not_set` or an
   // idempotency code counts as money-moving (money-moving-coverage.spec.ts).
   // This route moves no money, and a basket that costs nothing needs no wallet.
-  @MoneyErrors('target_not_found', 'target_not_payable')
+  @MoneyErrors('target_not_found', 'target_not_payable', 'event_order_limit')
   create(
     @CurrentUser() user: WawuJwtClaims,
     @Param('id', ParseUUIDPipe) eventId: string,
@@ -126,6 +126,7 @@ export class EventWalletOrdersController {
     'target_not_found',
     'target_not_payable',
     'payment_in_progress',
+    'event_order_limit',
   )
   @RequireFeesSet()
   pay(

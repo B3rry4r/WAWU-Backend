@@ -7,7 +7,11 @@ import type {
   PlanCurrency,
   PlanEventPassView,
 } from '../plans-view.type';
-import type { PlanPaymentKind, PlanPurchaseKind } from './plan-purchase-terms';
+import type {
+  PlanPaymentKind,
+  PlanPurchaseKind,
+  PlanPurchaseMethod,
+} from './plan-purchase-terms';
 
 /**
  * What the tier purchase routes answer (TIER-03). Amounts named `...Minor` are
@@ -47,9 +51,77 @@ export interface PlanPurchaseGrantView {
   firstVoiceIntroIncluded: boolean;
 }
 
+/**
+ * Where to send the money for a purchase waiting for a bank transfer, and how
+ * much (TIER-05, VF6 "transfer details shown"). The account is the person's
+ * own wallet account: WAWU runs no separate collection account (R-42).
+ * Amounts are kobo.
+ */
+export interface PlanPurchaseTransferView {
+  accountNumber: string;
+  accountName: string;
+  bankName: string;
+  bankCode: string;
+  /** The plan's price (with the bump's, when it is bought). */
+  priceKobo: number;
+  /** The bank's charge on the payment, shown as "Bank charge" (R-10, R-53). */
+  bankChargeKobo: number;
+  /** `priceKobo` plus `bankChargeKobo`: what the wallet must hold. */
+  totalKobo: number;
+  /** The wallet's available balance as the provider reports it now; null when it did not answer. */
+  balanceKobo: number | null;
+  /** `totalKobo` less the balance, never below 0; null when the balance is unknown. */
+  amountNeededKobo: number | null;
+  /** After this the purchase lapses (ISO 8601). */
+  expiresAt: string;
+}
+
+/**
+ * A purchase bought by bank transfer that has no wallet payment yet, or never
+ * got one (TIER-05, VF6 "transfer details shown"). The same `id` reads
+ * `PlanPurchaseView` from `GET /plans/purchases/{id}` once the money has
+ * landed and the wallet payment exists.
+ *
+ * - `awaiting_transfer`: the money has not reached the wallet account yet;
+ *   `transfer` says where to send it and how much is still needed. Nothing is
+ *   taken until it covers the total.
+ * - `pending`: the money landed and the purchase is being paid from the wallet.
+ * - `expired`: the time to send the money ran out. Nothing was taken, and any
+ *   money that was sent is in the wallet.
+ * - `failed`: the purchase cannot be made any more (the price changed, the
+ *   plan is no longer payable, it was paid another way, the person started the
+ *   same purchase again); `statusMessage` says why and nothing was taken.
+ */
+export interface PlanTransferOrderView {
+  id: string;
+  kind: PlanPurchaseKind;
+  tierId: string;
+  fromTierId: string | null;
+  bump: boolean;
+  method: 'transfer';
+  currency: PlanCurrency;
+  /** The plan's price (or the upgrade's difference) plus the bump's, never the bank's charge. */
+  amountMinor: number;
+  status: 'awaiting_transfer' | 'pending' | 'expired' | 'failed';
+  statusMessage: string | null;
+  /** Null: nothing has been taken. */
+  payment: PaymentView | null;
+  /** Set while `status` is `awaiting_transfer`. */
+  transfer: PlanPurchaseTransferView | null;
+  /** Null: nothing is granted before it is paid. */
+  grant: PlanPurchaseGrantView | null;
+  createdAt: string;
+  /** Null: it is not paid. */
+  paidAt: string | null;
+}
+
 /** One tier purchase: what was bought, where its payment stands and, once paid, what it gave. */
 export interface PlanPurchaseView {
-  /** The wallet payment's id: poll `GET /plans/purchases/{id}` with it. */
+  /**
+   * The id to poll `GET /plans/purchases/{id}` with: the wallet payment's id,
+   * or, for a purchase bought by transfer, the id it had while it waited for
+   * the money (the same id before and after the money lands).
+   */
   id: string;
   kind: PlanPurchaseKind;
   tierId: string;
@@ -57,7 +129,7 @@ export interface PlanPurchaseView {
   fromTierId: string | null;
   /** The checkout bump (extra points) was bought with it. */
   bump: boolean;
-  method: 'wallet';
+  method: PlanPurchaseMethod;
   currency: PlanCurrency;
   /** The plan's price (or the upgrade's difference) plus the bump's, never the provider's charge. */
   amountMinor: number;

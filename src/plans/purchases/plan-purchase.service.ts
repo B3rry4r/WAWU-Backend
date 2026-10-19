@@ -1,10 +1,17 @@
-import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+  type OnModuleInit,
+} from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { OpenWallet } from '../../money/gate/wallet-gate';
 import { nairaText } from '../../money/insufficient-funds';
 import { MoneyError } from '../../money/money-error';
 import type { PaymentStatus, PaymentView } from '../../money/money-view.type';
 import { WalletHoldService } from '../../money/holds/wallet-hold.service';
+import { WalletOpeningService } from '../../money/opening/wallet-opening.service';
 import type { IdempotencyScope } from '../../money/payments/idempotency';
 import {
   type CompletedPayment,
@@ -20,7 +27,10 @@ import {
   WalletPaymentService,
 } from '../../money/payments/wallet-payment.service';
 import { PointsService } from '../../points/points.service';
+import { ReferralRewardService } from '../../referrals/referral-reward.service';
+import type { PlanTransferOrder } from '../../../generated/prisma/client';
 import { BillingCurrencyService } from '../billing-currency.service';
+import type { PlanCurrency } from '../plans-view.type';
 import { MakerTierService } from '../maker-tier.service';
 import {
   countIn,
@@ -55,8 +65,12 @@ import {
 } from './plan-purchase-rules';
 import {
   PLAN_PAYMENT_KINDS,
+  PLAN_PURCHASE_ROUTE,
   paymentKindOf,
   type PlanPaymentKind,
+  POINTS_PACK_KIND,
+  PURCHASE_PAYMENT_KINDS,
+  type PurchasePaymentKind,
   type PurchaseTerms,
   targetIdOf,
   termsOf,
@@ -65,11 +79,25 @@ import type {
   PlanPurchaseGrantView,
   PlanPurchaseQuoteView,
   PlanPurchaseStatus,
+  PlanPurchaseTransferView,
   PlanPurchaseView,
+  PlanTransferOrderView,
 } from './plan-purchase-view.type';
+import {
+  amountNeeded,
+  EXPIRED_MESSAGE,
+  lapsed,
+  ORDER_STATUS,
+  SETTLING_MESSAGE,
+} from './plan-transfer-order';
+import { PlanTransferService } from './plan-transfer.service';
+import { PointsPackService } from './points-pack.service';
+import type {
+  PointsPackPurchaseView,
+  PointsPackQuoteView,
+} from './points-pack-view.type';
 
-/** The route a purchase's Idempotency-Key is scoped to. */
-export const PLAN_PURCHASE_ROUTE = 'POST plans/purchases';
+export { PLAN_PURCHASE_ROUTE };
 
 export const PURCHASE_NOT_FOUND_MESSAGE = 'We could not find that purchase.';
 
@@ -162,10 +190,16 @@ export class PlanPurchaseService implements OnModuleInit {
     private readonly payments: WalletPaymentService,
     private readonly registry: PayableRegistry,
     private readonly holds: WalletHoldService,
+    private readonly referrals: ReferralRewardService,
+    private readonly transfers: PlanTransferService,
+    private readonly opening: WalletOpeningService,
+    private readonly packs: PointsPackService,
   ) {}
 
   onModuleInit(): void {
     this.assertTargetsFit();
+    // The tier kinds are registered here; `points_pack` registers itself
+    // (PointsPackService), and both are answered by `present` below.
     for (const kind of PLAN_PAYMENT_KINDS)
       this.registry.register(this.handlerFor(kind));
     this.payments.presentRoute(PLAN_PURCHASE_ROUTE, (view) =>
@@ -206,7 +240,9 @@ export class PlanPurchaseService implements OnModuleInit {
   async quote(
     wallet: OpenWallet,
     q: PlanPurchaseQuoteQueryDto,
-  ): Promise<PlanPurchaseQuoteView> {
+  ): Promise<PlanPurchaseQuoteView | PointsPackQuoteView> {
+    refuseMixedRequest(q);
+    if (q.kind === POINTS_PACK_KIND) return this.packs.quote(wallet, q);
     const terms = await this.termsFor(wallet.wawuUserId, q);
     const targetId = this.targetOf(terms);
     const plan = await this.priced(wallet.wawuUserId, terms);
@@ -230,41 +266,201 @@ export class PlanPurchaseService implements OnModuleInit {
   }
 
   /**
-   * Pays for a purchase from the wallet. The answer, and every replay of the
-   * request's key, is the purchase as `present` builds it.
+   * Pays for a purchase from the wallet, or confirms it for payment by bank
+   * transfer (`method: transfer`, TIER-05). The answer, and every replay of
+   * the request's key, is the purchase as `present` (wallet) or
+   * `presentOrder` (transfer) builds it.
    */
   async buy(
     wallet: OpenWallet,
     scope: IdempotencyScope,
     dto: PlanPurchaseDto,
-  ): Promise<PlanPurchaseView> {
-    const terms = await this.termsFor(wallet.wawuUserId, dto);
+  ): Promise<PurchaseAnswer> {
+    refuseMixedRequest(dto);
+    const { kind, targetId } = await this.whatIsBought(wallet.wawuUserId, dto);
+    if (dto.method === 'transfer')
+      return this.buyByTransfer(wallet, scope, dto, kind, targetId);
     const payment = await this.payments.pay(
       wallet,
       {
-        kind: paymentKindOf(terms.bump),
-        targetId: this.targetOf(terms),
+        kind,
+        targetId,
         expectedTotalKobo: dto.expectedTotalKobo,
         quoteToken: dto.quoteToken,
       },
       scope,
     );
+    // The item is now being bought from the wallet: a bank-transfer purchase of
+    // the same item that is still waiting is closed (it would be a second one).
+    if (payment.status !== 'failed')
+      await this.transfers
+        .closeWaiting(wallet.wawuUserId, targetId)
+        .catch(() => undefined);
     return (
-      (scope.answered as PlanPurchaseView | undefined) ?? this.present(payment)
+      (scope.answered as PurchaseAnswer | undefined) ?? this.present(payment)
     );
   }
 
+  /** The payment kind and target a request buys, and nothing else: no wallet is read. */
+  private async whatIsBought(
+    wawuUserId: string,
+    dto: PlanPurchaseDto,
+  ): Promise<{ kind: PurchasePaymentKind; targetId: string }> {
+    if (dto.kind === POINTS_PACK_KIND)
+      return {
+        kind: POINTS_PACK_KIND,
+        targetId: this.packs.targetOf(dto.packId),
+      };
+    const terms = await this.termsFor(wawuUserId, dto);
+    return { kind: paymentKindOf(terms.bump), targetId: this.targetOf(terms) };
+  }
+
+  /**
+   * The person chose to pay by bank transfer (VF6 "transfer details shown"):
+   * the quote they saw is checked exactly as a wallet payment checks it, the
+   * order is written, and the answer says where to send the money and how
+   * much is still needed. Nothing is taken and nothing is held.
+   */
+  private async buyByTransfer(
+    wallet: OpenWallet,
+    scope: IdempotencyScope,
+    dto: PlanPurchaseDto,
+    kind: PurchasePaymentKind,
+    targetId: string,
+  ): Promise<PlanTransferOrderView | PointsPackPurchaseView> {
+    const { target, fee, availableKobo } = await this.payments.vouch(wallet, {
+      kind,
+      targetId,
+      expectedTotalKobo: dto.expectedTotalKobo,
+      quoteToken: dto.quoteToken,
+    });
+    const order = await this.transfers.place({
+      wallet,
+      kind,
+      targetId,
+      target,
+      fee,
+      availableKobo,
+    });
+    const view = await this.presentOrder(order, availableKobo);
+    await this.transfers.answer(scope, view);
+    return view as PlanTransferOrderView | PointsPackPurchaseView;
+  }
+
   /** One purchase as it stands now. Only the buyer reads it. */
-  async read(wawuUserId: string, id: string): Promise<PlanPurchaseView> {
+  async read(wawuUserId: string, id: string): Promise<PurchaseAnswer> {
+    const order = await this.transfers.find(wawuUserId, id);
+    if (order) return this.presentOrder(order);
     const payment = await this.prisma.walletPayment.findFirst({
       where: {
         id,
         payerWawuUserId: wawuUserId,
-        kind: { in: [...PLAN_PAYMENT_KINDS] },
+        kind: { in: [...PURCHASE_PAYMENT_KINDS] },
       },
     });
     if (!payment) throw new MoneyError('not_found', PURCHASE_NOT_FOUND_MESSAGE);
     return this.present(this.payments.view(payment, null));
+  }
+
+  /**
+   * A purchase bought by transfer as the routes answer it. While it waits, the
+   * provider's available balance is read for the amount still needed (pass it
+   * when it was just read); once the money landed and the wallet payment
+   * exists, it is that payment's purchase under the order's id.
+   */
+  private async presentOrder(
+    order: PlanTransferOrder,
+    knownAvailableKobo?: number,
+  ): Promise<PurchaseAnswer> {
+    const kind = order.paymentKind as PurchasePaymentKind;
+    if (order.status === ORDER_STATUS.settled && order.paymentId) {
+      const payment = await this.prisma.walletPayment.findUnique({
+        where: { id: order.paymentId },
+      });
+      if (payment) return this.present(this.payments.view(payment, null));
+    }
+    if (kind === POINTS_PACK_KIND) {
+      const waiting =
+        order.status === ORDER_STATUS.awaiting && !lapsed(order, new Date());
+      return this.packs.presentOrder(
+        order,
+        waiting,
+        waiting ? await this.transferView(order, knownAvailableKobo) : null,
+      );
+    }
+    const terms = termsOf(kind, order.targetId);
+    if (terms === null)
+      throw new Error(`Order ${order.id} is not a tier purchase.`);
+    const base = {
+      id: order.id,
+      kind: terms.kind,
+      tierId: terms.tierId,
+      fromTierId: terms.fromTierId,
+      bump: terms.bump,
+      method: 'transfer' as const,
+      currency: PAYMENT_CURRENCY as PlanCurrency,
+      amountMinor: order.priceKobo,
+      payment: null,
+      grant: null,
+      createdAt: order.createdAt.toISOString(),
+      paidAt: null,
+    };
+    const waiting =
+      order.status === ORDER_STATUS.awaiting && !lapsed(order, new Date());
+    if (waiting)
+      return {
+        ...base,
+        status: 'awaiting_transfer',
+        statusMessage: order.statusMessage,
+        transfer: await this.transferView(order, knownAvailableKobo),
+      };
+    if (order.status === ORDER_STATUS.closed)
+      return {
+        ...base,
+        status: 'failed',
+        statusMessage: order.statusMessage,
+        transfer: null,
+      };
+    if (order.status === ORDER_STATUS.settling || order.status === 'settled')
+      return {
+        ...base,
+        status: 'pending',
+        statusMessage: SETTLING_MESSAGE,
+        transfer: null,
+      };
+    return {
+      ...base,
+      status: 'expired',
+      statusMessage: order.statusMessage ?? EXPIRED_MESSAGE,
+      transfer: null,
+    };
+  }
+
+  /** Where to send the money and how much is still needed; the account is the person's own wallet. */
+  private async transferView(
+    order: PlanTransferOrder,
+    knownAvailableKobo?: number,
+  ): Promise<PlanPurchaseTransferView | null> {
+    const wallet = await this.opening.view(order.wawuUserId);
+    if (!wallet.account) return null;
+    let balance: number | null = knownAvailableKobo ?? null;
+    if (knownAvailableKobo === undefined) {
+      const open = await this.transfers.walletOf(order.wawuUserId);
+      balance = open ? await this.payments.availableOrNull(open) : null;
+    }
+    return {
+      accountNumber: wallet.account.accountNumber,
+      accountName: wallet.account.accountName,
+      bankName: wallet.account.bankName,
+      bankCode: wallet.account.bankCode,
+      priceKobo: order.priceKobo,
+      bankChargeKobo: order.providerFeeKobo,
+      totalKobo: order.totalKobo,
+      balanceKobo: balance,
+      amountNeededKobo:
+        balance === null ? null : amountNeeded(order.totalKobo, balance),
+      expiresAt: order.expiresAt.toISOString(),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -334,6 +530,7 @@ export class PlanPurchaseService implements OnModuleInit {
     const other = await this.prisma.walletPayment.findFirst({
       where: {
         payerWawuUserId: wawuUserId,
+        // A tier is one at a time across its targets; a points pack is not in it.
         kind: { in: [...PLAN_PAYMENT_KINDS] },
         OR: OPEN_PAYMENT_STATES,
         NOT: { kind, targetId },
@@ -375,6 +572,25 @@ export class PlanPurchaseService implements OnModuleInit {
     const goods = goodsFromTerms(payment.terms);
     const refusal = await this.grantOnce(payment, terms, goods);
     if (refusal !== null) await this.refund(payment, refusal);
+    else await this.rewardInviter(payment.payerWawuUserId);
+  }
+
+  /**
+   * The tier is granted, so if this person was invited, their first paid tier
+   * makes the reward for the person who invited them (REF-02). Made after the
+   * commit and never allowed to fail the delivery: a failure is logged, and
+   * the referral job makes the reward on its next pass.
+   */
+  private async rewardInviter(wawuUserId: string): Promise<void> {
+    try {
+      await this.referrals.onTierPaid(wawuUserId);
+    } catch (e) {
+      this.logger.warn(
+        `referral reward for ${wawuUserId} left to the referral job: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
   }
 
   /**
@@ -555,7 +771,9 @@ export class PlanPurchaseService implements OnModuleInit {
   // -------------------------------------------------------------------------
 
   /** The purchase a payment is, as the routes answer it and the key stores it. */
-  async present(view: PaymentView): Promise<PlanPurchaseView> {
+  async present(view: PaymentView): Promise<PurchaseAnswer> {
+    if (view.kind === POINTS_PACK_KIND)
+      return this.packs.present(view, await this.transfers.byPayment(view.id));
     const terms = termsOf(view.kind, view.targetId);
     if (terms === null)
       throw new Error(`Payment ${view.id} is not a tier payment.`);
@@ -570,13 +788,16 @@ export class PlanPurchaseService implements OnModuleInit {
           where: { paymentId: view.id },
           select: { status: true, amountKobo: true },
         });
+    // A payment the settlement of a bank-transfer purchase made is that
+    // purchase's: it keeps the id the person was given while it waited.
+    const order = await this.transfers.byPayment(view.id);
     return {
-      id: view.id,
+      id: order?.id ?? view.id,
       kind: terms.kind,
       tierId: terms.tierId,
       fromTierId: terms.fromTierId,
       bump: terms.bump,
-      method: 'wallet',
+      method: order ? 'transfer' : 'wallet',
       currency: row?.currency ?? PAYMENT_CURRENCY,
       amountMinor: row?.amountMinor ?? view.priceKobo,
       status: row ? 'paid' : payback ? 'refunded' : statusOf(view.status),
@@ -656,14 +877,17 @@ export class PlanPurchaseService implements OnModuleInit {
     req: Pick<PlanPurchaseQuoteQueryDto, 'kind' | 'tierId' | 'bump'>,
   ): Promise<PurchaseTerms> {
     const bump = req.bump === true;
+    const tierId = req.tierId;
+    if (req.kind === POINTS_PACK_KIND || tierId === undefined)
+      throw new BadRequestException('tierId is not a valid tier id');
     if (req.kind !== 'upgrade')
-      return { kind: req.kind, tierId: req.tierId, fromTierId: null, bump };
+      return { kind: req.kind, tierId, fromTierId: null, bump };
     const held = await this.tiers.tierOf(wawuUserId);
     if (!isRunning(held) || held.tierId === null)
       throw new MoneyError('target_not_payable', NOTHING_TO_UPGRADE_MESSAGE);
     return {
       kind: 'upgrade',
-      tierId: req.tierId,
+      tierId,
       fromTierId: held.tierId,
       bump,
     };
@@ -674,6 +898,33 @@ export class PlanPurchaseService implements OnModuleInit {
     if (id === null)
       throw new MoneyError('target_not_found', PLAN_NOT_FOUND_MESSAGE);
     return id;
+  }
+}
+
+/** What `POST /plans/purchases` and `GET /plans/purchases/{id}` answer: a tier purchase or a points pack's. */
+export type PurchaseAnswer =
+  PlanPurchaseView | PlanTransferOrderView | PointsPackPurchaseView;
+
+/**
+ * A request names what it buys with the field of its own kind: a `tierId` for
+ * a plan, a `packId` for a points pack. A body that mixes them is refused, so
+ * nothing is bought that the person did not mean to.
+ */
+function refuseMixedRequest(req: {
+  kind: string;
+  tierId?: string;
+  packId?: string;
+  bump?: boolean;
+}): void {
+  if (req.kind === POINTS_PACK_KIND) {
+    if (req.tierId !== undefined || req.bump === true)
+      throw new BadRequestException(
+        'A points pack is bought with a packId only. Do not send a tierId or bump.',
+      );
+  } else if (req.packId !== undefined) {
+    throw new BadRequestException(
+      'A packId is for a points pack. Send a tierId for a plan.',
+    );
   }
 }
 

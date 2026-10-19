@@ -82,6 +82,31 @@ export class NameCheckTokenService {
     );
   }
 
+  /**
+   * True when `token` is one this server signed for this person, this bank
+   * code and this account number, and is not past its time. It says nothing
+   * about the holder's name: that is `matches`, which needs the bank's
+   * answer. A send to an account that is not saved uses this to tell its own
+   * check (the person did name-check this account, WALLET-37 round 5) from a
+   * bare enquiry about any account number, before the bank is asked.
+   */
+  issuedFor(
+    token: unknown,
+    owner: string,
+    bankCode: string,
+    accountNumber: string,
+    at = new Date(),
+  ): boolean {
+    const claims = this.read(token);
+    return (
+      claims !== null &&
+      claims.u === owner &&
+      claims.b === bankCode &&
+      claims.a === accountNumber &&
+      claims.x > at.getTime()
+    );
+  }
+
   private mac(payload: string): Buffer {
     return createHmac('sha256', this.settings.quoteKey())
       .update(TOKEN_CONTEXT + payload)

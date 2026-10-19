@@ -283,6 +283,16 @@ export function countIn(count: PerCurrency, currency: BillingCurrency): number {
   return currency === 'USD' ? count.USD : count.NGN;
 }
 
+/**
+ * A percent of a number of points, rounded down to a whole point. Exact for
+ * whole inputs: the product is a whole number far below 2^53, and the
+ * remainder is taken off before the division.
+ */
+export function percentOf(points: number, percent: number): number {
+  const product = points * percent;
+  return (product - (product % 100)) / 100;
+}
+
 /** The tier with this id, or null when the config no longer has it. */
 export function tierById(config: PlansConfig, id: string): PlanTier | null {
   return config.tiers.find((t) => t.id === id) ?? null;
