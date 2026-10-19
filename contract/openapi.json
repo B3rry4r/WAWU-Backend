@@ -26516,6 +26516,150 @@
         ]
       }
     },
+    "/api/hub/schools/enrolments": {
+      "post": {
+        "operationId": "SchoolEnrolmentsController_enrol",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrolDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolEnrolmentView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code class_full (reason.nextIntake), intake_closed, already_enrolled (reason.enrolmentId), reservation_limit, or payment_in_progress (reason.paymentId) when the place being moved already has a payment started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolEnrolmentErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "SC4 Continue: holds a place in the class the student picked and answers\nthe order (the course, school and class, the fee that will be asked for,\nand `reservedUntil`, when the place goes back to the class if it is not\npaid). Pay it with `POST /money/payments`. The same request again answers\nthe same order and keeps the place a while longer; asking for another\nclass of the same course moves the place. A class with no seat left is\n`409 reason.code class_full` with `reason.nextIntake`, the soonest other\nclass of the course that has a seat (SC11), or null; a class that has\nstarted is `409 intake_closed`; a student already enrolled in the course\nis `409 already_enrolled` with `reason.enrolmentId`; a student holding\ntoo many unpaid places is `409 reservation_limit`. An unknown or hidden\nclass is 404. A course with no fee enrols at once (`status enrolled`,\nnothing to pay).",
+        "tags": [
+          "SchoolEnrolments"
+        ]
+      },
+      "get": {
+        "operationId": "SchoolEnrolmentsController_list",
+        "parameters": [
+          {
+            "name": "tab",
+            "required": false,
+            "in": "query",
+            "description": "`current` or `finished`; left out, both tabs together.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "current",
+                "finished"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the page before.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolEnrolmentPage"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "My courses (SC8): this student's enrolments, newest first. `tab` is\n`current` or `finished` (left out: both). Each row carries its class's\nstart date, the course's end date and the tab it belongs in. A place that\nwas given back unpaid is not listed. Pages by `cursor` (CONVENTIONS).",
+        "tags": [
+          "SchoolEnrolments"
+        ]
+      }
+    },
+    "/api/hub/schools/enrolments/{id}": {
+      "get": {
+        "operationId": "SchoolEnrolmentsController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolEnrolmentView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One enrolment as it stands now: what the app polls after a payment, and\nSC7's receipt (the course, class, fee and what the wallet was actually\ndebited). Only its student reads it; another person's and an id nobody\nholds are the same 404. It reads our own records only.",
+        "tags": [
+          "SchoolEnrolments"
+        ]
+      }
+    },
     "/api/hub/schools": {
       "get": {
         "operationId": "SchoolsPublicController_list",
@@ -26702,89 +26846,6 @@
         "summary": "One tap on \"Continue to their site\": records one click, answers with the link to open.",
         "tags": [
           "SchoolLink"
-        ]
-      }
-    },
-    "/api/hub/schools/enrolments": {
-      "post": {
-        "operationId": "SchoolEnrolmentsController_enrol",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/EnrolDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SchoolEnrolmentView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code class_full (reason.nextIntake), intake_closed, already_enrolled (reason.enrolmentId), reservation_limit, or payment_in_progress (reason.paymentId) when the place being moved already has a payment started.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SchoolEnrolmentErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "SC4 Continue: holds a place in the class the student picked and answers\nthe order (the course, school and class, the fee that will be asked for,\nand `reservedUntil`, when the place goes back to the class if it is not\npaid). Pay it with `POST /money/payments`. The same request again answers\nthe same order and keeps the place a while longer; asking for another\nclass of the same course moves the place. A class with no seat left is\n`409 reason.code class_full` with `reason.nextIntake`, the soonest other\nclass of the course that has a seat (SC11), or null; a class that has\nstarted is `409 intake_closed`; a student already enrolled in the course\nis `409 already_enrolled` with `reason.enrolmentId`; a student holding\ntoo many unpaid places is `409 reservation_limit`. An unknown or hidden\nclass is 404. A course with no fee enrols at once (`status enrolled`,\nnothing to pay).",
-        "tags": [
-          "SchoolEnrolments"
-        ]
-      }
-    },
-    "/api/hub/schools/enrolments/{id}": {
-      "get": {
-        "operationId": "SchoolEnrolmentsController_read",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SchoolEnrolmentView"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "One enrolment as it stands now: what the app polls after a payment, and\nSC7's receipt (the course, class, fee and what the wallet was actually\ndebited). Only its student reads it; another person's and an id nobody\nholds are the same 404. It reads our own records only.",
-        "tags": [
-          "SchoolEnrolments"
         ]
       }
     },
@@ -28730,6 +28791,219 @@
         },
         "tags": [
           "AdminSchools"
+        ]
+      }
+    },
+    "/api/hub/admin/schools/{id}/payee": {
+      "get": {
+        "operationId": "SchoolSettlementAdminController_payee",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolPayeeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The bank account the school is paid at; 404 when it has none yet.",
+        "tags": [
+          "SchoolSettlementAdmin"
+        ]
+      },
+      "put": {
+        "operationId": "SchoolSettlementAdminController_setPayee",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPayeeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolPayeeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Saves the school's bank account after the bank confirms it (the holder's\nname is what the bank gives). A miss saves nothing: 422.",
+        "tags": [
+          "SchoolSettlementAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/school-settlements": {
+      "get": {
+        "operationId": "SchoolSettlementAdminController_list",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "sent",
+                "paid",
+                "refunded",
+                "review"
+              ]
+            }
+          },
+          {
+            "name": "action",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "payout",
+                "refund"
+              ]
+            }
+          },
+          {
+            "name": "schoolId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 36,
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the previous page: opaque, sent back as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolSettlementPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Settlements, newest first: what is owed to schools, what was paid, what went back.",
+        "tags": [
+          "SchoolSettlementAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/school-intakes/{id}/cancel": {
+      "post": {
+        "operationId": "SchoolSettlementAdminController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelIntakeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Calls a class off: no more enrolments, unpaid places go back, and every\npaid enrolment's fee goes back to the student's wallet. A fee already paid\nto the school is counted in `alreadyPaidOut`, not refunded.",
+        "tags": [
+          "SchoolSettlementAdmin"
+        ]
+      }
+    },
+    "/api/hub/admin/school-enrolments/{id}/refund": {
+      "post": {
+        "operationId": "SchoolSettlementAdminController_refund",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchoolSettlementView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Sends one paid enrolment's fee back to the student. 409 once it is on its way to the school.",
+        "tags": [
+          "SchoolSettlementAdmin"
         ]
       }
     },
@@ -38287,6 +38561,27 @@
             "type": "boolean"
           }
         }
+      },
+      "SetPayeeDto": {
+        "type": "object",
+        "properties": {
+          "bankCode": {
+            "type": "string",
+            "description": "The bank's code in the provider's list.",
+            "pattern": "^[A-Za-z0-9]{3,12}$",
+            "example": "058"
+          },
+          "accountNumber": {
+            "type": "string",
+            "description": "Ten digits. The bank is asked for the holder's name before anything is saved.",
+            "pattern": "^\\d{10}$",
+            "example": "0123456789"
+          }
+        },
+        "required": [
+          "bankCode",
+          "accountNumber"
+        ]
       },
       "UpdatePlanSettingsDto": {
         "type": "object",
@@ -50325,6 +50620,180 @@
           "sections"
         ]
       },
+      "SchoolPayeeView": {
+        "type": "object",
+        "properties": {
+          "schoolId": {
+            "type": "string"
+          },
+          "bankCode": {
+            "type": "string"
+          },
+          "bankName": {
+            "type": "string"
+          },
+          "accountNumberLast4": {
+            "type": "string"
+          },
+          "accountName": {
+            "type": "string"
+          },
+          "verifiedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "schoolId",
+          "bankCode",
+          "bankName",
+          "accountNumberLast4",
+          "accountName",
+          "verifiedAt"
+        ]
+      },
+      "SchoolSettlementView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "enrolmentId": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "schoolId": {
+            "type": "string"
+          },
+          "schoolName": {
+            "type": "string"
+          },
+          "courseTitle": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "refund",
+              "payout"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "review",
+              "refunded",
+              "paid",
+              "sent"
+            ]
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "schoolShareKobo": {
+            "type": "integer"
+          },
+          "wawuShareKobo": {
+            "type": "integer"
+          },
+          "providerFeeKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "waiting": {
+            "type": "string",
+            "enum": [
+              "provider",
+              "no_payee",
+              "funds",
+              "refused"
+            ],
+            "nullable": true
+          },
+          "reviewNote": {
+            "type": "string",
+            "nullable": true
+          },
+          "decidedAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "refundedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "enrolmentId",
+          "reference",
+          "schoolId",
+          "schoolName",
+          "courseTitle",
+          "action",
+          "status",
+          "priceKobo",
+          "schoolShareKobo",
+          "wawuShareKobo",
+          "providerFeeKobo",
+          "waiting",
+          "reviewNote",
+          "decidedAt",
+          "paidAt",
+          "refundedAt"
+        ]
+      },
+      "SchoolSettlementPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SchoolSettlementView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "CancelIntakeView": {
+        "type": "object",
+        "properties": {
+          "intakeId": {
+            "type": "string"
+          },
+          "cancelledAt": {
+            "type": "string"
+          },
+          "refunding": {
+            "type": "number"
+          },
+          "alreadyPaidOut": {
+            "type": "number"
+          },
+          "placesReleased": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "intakeId",
+          "cancelledAt",
+          "refunding",
+          "alreadyPaidOut",
+          "placesReleased"
+        ]
+      },
       "AdminSchoolSummary": {
         "type": "object",
         "properties": {
@@ -53066,6 +53535,161 @@
           "createdAt",
           "enrolledAt",
           "returned"
+        ]
+      },
+      "SchoolEnrolmentListItem": {
+        "type": "object",
+        "properties": {
+          "weeks": {
+            "type": "number"
+          },
+          "endDate": {
+            "type": "string"
+          },
+          "tab": {
+            "type": "string",
+            "enum": [
+              "current",
+              "finished"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "released",
+              "refunded",
+              "reserved",
+              "enrolled"
+            ]
+          },
+          "reference": {
+            "type": "string"
+          },
+          "course": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "title"
+            ]
+          },
+          "school": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name"
+            ]
+          },
+          "intake": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "startDate": {
+                "type": "string"
+              },
+              "schedule": {
+                "type": "string"
+              },
+              "location": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "id",
+              "startDate",
+              "schedule",
+              "location"
+            ]
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "paymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "providerFeeKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "totalKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "reservedUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "enrolledAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "returned": {
+            "$ref": "#/components/schemas/EnrolmentReturnView",
+            "nullable": true
+          }
+        },
+        "required": [
+          "weeks",
+          "endDate",
+          "tab",
+          "id",
+          "status",
+          "reference",
+          "course",
+          "school",
+          "intake",
+          "priceKobo",
+          "paymentId",
+          "providerFeeKobo",
+          "totalKobo",
+          "reservedUntil",
+          "createdAt",
+          "enrolledAt",
+          "returned"
+        ]
+      },
+      "SchoolEnrolmentPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SchoolEnrolmentListItem"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
         ]
       },
       "SchoolApplyLinkView": {

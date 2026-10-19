@@ -1,4 +1,5 @@
 import type { HoldStatus } from '../../money/money-view.type';
+import type { EnrolmentTab } from './school-enrolment-list';
 import type { EnrolmentStatus } from './school-enrolment-rules';
 
 /**
@@ -53,4 +54,23 @@ export interface SchoolEnrolmentView {
   createdAt: string;
   enrolledAt: string | null;
   returned: EnrolmentReturnView | null;
+}
+
+/**
+ * One row of My courses (SC8): the enrolment as it stands, and when the
+ * course ends, so the app can tell the current tab from the finished one.
+ */
+export interface SchoolEnrolmentListItem extends SchoolEnrolmentView {
+  /** How long the course runs, in weeks. */
+  weeks: number;
+  /** The last day of the course (YYYY-MM-DD), from the class's start and the weeks. */
+  endDate: string;
+  /** The tab it belongs in: `current`, or `finished` (class over, or the fee went back). */
+  tab: EnrolmentTab;
+}
+
+/** A page of My courses, newest first. `nextCursor` null means the last page. */
+export interface SchoolEnrolmentPage {
+  items: SchoolEnrolmentListItem[];
+  nextCursor: string | null;
 }

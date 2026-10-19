@@ -5352,6 +5352,9 @@ model School {
   /// time the link is asked for.
   link       SchoolLink?
   clicks     SchoolLinkClick[]
+  /// SCHOOLS-11: the bank account the school's share is paid to.
+  payee       SchoolPayee?
+  settlements SchoolSettlement[]
 
   @@index([category])
   @@index([name])
@@ -5405,6 +5408,10 @@ model CourseIntake {
   seatsTaken Int          @default(0)
   /// SCHOOLS-02: when the dashboard hid this intake. Null: shown. SCHOOLS-04 serves only unhidden rows.
   hiddenAt   DateTime?
+  /// SCHOOLS-11: when the class was called off. A cancelled class is hidden at
+  /// the same moment (`hiddenAt`), takes no enrolments, and every fee paid for
+  /// it goes back to the student's wallet instead of to the school.
+  cancelledAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -5504,9 +5511,135 @@ model SchoolEnrolment {
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
+  report          SchoolEnrolmentReport?
+  settlement      SchoolSettlement?
+
   @@index([wawuUserId, createdAt])
   @@index([intakeId, status])
   @@index([status, reservedUntil])
+}
+
+/// SCHOOLS-11: the bank account a school's share of course fees is paid to. A
+/// school is not a WAWU user, so it is paid by bank transfer (R-12, R-31). The
+/// row exists only for an account the bank confirmed (the dashboard's
+/// `PUT /admin/schools/{id}/payee` asks the provider's name check and stores
+/// nothing when it does not match): `accountName` is the holder's name as the
+/// bank gave it, `verifiedAt` the time it did. Changing the account is the
+/// same call, so the row never holds an account nobody checked. The payee ids
+/// are the provider's (Nuvion's counterparty and payment detail), kept so a
+/// second payout to the same account reuses them.
+model SchoolPayee {
+  schoolId        String   @id
+  school          School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  bankCode        String
+  bankName        String
+  accountNumber   String
+  accountName     String
+  verifiedAt      DateTime
+  counterpartyId  String?
+  paymentDetailId String?
+  /// The admin who set it.
+  setBy           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+/// SCHOOLS-11: what becomes of one paid enrolment's fee. The fee waits in
+/// WAWU's merchant wallet in a hold (R-19). When the class starts the school's
+/// 85% is paid to its bank account (`action payout`); when the class is called
+/// off the student's fee goes back to their wallet (`action refund`, the R-10
+/// refund default). One row per enrolment (`enrolmentId` is unique), made by an
+/// insert that loses to any row already there, so the first decision stands:
+/// a payout that has been handed to the provider (`sentAt` set) is never turned
+/// into a refund, and a refund is never turned into a payout.
+///
+/// A payout is one bank send from WAWU's account under `customerReference`
+/// (`wawu-bank-sch-<id>`; a second try after the provider's own record proved
+/// the first failed adds `-2`, and there is no third). `status`: pending (not
+/// handed over yet; `waiting` says why), sent (handed over, not confirmed),
+/// paid / refunded (the provider confirmed), review (a person looks; the money
+/// stays where it is). The figures are integer kobo and the database holds
+/// `schoolShareKobo + wawuShareKobo = priceKobo`.
+model SchoolSettlement {
+  id                    String          @id @default(uuid())
+  enrolmentId           String          @unique
+  enrolment             SchoolEnrolment @relation(fields: [enrolmentId], references: [id])
+  schoolId              String
+  school                School          @relation(fields: [schoolId], references: [id])
+  /// The hold (WalletHold.id) that carries the fee.
+  holdId                String
+  /// The wallet provider whose hold this is; a server acts only on its own.
+  provider              String
+  action                String
+  status                String          @default("pending")
+  priceKobo             Int
+  schoolShareKobo       Int
+  wawuShareKobo         Int
+  /// The account paid, copied from the payee when the payout is handed over.
+  bankCode              String?
+  bankName              String?
+  bankAccountNumber     String?
+  bankAccountName       String?
+  counterpartyId        String?
+  paymentDetailId       String?
+  /// Which reference this try goes under (1, then 2 after a proved failure).
+  attempt               Int             @default(1)
+  /// Times a send was handed over (for the rest between tries).
+  attempts              Int             @default(0)
+  /// Questions asked of the provider about a send whose outcome was unknown.
+  checks                Int             @default(0)
+  customerReference     String?         @unique
+  /// Set when a send is handed to the provider (the lease only one caller wins).
+  sentAt                DateTime?
+  nextAttemptAt         DateTime?
+  /// Why nothing has moved yet: no_payee, provider, funds, refused.
+  waiting               String?
+  providerFeeKobo       BigInt?
+  providerTransactionId String?
+  reviewNote            String?
+  decidedAt             DateTime        @default(now())
+  paidAt                DateTime?
+  refundedAt            DateTime?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([schoolId, status])
+}
+
+/// SCHOOLS-09: the enrolment report that goes to the school (SC7: the school
+/// gets the student's name, email and phone, the course and the intake). One
+/// row per order, made in the same transaction as the order, when the student
+/// taps Continue on SC4 (the screen that says the school gets these details):
+/// `consentAt` is that moment. The contact details are a copy of the student's
+/// sign-in token at that moment, kept only until the report is sent; the send
+/// clears them. The report goes when the order is `enrolled` (paid, or a
+/// course with no fee), through the mail relay under the key
+/// `school-report-<enrolmentId>`, so a retry or a second server cannot send a
+/// second mail. `leaseUntil` is the claim on a try in flight, `nextAttemptAt`
+/// the rest before the next try, `gaveUpAt` when the tries ran out.
+model SchoolEnrolmentReport {
+  enrolmentId   String          @id
+  enrolment     SchoolEnrolment @relation(fields: [enrolmentId], references: [id], onDelete: Cascade)
+  /// The student. Set to null with the contact details when the account is deleted.
+  wawuUserId    String?
+  studentName   String?
+  studentEmail  String?
+  studentPhone  String?
+  consentAt     DateTime
+  attempts      Int             @default(0)
+  nextAttemptAt DateTime?
+  leaseUntil    DateTime?
+  sentAt        DateTime?
+  /// The mail relay's id for the mail it took.
+  messageId     String?
+  /// Why the last try failed (a status or a name, never an address).
+  lastError     String?
+  gaveUpAt      DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@index([sentAt, gaveUpAt, nextAttemptAt])
 }
 
 /// SETTINGS-02: the owner's legal text, one row per document ("terms",
