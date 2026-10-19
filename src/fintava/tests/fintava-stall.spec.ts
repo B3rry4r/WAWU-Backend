@@ -42,8 +42,18 @@ const TIMEOUT_MS = 300;
  * lag, measured during the call, is added (MONEY-17 round 2: the suite failed
  * at load average 6 to 8 with nothing wrong in the client). A hang is still a
  * hang: the bug this spec holds ended at undici's 300 s.
+ *
+ * FIX-90: the lag added is the TOTAL time the loop was unavailable during the
+ * call, not the single worst stall. In the deploy's whole-suite run (one
+ * process that has loaded 480 specs, so every forced collection is slow) a
+ * call met many stalls, three timeout cases ended 40 to 90 ms past a bound
+ * built on the worst one alone, and the deadline timer had fired on the first
+ * turn the loop gave it. A timer cannot fire while the loop is blocked, so the
+ * time blocked is not the client's.
  */
 const MARGIN_MS = 700;
+/** How often the loop is sampled for the time it was unavailable. */
+const SAMPLE_MS = 10;
 /** A call still going at this point is reported as hanging. */
 const WATCHDOG_MS = 10_000;
 
@@ -95,7 +105,10 @@ function outcome(p: Promise<unknown>): Promise<string> {
 interface Run {
   result: string;
   ms: number;
-  /** The worst event-loop delay seen during the call, in ms. */
+  /**
+   * The time the event loop was unavailable during the call, in ms: the
+   * larger of the worst single delay and the total of all the delays.
+   */
   lagMs: number;
 }
 
@@ -122,6 +135,13 @@ async function run(
   else if (collect) void server.headersSent().then(collectNow);
   const lag = monitorEventLoopDelay({ resolution: 10 });
   lag.enable();
+  let lostMs = 0;
+  let lastTick = Date.now();
+  const sampler = setInterval(() => {
+    const now = Date.now();
+    lostMs += Math.max(0, now - lastTick - SAMPLE_MS);
+    lastTick = now;
+  }, SAMPLE_MS);
   const started = Date.now();
   let watchdog: NodeJS.Timeout | undefined;
   const result = await Promise.race([
@@ -135,7 +155,9 @@ async function run(
   ]);
   const ms = Date.now() - started;
   lag.disable();
-  const lagMs = Math.ceil(lag.max / 1e6);
+  clearInterval(sampler);
+  lostMs += Math.max(0, Date.now() - lastTick - SAMPLE_MS);
+  const lagMs = Math.max(Math.ceil(lag.max / 1e6), lostMs);
   done = true;
   clearTimeout(watchdog);
   if (collector) clearInterval(collector);
