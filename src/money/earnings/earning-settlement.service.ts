@@ -485,17 +485,38 @@ export class EarningSettlementService {
           }
           if (members.length === 0 || sum < floor) return null;
 
+          // INBOX-25 (R-71): what WAWU takes back of this creator's earnings
+          // (the host's share of a pass paid back to a removed member) stays
+          // with WAWU, as much as this move can spare while it stays at the
+          // floor. What it cannot spare is still owed and comes out of the
+          // next move. Never taken from the creator's wallet.
+          const takes = await this.planDeductions(
+            tx,
+            payee,
+            provider,
+            sum - floor,
+          );
+          const taken = takes.reduce((total, t) => total + t.kobo, 0n);
           const move = await tx.earningMove.create({
             data: {
               payeeWawuUserId: payee,
               dayKey: day.key,
               provider,
               merchantAccountNumber: account!,
-              amountKobo: sum,
+              amountKobo: sum - taken,
               earnings: members.length,
               customerReference: moveReference(payee, day.key, 1),
             },
           });
+          if (takes.length > 0) {
+            await tx.earningDeductionTake.createMany({
+              data: takes.map((t) => ({
+                deductionId: t.id,
+                moveId: move.id,
+                amountKobo: t.kobo,
+              })),
+            });
+          }
           const { count } = await tx.earningSettlement.updateMany({
             where: {
               id: { in: members },
@@ -515,6 +536,47 @@ export class EarningSettlementService {
       if (isUniqueViolation(e) || e instanceof MoveTakenElsewhere) return null;
       throw e;
     }
+  }
+
+  /**
+   * The deductions this move takes, oldest first, up to `room` kobo in all
+   * (INBOX-25). The deductions of the creator are read FOR UPDATE inside the
+   * move's own transaction, so two servers never take the same kobo twice
+   * (the database also refuses a take beyond a deduction's amount).
+   */
+  private async planDeductions(
+    tx: Prisma.TransactionClient,
+    payee: string,
+    provider: string,
+    room: bigint,
+  ): Promise<Array<{ id: string; kobo: bigint }>> {
+    if (room <= 0n) return [];
+    const open = await tx.$queryRaw<Array<{ id: string; owed: string }>>(
+      Prisma.sql`
+        SELECT d."id",
+               (d."amountKobo" - COALESCE((SELECT SUM(t."amountKobo")
+                                             FROM "EarningDeductionTake" t
+                                            WHERE t."deductionId" = d."id"), 0))::text AS "owed"
+          FROM "EarningDeduction" d
+         WHERE d."payeeWawuUserId" = ${payee} AND d."provider" = ${provider}
+           AND d."amountKobo" > COALESCE((SELECT SUM(t."amountKobo")
+                                            FROM "EarningDeductionTake" t
+                                           WHERE t."deductionId" = d."id"), 0)
+         ORDER BY d."createdAt" ASC, d."id" ASC
+           FOR UPDATE OF d`,
+    );
+    const takes: Array<{ id: string; kobo: bigint }> = [];
+    let left = room;
+    for (const d of open) {
+      if (left <= 0n) break;
+      const owed = BigInt(d.owed);
+      const kobo = owed < left ? owed : left;
+      if (kobo > 0n) {
+        takes.push({ id: d.id, kobo });
+        left -= kobo;
+      }
+    }
+    return takes;
   }
 
   /** An earning out of the sweep for a person, inside the transaction that found it. */
@@ -954,6 +1016,9 @@ export class EarningSettlementService {
         const left = members.filter(
           (x) => x.paymentId === null || ok.has(x.paymentId),
         );
+        // INBOX-25: what this move left with WAWU is owed again; the move,
+        // made smaller, is not sent with it, and the next move takes it.
+        await tx.earningDeductionTake.deleteMany({ where: { moveId: m.id } });
         if (left.length === 0) {
           await tx.earningMove.deleteMany({
             where: { id: m.id, status: 'owed', sentAt: null },

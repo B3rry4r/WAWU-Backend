@@ -28356,6 +28356,45 @@
         ]
       }
     },
+    "/api/hub/communities/{id}/members/{userWawuId}/removal-quote": {
+      "get": {
+        "operationId": "CommunityController_removalQuote",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "userWawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityPassRemovalQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What removing this member would give them back, for the host's remove\nsheet (INBOX-25, R-71): the unused days of a paid monthly pass, pro rata\nin kobo. Figured by the Hub; nothing is written or moved.",
+        "tags": [
+          "Community"
+        ]
+      }
+    },
     "/api/hub/communities/{id}/members/{userWawuId}": {
       "delete": {
         "operationId": "CommunityController_removeMember",
@@ -28397,7 +28436,7 @@
             }
           }
         },
-        "summary": "Remove a settled member. Separate from decline on purpose: ejecting\nsomeone who is already in must never be something a stale queue can do\nby accident.",
+        "summary": "Remove a settled member. Separate from decline on purpose: ejecting\nsomeone who is already in must never be something a stale queue can do\nby accident. In a room that sells a monthly pass the member is paid back\nthe unused days (INBOX-25, R-71); the answer is the same `{ removed: true }`.",
         "tags": [
           "Community"
         ]
@@ -57881,6 +57920,33 @@
           "joinedAt",
           "handle",
           "avatarUrl"
+        ]
+      },
+      "CommunityPassRemovalQuoteView": {
+        "type": "object",
+        "properties": {
+          "communityId": {
+            "type": "string"
+          },
+          "userWawuId": {
+            "type": "string"
+          },
+          "refundKobo": {
+            "type": "integer"
+          },
+          "unusedDays": {
+            "type": "number"
+          },
+          "asOf": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "communityId",
+          "userWawuId",
+          "refundKobo",
+          "unusedDays",
+          "asOf"
         ]
       },
       "CommunityMessageSender": {

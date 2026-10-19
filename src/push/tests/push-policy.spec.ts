@@ -71,6 +71,8 @@ describe('which notifications reach a phone', () => {
     expect(PUSH_ONLY_GATE).toEqual({
       dm_received: 'dmReminders',
       money_in_reversed: 'moneyIn',
+      // INBOX-25 (R-71): a refund into the wallet is money in; its push follows that switch.
+      community_pass_refunded: 'moneyIn',
     });
     expect(SETTINGS_GATE.dm_received).toBeUndefined(); // the list is unchanged for the web
   });
@@ -144,6 +146,14 @@ const EVENTS: NotificationEvent[] = [
     communityId: 'c',
     communityName: 'Lagos Makers',
     endsAt: new Date('2026-11-30T12:00:00.000Z'),
+  },
+  // INBOX-25 (R-71): a removed member's unused pass days landed in the wallet.
+  {
+    kind: 'community_pass_refunded',
+    userWawuId: 'u',
+    communityId: 'c',
+    communityName: 'Lagos Makers',
+    amount: 1933.33,
   },
 ];
 

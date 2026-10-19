@@ -1,10 +1,13 @@
 import { Module } from '@nestjs/common';
 import { BlockedAccountModule } from '../../blocked-account/blocked-account.module';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
+import { LedgerModule } from '../../money/ledger/ledger.module';
 import { MoneyModule } from '../../money/money.module';
 import { NotificationModule } from '../../notification/notification.module';
+import { WalletProviderModule } from '../../wallet-provider/wallet-provider.module';
 import { CommunityPassAccessModule } from './community-pass-access.module';
 import { CommunityPassController } from './community-pass.controller';
+import { CommunityPassRefundService } from './community-pass-refund.service';
 import { CommunityPassReminderService } from './community-pass-reminder.service';
 import { CommunityPassService } from './community-pass.service';
 
@@ -24,11 +27,18 @@ import { CommunityPassService } from './community-pass.service';
   imports: [
     WawuAuthModule,
     MoneyModule,
+    WalletProviderModule,
+    LedgerModule,
     BlockedAccountModule,
     NotificationModule,
     CommunityPassAccessModule,
   ],
   controllers: [CommunityPassController],
-  providers: [CommunityPassService, CommunityPassReminderService],
+  providers: [
+    CommunityPassService,
+    CommunityPassReminderService,
+    CommunityPassRefundService,
+  ],
+  exports: [CommunityPassRefundService],
 })
 export class CommunityPassModule {}
