@@ -60,7 +60,10 @@ export class LiveCatchUpService {
      * exact: lists before it are read past that time, the list it names past
      * that row, and lists after it from that time on.
      */
-    const after = (kind: LiveKind, time: 'createdAt' | 'readAt' | 'sentAt') => {
+    const after = (
+      kind: LiveKind,
+      time: 'createdAt' | 'readAt' | 'sentAt' | 'changedAt',
+    ) => {
       const p = parsed.position;
       if (!p) return { [time]: { gte: since } };
       const rank = LIVE_KIND_RANK[kind] - LIVE_KIND_RANK[p.kind];
@@ -126,7 +129,7 @@ export class LiveCatchUpService {
     })();
 
     const take = limit + 1;
-    const [messages, reads, posts] = await Promise.all([
+    const [messages, reads, posts, requests] = await Promise.all([
       this.prisma.chatMessage.findMany({
         where: { conversationId: { in: chatIds }, ...after('m', 'createdAt') },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -148,6 +151,17 @@ export class LiveCatchUpService {
           senderWawuId: { notIn: [...blockedIds] },
         },
         orderBy: [{ sentAt: 'asc' }, { id: 'asc' }],
+        take,
+      }),
+      // Money requests paid, declined or cancelled (INBOX-15).
+      this.prisma.moneyRequest.findMany({
+        where: {
+          conversationId: { in: chatIds },
+          messageId: { not: null },
+          changedAt: { not: null },
+          ...after('q', 'changedAt'),
+        },
+        orderBy: [{ changedAt: 'asc' }, { id: 'asc' }],
         take,
       }),
     ]);
@@ -186,6 +200,22 @@ export class LiveCatchUpService {
             ]
           : [],
       ),
+      ...requests.map((row) => ({
+        kind: 'q' as const,
+        at: row.changedAt as Date,
+        id: row.id,
+        build: async (): Promise<LiveEvent> => {
+          const message = await this.prisma.chatMessage.findUniqueOrThrow({
+            where: { id: row.messageId as string },
+          });
+          return {
+            type: 'money_request.updated',
+            cursor: encodeLiveCursor(row.changedAt as Date),
+            chatId: row.conversationId,
+            message: await this.chats.viewMessage(me, message),
+          };
+        },
+      })),
       ...posts.map((row) => ({
         kind: 'p' as const,
         at: row.sentAt,

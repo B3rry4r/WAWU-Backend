@@ -616,6 +616,29 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'userBWawuId',
     disposition: 'COUNTERPARTY',
   },
+  // A money request (INBOX-15) has two people, so neither row is deleted with
+  // one of them: the other person's thread and, when it was paid, the record
+  // of the money that moved both stay. What each side's erase does:
+  // - the ASKER's: their chat bubble goes (ChatMessage above), so the purge
+  //   itself (eraseAskerRequests, at the start of AccountPurgeService.purge)
+  //   clears the reason they wrote (MoneyRequest.memo and the send's copy of
+  //   it) and cancels every request of theirs that is pending and not being
+  //   paid. One being paid is settled by its send first: paid if it
+  //   completes, closed if it fails. This id is then scrubbed by WAWU ID's
+  //   anonymize, as above.
+  // - the PAYER's: the request is the asker's, so it stays for them (they can
+  //   still cancel it); the payer's id on it is scrubbed by WAWU ID's
+  //   anonymize, which is the usual blank.
+  {
+    model: 'MoneyRequest',
+    column: 'requesterWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  {
+    model: 'MoneyRequest',
+    column: 'payerWawuId',
+    disposition: 'COUNTERPARTY',
+  },
   // Views this account made of OTHER people's profiles. Deleting them would
   // silently reduce somebody else's historical figures, which is editing a
   // third party's records to erase this one; the reference is scrubbed by

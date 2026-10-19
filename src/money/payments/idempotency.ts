@@ -118,6 +118,23 @@ export function bodyFingerprint(body: unknown): string {
 }
 
 /**
+ * What a key is bound to. A route with no path parameters binds the key to
+ * its body alone (every wallet payment route: the body names what is paid).
+ * A route that names the thing it pays in its path (INBOX-15: paying a
+ * money request) binds the key to the path parameters too, so the same key
+ * on another request is `409 idempotency_key_reused`, never the first
+ * request's receipt, while the same key on the same request still replays.
+ */
+export function requestFingerprint(req: {
+  body?: unknown;
+  params?: Record<string, unknown>;
+}): string {
+  const params = req.params ?? {};
+  if (Object.keys(params).length === 0) return bodyFingerprint(req.body);
+  return bodyFingerprint({ body: req.body ?? null, params });
+}
+
+/**
  * Thrown to answer a repeat with the stored answer. IdempotencyFilter (on
  * the route) writes it exactly as it was first sent.
  */
@@ -360,7 +377,7 @@ export class IdempotencyGuard implements CanActivate {
       method: req.method.toUpperCase(),
       route,
       key: raw,
-      fingerprint: bodyFingerprint(req.body as unknown),
+      fingerprint: requestFingerprint(req),
     };
     scope.claimId = await this.keys.claim(scope);
     req[SCOPE_KEY] = scope;

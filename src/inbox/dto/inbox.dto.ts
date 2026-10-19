@@ -25,8 +25,11 @@ export class InboxPageQueryDto {
   @Max(100)
   limit?: number;
 
-  /** Only rows of this kind (the Paid DMs and Communities chips). All kinds when left out. */
+  /**
+   * Only rows of this kind (the Paid DMs, Communities and Money chips; the
+   * Money chip is `money_request`). All kinds when left out.
+   */
   @IsOptional()
-  @IsIn(['chat', 'paid_dm', 'community'])
-  kind?: 'chat' | 'paid_dm' | 'community';
+  @IsIn(['chat', 'paid_dm', 'community', 'money_request'])
+  kind?: 'chat' | 'paid_dm' | 'community' | 'money_request';
 }

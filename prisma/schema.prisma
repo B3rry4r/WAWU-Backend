@@ -4504,6 +4504,7 @@ model ChatConversation {
   lastActivityAt DateTime          @default(now())
   participants   ChatParticipant[]
   messages       ChatMessage[]
+  moneyRequests  MoneyRequest[]
 
   @@unique([userAWawuId, userBWawuId])
 }
@@ -4553,6 +4554,50 @@ model ChatMessage {
 
   @@unique([conversationId, senderWawuId, clientMessageId])
   @@index([conversationId, createdAt, id])
+}
+
+/// One ask for money written into a chat (task INBOX-15, R-13): the requester
+/// asks the other person in the chat for an amount, with a reason. The ask is
+/// also a chat message (`messageId`, kind `money_request`), so it sits in the
+/// conversation and in the inbox like any other bubble.
+///
+/// `status` is pending, paid, declined or cancelled, and each of the last
+/// three is final. Paying is a send to the requester through the wallet send
+/// (WALLET-07). `transferId` is the send that is paying it: set in the same
+/// transaction that claims the send, so two taps, or a replay, can never
+/// start two sends for one request; cleared when that send failed or was
+/// reversed (nothing moved, so it can be paid again); and, once the send
+/// completed, kept beside `status = paid`. A pending request with a
+/// `transferId` is being paid: it cannot be declined or cancelled.
+model MoneyRequest {
+  id              String           @id @default(uuid())
+  conversationId  String
+  requesterWawuId String
+  payerWawuId     String
+  /// What the requester asks for, in kobo. What the payer pays on top is
+  /// quoted by the send's fee quote, never stored here.
+  amountKobo      BigInt
+  memo            String?
+  status          String           @default("pending")
+  /// The chat message that carries the request. Unique: one bubble each.
+  messageId       String?          @unique
+  /// The requester app's own id, so a resend after a lost answer returns the
+  /// first request instead of asking twice.
+  clientRequestId String?
+  /// The WalletTransfer that is paying (or paid) this request.
+  transferId      String?          @unique
+  /// When `status` last changed (null while still pending, never touched).
+  /// The live catch-up and the inbox rank by it.
+  changedAt       DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  conversation    ChatConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, requesterWawuId, clientRequestId])
+  @@index([requesterWawuId, createdAt])
+  @@index([payerWawuId, createdAt])
+  @@index([status, transferId])
+  @@index([changedAt])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
@@ -7021,4 +7066,39 @@ model ReferralMilestone {
   grantedAt          DateTime @default(now())
 
   @@unique([referrerWawuUserId, count])
+}
+
+// -----------------------------------------------------------------------------
+// NUV-08: what the reconciliation with Nuvion found and could not settle itself
+// -----------------------------------------------------------------------------
+
+/// One thing the reconciliation reports for a person at WAWU to look at
+/// (task NUV-08): a difference between Nuvion's fee simulation and the fee
+/// setting (both figures kept, the setting is never changed), a webhook
+/// subscription that is missing or could not be renewed, a sweep that could
+/// not read everything. One row per (kind, subject): seen again, it is
+/// updated; no longer true, it is resolved, and a later sighting reopens it.
+/// No person column, no name, no account number, no Nuvion text: our own
+/// words and kobo figures.
+model NuvionReconcileFinding {
+  id           String    @id @default(uuid())
+  /// `fee_differs`, `subscription_missing`, `subscription_renewal_failed`,
+  /// `subscription_expiring`, `sweep_incomplete`.
+  kind         String
+  /// What it is about: a fee setting's name, a subscription id, `sweep`.
+  subject      String
+  detail       String
+  /// The figure on WAWU's side (the setting), in kobo, when there is one.
+  settingKobo  BigInt?
+  /// The figure on Nuvion's side (the simulation), in kobo, when there is one.
+  providerKobo BigInt?
+  /// The amount the two figures were compared at, in kobo.
+  amountKobo   BigInt?
+  firstSeenAt  DateTime  @default(now())
+  lastSeenAt   DateTime  @default(now())
+  seenCount    Int       @default(1)
+  resolvedAt   DateTime?
+
+  @@unique([kind, subject])
+  @@index([resolvedAt, lastSeenAt])
 }

@@ -209,6 +209,16 @@ export const nextSendCheckDelayMs = nextCheckDelayMs;
  * - **Polled by its id** (`read`): `GET /money/transfers/{id}` reads our
  *   record only and never asks the provider.
  */
+/**
+ * Runs inside the send's claim transaction, after the send exists and before
+ * the provider is called. Throwing rolls the whole claim back: nothing is
+ * sent, no ledger row is left, and the Idempotency-Key is given back.
+ */
+export type SendClaimHook = (
+  tx: Prisma.TransactionClient,
+  transferId: string,
+) => Promise<void>;
+
 @Injectable()
 export class WalletTransferService implements OnModuleInit {
   private readonly logger = new Logger(WalletTransferService.name);
@@ -230,26 +240,34 @@ export class WalletTransferService implements OnModuleInit {
   ) {}
 
   onModuleInit(): void {
-    // A key left `in_progress` by a request that died (a restart mid-send)
-    // is answered from its send once the request can no longer be running.
     for (const route of [TRANSFER_ROUTE, BANK_TRANSFER_ROUTE]) {
-      this.keys.onStale(
-        route,
-        this.provider.timings.moneyTimeoutMs + MINUTE,
-        async (row) => {
-          const t = row.resourceId
-            ? await this.prisma.walletTransfer.findUnique({
-                where: { id: row.resourceId },
-              })
-            : null;
-          return t
-            ? { status: 201, body: successBody(await this.view(t)) }
-            : null;
-        },
-      );
+      this.answerStaleKeysFromSend(route);
     }
     // A send's ledger row settled by anything settles the send now.
     this.ledger.onTransferSettled((e) => this.settle(e.transferId));
+  }
+
+  /**
+   * A key left `in_progress` by a request that died (a restart mid-send) is
+   * answered from its send once the request can no longer be running. A
+   * feature route that sends through `send` registers its own route here
+   * (INBOX-15).
+   */
+  answerStaleKeysFromSend(route: string): void {
+    this.keys.onStale(
+      route,
+      this.provider.timings.moneyTimeoutMs + MINUTE,
+      async (row) => {
+        const t = row.resourceId
+          ? await this.prisma.walletTransfer.findUnique({
+              where: { id: row.resourceId },
+            })
+          : null;
+        return t
+          ? { status: 201, body: successBody(await this.view(t)) }
+          : null;
+      },
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -260,6 +278,7 @@ export class WalletTransferService implements OnModuleInit {
     wallet: OpenWallet,
     dto: WawuTransferDto,
     scope: IdempotencyScope,
+    inClaim?: SendClaimHook,
   ): Promise<TransferView> {
     const payer = wallet.wawuUserId;
     // Who the money goes to, read again now: the guard asked before the PIN,
@@ -311,7 +330,7 @@ export class WalletTransferService implements OnModuleInit {
     // in one transaction, before the provider is called (a crash after the
     // send still leaves a send the sweep settles, and a repeat of the key is
     // answered from this send).
-    const transfer = await this.claim(scope, data);
+    const transfer = await this.claim(scope, data, inClaim);
 
     let receipt: ProviderTransferReceipt;
     try {
@@ -470,6 +489,7 @@ export class WalletTransferService implements OnModuleInit {
   private async claim(
     scope: IdempotencyScope,
     data: Prisma.WalletTransferCreateInput,
+    inClaim?: SendClaimHook,
   ): Promise<TransferRow> {
     return this.prisma.$transaction(async (tx) => {
       await this.limits.assertMayMove(
@@ -485,6 +505,11 @@ export class WalletTransferService implements OnModuleInit {
       await this.keys.attach(tx, scope, data.id!);
       const row = await tx.walletTransfer.create({ data });
       await this.ledger.record(this.movement(row, 'out', 'pending'), tx);
+      // A feature that sends on someone's behalf (INBOX-15: paying a money
+      // request) ties its own record to this send HERE, in the claim, so a
+      // refusal rolls the send back with it and two sends can never be
+      // claimed for one thing.
+      if (inClaim) await inClaim(tx, row.id);
       return row;
     });
   }

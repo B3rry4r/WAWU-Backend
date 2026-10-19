@@ -22,10 +22,18 @@ import { SchoolsPublicModule } from '../../src/schools/schools-public.module';
 import { FintavaDouble, MERCHANT_ACCOUNT } from '../fintava/fintava-double';
 import { mintToken, QuietLogger } from '../payments/poll-helpers';
 import { installFintava, PIN, Wallets } from '../plans/tier-purchase-harness';
+import { WALLET_PROVIDER } from '../../src/wallet-provider/wallet-provider.interface';
+import {
+  NuvionHarnessRig,
+  runsOnFintavaDouble,
+} from '../nuvion/harness-wallets';
 
 /**
  * SCHOOLS-07's stand-ins: the real Hub modules for money and schools, a real
- * database, real RS256 tokens for the stand-in WAWU ID, and the real Fintava
+ * database, real RS256 tokens for the stand-in WAWU ID, and
+ * WALLET_PROVIDER=nuvion with Nuvion stood in at the seam (HARNESS-NUV, 17 Oct
+ * 2026: `test/nuvion/harness-wallets.ts` says how `h.wallets` and `h.double`
+ * are served); a spec on FINTAVA_BOUND_SPECS still gets the real Fintava
  * client over a socket to FintavaDouble (the tier harness's book of wallets).
  * No provider and no wawuafrica.com host is called.
  */
@@ -85,17 +93,23 @@ export async function bootSchoolApp(
     memoryCost: 1024,
     parallelism: 1,
   });
-  const double = new FintavaDouble();
-  await double.start();
+  const nuv = runsOnFintavaDouble() ? null : new NuvionHarnessRig();
+  const fintava = nuv ? null : new FintavaDouble();
+  if (fintava) await fintava.start();
+  const double = nuv ? nuv.double : fintava!;
   const logger = new QuietLogger();
-  const wallets = new Wallets();
+  const wallets = nuv ? nuv.wallets : new Wallets();
   const previous: Record<string, string | undefined> = {};
   const env: Record<string, string> = {
-    FINTAVA_BASE_URL: double.baseUrl,
-    FINTAVA_API_KEY: `live_test_${tag}_0123456789FAKEKEY`,
-    FINTAVA_TIMEOUT_MS: '120000',
-    FINTAVA_MONEY_TIMEOUT_MS: '120000',
-    FINTAVA_CHECK_TIMEOUT_MS: '120000',
+    ...(fintava
+      ? {
+          FINTAVA_BASE_URL: fintava.baseUrl,
+          FINTAVA_API_KEY: `live_test_${tag}_0123456789FAKEKEY`,
+          FINTAVA_TIMEOUT_MS: '120000',
+          FINTAVA_MONEY_TIMEOUT_MS: '120000',
+          FINTAVA_CHECK_TIMEOUT_MS: '120000',
+        }
+      : nuv!.env),
     FEE_QUOTE_KEY: `${tag}-test-fee-quote-key-0123456789abcdef0123`,
     MERCHANT_MAX_PER_TXN_KOBO: '1000000000',
     PIN_LOCK_MINUTES: '',
@@ -106,9 +120,9 @@ export async function bootSchoolApp(
     previous[k] = process.env[k];
     process.env[k] = v;
   }
-  installFintava(double, wallets);
+  if (fintava) installFintava(fintava, wallets);
   wallets.kobo.set(MERCHANT_ACCOUNT, 5_000_000_000);
-  const moduleRef = await Test.createTestingModule({
+  let builder = Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
       PassportModule.register({ defaultStrategy: 'wawu-jwt' }),
@@ -117,9 +131,10 @@ export async function bootSchoolApp(
       SchoolsPublicModule,
     ],
     providers: [WawuJwtStrategy, WawuIdClient],
-  })
-    .setLogger(logger)
-    .compile();
+  });
+  if (nuv)
+    builder = builder.overrideProvider(WALLET_PROVIDER).useValue(nuv.standin);
+  const moduleRef = await builder.setLogger(logger).compile();
   const app = moduleRef.createNestApplication<INestApplication<App>>({
     ...HUB_APP_OPTIONS,
     logger,
@@ -160,6 +175,28 @@ export async function bootSchoolApp(
       users.push(id);
       accountSeq += 1;
       const accountNumber = `42${String(Date.now()).slice(-6)}${String(accountSeq).padStart(2, '0')}`;
+      if (nuv) {
+        // An approved Nuvion account holding `kobo`, as NUV-04 records it.
+        const account = nuv.openAccount(kobo, accountNumber);
+        await prisma.fintavaWallet.create({
+          data: {
+            wawuUserId: id,
+            customerId: account.entityId,
+            walletId: account.accountId,
+            accountNumber,
+            provider: 'nuvion',
+          },
+        });
+        await prisma.transactionPin.create({
+          data: { wawuUserId: id, pinHash: cheapPinHash },
+        });
+        return {
+          id,
+          auth: `Bearer ${mintToken(id, tag)}`,
+          walletId: account.accountId,
+          accountNumber,
+        };
+      }
       const walletId = randomUUID();
       await prisma.fintavaWallet.create({
         data: {
@@ -275,7 +312,7 @@ export async function bootSchoolApp(
         where: { wawuUserId: { in: users } },
       });
       await app.close();
-      await double.stop();
+      await fintava?.stop();
       for (const [k, v] of Object.entries(previous)) {
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;

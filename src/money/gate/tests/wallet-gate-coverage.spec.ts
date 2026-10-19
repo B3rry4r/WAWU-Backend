@@ -241,6 +241,8 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET points/convert/quote',
       'POST bills/wallet',
       'POST bills/wallet/pay',
+      'POST chats/:chatId/money-requests',
+      'POST chats/:chatId/money-requests/:requestId/pay',
       // INBOX-16: a credit pack pays from the wallet.
       'POST credits/purchase/wallet',
       'POST events/orders/wallet/pay',
@@ -272,6 +274,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     );
     expect(pinRoutes.map((r) => r.key).sort()).toEqual([
       'POST bills/wallet/pay',
+      'POST chats/:chatId/money-requests/:requestId/pay',
       'POST credits/purchase/wallet',
       'POST events/orders/wallet/pay',
       'POST money/approval/verify',
