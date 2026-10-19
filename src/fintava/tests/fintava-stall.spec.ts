@@ -65,14 +65,17 @@ const server = new FintavaStallServer();
 beforeAll(() => server.start());
 afterAll(() => server.stop());
 
-function client(mode: StallMode): FintavaClient {
+function client(
+  mode: StallMode,
+  timeoutMs: number = TIMEOUT_MS,
+): FintavaClient {
   return new FintavaClient(
     fintavaConfig({
       FINTAVA_BASE_URL: server.baseUrl(mode),
       FINTAVA_API_KEY: 'stall_test_FAKEKEY_0123456789',
-      FINTAVA_TIMEOUT_MS: String(TIMEOUT_MS),
-      FINTAVA_CHECK_TIMEOUT_MS: String(TIMEOUT_MS),
-      FINTAVA_MONEY_TIMEOUT_MS: String(TIMEOUT_MS),
+      FINTAVA_TIMEOUT_MS: String(timeoutMs),
+      FINTAVA_CHECK_TIMEOUT_MS: String(timeoutMs),
+      FINTAVA_MONEY_TIMEOUT_MS: String(timeoutMs),
     }),
   );
 }
@@ -387,10 +390,22 @@ describe('a refusal or a trickle never outlives the deadline', () => {
 describe('a slow body that finishes in time is read as before', () => {
   afterEach(() => jest.restoreAllMocks());
 
+  /**
+   * FIX-88: this case runs its own, longer timeout. The server and the
+   * client share one event loop, so a stall of the loop that spans the body's
+   * arrival and the deadline makes the deadline fire first (the 17 Oct CI run
+   * failed that way at 300 ms, a body at 150 ms, with forced garbage
+   * collection every 20 ms on a loaded runner). The body still lands at half
+   * the timeout; the half is now 2000 ms, so only a stall of that length
+   * could fail it. What it proves is unchanged: the body is read, and the
+   * one deadline timer is cleared.
+   */
+  const LATE_TIMEOUT_MS = 4000;
+
   it('a balance whose body lands at half the timeout is read, and the deadline is cleared', async () => {
     const set = jest.spyOn(global, 'setTimeout');
     const clear = jest.spyOn(global, 'clearTimeout');
-    const c = client(`late-${TIMEOUT_MS / 2}`);
+    const c = client(`late-${LATE_TIMEOUT_MS / 2}`, LATE_TIMEOUT_MS);
     const collector = setInterval(gc, 20);
     try {
       const balance = await c.getMerchantBalance();
@@ -408,7 +423,7 @@ describe('a slow body that finishes in time is read as before', () => {
         ms: args[1],
         timer: set.mock.results[i].value as unknown,
       }))
-      .filter((t) => t.ms === TIMEOUT_MS);
+      .filter((t) => t.ms === LATE_TIMEOUT_MS);
     expect(deadlines).toHaveLength(1);
     expect(clear).toHaveBeenCalledWith(deadlines[0].timer);
   });
