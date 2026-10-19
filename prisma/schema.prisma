@@ -1293,9 +1293,67 @@ model CommunityPass {
   priceKobo       BigInt
   reminderSentAt  DateTime?
   createdAt       DateTime  @default(now())
+  /// INBOX-25 (R-71). Set once, when the host removed the person and this
+  /// pass's unused days were paid back (`CommunityPassRefund`). A marked pass
+  /// is never paid back again, and the removal ended it that moment.
+  refundId        String?
 
   @@index([communityId, userWawuId, endsAt])
   @@index([endsAt])
+  @@index([refundId])
+}
+
+/// INBOX-25 (R-71). The unused days of a monthly pass, paid back to a member
+/// the host removed. One row per removal that had days to give back; each
+/// pass it paid back carries this row's id in `CommunityPass.refundId`, set
+/// in the same transaction, so a pass is paid back once (a double tap, two
+/// servers, a retry). WAWU pays it at once from its merchant account to the
+/// member's wallet under our reference `wawu-pref-<id>` (the member caused
+/// nothing, R-19); the machinery is the hold's refund: the provider's record
+/// is the truth, a lost answer is asked about and never sent again, only a
+/// proven failure starts a new try under a new reference, and a member with
+/// no wallet waits and is paid within a minute of opening one (R-11).
+/// `hostShareKobo` is the host's 85% of the refunded days; it is taken back
+/// from the host's earnings by an `EarningDeduction`, never from their wallet.
+/// `amountKobo` is the price paid, pro rata, floored: price x whole unused
+/// days / pass days, where a started day counts as used.
+model CommunityPassRefund {
+  id                       String    @id @default(uuid())
+  communityId              String
+  /// The member who is paid back.
+  userWawuId               String
+  hostWawuId               String
+  removedAt                DateTime
+  /// The whole unused days across the passes paid back.
+  unusedDays               Int
+  amountKobo               BigInt
+  hostShareKobo            BigInt
+  /// WAWU's own account the passes were paid into, and the provider it is at.
+  merchantAccountNumber    String
+  provider                 String    @default("fintava")
+  /// pending until the provider confirmed the move, then refunded.
+  status                   String    @default("pending")
+  settledAt                DateTime?
+  customerReference        String    @unique
+  attempt                  Int       @default(1)
+  destinationAccountNumber String?
+  sentAt                   DateTime?
+  providerFeeKobo          BigInt?
+  nextAttemptAt            DateTime?
+  attempts                 Int       @default(0)
+  checks                   Int       @default(0)
+  /// member_wallet, recipient_frozen, funds, provider or refused.
+  waiting                  String?
+  reviewSince              DateTime?
+  discrepancy              String?
+  /// Set once, when the member was told (one notification).
+  notifiedAt               DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@index([status, reviewSince, nextAttemptAt])
+  @@index([userWawuId, createdAt])
+  @@index([communityId])
 }
 
 /// INBOX-01. A community's share link, written `wawu/c/<slug>`.
@@ -5444,9 +5502,47 @@ model EarningMove {
   createdAt                DateTime            @default(now())
   updatedAt                DateTime            @updatedAt
   members                  EarningSettlement[]
+  /// INBOX-25: what this move left with WAWU to take back a refunded pass's host share.
+  deductionTakes           EarningDeductionTake[]
 
   @@unique([payeeWawuUserId, dayKey])
   @@index([status, reviewSince, nextAttemptAt])
+}
+
+/// INBOX-25 (R-71). A sum WAWU takes back from a creator's earnings: the
+/// host's 85% of the days of a pass paid back to a member the host removed
+/// (`CommunityPassRefund.hostShareKobo`). It is never taken from the host's
+/// wallet. The creator's next daily move (R-55) leaves it with WAWU, as much
+/// as that move can spare while staying at the move floor; what the move
+/// cannot spare is still owed and comes out of the next move. What is still
+/// owed is `amountKobo` less the takes. One per refund.
+model EarningDeduction {
+  id              String                 @id @default(uuid())
+  payeeWawuUserId String
+  passRefundId    String                 @unique
+  amountKobo      BigInt
+  /// The provider whose moves it comes out of (the passes' own).
+  provider        String                 @default("fintava")
+  createdAt       DateTime               @default(now())
+  takes           EarningDeductionTake[]
+
+  @@index([payeeWawuUserId])
+}
+
+/// INBOX-25. What one daily move took of one deduction. The move is smaller by
+/// exactly this. A move withdrawn before it was sent takes its takes with it
+/// (the deduction is owed again).
+model EarningDeductionTake {
+  id          String           @id @default(uuid())
+  deductionId String
+  deduction   EarningDeduction @relation(fields: [deductionId], references: [id], onDelete: Restrict)
+  moveId      String
+  move        EarningMove      @relation(fields: [moveId], references: [id], onDelete: Cascade)
+  amountKobo  BigInt
+  createdAt   DateTime         @default(now())
+
+  @@unique([deductionId, moveId])
+  @@index([moveId])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────

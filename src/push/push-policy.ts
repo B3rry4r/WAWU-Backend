@@ -60,6 +60,10 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   // covers it (it is about money the person already paid), so like the join
   // decisions it is always sent.
   community_pass_ending: 'send',
+  // INBOX-25 (R-71). A removed member's unused pass days landed in their
+  // wallet. It is money in, so the "Money in" switch mutes the push (see
+  // PUSH_ONLY_GATE); the list always carries it.
+  community_pass_refunded: 'send',
   // The state of the person's own account or a marketing send, with no switch
   // that is agreed to cover them. Held until the owner answers (G-265).
   paid_dm_warning: 'hold',
@@ -93,6 +97,7 @@ export const PUSH_ONLY_GATE: Partial<
   // followed by its correction, so the list is not gated; the phone does not
   // buzz for it when "Money in" is off.
   money_in_reversed: 'moneyIn',
+  community_pass_refunded: 'moneyIn',
 };
 
 /** The Z3 switch that mutes `kind` on a phone, if any. */

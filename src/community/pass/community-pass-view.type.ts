@@ -73,3 +73,22 @@ export interface CommunityPassPurchaseView {
   createdAt: string;
   paidAt: string | null;
 }
+
+/**
+ * `GET /communities/{id}/members/{userWawuId}/removal-quote`: what the host's
+ * remove sheet says the member gets back before the host confirms (INBOX-25,
+ * R-71). Made by the Hub, never by the app. Kobo. `refundKobo` is 0 when the
+ * member has no unused days (a pass that has ended, or none), and then the
+ * sheet says nothing about money. The refund is made again at the moment of
+ * removal, so a day that starts in between can make it one day smaller.
+ */
+export interface CommunityPassRemovalQuoteView {
+  communityId: string;
+  userWawuId: string;
+  /** What the member is paid back, in kobo, pro rata for the whole unused days. */
+  refundKobo: number;
+  /** The whole unused days it is figured on; a day that has started counts as used. */
+  unusedDays: number;
+  /** When the figure was made (ISO 8601). */
+  asOf: string;
+}

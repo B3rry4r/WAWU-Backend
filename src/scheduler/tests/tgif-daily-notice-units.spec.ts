@@ -243,10 +243,13 @@ describe('where the notice sits in the tables', () => {
     expect(SETTINGS_GATE.tgif_daily).toBe('tgifDaily');
     expect(pushGateFor('tgif_daily')).toBe('tgifDaily');
     // Merge of HOME-16 and WALLET-39: the push-only map also holds WALLET-39's
-    // correction of a money-in notice (the same pair push-policy.spec.ts pins).
+    // correction of a money-in notice, and INBOX-25 (R-71) adds the refund of a
+    // removed member's pass days, muted by "Money in" (the same entries
+    // push-policy.spec.ts pins).
     expect(PUSH_ONLY_GATE).toEqual({
       dm_received: 'dmReminders',
       money_in_reversed: 'moneyIn',
+      community_pass_refunded: 'moneyIn',
     });
   });
 });

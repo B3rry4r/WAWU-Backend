@@ -35,6 +35,7 @@ import { CommunityModule } from '../../community.module';
 import { CommunityService } from '../../community.service';
 import { CommunityRoomsService } from '../../rooms/community-rooms.service';
 import { CommunityPassModule } from '../community-pass.module';
+import { CommunityPassRefundService } from '../community-pass-refund.service';
 import { CommunityPassReminderService } from '../community-pass-reminder.service';
 import type {
   CommunityPassPurchaseView,
@@ -118,6 +119,7 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
   let payments: WalletPaymentService;
   let holds: WalletHoldService;
   let reminders: CommunityPassReminderService;
+  let refunds: CommunityPassRefundService;
   let rooms: CommunityRoomsService;
   let communities: CommunityService;
   const nuvion = new NuvionSeamStandIn();
@@ -260,6 +262,24 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
       },
     });
 
+  /**
+   * INBOX-25 (R-71): a removal pays the unused days back, and the first try
+   * runs beside the request. Waits until that refund is settled and returns
+   * it. A pass bought a moment ago has 29 of 30 days left: N1,933.33.
+   */
+  const REFUND_AFTER_BUY = 193_333n;
+  const paidBack = async (p: Person) => {
+    for (let i = 0; i < 100; i += 1) {
+      const row = await prisma.communityPassRefund.findFirstOrThrow({
+        where: { userWawuId: p.id },
+      });
+      if (row.status === 'refunded') return row;
+      await refunds.drive(row.id);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    throw new Error('the refund was not paid');
+  };
+
   /** Every account's ledger, summed, equals the stand-in's balance, WAWU's included. */
   async function expectLedgerMatchesNuvion(people: Person[]) {
     for (const p of people) {
@@ -346,6 +366,7 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
     payments = moduleRef.get(WalletPaymentService);
     holds = moduleRef.get(WalletHoldService);
     reminders = moduleRef.get(CommunityPassReminderService);
+    refunds = moduleRef.get(CommunityPassRefundService);
     rooms = moduleRef.get(CommunityRoomsService);
     communities = moduleRef.get(CommunityService);
     // WAWU's own money beyond what is held (its shares and fees).
@@ -870,7 +891,9 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
     expect(reasonOf(noPay)).toBe('target_not_payable');
     expect(String(body<unknown>(noPay).message)).not.toContain('—');
     expect(sendsFrom(member)).toHaveLength(debitsBefore);
-    expect(available(member)).toBe(balanceBefore);
+    // INBOX-25 (R-71): the removal paid the unused days back, and nothing else moved.
+    await paidBack(member);
+    expect(available(member)).toBe(balanceBefore + REFUND_AFTER_BUY);
     expect(await passRows(id, member)).toHaveLength(1);
     expect(
       body<CommunityPassView>(await get(member, `/communities/${id}/pass`))
@@ -896,10 +919,12 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
       member.id,
     );
     expect(approved.status).toBe('joined');
-    expect((await messages(member, id)).status).toBe(200);
-    // Nothing was refunded or charged along the way.
+    // INBOX-25 (R-71): the removal ended the pass it paid back, so being let
+    // back in is not enough to read; they buy a pass again.
+    expect((await messages(member, id)).status).toBe(403);
+    // Nothing was charged along the way, and the unused days came back once.
     expect(sendsFrom(member)).toHaveLength(debitsBefore);
-    expect(available(member)).toBe(balanceBefore);
+    expect(available(member)).toBe(balanceBefore + REFUND_AFTER_BUY);
     expect(await passRows(id, member)).toHaveLength(1);
   });
 
@@ -946,6 +971,11 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
     expect(
       (await communities.approveJoinRequest(id, host.id, member.id)).status,
     ).toBe('joined');
+    // INBOX-25 (R-71): the removal paid the unused days back and ended that
+    // pass; let back in, they buy a new one to read.
+    await paidBack(member);
+    expect((await messages(member, id)).status).toBe(403);
+    await pay(member, id);
     expect((await messages(member, id)).status).toBe(200);
 
     // A member who was never removed still leaves and comes back on their pass.
@@ -957,7 +987,9 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
       .post(`${API}/communities/${id}/join`)
       .set('Authorization', member.auth);
     expect(body<{ status: string }>(rejoined).data!.status).toBe('joined');
-    expect(available(member)).toBe(balanceBefore);
+    expect(available(member)).toBe(
+      balanceBefore + REFUND_AFTER_BUY - BigInt(PRICE + NUVION_FEE),
+    );
   });
 
   it('a renewal paid while the host removes the member ends removed, and every naira comes back (round 3)', async () => {
@@ -975,15 +1007,18 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
     const res = await buy(member, id, q);
     const pending = body<CommunityPassPurchaseView>(res).data!;
     expect(pending.status).toBe('pending');
-    // The host removes them before it settles.
-    await communities.removeMember(id, host.id, member.id);
-    nuvion.settle(pending.payment.reference, 'successful');
+    // The host removes them before it settles (the refund of the first pass's
+    // unused days is a new transfer, and Nuvion finishes it at once).
     nuvion.mode = 'successful';
     nuvion.feeKobo = () => BigInt(NUVION_FEE);
-    for (let i = 0; i < 4; i += 1) {
+    await communities.removeMember(id, host.id, member.id);
+    nuvion.settle(pending.payment.reference, 'successful');
+    // INBOX-25 (R-71): the removal also paid back the first pass's unused days.
+    for (let i = 0; i < 6; i += 1) {
       await payments.sweep(later());
       await holds.sweep(later());
-      if (available(member) === balanceAfterFirst) break;
+      await refunds.sweep(later());
+      if (available(member) === balanceAfterFirst + REFUND_AFTER_BUY) break;
     }
 
     // Still removed: the payment did not admit them and gave no second pass.
@@ -996,9 +1031,10 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
     expect(row.joinedAt).toBeNull();
     expect((await messages(member, id)).status).toBe(403);
     expect(await passRows(id, member)).toHaveLength(passesAfterFirst);
-    // The renewal is paid back in full, the charge included; the Hub agrees
-    // with the stand-in; the host earns nothing from it.
-    expect(available(member)).toBe(balanceAfterFirst);
+    // The renewal is paid back in full, the charge included (and the first
+    // pass's unused days with it); the Hub agrees with the stand-in; the host
+    // earns nothing from the renewal.
+    expect(available(member)).toBe(balanceAfterFirst + REFUND_AFTER_BUY);
     const view = body<CommunityPassPurchaseView>(
       await get(member, `/communities/${id}/pass/${pending.id}`),
     ).data!;
@@ -1011,9 +1047,10 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
       }),
     ).toBe(0);
     await expectLedgerMatchesNuvion([member]);
-    // The host lets them back, and the days they paid for first are still there.
+    // The host lets them back. INBOX-25 (R-71): the days they paid for first
+    // were paid back with the removal, so the pass has ended and they buy again.
     await communities.approveJoinRequest(id, host.id, member.id);
-    expect((await messages(member, id)).status).toBe(200);
+    expect((await messages(member, id)).status).toBe(403);
   });
 
   it('leaving an open room or an older private room is exactly what it was: the row goes', async () => {

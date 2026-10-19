@@ -726,6 +726,34 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'payeeWawuUserId',
     disposition: 'COUNTERPARTY',
   },
+  // A removed member's refund (INBOX-25, R-71): WAWU's own record of money it
+  // paid out of its account for the unused days of a pass, and it names the
+  // member it was paid to and the host who removed them. Kept on both sides
+  // for the ledger: a deleted member's or host's account takes no row with it,
+  // and the amount, the reference and the provider's answer stay for the
+  // nightly check. A refund still waiting for a wallet when its member deletes
+  // the account stays in WAWU's account with no one to land it to, the same
+  // as an unlanded earning above.
+  {
+    model: 'CommunityPassRefund',
+    column: 'userWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  {
+    model: 'CommunityPassRefund',
+    column: 'hostWawuId',
+    disposition: 'COUNTERPARTY',
+  },
+  // What a host owes back from their earnings for that refund (INBOX-25,
+  // R-71, their 85% of the days refunded). Kept when the host's account goes:
+  // it is the record of what was taken back from their earnings (the takes
+  // hang off it), and what is still open when they go is collected from
+  // nothing: WAWU bears what is left, and account deletion does not wait on it.
+  {
+    model: 'EarningDeduction',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
 
   // ── admin audit trail, kept on purpose ──────────────────────────────────
   // The record that this account's deletion was scheduled and ran (SETTINGS-06):
