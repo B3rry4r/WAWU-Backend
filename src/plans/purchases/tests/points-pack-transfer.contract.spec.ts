@@ -22,6 +22,7 @@ import {
 import { PlanTransferService } from '../plan-transfer.service';
 import {
   EXPIRED_MESSAGE,
+  ORDER_STATUS,
   PAID_ANOTHER_WAY_MESSAGE,
 } from '../plan-transfer-order';
 import type {
@@ -332,7 +333,26 @@ describe('Buy a points pack by bank transfer (POINTS-02), Nuvion stood in', () =
     const p = await person(0);
     const placed = await order(p);
     const later = new Date(Date.now() + 25 * 3_600_000);
-    expect((await transfers.sweep(later)).expired).toBe(1);
+    // The sweep expires every lapsed waiting order in the database, and the
+    // deploy runs every spec on one database, so orders other specs left
+    // waiting lapse with this one. Read who is due before it runs, then count
+    // only what it did to those: this spec's order is the one it expired, and
+    // the report counts exactly the due orders that are now expired (on an
+    // empty database, that is 1).
+    const due = (
+      await h.prisma.planTransferOrder.findMany({
+        where: { status: ORDER_STATUS.awaiting, expiresAt: { lte: later } },
+        select: { id: true },
+      })
+    ).map((o) => o.id);
+    expect(due).toContain(placed.id);
+    const report = await transfers.sweep(later);
+    const expiredAmongDue = (over: { wawuUserId?: string } = {}) =>
+      h.prisma.planTransferOrder.count({
+        where: { id: { in: due }, status: ORDER_STATUS.expired, ...over },
+      });
+    expect(await expiredAmongDue({ wawuUserId: p.id })).toBe(1);
+    expect(report.expired).toBe(await expiredAmongDue());
     expect(await statusOf(p, placed.id)).toMatchObject({
       status: 'expired',
       statusMessage: EXPIRED_MESSAGE,
