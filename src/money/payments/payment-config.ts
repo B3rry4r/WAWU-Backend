@@ -30,7 +30,49 @@ export const PAYMENT_CONFIG_KEYS = {
   idempotencyKeyHours: 'IDEMPOTENCY_KEY_HOURS',
   reviewAfterHours: 'PAYMENT_REVIEW_AFTER_HOURS',
   chargeReviewAboveKobo: 'PAYMENT_CHARGE_REVIEW_ABOVE_KOBO',
+  earningsSweepStart: 'EARNINGS_SWEEP_START',
+  earningsMoveMinKobo: 'EARNINGS_MOVE_MIN_KOBO',
+  earningsRefusedReviewAfterHours: 'EARNINGS_REFUSED_REVIEW_AFTER_HOURS',
 } as const;
+
+/**
+ * R-55 (owner, 16 Oct 2026): a creator's earnings go to their wallet once a
+ * day in one transfer; a total under N200 waits for the next day. Both
+ * figures are settings (not provisional: the owner ruled them).
+ */
+export const DEFAULT_EARNINGS_MOVE_MIN_KOBO = 20_000;
+/** R-55: an earning the wallet refuses goes to a person 72 hours after its FIRST refusal. */
+export const DEFAULT_EARNINGS_REFUSED_REVIEW_AFTER_HOURS = 72;
+
+/**
+ * A moment with its zone, as an operator writes it: `2026-10-25T09:00:00Z` or
+ * `2026-10-25T10:00:00+01:00`. No zone is refused, because a time read in the
+ * server's own zone would mean a different moment on each machine.
+ */
+const ISO_WITH_ZONE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * Whether the text names a moment that exists as written: `new Date` rolls
+ * `2026-02-31T10:00:00Z` over to 3 March and `T24:00:00Z` to the next day, and
+ * a mistyped start would then move silently. The day must be a real calendar
+ * day and the clock 00:00 to 23:59:59.
+ */
+function isRealMoment(text: string): boolean {
+  const m = ISO_WITH_ZONE.exec(text);
+  if (!m) return false;
+  const [year, month, day, hour, minute] = m.slice(1, 6).map(Number);
+  const second = m[6] === undefined ? 0 : Number(m[6]);
+  if (hour > 23 || minute > 59 || second > 59) return false;
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  // Years 0 to 99 are read as 1900 to 1999 by Date.UTC: set the year again.
+  calendar.setUTCFullYear(year);
+  return (
+    calendar.getUTCFullYear() === year &&
+    calendar.getUTCMonth() === month - 1 &&
+    calendar.getUTCDate() === day
+  );
+}
 
 /**
  * PROVISIONAL(PAYMENT-REVIEW-AFTER-HOURS, owner=YOU, why=no ruling names how long a payment whose outcome Fintava has not settled is asked about before a person looks at it)
@@ -77,8 +119,77 @@ export class PaymentSettings {
   readonly idempotencyKeyHours: number;
   readonly reviewAfterHours: number;
   readonly chargeReviewAboveKobo: number;
+  /**
+   * PROVISIONAL(EARNINGS-SWEEP-START, owner=YOU, why=the lead's ruling of 17 Oct 2026 is a default the owner may override: the sweep that lands a creator's 85% pays only sales made on or after a start time, so sales unsettled before this code ran are never paid by surprise)
+   *
+   * The moment from which the earnings sweep pays sales (WALLET-16): null
+   * means the moment the code first ran in this environment, which the
+   * database holds (`EarningSweepStart`, written by its migration). Set it
+   * (EARNINGS_SWEEP_START, ISO 8601 with a zone) to pay sales from an earlier
+   * time, or to hold the sweep back to a later one.
+   */
+  readonly earningsSweepStart: Date | null;
+  /**
+   * The least a creator's day total may be for the day's move to be made
+   * (R-55), in kobo: 20000 (N200). A total under it waits and is added to the
+   * next day's. EARNINGS_MOVE_MIN_KOBO, 0 to 100000000.
+   */
+  readonly earningsMoveMinKobo: number;
+  /**
+   * Hours from the FIRST refusal of a creator's move by the wallet to a
+   * person looking at it (R-55): 72. Later refusals do not restart the count.
+   * EARNINGS_REFUSED_REVIEW_AFTER_HOURS, 1 to 720.
+   */
+  readonly earningsRefusedReviewAfterHours: number;
 
   constructor(config: ConfigService) {
+    const startKey = PAYMENT_CONFIG_KEYS.earningsSweepStart;
+    const startRaw = config.get<string>(startKey)?.trim();
+    if (startRaw) {
+      const at = isRealMoment(startRaw) ? new Date(startRaw) : null;
+      if (at === null || Number.isNaN(at.getTime())) {
+        throw new FeeConfigError(
+          `${startKey} must be a moment with its zone, like 2026-10-25T09:00:00Z.`,
+        );
+      }
+      this.earningsSweepStart = at;
+    } else {
+      this.earningsSweepStart = null;
+    }
+    const floor = PAYMENT_CONFIG_KEYS.earningsMoveMinKobo;
+    try {
+      this.earningsMoveMinKobo = koboSetting(
+        config.get<string>(floor),
+        floor,
+        DEFAULT_EARNINGS_MOVE_MIN_KOBO,
+        0,
+        100_000_000,
+      );
+    } catch (e) {
+      if (e instanceof FeeConfigError) {
+        throw new FeeConfigError(
+          `${floor} must be a whole number of kobo from 0 to 100000000.`,
+        );
+      }
+      throw e;
+    }
+    const refused = PAYMENT_CONFIG_KEYS.earningsRefusedReviewAfterHours;
+    try {
+      this.earningsRefusedReviewAfterHours = koboSetting(
+        config.get<string>(refused),
+        refused,
+        DEFAULT_EARNINGS_REFUSED_REVIEW_AFTER_HOURS,
+        1,
+        720,
+      );
+    } catch (e) {
+      if (e instanceof FeeConfigError) {
+        throw new FeeConfigError(
+          `${refused} must be a whole number of hours from 1 to 720.`,
+        );
+      }
+      throw e;
+    }
     const review = PAYMENT_CONFIG_KEYS.reviewAfterHours;
     try {
       this.reviewAfterHours = koboSetting(

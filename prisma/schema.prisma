@@ -1140,6 +1140,34 @@ model DirectMessage {
   @@index([refundStatus, refundLockedAt])
 }
 
+/// A PAID QUESTION NOT PAID FOR YET (task INBOX-17, R-19).
+///
+/// A fan writes a question, the server prices it (the creator's price, the
+/// provider's charge on top) and the fan pays it from the wallet. The words
+/// have to wait somewhere in between, and the creator's inbox must not show a
+/// question nobody paid for, so they wait here and not in `DirectMessage`.
+/// `id` is the id of the `DirectMessage` the payment will make and the
+/// payment's `targetId` (kind `paid_dm`). The row is never changed; the
+/// creator's price and window are read again when the payment is claimed, the
+/// window snapshotted here is the one the fan was shown. An abandoned draft
+/// (no payment ever made for it) is removed by the sweep after a fortnight.
+model PaidDmDraft {
+  id                  String   @id @default(uuid())
+  senderWawuId        String
+  creatorWawuId       String
+  text                String
+  /// How long the creator has to reply, in hours, as the fan was shown it.
+  responseWindowHours Int
+  /// The optional Idempotency-Key of the request that made the draft: one
+  /// tap, one draft.
+  requestKey          String?
+  createdAt           DateTime @default(now())
+
+  @@unique([senderWawuId, requestKey])
+  @@index([senderWawuId, creatorWawuId])
+  @@index([createdAt])
+}
+
 /// One creator reply bubble on a paid question (task INBOX-08). A question
 /// may carry several while its window is open. The first is also written to
 /// DirectMessage.responseText so the web's reading of that column is unchanged.
@@ -1449,6 +1477,8 @@ model CreditSpendEarning {
   /// implicit m2m join table would be three tables of machinery for that.
   lotIds            String[]
   earnedAt          DateTime    @default(now())
+  /// The host's share as an earning on its way to their wallet (WALLET-17).
+  settlement        EarningSettlement?
 
   @@index([creatorWawuId])
   @@index([creatorWawuId, earnedAt])
@@ -4994,6 +5024,8 @@ model WalletPayment {
   updatedAt             DateTime  @updatedAt
   /// Set for a held kind (paid DM, ticket, bill) once the payment completes (MONEY-18).
   hold                  WalletHold?
+  /// The payee's 85% of an ordinary sale, owed to their wallet until it lands (WALLET-16).
+  earning               EarningSettlement?
 
   @@index([payerWawuUserId, createdAt])
   @@index([status, createdAt])
@@ -5180,6 +5212,168 @@ model WalletTransfer {
   @@index([payerWawuUserId, createdAt])
   @@index([recipientWawuUserId, createdAt])
   @@index([status, reviewSince, nextCheckAt, id])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// A SALE'S 85% LANDING IN THE PAYEE'S WALLET (task WALLET-16, R-11)
+///
+/// An ordinary sale (an unlock, a tip, a legal fee, school fees: any kind that
+/// is not held) is paid into WAWU's own account at the wallet provider
+/// (WalletPayment, MONEY-17), and the payee's 85% (R-5) then has to reach the
+/// payee's wallet. One row per such payment, made when the payment is
+/// finished (completed, delivered, not in review) and owed until the provider
+/// CONFIRMS the move: `owed`, then `landed`. A held kind never has one: the
+/// hold's release lands its share (MONEY-18), and the database refuses a row
+/// for a payment that has a hold, so the same 85% cannot land twice.
+///
+/// A person with no wallet yet keeps earning: the row waits (`waiting:
+/// payee_wallet`) and lands within a minute of the wallet opening. The
+/// provider's balance is still the only balance; nothing here is added up
+/// into one (the earnings read says "earned" and "waiting", never "balance").
+///
+/// Exactly once, whoever asks: the payment id is unique, and so is the
+/// reference the provider sees (`wawu-earn-<payment id>`, one per earning).
+/// The move is handed over by a lease (`sentAt`) only one caller wins; a lost
+/// answer is found again by that reference and never sent under another. Only
+/// the provider's own record that a move FAILED starts a new try, under a new
+/// reference (`attempt`). `amountKobo` is the payment's `payeeShareKobo`
+/// frozen when the row is made. Every figure is integer kobo.
+/// ─────────────────────────────────────────────────────────────────────────
+model EarningSettlement {
+  id                       String        @id @default(uuid())
+  /// The sale this earning is the payee's share of. Null for a community host's
+  /// share of spent credits (WALLET-17): exactly one of `paymentId` and
+  /// `creditSpendEarningId` is set.
+  paymentId                String?       @unique
+  payment                  WalletPayment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  /// The host's share of one spent credit (CreditSpendEarning.hostShareKobo),
+  /// paid once; it travels in the host's daily move like a sale's share.
+  creditSpendEarningId     String?       @unique
+  creditSpendEarning       CreditSpendEarning? @relation(fields: [creditSpendEarningId], references: [id], onDelete: Restrict)
+  /// Who is owed it. COUNTERPARTY at account deletion: the payer's record survives.
+  payeeWawuUserId          String
+  /// What was paid for: the payment's kind, its target and its title.
+  kind                     String
+  targetId                 String
+  title                    String
+  /// When the sale completed: the month an earning counts in.
+  earnedAt                 DateTime
+  /// What moves out of WAWU's account to the payee: the payee's 85%. Positive.
+  amountKobo               BigInt
+  /// WAWU's own account at the provider the sale was paid into.
+  merchantAccountNumber    String
+  /// The wallet provider that took the sale (the payment's own).
+  provider                 String        @default("fintava")
+  /// owed or landed.
+  status                   String        @default("owed")
+  /// When the provider confirmed the move into the payee's wallet.
+  settledAt                DateTime?
+  /// OUR reference at the provider for the current try: `wawu-earn-<payment id>`,
+  /// with the try's number added after a proven failure.
+  customerReference        String        @unique
+  attempt                  Int           @default(1)
+  destinationAccountNumber String?
+  /// When the current try was handed to the provider. Set means "a record may
+  /// exist at the provider": it is asked, never sent again, until it says.
+  sentAt                   DateTime?
+  /// The provider's own charge on the move (WAWU's, R-31); null when its record did not say.
+  providerFeeKobo          BigInt?
+  /// The schedule: the next try or the next question to the provider. `waiting`
+  /// says why nothing has moved (payee_wallet, recipient_frozen, funds,
+  /// provider, not_supported, refused).
+  nextAttemptAt            DateTime?
+  attempts                 Int           @default(0)
+  checks                   Int           @default(0)
+  waiting                  String?
+  /// A person has to look (no answer past the review bound, a reversed move,
+  /// an amount that is not the share). Out of the sweep; the money stays put.
+  reviewSince              DateTime?
+  discrepancy              String?
+  /// The daily move this earning travels in (R-55): null until the creator's
+  /// move for the day takes it. The transfer, its reference and its state are
+  /// the move's; this row keeps what was earned, and lands with the move.
+  moveId                   String?
+  move                     EarningMove?  @relation(fields: [moveId], references: [id])
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+
+  @@index([status, reviewSince, nextAttemptAt])
+  @@index([payeeWawuUserId, earnedAt])
+  @@index([moveId])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// ONE MOVE A DAY PER CREATOR (task WALLET-16 round 3, R-55, owner 16 Oct 2026)
+///
+/// A creator's earnings go to their wallet once a day, in ONE transfer. The
+/// move takes every earning of the creator that is owed and not yet in a move
+/// (`EarningSettlement.moveId` null) when the day's move is made, if their
+/// total is at least the floor (EARNINGS_MOVE_MIN_KOBO, 20000 kobo = N200);
+/// under it they wait and are added to the next day's. `dayKey` is the
+/// Africa/Lagos date the move was made on; (payee, dayKey) is unique, so two
+/// servers on one day make one move, and its reference names the creator and
+/// the day, so the provider sees it once. The earnings in a move never change
+/// after it is made, except that an earning whose sale stopped being a
+/// finished one leaves it before anything is sent (the amount and the
+/// reference then change with it).
+///
+/// An earning the wallet REFUSES (waiting `refused`) is put in front of a
+/// person 72 hours after the FIRST refusal (`firstRefusedAt`, EARNINGS_
+/// REFUSED_REVIEW_AFTER_HOURS): later refusals do not move that time, and the
+/// review (`reviewSince`) is set once.
+model EarningMove {
+  id                       String              @id @default(uuid())
+  payeeWawuUserId          String
+  /// YYYY-MM-DD in Africa/Lagos: the day this move was made on.
+  dayKey                   String
+  /// The wallet provider that took the sales (their own).
+  provider                 String              @default("fintava")
+  /// WAWU's own account at the provider the sales were paid into.
+  merchantAccountNumber    String
+  /// The sum of the earnings in it, in kobo. Positive.
+  amountKobo               BigInt
+  /// How many earnings it holds.
+  earnings                 Int
+  /// owed or landed.
+  status                   String              @default("owed")
+  settledAt                DateTime?
+  /// OUR reference at the provider: names the creator and the day, with the
+  /// try's number added after a proven failure.
+  customerReference        String              @unique
+  attempt                  Int                 @default(1)
+  destinationAccountNumber String?
+  sentAt                   DateTime?
+  providerFeeKobo          BigInt?
+  nextAttemptAt            DateTime?
+  attempts                 Int                 @default(0)
+  checks                   Int                 @default(0)
+  waiting                  String?
+  /// When the wallet FIRST refused this move. Set once; never moved.
+  firstRefusedAt           DateTime?
+  /// A person has to look. Set once.
+  reviewSince              DateTime?
+  discrepancy              String?
+  createdAt                DateTime            @default(now())
+  updatedAt                DateTime            @updatedAt
+  members                  EarningSettlement[]
+
+  @@unique([payeeWawuUserId, dayKey])
+  @@index([status, reviewSince, nextAttemptAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// WHEN THE EARNINGS SWEEP STARTS PAYING (task WALLET-16, lead ruling 17 Oct 2026)
+///
+/// One row (id 1). The earnings sweep pays only sales completed on or after
+/// `startedAt`; an older sale that was never settled is never paid by the
+/// sweep and is listed for an admin to look at. The row is written by the
+/// migration, so `startedAt` is the moment this code reached the environment
+/// (the default); the setting EARNINGS_SWEEP_START, when set, takes the place
+/// of it. Never changed by code once written.
+model EarningSweepStart {
+  id        Int      @id @default(1)
+  startedAt DateTime
+  createdAt DateTime @default(now())
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
@@ -6129,6 +6323,17 @@ model AccountDeletion {
   /// leaves it alone). Past: when the last pass finished with it, so the pass
   /// takes the rows checked longest ago first. Null: never claimed.
   reconcileClaimedUntil DateTime?
+  /// SETTINGS-08 (G-SETTINGS-08-1). When WAWU ID confirmed the Hub's
+  /// mark-deletion call for this deletion (the call carries `purgeAfter`).
+  /// Null: not confirmed yet. The hourly pass asks again (after
+  /// `identityMarkNextAt`, with a wait that grows with `identityMarkAttempts`)
+  /// and the purge does not start while this is null. Cleared when a new
+  /// request takes the row over.
+  identityMarkedAt DateTime?
+  /// Failed mark-deletion calls in a row, and the earliest the next one is
+  /// made (a pass also sets it a few minutes ahead while it holds the row).
+  identityMarkAttempts Int @default(0)
+  identityMarkNextAt DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

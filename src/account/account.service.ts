@@ -1,5 +1,4 @@
 import {
-  Inject,
   Injectable,
   Logger,
   ServiceUnavailableException,
@@ -13,16 +12,13 @@ import {
   DELETION_GRACE_MS,
   FREEZING_STALE_MS,
 } from './account-deletion-config';
+import { AccountDeletionIdentityService } from './account-deletion-identity.service';
 import {
   AccountDeletionBlockedError,
   AccountDeletionMoneyService,
   type ReconcileOutcome,
 } from './account-deletion-money.service';
 import type { CancelDeletionResponseDto } from './dto/account-deletion.dto';
-import {
-  WAWU_ID_ACCOUNT_GATEWAY,
-  type WawuIdAccountGateway,
-} from './wawu-id-account.gateway';
 
 /** What a cancel is told once the purge has started. No em-dash. */
 export const DELETION_IN_PROGRESS_MESSAGE =
@@ -127,11 +123,10 @@ export class AccountService {
   private readonly logger = new Logger(AccountService.name);
 
   constructor(
-    @Inject(WAWU_ID_ACCOUNT_GATEWAY)
-    private readonly wawuIdGateway: WawuIdAccountGateway,
     private readonly prisma: PrismaService,
     private readonly pushTokens: PushTokenService,
     private readonly money: AccountDeletionMoneyService,
+    private readonly identity: AccountDeletionIdentityService,
   ) {}
 
   async deleteAccount(wawuUserId: string): Promise<AccountDeletionResponse> {
@@ -299,7 +294,7 @@ export class AccountService {
       throw new ServiceUnavailableException(CHANGED_MESSAGE);
     }
     if (promoted.outcome === 'scheduled') {
-      await this.stopPushAndTell(wawuUserId);
+      await this.stopPushAndTell(wawuUserId, promoted.purgeAfter);
     }
     return { deletionScheduledAt: promoted.purgeAfter.toISOString() };
   }
@@ -482,6 +477,10 @@ export class AccountService {
         purgeBlockedBy: null,
         purgeAttempts: 0,
         purgeNote: null,
+        // A new deletion has to be confirmed by WAWU ID on its own.
+        identityMarkedAt: null,
+        identityMarkAttempts: 0,
+        identityMarkNextAt: null,
       },
     });
     return taken.count === 1;
@@ -557,7 +556,7 @@ export class AccountService {
       return true;
     });
     if (inForce) {
-      await this.stopPushAndTell(wawuUserId);
+      await this.stopPushAndTell(wawuUserId, row.purgeAfter);
       await this.reassertFreeze(row);
     }
     return { deletionScheduledAt: row.purgeAfter.toISOString() };
@@ -715,7 +714,10 @@ export class AccountService {
     }
   }
 
-  private async stopPushAndTell(wawuUserId: string): Promise<void> {
+  private async stopPushAndTell(
+    wawuUserId: string,
+    purgeAfter: Date,
+  ): Promise<void> {
     // INBOX-03 (lead ruling, 7 Oct 2026): no phone push to an account whose
     // deletion is scheduled. Its push tokens and queued pushes are deleted
     // now, a token it registers later is not stored, and the sender skips it.
@@ -727,20 +729,10 @@ export class AccountService {
         `Could not stop phone push for deleted account ${wawuUserId}: ${(error as Error).message}`,
       );
     }
-    await this.tellWawuId(wawuUserId);
-  }
-
-  /** Starts (or restarts) WAWU ID's own grace period. Loud, not fatal. */
-  private async tellWawuId(wawuUserId: string): Promise<void> {
-    try {
-      await this.wawuIdGateway.scheduleAccountDeletion(wawuUserId);
-    } catch (error) {
-      // Never silently swallow: log loudly. The Hub's own record of the
-      // deletion stands even if WAWU ID's call fails, and asking again calls
-      // WAWU ID again.
-      this.logger.error(
-        `WAWU ID account deletion orchestration failed for ${wawuUserId}: ${(error as Error).message}`,
-      );
-    }
+    // SETTINGS-08: WAWU ID is told with the Hub's own end date. Loud, not
+    // fatal: if it does not answer, the Hub's record of the deletion stands,
+    // the call is asked again (the hourly pass, with a growing wait) and the
+    // purge does not start until WAWU ID has confirmed.
+    await this.identity.tell(wawuUserId, purgeAfter);
   }
 }

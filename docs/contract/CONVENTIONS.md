@@ -248,6 +248,7 @@ Every refusal is the envelope this backend already answers with
 | `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
 | `payment_in_progress` | 409 | a payment for this item by this person is still being confirmed (or is under review); a second one is not taken, under any Idempotency-Key (MONEY-17) | `paymentId` |
 | `event_order_limit` | 409 | the buyer already holds the most open paid ticket orders one event allows (`events.open_orders_per_buyer` in the admin settings, launch value 10; an order that failed or was refunded does not count, a free order is never counted): refused on `POST /events/{id}/orders/wallet` when they are already at it, and again on `POST /events/orders/wallet/pay` inside the payment's claim, before anything is recorded or sent. "You have reached the order limit for this event." (EVENTS-13) | |
+| `question_already_waiting` | 409 | the fan already has a paid question waiting on this creator (asked and not yet answered or refunded, or a payment for another still being confirmed): refused on `POST /dm/{creatorWawuId}/send/wallet` and again on `POST /dm/send/wallet/pay` inside the payment's claim. "You can send once they reply." (INBOX-17, G-75) | |
 | `statement_rate_limited` | 429 | the person has asked for 5 statements in the last minute or 30 in the last hour (`STATEMENT_RATE_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-27) | `retryAfterSeconds` |
 | `statement_busy` | 503 | two statements are already being built and no place came free within 5 s (`STATEMENT_CONCURRENCY`, PROVISIONAL) (WALLET-27) | `retryAfterSeconds` |
 | `email_not_verified` | 409 | the account has no email address that WAWU ID says is confirmed (the token's `emailVerified` is not `true`, or its `email` is empty or not an address), so a statement is not emailed (WALLET-35); never counted against the statement limit | |
@@ -1724,7 +1725,19 @@ Fintava or on Nuvion, whichever the server runs.
   paid for is delivered (the feature's record that the buyer owns it is then
   in place), never at the moment the provider confirms. The claim is taken before
   the feature's "already owned" rule is read for the last time, and given
-  back (nothing sent, failed, the key freed) when that now refuses.
+  back (nothing sent, failed, the key freed) when that now refuses. The
+  quote (`GET /money/payments/quote`) of a SCHOOL FEE answers the same `409
+  payment_in_progress` with `reason.paymentId` when the SAME payer holds the
+  open payment for the SAME target (FIX-58), so a second phone is never
+  shown a Pay the PIN tap would refuse; it is read after the item (an item
+  gone or not payable is that answer first) and before anything is priced.
+  Every other kind is quoted as before, open payment or not (the 409 meets
+  the payer at the PIN tap); a kind joins `QUOTE_REFUSES_OPEN_KINDS`
+  (`src/money/payments/wallet-payment.service.ts`) when its app caller reads
+  the 409 at the quote. Another person's open payment, or this payer's for
+  another item, changes nothing. The routes of the features that quote
+  through the same service (plans, points packs, bills, credit packs, event
+  orders) are unchanged.
 - **Before money moves**, in order, none of which stores anything: the
   wallet gate, the Idempotency-Key, the PIN, the body, the target, the
   quote, the merchant cap (`amount_out_of_range`), an open payment for the
@@ -1739,7 +1752,8 @@ Fintava or on Nuvion, whichever the server runs.
 - **The split** is recorded on the payment (`WalletPayment`), of the price
   only: the payee's 85% rounded down to the kobo, WAWU's 15% the rest (R-5;
   ₦1,000 is ₦850 and ₦150, ₦999.99 is ₦849.99 and ₦150.00). No payee: all
-  of it is WAWU's. Landing the 85% in the payee's wallet is WALLET-16's.
+  of it is WAWU's. Landing the 85% in the payee's wallet is WALLET-16's
+  (section 19).
   Deleting the payer's account keeps the payment (the payee's share may be
   unpaid) with the payer side set to null (`ANONYMISED` in the account data
   map).
@@ -2169,8 +2183,19 @@ added up into one.
     (a bill) or a share under a kobo nothing moves and the hold is over.
     The payment's `payeeSettledAt` is set when it is paid, so WALLET-16 never
     lands the same share again (WALLET-16 skips a payment that has a hold).
+    **Asked with `asEarning`** (a paid question, an event ticket; R-55, lead
+    ruling 17 Oct 2026) the share is not a transfer of its own: the release is
+    one database write that makes the hold `released` (no `transferKobo`, no
+    reference) and makes the payee's `EarningSettlement` for the payment, which
+    goes to their wallet in their ONE move a day with their other earnings
+    (section 26); `payeeSettledAt` is set when that move lands. The money stays
+    in WAWU's account until then (R-19).
   - `refund(...)`: the **price** moves back to the payer's wallet. The
-    provider's charge on the original payment is not returned (R-10).
+    provider's charge on the original payment is not returned (R-10), unless
+    the owning feature asks `returnCharge` because the payer did not cause the
+    refund (a lapsed paid question, a tip, unlock or legal fee that could not
+    be delivered, a called-off event, a failed bill): every naira comes back
+    and WAWU bears the charge of the refund transfer (lead ruling 17 Oct 2026).
   - The provider's charge on either move is WAWU's, paid from its 15% (R-31):
     the person receives the whole figure. It is recorded on the hold
     (`providerFeeKobo`) and on the merchant-side ledger row.
@@ -2238,7 +2263,10 @@ added up into one.
     (section 14) read the flag nowhere: they keep treating a lost write as an
     unknown outcome.
   - `refused`: the provider refused and nothing moved; retried under the same
-    reference, and a person looks past the review bound.
+    reference, and a person looks past the review bound (`PAYMENT_REVIEW_AFTER_HOURS`,
+    counted from when the release or refund was asked for): the first refusal
+    at or after it sends the hold to review. A frozen wallet, a missing wallet
+    and an unreachable provider have no such bound.
   Nothing is refunded because a release is stuck, or the other way round.
 - **Limits.** A move above the cap on one move through WAWU's account
   (`MERCHANT_MAX_PER_TXN_KOBO`, Fintava) is refused, never split: review. The
@@ -2875,7 +2903,8 @@ days; signing in during them cancels it (WAWU ID, SETTINGS-08).
   - `open_hold`: a held payment (paid DM, ticket, bill) where the person is
     the payer or the payee (R-19). `reason.openHolds` counts them.
   - `waiting_earnings`: a completed sale whose 85% has not reached their
-    wallet (R-11, `WalletPayment.payeeSettledAt` unset, no hold).
+    wallet (R-11, `WalletPayment.payeeSettledAt` unset, no open hold), or a
+    community host's share of spent credits still owed (WALLET-17).
     `reason.waitingEarnings` counts them. A person with no wallet can have
     these.
   - `payment_in_progress`: a payment of theirs with no final answer.
@@ -2950,3 +2979,188 @@ days; signing in during them cancels it (WAWU ID, SETTINGS-08).
   text). Pieces with only a pending, failed or tip purchase are stripped to
   "Removed content" and re-keyed to `deleted-account` too. `AccountDeletion.purgeNote`
   says how many pieces were kept this way.
+
+## 26. Earnings land in the wallet by themselves (WALLET-16)
+
+R-11: a sale's 85% reaches the payee's wallet without anyone tapping anything,
+and a creator without a wallet keeps earning: the money waits and is moved the
+day they open one. R-55 (owner, 16 Oct 2026): a creator's earnings go to their
+wallet ONCE A DAY, in one transfer per creator, and a day's total under N200
+waits for the next day (the rules are in the bullets below: "The move",
+"One transfer a day" and "A refusal gets a person after 72 hours"). Section 18 does this for a held kind (the hold's
+release); this section does it for every other kind with a payee (an unlock, a
+tip, a legal fee, school fees). The provider's balance is still the only
+balance (MONEY-11): nothing here is added up into one, and the routes say
+"earned" and "waiting", never "balance".
+
+- **What an earning is.** The payee's 85% (R-5, rounded down to the kobo, as
+  recorded on the payment: `WalletPayment.payeeShareKobo`) of a finished sale.
+  An ordinary sale is finished when its payment is `completed`, what was paid
+  for is delivered (or has nothing to deliver: `openKey` is given up, section
+  14) and neither `reviewSince` nor `chargeReviewSince` is set; a delivery or a
+  charge in question waits for a person, and its earning with it. A held kind
+  is earned once the owning feature has RELEASED its hold to the payee
+  (section 18; earned at once, `waiting` until the provider confirmed the
+  move); a hold nobody has decided is `held` (money paid, not earned), a
+  refunded one is the payer's. WAWU's own sales (credits, ticks, bills: no payee), a share under a
+  kobo, and the web's Flutterwave sales (`GET /content/mine/earnings`, which is
+  unchanged) are not earnings here.
+- **Routes** (`src/money/earnings/`, `no-store`, from our own records of the
+  sales: they never call the provider, so neither answers
+  `provider_unreachable`). **Not behind the wallet gate**: a creator with no
+  wallet reads them (no `409 wallet_not_open`), because that is the person who
+  has to see the money waiting. Any signed-in person reads their own and only
+  their own; a person with no sales gets zeros.
+  - `GET /money/earnings?month=YYYY-MM` (`EarningsView`): `allTime` and
+    `thisMonth` (each `earnedKobo`, `sales` and `streams`, one entry per kind
+    sold, largest first; the streams add up to `earnedKobo` exactly), `month`
+    (YYYY-MM in Africa/Lagos time, the current month unless asked), `waiting`
+    (`count`, `amountKobo`: earned and not in the wallet yet, part of `allTime`),
+    `held` (paid for, not earned yet) and `walletOpen` (the caller has a wallet
+    of the provider this server runs; false with money waiting is "Open your
+    wallet" on W39). Every figure comes from one statement, so they always agree.
+  - `GET /money/earnings/content?month=&cursor=&limit=` (`EarningContentPage`):
+    that month piece by piece (`kind`, `targetId`, `title` as the piece last
+    sold, `earnedKobo`, `sales`, `lastAt`), largest first, then kind, then
+    target. Every page together adds up to the month's `thisMonth.earnedKobo`.
+    The cursor is `e1.` plus base64url of the month and the last row's figure,
+    kind and target; one the server did not write, or one given for another
+    month, is a plain `400` ("cursor is not one this list gave.").
+  - A month is the Africa/Lagos calendar month of when the sale completed (a
+    release's time for a held kind). `month` that is not `YYYY-MM`, or is year
+    0000, is a plain `400` ("month must look like 2026-09").
+- **The move** (`EarningSettlementService`, exported by `MoneyModule`; nothing
+  else moves an earning, no client request does). One row per finished
+  ordinary sale records what it earned (`EarningSettlement`, made by the
+  sweep; the payment id is unique). The earnings travel in `EarningMove`
+  (R-55): ONE row, and one transfer, per creator per day. The payee's 85% of
+  every sale in it moves from WAWU's own account (the account the sales were
+  paid into) to the payee's wallet by a wallet-to-wallet transfer through the
+  seam (`walletToWallet`; a book transfer on Nuvion, section 14). The 15% is
+  WAWU's and stays. The provider's charge on the transfer is WAWU's, paid from
+  its 15% (R-31): the payee receives the whole total, and WAWU pays the charge
+  once per creator per day, not once per sale (G-703). The charge is on the
+  merchant-side ledger row and on the move's `providerFeeKobo`.
+- **One transfer a day** (R-55). A day is the Africa/Lagos calendar day.
+  The sweep makes a creator's move for the day when, all at once: they have
+  earnings no move has taken yet (`moveId` null), a wallet of the provider
+  this server runs, a total of those earnings of at least the floor
+  (`EARNINGS_MOVE_MIN_KOBO`, default 20000 = N200; a total of exactly the floor
+  moves), no open move (owed, not in review), and no move made or landed today
+  (a retried move that lands today is the day's transfer). A total under the
+  floor waits and is added to the next day's; it is still earned and still
+  counted under `waiting`. The move takes every such earning of one account of
+  WAWU's, oldest first, up to the provider's cap on one transfer
+  (`MERCHANT_MAX_PER_TXN_KOBO`) and 1000 earnings; the rest wait for the next
+  day. One earning that alone is over the cap goes to review, never split. The
+  earnings in a move are fixed when it is made: those that arrive later wait
+  for the next. An earning whose sale stops being a finished one before the
+  move is sent leaves it for review, and the move is made again without it,
+  under the next reference. All of a move's earnings land together, in one
+  write with the move.
+- **Exactly once.** The provider sees one reference per move,
+  `wawu-earn-d-<YYYYMMDD of the Lagos day>-<24 hex of sha256 of the creator's
+  id>` (45 characters, inside Nuvion's 64; a later try adds `-2`, `-3`). The
+  move row is unique per creator and day, so two servers make one, and only
+  one open move per creator and provider exists (a partial unique index).
+  The move is handed over by a lease (`sentAt`) only one caller wins, taken
+  with the move's row locked and its sales read FOR SHARE so a review mark set
+  meanwhile is seen (nothing is sent) or waits. A replay, the sweep and a
+  second Hub process asking at once, or a restart therefore send one move. The
+  database holds the same rules (the migrations' CHECKs and triggers): one row
+  per sale, a row only for a completed payment of this payee for exactly the
+  payee's share, never for a payment that has a hold (and no hold for a payment
+  that has a row), what is owed and to whom never changes, a landed row never
+  changes; an earning joins only a move of the same person and provider that
+  has not been sent; the first refusal's time and the review mark are never
+  moved once set.
+- **The provider's record is the truth** (the same rules as sections 14 and
+  18). A move whose outcome is unknown (a timeout, a 5xx, a transfer accepted
+  and not finished, a repeated reference, a Hub killed between the provider's
+  answer and our write) is `pending`: the provider is asked about our reference
+  (`reconcileSend` on WAWU's own account, backing off 1, 2, 4 ... 60 minutes),
+  the move is never sent again and never read as "nothing moved". Past
+  `PAYMENT_REVIEW_AFTER_HOURS` (72) with no answer it goes to review
+  (`reviewSince`): out of the sweep, the money where it is, a person decides.
+  Only the provider's own record that the move FAILED starts a new try, under
+  a new reference (`...-2`); a record that it completed and was then REVERSED,
+  or that another amount moved, is review. The move, and with it every earning
+  in it, is `landed` only when the provider confirmed the transfer, and each
+  sale's `payeeSettledAt` is set in the same write.
+- **Waiting is not failing** (`waiting` on the earning; the earning stays
+  `owed` and the money stays in WAWU's account):
+  - `payee_wallet`: the person has no wallet of this provider yet. Their
+    earnings are marked so and no move is made for them (R-11: they keep
+    earning); the first sweep after the person HAS a wallet makes their move,
+    which takes everything waiting, so the money is moved the day the wallet
+    opens, within a minute of it. No review bound. A wallet of the other
+    provider is not a place to send to.
+  - `recipient_frozen`: the provider refuses a move into a frozen wallet (G-10).
+    Paid on unfreeze, tried hourly.
+  - `funds`: the provider says WAWU's own account cannot cover the move: an
+    error in the log on every try.
+  - `provider`: the provider is out of reach or not set up, one of its limits
+    was hit, or it is another provider's sale (written before a switch of
+    `WALLET_PROVIDER`; this server sends nothing for it). A request that
+    provably never reached the provider (`requestNotSent`) is this, and is
+    sent again under the same reference.
+  - `not_supported`: the running provider has no way to make this move yet
+    (a Nuvion adapter without its book transfers, NUV-05). An error in the log on every
+    try saying so; the earning waits and lands once the provider can.
+  - `refused`: the provider refused and nothing moved; retried under the same
+    reference. See the next bullet for when a person looks. A frozen wallet, a
+    missing wallet and an unreachable provider have no such bound.
+- **A refusal gets a person after 72 hours** (R-55, F3). The FIRST time the
+  provider refuses a move with nothing moved (`waiting` `refused`, or its own
+  record that the transfer failed) the move's `firstRefusedAt` is written, once.
+  `EARNINGS_REFUSED_REVIEW_AFTER_HOURS` (default 72) after that moment, if the
+  move has not landed and nothing is in flight, it goes to review
+  (`reviewSince`, set once; out of the sweep, the money where it is). Later
+  refusals do not restart the count and make no second review; the look after a
+  refusal is never set later than the 72nd hour, so the review is not up to an
+  hour late. It is a clock on time, not a count of tries.
+- **The sweep** (`EarningSettlementService.sweep`, every minute, where
+  ScheduleModule.forRoot() is loaded) first makes the earning of every finished
+  ordinary sale of the running provider that has none, then makes the day's
+  move for every creator who is ready for it (see "One transfer a day"), then
+  walks every due move by a keyset cursor (creation time, then id) with no cap
+  on the rows it looks at, stopping only at the end or when its time
+  (`EARNING_SWEEP_BUDGET_MS`, 45 s) is used. The first sale of a day that
+  brings a creator's total to the floor is moved in the next pass; sales after
+  that wait for the next day's move.
+- **The ledger.** On confirmation one pair is written under the move's
+  reference, category `earning`: WAWU's account `out` (with the provider's
+  charge) and the payee's wallet `in`, for the whole transfer, so the ledger
+  equals the provider's record. A move of ONE sale keeps that sale's link and
+  names its payer (the history groups unlock earnings by that link, section 6;
+  WAWU when the payer's account is gone); a move of several sales has no link
+  and comes from WAWU. Best effort, like every ledger write after the money
+  moved; the signed delivery and the status check write them too.
+- **For the nightly check (MONEY-16):** `EarningSettlementService.owedTotals()`
+  is the count and the sum, in kobo, of the earnings still `owed` for the
+  running provider (those in a move that has not landed, and those no move has
+  taken yet). That money is in WAWU's account beside the open holds
+  (`WalletHoldService.openTotals()`) and WAWU's own shares. Compared with the
+  provider's own balance, never shown as one.
+- **Account deletion.** The payee's id on an earning is a `COUNTERPARTY`: the
+  payer's payment and the share it owes survive (BACKEND_GAPS G-702 for what is
+  owed to an account that is gone).
+- **Not here** (BACKEND_GAPS G-700 to G-702): refunding or reversing a sale
+  after its earning landed; credits' host shares and event hosts' payouts
+  (WALLET-17). The daily move is for ordinary sales: a held kind's release
+  (section 18) is still its own transfer. G-703 is answered by the daily move.
+- **The sweep pays only sales made on or after a start time** (lead ruling,
+  17 Oct 2026; the owner may override). The start is the setting
+  `EARNINGS_SWEEP_START` (ISO 8601 with a zone) when it is set, else the moment
+  this code first reached the environment, stored once in `EarningSweepStart`
+  (one row, written by its migration; a missing row is written by the first
+  sweep that finds it missing, and never changed after). A finished sale with a
+  payee made before the start gets no earning from the sweep, ever: it is not
+  paid by surprise on deploy. `GET /admin/money/earnings/before-start`
+  (superadmin and finance, `limit` and `cursor`, oldest first) lists those sales
+  for a person to decide; it moves nothing and cannot mark one paid. It is a
+  cursor page (section 6): `data` is `{ startsAt, source, count, items,
+  nextCursor }`, `count` being how many such sales there are in all. It is not
+  called `total` because the response interceptor rewrites any `items` beside a
+  numeric `total` as an offset page and would drop the cursor and the start. A sale at
+  exactly the start is paid; the millisecond before it is not.

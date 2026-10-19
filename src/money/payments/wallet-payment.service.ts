@@ -153,6 +153,16 @@ export function openKeyOf(
   return `${payer}:${kind}:${targetId}`;
 }
 
+/**
+ * The kinds whose quote (`GET /money/payments/quote`) is refused as `409
+ * payment_in_progress` when the same payer already has the open payment for
+ * the item (FIX-58, G-SCHOOLS-06-1). Only the school fee: the one app caller
+ * that reads that answer at the quote today (wmt/S5's `fetchFeeQuote`). Every
+ * other kind keeps quoting 200 while a payment is open and meets the 409 at
+ * the PIN tap, as before; a kind joins here when its app caller reads the 409.
+ */
+export const QUOTE_REFUSES_OPEN_KINDS: readonly PaymentKind[] = ['school_fee'];
+
 /** The rest before the next check of a pending payment: 1, 2, 4 ... minutes, at most an hour. */
 export function nextCheckDelayMs(checks: number): number {
   return Math.min(60, 2 ** Math.min(checks, 6)) * MINUTE;
@@ -349,10 +359,23 @@ export class WalletPaymentService implements OnModuleInit {
   // The quote (H14, W10, H17)
   // -------------------------------------------------------------------------
 
-  /** What the pay sheet shows before the PIN. Nothing is reserved. */
+  /**
+   * What the pay sheet shows before the PIN. Nothing is reserved.
+   *
+   * `refuseIfOpen` (the `GET /money/payments/quote` route sets it for the
+   * kinds in `QUOTE_REFUSES_OPEN_KINDS`, FIX-58): when this payer already has
+   * an open payment for this item, the quote is `409 payment_in_progress`
+   * with that payment's id, the answer `pay` gives, so a second phone is
+   * never shown a Pay the PIN tap would refuse. It is read after the item (an
+   * item gone or not payable is that answer first, as for `pay`) and before
+   * anything is priced. Another person's open payment for the item is not
+   * this payer's: their quote is unchanged. The features that quote through
+   * here for their own routes do not set it.
+   */
   async quote(
     wallet: OpenWallet,
     q: PaymentQuoteQueryDto,
+    options: { refuseIfOpen?: boolean } = {},
   ): Promise<PaymentQuoteView> {
     const { target } = await this.target(
       wallet.wawuUserId,
@@ -360,6 +383,9 @@ export class WalletPaymentService implements OnModuleInit {
       q.targetId,
       q.amountKobo,
     );
+    if (options.refuseIfOpen) {
+      await this.refuseIfOpen(openKeyOf(wallet.wawuUserId, q.kind, q.targetId));
+    }
     const fee = this.fees.quote(
       wallet.wawuUserId,
       { kind: 'purchase', amountKobo: target.priceKobo },

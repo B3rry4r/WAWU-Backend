@@ -16662,7 +16662,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable, payment_in_progress",
             "content": {
               "application/json": {
                 "schema": {
@@ -16697,7 +16697,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "What the pay sheet shows before the PIN (H14, H17): the price from the\nserver's own record of the item, the wallet provider's charge, the\ntotal, the balance and the shortfall, and a signed quote the payment\nsends back. Nothing is reserved. A total above MERCHANT_MAX_PER_TXN_KOBO\nis amount_out_of_range. A kind whose feature has not moved onto the\nwallet yet, or an item not priced in naira, is target_not_payable.\nWhile the running provider's fees are not set, fees_not_set before\nanything else (NUV-07); `withinDailyLimit` and `remainingTodayKobo` say\nwhere today's purchase limit stands.",
+        "summary": "What the pay sheet shows before the PIN (H14, H17): the price from the\nserver's own record of the item, the wallet provider's charge, the\ntotal, the balance and the shortfall, and a signed quote the payment\nsends back. Nothing is reserved. A total above MERCHANT_MAX_PER_TXN_KOBO\nis amount_out_of_range. A kind whose feature has not moved onto the\nwallet yet, or an item not priced in naira, is target_not_payable.\nWhile the running provider's fees are not set, fees_not_set before\nanything else (NUV-07); `withinDailyLimit` and `remainingTodayKobo` say\nwhere today's purchase limit stands. For a school fee (FIX-58), when the\npayer already has an open payment for the item (a second phone),\n`payment_in_progress` with `reason.paymentId`, as the payment itself\nanswers it: no live Pay is drawn. Every other kind is quoted as before.",
         "tags": [
           "MoneyPayments"
         ],
@@ -17572,6 +17572,171 @@
           "MoneyHolds"
         ],
         "x-wawu-built-by": "MONEY-18"
+      }
+    },
+    "/api/hub/money/earnings": {
+      "get": {
+        "operationId": "MoneyEarningsController_summary",
+        "parameters": [
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "description": "The month `thisMonth` is about, YYYY-MM in Africa/Lagos time. The current\nmonth when absent.",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EarningsView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "month is not YYYY-MM.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyPlainErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Earned all time and in a month, by kind of sale, with what is still waiting to reach the wallet.",
+        "tags": [
+          "MoneyEarnings"
+        ],
+        "x-wawu-built-by": "WALLET-16"
+      }
+    },
+    "/api/hub/money/earnings/content": {
+      "get": {
+        "operationId": "MoneyEarningsController_content",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "month",
+            "required": false,
+            "in": "query",
+            "description": "The month the pieces earned in, YYYY-MM in Africa/Lagos time. The\ncurrent month when absent. A cursor is good only for the month it was\ngiven for.",
+            "schema": {
+              "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])$",
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EarningContentPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "month is not YYYY-MM, or the cursor is not one this list gave.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyPlainErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One month's earnings piece by piece, largest first.",
+        "tags": [
+          "MoneyEarnings"
+        ],
+        "x-wawu-built-by": "WALLET-16"
+      }
+    },
+    "/api/hub/admin/money/earnings/before-start": {
+      "get": {
+        "operationId": "AdminEarningsController_beforeStart",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Sales per page, 1 to 100 (50 when absent).",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the page before (CONVENTIONS section 6).",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnsweptSalesPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Finished sales with a payee made before the sweep's start, oldest first.",
+        "tags": [
+          "AdminEarnings"
+        ]
       }
     },
     "/api/hub/money/transactions/{id}/receipt": {
@@ -31645,6 +31810,841 @@
         ]
       }
     },
+    "/api/hub/tips/wallet/quote": {
+      "get": {
+        "operationId": "TipWalletController_quote",
+        "parameters": [
+          {
+            "name": "creatorWawuId",
+            "required": true,
+            "in": "query",
+            "description": "The creator being tipped.",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "amountKobo",
+            "required": true,
+            "in": "query",
+            "description": "The tip in kobo, chosen by the payer: a whole number of naira (100 to 1,000,000,000).",
+            "schema": {
+              "minimum": 100,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TipWalletQuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The pay sheet (H26) before the PIN: the creator, the amount, the wallet\nprovider's charge on top, the total, the wallet's balance and the\nshortfall, and the signed quote `POST /tips/wallet` sends back. Nothing\nis reserved.",
+        "tags": [
+          "TipWallet"
+        ]
+      }
+    },
+    "/api/hub/tips/wallet": {
+      "post": {
+        "operationId": "TipWalletController_tip",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TipWalletDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TipWalletView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Sends a tip from the wallet, once, with an optional note: answers 201\nwith the tip: `paid`, `pending` while the provider has not confirmed the\ndebit yet (poll `GET /tips/wallet/{id}`; it is never sent again), or\n`failed` when the provider refused it and nothing moved. The same\nIdempotency-Key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN. Not enough money\nis `402 insufficient_funds` with the shortfall; no wallet is `409\nwallet_not_open`.",
+        "tags": [
+          "TipWallet"
+        ]
+      }
+    },
+    "/api/hub/tips/wallet/{id}": {
+      "get": {
+        "operationId": "TipWalletController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TipWalletView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One tip as it stands now: what the app polls after `pending`. Only the payer reads it.",
+        "tags": [
+          "TipWallet"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/unlock/wallet/quote": {
+      "get": {
+        "operationId": "UnlockWalletController_quote",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnlockWalletQuoteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The pay sheet (H14) before the PIN: the piece, its price, the wallet\nprovider's charge on top, the total, the wallet's balance and the\nshortfall, and the signed quote `POST /content/:id/unlock/wallet` sends\nback. Nothing is reserved.",
+        "tags": [
+          "UnlockWallet"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/unlock/wallet": {
+      "post": {
+        "operationId": "UnlockWalletController_unlock",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnlockWalletDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnlockWalletView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Unlocks the piece from the wallet, once: access is given when the payment\nis confirmed. Answers 201 with the unlock: `paid` (with `fullAssetUrl`),\n`pending` while the provider has not confirmed the debit yet (poll\n`GET /content/{id}/unlock/wallet/{paymentId}`; it is never sent again),\nor `failed` when the provider refused it and nothing moved. The same\nIdempotency-Key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN. Not enough money\nis `402 insufficient_funds` with the shortfall; no wallet is `409\nwallet_not_open`.",
+        "tags": [
+          "UnlockWallet"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/unlock/wallet/{paymentId}": {
+      "get": {
+        "operationId": "UnlockWalletController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "paymentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnlockWalletView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One unlock as it stands now: what the app polls after `pending`. Only the payer reads it.",
+        "tags": [
+          "UnlockWallet"
+        ]
+      }
+    },
+    "/api/hub/legal/requests/{id}/pay/wallet/quote": {
+      "get": {
+        "operationId": "LegalFeeWalletController_quote",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalFeeWalletQuoteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The pay sheet before the PIN: the fee that is due on the request (the\nconsultation fee once an hour is booked, the quoted fee once the\nengagement letter is signed), the wallet provider's charge on top, the\ntotal, the wallet's balance and the shortfall, and the signed quote\n`POST /legal/requests/{id}/pay/wallet` sends back. Nothing is reserved.",
+        "tags": [
+          "LegalFeeWallet"
+        ]
+      }
+    },
+    "/api/hub/legal/requests/{id}/pay/wallet": {
+      "post": {
+        "operationId": "LegalFeeWalletController_pay",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LegalFeeWalletDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalFeeWalletView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pays the fee that is due, once: the request moves on when the payment is\nconfirmed. Answers 201 with the payment: `paid`, `pending` while the\nprovider has not confirmed the debit yet (poll\n`GET /legal/requests/{id}/pay/wallet/{paymentId}`; it is never sent\nagain), or `failed` when the provider refused it and nothing moved. The\nsame Idempotency-Key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN. Not enough money\nis `402 insufficient_funds` with the shortfall; no wallet is `409\nwallet_not_open`.",
+        "tags": [
+          "LegalFeeWallet"
+        ]
+      }
+    },
+    "/api/hub/legal/requests/{id}/pay/wallet/{paymentId}": {
+      "get": {
+        "operationId": "LegalFeeWalletController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "paymentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalFeeWalletView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One payment as it stands now: what the app polls after `pending`. Only the payer reads it.",
+        "tags": [
+          "LegalFeeWallet"
+        ]
+      }
+    },
     "/api/hub/events/{id}/orders/wallet": {
       "post": {
         "description": "A priced basket needs an open wallet: 409 with reason.code wallet_not_open or wallet_opening, and the app leads to Open your wallet; with no fees set it is 503 fees_not_set. A basket that costs nothing needs no wallet and no fees. With an Idempotency-Key, the same key and tickets answer the same order; the same key with other tickets is 409 idempotency_key_reused, and a malformed key is 400 idempotency_key_required.",
@@ -31979,6 +32979,362 @@
         "summary": "One order as it stands now: what the app polls after `processing` (E10's\nRefresh) and E5's tickets. Only the buyer reads it; another person's\norder and an id nobody holds are the same `404 target_not_found`. It\nreads our own records only and never asks the wallet provider.",
         "tags": [
           "EventWalletOrders"
+        ]
+      }
+    },
+    "/api/hub/dm/{creatorWawuId}/send/wallet": {
+      "post": {
+        "operationId": "askPaidQuestionFromWallet",
+        "parameters": [
+          {
+            "name": "creatorWawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional. One value per tap on Send (a UUID); sent again unchanged on a retry, it answers the same draft. The same key with another question is 409 idempotency_key_reused, and a malformed key is 400 idempotency_key_required.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AskPaidQuestionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidQuestionQuoteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable, question_already_waiting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Drafts the question and answers I3: the question priced by the server\n(the creator's own price and reply window) and the wallet payment's quote\n(the price, the provider's charge on top, the total, the balance and any\nshortfall). Nothing is reserved and nothing is debited. A creator who has\nnot switched paid messages on, one who is paused, a block between the two\nand the fan's own account are `409 target_not_payable`; a question to this\ncreator still waiting is `409 question_already_waiting`. With an\n`Idempotency-Key`, the same key and question answer the same draft.",
+        "tags": [
+          "PaidDmWallet"
+        ]
+      }
+    },
+    "/api/hub/dm/send/wallet/pay": {
+      "post": {
+        "operationId": "PaidDmWalletController_pay",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PayPaidQuestionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidQuestionWalletView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress, question_already_waiting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pays the question from the wallet, once: the price moves into WAWU's own\naccount and waits there until the creator answers (R-19), with the\nprovider's charge on top (R-10). Answers 201 with the question: `pending`\nwhile the payment is not confirmed or the question is being sent (poll\n`GET /dm/send/wallet/{id}`; never pay again), `asked` once it is with the\ncreator, `failed` when the provider refused it and nothing moved. The same\nIdempotency-Key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN.",
+        "tags": [
+          "PaidDmWallet"
+        ]
+      }
+    },
+    "/api/hub/dm/send/wallet/{questionId}/quote": {
+      "get": {
+        "operationId": "PaidDmWalletController_quote",
+        "parameters": [
+          {
+            "name": "questionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidQuestionQuoteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable, question_already_waiting, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The pay sheet again: I3 reopened, or a quote past its `expiresAt`.",
+        "tags": [
+          "PaidDmWallet"
+        ]
+      }
+    },
+    "/api/hub/dm/send/wallet/{questionId}": {
+      "get": {
+        "operationId": "PaidDmWalletController_read",
+        "parameters": [
+          {
+            "name": "questionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaidQuestionWalletView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One question as it stands now: what the app polls after `pending` (I4).\nOnly the asker reads it; another person's question and an id nobody holds\nare the same `404 target_not_found`. It reads our own records only and\nnever asks the wallet provider.",
+        "tags": [
+          "PaidDmWallet"
         ]
       }
     },
@@ -35695,6 +37051,7 @@
               "insufficient_points",
               "currency_not_supported",
               "event_order_limit",
+              "question_already_waiting",
               "points_cap_reached",
               "points_not_short",
               "tier_required"
@@ -38931,6 +40288,85 @@
           "quoteToken"
         ]
       },
+      "TipWalletDto": {
+        "type": "object",
+        "properties": {
+          "creatorWawuId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 9007199254740991
+          },
+          "note": {
+            "type": "string",
+            "description": "The message that goes with the tip, 500 characters at most.",
+            "maxLength": 500
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`payment.totalKobo` from the quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`payment.quoteToken` from that quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "creatorWawuId",
+          "amountKobo",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
+      "UnlockWalletDto": {
+        "type": "object",
+        "properties": {
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`payment.totalKobo` from the quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`payment.quoteToken` from that quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
+      "LegalFeeWalletDto": {
+        "type": "object",
+        "properties": {
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`payment.totalKobo` from the quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`payment.quoteToken` from that quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
       "EventOrderLineDto": {
         "type": "object",
         "properties": {
@@ -38991,6 +40427,46 @@
         },
         "required": [
           "orderId",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
+      "AskPaidQuestionDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The question, 2,000 characters at most.",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "PayPaidQuestionDto": {
+        "type": "object",
+        "properties": {
+          "questionId": {
+            "type": "string",
+            "description": "`question.id` from the quote: the question being paid for.",
+            "format": "uuid"
+          },
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`payment.totalKobo` from the quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`payment.quoteToken` from that quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "questionId",
           "expectedTotalKobo",
           "quoteToken"
         ]
@@ -40881,6 +42357,322 @@
           "nextCursor"
         ]
       },
+      "AdminUserView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "superadmin",
+              "reviewer",
+              "support",
+              "finance"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended"
+            ]
+          },
+          "lastLoginAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "name",
+          "role",
+          "status",
+          "lastLoginAt",
+          "createdAt"
+        ]
+      },
+      "AdminSession": {
+        "type": "object",
+        "properties": {
+          "admin": {
+            "$ref": "#/components/schemas/AdminUserView"
+          },
+          "accessToken": {
+            "type": "string"
+          },
+          "refreshToken": {
+            "type": "string"
+          },
+          "expiresIn": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "admin",
+          "accessToken",
+          "refreshToken",
+          "expiresIn"
+        ]
+      },
+      "UnsweptSaleView": {
+        "type": "object",
+        "properties": {
+          "paymentId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "payeeWawuUserId": {
+            "type": "string"
+          },
+          "payeeShareKobo": {
+            "type": "integer"
+          },
+          "completedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "paymentId",
+          "kind",
+          "targetId",
+          "title",
+          "payeeWawuUserId",
+          "payeeShareKobo",
+          "completedAt"
+        ]
+      },
+      "UnsweptSalesPage": {
+        "type": "object",
+        "properties": {
+          "startsAt": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "config",
+              "first_run"
+            ]
+          },
+          "count": {
+            "type": "number"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnsweptSaleView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "startsAt",
+          "source",
+          "count",
+          "items",
+          "nextCursor"
+        ]
+      },
+      "EarningStreamView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bill",
+              "content_unlock",
+              "tip",
+              "credit_pack",
+              "verification",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket",
+              "tier",
+              "tier_bump",
+              "points_pack",
+              "extra_products",
+              "points_shortfall",
+              "points_cash_out"
+            ]
+          },
+          "earnedKobo": {
+            "type": "integer"
+          },
+          "sales": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "kind",
+          "earnedKobo",
+          "sales"
+        ]
+      },
+      "EarningsPeriodView": {
+        "type": "object",
+        "properties": {
+          "earnedKobo": {
+            "type": "integer"
+          },
+          "sales": {
+            "type": "number"
+          },
+          "streams": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EarningStreamView"
+            }
+          }
+        },
+        "required": [
+          "earnedKobo",
+          "sales",
+          "streams"
+        ]
+      },
+      "EarningsWaitingView": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "amountKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "amountKobo"
+        ]
+      },
+      "EarningsView": {
+        "type": "object",
+        "properties": {
+          "allTime": {
+            "$ref": "#/components/schemas/EarningsPeriodView"
+          },
+          "month": {
+            "type": "string"
+          },
+          "thisMonth": {
+            "$ref": "#/components/schemas/EarningsPeriodView"
+          },
+          "waiting": {
+            "$ref": "#/components/schemas/EarningsWaitingView"
+          },
+          "held": {
+            "$ref": "#/components/schemas/EarningsWaitingView"
+          },
+          "walletOpen": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "allTime",
+          "month",
+          "thisMonth",
+          "waiting",
+          "held",
+          "walletOpen"
+        ]
+      },
+      "EarningContentView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bill",
+              "content_unlock",
+              "tip",
+              "credit_pack",
+              "verification",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket",
+              "tier",
+              "tier_bump",
+              "points_pack",
+              "extra_products",
+              "points_shortfall",
+              "points_cash_out"
+            ]
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "earnedKobo": {
+            "type": "integer"
+          },
+          "sales": {
+            "type": "number"
+          },
+          "lastAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "targetId",
+          "title",
+          "earnedKobo",
+          "sales",
+          "lastAt"
+        ]
+      },
+      "EarningContentPage": {
+        "type": "object",
+        "properties": {
+          "month": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EarningContentView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "month",
+          "items",
+          "nextCursor"
+        ]
+      },
       "PaymentQuoteView": {
         "type": "object",
         "properties": {
@@ -41569,77 +43361,6 @@
           "url",
           "startedAt",
           "canStart"
-        ]
-      },
-      "AdminUserView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "email": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "role": {
-            "type": "string",
-            "enum": [
-              "superadmin",
-              "reviewer",
-              "support",
-              "finance"
-            ]
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "active",
-              "suspended"
-            ]
-          },
-          "lastLoginAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time"
-          }
-        },
-        "required": [
-          "id",
-          "email",
-          "name",
-          "role",
-          "status",
-          "lastLoginAt",
-          "createdAt"
-        ]
-      },
-      "AdminSession": {
-        "type": "object",
-        "properties": {
-          "admin": {
-            "$ref": "#/components/schemas/AdminUserView"
-          },
-          "accessToken": {
-            "type": "string"
-          },
-          "refreshToken": {
-            "type": "string"
-          },
-          "expiresIn": {
-            "type": "number"
-          }
-        },
-        "required": [
-          "admin",
-          "accessToken",
-          "refreshToken",
-          "expiresIn"
         ]
       },
       "PointNextExpiryView": {
@@ -57700,6 +59421,285 @@
           "badge"
         ]
       },
+      "UnlockWalletQuoteView": {
+        "type": "object",
+        "properties": {
+          "contentId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/MoneyPartyView",
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          }
+        },
+        "required": [
+          "contentId",
+          "title",
+          "creator",
+          "priceKobo",
+          "payment"
+        ]
+      },
+      "UnlockWalletView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "wallet"
+            ]
+          },
+          "contentId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "reversed",
+              "refunded",
+              "paid"
+            ]
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "purchased": {
+            "type": "boolean"
+          },
+          "fullAssetUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentView"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "method",
+          "contentId",
+          "title",
+          "status",
+          "statusMessage",
+          "priceKobo",
+          "purchased",
+          "fullAssetUrl",
+          "payment",
+          "createdAt",
+          "paidAt"
+        ]
+      },
+      "LegalFeeWalletQuoteView": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "consultation",
+              "service"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          }
+        },
+        "required": [
+          "requestId",
+          "stage",
+          "title",
+          "priceKobo",
+          "payment"
+        ]
+      },
+      "LegalFeeWalletView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "wallet"
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "consultation",
+              "service"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "reversed",
+              "refunded",
+              "paid"
+            ]
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "requestStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentView"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "method",
+          "requestId",
+          "stage",
+          "title",
+          "status",
+          "statusMessage",
+          "priceKobo",
+          "requestStatus",
+          "payment",
+          "createdAt",
+          "paidAt"
+        ]
+      },
+      "TipWalletQuoteView": {
+        "type": "object",
+        "properties": {
+          "creator": {
+            "$ref": "#/components/schemas/MoneyPartyView"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          }
+        },
+        "required": [
+          "creator",
+          "amountKobo",
+          "payment"
+        ]
+      },
+      "TipWalletView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "wallet"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "reversed",
+              "refunded",
+              "paid"
+            ]
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "creator": {
+            "$ref": "#/components/schemas/MoneyPartyView",
+            "nullable": true
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentView"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "method",
+          "status",
+          "statusMessage",
+          "creator",
+          "amountKobo",
+          "note",
+          "payment",
+          "createdAt",
+          "paidAt"
+        ]
+      },
       "EventOrderEventView": {
         "type": "object",
         "properties": {
@@ -57952,6 +59952,122 @@
         "required": [
           "order",
           "payment"
+        ]
+      },
+      "PaidQuestionDraftView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "creator": {
+            "$ref": "#/components/schemas/MoneyPartyView",
+            "nullable": true
+          },
+          "text": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "replyWindowHours": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "creator",
+          "text",
+          "priceKobo",
+          "replyWindowHours"
+        ]
+      },
+      "PaidQuestionQuoteView": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "$ref": "#/components/schemas/PaidQuestionDraftView"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          }
+        },
+        "required": [
+          "question",
+          "payment"
+        ]
+      },
+      "PaidQuestionWalletView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "wallet"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "reversed",
+              "refunded",
+              "unpaid",
+              "asked",
+              "answered",
+              "refunding"
+            ]
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "creator": {
+            "$ref": "#/components/schemas/MoneyPartyView",
+            "nullable": true
+          },
+          "text": {
+            "type": "string"
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "replyWindowHours": {
+            "type": "number"
+          },
+          "deadlineAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentView",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "sentAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "method",
+          "status",
+          "statusMessage",
+          "creator",
+          "text",
+          "priceKobo",
+          "replyWindowHours",
+          "deadlineAt",
+          "payment",
+          "createdAt",
+          "sentAt"
         ]
       },
       "PointsConvertQuoteView": {

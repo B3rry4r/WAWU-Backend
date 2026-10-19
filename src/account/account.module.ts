@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AccountController } from './account.controller';
 import { AccountService } from './account.service';
+import { AccountDeletionIdentityService } from './account-deletion-identity.service';
 import { AccountDeletionMoneyService } from './account-deletion-money.service';
 import { AccountDeletionSweepService } from './account-deletion-sweep.service';
 import { WAWU_ID_ACCOUNT_GATEWAY } from './wawu-id-account.gateway';
@@ -24,6 +25,8 @@ import { WalletProviderModule } from '../wallet-provider/wallet-provider.module'
   providers: [
     AccountService,
     AccountDeletionMoneyService,
+    // SETTINGS-08: tells WAWU ID the deletion started, until it confirms.
+    AccountDeletionIdentityService,
     AccountDeletionSweepService,
     { provide: WAWU_ID_ACCOUNT_GATEWAY, useClass: WawuIdAccountClient },
   ],

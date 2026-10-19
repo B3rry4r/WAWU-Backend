@@ -19,7 +19,8 @@ import { WalletProviderError } from '../wallet-provider/wallet-provider-error';
  *
  *   wallet_balance       the wallet holds money (the provider's balance)
  *   open_hold            a paid DM, ticket or bill is held, for or against them (R-19)
- *   waiting_earnings     a sale's share has not reached their wallet yet (R-11)
+ *   waiting_earnings     a sale's share, or a community host's share of spent
+ *                        credits, has not reached their wallet yet (R-11)
  *   payment_in_progress  a payment of theirs has no final answer yet
  *   cash_out_in_flight   points are held for a cash-out
  *   wallet_opening       their wallet is being opened right now
@@ -169,7 +170,7 @@ export class AccountDeletionMoneyService {
       where: { wawuUserId },
       select: { walletId: true, provider: true },
     });
-    const [openHolds, waitingEarnings, pendingPayments, cashOuts, opening] =
+    const [openHolds, owedSales, pendingPayments, cashOuts, opening] =
       await Promise.all([
         this.prisma.walletHold.count({
           where: {
@@ -180,15 +181,17 @@ export class AccountDeletionMoneyService {
             ],
           },
         }),
-        // A completed sale whose share has not landed: no hold (a held kind is
-        // counted above), not refunded, and the payee's share is more than 0.
+        // A completed sale whose share has not landed: no hold, or a hold
+        // that was released as an earning (R-55) and whose move has not
+        // landed (an open hold is counted above, a refunded one is the
+        // payer's), and the payee's share is more than 0.
         this.prisma.walletPayment.count({
           where: {
             status: 'completed',
             payeeWawuUserId: wawuUserId,
             payeeShareKobo: { gt: 0 },
             payeeSettledAt: null,
-            hold: { is: null },
+            OR: [{ hold: { is: null } }, { hold: { status: 'released' } }],
           },
         }),
         this.prisma.walletPayment.count({
@@ -211,6 +214,17 @@ export class AccountDeletionMoneyService {
             }),
       ]);
 
+    // A community host's share of spent credits that has not landed
+    // (WALLET-17): an earning with no sale behind it (a sale's earning is
+    // counted above, through its payment), owed to the person.
+    const owedHostShares = await this.prisma.earningSettlement.count({
+      where: {
+        payeeWawuUserId: wawuUserId,
+        status: 'owed',
+        creditSpendEarningId: { not: null },
+      },
+    });
+    const waitingEarnings = owedSales + owedHostShares;
     const blockers: DeletionBlocker[] = [];
     let balanceKobo: number | null = null;
     if (wallet) {
