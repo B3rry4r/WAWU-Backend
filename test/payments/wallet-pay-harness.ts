@@ -17,6 +17,7 @@ import { ResponseInterceptor } from '../../src/common/interceptors/response.inte
 import { PrismaModule } from '../../src/common/prisma/prisma.module';
 import { PrismaService } from '../../src/common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../src/hub-app-options';
+import { lagosDay } from '../../src/money/earnings/earning-rules';
 import { EarningSettlementService } from '../../src/money/earnings/earning-settlement.service';
 import { WalletHoldService } from '../../src/money/holds/wallet-hold.service';
 import { MoneyModule } from '../../src/money/money.module';
@@ -37,6 +38,16 @@ import { mintToken, QuietLogger } from './poll-helpers';
 export const PAY_PIN = '4826';
 /** What the stand-in charges on a book transfer, in kobo (a spec value, not a fact about Nuvion). */
 export const STAND_IN_FEE_KOBO = 2325;
+
+/**
+ * The sweeps' clock for a spec about one Lagos day: `from` itself when at
+ * least `hours` of its Lagos day are left, else the first instant of the next
+ * Lagos day. Pure, so a spec can pin both sides of midnight.
+ */
+export function clockWithRoomInLagosDay(from: number, hours = 2): number {
+  const end = lagosDay(new Date(from)).end.getTime();
+  return end - from < hours * 3_600_000 ? end : from;
+}
 
 export interface PayPerson {
   id: string;
@@ -61,6 +72,15 @@ export interface PayHarness {
   walletless(): PayPerson;
   /** Runs the payment, hold and earning sweeps as if `ms` more had passed. */
   pass(ms?: number): Promise<void>;
+  /**
+   * For a spec about ONE Lagos day (R-55: one move per creator per day): if
+   * fewer than `hours` (default 2) of today are left on the sweeps' clock,
+   * moves that clock to the start of the next Lagos day, so the spec cannot
+   * meet midnight between its own passes. It runs no sweep and never moves
+   * the clock back. The sweeps run at the clock, not at the wall time of day,
+   * so without this a spec's day changed with the time CI happened to run it.
+   */
+  keepInLagosDay(hours?: number): void;
   get(p: PayPerson, url: string): request.Test;
   post(
     p: PayPerson,
@@ -230,6 +250,9 @@ export async function bootPayApp(
       await payments.sweep(at);
       await holds.sweep(at);
       await earnings.sweep(at);
+    },
+    keepInLagosDay(hours = 2) {
+      clock = clockWithRoomInLagosDay(Math.max(clock, Date.now()), hours);
     },
     get: (p, url) =>
       request(app.getHttpServer())
