@@ -162,3 +162,16 @@ export interface PlanPurchaseQuoteView {
   /** The wallet payment quote: price, the provider's charge, total, balance, shortfall and its token. */
   payment: PaymentQuoteView;
 }
+
+/**
+ * The tier purchase still going through for the caller, if any (ME-13, M15:
+ * "Paid, still confirming"). `purchase` is the same `PlanPurchaseView`
+ * `GET /plans/purchases/{id}` answers, with `status: pending`: the payment is
+ * still confirming, or it is confirmed and the plan is being opened. It is
+ * null when nothing is going through, so a screen that is opened again after
+ * a restart can say "don't pay again" instead of offering the purchase.
+ * A purchase waiting for a bank transfer is not in it: nothing was paid yet.
+ */
+export interface PendingPlanPurchaseView {
+  purchase: PlanPurchaseView | null;
+}

@@ -9,6 +9,7 @@ import { PlansModule } from '../plans.module';
 import { PlanPurchasesController } from './plan-purchases.controller';
 import { PlanPurchaseService } from './plan-purchase.service';
 import { PlanTransferService } from './plan-transfer.service';
+import { ExtraProductsService } from './extra-products.service';
 import { PointsPackService } from './points-pack.service';
 
 /**
@@ -26,6 +27,10 @@ import { PointsPackService } from './points-pack.service';
  * on the same routes: a payment kind of its own, registered with the wallet
  * payments, bought from the wallet or by transfer like a tier.
  *
+ * TIER-04 adds the extra products (`kind: extra_products`,
+ * `ExtraProductsService`) the same way: a payment kind of its own on the same
+ * routes, bought from the wallet or by transfer.
+ *
  * TIER-05 adds `method: transfer` (`PlanTransferService`): a purchase waits for
  * a bank transfer into the person's own wallet account and is paid from the
  * wallet when the money lands. Same module, so no new import in AppModule.
@@ -41,6 +46,11 @@ import { PointsPackService } from './points-pack.service';
     WalletProviderModule,
   ],
   controllers: [PlanPurchasesController],
-  providers: [PlanPurchaseService, PlanTransferService, PointsPackService],
+  providers: [
+    PlanPurchaseService,
+    PlanTransferService,
+    PointsPackService,
+    ExtraProductsService,
+  ],
 })
 export class PlanPurchasesModule {}

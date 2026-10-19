@@ -728,6 +728,24 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // The products this person added to their tier (TIER-04). The payment
+  // reference is a payment id, so it stays out (rule 3).
+  {
+    key: 'extraProductsPurchases',
+    models: ['MakerExtraProducts'],
+    load: (prisma, me) =>
+      prisma.makerExtraProducts.findMany({
+        where: { wawuUserId: me },
+        select: {
+          tierId: true,
+          products: true,
+          currency: true,
+          amountMinor: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
   // What this person chose to pay for by bank transfer (TIER-05) and where it
   // stands. The payment that paid it is a payment id, so it stays out (rule 3).
   {

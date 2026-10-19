@@ -632,3 +632,75 @@ the wallet is being charged), `paid`, `failed`, `reversed`, `expired`. `grant`
   a rate that fits the pack alone but pays more than a Founding buyer paid for
   the same points is refused, naming the percent setting. A change to any
   tier's percent is judged by the same rule.
+
+## 11. Adding more products (TIER-04)
+
+Task TIER-04, R-43, R-44, R-65. A person at their limit adds more products
+instead of upgrading (VF13: "You have used 3 of 3. Add 5 more for ₦1,500 or
+upgrade"). It rides the routes section 8 describes, with `kind:
+"extra_products"` and no `tierId`, `packId` or `bump` (sending one is `400`).
+It is WAWU's own sale: one debit into WAWU's own account, no seller split,
+nothing held, and the provider's charge on top, shown as the Bank charge
+(R-10). How many products one add-on holds and its price are admin settings
+(TIER-06, R-65): `plan.extra_products.count` and
+`plan.extra_products.price_kobo`. None is written in code.
+
+| Route | Does |
+|---|---|
+| `GET /plans/purchases/quote?kind=extra_products` | The pay sheet (VF13) before the PIN. Answers an `ExtraProductsQuoteView`: `extraMinor` (the price), `products` (how many it adds), `productsAllowed` (the places the person has now) and `productsAllowedAfter` (with the add-on), `paymentKind` (`extra_products`) and `payment`, the wallet payment's own quote. |
+| `POST /plans/purchases` | Pays, with the quote's `expectedTotalKobo` and `quoteToken`, `method: "wallet"` or `"transfer"`, `Idempotency-Key` and the PIN, exactly as for a tier. Answers 201 with an `ExtraProductsPurchaseView`. |
+| `GET /plans/purchases/{id}` | The same purchase as it stands now (the app polls it after `pending`). |
+
+`ExtraProductsPurchaseView` (`kind: "extra_products"`) is one shape from the
+ask to the products being added: `id`, `method`, `currency`, `amountMinor` (the
+price, never the provider's charge), `products` (as quoted), `status`,
+`statusMessage`, `payment` (null until the money is taken), `transfer` (set
+while `awaiting_transfer`: the same `PlanPurchaseTransferView` section 8
+describes), `grant` and `paidAt`. `status`: `awaiting_transfer`, `pending`,
+`paid`, `failed`, `reversed`, `expired`, as for a points pack (section 10).
+`grant` (once `paid`): `productsAdded` (this purchase), `extraProducts` (all
+the extras bought on the account, as they stand now) and `productsAllowed`
+(the tier's own plus the extras, as they stand now).
+
+- **The payment.** Kind `extra_products`, `targetId` `extra-products`. The same
+  payment is reachable through `GET /money/payments/quote` and `POST
+  /money/payments`.
+- **Needs a running tier.** A person whose tier is `active` or `ending` can
+  buy. With no tier, or an ended one, the quote and the purchase answer `402
+  tier_required` (CONVENTIONS section 23) and nothing is taken or kept. A
+  person with an open wallet and no tier is told this, not that the wallet is
+  missing: the wallet is checked first, as for every purchase.
+- **The quote binds price and count.** The number of products is the
+  payment's terms. A quote whose price or count changed since it was given is
+  `409 quote_changed`, before anything moves. The payment keeps them from the
+  claim, so a setting changed while it confirms, or while a transfer waits,
+  does not change what is added; a transfer whose price or count changed
+  before the money lands is closed with nothing taken.
+- **Once.** The purchase row is keyed by the payment's id
+  (`MakerExtraProducts`: `products` as quoted, `tierId` the tier held when it
+  was paid, the price and the currency): a
+  repeated delivery, a replayed key or two servers find it and add nothing
+  more. The count is added to the tier row's `extraProducts` last in a
+  transaction that does nothing but write the database, under the person's
+  tier lock, so nothing is held across a provider call. A second add-on is a
+  second purchase and adds the count again.
+- **What is bought stays with the account.** `extraProducts` lives on the tier
+  row, which a renewal, a new tier bought after the last ended and an upgrade
+  leave alone. The publishing gate (section 6) counts it whenever the person
+  holds a tier: `productsAllowed` is the tier's own products plus the extras.
+  While no tier runs nothing can be published, and the extras wait. A payment
+  that confirms after the tier ended is still added (the person paid for it),
+  and counts from the next tier.
+- **By transfer.** TIER-05's order: it waits for the money to reach the
+  person's own wallet account and is paid from the wallet, once, when the
+  balance covers the total. If the tier ends while it waits, the order is
+  closed with nothing taken (`status: "failed"`, with the sentence in
+  `statusMessage`).
+- **Naira only at launch (R-16).** A person billed in dollars is priced from
+  the file's dollar column and refused `409 target_not_payable` by the payment
+  service until a dollar wallet can pay (NUV-09).
+- **Default (agent), owner may override.** The add-on can be bought again and
+  again, and also when the places it adds would still leave fewer than the
+  person has published (the gate's offers leave it out then, section 6; a
+  direct call is not refused, and the places count when more is allowed).
+

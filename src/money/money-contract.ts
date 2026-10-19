@@ -126,6 +126,9 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // buy, as wallet_already_open).
   points_cap_reached: 422,
   points_not_short: 409,
+  // TIER-04. 402, as the publishing gate answers the same code (TIER-02,
+  // CONVENTIONS section 23): the person has to pay for a tier first.
+  tier_required: 402,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */
