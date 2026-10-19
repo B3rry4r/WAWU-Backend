@@ -395,16 +395,27 @@ describe('Request bodies the parser refuses (FIX-08)', () => {
   });
 
   it('src/main.ts composes the app this spec builds: HUB_APP_OPTIONS, this filter, and no parser of its own', () => {
+    // FIX-17 moved main.ts's setup into src/hub-app-config.ts: main.ts creates
+    // the app with HUB_APP_OPTIONS and calls configureHubApp, which holds the
+    // filter this spec's app uses.
     const main = readFileSync(join(__dirname, '../../../main.ts'), 'utf8');
+    const config = readFileSync(
+      join(__dirname, '../../../hub-app-config.ts'),
+      'utf8',
+    );
     expect(main).toMatch(
       /NestFactory\.create\(\s*AppModule,\s*HUB_APP_OPTIONS\s*\)/,
     );
-    expect(main).toMatch(
+    expect(main).toMatch(/configureHubApp\(app\)/);
+    expect(config).toMatch(
       /useGlobalFilters\(\s*new AllExceptionsFilter\(\)\s*\)/,
     );
-    // A parser or limit set here would mean the default above is not live.
-    expect(main).not.toMatch(
-      /useBodyParser|bodyParser|express\.json|express\.urlencoded|limit\s*:/,
-    );
+    // A parser or limit set in either file would mean the default above is
+    // not live.
+    for (const text of [main, config]) {
+      expect(text).not.toMatch(
+        /useBodyParser|bodyParser|express\.json|express\.urlencoded|limit\s*:/,
+      );
+    }
   });
 });

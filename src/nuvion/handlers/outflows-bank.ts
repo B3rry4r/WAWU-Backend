@@ -4,7 +4,10 @@ import type {
   LedgerRecordResult,
   LedgerWallet,
 } from '../../money/ledger/ledger.interface';
-import type { LedgerService } from '../../money/ledger/ledger.service';
+import {
+  LEDGER_BANK_SEND_FAILURE,
+  type LedgerService,
+} from '../../money/ledger/ledger.service';
 import type { TransferStatus } from '../../money/money-view.type';
 import type {
   ProviderHolder,
@@ -36,9 +39,11 @@ const failed = (note: string): NuvionHandlerResult => ({
 /** The rail this file answers for: NIP, Nigeria's bank transfer. */
 export const NUVION_BANK_TRANSFER_TYPE = 'bank-transfer';
 
-/** What a person reads on a bank send that did not complete. No provider name. */
-export const BANK_SEND_FAILURE_REASON =
-  'The bank did not complete this transfer.';
+/**
+ * What a person reads on a bank send that did not complete. No provider name.
+ * The ledger owns the text: the send settles on it (FIX-54).
+ */
+export const BANK_SEND_FAILURE_REASON = LEDGER_BANK_SEND_FAILURE;
 
 /**
  * The list of a sender's transfers is read from this long before the send
@@ -360,6 +365,12 @@ export class NuvionBankOutflowRecorder {
     d: NuvionDelivery | null,
     t: NuvionPayoutReading,
     side: { entityId: string | null; wallet: LedgerWallet },
+    /** What Nuvion's credit record says came back, for a send it reversed (FIX-54). */
+    reversal: {
+      at: Date | null;
+      reference: string;
+      returnedKobo: number;
+    } | null = null,
   ): Promise<NuvionHandlerResult> {
     const status = nuvionTransferStatus(t.status);
     if (status === null) {
@@ -391,6 +402,16 @@ export class NuvionBankOutflowRecorder {
       d?.id ?? null,
       await this.placeOf(side.entityId, t),
     );
+    if (status === 'reversed' && reversal !== null) {
+      // The row says what Nuvion gave back, once; a replay writes nothing.
+      await this.ledger.noteReversalFigures(r.entryId, {
+        at: reversal.at ?? new Date(),
+        reference: reversal.reference,
+        amountKobo: reversal.returnedKobo,
+        chargesKobo: 0,
+        totalKobo: reversal.returnedKobo,
+      });
+    }
     return done(
       `${r.created ? 'recorded' : 'already recorded'} once as ${status}${r.discrepancy ? `; ${r.discrepancy} (review)` : ''}`,
     );
@@ -554,7 +575,17 @@ export class NuvionBankOutflowRecorder {
     if (original.currency !== NUVION_NAIRA) {
       return done(`a ${original.currency} send: not the naira wallet`);
     }
-    if (original.amountKobo !== credit.amountKobo) {
+    // A reversal is in full when it gives back the amount, or the amount with
+    // the charge Nuvion took (the credit record states what was returned and
+    // the docs do not say whether the charge goes back): anything else is a
+    // partial refund, which is not applied.
+    const wholeSend = original.feeStated
+      ? original.amountKobo + original.feeKobo
+      : original.amountKobo;
+    if (
+      credit.amountKobo !== original.amountKobo &&
+      credit.amountKobo !== wholeSend
+    ) {
       this.logger.error(
         'outflows: a refund of another amount than the send; nothing applied (review)',
       );
@@ -586,7 +617,11 @@ export class NuvionBankOutflowRecorder {
         `Nuvion records the send as ${original.status}, not reversed, although a refund names it; nothing applied (review)`,
       );
     }
-    return this.applyRecord(d, original, side);
+    return this.applyRecord(d, original, side, {
+      at: credit.createdAt,
+      reference: credit.id,
+      returnedKobo: credit.amountKobo,
+    });
   }
 
   /**

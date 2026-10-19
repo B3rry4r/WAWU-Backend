@@ -9,9 +9,13 @@ import { ConfigService } from '@nestjs/config';
  * holds an address and never writes an email. Like those routes, it names the
  * user and the link, and WAWU ID decides the address, the subject and the
  * wording: `POST /internal/users/:userId/data-export`
- * `{ downloadUrl, expiresAt }`. That route is built by WAWU ID (BACKEND_GAPS
- * G-131); until it exists WAWU ID answers 404, the request stays pending and
- * the sweep retries.
+ * `{ downloadUrl, expiresAt }`. WAWU ID built that route in FIX-53 (BACKEND_GAPS
+ * G-131, wawu-id `src/auth/internal.controller.ts`): it answers 200 once the
+ * mail is handed to its mailer, 400 for a body that is not exactly the export
+ * link and its deadline, 404 for no such account, 409 for an account with no
+ * proven address and 503 when its mailer could not take it. Any answer but 200
+ * leaves the request pending and the sweep retries; a Hub older than that route
+ * got 404 and never sent the email.
  */
 @Injectable()
 export class DataExportMailer {

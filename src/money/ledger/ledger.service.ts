@@ -78,6 +78,15 @@ export const LEDGER_ABSENT_FAILURE =
 /** The failure reason when Fintava's own record says FAILURE or CANCELLED. */
 export const LEDGER_FINTAVA_FAILURE = 'Fintava reports this transfer failed.';
 
+/**
+ * The failure reason when Nuvion's own record says a bank send failed or was
+ * cancelled (NUV-06). It is the provider's word, as `LEDGER_FINTAVA_FAILURE`
+ * is, and the only other `failed` a send settles on (FIX-54). What a person
+ * reads: it names no provider.
+ */
+export const LEDGER_BANK_SEND_FAILURE =
+  'The bank did not complete this transfer.';
+
 export interface LedgerReferenceRow {
   value: string;
   kind: LedgerReferenceKind;
@@ -680,6 +689,109 @@ export class LedgerService {
       await tx.fintavaLedgerEntry.update({
         where: { id: entryId },
         data: { status: 'failed', failureReason: LEDGER_ABSENT_FAILURE },
+      });
+      return true;
+    });
+  }
+
+  /**
+   * FIX-54: what the provider says came back for a row that is `reversed`
+   * (Nuvion's `outflows.refunded` credit record), written once. `applyReversal`
+   * is Fintava's way of saying the same and refuses a completed send; a
+   * reversal Nuvion reports reaches the row through `record`, which holds no
+   * figures, so they are put on it here. A row that is not `reversed`, or
+   * already holds them, is left alone. Returns whether this call wrote them.
+   */
+  async noteReversalFigures(
+    entryId: string,
+    reversal: {
+      at: Date;
+      reference: string | null;
+      amountKobo: number;
+      chargesKobo: number;
+      totalKobo: number;
+    },
+  ): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "FintavaLedgerEntry" WHERE "id" = ${entryId} FOR UPDATE`;
+      const row = await tx.fintavaLedgerEntry.findUnique({
+        where: { id: entryId },
+        select: {
+          status: true,
+          reversalTotalKobo: true,
+          reversalChargesKobo: true,
+        },
+      });
+      if (!row || row.status !== 'reversed' || row.reversalTotalKobo !== null) {
+        return false;
+      }
+      // WAWU's fee, when it was given back before these figures arrived
+      // (noteFeeReturned), is already on the row as the charges: it stays in
+      // them and in the total.
+      const fee = row.reversalChargesKobo ?? 0n;
+      await tx.fintavaLedgerEntry.update({
+        where: { id: entryId },
+        data: {
+          reversedAt: reversal.at,
+          reversalReference: reversal.reference,
+          reversalAmountKobo: koboBig('reversal amount', reversal.amountKobo),
+          reversalChargesKobo:
+            koboBig('reversal charges', reversal.chargesKobo) + fee,
+          reversalTotalKobo:
+            koboBig('reversal total', reversal.totalKobo) + fee,
+        },
+      });
+      return true;
+    });
+  }
+
+  /**
+   * FIX-54 round 2: WAWU's fee, given back to the sender through the
+   * `-fee-back` transfer, counted as returned on the sender's reversed row.
+   * The provider's credit does not carry it, yet it moved back to the wallet,
+   * so the row's figures (what W14 prints) must say it: the fee is put on the
+   * row as the reversal's charges and added to its total. Either order works:
+   * a fee noted before the credit's figures arrive waits as the charges, and
+   * `noteReversalFigures` keeps it. Written once (the same fee again changes
+   * nothing); a row that is not `reversed`, or holds a charge that is not this
+   * fee (a provider's own report), is left alone. Returns whether it wrote.
+   */
+  async noteFeeReturned(
+    sender: { customerReference: string; wawuUserId: string },
+    feeKobo: bigint,
+  ): Promise<boolean> {
+    if (feeKobo <= 0n) return false;
+    return this.prisma.$transaction(async (tx) => {
+      const found = await tx.fintavaLedgerEntry.findFirst({
+        where: {
+          customerReference: sender.customerReference,
+          wawuUserId: sender.wawuUserId,
+          walletKind: 'user',
+          direction: 'out',
+        },
+        select: { id: true },
+      });
+      if (!found) return false;
+      await tx.$queryRaw`SELECT "id" FROM "FintavaLedgerEntry" WHERE "id" = ${found.id} FOR UPDATE`;
+      const row = await tx.fintavaLedgerEntry.findUnique({
+        where: { id: found.id },
+        select: {
+          status: true,
+          reversalTotalKobo: true,
+          reversalChargesKobo: true,
+        },
+      });
+      if (!row || row.status !== 'reversed') return false;
+      const noted = row.reversalChargesKobo ?? 0n;
+      if (noted !== 0n) return false;
+      await tx.fintavaLedgerEntry.update({
+        where: { id: found.id },
+        data: {
+          reversalChargesKobo: feeKobo,
+          ...(row.reversalTotalKobo !== null
+            ? { reversalTotalKobo: row.reversalTotalKobo + feeKobo }
+            : {}),
+        },
       });
       return true;
     });
