@@ -9,6 +9,7 @@ import { WawuIdAccountClient } from './wawu-id-account.client';
 import { PushModule } from '../push/push.module';
 import { PointsModule } from '../points/points.module';
 import { AccountPurgeModule } from '../account-purge/account-purge.module';
+import { IdDocsRetentionModule } from '../account-purge/id-docs-retention.module';
 import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
 
 @Module({
@@ -20,6 +21,9 @@ import { WalletProviderModule } from '../wallet-provider/wallet-provider.module'
     WalletProviderModule,
     PointsModule,
     AccountPurgeModule,
+    // SETTINGS-09: the daily sweep that deletes the ID documents kept for the
+    // days in the admin setting `id_docs_keep_days` (R-73).
+    IdDocsRetentionModule,
   ],
   controllers: [AccountController],
   providers: [

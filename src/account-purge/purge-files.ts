@@ -18,11 +18,14 @@ import { DELETED_CREATOR_ID } from '../content-piece/deleted-creator';
  *           bucket after the database rows that pointed at it are gone, and
  *           only then is its row deleted (a row is the list of what is left, so
  *           a failed or interrupted run finds the rest next time).
- *   OWNER   an identity or verification document WAWU may have to keep for a
- *           time. Whether it must is a legal question for the owner (R-1), so
- *           the purge does NOT delete it: its row is refiled under
- *           DELETED_CREATOR_ID (the key stays findable; the row is no longer
- *           the person's) and the account's `purgeNote` counts it.
+ *   OWNER   an identity or verification document WAWU keeps, hidden, for a
+ *           time (R-73: the admin setting `id_docs_keep_days`, 5 years at
+ *           launch, counted from the day the deletion completed). The purge
+ *           does NOT delete it: its row is refiled under DELETED_CREATOR_ID
+ *           (the key stays findable; the row is no longer the person's) and
+ *           the account's `purgeNote` counts it. The daily sweep in
+ *           id-docs-retention.service.ts deletes the file and the row when the
+ *           time is up (SETTINGS-09), choosing them with `listKeptFiles`.
  *
  * Two more things are kept, and are not decisions of this table:
  *   - the files of content pieces a buyer paid for (`soldKeys`, SETTINGS-06
@@ -55,15 +58,15 @@ export const FILE_KINDS: Readonly<Record<string, FileKind>> = {
   },
   'kyc/id-document': {
     decision: 'OWNER',
-    what: 'The identity document for the wallet check (KycSubmission.idDocumentUrl). Kept; retention is a legal question for the owner.',
+    what: 'The identity document for the wallet check (KycSubmission.idDocumentUrl). Kept, hidden, for the days in `id_docs_keep_days` (R-73), then deleted by the daily sweep.',
   },
   'service-application/document': {
     decision: 'OWNER',
-    what: 'Supporting documents for a CAC, NEPC or partner application (ServiceApplication.documents), which include a valid ID and a signature. Kept for the owner.',
+    what: 'Supporting documents for a CAC, NEPC or partner application (ServiceApplication.documents), which include a valid ID and a signature. Kept, hidden, for the days in `id_docs_keep_days` (R-73), then deleted by the daily sweep.',
   },
   'professional/document': {
     decision: 'OWNER',
-    what: 'A practising licence or qualification for a professional listing (ProfessionalProfile.documents). Evidence WAWU relied on to list the person. Kept for the owner.',
+    what: 'A practising licence or qualification for a professional listing (ProfessionalProfile.documents). Evidence WAWU relied on to list the person. Kept, hidden, for the days in `id_docs_keep_days` (R-73), then deleted by the daily sweep.',
   },
   'legal/document': {
     decision: 'DELETE',
@@ -226,6 +229,28 @@ export async function countKeptFiles(
   prisma: PrismaService,
   wawuUserId: string,
 ): Promise<{ ownerKept: number; eventKept: number }> {
+  const kept = await listKeptFiles(prisma, wawuUserId);
+  return { ownerKept: kept.owner.length, eventKept: kept.event.length };
+}
+
+/** A file row the purge set aside under the deleted account. */
+export interface KeptFileRow {
+  id: string;
+  key: string;
+}
+
+/**
+ * The rows `countKeptFiles` counts, as rows: the identity and verification
+ * files set aside for this person (`owner`), and the event images kept while an
+ * event still stands (`event`). Neither list holds a file a kept piece names
+ * (kept for its buyers) or a content-folder file. SETTINGS-09's sweep deletes
+ * `owner` once the days kept have passed, and nothing else, so what it deletes
+ * is exactly what the purge note counted.
+ */
+export async function listKeptFiles(
+  prisma: PrismaService,
+  wawuUserId: string,
+): Promise<{ owner: KeptFileRow[]; event: KeptFileRow[] }> {
   const rows = await prisma.storageObject.findMany({
     where: {
       wawuUserId: DELETED_CREATOR_ID,
@@ -235,14 +260,17 @@ export async function countKeptFiles(
         { key: { startsWith: 'content/full/' } },
       ],
     },
-    select: { key: true },
+    orderBy: { id: 'asc' },
+    select: { id: true, key: true },
   });
   const forBuyers = await keysOfKeptPieces(prisma, wawuUserId);
   const mine = rows.filter((r) => !forBuyers.has(r.key));
   const isEvent = (key: string) =>
     EVENT_FOLDERS.some((f) => key.startsWith(`${f}/`));
-  const eventKept = mine.filter((r) => isEvent(r.key)).length;
-  return { ownerKept: mine.length - eventKept, eventKept };
+  return {
+    owner: mine.filter((r) => !isEvent(r.key)),
+    event: mine.filter((r) => isEvent(r.key)),
+  };
 }
 
 /**

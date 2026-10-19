@@ -6429,6 +6429,19 @@ model AccountDeletion {
   /// takes over a cancelled one. A choice from a list, never free text, so it
   /// holds no personal detail.
   leavingReason   String?
+  /// SETTINGS-09 (R-73). The daily sweep that deletes a purged account's
+  /// set-aside ID documents once the days kept (admin setting
+  /// `id_docs_keep_days`) have passed since `purgedAt`.
+  /// idDocsClaimedUntil: future, a server holds this account until then (a
+  /// second server leaves it alone); past or null, free. A crash frees it.
+  /// idDocsErasedAt: when the sweep found none left; this is the audit line,
+  /// and an account with it set is never looked at again.
+  /// idDocsErased: files deleted (object, then row), counts only.
+  /// idDocsKeepDays: the days kept in force when the sweep finished.
+  idDocsClaimedUntil DateTime?
+  idDocsErasedAt  DateTime?
+  idDocsErased    Int       @default(0)
+  idDocsKeepDays  Int?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
