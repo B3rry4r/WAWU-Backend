@@ -19,6 +19,7 @@
     "community_credit_cost_voice": 3,
     "tgif_notification_time": "07:00",
     "tgif_notice_retention_days": 30,
+    "id_docs_keep_days": 1826,
     "events.open_orders_per_buyer": 10,
     "earnings.daily_move_floor_kobo": 20000,
     "earnings.refused_review_hours": 72,
