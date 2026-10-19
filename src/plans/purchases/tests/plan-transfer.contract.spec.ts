@@ -67,6 +67,14 @@ describe('Pay by bank transfer at checkout (TIER-05), Nuvion stood in', () => {
     settings = h.get(PlanSettingsService);
   });
   afterAll(async () => {
+    // Orders this spec left waiting are its own and go with it. Left behind,
+    // each one falls due four minutes after it was placed, its person's
+    // wallet gone with h.close(), and a later spec's sweep (the deploy runs
+    // every spec in one process on one database) closes it and counts it
+    // (FIX-93; the same defect FIX-89 met for lapsed orders).
+    await h.prisma.planTransferOrder.deleteMany({
+      where: { wawuUserId: { in: h.users } },
+    });
     await h.close();
   });
   beforeEach(() => {
