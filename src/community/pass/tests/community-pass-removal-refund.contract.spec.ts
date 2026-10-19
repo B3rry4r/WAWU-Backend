@@ -32,6 +32,7 @@ import { CommunityModule } from '../../community.module';
 import { CommunityService } from '../../community.service';
 import { CommunityPassModule } from '../community-pass.module';
 import { CommunityPassRefundService } from '../community-pass-refund.service';
+import { CommunityPassRemoval } from '../community-pass-removal.service';
 import type {
   CommunityPassPurchaseView,
   CommunityPassQuoteView,
@@ -111,6 +112,7 @@ describe('A removed member gets the unused days of their pass back (INBOX-25), N
   let prisma: PrismaService;
   let earnings: EarningSettlementService;
   let refunds: CommunityPassRefundService;
+  let removal: CommunityPassRemoval;
   let communities: CommunityService;
   const nuvion = new NuvionSeamStandIn();
   const logger = new QuietLogger();
@@ -329,6 +331,7 @@ describe('A removed member gets the unused days of their pass back (INBOX-25), N
     prisma = moduleRef.get(PrismaService);
     earnings = moduleRef.get(EarningSettlementService);
     refunds = moduleRef.get(CommunityPassRefundService);
+    removal = moduleRef.get(CommunityPassRemoval, { strict: false });
     communities = moduleRef.get(CommunityService);
     // WAWU's own money beyond what is held (its shares and fees).
     nuvion.operational.availableKobo = 5_000_000n;
@@ -592,6 +595,123 @@ describe('A removed member gets the unused days of their pass back (INBOX-25), N
         where: { payeeWawuUserId: host.id },
       }),
     ).toBe(0);
+  });
+
+  it('a running pass and a renewal bought early that has not started: ONE refund pays both, whole price for the unstarted one, the member is out and nothing answers 500', async () => {
+    const host = await person(0, false);
+    const member = await person(5_000_000);
+    const id = await room(host);
+    await pay(member, id);
+    await pay(member, id); // the early renewal: it starts where the first ends
+    const afterBuys = available(member);
+    expect(afterBuys).toBe(BigInt(5_000_000 - 2 * (PRICE + NUVION_FEE)));
+    const [first, second] = await passRows(id, member);
+    expect(second.startsAt.getTime()).toBe(first.endsAt.getTime());
+    // The first has run 5 days (a started day counts): 25 unused. The second starts in 25 days.
+    const startsAt = new Date(Date.now() - 4.5 * DAY);
+    const firstEnds = new Date(startsAt.getTime() + 30 * DAY);
+    await prisma.communityPass.update({
+      where: { id: first.id },
+      data: { startsAt, endsAt: firstEnds },
+    });
+    await prisma.communityPass.update({
+      where: { id: second.id },
+      data: {
+        startsAt: firstEnds,
+        endsAt: new Date(firstEnds.getTime() + 30 * DAY),
+      },
+    });
+    // 200,000 x 25 / 30 = 166,666 (floored) for the first, the whole 200,000 for the second.
+    const quote = await communities.removalQuote(id, host.id, member.id);
+    expect(quote).toMatchObject({ refundKobo: 366_666, unusedDays: 55 });
+
+    expect(await communities.removeMember(id, host.id, member.id)).toEqual({
+      removed: true,
+    });
+    // The member is out of the room (a pending request, as for any removal in a room with a pass).
+    expect(
+      (
+        await prisma.communityMembership.findUniqueOrThrow({
+          where: {
+            userWawuId_communityId: { userWawuId: member.id, communityId: id },
+          },
+        })
+      ).status,
+    ).toBe('pending');
+    // One refund for the removal (one payment, not one per pass), the sum exact to the kobo.
+    const rows = await refundsOf(id, member);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      amountKobo: 366_666n,
+      unusedDays: 55,
+      hostShareKobo: 311_666n,
+    });
+    expect(rows[0].amountKobo).toBe(BigInt(quote.refundKobo));
+    const done = await reached(rows[0].id, settled);
+    expect(done.status).toBe('refunded');
+    expect(available(member)).toBe(afterBuys + 366_666n);
+    expect(await hubBalance(member)).toBe(Number(afterBuys + 366_666n));
+    const sent = refundsReceived(member);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      amountKobo: 366_666n,
+      status: 'successful',
+    });
+    // Both passes are marked paid back and over; neither breaks "ends after it starts".
+    const after = await passRows(id, member);
+    expect(after).toHaveLength(2);
+    for (const pass of after) {
+      expect(pass.refundId).toBe(rows[0].id);
+      expect(pass.endsAt.getTime()).toBeLessThanOrEqual(Date.now());
+      expect(pass.endsAt.getTime()).toBeGreaterThan(pass.startsAt.getTime());
+    }
+    // The pass that never started kept its price and payment link (a payment confirmed again cannot grant it twice).
+    const unstarted = after.find((p) => p.id === second.id)!;
+    expect(unstarted.priceKobo).toBe(BigInt(PRICE));
+    expect(unstarted.walletPaymentId).toBe(second.walletPaymentId);
+    expect(await passFor(id, member)).toMatchObject({
+      active: false,
+      canBuy: false,
+      canRenew: false,
+    });
+    expect(
+      await prisma.earningDeduction.findMany({
+        where: { payeeWawuUserId: host.id },
+      }),
+    ).toMatchObject([{ passRefundId: rows[0].id, amountKobo: 311_666n }]);
+    // A second tap pays nothing more.
+    await communities.removeMember(id, host.id, member.id);
+    expect(await refundsOf(id, member)).toHaveLength(1);
+    expect(refundsReceived(member)).toHaveLength(1);
+    await expectLedgerMatchesNuvion([member]);
+    expect(fintavaHits).toEqual([]);
+  });
+
+  it('a pass that starts at the very moment of the removal is paid back whole and ended without breaking the period check', async () => {
+    const host = await person(0, false);
+    const member = await person(5_000_000);
+    const id = await room(host);
+    await pay(member, id);
+    const afterBuy = available(member);
+    const [pass] = await passRows(id, member);
+    const decided = await prisma.$transaction((tx) =>
+      removal.decide(tx, {
+        communityId: id,
+        hostWawuId: host.id,
+        userWawuId: member.id,
+        now: pass.startsAt,
+      }),
+    );
+    expect(decided).not.toBeNull();
+    const [row] = await refundsOf(id, member);
+    expect(row).toMatchObject({ id: decided, amountKobo: 200_000n });
+    const [ended] = await passRows(id, member);
+    expect(ended.refundId).toBe(row.id);
+    expect(ended.endsAt.getTime()).toBe(pass.startsAt.getTime());
+    expect(ended.startsAt.getTime()).toBe(pass.startsAt.getTime() - 1);
+    await refunds.drive(row.id);
+    await reached(row.id, settled);
+    expect(available(member)).toBe(afterBuy + 200_000n);
   });
 
   it('a member who LEAVES gets nothing back, and a removal that finds them gone gives nothing either', async () => {

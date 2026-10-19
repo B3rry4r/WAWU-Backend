@@ -25,7 +25,10 @@ import type { CommunityPassRemovalQuoteView } from './community-pass-view.type';
  *   back is marked with the refund's id in the same write, conditional on the
  *   mark being empty. A double tap, two servers or a retry find the passes
  *   marked and decide nothing. The removal ends the passes it paid back that
- *   moment, so a member the host lets back in has to buy a pass again.
+ *   moment, so a member the host lets back in has to buy a pass again. A pass
+ *   that has not started yet is all unused: its whole price is paid back with
+ *   the rest, in the same single refund, and it is ended the same way (see
+ *   the note at the update in `decide`).
  * - **The host's share** (85% of the refunded sum, R-5) becomes an
  *   `EarningDeduction`, taken from the host's next daily move and never from
  *   their wallet. WAWU's own 15% of those days is WAWU's loss.
@@ -156,14 +159,26 @@ export class CommunityPassRemoval {
     // Each pass paid back is marked, once, and ended this moment. The mark is
     // conditional: a pass another server marked first stops this removal, and
     // the whole transaction goes with it.
+    //
+    // "Ended" means `endsAt = now`, which is how access is read everywhere (a
+    // pass gives access while `endsAt > now`). The table requires
+    // `endsAt > startsAt` (CommunityPass_period_valid), so a pass that has not
+    // started (a renewal bought early, its start still ahead) or that starts
+    // this very millisecond cannot simply be ended at `now`: its start is
+    // pulled back to one millisecond before `now`, so it is a pass that gave
+    // nothing and is over. The row is kept, never deleted: it holds the
+    // payment link (`walletPaymentId` is unique, so a payment confirmed again
+    // cannot grant the pass a second time), the price, and the refund mark
+    // that makes this removal once-only.
+    const endedStart = new Date(now.getTime() - 1);
     for (const { pass } of owed) {
-      const started = pass.startsAt.getTime() <= now.getTime();
+      const startsBefore = pass.startsAt.getTime() < now.getTime();
       const { count } = await tx.communityPass.updateMany({
         where: { id: pass.id, refundId: null },
         data: {
           refundId: id,
           endsAt: now,
-          ...(started ? {} : { startsAt: now }),
+          ...(startsBefore ? {} : { startsAt: endedStart }),
         },
       });
       if (count !== 1) {
