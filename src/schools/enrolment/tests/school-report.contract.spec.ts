@@ -47,6 +47,20 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
     h.prisma.schoolEnrolmentReport.findUniqueOrThrow({
       where: { enrolmentId },
     });
+  /**
+   * Waits until the first try, which the enrolment starts in the background,
+   * has been made AND has finished: a try claims the row (`attempts` goes up
+   * and the lease is taken) before it asks the relay, and writes its result
+   * with the lease let go. A test that sets the relay's mode or clears its
+   * requests on `attempts >= 1` alone does it while that try is still on its
+   * way to the relay, so the late request lands in the new mode and the new
+   * list (FIX-93).
+   */
+  const firstTryDone = (enrolmentId: string) =>
+    until(async () => {
+      const row = await reportOf(enrolmentId);
+      return row.attempts >= 1 && row.leaseUntil === null;
+    });
   /** Lets the next try happen now. */
   const dueNow = (enrolmentId: string) =>
     h.prisma.schoolEnrolmentReport.update({
@@ -138,7 +152,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      await firstTryDone(id);
       expect((await reportOf(id)).sentAt).toBeNull();
       h.mail.mode = 'ok';
       h.mail.requests.length = 0;
@@ -161,7 +175,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      await firstTryDone(id);
       expect(h.mail.mails.size).toBe(1);
       expect((await reportOf(id)).sentAt).toBeNull();
       expect((await reportOf(id)).lastError).toContain('transient');
@@ -182,7 +196,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      await firstTryDone(id);
       const first = await reportOf(id);
       expect(first.nextAttemptAt!.getTime()).toBeGreaterThan(Date.now());
       // Resting: a sweep now does not try it.
@@ -204,7 +218,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      await firstTryDone(id);
       for (let i = 0; i < 20; i += 1) {
         const row = await reportOf(id);
         if (row.gaveUpAt) break;
@@ -233,7 +247,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      await firstTryDone(id);
       // What the account purge does to the row (account-data-map.ts).
       await h.prisma.schoolEnrolmentReport.update({
         where: { enrolmentId: id },
@@ -296,7 +310,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      await until(async () => (await reportOf(id)).attempts >= 1);
+      await firstTryDone(id);
       await h.prisma.schoolEnrolment.update({
         where: { id },
         data: { status: 'refunded', refundedAt: new Date() },
