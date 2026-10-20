@@ -188,6 +188,10 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
       where: {
         accountNumber: h.nuvion.operational.nuvionBan,
         status: 'completed',
+        // This spec's own people only (FIX-91): every stand-in's WAWU account
+        // has the same number, so rows an earlier spec of the same run left
+        // on it are not money this stand-in ever held.
+        counterpartyWawuUserId: { in: h.users },
       },
       select: { direction: true, amountKobo: true, totalKobo: true },
     });
@@ -677,6 +681,12 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
   });
 
   it("two answers in a day land in the creator's one move, once; a later answer waits for the next day's (R-55)", async () => {
+    // "A day" is the Lagos day of the sweeps' clock, which runs ahead of the
+    // wall clock by every pass the earlier tests made. Started near Lagos
+    // midnight (23:00 UTC), the third answer's sweep would fall in the next
+    // day and rightly get its own move. So the day is pinned: at least two
+    // hours of it are left before anything below.
+    h.keepInLagosDay();
     const c = await creator();
     const fans = [
       await h.person(RICH),

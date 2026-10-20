@@ -135,6 +135,10 @@ describe('Hosts receive their share of spent credits (WALLET-17), Nuvion stood i
       where: {
         accountNumber: h.nuvion.operational.nuvionBan,
         status: 'completed',
+        // This spec's own people only (FIX-91): every stand-in's WAWU account
+        // has the same number, so rows an earlier spec of the same run left
+        // on it are not money this stand-in ever held.
+        counterpartyWawuUserId: { in: h.users },
       },
       select: { direction: true, amountKobo: true, totalKobo: true },
     });
@@ -181,6 +185,8 @@ describe('Hosts receive their share of spent credits (WALLET-17), Nuvion stood i
   });
 
   it("a creator gets one move a day: a later spend waits for tomorrow's, and lands once then", async () => {
+    // The sweeps' Lagos day must not turn over between the two passes below.
+    h.keepInLagosDay();
     const m = await member();
     const { p: hp, room } = await host();
     for (let i = 0; i < 3; i += 1) await spend(m, hp.id, room.id);
