@@ -188,6 +188,10 @@ describe('A paid question from the wallet (INBOX-17), Nuvion stood in', () => {
       where: {
         accountNumber: h.nuvion.operational.nuvionBan,
         status: 'completed',
+        // This spec's own people only (FIX-91): every stand-in's WAWU account
+        // has the same number, so rows an earlier spec of the same run left
+        // on it are not money this stand-in ever held.
+        counterpartyWawuUserId: { in: h.users },
       },
       select: { direction: true, amountKobo: true, totalKobo: true },
     });

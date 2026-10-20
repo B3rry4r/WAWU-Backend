@@ -457,12 +457,23 @@ describe('SETTINGS-06 round 4: a deletion in force keeps a frozen wallet, a canc
     // a stranded row must be healed by the sweep
     let healed = true;
     if (st === 'freezing' || strandedCancel) {
-      plans.set(walletId, { freeze: [], unfreeze: [], balance: [] });
+      // FIX-88: the provider has recovered, for every wallet this spec made,
+      // not only this round's. The sweep also looks at the in-force rows of
+      // the earlier rounds, whose leftover plans still hold refusals; three
+      // refusals in a row end a pass early BY DESIGN ("the rows it did not
+      // reach are asked first next pass"), and the order it meets the rows in
+      // follows their random ids. That made this check pass or fail by chance
+      // (CI, 18 Oct: seed 5637). The row must still be healed, and by the
+      // sweep: the next hourly pass at the latest, so up to three passes here.
+      for (const key of plans.keys()) plans.set(key, { freeze: [], unfreeze: [], balance: [] });
       counts.set(walletId, { freeze: 0, unfreeze: 0, balance: 0 });
       await backdate(id);
-      await sweep.runOnce(new Date(), 200);
-      const after = await row(id);
-      healed = (after === null || after.status === 'cancelled') && !frozen(walletId);
+      healed = false;
+      for (let pass = 0; pass < 3 && !healed; pass++) {
+        await sweep.runOnce(new Date(), 200);
+        const after = await row(id);
+        healed = (after === null || after.status === 'cancelled') && !frozen(walletId);
+      }
     }
     const plan = plans.get(walletId);
     const tl = evs.map((e) => `${e.op}#${e.n}@${Math.round(e.recv - t0)}/${e.apply == null ? '-' : Math.round(e.apply - t0)}`).join(' ');
