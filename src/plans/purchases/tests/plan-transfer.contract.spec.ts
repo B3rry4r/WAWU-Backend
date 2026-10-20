@@ -6,6 +6,7 @@ import {
   type Person,
   type TierHarness,
 } from '../../../../test/plans/tier-purchase-harness';
+import { sweepWithDue } from '../../../../test/plans/lapsed-orders';
 import { NuvionSeamStandIn } from '../../../../test/payments/nuvion-seam-standin';
 import { body, until } from '../../../../test/payments/poll-helpers';
 import { AdminRole } from '../../../../generated/prisma/enums';
@@ -66,6 +67,14 @@ describe('Pay by bank transfer at checkout (TIER-05), Nuvion stood in', () => {
     settings = h.get(PlanSettingsService);
   });
   afterAll(async () => {
+    // Orders this spec left waiting are its own and go with it. Left behind,
+    // each one falls due four minutes after it was placed, its person's
+    // wallet gone with h.close(), and a later spec's sweep (the deploy runs
+    // every spec in one process on one database) closes it and counts it
+    // (FIX-93; the same defect FIX-89 met for lapsed orders).
+    await h.prisma.planTransferOrder.deleteMany({
+      where: { wawuUserId: { in: h.users } },
+    });
     await h.close();
   });
   beforeEach(() => {
@@ -301,7 +310,15 @@ describe('Pay by bank transfer at checkout (TIER-05), Nuvion stood in', () => {
     const p = await person(0);
     const placed = await order(p, { kind: 'tier', tierId: small.id });
     const later = new Date(Date.now() + 25 * 3_600_000);
-    expect((await transfers.sweep(later)).expired).toBe(1);
+    // Other specs' waiting orders lapse with this one (see sweepWithDue).
+    const { due, report, expiredAmongDue } = await sweepWithDue(
+      h.prisma,
+      transfers,
+      later,
+    );
+    expect(due).toContain(placed.id);
+    expect(await expiredAmongDue({ wawuUserId: p.id })).toBe(1);
+    expect(report.expired).toBe(await expiredAmongDue());
     const gone = await statusOf(p, placed.id);
     expect(gone).toMatchObject({
       status: 'expired',

@@ -7273,9 +7273,9 @@
       }
     ],
     "lock": {
-      "lockedAt": "2026-10-17T11:52:11.782Z",
-      "lockedAgainst": "06b776378e84e21027ea54635748b54dd7dc690b",
-      "sha256": "dd8809e53366a5859aece0263d545245cadf4eb5490a743dc199d07d92db4939"
+      "lockedAt": "2026-10-20T09:27:32.477Z",
+      "lockedAgainst": "788e2422f5afdf7a39a83914fa091342fb003582",
+      "sha256": "43f8a5055daed3113c1831c6d6fe91f5edbd24c651073ca556275530751a1d12"
     },
     "routes": [
       {
@@ -12861,7 +12861,9 @@
               "imageUrl": "null",
               "senderWawuId": "string",
               "sentAt": "string",
-              "text": "string"
+              "text": "string",
+              "videoUrl": "null",
+              "voiceUrl": "null"
             },
             "message": "string",
             "statusCode": "number"
@@ -12919,7 +12921,9 @@
                 },
                 "senderWawuId": "string",
                 "sentAt": "string",
-                "text": "string"
+                "text": "string",
+                "videoUrl": "null",
+                "voiceUrl": "null"
               }
             ],
             "message": "string",

@@ -1,5 +1,9 @@
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
+import {
+  PurchaseType,
+  TransactionStatus,
+} from '../../../generated/prisma/enums';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { CourseLessonModule } from '../course-lesson.module';
@@ -30,6 +34,14 @@ const NONEXISTENT_CONTENT_ID = 'ffffffff-0000-4000-8000-000000000099';
 const LESSON_CAC_1 = '11000000-0000-4000-8000-000000000001';
 const LESSON_CAC_2 = '11000000-0000-4000-8000-000000000002';
 
+// FIX-90: a buyer of this spec's own, with a completed Purchase of the seeded
+// course that the spec writes and removes itself. The seeded plain user's
+// Purchase (USER_PLAIN above) is not safe to count on: the deploy's
+// whole-suite run reaches this file after another spec has had that account
+// purged, and its purchase with it.
+const OWN_BUYER = 'f9000000-0000-4000-8000-0000000000b1';
+const OWN_PURCHASE = 'f9000000-0000-4000-8000-0000000000c1';
+
 describe('CourseLesson (contract)', () => {
   let service: CourseLessonService;
   let prisma: PrismaService;
@@ -45,9 +57,25 @@ describe('CourseLesson (contract)', () => {
 
     service = moduleRef.get(CourseLessonService);
     prisma = moduleRef.get(PrismaService);
+    await prisma.purchase.deleteMany({ where: { id: OWN_PURCHASE } });
+    await prisma.purchase.create({
+      data: {
+        id: OWN_PURCHASE,
+        contentId: CONTENT_CAC_COURSE,
+        type: PurchaseType.content,
+        buyerWawuId: OWN_BUYER,
+        creatorWawuId: USER_CREATOR_PRO,
+        amount: 5000,
+        commissionRate: 0.15,
+        flutterwaveTxRef: 'fix90-course-lesson-tx-ref',
+        flutterwaveTxId: 'fix90-course-lesson-tx-id',
+        status: TransactionStatus.completed,
+      },
+    });
   }, 30000);
 
   afterAll(async () => {
+    await prisma.purchase.deleteMany({ where: { id: OWN_PURCHASE } });
     await prisma.$disconnect();
   });
 
@@ -77,8 +105,9 @@ describe('CourseLesson (contract)', () => {
     it('unlocks for a requester with a completed Purchase of the content', async () => {
       const lessons = await service.getLessonsForContent(
         CONTENT_CAC_COURSE,
-        USER_PLAIN,
+        OWN_BUYER,
       );
+      expect(lessons).toHaveLength(2);
       expect(lessons.every((l) => l.locked === false)).toBe(true);
     });
 

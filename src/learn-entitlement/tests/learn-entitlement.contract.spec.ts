@@ -7,6 +7,7 @@ import { ConfigModule } from '@nestjs/config';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
 import { PrismaModule } from '../../common/prisma/prisma.module';
+import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { LearnEntitlementModule } from '../learn-entitlement.module';
 
@@ -52,11 +53,44 @@ async function login(identifier: string): Promise<string> {
   return body.accessToken;
 }
 
+/**
+ * FIX-90: a plain user of this spec's own. The seeded plain user (user@test)
+ * is not safe to count on: the deploy's whole-suite run reaches this file after
+ * another spec has had that account purged, and its seeded enrollment with it.
+ * The mock WAWU ID registers a new account on request; the spec enrolls that
+ * account in the seeded course itself, so the route is asked about rows the
+ * spec made and nobody else touches.
+ */
+async function registerPlainUser(): Promise<{ token: string; sub: string }> {
+  const stamp = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  const res = await fetch(`${MOCK_WAWU_ID_BASE}/auth/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      fullName: 'Fix Ninety',
+      email: `fix90-le-${stamp}@test.wawu.dev`,
+      phone: `+2347${stamp.slice(-9).padStart(9, '0')}`,
+      country: 'NG',
+      password: 'Passw0rd!',
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`mock-wawu-id register failed: ${res.status}`);
+  }
+  const body = (await res.json()) as { accessToken: string };
+  const claims = JSON.parse(
+    Buffer.from(body.accessToken.split('.')[1], 'base64url').toString('utf8'),
+  ) as { sub: string };
+  return { token: body.accessToken, sub: claims.sub };
+}
+
 describe('LearnEntitlement (contract)', () => {
   let app: INestApplication;
+  let prisma: PrismaService;
   let mockWawuId: ChildProcess | undefined;
   let ownedMockWawuId = false;
 
+  let ownPlainSub: string | undefined;
   let plainUserToken: string;
   let basicCreatorToken: string;
   let proCreatorToken: string;
@@ -78,7 +112,9 @@ describe('LearnEntitlement (contract)', () => {
       }
     }
 
-    plainUserToken = await login('user@test.wawu.dev');
+    const own = await registerPlainUser();
+    ownPlainSub = own.sub;
+    plainUserToken = own.token;
     basicCreatorToken = await login('creator-basic@test.wawu.dev');
     proCreatorToken = await login('creator-pro@test.wawu.dev');
 
@@ -102,9 +138,18 @@ describe('LearnEntitlement (contract)', () => {
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
     await app.init();
+    prisma = app.get(PrismaService);
+    await prisma.courseEnrollment.create({
+      data: { userWawuId: ownPlainSub, courseId: LEARN_COURSE_EXPORT },
+    });
   }, 30000);
 
   afterAll(async () => {
+    if (prisma && ownPlainSub) {
+      await prisma.courseEnrollment.deleteMany({
+        where: { userWawuId: ownPlainSub },
+      });
+    }
     await app?.close();
     if (ownedMockWawuId && mockWawuId) {
       mockWawuId.kill();
