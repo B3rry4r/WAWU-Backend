@@ -207,14 +207,6 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     files: ['applyUrl', 'logo'],
     why: 'an admin writes a school logo and a link to its application page',
   },
-  'POST admin/shop/products': {
-    files: ['images'],
-    why: 'an admin writes a shop product with its pictures (the shop has no creator route, R-2)',
-  },
-  'PUT admin/shop/products/:id': {
-    files: ['images'],
-    why: 'an admin writes a shop product with its pictures (the shop has no creator route, R-2)',
-  },
   'POST admin/ads': {
     files: ['creative.artworkUrl'],
     why: 'an admin writes an ad with its artwork',

@@ -277,9 +277,6 @@ describe('Text Postgres cannot take, on every Hub route (FIX-17)', () => {
 
   // The routes FIX-07's verifier saw answer 500 for a NUL (Postgres 22021).
   const NAMED: [string, 'anon' | 'buyer' | 'admin', string][] = [
-    ['/shop/products?search=%00', 'anon', 'search'],
-    ['/shop/products?subcategory=a%00b', 'anon', 'subcategory'],
-    ['/shop/%00', 'anon', 'slug'],
     ['/creators?category=%00', 'anon', 'category'],
     ['/learn/guides?country=a%00b', 'anon', 'country'],
     ['/users/public/%00', 'anon', 'wawuId'],
@@ -442,27 +439,6 @@ describe('Text Postgres cannot take, on every Hub route (FIX-17)', () => {
           perPage,
         ]);
       }
-    });
-
-    it('GET /shop/categories/<not a category>/subcategories is a 400 naming category', async () => {
-      const body = {
-        statusCode: 400,
-        message:
-          'category must be one of the following values: audio_music, video_film, lighting_studio, photography, computing, art_design, gaming_streaming, content_creation, live_events, professional, power_accessories',
-        data: null,
-      };
-      for (const c of [
-        'business',
-        'AUDIO_MUSIC',
-        '%00',
-        'audio_music%00',
-        'constructor',
-        '__proto__',
-      ])
-        expect(
-          (await get(`/shop/categories/${c}/subcategories`).expect(400)).body,
-        ).toEqual(body);
-      await get('/shop/categories/audio_music/subcategories').expect(200);
     });
   });
 
