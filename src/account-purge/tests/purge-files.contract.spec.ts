@@ -421,10 +421,13 @@ describe('FIX-65: a purged account leaves no file of its own in the bucket', () 
     deletes.length = 0;
     const again = await purge.purge(w.p);
     expect(again.failed).toEqual([]);
+    // FIX-65 N1 (SWEEP-LATE): the kept files are counted from where they sit,
+    // so a repeat reports the 4 identity files and the 1 banner still kept
+    // (it said 0, which is what made a purgeNote forget an earlier pass).
     expect(again.files).toEqual({
       objectsRemoved: 0,
-      ownerKept: 0,
-      eventKept: 0,
+      ownerKept: 4,
+      eventKept: 1,
     });
     expect(deletes).toEqual([]);
     expect(holds(w.t.kyc, w.t.soldFull)).toBe(true);
@@ -535,6 +538,23 @@ describe('FIX-65: a purged account leaves no file of its own in the bucket', () 
         ).map((r) => r.wawuUserId),
       ).toEqual([DELETED_CREATOR_ID, DELETED_CREATOR_ID]);
       expect(await rowsOf(w.p)).toEqual([]);
+    });
+
+    // FIX-65 N1: the note of the pass that ends the purge counts the files an
+    // earlier pass refiled too (it counted only its own pass).
+    it('counts the identity files an earlier pass refiled in the report of the pass that ends it', async () => {
+      const w = await filedElsewhere();
+      const fail = jest
+        .spyOn(prisma.profileWork, 'deleteMany')
+        .mockRejectedValueOnce(new Error('injected: one table fails'));
+      const first = await purge.purge(w.p);
+      fail.mockRestore();
+      expect(first.failed).toEqual(['ProfileWork.wawuUserId']);
+      // pass one refiled the document; pass two refiles the licence
+      const second = await purge.purge(w.p);
+      expect(second.failed).toEqual([]);
+      expect(second.files.ownerKept).toBe(2);
+      expect(second.files.eventKept).toBe(0);
     });
 
     it('leaves the identity rows alone when the purge cannot tell which files they name', async () => {

@@ -18,6 +18,11 @@ import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { CommunityModule } from '../community.module';
 import { CommunityMessageModule } from '../../community-message/community-message.module';
 import {
+  expectLinkSignedAgain,
+  moveClockForward,
+  restoreClock,
+} from '../../community-message/tests/fresh-link';
+import {
   PhotoUploads,
   useTestBucket,
 } from '../../community-message/tests/photo-upload';
@@ -438,6 +443,16 @@ describe('Community images (contract)', () => {
       hostPhoto = await photos.link(hostSub);
     });
 
+    // Every answer signs the photo's link again (FIX-71), so the link in an
+    // answer is the sender's own file with a new signature, never the string
+    // that was sent (FIX-84). The tests move the clock two seconds before each
+    // send so every run meets that; the real clock is put back after each test.
+    afterEach(() => {
+      restoreClock();
+    });
+    const imageOf = (res: { body: unknown }): string | null =>
+      (res.body as { data: { imageUrl: string | null } }).data.imageUrl;
+
     // The photo-price tests are asked of an ordinary PAYING member, not of
     // the host: the host of a room never pays to post in it, so a price
     // assertion made from the host's balance would pass no matter what the
@@ -452,6 +467,7 @@ describe('Community images (contract)', () => {
     it('accepts an image with no text, and charges exactly 1 credit for it', async () => {
       await setCredits(posterSub, 10);
 
+      moveClockForward();
       const res = await send({ imageUrl: posterPhoto });
       expect([200, 201]).toContain(res.status);
 
@@ -460,12 +476,12 @@ describe('Community images (contract)', () => {
           communityId,
           senderWawuId: posterSub,
           text: null,
-          imageUrl: posterPhoto,
           // The rule: 1 credit = 1 message, whatever is in it. A photo is
           // NOT priced differently — see MESSAGE_COST_IN_CREDITS.
           costInCredits: 1,
         }),
       );
+      expectLinkSignedAgain(imageOf(res), posterPhoto);
 
       expect(await balanceOf(posterSub)).toBe(9); // 10 - 1, not 10 - anything-else
 
@@ -481,6 +497,7 @@ describe('Community images (contract)', () => {
     it('charges the same 1 credit for text AND an image together', async () => {
       await setCredits(posterSub, 10);
 
+      moveClockForward();
       const res = await send({
         text: 'Fresh batch, this morning.',
         imageUrl: posterPhoto,
@@ -490,10 +507,10 @@ describe('Community images (contract)', () => {
       expect(res.body.data).toEqual(
         expect.objectContaining({
           text: 'Fresh batch, this morning.',
-          imageUrl: posterPhoto,
           costInCredits: 1,
         }),
       );
+      expectLinkSignedAgain(imageOf(res), posterPhoto);
       expect(await balanceOf(posterSub)).toBe(9);
     });
 
@@ -555,6 +572,7 @@ describe('Community images (contract)', () => {
       // that pays them for it either.
       await setCredits(hostSub, 10);
 
+      moveClockForward();
       const res = await request(app.getHttpServer())
         .post(`/communities/${communityId}/messages`)
         .set('Authorization', `Bearer ${hostToken}`)
@@ -563,10 +581,10 @@ describe('Community images (contract)', () => {
       expect(res.body.data).toEqual(
         expect.objectContaining({
           senderWawuId: hostSub,
-          imageUrl: hostPhoto,
           costInCredits: 0,
         }),
       );
+      expectLinkSignedAgain(imageOf(res), hostPhoto);
 
       expect(await balanceOf(hostSub)).toBe(10);
       expect(

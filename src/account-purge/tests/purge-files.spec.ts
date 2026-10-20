@@ -54,6 +54,33 @@ describe('FIX-65: what the purge does with each kind of upload', () => {
     ]);
   });
 
+  // FIX-65 I2: the test above greps the Hub's own writers; a file that talked
+  // to S3 itself (its own PutObjectCommand) would pass it. Only
+  // storage.service.ts may put an object, so a new file that does fails here
+  // until its folder has a decision in FILE_KINDS and this list names it.
+  it('has no file that puts an object in the bucket besides storage.service.ts', () => {
+    const src = join(__dirname, '../..');
+    const found = spawnSync(
+      'grep',
+      [
+        '-rlE',
+        'PutObjectCommand|CreateMultipartUploadCommand|createPresignedPost|UploadPartCommand',
+        src,
+        '--include=*.ts',
+        '--exclude=*.spec.ts',
+        '--exclude-dir=tests',
+      ],
+      { encoding: 'utf8' },
+    );
+    expect(
+      found.stdout
+        .trim()
+        .split('\n')
+        .map((f) => relative(src, f))
+        .sort(),
+    ).toEqual(['storage/storage.service.ts']);
+  });
+
   it('keeps for the owner exactly the identity and verification folders', () => {
     expect([...OWNER_FOLDERS].sort()).toEqual([
       'kyc/id-document',

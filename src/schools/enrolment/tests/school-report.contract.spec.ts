@@ -6,6 +6,8 @@ import {
   type SchoolNuvion,
 } from '../../../../test/schools/school-nuvion-harness';
 import { until } from '../../../../test/transfers/harness';
+import { WawuIdMailRelay } from '../../../admin/notifications/email/email-provider';
+import type { PrismaService } from '../../../common/prisma/prisma.service';
 import { SchoolEnrolmentService } from '../school-enrolment.service';
 import { SchoolReportService } from '../school-report.service';
 import { longDay, lagosStamp } from '../school-report';
@@ -29,10 +31,42 @@ const day = (n: number) =>
 describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
   let h: SchoolNuvion;
   let reports: SchoolReportService;
+  /**
+   * The same service for the sweeps, reading only the reports of the students
+   * this spec made. The minute sweep reads EVERY due report in the database
+   * (that is right for the Hub), so on a database that another process also
+   * uses (a second copy of this spec, a loop beside it) a sweep here sent that
+   * process's reports through this relay, and that process's sweep sent this
+   * one's: a report found sent, or tried fewer times than the spec made it
+   * (README: the contract suite is not parallel-safe; with this the spec's
+   * sweeps no longer need a database to themselves). Everything else it does
+   * goes by one enrolment id and was never shared.
+   */
+  let sweeper: SchoolReportService;
 
   beforeAll(async () => {
     h = await bootSchoolNuvion('s09');
     reports = h.app.get(SchoolReportService);
+    const mineOnly = h.prisma.$extends({
+      query: {
+        schoolEnrolmentReport: {
+          findMany: ({ args, query }) =>
+            query({
+              ...args,
+              where: {
+                AND: [
+                  args.where ?? {},
+                  { enrolment: { wawuUserId: { in: h.users } } },
+                ],
+              },
+            }),
+        },
+      },
+    });
+    sweeper = new SchoolReportService(
+      mineOnly as unknown as PrismaService,
+      h.app.get(WawuIdMailRelay),
+    );
   });
 
   afterAll(async () => {
@@ -142,7 +176,7 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       await until(async () => (await reportOf(view.id)).sentAt !== null);
       // Asked again, from the request and from a sweep: still the one mail.
       expect(await reports.deliver(view.id)).toBe('not_due');
-      await reports.sweep();
+      await sweeper.sweep();
       expect(h.mail.requests).toHaveLength(1);
       expect(h.mail.mails.size).toBe(1);
     });
@@ -205,10 +239,10 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       expect(first.nextAttemptAt!.getTime()).toBeGreaterThan(Date.now());
       // Resting: a sweep now does not try it.
       h.mail.requests.length = 0;
-      await reports.sweep();
+      await sweeper.sweep();
       expect(h.mail.requests).toHaveLength(0);
       h.mail.mode = 'ok';
-      const out = await reports.sweep(new Date(Date.now() + 5 * 60_000));
+      const out = await sweeper.sweep(new Date(Date.now() + 5 * 60_000));
       expect(out.sent).toBeGreaterThanOrEqual(1);
       expect((await reportOf(id)).sentAt).not.toBeNull();
     });

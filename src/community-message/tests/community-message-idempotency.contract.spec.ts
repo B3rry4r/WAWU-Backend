@@ -15,6 +15,11 @@ import { LivePublisher } from '../../live/live-publisher.service';
 import { AccountPurgeService } from '../../account-purge/account-purge.service';
 import { StorageService } from '../../storage/storage.service';
 import { CommunityMessageModule } from '../community-message.module';
+import {
+  expectSameAnswerSignedAgain,
+  moveClockForward,
+  restoreClock,
+} from './fresh-link';
 import { PhotoUploads, useTestBucket } from './photo-upload';
 
 /**
@@ -236,6 +241,7 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
 
   afterEach(() => {
     publishSpy.mockRestore();
+    restoreClock();
   });
 
   afterAll(async () => {
@@ -291,9 +297,12 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
       expect(first.headers['idempotent-replayed']).toBeUndefined();
       expect(await balance()).toBe(9);
 
+      // Each answer signs the photo's link again (FIX-71), so the repeat's link
+      // is the same file signed in a later second, not the same string (FIX-84).
+      moveClockForward();
       const repeat = await post(app, userToken, { text: 'once only' }, key);
       expect(repeat.status).toBe(first.status);
-      expect(repeat.body).toEqual(first.body);
+      expectSameAnswerSignedAgain(repeat, first);
       expect(repeat.headers['idempotent-replayed']).toBe('true');
 
       expect(await balance()).toBe(9);
@@ -319,9 +328,10 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
       const first = await post(app, userToken, { text: 'last credit' }, key);
       expect(first.status).toBe(201);
       expect(await balance()).toBe(0);
+      moveClockForward();
       const repeat = await post(app, userToken, { text: 'last credit' }, key);
       expect(repeat.status).toBe(201);
-      expect(repeat.body).toEqual(first.body);
+      expectSameAnswerSignedAgain(repeat, first);
       expect(await balance()).toBe(0);
     });
 
@@ -330,9 +340,10 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
       const first = await post(app, hostToken, { text: 'host once' }, key);
       expect(first.status).toBe(201);
       expect(bodyOf(first).data.costInCredits).toBe(0);
+      moveClockForward();
       const repeat = await post(app, hostToken, { text: 'host once' }, key);
       expect(repeat.status).toBe(201);
-      expect(repeat.body).toEqual(first.body);
+      expectSameAnswerSignedAgain(repeat, first);
       expect(repeat.headers['idempotent-replayed']).toBe('true');
       expect(await rowsWith('host once', HOST)).toHaveLength(1);
     });

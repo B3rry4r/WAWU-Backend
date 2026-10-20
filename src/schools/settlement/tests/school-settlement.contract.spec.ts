@@ -56,6 +56,23 @@ describe('Pay schools their share of course fees (SCHOOLS-11) on Nuvion stood in
     clock = Math.max(clock, Date.now()) + ms;
     return new Date(clock);
   };
+  /**
+   * Lets the longest rest between two looks at a send pass (FIX-76). Sweeps
+   * that overlap each take a look at the send, and every look lengthens the
+   * rest before the next one (2, 4, 8 ... minutes, at most an hour), so a wait
+   * of ten minutes after a batch of them is not always long enough: the next
+   * sweep found the send not yet due and the settlement stayed `sent`. A wait
+   * that ends after the longest rest is due for any number of looks.
+   */
+  const restPasses = () => later(LONG_REST);
+  /** Polls for something a sweep has not done yet; fails loud after 30 seconds. */
+  async function waitFor(done: () => boolean, what: string): Promise<void> {
+    const end = Date.now() + 30_000;
+    while (!done()) {
+      if (Date.now() > end) throw new Error(`waited 30 s for ${what}`);
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  }
   const today = () => lagosToday(new Date());
   const inDays = (n: number) =>
     new Date(Date.now() + n * 86_400_000).toISOString().slice(0, 10);
@@ -390,6 +407,7 @@ describe('Pay schools their share of course fees (SCHOOLS-11) on Nuvion stood in
         rows.map((r) => r.id),
         'successful',
       );
+      restPasses();
       await Promise.all(
         Array.from({ length: 5 }, () => settlements.run(later())),
       );
@@ -503,7 +521,7 @@ describe('Pay schools their share of course fees (SCHOOLS-11) on Nuvion stood in
       );
       expect(sendsOf(s.id)).toHaveLength(2);
       finishSends([s.id], 'successful');
-      await settlements.run(later());
+      await settlements.run(restPasses());
       s = await settlementOf(id);
       expect(s.status).toBe('paid');
       expect(
@@ -553,11 +571,80 @@ describe('Pay schools their share of course fees (SCHOOLS-11) on Nuvion stood in
       expect(sendsOf(s.id)).toHaveLength(1);
       expect((await settlementOf(id)).status).toBe('sent');
       finishSends([s.id], 'successful');
-      await settlements.run(later());
+      await settlements.run(restPasses());
       s = await settlementOf(id);
       expect(s.status).toBe('paid');
       expect(sendsOf(s.id)).toHaveLength(1);
       expect(s.providerFeeKobo).toBe(BANK_FEE);
+      await ledgerEqualsStandin();
+    });
+  });
+
+  describe('sweeps that overlap', () => {
+    it('looks at one send that end in a set order lengthen the rest by up to an hour, send nothing, and the sweep after the hour pays it once', async () => {
+      const c = await classAt(today());
+      const id = await paidEnrolment(c, await student());
+      await settlements.run(later());
+      const s = await settlementOf(id);
+      expect(sendsOf(s.id)).toHaveLength(1);
+      const reference = `wawu-bank-sch-${s.id}`;
+      const looks = () =>
+        h.nuvion.calls.filter(
+          (x) =>
+            x.method === 'reconcileSend' &&
+            (x.args as { reference: string }).reference === reference,
+        ).length;
+      const seen = looks();
+      // Four sweeps begun ten minutes apart. The stand-in holds each answer
+      // about the send, so the order is the same every time: sweeps 1 and 2
+      // read the settlement together; 1 ends; 3 reads what 1 left; 2 ends;
+      // 4 reads what 2 left; 3 and 4 end. Each look adds one to the count and
+      // lengthens the rest by what it read, so the last rest is longer than
+      // ten minutes. (A ten-minute wait after sweeps like these used to leave
+      // the send not yet due, under load, in the specs above.)
+      const answers: Array<() => void> = [];
+      h.nuvion.holdLook = (r) =>
+        r === reference
+          ? new Promise<void>((go) => answers.push(go))
+          : undefined;
+      let lastLook: Date;
+      try {
+        const times = [later(), later(), later(), later()];
+        lastLook = times[3];
+        const sweep = (i: number) => settlements.run(times[i]);
+        const one = sweep(0);
+        await waitFor(() => looks() === seen + 1, 'the first look');
+        const two = sweep(1);
+        await waitFor(() => looks() === seen + 2, 'the second look');
+        answers[0]();
+        await one;
+        const three = sweep(2);
+        await waitFor(() => looks() === seen + 3, 'the third look');
+        answers[1]();
+        await two;
+        const four = sweep(3);
+        await waitFor(() => looks() === seen + 4, 'the fourth look');
+        answers[2]();
+        await three;
+        answers[3]();
+        await four;
+      } finally {
+        h.nuvion.holdLook = null;
+        for (const go of answers) go();
+      }
+      const resting = await settlementOf(id);
+      expect(resting.status).toBe('sent');
+      expect(sendsOf(s.id)).toHaveLength(1);
+      expect(resting.checks).toBe(5);
+      const rest = resting.nextAttemptAt!.getTime() - lastLook.getTime();
+      expect(rest).toBeGreaterThan(10 * 60_000);
+      expect(rest).toBeLessThanOrEqual(60 * 60_000);
+      finishSends([s.id], 'successful');
+      await settlements.run(restPasses());
+      const paid = await settlementOf(id);
+      expect(paid.status).toBe('paid');
+      expect(sendsOf(s.id)).toHaveLength(1);
+      expect((await holdOf(paid.holdId)).status).toBe('released');
       await ledgerEqualsStandin();
     });
   });

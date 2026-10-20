@@ -54,7 +54,10 @@ const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
   ? new URL(process.env.WAWU_ID_JWKS_URL).port
   : '4001';
 const MOCK_WAWU_ID_BASE = `http://localhost:${MOCK_WAWU_ID_PORT}`;
-const HOST = 'https://fix71-bucket.test.invalid';
+// The bucket's own links point here (virtual-hosted: the bucket is in the
+// host). The stale link was on the endpoint host, which is not the bucket's origin:
+// the code signed it, which FIX-71 L1 (SWEEP-LATE) stopped, so the fixture changed.
+const OWN = 'https://fix71-bucket.fix71-bucket.test.invalid';
 const STALE = 'dead0000beef';
 const DAY = 24 * 3600 * 1000;
 
@@ -104,7 +107,7 @@ function eightDayOldLink(key: string): string {
       .replace(/[-:]/g, '')
       .slice(0, 15) + 'Z';
   return (
-    `${HOST}/${key}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=${stamp}` +
+    `${OWN}/${key}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Date=${stamp}` +
     `&X-Amz-Expires=604800&X-Amz-Signature=${STALE}`
   );
 }
@@ -370,14 +373,10 @@ describe('Community message media is signed again on read (FIX-71, contract)', (
 
   it('the answer to a send, and to its repeat, carries a link that loads today', async () => {
     const key = `community/message/${host.sub}/${randomUUID()}.jpg`;
-    // FIX-77 (two branches met): a message photo must be the sender's own
-    // upload on this bucket, so the old link is on the bucket's own host (the
-    // endpoint's host with the bucket in front, as the SDK signs it) and its
-    // key has the row presign writes.
-    const old = eightDayOldLink(key).replace(
-      HOST,
-      'https://fix71-bucket.fix71-bucket.test.invalid',
-    );
+    // FIX-77: a message photo must be the sender's own upload on this bucket,
+    // so the old link is on the bucket's own host (SWEEP-LATE's eightDayOldLink
+    // now builds it there) and its key has the row presign writes.
+    const old = eightDayOldLink(key);
     await prisma.storageObject.create({
       data: {
         wawuUserId: host.sub,

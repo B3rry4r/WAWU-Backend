@@ -140,12 +140,14 @@ export class NuvionPayoutsStandin {
   private processing = new Set<string>();
   private seq = 0;
   private loseRequest = 0;
+  private failCreate: string[] = [];
   private overrides: Array<{
     match: RegExp;
     method: string | null;
     what:
       | 'lose_after'
       | { answer: StandinAnswer }
+      | { after: StandinAnswer }
       | { error: { type: string; status?: number } };
   }> = [];
   readonly operational: StandinAccount;
@@ -206,9 +208,39 @@ export class NuvionPayoutsStandin {
     return this;
   }
 
+  /**
+   * The next `POST /transfers` is made and Nuvion answers a server error
+   * (`status`, a 5xx): the transfer exists, the answer is not the transfer.
+   */
+  answerAfterNext(status = 500): this {
+    this.overrides.push({
+      match: /^\/transfers$/,
+      method: 'POST',
+      what: {
+        after: {
+          status,
+          body: errorBody('error_internal_server_error', 'Server error.'),
+        },
+      },
+    });
+    return this;
+  }
+
   /** The next `POST /transfers` is cut before it is made. */
   loseRequestNext(times = 1): this {
     this.loseRequest += times;
+    return this;
+  }
+
+  /**
+   * The next `POST /transfers` (a new reference) is made and Nuvion fails it
+   * at once: the answer is the transfer with `status: failed` (api-reference__
+   * transfers.md "Transfer statuses": "Could not be completed"), its funds
+   * back in the account, and a repeat of the reference answers with this same
+   * failed record ("Idempotency key", line 174).
+   */
+  failCreateNext(times = 1, reason = 'invalid_account_details'): this {
+    this.failCreate.push(...Array.from({ length: times }, () => reason));
     return this;
   }
 
@@ -357,6 +389,10 @@ export class NuvionPayoutsStandin {
       if (o.what === 'lose_after') {
         handler(req);
         return { status: 0, hangUp: true };
+      }
+      if ('after' in o.what) {
+        handler(req);
+        return o.what.after;
       }
       if ('answer' in o.what) return o.what.answer;
       return this.errorAnswer(o.what.error.type, o.what.error.status);
@@ -680,6 +716,9 @@ export class NuvionPayoutsStandin {
       };
       this.nuv.transfers.set(t.id, t);
       this.bump(account, 'available', -(amount + this.fee));
+      const failWith = this.failCreate.shift();
+      if (failWith !== undefined)
+        return answer(this.settle(t.id, 'failed', failWith));
       return answer(t);
     });
 
