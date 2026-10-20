@@ -631,12 +631,17 @@ describe('AITOOLS-01: the AI tools catalogue and VoiceOver (contract)', () => {
     await h.grant(PLAIN, COST_1 * 2);
     const res = await h.create(PLAIN, body(`${SCRIPT} [[slow:800]]`));
     const id = data<AiJobView>(res).id;
-    // Meanwhile the sweep runs long after the job should have ended.
+    expect((await holdsOf(PLAIN)).map((x) => x.state)).toEqual(['held']);
+    // Meanwhile the sweep runs long after the job should have ended. It looks
+    // at every stale AI hold in the database, so it may also give back one
+    // another spec left (FIX-91): the count is not this job's. What this proves
+    // is read off this job's own hold: held before, given back by the sweep.
     const swept = await h.spend.releaseStale(
       30,
       new Date(Date.now() + 3_600_000),
     );
-    expect(swept.released).toBe(1);
+    expect(swept.released).toBeGreaterThanOrEqual(1);
+    expect((await holdsOf(PLAIN)).map((x) => x.state)).toEqual(['released']);
     const read = data<AiJobView>(
       await h
         .http()
@@ -659,12 +664,11 @@ describe('AITOOLS-01: the AI tools catalogue and VoiceOver (contract)', () => {
     const res = await h.create(PLAIN, body());
     const id = data<AiJobView>(res).id;
     expect((await h.finish(PLAIN, id)).state).toBe('done');
-    const swept = await h.spend.releaseStale(
-      30,
-      new Date(Date.now() + 3_600_000),
-    );
-    expect(swept.released).toBe(0);
-    expect((await holdsOf(PLAIN))[0].state).toBe('committed');
+    // The sweep is global (FIX-91): a hold another spec left may be given back
+    // here, so the count says nothing about this job. Its own hold is what
+    // must be left alone.
+    await h.spend.releaseStale(30, new Date(Date.now() + 3_600_000));
+    expect((await holdsOf(PLAIN)).map((x) => x.state)).toEqual(['committed']);
     expect(await h.balance(PLAIN)).toBe(COST_1);
   });
 

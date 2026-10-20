@@ -42,8 +42,18 @@ const TIMEOUT_MS = 300;
  * lag, measured during the call, is added (MONEY-17 round 2: the suite failed
  * at load average 6 to 8 with nothing wrong in the client). A hang is still a
  * hang: the bug this spec holds ended at undici's 300 s.
+ *
+ * FIX-90: the lag added is the TOTAL time the loop was unavailable during the
+ * call, not the single worst stall. In the deploy's whole-suite run (one
+ * process that has loaded 480 specs, so every forced collection is slow) a
+ * call met many stalls, three timeout cases ended 40 to 90 ms past a bound
+ * built on the worst one alone, and the deadline timer had fired on the first
+ * turn the loop gave it. A timer cannot fire while the loop is blocked, so the
+ * time blocked is not the client's.
  */
 const MARGIN_MS = 700;
+/** How often the loop is sampled for the time it was unavailable. */
+const SAMPLE_MS = 10;
 /** A call still going at this point is reported as hanging. */
 const WATCHDOG_MS = 10_000;
 
@@ -65,14 +75,17 @@ const server = new FintavaStallServer();
 beforeAll(() => server.start());
 afterAll(() => server.stop());
 
-function client(mode: StallMode): FintavaClient {
+function client(
+  mode: StallMode,
+  timeoutMs: number = TIMEOUT_MS,
+): FintavaClient {
   return new FintavaClient(
     fintavaConfig({
       FINTAVA_BASE_URL: server.baseUrl(mode),
       FINTAVA_API_KEY: 'stall_test_FAKEKEY_0123456789',
-      FINTAVA_TIMEOUT_MS: String(TIMEOUT_MS),
-      FINTAVA_CHECK_TIMEOUT_MS: String(TIMEOUT_MS),
-      FINTAVA_MONEY_TIMEOUT_MS: String(TIMEOUT_MS),
+      FINTAVA_TIMEOUT_MS: String(timeoutMs),
+      FINTAVA_CHECK_TIMEOUT_MS: String(timeoutMs),
+      FINTAVA_MONEY_TIMEOUT_MS: String(timeoutMs),
     }),
   );
 }
@@ -92,7 +105,10 @@ function outcome(p: Promise<unknown>): Promise<string> {
 interface Run {
   result: string;
   ms: number;
-  /** The worst event-loop delay seen during the call, in ms. */
+  /**
+   * The time the event loop was unavailable during the call, in ms: the
+   * larger of the worst single delay and the total of all the delays.
+   */
   lagMs: number;
 }
 
@@ -119,6 +135,13 @@ async function run(
   else if (collect) void server.headersSent().then(collectNow);
   const lag = monitorEventLoopDelay({ resolution: 10 });
   lag.enable();
+  let lostMs = 0;
+  let lastTick = Date.now();
+  const sampler = setInterval(() => {
+    const now = Date.now();
+    lostMs += Math.max(0, now - lastTick - SAMPLE_MS);
+    lastTick = now;
+  }, SAMPLE_MS);
   const started = Date.now();
   let watchdog: NodeJS.Timeout | undefined;
   const result = await Promise.race([
@@ -132,7 +155,9 @@ async function run(
   ]);
   const ms = Date.now() - started;
   lag.disable();
-  const lagMs = Math.ceil(lag.max / 1e6);
+  clearInterval(sampler);
+  lostMs += Math.max(0, Date.now() - lastTick - SAMPLE_MS);
+  const lagMs = Math.max(Math.ceil(lag.max / 1e6), lostMs);
   done = true;
   clearTimeout(watchdog);
   if (collector) clearInterval(collector);
@@ -387,10 +412,22 @@ describe('a refusal or a trickle never outlives the deadline', () => {
 describe('a slow body that finishes in time is read as before', () => {
   afterEach(() => jest.restoreAllMocks());
 
+  /**
+   * FIX-88: this case runs its own, longer timeout. The server and the
+   * client share one event loop, so a stall of the loop that spans the body's
+   * arrival and the deadline makes the deadline fire first (the 17 Oct CI run
+   * failed that way at 300 ms, a body at 150 ms, with forced garbage
+   * collection every 20 ms on a loaded runner). The body still lands at half
+   * the timeout; the half is now 2000 ms, so only a stall of that length
+   * could fail it. What it proves is unchanged: the body is read, and the
+   * one deadline timer is cleared.
+   */
+  const LATE_TIMEOUT_MS = 4000;
+
   it('a balance whose body lands at half the timeout is read, and the deadline is cleared', async () => {
     const set = jest.spyOn(global, 'setTimeout');
     const clear = jest.spyOn(global, 'clearTimeout');
-    const c = client(`late-${TIMEOUT_MS / 2}`);
+    const c = client(`late-${LATE_TIMEOUT_MS / 2}`, LATE_TIMEOUT_MS);
     const collector = setInterval(gc, 20);
     try {
       const balance = await c.getMerchantBalance();
@@ -408,7 +445,7 @@ describe('a slow body that finishes in time is read as before', () => {
         ms: args[1],
         timer: set.mock.results[i].value as unknown,
       }))
-      .filter((t) => t.ms === TIMEOUT_MS);
+      .filter((t) => t.ms === LATE_TIMEOUT_MS);
     expect(deadlines).toHaveLength(1);
     expect(clear).toHaveBeenCalledWith(deadlines[0].timer);
   });
