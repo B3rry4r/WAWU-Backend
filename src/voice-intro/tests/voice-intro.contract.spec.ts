@@ -642,9 +642,15 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
       await h.grant(PLAIN, COST);
       await h.prepare(PLAIN, 'A slow one. [[slow:900]]');
       expect((await generate()).status).toBe(202);
+      // The sweep is global: it may also give back a hold another spec left
+      // behind, so the proof is this person's own hold, not a count.
+      const [own] = await holdsOf(PLAIN);
+      expect(own.state).toBe('held');
       const spend = h.get<PointsSpendService>(PointsSpendService);
-      const swept = await spend.releaseStale(0, new Date(Date.now() + 60_000));
-      expect(swept.released).toBe(1);
+      await spend.releaseStale(0, new Date(Date.now() + 60_000));
+      expect(
+        await h.prisma.pointHold.findUnique({ where: { id: own.id } }),
+      ).toMatchObject({ state: 'released', wawuUserId: PLAIN });
       await h.runs.drain();
       const view = data<VoiceIntroView>(
         await h.as(PLAIN, 'get', '/me/voice-intro'),
