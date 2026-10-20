@@ -89,6 +89,14 @@ export const FILE_KINDS: Readonly<Record<string, FileKind>> = {
     decision: 'DELETE',
     what: 'A photo posted in a community (CommunityMessage.imageUrl); the message is the person’s writing and goes.',
   },
+  'community/message-video': {
+    decision: 'DELETE',
+    what: 'A video posted in a community (CommunityMessage.videoUrl, INBOX-22); the message is the person’s writing and goes.',
+  },
+  'community/message-voice': {
+    decision: 'DELETE',
+    what: 'A voice note posted in a community (CommunityMessage.voiceUrl, INBOX-22); the message is the person’s writing and goes.',
+  },
   'event/banner': {
     decision: 'DELETE',
     what: 'An event banner (Event.bannerUrl). Deleted, unless an event that still stands shows it.',

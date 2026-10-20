@@ -520,7 +520,15 @@ describe('Live updates (contract, INBOX-02)', () => {
           .get(`/live/catch-up?cursor=${startBola.cursor}`)
           .expect(200),
       );
-      expect(forBola.events).toEqual([]);
+      // Bola's own "Bola in the room" (text is free since INBOX-22, R-62, so the
+      // post above now lands) is hers to see; what must not reach her is Ada's.
+      expect(
+        forBola.events.filter(
+          (e) =>
+            (e as LiveEvent & { type: 'community.message' }).message
+              .senderWawuId !== bola.sub,
+        ),
+      ).toEqual([]);
     });
 
     it('loses nothing across a reconnect, with messages arriving while the socket is down', async () => {

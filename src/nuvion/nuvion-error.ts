@@ -294,6 +294,7 @@ export class NuvionError extends WalletProviderError {
     reference?: string | null;
     recordMayExist?: boolean;
     requestNotSent?: boolean;
+    providerFailed?: boolean;
     retryAfterSeconds?: number;
     requestId?: string | null;
     nuvionType?: string | null;

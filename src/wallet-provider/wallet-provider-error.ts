@@ -95,6 +95,17 @@ export class WalletProviderError extends Error {
    * not read this flag keeps treating a lost write as an unknown outcome.
    */
   readonly requestNotSent: boolean;
+  /**
+   * True only when the provider TOOK the transfer and its OWN record says it
+   * failed (FIX-66; Nuvion: the transfer object's `status: failed`,
+   * api-reference__transfers.md "Transfer statuses"). The money is where it
+   * was, so `recordMayExist` is false, but the reference is spent: the
+   * provider answers a repeat of it with that same failed record
+   * (`unique_reference` is its idempotency key), so a caller that may move
+   * the money again does it under a NEW reference. A refusal at the door (no
+   * transfer made) never sets it: that reference is not used up.
+   */
+  readonly providerFailed: boolean;
   /** What a refusal built from this error tells the app to wait. */
   readonly retryAfterSeconds: number;
 
@@ -107,6 +118,7 @@ export class WalletProviderError extends Error {
     reference?: string | null;
     recordMayExist?: boolean;
     requestNotSent?: boolean;
+    providerFailed?: boolean;
     retryAfterSeconds?: number;
   }) {
     const status = args.httpStatus ?? null;
@@ -125,6 +137,7 @@ export class WalletProviderError extends Error {
       args.recordMayExist ??
       WALLET_PROVIDER_UNKNOWN_OUTCOMES.includes(args.kind);
     this.requestNotSent = args.requestNotSent ?? false;
+    this.providerFailed = args.providerFailed ?? false;
     this.retryAfterSeconds =
       args.retryAfterSeconds ?? DEFAULT_PROVIDER_RETRY_AFTER_SECONDS;
   }

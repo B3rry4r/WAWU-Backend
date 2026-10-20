@@ -603,6 +603,19 @@ export class WalletHoldService {
     now: Date,
   ): Promise<HoldSettlement> {
     const refusal = e instanceof WalletProviderError ? e : null;
+    if (refusal?.providerFailed) {
+      // The provider TOOK the move and its own record says it failed (FIX-66):
+      // the money is where it was, but the reference is spent, because the
+      // provider answers a repeat of it with that same failed record. Trying
+      // again under it would be refused for ever. The provider is asked once
+      // more (a read, nothing is sent), and its record starts the new try
+      // under a new reference, the same step a failure found by the sweep
+      // takes. Nothing else does.
+      this.logger.warn(
+        `hold ${hold.id}: ${this.provider.label} took the ${hold.action} and says it failed; reading its record`,
+      );
+      return this.reconcile(hold, now);
+    }
     if (!refusal || (refusal.recordMayExist && !refusal.requestNotSent)) {
       // Money may have moved (a lost answer, a transfer accepted and not
       // finished, a repeated reference): asked about, never sent again.
@@ -821,7 +834,23 @@ export class WalletHoldService {
         nextAttemptAt: new Date(now.getTime() + restMs(attempt)),
       },
     });
-    return this.settlementOf(await this.load(hold.id));
+    // A move the provider keeps failing is a refusal with nothing moved: it
+    // rests longer each time and, as for any refusal, goes to a person once
+    // it has been refused for the review bound (CONVENTIONS section 26), so a
+    // second failure never makes this loop for ever.
+    const fresh = await this.load(hold.id);
+    if (
+      fresh.status === 'held' &&
+      !fresh.reviewSince &&
+      !fresh.sentAt &&
+      this.refusedTooLong(fresh, now)
+    ) {
+      return this.toReview(
+        fresh,
+        `the ${hold.action} has failed at ${this.provider.label} for ${this.settings.reviewAfterHours} hours`,
+      );
+    }
+    return this.settlementOf(fresh);
   }
 
   // -------------------------------------------------------------------------

@@ -98,6 +98,7 @@ describe('WAWU fee on a send to a WAWU user, collected on Nuvion (FIX-52)', () =
   const fintavaHits: string[] = [];
   const users: string[] = [];
   const previous: Record<string, string | undefined> = {};
+  const startedAt = new Date();
   let clock = Date.now();
   const later = (ms = 2 * 60_000) => {
     clock = Math.max(clock, Date.now()) + ms;
@@ -195,6 +196,33 @@ describe('WAWU fee on a send to a WAWU user, collected on Nuvion (FIX-52)', () =
       0,
     );
   };
+  /**
+   * What WAWU's ledger says its own (operational) account changed by (FIX-66):
+   * every completed row on it since this spec began, in minus out.
+   */
+  const operationalLedgerNet = async () => {
+    const rows = await prisma.fintavaLedgerEntry.findMany({
+      where: {
+        walletKind: 'merchant',
+        accountNumber: book.operational.nuvion_ban,
+        status: 'completed',
+        createdAt: { gte: startedAt },
+      },
+      select: { direction: true, totalKobo: true },
+    });
+    return rows.reduce(
+      (n, r) => n + (r.direction === 'in' ? 1 : -1) * Number(r.totalKobo),
+      0,
+    );
+  };
+  const merchantRow = (reference: string, direction: 'in' | 'out') =>
+    prisma.fintavaLedgerEntry.findMany({
+      where: {
+        customerReference: reference,
+        walletKind: 'merchant',
+        direction,
+      },
+    });
   const deliver = async (
     event: string,
     transfer: Record<string, unknown>,
@@ -645,6 +673,113 @@ describe('WAWU fee on a send to a WAWU user, collected on Nuvion (FIX-52)', () =
     // The fee is not moved after the fact.
     expect(feeLegs(reference)).toHaveLength(0);
     expect(operational()).toBe(opBefore);
+    expect(fintavaHits).toEqual([]);
+  });
+
+  it('FIX-66 F2: after sends the operational account ledger equals Nuvion exactly: the fee leg writes its row, once however often it is swept', async () => {
+    const me = await person(5 * PERSON_START);
+    const to = await person(0);
+    book.mode = 'successful';
+    const sent: TransferView[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const b = await prepare(me, to, AMOUNT);
+      const view = body<TransferView>(await post(me, b)).data!;
+      expect(view.status).toBe('completed');
+      sent.push(view);
+    }
+    for (const view of sent) {
+      // The fee transfer's money came into WAWU's account: one row, at what it moved.
+      const rows = await merchantRow(`${view.reference}-fee`, 'in');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        status: 'completed',
+        category: 'transfer',
+        walletKind: 'merchant',
+        wawuUserId: null,
+      });
+      expect(Number(rows[0].totalKobo)).toBe(WAWU_FEE - FEE);
+      expect(await merchantRow(`${view.reference}-fee-back`, 'out')).toEqual(
+        [],
+      );
+    }
+    await transfers.sweep(later());
+    await transfers.settle(sent[0].id, later(), true);
+    expect(await merchantRow(`${sent[0].reference}-fee`, 'in')).toHaveLength(1);
+    // Hub = Nuvion = ledger for WAWU's account, after all the sends of this spec.
+    expect(await operationalLedgerNet()).toBe(
+      operational() - OPERATIONAL_START,
+    );
+    expect(await ledgerNet(me)).toBe(-(5 * PERSON_START - available(me)));
+  });
+
+  it('FIX-66 F2: a send that fails after its fee moved reverses the fee leg in the ledger as the money is reversed', async () => {
+    const me = await person(PERSON_START);
+    const to = await person(0);
+    const opBefore = operational();
+    const ledgerBefore = await operationalLedgerNet();
+    const b = await prepare(me, to, AMOUNT);
+    const view = body<TransferView>(await post(me, b)).data!;
+    book.settle(`${view.reference}-fee`, 'successful');
+    await transfers.sweep(later());
+    expect(await merchantRow(`${view.reference}-fee`, 'in')).toHaveLength(1);
+    book.settle(view.reference, 'failed');
+    book.mode = 'successful';
+    await transfers.sweep(later());
+    await transfers.sweep(later());
+    await transfers.sweep(later());
+    expect((await rowOf(view.id)).status).toBe('failed');
+    expect(feeBacks(view.reference)).toHaveLength(1);
+    // The fee came in (the amount it moved) and went back (what it moved
+    // and Nuvion's charge on the way back, which is WAWU's): both rows are
+    // there, once, and the ledger moved as Nuvion's balance did.
+    const inRows = await merchantRow(`${view.reference}-fee`, 'in');
+    const outRows = await merchantRow(`${view.reference}-fee-back`, 'out');
+    expect(inRows).toHaveLength(1);
+    expect(outRows).toHaveLength(1);
+    expect(Number(inRows[0].totalKobo)).toBe(WAWU_FEE - FEE);
+    expect(outRows[0]).toMatchObject({
+      status: 'completed',
+      category: 'refund',
+    });
+    expect(Number(outRows[0].amountKobo)).toBe(WAWU_FEE);
+    expect(Number(outRows[0].feeKobo)).toBe(FEE);
+    expect(Number(outRows[0].totalKobo)).toBe(WAWU_FEE + FEE);
+    expect(operational() - opBefore).toBe(-2 * FEE);
+    expect((await operationalLedgerNet()) - ledgerBefore).toBe(-2 * FEE);
+    expect(await operationalLedgerNet()).toBe(
+      operational() - OPERATIONAL_START,
+    );
+    expect(available(me)).toBe(PERSON_START);
+    expect(await ledgerNet(me)).toBe(0);
+  });
+
+  it('FIX-66 F2: a completed send Nuvion reverses later: the fee leg and the fee back are both in the operational ledger, and it equals Nuvion', async () => {
+    const me = await person(PERSON_START);
+    const to = await person(0);
+    const b = await prepare(me, to, AMOUNT);
+    book.mode = 'successful';
+    const view = body<TransferView>(await post(me, b)).data!;
+    expect(view.status).toBe('completed');
+    const sent = book.settle(view.reference, 'reversed');
+    await deliver('outflows.refunded', sent, me);
+    await waitFor(async () => (await rowOf(view.id)).status === 'reversed');
+    await transfers.sweep(later());
+    await transfers.sweep(later());
+    expect(feeBacks(view.reference)).toHaveLength(1);
+    expect(await merchantRow(`${view.reference}-fee`, 'in')).toHaveLength(1);
+    expect(await merchantRow(`${view.reference}-fee-back`, 'out')).toHaveLength(
+      1,
+    );
+    expect(await operationalLedgerNet()).toBe(
+      operational() - OPERATIONAL_START,
+    );
+    expect(available(me)).toBe(PERSON_START);
+  });
+
+  it('FIX-66 F2: after every scenario of this spec (a fee that waited, a fee Nuvion failed, a balance spent, a delivery first) the operational ledger still equals Nuvion', async () => {
+    expect(await operationalLedgerNet()).toBe(
+      operational() - OPERATIONAL_START,
+    );
     expect(fintavaHits).toEqual([]);
   });
 });

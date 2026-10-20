@@ -1518,7 +1518,6 @@ export function storedFailure(text: string | null): RunFailure {
   return m ? { code: m[1], sentence: m[2] } : RUN_DIED;
 }
 
-/** What an error is called in the Hub's own log (never stored, never mailed). */
 /**
  * One finding as a single log line. A reference can come from the provider,
  * so it is cut to the characters of `plainRef` (no newline or control
@@ -1534,6 +1533,7 @@ export function findingLogLine(
   );
 }
 
+/** What an error is called in the Hub's own log (never stored, never mailed). */
 function logReason(e: unknown): string {
   if (e instanceof MoneyCheckMailRefused) return e.message;
   if (e instanceof WalletProviderError) return `provider ${e.kind}`;

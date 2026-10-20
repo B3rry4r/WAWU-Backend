@@ -349,6 +349,23 @@ refusal (403, 404, 409 for the window) stores nothing and leaves the key free. T
 makes one key per reply attempt, keeps it across a retry of that attempt, and makes a new
 one for a new reply.
 
+**What a community message costs (INBOX-22, R-62).** By kind, in WAWU Credits (a count,
+never naira): text and emoji 0, a photo `community_credit_cost_photo` (1), a video
+`community_credit_cost_video` (3), a voice note `community_credit_cost_voice` (3), the admin
+settings of TIER-06, read when the message is sent. `GET /communities/message-cost` answers
+`creditsPerMessage` (what a plain message costs: 0) and `creditsByKind` (`text`, `photo`,
+`video`, `voice`). A message carries at most one of `imageUrl`, `videoUrl` and `voiceUrl`
+(a second is `400`); a `videoUrl` or `voiceUrl` must be the sender's own confirmed upload
+(`POST /uploads/presign` for `community/message-video` or `community/message-voice`, then
+`POST /uploads/confirm`) and the link must be the `fileUrl` presign handed back, on this bucket's
+own host, or it is `400` and nothing is charged. Text sent with an
+attachment adds nothing. The host sends every kind free in their own room. A free message
+writes no credit row at all (no balance row is made, no ledger row, no host earning). A sender
+whose credits do not cover the message gets `402` with `reason: "insufficient_credits"` and a
+sentence that says what the kind costs, what they have and how many they are short; nothing
+is stored or taken, and the key stays free. The message, the debit and the ledger row are
+one transaction, so a send that fails after the debit gives the credits back.
+
 **On the PIN routes (optional).** `PUT /money/pin` and `POST /money/pin/reset/confirm`
 move no money, so they do not need a key, but they take one if it is sent
 (WALLET-06 round 2). A phone whose answer to a PIN change or a reset was lost

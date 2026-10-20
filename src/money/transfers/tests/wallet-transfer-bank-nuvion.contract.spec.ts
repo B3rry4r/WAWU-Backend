@@ -200,6 +200,7 @@ describe('A bank send on Nuvion shows its true outcome (FIX-54)', () => {
   const fintavaHits: string[] = [];
   const users: string[] = [];
   const previous: Record<string, string | undefined> = {};
+  const startedAt = new Date();
   let clock = Date.now();
   const later = (ms = 2 * 60_000) => {
     clock = Math.max(clock, Date.now()) + ms;
@@ -908,5 +909,26 @@ describe('A bank send on Nuvion shows its true outcome (FIX-54)', () => {
     expect((await read(second.me, second.view.id)).failureReason).toBe(
       BANK_SEND_RETURNED_REASON,
     );
+  });
+
+  it('FIX-66 F2: after every send of this spec (completed, failed, reversed, waiting on its fee) the operational account ledger equals Nuvion exactly', async () => {
+    const rows = await prisma.fintavaLedgerEntry.findMany({
+      where: {
+        walletKind: 'merchant',
+        accountNumber: book.operational.nuvion_ban,
+        status: 'completed',
+        createdAt: { gte: startedAt },
+      },
+      select: { direction: true, totalKobo: true, customerReference: true },
+    });
+    const net = rows.reduce(
+      (n, r) => n + (r.direction === 'in' ? 1 : -1) * Number(r.totalKobo),
+      0,
+    );
+    // The fee leg of each bank send is a row of its own on WAWU's account.
+    expect(
+      rows.filter((r) => r.customerReference?.endsWith('-fee')).length,
+    ).toBeGreaterThan(0);
+    expect(net).toBe(operational() - OPERATIONAL_START);
   });
 });

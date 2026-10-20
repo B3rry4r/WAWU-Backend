@@ -42,6 +42,12 @@ export const UPLOAD_FOLDERS = [
   // photo by any member, so they never share a prefix.
   'community/image',
   'community/message',
+  // INBOX-22 (R-62). A video and a voice note posted into a room. Their own
+  // prefixes, not `community/message`: that folder holds photos only, and a
+  // message's video or voice note must come from the folder that says so, so
+  // the send can tell a video from a photo by where the file was uploaded.
+  'community/message-video',
+  'community/message-voice',
   // A speaker's photo on a submitted event. Its own prefix: set by the host
   // (never the speaker themselves, who may have no WAWU account at all) and
   // shown publicly once the event is approved, same visibility as the
@@ -129,6 +135,16 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   // markup out of.
   'community/image': IMAGE,
   'community/message': IMAGE,
+  // INBOX-22. Video and voice, played in place by the room, so the same kind
+  // of allowlist as the other folders that render inline. A voice note is what
+  // a phone records (mp4 audio or aac) or an upload of the usual audio types.
+  'community/message-video': ['video/mp4', 'video/quicktime', 'video/webm'],
+  'community/message-voice': [
+    'audio/mp4',
+    'audio/aac',
+    'audio/mpeg',
+    'audio/wav',
+  ],
   'event/speaker': IMAGE,
   'event/banner': IMAGE,
   // Photos, and a video for a showreel. No document types: this is drawn in
@@ -146,6 +162,9 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
  */
 export const FOLDER_MAX_BYTES: Partial<Record<UploadFolder, number>> = {
   'profile/work': 100 * 1024 * 1024,
+  // PROVISIONAL(COMMUNITY-MEDIA-MAX-BYTES, owner=YOU, why=R-62 prices a video and a voice note in a community but no ruling sizes the file; the allowance counts only content/preview and content/full, so without a cap one message could be 512MB): 100MB for a video, 25MB for a voice note.
+  'community/message-video': 100 * 1024 * 1024,
+  'community/message-voice': 25 * 1024 * 1024,
 };
 
 /**
