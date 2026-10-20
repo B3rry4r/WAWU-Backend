@@ -7689,3 +7689,73 @@ model AiToolJob {
   @@index([wawuUserId, createdAt])
   @@index([state, createdAt])
 }
+
+/// A person's voice: how their name is said and their Voice Intro (VOICE-01,
+/// R-43, R-66). One row per person, made the first time they save a spelling,
+/// a script, a consent or a sample. The sample is a file the person uploaded
+/// themselves (`StorageObject`, folder `voice/sample`); `consentAt` and
+/// `consentLine` are the words they agreed to and when. Only the person reads
+/// or changes it; the public profile reads `audioKey` alone.
+model VoiceProfile {
+  wawuUserId      String    @id
+  /// How the person's name is said ("Ah-DEH-oh-lah"), when they set one.
+  namePhonetic    String?
+  nameSavedAt     DateTime?
+  /// The words of the Voice Intro, as the person wrote them.
+  introText       String?
+  introTextAt     DateTime?
+  /// The person's agreement that WAWU may make an AI copy of their own voice.
+  consentAt       DateTime?
+  /// The exact words they agreed to (the line the Hub served).
+  consentLine     String?
+  /// The 30 second recording (a `StorageObject` key of the person's own), and the time it was set.
+  sampleKey       String?
+  sampleAt        DateTime?
+  /// The time of the consent in force when the sample was set.
+  sampleConsentAt DateTime?
+  /// The current Voice Intro audio (a `StorageObject` key), once a run is done.
+  audioKey        String?
+  audioAt         DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+/// One try at making a Voice Intro (VOICE-01). Free when the person's tier
+/// still gives the first one (`includedUsed`, no hold) and otherwise paid in
+/// points held by POINTS-03 (`PointHold`, purpose `ai_job`, reference
+/// `<id>:1`): kept when the audio is stored, given back when it is not. The
+/// script is NEVER stored here; the same Idempotency-Key answers the first run
+/// being used twice. At most one `working` run per person (a partial unique
+/// index in the migration).
+model VoiceIntroRun {
+  id             String     @id @default(uuid())
+  wawuUserId     String
+  idempotencyKey String
+  characters     Int
+  /// 0 when the tier's included first one paid for it.
+  costPoints     Int
+  /// True when the tier's included first Voice Intro was used for this run;
+  /// a run that fails puts it back.
+  includedUsed   Boolean    @default(false)
+  state          AiJobState @default(working)
+  holdId         String?
+  /// `provider_failed`, `provider_unavailable`, `store_failed`, `sample_unreadable` or `timed_out`.
+  failureCode    String?
+  audioKey       String?
+  createdAt      DateTime   @default(now())
+  finishedAt     DateTime?
+
+  @@unique([wawuUserId, idempotencyKey])
+  @@index([wawuUserId, createdAt])
+  @@index([state, createdAt])
+}
+
+/// One "hear your name" preview a person asked for (VOICE-01). Only counted,
+/// so the free preview has a per-hour limit; it holds no name and no audio.
+model VoiceNamePreview {
+  id         String   @id @default(uuid())
+  wawuUserId String
+  createdAt  DateTime @default(now())
+
+  @@index([wawuUserId, createdAt])
+}

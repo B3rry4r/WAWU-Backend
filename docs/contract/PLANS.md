@@ -835,3 +835,39 @@ new additive `reason.code`:
 - The old `verification_required` is no longer answered by these routes: the
   tick is not what they ask for any more. The web reads only `reason.code` and
   `message` from the envelope, and a host with a live tick sees no change.
+
+## 14. Hear your name and the Voice Intro (VOICE-01)
+
+Task VOICE-01, R-43, R-66, R-68, R-65. A person hears their name in a studio
+voice (VF3) and makes a Voice Intro in their own AI voice from a 30 second
+recording they consent to (VF8 to VF11). Every route takes the caller's own id
+from the token and no id in the path or body, so there is no way to ask for,
+record or use anyone else's voice. The audio is an AI voice: every view carries
+`aiVoice: true` so the app shows the tag. No message names the voice provider.
+
+| Route | Does |
+|---|---|
+| `GET /me/voice` | `{ namePhonetic, nameSavedAt, available }`. `available` is false until voices are set up on the Hub. |
+| `POST /me/voice/name-preview` | Body `{ name, phonetic? }`: letters, spaces, apostrophes, hyphens. Answers `{ audioUrl, aiVoice: true }`. Free; at most `voice.name_previews_per_hour` an hour (`429 voice_preview_limit`). `503 voice_unavailable` when voices are off. |
+| `PUT /me/voice/name` | Body `{ phonetic: string \| null }`: how the name is said. Answers `GET /me/voice`. |
+| `GET /me/voice-intro` | `{ aiVoice, text, textMaxChars, consent: { line, given, at }, sample: { recorded, at }, audioUrl, next: { free, costPoints }, canGenerate, run }`. `consent.line` is the words to show. `next.free` is true while the tier still includes the first Voice Intro. `run` is the latest try: `{ id, state, costPoints, included, message, createdAt, finishedAt }`. |
+| `PUT /me/voice-intro/text` | Body `{ text }`, at most `textMaxChars` (`voice.intro_max_chars`, `400 voice_text_too_long`). Answers the view. |
+| `POST /me/voice-intro/consent` | Body `{ line }`, which must be `consent.line` exactly (`409 voice_consent_line_changed`). Stored with the time. Answers the view. |
+| `POST /me/voice-intro/sample` | Body `{ fileUrl }`: the `fileUrl` of `POST /uploads/presign` with the folder `voice/sample`, after the file is sent and `POST /uploads/confirm` says `confirmed`. Only the caller's own landed upload is taken (`400 voice_sample_unusable`); the consent comes first (`409 voice_consent_required`). The time of that consent is stored with the sample. |
+| `POST /me/voice-intro/generate` | `Idempotency-Key` required. Answers `202` with `run.state` `working` (a repeat of the key: `200`, `Idempotent-Replayed: true`, nothing taken twice). The app polls `GET /me/voice-intro`. |
+| `GET /users/{wawuId}/voice-intro` | `{ voiceIntro: { url, aiVoice: true } }`, or `{ voiceIntro: null }`. `404` for no such person or one hidden by a block. Only the audio is public. |
+
+Paying. The first Voice Intro a tier includes (`firstVoiceIntroIncluded`, spent
+once) takes no points; any other holds the plan's `voice_intro` points (200 by
+default, `points.action.voice_intro`) through POINTS-03 before the provider is
+asked, keeps them when the audio is stored and gives every one back when it is
+not (`run.message`: "That didn't work. No points were taken. Try again."); a
+try that used the included one puts it back. One try at a time per person
+(`409 voice_intro_busy`). Refused with nothing taken: `409 voice_text_required`,
+`409 voice_consent_required`, `409 voice_sample_required`, `402
+insufficient_points`, `422 points_cap_reached`, `503 voice_unavailable`.
+
+The public profile route `GET /users/{wawuId}/public-profile` does not carry
+`voiceIntro`: its response is locked by the protected route suite, so the
+Voice Intro is served by the route above (G-VOICE-01-1).
+

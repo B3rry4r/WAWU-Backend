@@ -724,6 +724,22 @@ export function buildRegistry(
     'AITOOLS-CHARS-PER-MINUTE',
   );
   other(
+    'voice.intro_max_chars',
+    'Characters a Voice Intro script can have',
+    'count',
+    ['VF8 (the Voice Intro words), PUT /me/voice-intro/text'],
+    count,
+    'VOICE-INTRO-MAX-CHARS',
+  );
+  other(
+    'voice.name_previews_per_hour',
+    'Free "hear your name" previews one person can ask for in an hour',
+    'count',
+    ['VF3, POST /me/voice/name-preview'],
+    count,
+    'VOICE-NAME-PREVIEWS',
+  );
+  other(
     'tgif_notification_time',
     'Morning time of the TGIF notification (Africa/Lagos)',
     'time',

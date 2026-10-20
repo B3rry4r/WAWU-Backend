@@ -40,6 +40,6 @@ import { HttpVoiceProvider } from './voice/http-voice-provider';
     },
     { provide: AI_AUDIO_STORE, useClass: StorageAiAudioStore },
   ],
-  exports: [AiJobService],
+  exports: [AiJobService, AI_VOICE_PROVIDER, AI_AUDIO_STORE],
 })
 export class AiToolsModule {}

@@ -487,6 +487,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // AI tool jobs (AITOOLS-01): what a person ran, how long and what it cost. No text is
   // kept. The audio is a StorageObject of the person's, removed with the rest of their files.
   { model: 'AiToolJob', column: 'wawuUserId', disposition: 'OWNED' },
+  // VOICE-01: the person's voice (spelling, script, consent, sample and intro
+  // audio keys), the tries at making an intro, and the count of free previews.
+  { model: 'VoiceProfile', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'VoiceIntroRun', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'VoiceNamePreview', column: 'wawuUserId', disposition: 'OWNED' },
   // Points turned into cash (POINTS-04): each row is WAWU's own movement of
   // cash from its account to this person's wallet, and the provider's record
   // of it (our reference, the amount, whether it was confirmed) must outlive

@@ -10,7 +10,11 @@ export interface StandinHandle {
     failed: number;
     active: number;
     maxActive: number;
+    cloned: number;
+    deleted: number;
   };
+  /** Voices the stand-in made for a person's own sample and has not yet had removed. */
+  openClones: () => number;
 }
 
 type StandinModule = {
@@ -24,5 +28,8 @@ export function startStandin(key: string): Promise<StandinHandle> {
   /* eslint-disable @typescript-eslint/no-require-imports */
   const mod = require('../../scripts/dev/voice-standin.cjs') as StandinModule;
   /* eslint-enable @typescript-eslint/no-require-imports */
-  return mod.startVoiceStandin({ port: 0, key });
+  return mod.startVoiceStandin({
+    port: Number(process.env.VOICE_STANDIN_PORT ?? 0),
+    key,
+  });
 }

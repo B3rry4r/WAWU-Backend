@@ -174,6 +174,15 @@ set `STACK_STORAGE_ENDPOINT=http://127.0.0.1:<port>` with
 `STACK_STORAGE_PATH_STYLE=true`. Keep both ports outside the stack's range.
 Without these the tool is listed `enabled: false` and a job is refused.
 
+The same stand-in serves the Voice Intro (VOICE-01): "hear your name" is the
+text-to-speech call with the first listed voice, and a Voice Intro in a
+person's own voice is `POST /v1/voices/add` (the sample as a multipart file,
+answering a one-run voice id), the same text-to-speech call with that id, then
+`DELETE /v1/voices/<id>`. A recording containing `[[sample-reject]]` or
+`[[sample-fail]]` makes the voice call refuse or fail; the script markers above
+work as before. The recording is a `voice/sample` upload, so the storage
+stand-in is needed for a Voice Intro on a stack too.
+
 ### Nuvion on the stack (STACK-NUV)
 
 The Hub's Nuvion adapter accepts only Nuvion's two real hosts, so the stack gives
