@@ -27,6 +27,7 @@ import {
 import { WalletPaymentService } from '../../money/payments/wallet-payment.service';
 import { isUniqueViolationOn } from '../../money/prisma-unique';
 import { NotificationService } from '../../notification/notification.service';
+import { replyTimesFor } from '../../professional/professional-reply-time';
 import {
   WALLET_PROVIDER,
   type WalletProvider,
@@ -808,6 +809,11 @@ export class PaidDmWalletService implements OnModuleInit {
       kind: PAID_DM_KIND,
       targetId: draft.id,
     });
+    // The same median PROS-02's card and H10 read (G-146): replies to wallet
+    // questions are stamped `respondedAt` on the same `DirectMessage` rows.
+    const reply = (await replyTimesFor(this.prisma, [draft.creatorWawuId])).get(
+      draft.creatorWawuId,
+    );
     return {
       question: {
         id: draft.id,
@@ -815,6 +821,7 @@ export class PaidDmWalletService implements OnModuleInit {
         text: draft.text,
         priceKobo: payment.priceKobo,
         replyWindowHours: draft.responseWindowHours,
+        usualReplyMinutes: reply?.usualReplyMinutes ?? null,
       } satisfies PaidQuestionDraftView,
       payment,
     };

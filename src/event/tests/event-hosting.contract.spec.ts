@@ -451,7 +451,8 @@ describe('Event hosting, one submit (EVENTS-02)', () => {
         .set(auth(unverifiedToken))
         .send(wizardBody({ name }))
         .expect(403);
-      expect(bodyOf(res).reason?.code).toBe('verification_required');
+      // EVENTS-12 (R-43): the missing thing is a tier now, not a tick.
+      expect(bodyOf(res).reason?.code).toBe('tier_required');
       expect(await submitted(name)).toHaveLength(0);
     });
 

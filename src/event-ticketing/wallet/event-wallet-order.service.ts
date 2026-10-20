@@ -39,7 +39,7 @@ import {
   MAX_TICKETS_PER_ORDER,
   commissionRate,
 } from '../event-ticketing.constants';
-import { ticketCode } from '../event-ticketing.service';
+import { ticketCode, TIER_CHANGED } from '../event-ticketing.service';
 import type { CreateEventWalletOrderDto } from './event-wallet-order.dto';
 import {
   type BasketAsk,
@@ -372,6 +372,7 @@ export class EventWalletOrderService implements OnModuleInit {
         sold: true,
         salesStartAt: true,
         salesEndAt: true,
+        retiredAt: true,
       },
     });
     const byId = new Map(tiers.map((t) => [t.id, t]));
@@ -380,6 +381,12 @@ export class EventWalletOrderService implements OnModuleInit {
       const tier = byId.get(ask.ticketTypeId);
       if (!tier) {
         throw new MoneyError('target_not_found', TICKET_NOT_FOUND_MESSAGE);
+      }
+      // EVENTS-11: a tier the host replaced while orders pointed at it is
+      // retired, not on sale. It cannot be bought again, whoever picked it
+      // before the host changed it.
+      if (tier.retiredAt) {
+        throw new MoneyError('target_not_payable', TIER_CHANGED);
       }
       basket.push({ tier, quantity: ask.quantity });
     }
@@ -418,6 +425,7 @@ export class EventWalletOrderService implements OnModuleInit {
       const id = randomUUID();
       try {
         return await this.prisma.$transaction(async (tx) => {
+          if (!opts.free) await this.assertTiersOnSale(tx, basket);
           if (opts.free) {
             // EVENTS-13: the same share lock on the event row as `issue`, so
             // a host's cancel and a free order take turns: either the cancel
@@ -479,6 +487,29 @@ export class EventWalletOrderService implements OnModuleInit {
       }
     }
     throw new Error('EventOrder: no free reference after three tries.');
+  }
+
+  /**
+   * EVENTS-11: before a priced order is written, locks its tier rows FOR SHARE
+   * (in id order, the order the host's tier edit and the seat taking use) and
+   * checks, under the lock, that each is still there and not retired. A host's
+   * edit that replaces a tier either commits first, and this order is refused
+   * (409 target_not_payable, "has changed"), or waits for this one and then
+   * sees an order that names the tier. An order is never written against a
+   * tier row that is going away. A free basket does not need it: it takes the
+   * event row's share lock and its seats in this same transaction.
+   */
+  private async assertTiersOnSale(
+    tx: Prisma.TransactionClient,
+    basket: readonly BasketEntry[],
+  ): Promise<void> {
+    const ids = basket.map((b) => b.tier.id);
+    const rows = await tx.$queryRaw<
+      Array<{ id: string; retiredAt: Date | null }>
+    >`SELECT "id", "retiredAt" FROM "EventTicketType" WHERE "id" = ANY(${ids}::text[]) ORDER BY "id" FOR SHARE`;
+    if (rows.length !== ids.length || rows.some((r) => r.retiredAt)) {
+      throw new MoneyError('target_not_payable', TIER_CHANGED);
+    }
   }
 
   /**

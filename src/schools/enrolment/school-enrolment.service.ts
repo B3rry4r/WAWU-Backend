@@ -25,6 +25,7 @@ import {
 import { isUniqueViolation } from '../../money/prisma-unique';
 import { intakeView, type PublicIntakeView } from '../schools-public.views';
 import { SchoolEnrolmentError } from './school-enrolment-error';
+import { describeDatabaseFailure } from './school-enrolment-failure';
 import { SchoolReportService } from './school-report.service';
 import { type StudentContact } from './school-report';
 import {
@@ -113,6 +114,14 @@ type Intake = CourseIntake & {
  *   or an idempotent hold call.
  * - **Never the Learn tables.** LearnCourse and CourseEnrollment reference
  *   the removed subscription; nothing here reads them.
+ * - **One lock order** (FIX-69, G-FIX-68-3). Every transaction here that holds
+ *   more than one row takes its locks in the same order: the student's
+ *   advisory lock, then enrolment rows, then class (intake) rows lowest id
+ *   first (`lockIntakes`). A swap, the release sweep and a payment arriving
+ *   for a released place can therefore wait for each other but never each
+ *   hold what the other wants. The sweep never waits on an enrolment row
+ *   (`SKIP LOCKED`), and the settlement's refund (SCHOOLS-11) already takes
+ *   its one enrolment row before its one class.
  */
 @Injectable()
 export class SchoolEnrolmentService implements OnModuleInit {
@@ -379,7 +388,7 @@ export class SchoolEnrolmentService implements OnModuleInit {
         }
         // Another class is held: give it back for this one. Only a payment
         // that has started keeps it.
-        const gone = await this.releaseIds(tx, [live.id], now);
+        const gone = await this.releaseIds(tx, [live.id], now, [intake.id]);
         if (gone === 0) {
           const open = await this.openPayment(tx, live.id);
           if (open) throw this.inProgress(open);
@@ -451,8 +460,15 @@ export class SchoolEnrolmentService implements OnModuleInit {
   /**
    * Releases these reserved orders that have no payment started and returns
    * their seats, in the caller's transaction. Answers how many were released.
+   * `alsoLock` names classes the caller will take next: they are locked with
+   * the ones given back, in one id order (a swap passes the class it moves to).
    */
-  private async releaseIds(tx: Tx, ids: string[], now: Date): Promise<number> {
+  private async releaseIds(
+    tx: Tx,
+    ids: string[],
+    now: Date,
+    alsoLock: string[] = [],
+  ): Promise<number> {
     const rows = await tx.$queryRaw<{ intakeId: string }[]>`
       UPDATE "SchoolEnrolment" e
          SET "status" = 'released', "releasedAt" = ${now}, "updatedAt" = ${now}
@@ -462,14 +478,42 @@ export class SchoolEnrolmentService implements OnModuleInit {
     await this.giveBack(
       tx,
       rows.map((r) => r.intakeId),
+      alsoLock,
     );
     return rows.length;
   }
 
-  private async giveBack(tx: Tx, intakeIds: string[]): Promise<void> {
+  /**
+   * Locks these classes' rows in one order, lowest id first, in a single
+   * statement, so two transactions that want the same classes cannot each
+   * hold one and wait for the other. Rows already locked by the caller are
+   * not waited on again.
+   */
+  private async lockIntakes(tx: Tx, ids: string[]): Promise<void> {
+    const ordered = [...new Set(ids)].sort();
+    if (ordered.length === 0) return;
+    await tx.$queryRaw`
+      SELECT "id" FROM "CourseIntake"
+       WHERE "id" IN (${Prisma.join(ordered)})
+       ORDER BY "id" COLLATE "C"
+         FOR NO KEY UPDATE`;
+  }
+
+  /**
+   * Returns seats to their classes. Every class involved (these, and
+   * `alsoLock`) is locked first, lowest id first, and nothing is locked when
+   * there is nothing to give back.
+   */
+  private async giveBack(
+    tx: Tx,
+    intakeIds: string[],
+    alsoLock: string[] = [],
+  ): Promise<void> {
+    if (intakeIds.length === 0) return;
     const per = new Map<string, number>();
     for (const id of intakeIds) per.set(id, (per.get(id) ?? 0) + 1);
-    for (const [id, n] of per) {
+    await this.lockIntakes(tx, [...per.keys(), ...alsoLock]);
+    for (const [id, n] of [...per].sort(([a], [b]) => (a < b ? -1 : 1))) {
       await tx.$executeRaw`
         UPDATE "CourseIntake" SET "seatsTaken" = "seatsTaken" - ${n}
          WHERE "id" = ${id} AND "seatsTaken" >= ${n}`;
@@ -520,8 +564,10 @@ export class SchoolEnrolmentService implements OnModuleInit {
       const n = await this.releaseExpired();
       if (n > 0) this.logger.log(`released ${n} unpaid school places`);
     } catch (e) {
+      // The Prisma code and the Postgres state tell a timeout (P2024, P2028)
+      // from a deadlock (40P01); nothing a person typed is ever printed.
       this.logger.error(
-        `release of unpaid school places failed (${e instanceof Error ? e.name : 'error'})`,
+        `release of unpaid school places failed (${describeDatabaseFailure(e)}; models SchoolEnrolment and CourseIntake)`,
       );
     } finally {
       this.releasing = false;
@@ -733,7 +779,10 @@ export class SchoolEnrolmentService implements OnModuleInit {
   ): Promise<{ row: SchoolEnrolment; chose: boolean }> {
     try {
       const enrolled = await this.prisma.$transaction(async (tx) => {
-        if (!(await this.takeSeat(tx, row.intakeId))) throw new NoSeat();
+        // The student's lock first, as in `claim`: this order and a claim by
+        // the same student cannot cross on the one-live-order index. Then the
+        // order row, then the class (the common lock order).
+        await tx.$queryRaw`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtextextended(${`school-claim:${row.wawuUserId ?? row.id}`}, 0))`;
         const { count } = await tx.schoolEnrolment.updateMany({
           where: { id: row.id, status: 'released', paymentId: null },
           data: {
@@ -744,8 +793,10 @@ export class SchoolEnrolmentService implements OnModuleInit {
             releasedAt: null,
           },
         });
-        // Another server settled this order first: the seat taken is rolled back.
+        // Another server settled this order first: nothing was changed.
         if (count !== 1) throw new NoSeat();
+        // No seat: the order row goes back with the rest of the transaction.
+        if (!(await this.takeSeat(tx, row.intakeId))) throw new NoSeat();
         return tx.schoolEnrolment.findUniqueOrThrow({ where: { id: row.id } });
       });
       return { row: enrolled, chose: false };
@@ -754,7 +805,7 @@ export class SchoolEnrolmentService implements OnModuleInit {
         return { row: await this.byId(row.id), chose: false };
       }
       // The one-live-order-per-course index: the student holds or has paid for
-      // another place in this course now. The seat taken is rolled back.
+      // another place in this course now. The order row is rolled back.
       if (isUniqueViolation(e)) {
         return { row: await this.byId(row.id), chose: true };
       }

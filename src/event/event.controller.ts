@@ -16,6 +16,7 @@ import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { PaginationQueryDto } from '../common/dto/pagination.dto';
+import { GatesHosting } from '../plans/host-tier-offers.interceptor';
 import { EventService } from './event.service';
 import { CreateEventDto } from './dto/create-event.dto';
 import { UpdateEventDto } from './dto/update-event.dto';
@@ -102,12 +103,14 @@ export class EventController {
    * Submit an event. Always lands `pending`; an admin decides whether it is
    * ever visible to anyone else.
    */
+  @GatesHosting()
   @Post()
   create(@CurrentUser() user: WawuJwtClaims, @Body() dto: CreateEventDto) {
     return this.eventService.create(user.sub, dto);
   }
 
   /** Edit your own. Any edit sends it back to `pending` — see EventService.update. */
+  @GatesHosting()
   @Patch(':id')
   update(
     @Param('id', ParseUUIDPipe) id: string,

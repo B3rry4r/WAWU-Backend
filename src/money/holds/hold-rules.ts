@@ -128,7 +128,8 @@ export type HoldRequestErrorCode =
  * everything the payment took from them, the provider's charge and WAWU's fee
  * included, and WAWU carries the charge (EVENTS-07 round 2: an order that
  * failed after the debit, as a failed bill is). It changes only the amount of
- * the move; the hold's `refundedKobo` stays the held price.
+ * the move; the hold's stored `refundedKobo` stays the held price (a database
+ * rule) and the hold view serves the move's figure as what came back.
  */
 export interface RefundOptions {
   returnCharge?: boolean;

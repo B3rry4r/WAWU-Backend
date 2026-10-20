@@ -3,6 +3,7 @@ import { IdentityPauseModule } from '../money/opening/identity-pause.module';
 import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { PointsModule } from '../points/points.module';
 import { BillingCurrencyService } from './billing-currency.service';
+import { HostTierOffersInterceptor } from './host-tier-offers.interceptor';
 import { MakerTierService } from './maker-tier.service';
 import { MeTierController } from './me-tier.controller';
 import { PlansController } from './plans.controller';
@@ -33,6 +34,10 @@ import { TierGrantService } from './tier-grant.service';
  * PointsService, so PointsModule is imported, and it is already mounted ahead
  * of this module by MeModule, so no route moves.
  *
+ * Hosting an event reads the tier too (EVENTS-12): `HostTierOffersInterceptor`
+ * (on the routes that carry `@GatesHosting()`) adds the lowest tier to the 403
+ * `tier_required` that EventService.assertMayHost throws.
+ *
  * The gate also refuses while the person's identity check is paused (S7
  * round 2, F3): `IdentityPauseModule` gives it the reader.
  *
@@ -43,6 +48,7 @@ import { TierGrantService } from './tier-grant.service';
   controllers: [PlansController, MeTierController],
   providers: [
     BillingCurrencyService,
+    HostTierOffersInterceptor,
     MakerTierService,
     PlansService,
     PublishingAllowanceService,
@@ -54,6 +60,7 @@ import { TierGrantService } from './tier-grant.service';
     // Re-exports PLANS_CONFIG (the live plan) and PlanSettingsService.
     PlanSettingsModule,
     BillingCurrencyService,
+    HostTierOffersInterceptor,
     MakerTierService,
     PlansService,
     PublishingAllowanceService,

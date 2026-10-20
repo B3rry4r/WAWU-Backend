@@ -332,7 +332,7 @@ describe('Events contract (app-facing)', () => {
       expect(res.body.data.status).toBe('pending');
     });
 
-    it('REFUSES an unverified account, and says what would make it eligible', async () => {
+    it('REFUSES an account with no tick and no tier, and says what would make it eligible', async () => {
       const res = await http()
         .post('/api/hub/events')
         .set(auth(strangerToken))
@@ -341,22 +341,19 @@ describe('Events contract (app-facing)', () => {
 
       // Never a bare 403. The body has to be enough for the app to render a
       // conversion prompt instead of a wall.
+      // EVENTS-12 (R-43): hosting reads the tier now, so the thing it tells
+      // them to get is a tier, not a tick (the old `verification_required`
+      // with `steps` and `purchasable`). The new spec event-host-tier covers
+      // the tier cases in full; this one keeps the refusal's shape.
       expect(res.body.reason).toBeDefined();
-      expect(res.body.reason.code).toBe('verification_required');
+      expect(res.body.reason.code).toBe('tier_required');
       expect(typeof res.body.reason.message).toBe('string');
       expect(res.body.reason.message.length).toBeGreaterThan(0);
-      expect(Array.isArray(res.body.reason.steps)).toBe(true);
-      expect(res.body.reason.steps.length).toBeGreaterThan(0);
-      // And the price of the thing it is telling them to buy, in naira.
-      expect(res.body.reason.purchasable).toEqual([
-        { kind: 'creator', priceNgn: 2000, currency: 'NGN', termMonths: 12 },
-      ]);
+      expect(res.body.reason.tierState).toBe('none');
+      // And the lowest tier it is telling them to get, with its price.
+      expect(res.body.reason.lowestTier.priceMinor).toBeGreaterThan(0);
       // No em-dash anywhere a person reads (CLAUDE.md, product-owner rule).
-      const readable = [
-        res.body.message,
-        res.body.reason.message,
-        ...res.body.reason.steps,
-      ].join(' ');
+      const readable = [res.body.message, res.body.reason.message].join(' ');
       expect(readable).not.toContain('\u2014');
 
       // And nothing was written.
@@ -380,7 +377,8 @@ describe('Events contract (app-facing)', () => {
           .set(auth(thirdToken))
           .send(validEventBody({ name: 'Submitted on a lapsed tick' }))
           .expect(403);
-        expect(res.body.reason.code).toBe('verification_required');
+        // EVENTS-12: the tier is what is missing now, not the tick.
+        expect(res.body.reason.code).toBe('tier_required');
       } finally {
         await prisma.userProfile.update({
           where: { wawuUserId: THIRD_SUB },

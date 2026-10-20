@@ -1,18 +1,20 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { VerificationStateService } from '../common/verification/verification-state.service';
-import { VerificationPricingService } from '../common/verification/verification-pricing';
 import {
   holdsAnyTick,
   unverified as unverifiedState,
   type VerificationState,
 } from '../common/verification/verification-state';
 import type { IneligibilityReason } from '../verification/verification-view.type';
+import { MakerTierService } from '../plans/maker-tier.service';
+import { HostTierRequiredError } from '../plans/host-tier-error';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type {
   EventModel,
@@ -69,34 +71,49 @@ export class EventService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly verification: VerificationStateService,
-    private readonly pricing: VerificationPricingService,
+    private readonly tiers: MakerTierService,
     private readonly blockedAccounts: BlockedAccountService,
   ) {}
 
   /**
-   * HOSTING AN EVENT IS VERIFIED-ONLY (build brief B3).
+   * HOSTING AN EVENT NEEDS A TIER (EVENTS-12, R-43).
    *
    * Enforced here, on the write, and not by hiding a button. A hidden button
-   * is a suggestion; this is the rule. A buyer can never host, because a
-   * buyer account can hold neither tick. An unverified creator and an
-   * unverified professional cannot host either, which is the half that is
-   * easy to get wrong: having the right ACCOUNT TYPE is not having the tick.
+   * is a suggestion; this is the rule. The gate used to read the verification
+   * tick (build brief B3); it now reads the person's tier, the thing R-43
+   * replaced the tick with.
    *
-   * Either tick is enough, and they are not ranked. A verified creator hosts
-   * on the strength of the purple tick; a verified professional on the green
-   * one; somebody with both does not host twice as hard.
+   * Who may host, in the order it is decided:
+   *  1. Somebody whose verification tick has not ended yet (either kind).
+   *     Nothing live stops working: a tick bought before tiers hosts until it
+   *     ends, exactly as before, and with no extra read.
+   *  2. Somebody with a tier that is running (`active`, or `ending` while its
+   *     period has days left; the same test the publishing gate uses).
    *
-   * The refusal carries a `reason` object, not a bare sentence, so the app
-   * can render what this person specifically has to do to become eligible.
-   * Being refused for want of a NGN 4,999 purchase and being refused because
-   * you are on the wrong kind of account are different problems with
-   * different remedies, and a single 403 string cannot tell them apart.
+   * Anyone else is refused with a 403 and a `reason` object, not a bare
+   * sentence, so the app can render what this person specifically has to do:
+   *  - `tier_required`: a creator or professional with no running tier (never
+   *    had one, or it ended). The route's HostTierOffersInterceptor adds the
+   *    lowest tier on `GET /plans` in the person's currency, for "Needs a
+   *    tier, from ...".
+   *  - `account_type_required`: an account that is neither a creator nor an
+   *    approved professional, which has a different remedy to start with.
+   *
+   * An ended tier stops NEW hosting (a new event, an edit, a ticket price
+   * change). It never touches an event that is already live: buying a ticket
+   * asks nothing of the host's tier, so a live event keeps selling.
+   *
+   * Public, and the ONE copy of the rule: PUT /events/:id/tickets
+   * (EventTicketingService.setTicketTypes) calls this too (R-40, owner,
+   * 7 Oct 2026), so repricing an approved event's tickets needs the same
+   * standing as creating or editing the event, with the same 403s.
    */
-  private async assertMayHost(userWawuId: string): Promise<void> {
+  async assertMayHost(userWawuId: string): Promise<void> {
     const state: VerificationState = await this.verification.forOne(userWawuId);
     if (holdsAnyTick(state)) return;
 
-    const [profile, professional, prices] = await Promise.all([
+    const [held, profile, professional] = await Promise.all([
+      this.tiers.heldRowsOf([userWawuId]),
       this.prisma.userProfile.findUnique({
         where: { wawuUserId: userWawuId },
         select: { accountType: true },
@@ -105,55 +122,28 @@ export class EventService {
         where: { wawuUserId: userWawuId, status: 'approved' },
         select: { id: true },
       }),
-      this.pricing.prices(),
     ]);
+
+    const tier = held.get(userWawuId);
+    if (tier && tier.state !== 'ended') return;
 
     const isCreator = profile?.accountType === 'creator';
     const isProfessional = Boolean(professional);
-
-    const purchasable: IneligibilityReason['purchasable'] = [];
-    if (isCreator) {
-      purchasable.push({
-        kind: 'creator',
-        priceNgn: prices.creator,
-        currency: 'NGN',
-        termMonths: 12,
-      });
-    }
-    if (isProfessional) {
-      purchasable.push({
-        kind: 'professional',
-        priceNgn: prices.professional,
-        currency: 'NGN',
-        termMonths: 12,
-      });
+    if (isCreator || isProfessional) {
+      throw new HostTierRequiredError(tier ? 'ended' : 'none');
     }
 
-    const reason: IneligibilityReason =
-      purchasable.length > 0
-        ? {
-            code: 'verification_required',
-            message:
-              'Only verified accounts can host an event. Get verified and you can submit this one straight away.',
-            steps: [
-              'Open Settings, then Verification.',
-              'Pay for the tick that fits your account. It lasts a year.',
-              'Come back and submit your event.',
-            ],
-            purchasable,
-          }
-        : {
-            code: 'account_type_required',
-            message:
-              'Hosting an event is for verified creators and verified professionals. This account is neither yet.',
-            steps: [
-              'Switch to a creator account in Settings, or submit your professional credentials for review.',
-              'Once that is done, pay for the tick that fits your account.',
-              'Come back and submit your event.',
-            ],
-            purchasable: [],
-          };
-
+    const reason: IneligibilityReason = {
+      code: 'account_type_required',
+      message:
+        'Hosting an event is for creators and professionals with a tier. This account is neither yet.',
+      steps: [
+        'Switch to a creator account in Settings, or submit your professional credentials for review.',
+        'Once that is done, pick a tier.',
+        'Come back and submit your event.',
+      ],
+      purchasable: [],
+    };
     throw new ForbiddenException({
       statusCode: 403,
       message: reason.message,
@@ -327,7 +317,8 @@ export class EventService {
    *
    * The ticket types, when sent, are created in the same write as the event
    * (EVENTS-02), so a host never has an event in the queue whose tickets
-   * failed to save, and the reviewer sees both at once.
+   * failed to save. The reviewer reads both: the admin queue and the admin
+   * event detail carry the event's ticket types (R-42, EVENTS-11).
    */
   async create(userWawuId: string, dto: CreateEventDto): Promise<EventView> {
     await this.assertMayHost(userWawuId);
@@ -390,28 +381,51 @@ export class EventService {
     userWawuId: string,
     dto: UpdateEventDto,
   ): Promise<EventView> {
-    // Checked on the edit as well as the create. A tick that lapses after an
-    // event was approved must not leave its host with a write path that the
-    // create path refuses, and every edit re-enters the moderation queue
-    // anyway, so an edit IS a submission.
+    // Checked on the edit as well as the create. A tick or tier that lapses
+    // after an event was approved must not leave its host with a write path
+    // that the create path refuses, and every edit re-enters the moderation
+    // queue anyway, so an edit IS a submission.
     await this.assertMayHost(userWawuId);
-    const existing = await this.prisma.event.findUnique({ where: { id } });
-    if (!existing || existing.hostWawuId !== userWawuId) {
-      // Same 404-not-403 reasoning as findOne: an event that is not yours is
-      // an event you are not told about.
-      throw new NotFoundException('Event not found.');
-    }
-    if (existing.status === 'removed') {
-      throw new ForbiddenException(
-        'This event was taken down by an admin and cannot be edited. Submit a new one, or contact support.',
-      );
-    }
 
-    const startsAt = dto.startsAt ? new Date(dto.startsAt) : existing.startsAt;
-    const endsAt = dto.endsAt ? new Date(dto.endsAt) : existing.endsAt;
-    assertWindowOrdered(startsAt, endsAt);
-
+    // The event is read, checked and written under a lock on its row, in one
+    // transaction (EVENTS-11 D1). An admin's remove that lands while this
+    // edit is in flight either commits first, and this edit then gets the
+    // takedown's 403, or waits for this edit and finds the event `pending`.
+    // Read before the lock, a takedown in between was overwritten with
+    // `pending` and an approve would then have published it.
+    //
+    // FOR NO KEY UPDATE, not FOR UPDATE (EVENTS-11 D2): it conflicts with
+    // every other update of the event row (an admin's decision, another
+    // edit) but not with the FOR KEY SHARE lock Postgres takes on the event
+    // for each row inserted that points at it (an order, a ticket, a going
+    // mark), so none of those waits on an edit and none can deadlock with
+    // one.
     const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "Event" WHERE "id" = ${id} FOR NO KEY UPDATE`;
+      const existing = await tx.event.findUnique({ where: { id } });
+      if (!existing || existing.hostWawuId !== userWawuId) {
+        // Same 404-not-403 reasoning as findOne: an event that is not yours
+        // is an event you are not told about.
+        throw new NotFoundException('Event not found.');
+      }
+      if (existing.status === 'removed') {
+        throw new ForbiddenException(TAKEN_DOWN_MESSAGE);
+      }
+      // FIX-12: an event its own host called off is over. An edit used to be
+      // accepted here and write `pending` over `cancelled`, which would have
+      // put a called-off event back in the review queue (and, once approved,
+      // back on sale with every ticket already voided and refunded). PUT
+      // /events/:id/tickets answers the same 409, from the same sentence.
+      if (existing.status === 'cancelled' || existing.cancelledAt) {
+        throw new ConflictException(EVENT_CANCELLED_MESSAGE);
+      }
+
+      const startsAt = dto.startsAt
+        ? new Date(dto.startsAt)
+        : existing.startsAt;
+      const endsAt = dto.endsAt ? new Date(dto.endsAt) : existing.endsAt;
+      assertWindowOrdered(startsAt, endsAt);
+
       if (dto.speakers) {
         // Wholesale replacement — see UpdateEventDto. Both halves are in the
         // same transaction so an event is never briefly speakerless.
@@ -466,8 +480,7 @@ export class EventService {
           // Every edit re-enters review, and the old decision reason goes with
           // it — a rejection note still attached to a resubmission tells the
           // host they were rejected for something they have just fixed.
-          status: 'pending',
-          lastDecisionReason: null,
+          ...BACK_TO_REVIEW,
         },
         include: { speakers: { orderBy: { order: 'asc' } } },
       });
@@ -624,9 +637,10 @@ export class EventService {
       // The "from" price, DERIVED: the cheapest tier this event offers. One
       // grouped read for the whole page rather than a price column on Event
       // that would go stale the moment a tier is added or repriced.
+      // Retired tiers (EVENTS-11 round 5) are not on sale and set no price.
       this.prisma.eventTicketType.groupBy({
         by: ['eventId'],
-        where: { eventId: { in: ids } },
+        where: { eventId: { in: ids }, retiredAt: null },
         _min: { priceNaira: true },
       }),
       // One batched read for the whole page, not one per row.
@@ -692,6 +706,34 @@ export class EventService {
     }));
   }
 }
+
+/**
+ * The refusal for an edit to an event an admin took down (`removed`). PATCH
+ * /events/:id and PUT /events/:id/tickets (R-40 round 4 ruling) both answer
+ * it, as a 403 with this message, and write nothing: the way back from a
+ * takedown is an admin's restore, and a restore must not publish anything
+ * the host changed after the takedown.
+ */
+export const TAKEN_DOWN_MESSAGE =
+  'This event was taken down by an admin and cannot be edited. Submit a new one, or contact support.';
+
+/**
+ * The refusal for an edit to an event its host called off (`cancelled`). PATCH
+ * /events/:id and PUT /events/:id/tickets both answer it, as a 409, and write
+ * nothing (FIX-12). Buying a ticket for such an event says the same.
+ */
+export const EVENT_CANCELLED_MESSAGE = 'This event has been cancelled.';
+
+/**
+ * What sending an event back to review writes: `pending`, and the old
+ * decision reason cleared. PATCH /events/:id writes it on every edit, and
+ * PUT /events/:id/tickets on a tier change (R-40), from this one place, so
+ * the two can never disagree about what "back to review" means.
+ */
+export const BACK_TO_REVIEW = {
+  status: 'pending',
+  lastDecisionReason: null,
+} as const;
 
 /**
  * upcoming / past, decided on `endsAt ?? startsAt`.
