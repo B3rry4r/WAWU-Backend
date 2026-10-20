@@ -7,6 +7,7 @@ import {
   type Person,
   type TierHarness,
 } from '../../../../test/plans/tier-purchase-harness';
+import { sweepWithDue } from '../../../../test/plans/lapsed-orders';
 import { NuvionSeamStandIn } from '../../../../test/payments/nuvion-seam-standin';
 import { body } from '../../../../test/payments/poll-helpers';
 import { AdminRole } from '../../../../generated/prisma/enums';
@@ -339,7 +340,15 @@ describe('Add more products by bank transfer (TIER-04), Nuvion stood in', () => 
     await running(p);
     const placed = await order(p);
     const later = new Date(Date.now() + 25 * 3_600_000);
-    expect((await transfers.sweep(later)).expired).toBe(1);
+    // Other specs' waiting orders lapse with this one (see sweepWithDue).
+    const { due, report, expiredAmongDue } = await sweepWithDue(
+      h.prisma,
+      transfers,
+      later,
+    );
+    expect(due).toContain(placed.id);
+    expect(await expiredAmongDue({ wawuUserId: p.id })).toBe(1);
+    expect(report.expired).toBe(await expiredAmongDue());
     expect(await statusOf(p, placed.id)).toMatchObject({
       status: 'expired',
       statusMessage: EXPIRED_MESSAGE,

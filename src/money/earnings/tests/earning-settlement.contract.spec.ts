@@ -54,7 +54,7 @@ import { PaymentSettings } from '../../payments/payment-config';
 import { WalletPaymentService } from '../../payments/wallet-payment.service';
 import type { MoneyErrorReason } from '../../dto/money-error.dto';
 import { EarningSettlementService } from '../earning-settlement.service';
-import { earningReference } from '../earning-rules';
+import { earningReference, lagosDay, moveReference } from '../earning-rules';
 
 /**
  * A sale's 85% lands in the payee's wallet by itself (task WALLET-16, R-11)
@@ -68,6 +68,15 @@ import { earningReference } from '../earning-rules';
  * (`docs/fintava/fees.md`). Ordinary kinds (`content_unlock`, `tip`) are
  * registered the way a selling feature will register its own, and so is one
  * held kind (`paid_dm`) to show the two never overlap.
+ *
+ * Since R-55 (owner, 16 Oct 2026) a creator's earnings travel in ONE move a
+ * day (`EarningMove`), not one transfer per sale. The provider, the lease, the
+ * unknown outcomes and the 72 hours after a first refusal belong to the MOVE,
+ * and its reference names the creator and the day (`moveReference`). The
+ * money checks are the same as before it (amounts to the kobo, once only);
+ * `earning-settlement-nuvion.contract.spec.ts` and
+ * `earning-daily-move.contract.spec.ts` pin the same rule on Nuvion.
+ * FIX-88 brought this file to R-55.
  */
 
 const BASE = '/api/hub/money';
@@ -206,6 +215,17 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     clock = Math.max(clock, Date.now()) + ms;
     return new Date(clock);
   };
+  /**
+   * The sweep's clock to 01:00 Lagos on a later day: R-55 counts a day by
+   * Lagos midnight, so a test whose passes minutes apart must fall on ONE day
+   * starts here and cannot be split by a midnight that comes by chance.
+   */
+  const freshDay = () => {
+    const next = lagosDay(
+      new Date(Math.max(clock, Date.now()) + 24 * 3_600_000),
+    );
+    clock = next.start.getTime() + 3_600_000;
+  };
 
   type Person = {
     id: string;
@@ -319,6 +339,19 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     prisma.earningSettlement.findUnique({ where: { paymentId } });
   const settlementOrThrow = (paymentId: string) =>
     prisma.earningSettlement.findUniqueOrThrow({ where: { paymentId } });
+  /** The creator's move of the day (R-55): the one transfer their earnings travel in. */
+  const moveOf = (p: Pick<Person, 'id'>) =>
+    prisma.earningMove.findFirstOrThrow({
+      where: { payeeWawuUserId: p.id },
+      orderBy: { createdAt: 'asc' },
+    });
+  const moveById = (id: string) =>
+    prisma.earningMove.findUniqueOrThrow({ where: { id } });
+  const moveCount = (p: Pick<Person, 'id'>) =>
+    prisma.earningMove.count({ where: { payeeWawuUserId: p.id } });
+  /** What every try of one move starts with (a later try adds `-<n>`). */
+  const firstRefOf = (m: { payeeWawuUserId: string; dayKey: string }) =>
+    moveReference(m.payeeWawuUserId, m.dayKey, 1);
   const ledgerRows = (reference: string) =>
     prisma.fintavaLedgerEntry.findMany({
       where: { customerReference: reference },
@@ -421,6 +454,32 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
         customerReference: earningReference(paymentId, 1),
       },
     });
+  }
+
+  /**
+   * The earning of a finished sale AND the creator's move that carries it,
+   * both made by hand (nothing is sent), so a test acts on the move before
+   * the sweep does.
+   */
+  async function makeEarningInMove(paymentId: string) {
+    const earning = await makeEarning(paymentId);
+    const dayKey = lagosDay(new Date()).key;
+    const move = await prisma.earningMove.create({
+      data: {
+        payeeWawuUserId: earning.payeeWawuUserId,
+        dayKey,
+        provider: 'fintava',
+        merchantAccountNumber: earning.merchantAccountNumber,
+        amountKobo: earning.amountKobo,
+        earnings: 1,
+        customerReference: moveReference(earning.payeeWawuUserId, dayKey, 1),
+      },
+    });
+    await prisma.earningSettlement.update({
+      where: { id: earning.id },
+      data: { moveId: move.id },
+    });
+    return { earning, move };
   }
 
   /** What the provider answered to each question about one reference. */
@@ -734,6 +793,15 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
       await prisma.earningSettlement.deleteMany({
         where: { paymentId: { in: ids } },
       });
+      // The creators' moves (R-55), after the earnings that point at them.
+      await prisma.earningMove.deleteMany({
+        where: {
+          OR: [
+            { createdAt: { gte: startedAt } },
+            { payeeWawuUserId: { in: users } },
+          ],
+        },
+      });
       await prisma.walletHold.deleteMany({ where: { paymentId: { in: ids } } });
       await prisma.walletPayment.deleteMany({ where: { id: { in: ids } } });
       await prisma.moneyIdempotencyKey.deleteMany({
@@ -795,14 +863,30 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
 
     const result = await pass();
     expect(result.adopted).toBeGreaterThanOrEqual(pays.length);
+    expect(result.planned).toBeGreaterThanOrEqual(1);
+
+    // R-55: the five earnings travel in ONE move, one transfer to the
+    // creator's wallet, named by the creator and the day.
+    const move = await moveOf(creator);
+    const ref = move.customerReference;
+    expect(move).toMatchObject({ earnings: pays.length, status: 'landed' });
+    expect(move.amountKobo).toBe(BigInt(expected));
+    expect(ref).toBe(moveReference(creator.id, move.dayKey, 1));
+    expect(await moveCount(creator)).toBe(1);
 
     // The provider's balance is the truth: the creator got exactly the shares.
     expect(balanceOf(creator)).toBe(expected);
-    // WAWU's account paid out the shares and Fintava's charge on each move (R-31).
-    const moves = pays.map((p) => sendsOf(earningReference(p.id, 1)));
-    for (const m of moves) expect(m).toHaveLength(1);
-    const charges = moves.reduce((sum, m) => sum + m[0].feeKobo, 0);
-    expect(merchantBefore - merchantBalance()).toBe(expected + charges);
+    // WAWU's account paid out the shares and Fintava's charge on the ONE
+    // move (R-31): the charge once, not once per sale.
+    const sent = sendsOf(ref);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].amountKobo).toBe(expected);
+    expect(merchantBefore - merchantBalance()).toBe(expected + sent[0].feeKobo);
+    expect(move.providerFeeKobo).toBe(BigInt(sent[0].feeKobo));
+    // None of the five has a transfer of its own any more.
+    for (const p of pays) {
+      expect(sendsOf(earningReference(p.id, 1))).toHaveLength(0);
+    }
 
     // What the creator is shown.
     const res = await getEarnings(creator);
@@ -854,19 +938,25 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     expect(seen.reduce((sum, s) => sum + s.earnedKobo, 0)).toBe(expected);
     expect(seen.reduce((sum, s) => sum + s.sales, 0)).toBe(pays.length);
 
-    // The wallet's own history shows each earning once, linked to the sale.
+    // The wallet's own history shows the move once: one pair for the whole
+    // move, linked to none of the five sales (it names no single sale).
+    const rows = await ledgerRows(ref);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((r) => r.direction).sort()).toEqual(['in', 'out']);
+    for (const r of rows) {
+      expect(r.status).toBe('completed');
+      expect(r.category).toBe('earning');
+      expect(r.paymentId).toBeNull();
+      expect(r.linkKind).toBeNull();
+    }
+    expect(rows.find((r) => r.direction === 'in')!.amountKobo).toBe(
+      BigInt(expected),
+    );
     for (const p of pays) {
-      const rows = await ledgerRows(earningReference(p.id, 1));
-      expect(rows).toHaveLength(2);
-      expect(rows.map((r) => r.direction).sort()).toEqual(['in', 'out']);
-      for (const r of rows) {
-        expect(r.status).toBe('completed');
-        expect(r.category).toBe('earning');
-        expect(r.paymentId).toBeNull();
-        expect(r.linkKind).toBe(p.kind);
-      }
+      expect(await ledgerRows(earningReference(p.id, 1))).toHaveLength(0);
       const done = await settlementOrThrow(p.id);
       expect(done.status).toBe('landed');
+      expect(done.moveId).toBe(move.id);
       expect(done.destinationAccountNumber).toBe(creator.accountNumber);
       const paid = await prisma.walletPayment.findUniqueOrThrow({
         where: { id: p.id },
@@ -889,14 +979,15 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     const buyer = await person(1_000_000);
     const target = listing(creator, 250_000);
     const paid = await sale(buyer, 'content_unlock', target);
-    const reference = earningReference(paid.id, 1);
     const merchantBefore = merchantBalance();
 
     await pass();
     const waiting = await settlementOrThrow(paid.id);
     expect(waiting.status).toBe('owed');
     expect(waiting.waiting).toBe('payee_wallet');
-    expect(attemptsOf(reference)).toBe(0);
+    // No wallet, no move: nothing was asked of the provider (R-11, R-55).
+    expect(waiting.moveId).toBeNull();
+    expect(await moveCount(creator)).toBe(0);
     expect(merchantBalance()).toBe(merchantBefore);
 
     // She sees what she earned and that it is waiting, not a balance.
@@ -911,20 +1002,22 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     // The routes work without a wallet: no 409 wallet_not_open.
     expect((await getContent(creator)).status).toBe(200);
 
-    // More passes while she has no wallet: nothing is sent, nothing is lost.
+    // More passes while she has no wallet: no move is made, nothing is lost.
     for (let i = 0; i < 4; i += 1) await pass(30 * 60_000);
-    expect(attemptsOf(reference)).toBe(0);
+    expect(await moveCount(creator)).toBe(0);
+    expect(merchantBalance()).toBe(merchantBefore);
     expect((await settlementOrThrow(paid.id)).status).toBe('owed');
 
-    // She opens her wallet. The very next pass lands it, whatever it had rested.
+    // She opens her wallet. The very next pass makes her move and lands it.
     await openWallet(creator, 0);
-    const woke = await settlementOrThrow(paid.id);
-    expect(woke.nextAttemptAt).not.toBeNull();
     await earnings.sweep(new Date(Date.now() + 1_000));
+    const move = await moveOf(creator);
+    const reference = move.customerReference;
     expect(balanceOf(creator)).toBe(shareOf(250_000));
     expect(sendsOf(reference)).toHaveLength(1);
     const landed = await settlementOrThrow(paid.id);
     expect(landed.status).toBe('landed');
+    expect(landed.moveId).toBe(move.id);
     expect(landed.destinationAccountNumber).toBe(creator.accountNumber);
 
     // Once: more passes, and the same earning asked for again, move nothing.
@@ -932,6 +1025,7 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     await earnings.drive(landed.id, later());
     expect(sendsOf(reference)).toHaveLength(1);
     expect(balanceOf(creator)).toBe(shareOf(250_000));
+    expect(await moveCount(creator)).toBe(1);
 
     const after = body<EarningsView>(await getEarnings(creator)).data!;
     expect(after.walletOpen).toBe(true);
@@ -939,7 +1033,6 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     expect(after.allTime.earnedKobo).toBe(shareOf(250_000));
     expect(await ledgerRows(reference)).toHaveLength(2);
   });
-
   // -------------------------------------------------------------------------
   // Exactly once
   // -------------------------------------------------------------------------
@@ -948,25 +1041,28 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
-    const reference = earningReference(paid.id, 1);
 
     for (let i = 0; i < 6; i += 1) await pass();
     const row = await settlementOrThrow(paid.id);
+    const move = await moveOf(creator);
+    const reference = move.customerReference;
     for (let i = 0; i < 4; i += 1) await earnings.drive(row.id, later());
     expect(sendsOf(reference)).toHaveLength(1);
     expect(attemptsOf(reference)).toBe(1);
     expect(balanceOf(creator)).toBe(85_000);
-    expect(await ledgerRows(reference)).toHaveLength(2);
+    const ledger2 = await ledgerRows(reference);
+    expect(ledger2).toHaveLength(2);
+    // A move of one sale keeps that sale's link in the wallet's history.
+    for (const r of ledger2) expect(r.linkKind).toBe('content_unlock');
     expect(
       await prisma.earningSettlement.count({ where: { paymentId: paid.id } }),
     ).toBe(1);
+    expect(await moveCount(creator)).toBe(1);
   });
-
   it('lands once between two Hub processes: two services on one database, both sweeping and driving at the same moment', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, 'content_unlock', listing(creator, 120_000));
-    const reference = earningReference(paid.id, 1);
     // A second process: its own service, the same database and provider.
     const other = new EarningSettlementService(
       prisma,
@@ -986,11 +1082,21 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
       other.sweep(now),
       other.sweep(now),
     ]);
-    // Wait until the winner has reached the provider, give the others time,
-    // then let it answer.
-    for (let i = 0; i < 400 && attemptsOf(reference) < 1; i += 1) {
-      await new Promise((r) => setTimeout(r, 25));
+    // Wait until the winner has reached the provider (the move is named by
+    // the creator and the day, so it is found by its row), give the others
+    // time, then let it answer.
+    let reference = '';
+    for (let i = 0; i < 400 && !reference; i += 1) {
+      const m = await prisma.earningMove.findFirst({
+        where: { payeeWawuUserId: creator.id },
+      });
+      if (m && attemptsOf(m.customerReference) >= 1) {
+        reference = m.customerReference;
+      } else {
+        await new Promise((r) => setTimeout(r, 25));
+      }
     }
+    expect(reference).not.toBe('');
     await new Promise((r) => setTimeout(r, 300));
     release();
     await runs;
@@ -999,44 +1105,45 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
       earnings.drive(row.id, later()),
       other.drive(row.id, later()),
     ]);
+    expect(await moveCount(creator)).toBe(1);
     expect(attemptsOf(reference)).toBe(1);
     expect(sendsOf(reference)).toHaveLength(1);
     expect(balanceOf(creator)).toBe(102_000);
     expect((await settlementOrThrow(paid.id)).status).toBe('landed');
     expect(await ledgerRows(reference)).toHaveLength(2);
   });
-
   it('a crash between the provider moving the money and our write: found again by its reference, never sent again', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
-    const reference = earningReference(paid.id, 1);
     // The process dies after the provider answered and before anything was
-    // written here: this one earning's landing throws, as a killed process
-    // would, and every other earning lands as usual.
+    // written here: this one creator's move landing throws, as a killed
+    // process would, and every other move lands as usual.
     const real = (
       earnings as unknown as {
         land: (
-          s: { paymentId: string },
+          m: { payeeWawuUserId: string },
           ...rest: unknown[]
         ) => Promise<unknown>;
       }
     ).land.bind(earnings);
     const spy = jest
       .spyOn(earnings as unknown as { land: typeof real }, 'land')
-      .mockImplementation((s, ...rest) =>
-        s.paymentId === paid.id
+      .mockImplementation((m, ...rest) =>
+        m.payeeWawuUserId === creator.id
           ? Promise.reject(new Error('killed after the provider answered'))
-          : real(s, ...rest),
+          : real(m, ...rest),
       );
     await pass();
     spy.mockRestore();
     // The money moved at the provider; nothing was written here.
+    const midway = await moveOf(creator);
+    const reference = midway.customerReference;
     expect(sendsOf(reference)).toHaveLength(1);
     expect(balanceOf(creator)).toBe(85_000);
-    const midway = await settlementOrThrow(paid.id);
     expect(midway.status).toBe('owed');
     expect(midway.sentAt).not.toBeNull();
+    expect((await settlementOrThrow(paid.id)).status).toBe('owed');
     expect(await ledgerRows(reference)).toHaveLength(0);
     const payment = await prisma.walletPayment.findUniqueOrThrow({
       where: { id: paid.id },
@@ -1048,9 +1155,10 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     expect(midway.nextAttemptAt!.getTime() - midway.sentAt!.getTime()).toBe(
       MONEY_TIMEOUT_MS + provider.timings.resendSafetyMs,
     );
-    await earnings.drive(midway.id, later(30 * 60_000));
-    const done = await settlementOrThrow(paid.id);
+    await earnings.driveMove(midway.id, later(30 * 60_000));
+    const done = await moveById(midway.id);
     expect(done.status).toBe('landed');
+    expect((await settlementOrThrow(paid.id)).status).toBe('landed');
     expect(attemptsOf(reference)).toBe(1);
     expect(sendsOf(reference)).toHaveLength(1);
     expect(balanceOf(creator)).toBe(85_000);
@@ -1063,39 +1171,38 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
       ).payeeSettledAt,
     ).not.toBeNull();
   });
-
   it('a lost answer (the provider took it, the line dropped) is asked about, found, and never sent under a new reference', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, 'content_unlock', listing(creator, 300_000));
-    const reference = earningReference(paid.id, 1);
     wallets.mode = 'timeout';
     await pass();
-    const lost = await settlementOrThrow(paid.id);
+    const lost = await moveOf(creator);
+    const reference = lost.customerReference;
     expect(lost.status).toBe('owed');
     expect(lost.sentAt).not.toBeNull();
     expect(sendsOf(reference)).toHaveLength(1);
 
     wallets.mode = 'live';
     await pass(10 * 60_000);
-    const done = await settlementOrThrow(paid.id);
+    const done = await moveById(lost.id);
     expect(done.status).toBe('landed');
     expect(done.customerReference).toBe(reference);
+    expect((await settlementOrThrow(paid.id)).status).toBe('landed');
     expect(attemptsOf(reference)).toBe(1);
     expect(balanceOf(creator)).toBe(255_000);
     expect(
-      wallets.attempts.filter((r) => r.startsWith(`wawu-earn-${paid.id}`)),
+      wallets.attempts.filter((r) => r.startsWith(firstRefOf(done))),
     ).toHaveLength(1);
   });
-
   it('silence is never proof that no money moved: an unknown outcome is asked about, not resent, and goes to a person at the bound', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
-    const reference = earningReference(paid.id, 1);
     wallets.mode = 'error500';
     await pass();
-    const unknown = await settlementOrThrow(paid.id);
+    const unknown = await moveOf(creator);
+    const reference = unknown.customerReference;
     expect(unknown.sentAt).not.toBeNull();
     expect(unknown.waiting).toBeNull();
     // The provider now answers, but has no record of it (absent).
@@ -1103,92 +1210,99 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     for (let i = 0; i < 5; i += 1) await pass(2 * 60 * 60_000);
     expect(attemptsOf(reference)).toBe(1);
     expect((await settlementOrThrow(paid.id)).status).toBe('owed');
+    expect((await moveById(unknown.id)).status).toBe('owed');
     expect(balanceOf(creator)).toBe(0);
-    // Past the review bound a person looks; the earning is not sent again.
-    await earnings.drive(
+    // Past the review bound a person looks; the move is not sent again.
+    await earnings.driveMove(
       unknown.id,
       new Date(
         unknown.sentAt!.getTime() + (settings.reviewAfterHours + 1) * 3_600_000,
       ),
     );
-    const review = await settlementOrThrow(paid.id);
+    const review = await moveById(unknown.id);
     expect(review.reviewSince).not.toBeNull();
     expect(review.discrepancy).toContain('may have moved');
     await pass();
     expect(attemptsOf(reference)).toBe(1);
   });
-
   it("only the provider's own record that a move failed starts a new try, under a new reference", async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
-    const first = earningReference(paid.id, 1);
     wallets.mode = 'error500';
     await pass();
+    const first = await moveOf(creator);
     wallets.mode = 'live';
-    wallets.failures.add(first); // the provider's record: the move failed
+    wallets.failures.add(first.customerReference); // the provider's record: the move failed
     await pass(10 * 60_000);
-    const retry = await settlementOrThrow(paid.id);
+    const retry = await moveById(first.id);
     expect(retry.attempt).toBe(2);
-    expect(retry.customerReference).toBe(earningReference(paid.id, 2));
+    expect(retry.customerReference).toBe(
+      moveReference(creator.id, retry.dayKey, 2),
+    );
     expect(retry.sentAt).toBeNull();
+    // A move the provider failed counts as a refusal for the 72 hours (R-55).
+    expect(retry.firstRefusedAt).not.toBeNull();
     expect(balanceOf(creator)).toBe(0);
     await pass(2 * 60 * 60_000);
-    const done = await settlementOrThrow(paid.id);
+    const done = await moveById(first.id);
     expect(done.status).toBe('landed');
-    expect(sendsOf(earningReference(paid.id, 2))).toHaveLength(1);
-    expect(sendsOf(first)).toHaveLength(0);
+    expect((await settlementOrThrow(paid.id)).status).toBe('landed');
+    expect(sendsOf(retry.customerReference)).toHaveLength(1);
+    expect(sendsOf(first.customerReference)).toHaveLength(0);
     expect(balanceOf(creator)).toBe(85_000);
   });
-
   it('a wallet that the provider has frozen waits and is paid on unfreeze; the money stays in WAWU’s account meanwhile', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
     wallets.frozen.add(creator.accountNumber);
     await pass();
-    const frozen = await settlementOrThrow(paid.id);
+    const frozen = await moveOf(creator);
     expect(frozen.status).toBe('owed');
     expect(frozen.waiting).toBe('recipient_frozen');
     expect(frozen.sentAt).toBeNull();
+    // A frozen wallet is a wait, not a refusal: the 72 hours do not start.
+    expect(frozen.firstRefusedAt).toBeNull();
+    expect((await settlementOrThrow(paid.id)).status).toBe('owed');
     expect(balanceOf(creator)).toBe(0);
     wallets.frozen.clear();
     await pass(2 * 60 * 60_000);
+    expect((await moveById(frozen.id)).status).toBe('landed');
     expect((await settlementOrThrow(paid.id)).status).toBe('landed');
     expect(balanceOf(creator)).toBe(85_000);
   });
-
   it('another amount than the share is a stop for a person, with the ledger untouched', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
     wallets.mode = 'wrongamount';
     await pass();
-    const row = await settlementOrThrow(paid.id);
+    const row = await moveOf(creator);
     expect(row.status).toBe('owed');
     expect(row.reviewSince).not.toBeNull();
     expect(row.discrepancy).toContain(
-      'moved 85100 kobo for an earning of 85000',
+      'moved 85100 kobo for a move of 85000 kobo',
     );
-    expect(await ledgerRows(earningReference(paid.id, 1))).toHaveLength(0);
+    expect((await settlementOrThrow(paid.id)).status).toBe('owed');
+    expect(await ledgerRows(row.customerReference)).toHaveLength(0);
     const payment = await prisma.walletPayment.findUniqueOrThrow({
       where: { id: paid.id },
     });
     expect(payment.payeeSettledAt).toBeNull();
   });
-
   // -------------------------------------------------------------------------
   // Round 2, F1: three rules about the provider's own record
   // -------------------------------------------------------------------------
 
-  it('F1 a record the provider does not have (absent: not found, and a complete empty history) is not a failure: the earning stays on its reference, asked about, never resent', async () => {
+  it('F1 a record the provider does not have (absent: not found, and a complete empty history) is not a failure: the move stays on its reference, asked about, never resent', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
-    const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
-    const reference = earningReference(paid.id, 1);
+    await sale(buyer, 'content_unlock', listing(creator, 100_000));
     wallets.mode = 'error500';
     await pass();
-    const unknown = await settlementOrThrow(paid.id);
+    const unknown = await moveOf(creator);
+    const reference = unknown.customerReference;
     expect(unknown.sentAt).not.toBeNull();
     expect(attemptsOf(reference)).toBe(1);
 
@@ -1204,52 +1318,52 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     } finally {
       asked.mockRestore();
     }
-    const waiting = await settlementOrThrow(paid.id);
+    const waiting = await moveById(unknown.id);
     expect(waiting.status).toBe('owed');
     expect(waiting.attempt).toBe(1);
     expect(waiting.customerReference).toBe(reference);
     expect(waiting.sentAt).not.toBeNull();
     expect(waiting.reviewSince).toBeNull();
     expect(attemptsOf(reference)).toBe(1);
-    expect(attemptsOf(earningReference(paid.id, 2))).toBe(0);
+    expect(attemptsOf(moveReference(creator.id, waiting.dayKey, 2))).toBe(0);
     expect(balanceOf(creator)).toBe(0);
 
     // For as long as the review bound: still the same reference, still one
     // attempt. Past it a person looks, and nothing is sent.
-    await earnings.drive(
+    await earnings.driveMove(
       unknown.id,
       new Date(
         unknown.sentAt!.getTime() + (settings.reviewAfterHours + 1) * 3_600_000,
       ),
     );
-    const review = await settlementOrThrow(paid.id);
+    const review = await moveById(unknown.id);
     expect(review.reviewSince).not.toBeNull();
     expect(review.attempt).toBe(1);
     expect(review.customerReference).toBe(reference);
     expect(attemptsOf(reference)).toBe(1);
     expect(
-      wallets.attempts.filter((r) => r.startsWith(`wawu-earn-${paid.id}`)),
+      wallets.attempts.filter((r) => r.startsWith(firstRefOf(review))),
     ).toHaveLength(1);
   });
-
   it('F1 a record that is still pending at the provider is not a finished move: nothing lands, the ledger is untouched, and it is not resent', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
-    const reference = earningReference(paid.id, 1);
     // The provider took the move and lost the answer; its record says PENDING.
     wallets.mode = 'timeout';
     await pass();
     wallets.mode = 'live';
+    const handedOver = await moveOf(creator);
+    const reference = handedOver.customerReference;
     wallets.pending.add(reference);
-    const handedOver = await settlementOrThrow(paid.id);
     expect(handedOver.sentAt).not.toBeNull();
 
     for (let i = 0; i < 4; i += 1) await pass(2 * 60 * 60_000);
-    const waiting = await settlementOrThrow(paid.id);
+    const waiting = await moveById(handedOver.id);
     expect(waiting.status).toBe('owed');
     expect(waiting.reviewSince).toBeNull();
     expect(waiting.settledAt).toBeNull();
+    expect((await settlementOrThrow(paid.id)).status).toBe('owed');
     expect(await ledgerRows(reference)).toHaveLength(0);
     expect(
       (
@@ -1262,40 +1376,41 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     expect(waiting.attempt).toBe(1);
 
     // Past the bound a person looks; still not landed, still not resent.
-    await earnings.drive(
+    await earnings.driveMove(
       handedOver.id,
       new Date(
         handedOver.sentAt!.getTime() +
           (settings.reviewAfterHours + 1) * 3_600_000,
       ),
     );
-    const review = await settlementOrThrow(paid.id);
+    const review = await moveById(handedOver.id);
     expect(review.reviewSince).not.toBeNull();
     expect(review.status).toBe('owed');
     expect(review.discrepancy).toContain('may have moved');
     expect(attemptsOf(reference)).toBe(1);
     wallets.pending.delete(reference);
   });
-
   it('F1 a completed record of another amount than the share is a stop for a person: the ledger and the sale are untouched', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
-    const reference = earningReference(paid.id, 1);
     // The answer was lost; the record says completed, for 900 naira, not 850.
     wallets.mode = 'timeout';
     await pass();
     wallets.mode = 'live';
+    const sentMove = await moveOf(creator);
+    const reference = sentMove.customerReference;
     wallets.recordAmount.set(reference, '900.00');
 
     await pass(10 * 60_000);
-    const row = await settlementOrThrow(paid.id);
+    const row = await moveById(sentMove.id);
     expect(row.status).toBe('owed');
     expect(row.reviewSince).not.toBeNull();
     expect(row.settledAt).toBeNull();
     expect(row.discrepancy).toContain(
-      'moved 90000 kobo for an earning of 85000',
+      'moved 90000 kobo for a move of 85000 kobo',
     );
+    expect((await settlementOrThrow(paid.id)).status).toBe('owed');
     expect(await ledgerRows(reference)).toHaveLength(0);
     expect(
       (
@@ -1310,7 +1425,6 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     expect(attemptsOf(reference)).toBe(1);
     wallets.recordAmount.delete(reference);
   });
-
   // -------------------------------------------------------------------------
   // Round 2, F2: the lease and the bounds
   // -------------------------------------------------------------------------
@@ -1319,30 +1433,32 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
-    const row = await makeEarning(paid.id);
+    await makeEarning(paid.id);
     await prisma.walletPayment.update({
       where: { id: paid.id },
       data: { status: 'reversed' },
     });
 
-    const result = await earnings.drive(row.id, later());
-    expect(result.state).toBe('review');
+    // The planner meets the earning, finds its sale is no longer a finished
+    // one, and makes no move: the earning goes to a person.
+    await pass();
+    const result = await earnings.forPayment(paid.id);
+    expect(result!.state).toBe('review');
     const after = await settlementOrThrow(paid.id);
     expect(after.reviewSince).not.toBeNull();
-    expect(after.sentAt).toBeNull();
-    expect(after.attempts).toBe(0);
+    expect(after.moveId).toBeNull();
     expect(after.discrepancy).toContain('no longer a finished one');
+    expect(await moveCount(creator)).toBe(0);
     expect(attemptsOf(earningReference(paid.id, 1))).toBe(0);
     expect(balanceOf(creator)).toBe(0);
     expect(await ledgerRows(earningReference(paid.id, 1))).toHaveLength(0);
   });
-
-  it('F2 two callers that both read the earning before either took the lease send one move: the lease is won once', async () => {
+  it('F2 two callers that both read the move before either took the lease send one move: the lease is won once', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
-    const reference = earningReference(paid.id, 1);
-    const row = await makeEarning(paid.id);
+    const { move } = await makeEarningInMove(paid.id);
+    const reference = move.customerReference;
     const other = new EarningSettlementService(
       prisma,
       provider,
@@ -1351,18 +1467,18 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
       settings,
     );
 
-    // Each caller's first read of the earning waits until the other has read
-    // it too, so both hold a snapshot with no lease on it (a stale snapshot)
-    // and only the conditional write on the earning's row can tell them apart.
+    // Each caller's first read of the move waits until the other has read it
+    // too, so both hold a snapshot with no lease on it (a stale snapshot) and
+    // only the conditional write on the move's row can tell them apart.
     let reads = 0;
     let open!: () => void;
     const bothRead = new Promise<void>((r) => (open = r));
-    type Loads = { load: (id: string) => Promise<unknown> };
+    type Loads = { loadMove: (id: string) => Promise<unknown> };
     const gated = (svc: EarningSettlementService) => {
       const target = svc as unknown as Loads;
-      const real = target.load.bind(svc);
+      const real = target.loadMove.bind(svc);
       let first = true;
-      return jest.spyOn(target, 'load').mockImplementation(async (id) => {
+      return jest.spyOn(target, 'loadMove').mockImplementation(async (id) => {
         const snapshot = await real(id);
         if (first) {
           first = false;
@@ -1377,8 +1493,8 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     const now = later();
     try {
       await Promise.all([
-        earnings.drive(row.id, now),
-        other.drive(row.id, now),
+        earnings.driveMove(move.id, now),
+        other.driveMove(move.id, now),
       ]);
     } finally {
       spies.forEach((spy) => spy.mockRestore());
@@ -1387,39 +1503,44 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     expect(attemptsOf(reference)).toBe(1);
     expect(sendsOf(reference)).toHaveLength(1);
     expect(balanceOf(creator)).toBe(85_000);
-    const done = await settlementOrThrow(paid.id);
+    const done = await moveById(move.id);
     expect(done.status).toBe('landed');
     expect(done.attempts).toBe(1);
+    expect((await settlementOrThrow(paid.id)).status).toBe('landed');
     expect(await ledgerRows(reference)).toHaveLength(2);
   });
-
   it('F2 the review bound is reached AT the 72nd hour of silence, not after it', async () => {
     const creatorA = await person(0, false);
     const creatorB = await person(0, false);
     const buyer = await person(2_000_000);
-    const a = await sale(buyer, 'content_unlock', listing(creatorA, 100_000));
-    const b = await sale(buyer, 'content_unlock', listing(creatorB, 100_000));
+    await sale(buyer, 'content_unlock', listing(creatorA, 100_000));
+    await sale(buyer, 'content_unlock', listing(creatorB, 100_000));
     wallets.mode = 'error500';
     await pass();
     wallets.mode = 'live';
-    const rowA = await settlementOrThrow(a.id);
-    const rowB = await settlementOrThrow(b.id);
-    expect(rowA.sentAt).not.toBeNull();
-    expect(rowB.sentAt).not.toBeNull();
+    const moveA = await moveOf(creatorA);
+    const moveB = await moveOf(creatorB);
+    expect(moveA.sentAt).not.toBeNull();
+    expect(moveB.sentAt).not.toBeNull();
     const bound = settings.reviewAfterHours * 3_600_000;
 
     // One millisecond short of the bound: asked again, not yet a person's.
-    await earnings.drive(rowA.id, new Date(rowA.sentAt!.getTime() + bound - 1));
-    expect((await settlementOrThrow(a.id)).reviewSince).toBeNull();
+    await earnings.driveMove(
+      moveA.id,
+      new Date(moveA.sentAt!.getTime() + bound - 1),
+    );
+    expect((await moveById(moveA.id)).reviewSince).toBeNull();
     // Exactly at it: a person looks.
-    await earnings.drive(rowB.id, new Date(rowB.sentAt!.getTime() + bound));
-    const review = await settlementOrThrow(b.id);
+    await earnings.driveMove(
+      moveB.id,
+      new Date(moveB.sentAt!.getTime() + bound),
+    );
+    const review = await moveById(moveB.id);
     expect(review.reviewSince).not.toBeNull();
     expect(review.discrepancy).toContain('may have moved');
-    expect(attemptsOf(earningReference(a.id, 1))).toBe(1);
-    expect(attemptsOf(earningReference(b.id, 1))).toBe(1);
+    expect(attemptsOf(moveA.customerReference)).toBe(1);
+    expect(attemptsOf(moveB.customerReference)).toBe(1);
   });
-
   it('F2 a sale at the first instant of a Lagos month is that month’s alone, and the last millisecond before it is the month before’s', async () => {
     const creator = noWallet();
     // 1 Oct 00:00:00.000 in Lagos is 30 Sep 23:00:00.000 UTC.
@@ -1464,42 +1585,47 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
   // Round 2, F3: a refusal that moved nothing goes to a person past the bound
   // -------------------------------------------------------------------------
 
-  it('F3 a refused earning (the provider refuses, nothing moves) is retried under the same reference and, past the review bound, goes to a person', async () => {
+  it('F3 a refused move (the provider refuses, nothing moves) is retried under the same reference and, 72 hours after its first refusal, goes to a person', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
-    const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
-    const reference = earningReference(paid.id, 1);
+    await sale(buyer, 'content_unlock', listing(creator, 100_000));
     wallets.mode = 'refuse';
     await pass();
-    const first = await settlementOrThrow(paid.id);
+    const first = await moveOf(creator);
+    const reference = first.customerReference;
     expect(first.waiting).toBe('refused');
     expect(first.sentAt).toBeNull();
     expect(first.reviewSince).toBeNull();
+    expect(first.firstRefusedAt).not.toBeNull();
 
     // Inside the bound it keeps trying, on the one reference.
     await pass(2 * 60 * 60_000);
     await pass(28 * 60 * 60_000);
-    const trying = await settlementOrThrow(paid.id);
+    const trying = await moveById(first.id);
     expect(trying.waiting).toBe('refused');
     expect(trying.reviewSince).toBeNull();
     expect(trying.attempt).toBe(1);
     expect(attemptsOf(reference)).toBeGreaterThanOrEqual(3);
     expect(sendsOf(reference)).toHaveLength(0);
+    // R-55: a later refusal does not restart the count.
+    expect(trying.firstRefusedAt!.getTime()).toBe(
+      first.firstRefusedAt!.getTime(),
+    );
 
-    // At the bound (counted from when the earning was made) a person looks.
-    const bound = settings.reviewAfterHours * 3_600_000;
-    const result = await earnings.drive(
+    // 72 hours after the FIRST refusal a person looks.
+    const bound = settings.earningsRefusedReviewAfterHours * 3_600_000;
+    const result = await earnings.driveMove(
       trying.id,
-      new Date(trying.createdAt.getTime() + bound),
+      new Date(first.firstRefusedAt!.getTime() + bound),
     );
     expect(result.state).toBe('review');
-    const review = await settlementOrThrow(paid.id);
+    const review = await moveById(first.id);
     expect(review.reviewSince).not.toBeNull();
     expect(review.status).toBe('owed');
     expect(review.sentAt).toBeNull();
     expect(review.customerReference).toBe(reference);
     expect(review.discrepancy).toContain(
-      `refused for ${settings.reviewAfterHours} hours`,
+      `first refused this move ${settings.earningsRefusedReviewAfterHours} hours ago`,
     );
     expect(balanceOf(creator)).toBe(0);
     expect(await ledgerRows(reference)).toHaveLength(0);
@@ -1512,7 +1638,6 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     expect(attemptsOf(reference)).toBe(seen);
     expect(balanceOf(creator)).toBe(0);
   });
-
   it('F3 the bound is for a refusal only: a frozen wallet and a missing wallet wait past it, as the contract says', async () => {
     const frozenCreator = await person(0, false);
     const noWalletCreator = noWallet();
@@ -1529,22 +1654,27 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     );
     wallets.frozen.add(frozenCreator.accountNumber);
     await pass();
-    const rowFrozen = await settlementOrThrow(frozen.id);
+    const moveFrozen = await moveOf(frozenCreator);
     const rowMissing = await settlementOrThrow(missing.id);
-    expect(rowFrozen.waiting).toBe('recipient_frozen');
+    expect(moveFrozen.waiting).toBe('recipient_frozen');
     expect(rowMissing.waiting).toBe('payee_wallet');
+    expect(await moveCount(noWalletCreator)).toBe(0);
 
     const late = new Date(
-      rowFrozen.createdAt.getTime() +
+      moveFrozen.createdAt.getTime() +
         (settings.reviewAfterHours + 24) * 3_600_000,
     );
-    await earnings.drive(rowFrozen.id, late);
-    await earnings.drive(rowMissing.id, late);
+    clock = Math.max(clock, late.getTime());
+    await earnings.driveMove(moveFrozen.id, late);
+    await earnings.sweep(late);
+    expect((await moveById(moveFrozen.id)).reviewSince).toBeNull();
+    expect((await moveById(moveFrozen.id)).waiting).toBe('recipient_frozen');
     expect((await settlementOrThrow(frozen.id)).reviewSince).toBeNull();
     expect((await settlementOrThrow(missing.id)).reviewSince).toBeNull();
+    expect((await settlementOrThrow(missing.id)).waiting).toBe('payee_wallet');
+    expect(await moveCount(noWalletCreator)).toBe(0);
     wallets.frozen.clear();
   });
-
   // -------------------------------------------------------------------------
   // What is an earning, and what is not
   // -------------------------------------------------------------------------
@@ -1611,13 +1741,20 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     await earnings.sweep(new Date(Date.now() + 1_000));
     await holds.sweep(new Date(Date.now() + 1_000));
     expect(balanceOf(creator)).toBe(255_000);
-    expect(sendsOf(earningReference(paidUnlock.id, 1))).toHaveLength(1);
+    // The ordinary sale travelled in the creator's move of the day; the held
+    // one landed by its hold's release, not in a move.
+    const move = await moveOf(creator);
+    expect(move).toMatchObject({ earnings: 1, status: 'landed' });
+    expect(move.amountKobo).toBe(170_000n);
+    expect(sendsOf(move.customerReference)).toHaveLength(1);
+    expect(sendsOf(earningReference(paidUnlock.id, 1))).toHaveLength(0);
     const after = body<EarningsView>(await getEarnings(creator)).data!;
     expect(after.waiting).toEqual({ count: 0, amountKobo: 0 });
     expect(after.allTime.earnedKobo).toBe(255_000);
   });
 
   it('a payment not yet delivered, or under review, is not an earning until it is finished', async () => {
+    freshDay();
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
     const target = listing(creator, 100_000);
@@ -1635,7 +1772,7 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     expect((await settlementOrThrow(paid.id)).status).toBe('landed');
     expect(balanceOf(creator)).toBe(85_000);
 
-    // A sale a person holds in review is not landed until they clear it.
+    // A sale a person holds in review is not an earning until they clear it.
     const target2 = listing(creator, 100_000);
     const paid2 = await sale(buyer, 'content_unlock', target2);
     await prisma.walletPayment.update({
@@ -1649,10 +1786,17 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
       data: { reviewSince: null },
     });
     await pass();
+    // It is an earning now, but today's one transfer is made (R-55): it
+    // waits for the next day's move.
+    const waiting = await settlementOrThrow(paid2.id);
+    expect(waiting.status).toBe('owed');
+    expect(waiting.moveId).toBeNull();
+    expect(balanceOf(creator)).toBe(85_000);
+    await pass(25 * 60 * 60_000);
     expect((await settlementOrThrow(paid2.id)).status).toBe('landed');
+    expect(await moveCount(creator)).toBe(2);
     expect(balanceOf(creator)).toBe(170_000);
   });
-
   it('a sale put under review after its earning was made stops the move before anything is sent', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
@@ -1669,25 +1813,10 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     await pass();
     expect(await settlementOf(flagged.id)).toBeNull();
 
-    // An earning that exists, and then its sale is flagged: no send, a person looks.
+    // An earning that exists, in its creator's move, and then its sale is
+    // flagged: nothing is sent, the earning leaves the move and a person looks.
     const paid = await sale(buyer, 'content_unlock', listing(creator, 100_000));
-    const payment = await prisma.walletPayment.findUniqueOrThrow({
-      where: { id: paid.id },
-    });
-    const row = await prisma.earningSettlement.create({
-      data: {
-        paymentId: paid.id,
-        payeeWawuUserId: creator.id,
-        kind: payment.kind,
-        targetId: payment.targetId,
-        title: payment.title,
-        earnedAt: payment.completedAt!,
-        amountKobo: payment.payeeShareKobo,
-        merchantAccountNumber: payment.merchantAccountNumber,
-        provider: 'fintava',
-        customerReference: earningReference(paid.id, 1),
-      },
-    });
+    const { earning: row } = await makeEarningInMove(paid.id);
     await prisma.walletPayment.update({
       where: { id: paid.id },
       data: { reviewSince: new Date() },
@@ -1696,11 +1825,16 @@ describe('Earnings land in the wallet by themselves (WALLET-16) on Fintava', () 
     expect(result.state).toBe('review');
     const after = await settlementOrThrow(paid.id);
     expect(after.reviewSince).not.toBeNull();
-    expect(after.sentAt).toBeNull();
+    expect(after.moveId).toBeNull();
+    expect(after.discrepancy).toContain('no longer a finished one');
+    // The move had nothing else in it: it is withdrawn, and nothing was sent.
+    expect(await moveCount(creator)).toBe(0);
     expect(attemptsOf(earningReference(paid.id, 1))).toBe(0);
+    expect(wallets.sends.filter((x) => x.to === creator.accountNumber)).toEqual(
+      [],
+    );
     expect(balanceOf(creator)).toBe(0);
   });
-
   it('a share under a kobo is no earning: nothing is owed and nothing moves', async () => {
     const creator = await person(0, false);
     const buyer = await person(1_000_000);
