@@ -14,6 +14,7 @@ import type {
 } from '../../wallet-provider/wallet-provider.interface';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import type { NuvionClient, NuvionOp } from '../nuvion-client';
+import { sendReferenceOfFee, sendReferenceOfFeeBack } from '../fee-legs';
 import { NuvionError } from '../nuvion-error';
 import { nuvionTransferStatus } from '../nuvion-ledger-delivery';
 import { isNuvionId, NUVION_NAIRA, readNuvionAccount } from './accounts';
@@ -92,6 +93,17 @@ interface Walk {
   floor: { year: number; month: number } | null;
 }
 
+/** What a line's reference says about WAWU's fee transfers; nothing for any other line. */
+function feeLegFields(
+  reference: string | null,
+): Pick<ProviderTransaction, 'feeLegOf' | 'feeReturnOf'> {
+  if (reference === null) return {};
+  const leg = sendReferenceOfFee(reference);
+  if (leg !== null) return { feeLegOf: leg };
+  const back = sendReferenceOfFeeBack(reference);
+  return back === null ? {} : { feeReturnOf: back };
+}
+
 /** A statement line as the seam's transaction. */
 export function statementTransaction(
   line: NuvionStatementLine,
@@ -111,6 +123,9 @@ export function statementTransaction(
     direction: line.direction,
     balanceAfterKobo:
       line.balanceAfterKobo === null ? null : BigInt(line.balanceAfterKobo),
+    // The transfer that moves WAWU's fee on a send, or gives it back, is a
+    // line of its own; the nightly check matches it to its send by these.
+    ...feeLegFields(line.reference),
   };
 }
 

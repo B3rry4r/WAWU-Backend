@@ -156,7 +156,7 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
   // Not a person's own product.
   'POST communities/:id/messages': {
     files: ['imageUrl', 'videoUrl', 'voiceUrl'],
-    why: "a picture, a video or a voice note in a community chat; the video and the voice note must be the sender's own confirmed upload (INBOX-22)",
+    why: "a picture, a video or a voice note in a community chat; each must be the sender's own upload into that kind's folder on this bucket (INBOX-22, FIX-77)",
   },
   'POST communities': {
     files: ['imageUrl'],

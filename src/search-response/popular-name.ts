@@ -86,7 +86,7 @@ const LOOKALIKE_LETTERS: readonly [number, string][] = [
   [0x03f3, 'j'],
 ];
 
-/** Latin-script lookalikes that NFKC leaves alone (no upper-case twin added). */
+/** Latin-script lookalikes that NFKC leaves alone (no upper-case twin added). Folded in the search, never allowed in a shown name (`LATIN_LETTERS`). */
 const LOOKALIKE_LATIN: readonly [number, string][] = [
   [0x0131, 'i'], // dotless i
   [0x0251, 'a'],
@@ -150,8 +150,15 @@ export function foldSql(text: Prisma.Sql): Prisma.Sql {
 
 // ------------------------------------------------------- the character rule
 
-/** Latin letters: ASCII, Latin-1 and Latin Extended (A, B, IPA), Extended Additional. */
-const LATIN_LETTERS = 'A-Za-zÀ-ÖØ-öø-ʯḀ-ỿ';
+/**
+ * Latin letters: ASCII, Latin-1 and Latin Extended (A, B, IPA), Extended Additional, except the three lookalikes the fold
+ * reads as plain letters (U+0131 dotless i, U+0251 latin alpha, U+0261 script g, `LOOKALIKE_LATIN`). A shown name that
+ * held one would be found by neither its own spelling nor the plain one, and a lookalike-spelled public thing could take
+ * over the shown spelling of an organic entry, so such a name is not shown (SWEEP-APP-4, EXPLORE-05 R3-2). Written with
+ * escapes so the ranges read: C0-D6, D8-F6, F8-130, 132-250, 252-260, 262-2AF, 1E00-1EFF.
+ */
+const LATIN_LETTERS =
+  'A-Za-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u0130\u0132-\u0250\u0252-\u0260\u0262-\u02af\u1e00-\u1eff';
 /** Combining accents, allowed only straight after a letter. */
 const ACCENTS = '̀-ͯ';
 

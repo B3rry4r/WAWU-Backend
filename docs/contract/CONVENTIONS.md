@@ -358,7 +358,11 @@ settings of TIER-06, read when the message is sent. `GET /communities/message-co
 (a second is `400`); a `videoUrl` or `voiceUrl` must be the sender's own confirmed upload
 (`POST /uploads/presign` for `community/message-video` or `community/message-voice`, then
 `POST /uploads/confirm`) and the link must be the `fileUrl` presign handed back, on this bucket's
-own host, or it is `400` and nothing is charged. Text sent with an
+own host, or it is `400` and nothing is charged. An `imageUrl` is held to the same rule (FIX-77):
+the `fileUrl` of the sender's own `POST /uploads/presign` for `community/message`, on this
+bucket's own host; it needs no confirm (the web never confirms a photo), so a presigned or a
+confirmed upload both pass, and any other link, another person's file or another folder's file
+is `400` ("That photo could not be sent. Choose it again.") with nothing stored or charged. Text sent with an
 attachment adds nothing. The host sends every kind free in their own room. A free message
 writes no credit row at all (no balance row is made, no ledger row, no host earning). A sender
 whose credits do not cover the message gets `402` with `reason: "insufficient_credits"` and a

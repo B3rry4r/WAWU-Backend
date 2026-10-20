@@ -192,6 +192,13 @@ function tokenPairFor(claims) {
   };
 }
 
+// The real WAWU ID answers a token pair as { data: { accessToken, refreshToken, user } } (the mobile app reads data.*).
+// The mock keeps its flat fields too, because the Hub's own specs read them flat, and adds the same pair under `data`
+// (SWEEP-APP-4 row 154).
+function withEnvelope(pair) {
+  return { ...pair, data: pair };
+}
+
 app.get("/.well-known/jwks.json", (_req, res) => {
   const keyObject = crypto.createPublicKey(PUBLIC_KEY);
   const jwk = keyObject.export({ format: "jwk" });
@@ -241,7 +248,7 @@ app.post("/auth/login", (req, res) => {
   if (!user) {
     return res.status(404).json({ code: "USER_NOT_IN_WAWUID", message: "No such test user" });
   }
-  res.json(tokenPairFor(user));
+  res.json(withEnvelope(tokenPairFor(user)));
 });
 
 app.post("/auth/otp/start", (req, res) => {
@@ -251,7 +258,7 @@ app.post("/auth/otp/start", (req, res) => {
 app.post("/auth/otp/verify", (req, res) => {
   const identifier = req.body?.phone || req.body?.email;
   const user = Object.values(USERS).find((u) => u.phone === identifier || u.email === identifier) || USERS["user@test.wawu.dev"];
-  res.json(tokenPairFor(user));
+  res.json(withEnvelope(tokenPairFor(user)));
 });
 
 // Anti-enumeration: always the same message, matching the real service.
@@ -270,7 +277,7 @@ app.post("/auth/reset-password", (req, res) => {
   if (identifier && code && newPassword) {
     const user = USERS[identifier];
     if (!user) return res.status(400).json({ statusCode: 400, message: "Invalid or expired code" });
-    return res.json(tokenPairFor(user));
+    return res.json(withEnvelope(tokenPairFor(user)));
   }
   res.status(400).json({ statusCode: 400, message: "Provide either {token,email,password} or {identifier,code,newPassword}" });
 });
@@ -281,7 +288,7 @@ app.post("/auth/refresh", (req, res) => {
     const user = Object.values(USERS).find((u) => u.sub === decoded.sub);
     if (!user) return res.status(401).json({ message: "invalid refresh token" });
     const { user: _unused, ...pair } = tokenPairFor(user);
-    res.json(pair);
+    res.json(withEnvelope(pair));
   } catch {
     res.status(401).json({ message: "invalid refresh token" });
   }
@@ -514,7 +521,13 @@ console.log(
 );
 
 const PORT = process.env.MOCK_WAWU_ID_PORT || 4001;
-app.listen(PORT, () => {
+// Express 5 hands a listen failure (EADDRINUSE) to this callback, so it must stop here: it used to log "listening" after losing
+// the port and exit 0 (SWEEP-APP-4 row 135).
+app.listen(PORT, (error) => {
+  if (error) {
+    console.error(`[mock-wawu-id] could not listen on :${PORT}: ${error.code ?? error.message}`);
+    process.exit(1);
+  }
   console.log(`[mock-wawu-id] listening on :${PORT}`);
   console.log(`[mock-wawu-id] JWKS: http://localhost:${PORT}/.well-known/jwks.json`);
   console.log(`[mock-wawu-id] seeded users: ${Object.keys(USERS).join(", ")}`);

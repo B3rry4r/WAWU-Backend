@@ -49,11 +49,12 @@ import {
 const FREE_MESSAGE_COST_IN_CREDITS = 0;
 
 /**
- * Where a video or a voice note must have been uploaded, and the files a
- * phone or a person may send for it (the folders and their allowlists are
- * FOLDER_CONTENT_TYPES in storage/dto/presign-upload.dto.ts).
+ * Where a photo, a video or a voice note must have been uploaded, and the
+ * files a phone or a person may send for it (the folders and their
+ * allowlists are FOLDER_CONTENT_TYPES in storage/dto/presign-upload.dto.ts).
  */
 const MEDIA_FOLDERS = {
+  photo: { folder: 'community/message', words: 'photo' },
   video: { folder: 'community/message-video', words: 'video' },
   voice: { folder: 'community/message-voice', words: 'voice note' },
 } as const;
@@ -567,27 +568,35 @@ export class CommunityMessageService {
   }
 
   /**
-   * INBOX-22. A video or a voice note must be a file the SENDER uploaded
-   * through the presign and confirm path into that kind's own folder
-   * (`community/message-video`, `community/message-voice`) and that has
-   * landed (`POST /uploads/confirm` made its `StorageObject` row
-   * `confirmed`). The link must be one of THIS bucket's own (its origin and
-   * key prefix, read from the storage client: another host, a look-alike
-   * host, userinfo, a `%` escape or a backslash is refused) and its key must
-   * be exactly `<folder>/<sender>/<uuid>.<ext>`; another person's file,
-   * another folder's file and a link to anywhere else are refused. No
-   * network call (the bucket's address is worked out by signing a link
+   * INBOX-22, FIX-77. A photo, a video or a voice note must be a file the
+   * SENDER uploaded through the presign path into that kind's own folder
+   * (`community/message`, `community/message-video`,
+   * `community/message-voice`). The link must be one of THIS bucket's own
+   * (its origin and key prefix, read from the storage client: another host,
+   * a look-alike host, userinfo, a `%` escape or a backslash is refused) and
+   * its key must be exactly `<folder>/<sender>/<uuid>.<ext>`; another
+   * person's file, another folder's file and a link to anywhere else are
+   * refused. The sender's `StorageObject` row for that key must exist.
+   *
+   * A video or a voice note must also have landed (`POST /uploads/confirm`
+   * made its row `confirmed`). A photo needs no confirm: the web's photo path
+   * is presign then PUT and never confirms, so a row that is `pending` or
+   * `confirmed` passes and only a given-up (`abandoned`) one is refused.
+   *
+   * No network call (the bucket's address is worked out by signing a link
    * locally) and no lock, and it runs before anything is charged, so a
    * refused file costs nothing.
    */
   private async assertUploaded(
     senderWawuId: string,
-    kind: 'video' | 'voice',
+    kind: keyof typeof MEDIA_FOLDERS,
     url: string,
   ): Promise<void> {
     const { folder, words } = MEDIA_FOLDERS[kind];
     const unusable = new BadRequestException(
-      `That ${words} could not be used. Upload it again, then send it.`,
+      kind === 'photo'
+        ? 'That photo could not be sent. Choose it again.'
+        : `That ${words} could not be used. Upload it again, then send it.`,
     );
     // The strict check LEGAL-03 uses: this bucket's own host and prefix, the
     // kind's own folder, two plain segments after it. A storage that is not
@@ -616,7 +625,7 @@ export class CommunityMessageService {
     ) {
       throw unusable;
     }
-    if (row.status !== 'confirmed') {
+    if (kind !== 'photo' && row.status !== 'confirmed') {
       throw new BadRequestException(
         `That ${words} has not finished uploading. Wait a moment, then send it again.`,
       );
@@ -669,8 +678,10 @@ export class CommunityMessageService {
         return this.replayOf(earlier, communityId, text, attachments);
     }
 
-    // A video or a voice note must be the sender's own confirmed upload. Reads
-    // only, before any charge: a refused file costs nothing.
+    // A photo must be the sender's own upload (presigned or confirmed), a
+    // video or a voice note their own confirmed one. Reads only, before any
+    // charge: a refused file costs nothing.
+    if (imageUrl) await this.assertUploaded(senderWawuId, 'photo', imageUrl);
     if (videoUrl) await this.assertUploaded(senderWawuId, 'video', videoUrl);
     if (voiceUrl) await this.assertUploaded(senderWawuId, 'voice', voiceUrl);
 
