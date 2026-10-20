@@ -195,6 +195,15 @@ first publishes sent together both succeed.
   allows 3. To publish another, remove some." with ", or add more places"
   only while an offer in the answer would really let another go up (round 3).
 
+- `identity_paused` (403, S7 round 2): the person's identity check is paused,
+  so nothing is published or accepted for a product until it passes. It is
+  asked after the tier and before the room. `reason` is `code`, `message`
+  (the Hub's sentence: "Publishing is paused until your identity check
+  passes." and then what went wrong and what to do, from the wallet's own
+  review) and `stage`, the same word as `review.stage` on `GET /money/wallet`
+  (`needs_documents`, `rejected`, `stopped`, `expired`). Uploading the ID
+  document itself is never refused. No offers.
+
 `reason` is flat: `code`, `message`, `tierState`, `productsUsed`,
 `productsAllowed`, and the offers `currency`, `tiers`, `extraProducts` (absent
 only when the Hub could not read the plan at that moment; the app then shows

@@ -2761,6 +2761,7 @@ may have:
 |---|---|---|---|
 | `tier_required` | 402 | no running tier and no verification tick that has not ended | `tierState` (`none` or `ended`), `productsUsed`, `productsAllowed`, `currency`, `tiers`, `extraProducts` |
 | `product_limit_reached` | 402 | every product the person may have is published | the same fields |
+| `identity_paused` | 403 | the person's identity check is paused: waiting for documents, refused, stopped, or closed unfinished (S7 round 2). A check that passed, one under way, and one never started are not refused. Asked after the tier, before the room | `stage` (`needs_documents`, `rejected`, `stopped` or `expired`); `message` is the Hub's own sentence, no offers |
 | `draft_limit_reached` | 409 | a person already keeps `PRODUCT_DRAFTS_MAX` drafts (`POST /product-drafts`) | `draftsKept`, `draftsAllowed` |
 | `draft_incomplete` | 400 | a draft being published still lacks details | `missing` |
 
