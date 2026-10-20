@@ -146,6 +146,9 @@ scripts/dev/stack.sh down   --name <n>
   lockfile is the same, and runs `npm ci` otherwise. `dist/` is rebuilt only when
   the source is newer (`--rebuild` forces it), so do not rebuild the Hub checkout
   while a stack from it is running.
+- `STACK_NUVION_LIVENESS=on` turns the hosted selfie on in the Hub (`NUVION_HOSTED_LIVENESS=on`, with the app's return
+  address `https://wawuafrica.com/selfie` as the only one it may hand on; nothing is ever sent to it). Left unset it is
+  off and the opening does not wait for a selfie. See "Nuvion on the stack".
 - `STACK_STORAGE_ENDPOINT` (with `STACK_STORAGE_PATH_STYLE=true` for a path-style
   stand-in) points the Hub's object storage at a stand-in on this machine, for a
   spec that must see the Hub's own storage calls. Left unset, storage is a name
@@ -202,6 +205,25 @@ node scripts/dev/nuvion-tool.cjs seed --name <n> --scratch <dir> [--amount-kobo 
 node scripts/dev/nuvion-tool.cjs fire --name <n> --scratch <dir> --inflow <account number> --amount-kobo 250000
 #    also: --settle <transfer id> --status failed|reversed|successful   --event <name> --transfer-id <id>   --state
 ```
+
+Two more switches, for the app's walks (ME-13 L3, FIX-47 L2):
+
+```bash
+# A purchase waits: while the hold is on, a book transfer into WAWU's operational account (a tier, ticket or DM
+# payment) stays pending and the payer is debited at once. "Paid, still confirming" (M15) is then on the person's
+# Verification page. Release it (the signed outflows.completed webhook goes to the Hub; the Hub reads webhooks on
+# its 30 second tick), or fail it: status failed|reversed. `narration` holds only the transfers whose narration contains it.
+curl -s -X POST http://127.0.0.1:<stand-in port>/__standin/hold    -H 'content-type: application/json' -d '{"on":true}'
+curl -s -X POST http://127.0.0.1:<stand-in port>/__standin/release -H 'content-type: application/json' -d '{}'
+# The hosted selfie: start the stack with STACK_NUVION_LIVENESS=on (the Hub gets NUVION_HOSTED_LIVENESS=on and the app's
+# return address as the one it may hand on). The stand-in answers /kyc/liveness/sessions and serves the page its https
+# address opens, GET /capture/<id> (buttons: take the selfie, face does not match, camera problem). The address is
+# https://verify.example.invalid/capture/<id> (STANDIN_SELFIE_ORIGIN): a browser on the machine sends that origin to the
+# stand-in's port. GET /__standin/liveness lists the sessions; POST /__standin/liveness/<id>/finish decides one by hand.
+```
+
+Their spec is `src/nuvion/tests/nuvion-standin-hold-selfie.spec.ts` (the hold and release through the signed webhook,
+and the hosted selfie read through the Hub's own liveness area).
 
 `fire --state` (or `GET <stand-in>/__standin/state`) lists the stand-in's accounts,
 transfers and webhooks sent; `GET /__standin/account/<id, number or ban>` reads one

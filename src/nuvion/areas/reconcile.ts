@@ -14,7 +14,11 @@ import type {
 } from '../../wallet-provider/wallet-provider.interface';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import type { NuvionClient, NuvionOp } from '../nuvion-client';
-import { sendReferenceOfFee, sendReferenceOfFeeBack } from '../fee-legs';
+import {
+  referenceOfReturn,
+  sendReferenceOfFee,
+  sendReferenceOfFeeBack,
+} from '../fee-legs';
 import { NuvionError } from '../nuvion-error';
 import { nuvionTransferStatus } from '../nuvion-ledger-delivery';
 import { isNuvionId, NUVION_NAIRA, readNuvionAccount } from './accounts';
@@ -93,15 +97,20 @@ interface Walk {
   floor: { year: number; month: number } | null;
 }
 
-/** What a line's reference says about WAWU's fee transfers; nothing for any other line. */
+/**
+ * What a line's reference says about WAWU's fee transfers and about a move
+ * given back (FIX-80); nothing for any other line.
+ */
 function feeLegFields(
   reference: string | null,
-): Pick<ProviderTransaction, 'feeLegOf' | 'feeReturnOf'> {
+): Pick<ProviderTransaction, 'feeLegOf' | 'feeReturnOf' | 'returnOf'> {
   if (reference === null) return {};
   const leg = sendReferenceOfFee(reference);
   if (leg !== null) return { feeLegOf: leg };
   const back = sendReferenceOfFeeBack(reference);
-  return back === null ? {} : { feeReturnOf: back };
+  if (back !== null) return { feeReturnOf: back };
+  const given = referenceOfReturn(reference);
+  return given === null ? {} : { returnOf: given };
 }
 
 /** A statement line as the seam's transaction. */

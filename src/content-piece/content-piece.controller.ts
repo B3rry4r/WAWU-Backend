@@ -136,7 +136,13 @@ export class ContentPieceController {
   @Post()
   @UseGuards(CreatorAccountGuard)
   @GatesPublishing()
-  create(@CurrentUser() user: WawuJwtClaims, @Body() dto: CreateContentDto) {
+  async create(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: CreateContentDto,
+  ) {
+    // A file whose upload outlasted the Hub's wait is counted first, outside
+    // any lock (SWEEP-APP-5, ME-04 R4-5).
+    await this.contentPieceService.settleSlowUploads(user.sub, dto);
     // The files it names must still be the person's: checked inside the
     // create transaction, under the storage lock (ME-04 round 4).
     return this.contentPieceService.create(

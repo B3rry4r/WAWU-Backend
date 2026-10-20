@@ -784,6 +784,167 @@ describe('A bank send on Nuvion shows its true outcome (FIX-54)', () => {
     });
   }
 
+  /**
+   * A send the Hub holds as failed whose record at Nuvion then turns reversed
+   * (G-FIX-70-6, FIX-85): the failure gave the whole total back, so the stand-in
+   * moves as Nuvion would. The send went out after all (the total leaves
+   * again) and the bank returned `creditKobo` of it. The stand-in's `reverse`
+   * moves the total back on top of the failure's, so the balance is set to
+   * what that sequence leaves. Returns the refund as the webhook delivers it.
+   */
+  const reverseAfterFailure = (p: Person, id: string, creditKobo: number) => {
+    const t = pay.transfer(id);
+    const total = Number(t.amount) + Number(t.applicable_fee);
+    const { credit } = pay.reverse(id);
+    const account = accounts.accounts.get(p.account.id)!;
+    account.balance.available =
+      Number(account.balance.available) - 2 * total + creditKobo;
+    return { ...pay.delivery(credit.id), amount: creditKobo };
+  };
+
+  /**
+   * The sender's ledger = Nuvion for the sender, once the ledger writes that
+   * follow a step have landed (polled with a bound, then asserted).
+   */
+  const ledgerEqualsNuvion = async (p: Person) => {
+    await waitFor(
+      async () => (await senderNet(p)) === available(p) - PERSON_START,
+      3000,
+    );
+    expect(await senderNet(p)).toBe(available(p) - PERSON_START);
+  };
+
+  const credits = [
+    { name: 'the principal only', kobo: AMOUNT, kept: FEE },
+    { name: 'the whole of what Nuvion held', kobo: AMOUNT + FEE, kept: 0 },
+  ];
+
+  for (const credited of credits) {
+    for (const feeBack of ['lands', 'fails twice'] as const) {
+      it(`a send the Hub failed that Nuvion then refunds (${credited.name}), the fee-back ${feeBack}: the sender's ledger equals Nuvion at every step, the fee given back at most once (FIX-85)`, async () => {
+        const opBefore = operational();
+        const { me, view, nuvion } = await send();
+        const sameAsNuvion = () => ledgerEqualsNuvion(me);
+        // Every fee-back stays pending at Nuvion until the test settles it.
+        book.mode = 'pending';
+        pay.settle(nuvion.id, 'failed');
+        expect(
+          (await deliver('outflows.failed', pay.delivery(nuvion.id), me))
+            .outcome,
+        ).toBe('done');
+        expect(
+          await waitFor(async () => (await rowOf(view.id)).status === 'failed'),
+        ).toBe(true);
+        const first = feeBackReference(view.reference, 1);
+        const second = feeBackReference(view.reference, 2);
+        expect(await waitFor(() => book.byReference(first).length === 1)).toBe(
+          true,
+        );
+        // Failed: the money is back and WAWU's fee is owed, once.
+        expect(available(me)).toBe(PERSON_START - WAWU_FEE);
+        await sameAsNuvion();
+
+        // Nuvion's record of the failed send turns reversed.
+        const refund = reverseAfterFailure(me, nuvion.id, credited.kobo);
+        expect((await deliver('outflows.refunded', refund, me)).outcome).toBe(
+          'done',
+        );
+        expect(
+          await waitFor(
+            async () => (await rowOf(view.id)).status === 'reversed',
+          ),
+        ).toBe(true);
+        const owed = WAWU_FEE + credited.kept;
+        expect(available(me)).toBe(PERSON_START - owed);
+        await sameAsNuvion();
+
+        if (feeBack === 'lands') {
+          book.settle(first, 'successful');
+          await transfers.sweep(later());
+          expect(
+            await waitFor(
+              async () =>
+                (await senderNet(me)) === available(me) - PERSON_START &&
+                available(me) === PERSON_START - credited.kept,
+            ),
+          ).toBe(true);
+          await sameAsNuvion();
+          // Every naira is back but what Nuvion kept; WAWU paid its charges.
+          expect(available(me)).toBe(PERSON_START - credited.kept);
+          expect(operational() - opBefore).toBe(-2 * FEE);
+        } else {
+          // Nuvion fails the first fee-back; a later pass makes the one new try.
+          book.settle(first, 'failed');
+          await transfers.sweep(later());
+          await sameAsNuvion();
+          await transfers.sweep(later());
+          expect(book.byReference(second)).toHaveLength(1);
+          await sameAsNuvion();
+          // It fails too: nothing more is sent, the fee is still owed, once.
+          book.settle(second, 'failed');
+          for (let i = 0; i < 3; i += 1) {
+            await transfers.sweep(later(35 * 60_000));
+            await sameAsNuvion();
+          }
+          expect(book.byReference(`${view.reference}-fee-back-3`)).toEqual([]);
+          expect(available(me)).toBe(PERSON_START - owed);
+          expect(operational() - opBefore).toBe(WAWU_FEE - FEE);
+        }
+        // Replays and more passes change nothing, and the fee goes back once.
+        await deliver('outflows.refunded', refund, me);
+        await transfers.sweep(later());
+        await transfers.settle(view.id, later(), true);
+        expect(feeBacks(view.reference)).toHaveLength(1);
+        expect(book.byReference(second)).toHaveLength(
+          feeBack === 'lands' ? 0 : 1,
+        );
+        expect((await rowOf(view.id)).status).toBe('reversed');
+        await sameAsNuvion();
+      });
+    }
+  }
+
+  for (const credited of credits) {
+    it(`a send the Hub failed whose fee-back already landed, that Nuvion then refunds (${credited.name}): the fee stays given back once and the sender's ledger equals Nuvion (FIX-85)`, async () => {
+      const opBefore = operational();
+      const { me, view, nuvion } = await send();
+      pay.settle(nuvion.id, 'failed');
+      expect(
+        (await deliver('outflows.failed', pay.delivery(nuvion.id), me)).outcome,
+      ).toBe('done');
+      expect(
+        await waitFor(async () => (await rowOf(view.id)).status === 'failed'),
+      ).toBe(true);
+      expect(await waitFor(() => feeBacks(view.reference).length === 1)).toBe(
+        true,
+      );
+      expect(await waitFor(async () => (await senderNet(me)) === 0)).toBe(true);
+      expect(available(me)).toBe(PERSON_START);
+
+      // Nuvion's record of the failed send turns reversed.
+      const refund = reverseAfterFailure(me, nuvion.id, credited.kobo);
+      expect((await deliver('outflows.refunded', refund, me)).outcome).toBe(
+        'done',
+      );
+      expect(
+        await waitFor(async () => (await rowOf(view.id)).status === 'reversed'),
+      ).toBe(true);
+      expect(available(me)).toBe(PERSON_START - credited.kept);
+      await ledgerEqualsNuvion(me);
+
+      // Replays and more passes change nothing: the fee went back once.
+      await deliver('outflows.refunded', refund, me);
+      await transfers.sweep(later());
+      await transfers.settle(view.id, later(), true);
+      expect(feeBacks(view.reference)).toHaveLength(1);
+      expect(book.byReference(feeBackReference(view.reference, 2))).toEqual([]);
+      expect(operational() - opBefore).toBe(-2 * FEE);
+      expect(available(me)).toBe(PERSON_START - credited.kept);
+      expect((await rowOf(view.id)).status).toBe('reversed');
+      await ledgerEqualsNuvion(me);
+    });
+  }
+
   it('duplicated and reordered deliveries: a refund before the completion reverses the pending send once, and the old completion cannot undo it', async () => {
     const { me, b, view, nuvion } = await send();
     expect(view.status).toBe('pending');
