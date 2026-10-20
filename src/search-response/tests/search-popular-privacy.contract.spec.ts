@@ -8,6 +8,7 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { AccountModule } from '../../account/account.module';
+import { AccountService } from '../../account/account.service';
 import { WAWU_ID_ACCOUNT_GATEWAY } from '../../account/wawu-id-account.gateway';
 import { CommunityModule } from '../../community/community.module';
 import { SearchResponseModule } from '../search-response.module';
@@ -59,6 +60,7 @@ describe('Search, round 2 (EXPLORE-05)', () => {
   let plain: string;
   let basic: string;
   let hadPushStop = false;
+  let hadDeletion = false;
   const roomIds: string[] = [];
   const gateway = {
     scheduleAccountDeletion: jest.fn().mockResolvedValue({ scheduled: true }),
@@ -160,11 +162,33 @@ describe('Search, round 2 (EXPLORE-05)', () => {
       (await prisma.pushStoppedAccount.count({
         where: { userWawuId: USER_PLAIN },
       })) > 0;
+    hadDeletion =
+      (await prisma.accountDeletion.count({
+        where: { wawuUserId: USER_PLAIN },
+      })) > 0;
     await cleanUp();
   }, 60000);
 
   afterAll(async () => {
     await cleanUp();
+    // FIX-92: the seeded plain user is left as this spec found it. DELETE
+    // /account scheduled a deletion for it; a row left behind is purged by any
+    // later spec that sweeps with a clock ahead (the deploy runs every spec in
+    // one process on one database). A cancel puts back the content the
+    // deletion hid and the push mark; the row it leaves, and the rows that
+    // listed the hidden content, are then removed.
+    if (!hadDeletion) {
+      try {
+        await app.get(AccountService).cancelDeletion(USER_PLAIN);
+      } finally {
+        await prisma.accountDeletionContent.deleteMany({
+          where: { wawuUserId: USER_PLAIN },
+        });
+        await prisma.accountDeletion.deleteMany({
+          where: { wawuUserId: USER_PLAIN },
+        });
+      }
+    }
     if (!hadPushStop)
       await prisma.pushStoppedAccount.deleteMany({
         where: { userWawuId: USER_PLAIN },
