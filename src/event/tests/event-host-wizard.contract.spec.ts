@@ -129,6 +129,8 @@ describe('Host wizard rules (EVENTS-04)', () => {
   const http = () => request(app.getHttpServer() as Server);
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
   let snapshot: Record<string, Date | null> | null = null;
+  /** The host had no profile row (see beforeAll), so the suite made one and removes it. */
+  let madeHostProfile = false;
 
   async function sweep(): Promise<void> {
     await prisma.event.deleteMany({
@@ -176,13 +178,20 @@ describe('Host wizard rules (EVENTS-04)', () => {
         professionalVerifiedUntil: true,
       },
     });
-    await prisma.userProfile.update({
+    // FIX-90: the seeded profile row of the host is not always there. The
+    // deploy's whole-suite run reaches this file after another spec has had
+    // the account of this seeded user purged, so the host's profile is made
+    // when it is missing (and removed again in afterAll).
+    const ticked = {
+      creatorVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
+      creatorVerifiedUntil: new Date('2099-01-01T00:00:00.000Z'),
+    };
+    await prisma.userProfile.upsert({
       where: { wawuUserId: HOST_SUB },
-      data: {
-        creatorVerifiedAt: new Date('2026-01-01T00:00:00.000Z'),
-        creatorVerifiedUntil: new Date('2099-01-01T00:00:00.000Z'),
-      },
+      create: { wawuUserId: HOST_SUB, accountType: 'user', ...ticked },
+      update: ticked,
     });
+    madeHostProfile = snapshot === null;
     await sweep();
 
     const res = await http()
@@ -205,6 +214,8 @@ describe('Host wizard rules (EVENTS-04)', () => {
         where: { wawuUserId: HOST_SUB },
         data: snapshot,
       });
+    } else if (madeHostProfile) {
+      await prisma.userProfile.deleteMany({ where: { wawuUserId: HOST_SUB } });
     }
     await app.close();
   });

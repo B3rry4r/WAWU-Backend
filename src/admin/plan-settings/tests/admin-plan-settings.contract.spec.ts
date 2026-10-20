@@ -56,9 +56,16 @@ describe('Admin: the launch figures as settings (TIER-06)', () => {
     (res.body as Envelope<PlanSettingsView>).data;
   const one = (v: PlanSettingsView, key: string): PlanSettingView =>
     v.settings.find((s) => s.key === key)!;
+  // Only this spec's own admins: the audit table is shared with every spec
+  // that runs in the same database (the deploy runs them all in one process),
+  // and another spec's admin can leave rows for the same setting key.
   const auditRows = (key: string) =>
     prisma.adminOpsAudit.findMany({
-      where: { resource: 'plan_setting', resourceId: key },
+      where: {
+        resource: 'plan_setting',
+        resourceId: key,
+        actedByAdminId: { in: adminIds },
+      },
       orderBy: { actedAt: 'asc' },
     });
   const storedRows = () => prisma.planSetting.findMany();
