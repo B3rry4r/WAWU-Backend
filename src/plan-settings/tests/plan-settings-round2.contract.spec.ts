@@ -514,6 +514,27 @@ describe('the cash rate can never be set above what points are sold for (finding
     expect(settings.current().cashOut.per1000Points.kobo).toBe(80_000);
   });
 
+  it('one request that moves the cash rate, a pack price and the checkout bump together is allowed as a consistent triple and refused when the bump is the one out of line (POINTS-02 L3)', async () => {
+    // Bump: 1,000 points. A pack-l price of 600,000 sells 6,600 points with the
+    // Founding bonus (about 90,900 per 1,000), above the 80,000 cash rate.
+    const bumpKey = 'plan.checkout_bump.price_kobo';
+    const triple = (bump: number) => ({
+      [CASH]: 80_000,
+      'plan.pack.l.price_kobo': 600_000,
+      [bumpKey]: bump,
+    });
+    const said = await refused(triple(79_000));
+    expect(said).toContain(CASH);
+    expect(said).toContain('plan.checkout_bump');
+    expect(await h.prisma.planSetting.count()).toBe(0);
+    await settings.set(admin, { settings: triple(90_000) });
+    expect(settings.current().cashOut.per1000Points.kobo).toBe(80_000);
+    expect(settings.current().checkoutBump.price.kobo).toBe(90_000);
+    expect(settings.current().packs.find((x) => x.id === 'l')!.price.kobo).toBe(
+      600_000,
+    );
+  });
+
   it('putting the cash rate back to its default is always allowed', async () => {
     await settings.set(admin, { settings: { [CASH]: 70_000 } });
     await settings.set(admin, { settings: { [CASH]: null } });

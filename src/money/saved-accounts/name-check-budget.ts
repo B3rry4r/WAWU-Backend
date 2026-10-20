@@ -34,8 +34,10 @@ export function nameCheckLimitMessage(retryAfterSeconds: number): string {
  * One budget covers every route that tells a person whose account a bank
  * number is: `POST /money/banks/name-check`, `PUT /money/payout-account` (its
  * refusal names the holder) and `POST /money/beneficiaries` for a bank
- * account. A bank send's own check just before the money goes is not counted:
- * sends to other people are unchanged (R-51).
+ * account. A bank send to an account that is not saved, with no name token
+ * this person got for that account, is a counted check like any other (WALLET-37
+ * round 5, G-764); a send with such a token, or to a saved account, is the
+ * send's own check and is not counted (R-51).
  *
  * Counted and decided in memory in one step, so nothing is held while the
  * bank is asked: the count is taken, then the check runs holding nothing. A

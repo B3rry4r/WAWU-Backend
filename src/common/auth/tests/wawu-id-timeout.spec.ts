@@ -370,6 +370,20 @@ describe('the bound', () => {
     expect(wawuIdTimeoutMs(cfg({}), 'write')).toBe(8_000);
   });
 
+  it('ignores a setting under 100 ms, which no healthy answer could meet, and takes 100 itself (SWEEP-APP-1 FIX-10 L3)', () => {
+    for (const slip of ['1', '99', '0x10', '16']) {
+      expect(
+        wawuIdTimeoutMs(cfg({ WAWU_ID_READ_TIMEOUT_MS: slip }), 'read'),
+      ).toBe(3_000);
+      expect(
+        wawuIdTimeoutMs(cfg({ WAWU_ID_WRITE_TIMEOUT_MS: slip }), 'write'),
+      ).toBe(8_000);
+    }
+    expect(
+      wawuIdTimeoutMs(cfg({ WAWU_ID_READ_TIMEOUT_MS: '100' }), 'read'),
+    ).toBe(100);
+  });
+
   it('takes a whole number of milliseconds from config and ignores anything else', () => {
     expect(
       wawuIdTimeoutMs(cfg({ WAWU_ID_READ_TIMEOUT_MS: '1500' }), 'read'),

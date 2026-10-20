@@ -48,18 +48,18 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       where: { enrolmentId },
     });
   /**
-   * Waits until the first try, which the enrolment starts in the background,
-   * has been made AND has finished: a try claims the row (`attempts` goes up
-   * and the lease is taken) before it asks the relay, and writes its result
-   * with the lease let go. A test that sets the relay's mode or clears its
-   * requests on `attempts >= 1` alone does it while that try is still on its
-   * way to the relay, so the late request lands in the new mode and the new
-   * list (FIX-93).
+   * Waits until the first try, which `enrol` starts in the background, has
+   * ended and its result is recorded. `attempts` counts from the moment a try
+   * is claimed, before the relay is called, so waiting on `attempts` alone
+   * returns while that try is still on its way to the relay: a spec that then
+   * changes the relay's mode or clears its requests meets the try half done
+   * (it fails whenever the machine is slow, at any hour). A try that ended
+   * has let go of its lease.
    */
   const firstTryDone = (enrolmentId: string) =>
     until(async () => {
-      const row = await reportOf(enrolmentId);
-      return row.attempts >= 1 && row.leaseUntil === null;
+      const r = await reportOf(enrolmentId);
+      return r.attempts >= 1 && r.leaseUntil === null;
     });
   /** Lets the next try happen now. */
   const dueNow = (enrolmentId: string) =>
@@ -69,6 +69,10 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
     });
 
   describe('the report', () => {
+    beforeEach(() => {
+      h.mail.delayMs = 150;
+    });
+
     it('a course with no fee: the school gets one mail with the student, course, intake and consent time', async () => {
       const c = await h.seed({
         priceKobo: 0,
@@ -196,14 +200,6 @@ describe('Enrolment report to the school and My courses (SCHOOLS-09)', () => {
       const p = await h.person(0);
       const made = await h.enrol(p, c.intakeIds[0]);
       const id = body<SchoolEnrolmentView>(made).data!.id;
-      // `attempts` is raised by the claim, before the relay answers;
-      // `nextAttemptAt` is written after it answers (SWEEP-MONEY SCHOOLS-09 L1).
-      await until(async () => {
-        const r = await reportOf(id);
-        return (
-          r.attempts >= 1 && r.nextAttemptAt !== null && r.lastError !== null
-        );
-      });
       await firstTryDone(id);
       const first = await reportOf(id);
       expect(first.nextAttemptAt!.getTime()).toBeGreaterThan(Date.now());

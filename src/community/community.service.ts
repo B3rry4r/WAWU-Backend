@@ -322,8 +322,17 @@ export class CommunityService {
 
   /** Leaves a community. Idempotent: leaving one you are not in is a no-op. */
   async leave(id: string, userWawuId: string): Promise<{ joined: false }> {
+    // INBOX-24 round 3 (R-63). In a room that sells a pass a `pending` row is
+    // a member the host removed, and only the host's approval lets them back.
+    // Leaving must not delete it: with no row, joining again admits anyone
+    // whose pass still runs. Only a `joined` row goes.
+    const keepRemoved = await this.sellsPass(id);
     await this.prisma.communityMembership.deleteMany({
-      where: { userWawuId, communityId: id },
+      where: {
+        userWawuId,
+        communityId: id,
+        ...(keepRemoved ? { status: 'joined' as const } : {}),
+      },
     });
     return { joined: false };
   }

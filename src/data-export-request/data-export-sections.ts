@@ -795,7 +795,11 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       prisma.planTransferOrder.findMany({
         where: { wawuUserId: me },
         select: {
+          // The kind and the goods the quote promised (a tier, or a points
+          // pack's points and bonus), so a pack order says what it was.
+          paymentKind: true,
           targetId: true,
+          terms: true,
           priceKobo: true,
           providerFeeKobo: true,
           totalKobo: true,

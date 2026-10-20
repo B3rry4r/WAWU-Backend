@@ -842,7 +842,13 @@ export function moneyInSenderName(
     .replace(/[\u2013\u2014]/g, '-')
     .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ')
     .replace(/\s+/g, ' ')
-    .trim();
+    .trim()
+    // A number written into a name (a phone, an account) is shown as its last
+    // four digits, the way the account field is (SWEEP-MONEY, WALLET-39 F1).
+    .replace(
+      /\d(?:[ -]?\d){5,}/g,
+      (run) => `****${run.replace(/\D/g, '').slice(-4)}`,
+    );
   if (cleaned === '') return null;
   const chars = Array.from(cleaned);
   return chars.length <= MONEY_IN_NAME_MAX
@@ -876,8 +882,18 @@ export function moneyInShortName(
   if (name === null) return null;
   const words = name.split(' ');
   if (words.length < 2) return name;
-  const initial = Array.from(words[words.length - 1])[0];
-  return `${words[0]} ${initial}.`;
+  // The initial is the first character that is not punctuation: "Adaeze
+  // (CEO)" is "Adaeze C.", not "Adaeze (.". A trailing Jr. or Sr. is not the
+  // surname, so "Ada Obi Jr." is "Ada O." (SWEEP-MONEY, WALLET-39 F4).
+  let rest = words.slice(1);
+  if (rest.length > 1 && /^(jr|sr)\.?$/i.test(rest[rest.length - 1])) {
+    rest = rest.slice(0, -1);
+  }
+  for (let i = rest.length - 1; i >= 0; i -= 1) {
+    const initial = Array.from(rest[i]).find((c) => !/^[\p{P}\p{Z}]$/u.test(c));
+    if (initial !== undefined) return `${words[0]} ${initial}.`;
+  }
+  return words[0];
 }
 
 /**

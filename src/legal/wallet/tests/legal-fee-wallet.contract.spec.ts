@@ -379,6 +379,40 @@ describe('Pay a legal fee from the wallet (LEGAL-05), Nuvion stood in', () => {
     await h.expectLedgerEqualsStandIn([payer]);
   });
 
+  it('a consultation fee for a request an admin moved to another state while the debit was pending is paid back whole, not held for ever (B1 F5)', async () => {
+    const payer = await h.person(RICH);
+    const id = await consultation(payer);
+    const q = await quoted(payer, id);
+    h.nuvion.mode = 'pending';
+    const res = await h.post(payer, url(id), request(q));
+    const pending = body<LegalFeeWalletView>(res).data!;
+    expect(pending.status).toBe('pending');
+    // Not cancelled, not paid: the matter is moved on by hand.
+    await h.prisma.legalRequest.update({
+      where: { id },
+      data: { status: 'consultation_scheduled' },
+    });
+    h.nuvion.settle(
+      h.sendsFrom(payer)[0].request.unique_reference,
+      'successful',
+    );
+    h.nuvion.mode = 'successful';
+    await until(async () => {
+      await h.pass();
+      const hold = await h.prisma.walletHold.findUnique({
+        where: { paymentId: pending.id },
+      });
+      return hold?.status === 'refunded';
+    }, 'the fee to be paid back');
+    await h.pass();
+
+    const r = await row(id);
+    expect(r.consultationPaidAt).toBeNull();
+    expect(r.status).toBe('consultation_scheduled');
+    expect(balance(payer)).toBe(BigInt(RICH));
+    await h.expectLedgerEqualsStandIn([payer]);
+  });
+
   it("refuses someone else's request, one that is gone, a cancelled one and a booking whose hold has run out", async () => {
     const payer = await h.person(RICH);
     const other = await h.person(RICH);

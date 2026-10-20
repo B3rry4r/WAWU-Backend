@@ -70,6 +70,8 @@ const REQUOTE_CHANGED =
   'This request changed while the quote was being saved, so the quote was not changed. Open it again to see where it stands.';
 const SIGN_CHANGED =
   'This request changed while you were signing, so nothing was signed. Open the engagement letter again to see where it stands.';
+const SIGN_CLOSED =
+  'This request is closed, so nothing was signed. Open it to see where it stands.';
 
 /**
  * Why a request can no longer be re-quoted, or null when it still can: it is
@@ -788,6 +790,9 @@ export class LegalRequestsService {
     if (record.contractSignedAt) {
       throw new ConflictException('This contract has already been signed.');
     }
+    // A closed matter that still carries its quote is not reopened by a
+    // signature (SWEEP-MONEY, LEGAL-06 B3a L4).
+    if (record.status === 'cancelled') throw new ConflictException(SIGN_CLOSED);
     if (record.quoteAmount == null) {
       throw new BadRequestException('This request has not been quoted yet.');
     }

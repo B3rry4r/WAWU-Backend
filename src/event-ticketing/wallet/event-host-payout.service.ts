@@ -39,10 +39,11 @@ export interface EventHostPayoutCounts {
  * - **Through the hold (MONEY-18).** A wallet order's price waits in WAWU's own
  *   account as a `held` `event_ticket` hold, with the host as its payee
  *   (EVENTS-07). Once `endsAt ?? startsAt` (plus `EVENT_PAYOUT_DELAY_HOURS`,
- *   default none) has gone by, the hold is RELEASED: the host's 85% (R-5) moves
- *   to their wallet, and WAWU keeps 15%. A host with no wallet keeps the share,
- *   and it lands the minute they open one (R-11), by the hold's own sweep. No
- *   money path of its own here.
+ *   default none) has gone by, the hold is RELEASED: the host's 85% (R-5)
+ *   becomes an earning of the host (an `EarningSettlement`, R-55) that rides
+ *   their one move a day to their wallet with their other earnings, and WAWU
+ *   keeps 15%. A host with no wallet keeps the share, and it lands the minute
+ *   they open one (R-11), by the earnings sweep. No money path of its own here.
  * - **Once.** The hold decides one way, once, and sends under its own
  *   reference: a second pass, a second server or this job running twice ask the
  *   same hold and only one move goes out. A hold the other way already

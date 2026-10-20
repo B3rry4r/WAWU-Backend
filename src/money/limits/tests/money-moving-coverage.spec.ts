@@ -399,6 +399,9 @@ function coverageFailures(routes: Route[]): string[] {
   return out;
 }
 
+/** A route at `money` itself or anywhere under `money/` (SWEEP-MONEY, FIX-26 L1: the bare `money` was missed). */
+const UNDER_MONEY = /^\w+ money(\/|$)/;
+
 /**
  * Every write under `money/` that is neither money-moving nor named: the
  * deny-by-default rule (see NON_MONEY_WRITES). A route that moves money is
@@ -406,7 +409,7 @@ function coverageFailures(routes: Route[]): string[] {
  */
 function unnamedMoneyWrites(routes: Route[]): string[] {
   return routes
-    .filter((r) => !r.key.startsWith('GET ') && /^\w+ money\//.test(r.key))
+    .filter((r) => !r.key.startsWith('GET ') && UNDER_MONEY.test(r.key))
     .filter(
       (r) =>
         !movesMoney(r) &&
@@ -645,6 +648,18 @@ class ClassAndMethodDocumented {
   @Post()
   @RequireOpenWallet()
   @MoneyErrors('pin_required')
+  pay() {
+    return { moved: true };
+  }
+}
+
+/** FIX-26 L1: the same silent debit mounted at `money` itself, with no sub-path. */
+@UseGuards(WawuAuthGuard)
+@Controller('money')
+class SilentDebitAtRoot {
+  @Post()
+  @RequireOpenWallet()
+  @MoneyErrors(...WALLET_GATE_ERRORS)
   pay() {
     return { moved: true };
   }
@@ -918,7 +933,7 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
       expect({ key, found: route !== undefined }).toEqual({ key, found: true });
       expect({
         key,
-        write: !key.startsWith('GET ') && /^\w+ money\//.test(key),
+        write: !key.startsWith('GET ') && UNDER_MONEY.test(key),
         moves: movesMoney(route!),
         alsoNamedAsPinOnly: key in MOVES_NO_MONEY,
       }).toEqual({
@@ -1249,6 +1264,12 @@ describe('FIX-26: the shapes the spec could not see now fail it', () => {
       expect.stringMatching(
         /^POST money\/fix26\/silent: a write under money\/ that nothing on it says moves money/,
       ),
+    ]);
+    // A write at `money` itself, with no sub-path, is asked for a name too.
+    const atRoot = routesOf([SilentDebitAtRoot]);
+    expect(atRoot.map((r) => r.key)).toEqual(['POST money']);
+    expect(unnamedMoneyWrites(atRoot)).toEqual([
+      expect.stringMatching(/^POST money: a write under money\/ that/),
     ]);
     // A read, a named write and a route that moves money are not asked for a name.
     const named = routesOf(controllersOf(MoneyContractModule)).filter(

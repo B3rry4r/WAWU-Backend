@@ -27,6 +27,8 @@ const CONFIG_KEY: Record<WawuIdCallKind, string> = {
 
 /** The longest bound a deployment may set. */
 const MAX_TIMEOUT_MS = 120_000;
+/** The shortest: a setting under this (`1`, `0x10` read as 16) is a slip, not a bound that any healthy answer could meet. */
+const MIN_TIMEOUT_MS = 100;
 
 /** The bound for one kind of call: the setting when it is whole and in range, else the default. */
 export function wawuIdTimeoutMs(
@@ -35,7 +37,7 @@ export function wawuIdTimeoutMs(
 ): number {
   const raw = config.get<string | number>(CONFIG_KEY[kind]);
   const n = typeof raw === 'number' ? raw : Number(String(raw ?? '').trim());
-  return Number.isInteger(n) && n > 0 && n <= MAX_TIMEOUT_MS
+  return Number.isInteger(n) && n >= MIN_TIMEOUT_MS && n <= MAX_TIMEOUT_MS
     ? n
     : WAWU_ID_TIMEOUT_MS[kind];
 }

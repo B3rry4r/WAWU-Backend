@@ -5,6 +5,7 @@
 
 import {
   composeNotification,
+  moneyInSenderName,
   moneyInShortName,
   NOTIFICATION_CATEGORY,
   type NotificationEvent,
@@ -57,6 +58,26 @@ describe('a person who sent money is "Tolu B."', () => {
   });
   it('keeps a letter from the second half of a pair whole', () => {
     expect(moneyInShortName('Tolu \u{1F600}ade')).toBe('Tolu \u{1F600}.');
+  });
+  it('takes the initial from the first character that is not punctuation, and not from a Jr. or Sr. (WALLET-39 F4)', () => {
+    expect(moneyInShortName('Adaeze (CEO)')).toBe('Adaeze C.');
+    expect(moneyInShortName('Ada Obi Jr.')).toBe('Ada O.');
+    expect(moneyInShortName('Ada Obi sr')).toBe('Ada O.');
+    expect(moneyInShortName('Ada Jr.')).toBe('Ada J.');
+    expect(moneyInShortName('Ada ...')).toBe('Ada');
+  });
+});
+
+describe('a number written into a sender name is masked (WALLET-39 F1)', () => {
+  it('shows a name that is a phone number, or a bank label that holds an account number, as its last four digits only', () => {
+    expect(moneyInSenderName('08012345678')).toBe('****5678');
+    expect(moneyInSenderName('GTBank 0123456789')).toBe('GTBank ****6789');
+    expect(moneyInSenderName('0801 234 5678')).toBe('****5678');
+    expect(moneyInSenderName('Store 24 and 7 Ltd')).toBe('Store 24 and 7 Ltd');
+    const words = told({ source: 'transfer', senderName: '08012345678' });
+    expect(JSON.stringify(words)).not.toMatch(LONG_NUMBER);
+    const bank = told({ source: 'bank', senderBankName: 'GTBank 0123456789' });
+    expect(JSON.stringify(bank)).not.toMatch(LONG_NUMBER);
   });
 });
 
