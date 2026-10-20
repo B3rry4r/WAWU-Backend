@@ -68,6 +68,7 @@ decides nothing about categories by itself:
 | `dm_received` | Paid questions (`dmReminders`), for push only (the list is unchanged, G-24) |
 | `content_published`, `content_rejected`, `review_received` | Reviews (`contentReviews`) |
 | `community_join_approved`, `community_join_declined` | none (G-32) |
+| `community_pass_ending` | none (G-INBOX-24-1): the reminder 3 days before a private room's pass ends (R-63), always pushed |
 
 **Held, not pushed** (they stay in the in-app list): `paid_dm_warning`,
 `paid_dm_paused`, `credits_low`, `kyc_verified`, `verify_reminder`, `campaign`.

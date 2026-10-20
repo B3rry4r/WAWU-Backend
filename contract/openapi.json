@@ -16604,7 +16604,8 @@
                 "points_pack",
                 "extra_products",
                 "points_shortfall",
-                "points_cash_out"
+                "points_cash_out",
+                "community_pass"
               ]
             }
           },
@@ -18384,6 +18385,417 @@
         "x-wawu-built-by": "NUV-03"
       }
     },
+    "/api/hub/admin/support/threads": {
+      "get": {
+        "operationId": "AdminSupportController_threads",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSummaryPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The support threads, newest activity first. Each item's `other` is the\nperson, `lastMessage.mine` is false while it waits for a reply, and\n`unreadCount` is how many of their messages no reply has followed.",
+        "tags": [
+          "AdminSupport"
+        ]
+      }
+    },
+    "/api/hub/admin/support/threads/{chatId}/messages": {
+      "get": {
+        "operationId": "AdminSupportController_messages",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatMessagePage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One thread's messages, newest first, cursor-paged.",
+        "tags": [
+          "AdminSupport"
+        ]
+      },
+      "post": {
+        "operationId": "AdminSupportController_reply",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminSupportReplyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatMessage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Reply in a thread. The person sees it in their chat from \"Who Made\nThis?\". Text only: a body with an attachment is 400. The same\n`clientMessageId` sent again returns the first reply instead of posting\nit twice.",
+        "tags": [
+          "AdminSupport"
+        ]
+      }
+    },
+    "/api/hub/chats": {
+      "post": {
+        "operationId": "ChatController_open",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenChatDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSummary"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Open the chat with one person, or get the one that already exists.",
+        "tags": [
+          "Chat"
+        ]
+      },
+      "get": {
+        "operationId": "ChatController_list",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSummaryPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The caller's chats, newest activity first, cursor-paged.",
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}": {
+      "get": {
+        "operationId": "ChatController_get",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSummary"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}/messages": {
+      "get": {
+        "operationId": "ChatController_messages",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
+            "schema": {
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, 20 when left out.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatMessagePage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Messages, newest first, cursor-paged.",
+        "tags": [
+          "Chat"
+        ]
+      },
+      "post": {
+        "operationId": "ChatController_send",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatSendMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatMessage"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}/read": {
+      "post": {
+        "operationId": "ChatController_markRead",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkChatReadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatReadMark"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Move the caller's read mark forward.",
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}/attachments": {
+      "post": {
+        "operationId": "ChatController_presignAttachment",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatUpload"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Where to upload one photo, video or PDF for this chat.",
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
     "/api/hub/admin/events": {
       "get": {
         "operationId": "AdminEventsController_list",
@@ -19840,7 +20252,7 @@
             }
           }
         },
-        "summary": "Asks to delete the account (R-17: it waits 30 days). Refused with\n`409 account_deletion_blocked` while the wallet holds money, a hold is\nopen or earnings are waiting (SETTINGS-06). `503 provider_unreachable`\nwhen the wallet provider does not answer, so \"empty\" is never guessed.",
+        "summary": "Asks to delete the account (R-17: it waits 30 days). The body may carry\n`reason`, why the person is leaving (Z7, SETTINGS-05), kept on the\ndeletion row. Refused with\n`409 account_deletion_blocked` while the wallet holds money, a hold is\nopen or earnings are waiting (SETTINGS-06). `503 provider_unreachable`\nwhen the wallet provider does not answer, so \"empty\" is never guessed.",
         "tags": [
           "Account"
         ]
@@ -26577,6 +26989,40 @@
         ]
       }
     },
+    "/api/hub/search/people": {
+      "get": {
+        "operationId": "SearchResponseController_people",
+        "parameters": [
+          {
+            "name": "ids",
+            "required": true,
+            "in": "query",
+            "description": "The accounts to describe, as a comma-separated list of ids (1 to 50), in\nthe order the answer should keep.",
+            "schema": {
+              "maxLength": 3250,
+              "pattern": "^[A-Za-z0-9_,-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPeople"
+                }
+              }
+            }
+          }
+        },
+        "summary": "EXPLORE-02. The names the app draws on result rows and \"Creators to know\":\nfor each account asked about, who they are (real name or handle, picture,\nwhat they do, both ticks) and whether the caller follows them. A person\nthe caller may not see is left out of the answer. New route: nothing the\nweb calls changes.",
+        "tags": [
+          "SearchResponse"
+        ]
+      }
+    },
     "/api/hub/search/closest": {
       "get": {
         "operationId": "SearchResponseController_closest",
@@ -27173,7 +27619,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateCommunityDto"
+                "$ref": "#/components/schemas/CreateRoomDto"
               }
             }
           }
@@ -27479,6 +27925,14 @@
                     "joinedAt": {
                       "type": "string",
                       "format": "date-time",
+                      "nullable": true
+                    },
+                    "passUntil": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "canRenew": {
+                      "type": "boolean",
                       "nullable": true
                     }
                   },
@@ -29322,16 +29776,16 @@
         ]
       }
     },
-    "/api/hub/chats": {
+    "/api/hub/support/thread": {
       "post": {
-        "operationId": "ChatController_open",
+        "operationId": "SupportController_open",
         "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/OpenChatDto"
+                "$ref": "#/components/schemas/OpenSupportThreadDto"
               }
             }
           }
@@ -29342,259 +29796,20 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ChatSummary"
+                  "$ref": "#/components/schemas/SupportThreadView"
                 }
               }
             }
           }
         },
-        "summary": "Open the chat with one person, or get the one that already exists.",
-        "tags": [
-          "Chat"
-        ]
-      },
-      "get": {
-        "operationId": "ChatController_list",
-        "parameters": [
+        "security": [
           {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
-            "schema": {
-              "maxLength": 200,
-              "type": "string"
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "description": "1 to 100, 20 when left out.",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100,
-              "type": "number"
-            }
+            "wawu-id": []
           }
         ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatSummaryPage"
-                }
-              }
-            }
-          }
-        },
-        "summary": "The caller's chats, newest activity first, cursor-paged.",
+        "summary": "H18 \"Contact support\", W27 \"Report a problem\" and W35 \"Help with a\npayment\": open the caller's support thread, or get the one that exists,\nwith the payment they are asking about already written into it. The same\nreference sent again returns the same thread and the same message. A\nreference that does not exist, or is someone else's, is 404.",
         "tags": [
-          "Chat"
-        ]
-      }
-    },
-    "/api/hub/chats/{chatId}": {
-      "get": {
-        "operationId": "ChatController_get",
-        "parameters": [
-          {
-            "name": "chatId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatSummary"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Chat"
-        ]
-      }
-    },
-    "/api/hub/chats/{chatId}/messages": {
-      "get": {
-        "operationId": "ChatController_messages",
-        "parameters": [
-          {
-            "name": "chatId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "description": "Opaque: send back the `nextCursor` of the previous page as given.",
-            "schema": {
-              "maxLength": 200,
-              "type": "string"
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "description": "1 to 100, 20 when left out.",
-            "schema": {
-              "minimum": 1,
-              "maximum": 100,
-              "type": "number"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatMessagePage"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Messages, newest first, cursor-paged.",
-        "tags": [
-          "Chat"
-        ]
-      },
-      "post": {
-        "operationId": "ChatController_send",
-        "parameters": [
-          {
-            "name": "chatId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChatSendMessageDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatMessage"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Chat"
-        ]
-      }
-    },
-    "/api/hub/chats/{chatId}/read": {
-      "post": {
-        "operationId": "ChatController_markRead",
-        "parameters": [
-          {
-            "name": "chatId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MarkChatReadDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatReadMark"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Move the caller's read mark forward.",
-        "tags": [
-          "Chat"
-        ]
-      }
-    },
-    "/api/hub/chats/{chatId}/attachments": {
-      "post": {
-        "operationId": "ChatController_presignAttachment",
-        "parameters": [
-          {
-            "name": "chatId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ChatUploadDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ChatUpload"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Where to upload one photo, video or PDF for this chat.",
-        "tags": [
-          "Chat"
+          "Support"
         ]
       }
     },
@@ -31810,6 +32025,316 @@
         ]
       }
     },
+    "/api/hub/communities/{id}/pass": {
+      "get": {
+        "operationId": "CommunityPassController_pass",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityPassView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Where the caller stands with this room's pass: the host's price, when\ntheir pass ends, and whether they can buy or renew. Needs no wallet, so\nthe landing (I30) can open before one exists.",
+        "tags": [
+          "CommunityPass"
+        ]
+      },
+      "post": {
+        "operationId": "CommunityPassController_buy",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommunityPassDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityPassPurchaseView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Pays for 30 days from the wallet, once: the person is in when the payment\nis confirmed. Paying before the end extends from the current end date.\nAnswers 201 with the purchase: `paid`, `pending` while the provider has\nnot confirmed the debit yet (poll `GET /communities/{id}/pass/{paymentId}`;\nit is never sent again), `failed` when the provider refused it and nothing\nmoved, or `refunded` when the pass could not be given and everything paid\nis going back. The same Idempotency-Key and body answer the first result\nagain (`Idempotent-Replayed: true`) without checking the PIN. Not enough\nmoney is `402 insufficient_funds` with the shortfall; no wallet is `409\nwallet_not_open`. Nothing is ever debited without this request.",
+        "tags": [
+          "CommunityPass"
+        ]
+      }
+    },
+    "/api/hub/communities/{id}/pass/quote": {
+      "get": {
+        "operationId": "CommunityPassController_quote",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityPassQuoteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: target_not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The pay sheet before the PIN: the host's price, the wallet provider's\ncharge and WAWU's fee on top, the total, the wallet's balance and the\nshortfall, when the pass would end, and the signed quote\n`POST /communities/{id}/pass` sends back. Nothing is reserved.",
+        "tags": [
+          "CommunityPass"
+        ]
+      }
+    },
+    "/api/hub/communities/{id}/pass/{paymentId}": {
+      "get": {
+        "operationId": "CommunityPassController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "paymentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityPassPurchaseView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One purchase as it stands now: what the app polls after `pending`. Only\nthe payer reads it, for the room in the path; another person's purchase\nand an id nobody holds are the same `404 not_found`.",
+        "tags": [
+          "CommunityPass"
+        ]
+      }
+    },
     "/api/hub/tips/wallet/quote": {
       "get": {
         "operationId": "TipWalletController_quote",
@@ -33880,6 +34405,119 @@
           "PointsSettings"
         ],
         "x-wawu-built-by": "POINTS-03"
+      }
+    },
+    "/api/hub/ai-tools": {
+      "get": {
+        "operationId": "AiToolsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiToolsView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The tools the Hub can run, each with its points per unit, whether it is\non, its limits and its voices, and the caps that stop a job (PT1, PT7).\nCosts and caps are settings. Read-only.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-01"
+      }
+    },
+    "/api/hub/ai-tools/voiceover/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createVoiceover",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVoiceoverJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a VoiceOver job (PT2): `text`, a `voiceId` from the list and the\n`quoteToken` of the `POST /points/quote` the person saw. Holds the job's\npoints, answers `202` with the job `working` and makes the audio after the\nanswer; `GET /ai-tools/jobs/{id}` is what the app polls. The points are\nkept only when the audio is made and given back when it is not.\n\nNeeds an `Idempotency-Key` (8 to 128 of `[A-Za-z0-9_-]`): the same key and\nwords again answer the first job (`200`, `Idempotent-Replayed: true`)\nand hold nothing more; the same key with other words is `409\nidempotency_key_reused`. Refused with nothing held: `422\npoints_cap_reached` naming the cap (characters, minutes or the day's\npoints), `402 insufficient_points`, `409 quote_changed` (the cost is not\nwhat the quote showed), `400 ai_voice_unknown`, `503 ai_tool_unavailable`.\nA refusal leaves the key free to use once the cause is fixed.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-01"
+      }
+    },
+    "/api/hub/ai-tools/jobs/{id}": {
+      "get": {
+        "operationId": "AiToolsController_readJob",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One job as it stands now: `working`, `done` with `audioUrl`, or `failed`\nwith the words \"No points were taken\" (PT2c). Only the person who ran it\nreads it; another person's job and one that is not there are the same\n`404 not_found`.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-01"
       }
     },
     "/api/hub/waitlist/offers/current": {
@@ -37597,7 +38235,8 @@
               "points_pack",
               "extra_products",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ],
             "type": "string"
           },
@@ -37784,6 +38423,109 @@
             "maxLength": 2000
           }
         }
+      },
+      "AdminSupportReplyDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "\\S"
+          },
+          "clientMessageId": {
+            "type": "string",
+            "description": "The dashboard's own id for this reply. Sending the same one again returns\nthe reply already stored instead of posting it twice.",
+            "pattern": "^[A-Za-z0-9_-]{8,64}$"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "OpenChatDto": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string",
+            "description": "The other person's WAWU ID (uuid).",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "wawuId"
+        ]
+      },
+      "ChatAttachmentDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The `key` POST /chats/:chatId/attachments returned, after the upload.",
+            "maxLength": 300
+          },
+          "name": {
+            "type": "string",
+            "description": "The file's own name, shown on a PDF bubble.",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "key"
+        ]
+      },
+      "ChatSendMessageDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "pattern": "\\S"
+          },
+          "attachment": {
+            "$ref": "#/components/schemas/ChatAttachmentDto"
+          },
+          "clientMessageId": {
+            "type": "string",
+            "description": "The app's own id for this message. Sending the same one again returns\nthe message already stored instead of posting it twice.",
+            "pattern": "^[A-Za-z0-9_-]{8,64}$"
+          }
+        }
+      },
+      "MarkChatReadDto": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ChatUploadDto": {
+        "type": "object",
+        "properties": {
+          "contentType": {
+            "type": "string",
+            "description": "image/png, image/jpeg, image/webp, video/mp4, video/quicktime or application/pdf.",
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "video/mp4",
+              "video/quicktime",
+              "application/pdf"
+            ]
+          },
+          "contentLength": {
+            "type": "number",
+            "description": "Exact size in bytes; the upload link is signed for this length. Up to\n512 MB, the limit every upload already has (MAX_UPLOAD_BYTES).",
+            "minimum": 1,
+            "maximum": 536870912
+          }
+        },
+        "required": [
+          "contentType",
+          "contentLength"
+        ]
       },
       "EventDecisionReasonDto": {
         "type": "object",
@@ -37994,7 +38736,19 @@
       },
       "DeleteAccountDto": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "reason": {
+            "description": "Why the person is leaving; left out when they did not say.",
+            "enum": [
+              "not_using_enough",
+              "another_account",
+              "privacy",
+              "too_many_notifications",
+              "something_else"
+            ],
+            "type": "string"
+          }
+        }
       },
       "AccountDeletionBlockedReason": {
         "type": "object",
@@ -39175,6 +39929,47 @@
           "reason"
         ]
       },
+      "CreateRoomDto": {
+        "type": "object",
+        "properties": {
+          "passPriceKobo": {
+            "type": "integer",
+            "description": "What a member pays for 30 days, in kobo, set by the host (I32). Private\nrooms only. The bounds are checked by the service (a figure of the\nlaunch settings, COMMUNITY_PASS_MIN_KOBO and COMMUNITY_PASS_MAX_KOBO).\nOmitted, a private room has no pass and keeps the older join request flow.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string",
+            "description": "Bound: 3-80 characters. A community name is a list-row heading on both\nthe mobile and desktop community surfaces, so it is deliberately far\nshorter than ContentPiece.title (200) — anything longer is a\ndescription, not a name. `\\S` rejects an all-whitespace name, which\n@IsNotEmpty alone lets through and which renders as a blank, unclickable\nrow.",
+            "minLength": 3,
+            "maxLength": 80,
+            "pattern": "\\S"
+          },
+          "description": {
+            "type": "string",
+            "description": "Bound: 1-500 characters. This is the \"what this community is for\" blurb\nshown on the community card / join screen, not long-form content — an\norder of magnitude shorter than ContentPiece.description (5000), which\nbacks a full detail page. Required, because `Community.description` is\na non-nullable column and a community with no stated purpose is the\nthing nobody joins.",
+            "maxLength": 500,
+            "pattern": "\\S"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "open",
+              "private"
+            ]
+          },
+          "imageUrl": {
+            "type": "string",
+            "description": "The room's cover image, as the `fileUrl` handed back by\n`POST /uploads/presign` for the `community/image` folder. Optional — a\ncommunity without one is normal and the client falls back to its\nplaceholder tile, so hosting is never blocked on finding a picture.\n\nNo `@MaxLength` here, matching every other asset-URL field in this\nbackend (CreateContentDto's previewAssetUrl/fullAssetUrl, CreateEventDto's\nbannerUrl — neither caps length). A presigned S3 GET URL carries the\nbucket, region, path and a full signed query string, routinely well past\n500 characters; a cap this field alone had meant every community created\nwith a picture 400'd against this backend's own presign output.",
+            "format": "uri"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "kind"
+        ]
+      },
       "CreateCommunityDto": {
         "type": "object",
         "properties": {
@@ -39192,11 +39987,11 @@
             "pattern": "\\S"
           },
           "kind": {
+            "type": "string",
             "enum": [
               "open",
               "private"
-            ],
-            "type": "string"
+            ]
           },
           "imageUrl": {
             "type": "string",
@@ -39968,90 +40763,39 @@
           }
         }
       },
-      "OpenChatDto": {
+      "SupportReferenceDto": {
         "type": "object",
         "properties": {
-          "wawuId": {
+          "kind": {
             "type": "string",
-            "description": "The other person's WAWU ID (uuid).",
-            "format": "uuid"
-          }
-        },
-        "required": [
-          "wawuId"
-        ]
-      },
-      "ChatAttachmentDto": {
-        "type": "object",
-        "properties": {
-          "key": {
-            "type": "string",
-            "description": "The `key` POST /chats/:chatId/attachments returned, after the upload.",
-            "maxLength": 300
-          },
-          "name": {
-            "type": "string",
-            "description": "The file's own name, shown on a PDF bubble.",
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "key"
-        ]
-      },
-      "ChatSendMessageDto": {
-        "type": "object",
-        "properties": {
-          "text": {
-            "type": "string",
-            "maxLength": 2000,
-            "pattern": "\\S"
-          },
-          "attachment": {
-            "$ref": "#/components/schemas/ChatAttachmentDto"
-          },
-          "clientMessageId": {
-            "type": "string",
-            "description": "The app's own id for this message. Sending the same one again returns\nthe message already stored instead of posting it twice.",
-            "pattern": "^[A-Za-z0-9_-]{8,64}$"
-          }
-        }
-      },
-      "MarkChatReadDto": {
-        "type": "object",
-        "properties": {
-          "messageId": {
-            "type": "string",
-            "format": "uuid"
-          }
-        }
-      },
-      "ChatUploadDto": {
-        "type": "object",
-        "properties": {
-          "contentType": {
-            "type": "string",
-            "description": "image/png, image/jpeg, image/webp, video/mp4, video/quicktime or application/pdf.",
+            "description": "`transaction` is a row of the wallet's history (W27's id); `payment` is a\npayment the person made, such as an unlock (the id the unlock answered).",
             "enum": [
-              "image/png",
-              "image/jpeg",
-              "image/webp",
-              "video/mp4",
-              "video/quicktime",
-              "application/pdf"
+              "transaction",
+              "payment"
             ]
           },
-          "contentLength": {
-            "type": "number",
-            "description": "Exact size in bytes; the upload link is signed for this length. Up to\n512 MB, the limit every upload already has (MAX_UPLOAD_BYTES).",
-            "minimum": 1,
-            "maximum": 536870912
+          "id": {
+            "type": "string",
+            "format": "uuid"
           }
         },
         "required": [
-          "contentType",
-          "contentLength"
+          "kind",
+          "id"
         ]
+      },
+      "OpenSupportThreadDto": {
+        "type": "object",
+        "properties": {
+          "reference": {
+            "description": "What the person wants help with. Left out: the thread opens with nothing attached.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SupportReferenceDto"
+              }
+            ]
+          }
+        }
       },
       "CreateMoneyRequestDto": {
         "type": "object",
@@ -40284,6 +41028,27 @@
         },
         "required": [
           "pack",
+          "expectedTotalKobo",
+          "quoteToken"
+        ]
+      },
+      "CommunityPassDto": {
+        "type": "object",
+        "properties": {
+          "expectedTotalKobo": {
+            "type": "integer",
+            "description": "`payment.totalKobo` from the quote the person saw. A different server total is `quote_changed`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`payment.quoteToken` from that quote.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
           "expectedTotalKobo",
           "quoteToken"
         ]
@@ -40605,6 +41370,33 @@
         },
         "required": [
           "useWallet"
+        ]
+      },
+      "CreateVoiceoverJobDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The words to speak. Never stored: the job keeps only how long it was.",
+            "minLength": 1,
+            "maxLength": 200000
+          },
+          "voiceId": {
+            "type": "string",
+            "description": "A voice id from `GET /ai-tools`.",
+            "pattern": "^[a-z0-9_-]{1,40}$"
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw. A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "text",
+          "voiceId",
+          "quoteToken"
         ]
       },
       "CreateWaitlistRegistrationDto": {
@@ -41059,7 +41851,8 @@
               "points_pack",
               "extra_products",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ]
           },
           "targetId": {
@@ -42277,7 +43070,8 @@
               "points_pack",
               "extra_products",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ]
           },
           "status": {
@@ -42518,7 +43312,8 @@
               "points_pack",
               "extra_products",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ]
           },
           "earnedKobo": {
@@ -42622,7 +43417,8 @@
               "points_pack",
               "extra_products",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ]
           },
           "targetId": {
@@ -42693,7 +43489,8 @@
               "points_pack",
               "extra_products",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ]
           },
           "targetId": {
@@ -42784,7 +43581,8 @@
               "points_pack",
               "extra_products",
               "points_shortfall",
-              "points_cash_out"
+              "points_cash_out",
+              "community_pass"
             ]
           },
           "targetId": {
@@ -51400,6 +52198,335 @@
           "state"
         ]
       },
+      "ChatPerson": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "support": {
+            "type": "boolean",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "avatarUrl",
+          "verification"
+        ]
+      },
+      "ChatAttachment": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "url",
+          "contentType",
+          "bytes",
+          "name"
+        ]
+      },
+      "MoneyRequestView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "messageId": {
+            "type": "string",
+            "nullable": true
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "outgoing",
+              "incoming"
+            ]
+          },
+          "requesterWawuId": {
+            "type": "string"
+          },
+          "payerWawuId": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "memo": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "paid",
+              "cancelled",
+              "declined"
+            ]
+          },
+          "paying": {
+            "type": "boolean"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "resolvedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "chatId",
+          "messageId",
+          "direction",
+          "requesterWawuId",
+          "payerWawuId",
+          "amountKobo",
+          "memo",
+          "status",
+          "paying",
+          "createdAt",
+          "resolvedAt"
+        ]
+      },
+      "ChatMessage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "senderWawuId": {
+            "type": "string"
+          },
+          "mine": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "video",
+              "image",
+              "text",
+              "file",
+              "money_request"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "attachment": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChatAttachment"
+              }
+            ],
+            "nullable": true
+          },
+          "moneyRequest": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MoneyRequestView"
+              }
+            ],
+            "nullable": true
+          },
+          "clientMessageId": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "readState": {
+            "type": "string",
+            "enum": [
+              "read",
+              "sent"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "chatId",
+          "senderWawuId",
+          "mine",
+          "kind",
+          "text",
+          "attachment",
+          "moneyRequest",
+          "clientMessageId",
+          "createdAt",
+          "readState"
+        ]
+      },
+      "ChatSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "other": {
+            "$ref": "#/components/schemas/ChatPerson"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "lastActivityAt": {
+            "type": "string"
+          },
+          "lastMessage": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChatMessage"
+              }
+            ],
+            "nullable": true
+          },
+          "unreadCount": {
+            "type": "number"
+          },
+          "myLastReadAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "otherLastReadAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "canMessage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "other",
+          "createdAt",
+          "lastActivityAt",
+          "lastMessage",
+          "unreadCount",
+          "myLastReadAt",
+          "otherLastReadAt",
+          "canMessage"
+        ]
+      },
+      "ChatSummaryPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatSummary"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "ChatMessagePage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessage"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "ChatReadMark": {
+        "type": "object",
+        "properties": {
+          "chatId": {
+            "type": "string"
+          },
+          "lastReadAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastReadMessageId": {
+            "type": "string",
+            "nullable": true
+          },
+          "unreadCount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "chatId",
+          "lastReadAt",
+          "lastReadMessageId",
+          "unreadCount"
+        ]
+      },
+      "ChatUpload": {
+        "type": "object",
+        "properties": {
+          "uploadUrl": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadUrl",
+          "key"
+        ]
+      },
       "EventSpeakerView": {
         "type": "object",
         "properties": {
@@ -55075,6 +56202,58 @@
           "suggestedCreators"
         ]
       },
+      "SearchPerson": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "avatarUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "field": {
+            "type": "string",
+            "nullable": true
+          },
+          "verification": {
+            "$ref": "#/components/schemas/VerificationState"
+          },
+          "following": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "avatarUrl",
+          "field",
+          "verification",
+          "following"
+        ]
+      },
+      "SearchPeople": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchPerson"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
       "ClosestSearchResult": {
         "type": "object",
         "properties": {
@@ -56588,329 +57767,48 @@
           "userSaved"
         ]
       },
-      "ChatPerson": {
+      "SupportReferenceView": {
         "type": "object",
         "properties": {
-          "wawuId": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "handle": {
+          "kind": {
             "type": "string",
-            "nullable": true
+            "enum": [
+              "transaction",
+              "payment"
+            ]
           },
-          "avatarUrl": {
-            "type": "string",
-            "nullable": true
-          },
-          "verification": {
-            "$ref": "#/components/schemas/VerificationState"
-          }
-        },
-        "required": [
-          "wawuId",
-          "name",
-          "handle",
-          "avatarUrl",
-          "verification"
-        ]
-      },
-      "ChatAttachment": {
-        "type": "object",
-        "properties": {
-          "url": {
-            "type": "string",
-            "nullable": true
-          },
-          "contentType": {
-            "type": "string"
-          },
-          "bytes": {
-            "type": "number"
-          },
-          "name": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "url",
-          "contentType",
-          "bytes",
-          "name"
-        ]
-      },
-      "MoneyRequestView": {
-        "type": "object",
-        "properties": {
           "id": {
             "type": "string"
           },
+          "reference": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "reference"
+        ]
+      },
+      "SupportThreadView": {
+        "type": "object",
+        "properties": {
           "chatId": {
             "type": "string"
+          },
+          "reference": {
+            "$ref": "#/components/schemas/SupportReferenceView",
+            "nullable": true
           },
           "messageId": {
             "type": "string",
             "nullable": true
-          },
-          "direction": {
-            "type": "string",
-            "enum": [
-              "outgoing",
-              "incoming"
-            ]
-          },
-          "requesterWawuId": {
-            "type": "string"
-          },
-          "payerWawuId": {
-            "type": "string"
-          },
-          "amountKobo": {
-            "type": "integer"
-          },
-          "memo": {
-            "type": "string",
-            "nullable": true
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "paid",
-              "cancelled",
-              "declined"
-            ]
-          },
-          "paying": {
-            "type": "boolean"
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "resolvedAt": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "chatId",
-          "messageId",
-          "direction",
-          "requesterWawuId",
-          "payerWawuId",
-          "amountKobo",
-          "memo",
-          "status",
-          "paying",
-          "createdAt",
-          "resolvedAt"
-        ]
-      },
-      "ChatMessage": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "chatId": {
-            "type": "string"
-          },
-          "senderWawuId": {
-            "type": "string"
-          },
-          "mine": {
-            "type": "boolean"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "video",
-              "image",
-              "text",
-              "file",
-              "money_request"
-            ]
-          },
-          "text": {
-            "type": "string",
-            "nullable": true
-          },
-          "attachment": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/ChatAttachment"
-              }
-            ],
-            "nullable": true
-          },
-          "moneyRequest": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/MoneyRequestView"
-              }
-            ],
-            "nullable": true
-          },
-          "clientMessageId": {
-            "type": "string",
-            "nullable": true
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "readState": {
-            "type": "string",
-            "enum": [
-              "read",
-              "sent"
-            ],
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "chatId",
-          "senderWawuId",
-          "mine",
-          "kind",
-          "text",
-          "attachment",
-          "moneyRequest",
-          "clientMessageId",
-          "createdAt",
-          "readState"
-        ]
-      },
-      "ChatSummary": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "other": {
-            "$ref": "#/components/schemas/ChatPerson"
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "lastActivityAt": {
-            "type": "string"
-          },
-          "lastMessage": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/ChatMessage"
-              }
-            ],
-            "nullable": true
-          },
-          "unreadCount": {
-            "type": "number"
-          },
-          "myLastReadAt": {
-            "type": "string",
-            "nullable": true
-          },
-          "otherLastReadAt": {
-            "type": "string",
-            "nullable": true
-          },
-          "canMessage": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "id",
-          "other",
-          "createdAt",
-          "lastActivityAt",
-          "lastMessage",
-          "unreadCount",
-          "myLastReadAt",
-          "otherLastReadAt",
-          "canMessage"
-        ]
-      },
-      "ChatSummaryPage": {
-        "type": "object",
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ChatSummary"
-            }
-          },
-          "nextCursor": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "items",
-          "nextCursor"
-        ]
-      },
-      "ChatMessagePage": {
-        "type": "object",
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ChatMessage"
-            }
-          },
-          "nextCursor": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "items",
-          "nextCursor"
-        ]
-      },
-      "ChatReadMark": {
-        "type": "object",
-        "properties": {
-          "chatId": {
-            "type": "string"
-          },
-          "lastReadAt": {
-            "type": "string",
-            "nullable": true
-          },
-          "lastReadMessageId": {
-            "type": "string",
-            "nullable": true
-          },
-          "unreadCount": {
-            "type": "number"
           }
         },
         "required": [
           "chatId",
-          "lastReadAt",
-          "lastReadMessageId",
-          "unreadCount"
-        ]
-      },
-      "ChatUpload": {
-        "type": "object",
-        "properties": {
-          "uploadUrl": {
-            "type": "string"
-          },
-          "key": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "uploadUrl",
-          "key"
+          "reference",
+          "messageId"
         ]
       },
       "TgifDayView": {
@@ -57303,6 +58201,10 @@
           },
           "verification": {
             "$ref": "#/components/schemas/VerificationState"
+          },
+          "support": {
+            "type": "boolean",
+            "nullable": true
           }
         },
         "required": [
@@ -58105,9 +59007,9 @@
             "enum": [
               "community",
               "content",
+              "transaction",
               "paid_question",
-              "profile",
-              "transaction"
+              "profile"
             ]
           },
           "id": {
@@ -59421,6 +60323,156 @@
           "badge"
         ]
       },
+      "CommunityPassView": {
+        "type": "object",
+        "properties": {
+          "communityId": {
+            "type": "string"
+          },
+          "sellsPass": {
+            "type": "boolean"
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "periodDays": {
+            "type": "number"
+          },
+          "passUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "canRenew": {
+            "type": "boolean"
+          },
+          "canBuy": {
+            "type": "boolean"
+          },
+          "isHost": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "communityId",
+          "sellsPass",
+          "priceKobo",
+          "periodDays",
+          "passUntil",
+          "active",
+          "canRenew",
+          "canBuy",
+          "isHost"
+        ]
+      },
+      "CommunityPassQuoteView": {
+        "type": "object",
+        "properties": {
+          "communityId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "host": {
+            "$ref": "#/components/schemas/MoneyPartyView",
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "periodDays": {
+            "type": "number"
+          },
+          "passUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "newPassUntil": {
+            "type": "string"
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentQuoteView"
+          }
+        },
+        "required": [
+          "communityId",
+          "title",
+          "host",
+          "priceKobo",
+          "periodDays",
+          "passUntil",
+          "newPassUntil",
+          "payment"
+        ]
+      },
+      "CommunityPassPurchaseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "wallet"
+            ]
+          },
+          "communityId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "failed",
+              "reversed",
+              "refunded",
+              "paid"
+            ]
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "priceKobo": {
+            "type": "integer"
+          },
+          "passUntil": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentView"
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "paidAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "method",
+          "communityId",
+          "title",
+          "status",
+          "statusMessage",
+          "priceKobo",
+          "passUntil",
+          "payment",
+          "createdAt",
+          "paidAt"
+        ]
+      },
       "UnlockWalletQuoteView": {
         "type": "object",
         "properties": {
@@ -60327,6 +61379,9 @@
           "useWallet": {
             "type": "boolean"
           },
+          "quoteToken": {
+            "type": "string"
+          },
           "canRun": {
             "type": "boolean"
           },
@@ -60362,6 +61417,7 @@
           "balancePoints",
           "shortfallPoints",
           "useWallet",
+          "quoteToken",
           "canRun",
           "cap",
           "wallet",
@@ -60448,6 +61504,188 @@
         },
         "required": [
           "useWallet"
+        ]
+      },
+      "AiVoiceView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description"
+        ]
+      },
+      "AiToolView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "enum": [
+              "voiceover"
+            ]
+          },
+          "action": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string",
+            "enum": [
+              "minute"
+            ]
+          },
+          "costPointsPerUnit": {
+            "type": "number"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "input": {
+            "type": "object",
+            "properties": {
+              "maxCharacters": {
+                "type": "number"
+              },
+              "charactersPerUnit": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "maxCharacters",
+              "charactersPerUnit"
+            ]
+          },
+          "voices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiVoiceView"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "name",
+          "description",
+          "unit",
+          "costPointsPerUnit",
+          "enabled",
+          "input",
+          "voices"
+        ]
+      },
+      "AiToolCapsView": {
+        "type": "object",
+        "properties": {
+          "dailyPoints": {
+            "type": "number"
+          },
+          "maxCharactersPerJob": {
+            "type": "number"
+          },
+          "maxAudioMinutesPerJob": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "dailyPoints",
+          "maxCharactersPerJob",
+          "maxAudioMinutesPerJob"
+        ]
+      },
+      "AiToolsView": {
+        "type": "object",
+        "properties": {
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiToolView"
+            }
+          },
+          "caps": {
+            "$ref": "#/components/schemas/AiToolCapsView"
+          }
+        },
+        "required": [
+          "tools",
+          "caps"
+        ]
+      },
+      "AiJobView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string",
+            "enum": [
+              "voiceover"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "done",
+              "working"
+            ]
+          },
+          "voiceId": {
+            "type": "string"
+          },
+          "characters": {
+            "type": "number"
+          },
+          "units": {
+            "type": "number"
+          },
+          "costPoints": {
+            "type": "number"
+          },
+          "audioUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "finishedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "tool",
+          "state",
+          "voiceId",
+          "characters",
+          "units",
+          "costPoints",
+          "audioUrl",
+          "message",
+          "createdAt",
+          "finishedAt"
         ]
       },
       "AdminWaitlistRegistrationView": {

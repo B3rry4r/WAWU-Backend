@@ -1232,9 +1232,48 @@ model Community {
   /// INBOX-01. Relation fields only: no column is added to Community.
   link         CommunityLink?
   readMarkers  CommunityReadMarker[]
+  /// INBOX-24 (R-63). Relation fields only: no column is added to Community.
+  passPrice    CommunityPassPrice?
+  passes       CommunityPass[]
 
   @@index([hostWawuId])
   @@index([kind])
+}
+
+/// INBOX-24 (R-63). The monthly price a private community sells its pass at,
+/// set by the host when the room is made. A side table, not a column on
+/// Community, because every Community response is the model spread (locked
+/// response shape H-1). A private room with no row here has no pass: it keeps
+/// the older join request flow. Kobo, the host's own figure; the 85/15 split is
+/// taken from it when a pass is bought (R-5).
+model CommunityPassPrice {
+  communityId String    @id
+  community   Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  priceKobo   BigInt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+/// INBOX-24 (R-63). One paid pass: 30 days of a private room, bought from the
+/// wallet. One row per wallet payment (`walletPaymentId` is unique, so a
+/// payment confirmed twice, by the request and by the sweep, on any server,
+/// grants once). A person's pass runs to the latest `endsAt` of their rows; a
+/// new pass starts at the later of today and that date. `reminderSentAt` is
+/// set once, when the 3 day reminder for this pass was claimed.
+model CommunityPass {
+  id              String    @id @default(uuid())
+  communityId     String
+  community       Community @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  userWawuId      String
+  walletPaymentId String    @unique
+  startsAt        DateTime
+  endsAt          DateTime
+  priceKobo       BigInt
+  reminderSentAt  DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([communityId, userWawuId, endsAt])
+  @@index([endsAt])
 }
 
 /// INBOX-01. A community's share link, written `wawu/c/<slug>`.
@@ -6334,6 +6373,13 @@ model AccountDeletion {
   /// made (a pass also sets it a few minutes ahead while it holds the row).
   identityMarkAttempts Int @default(0)
   identityMarkNextAt DateTime?
+  /// SETTINGS-05. Why the person is leaving, as the app's list gives it (one of
+  /// `LEAVING_REASONS` in src/account/dto/delete-account.dto.ts; a string, so a
+  /// new choice needs no migration). Optional: null when they did not say. Set
+  /// when a request records the deletion and replaced when a later request
+  /// takes over a cancelled one. A choice from a list, never free text, so it
+  /// holds no personal detail.
+  leavingReason   String?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -7439,4 +7485,49 @@ model NuvionReconcileFinding {
 
   @@unique([kind, subject])
   @@index([resolvedAt, lastSeenAt])
+}
+
+/// Where an AI tool job is (AITOOLS-01, PT2). `working` until the voice provider
+/// answers; then `done` (the points were kept) or `failed` (every held point
+/// went back).
+enum AiJobState {
+  working
+  done
+  failed
+}
+
+/// One run of an AI tool for one person (AITOOLS-01, R-43). The points it
+/// costs are held by POINTS-03 (`PointHold`, purpose `ai_job`, reference
+/// `<id>:1`) before the provider is asked, kept when the audio is stored, and
+/// given back when it is not. The text a person typed is NEVER stored: it
+/// lives in the request that runs the job. `requestHash` is an HMAC of the
+/// request, so the same Idempotency-Key with other words is refused and a read
+/// of this table reveals no text.
+model AiToolJob {
+  id             String     @id @default(uuid())
+  wawuUserId     String
+  /// The plan's action id (`voiceover_per_min`), which names the cost.
+  tool           String
+  /// The person's Idempotency-Key for this job: a lost answer and a retry run one job.
+  idempotencyKey String
+  requestHash    String
+  /// The WAWU voice id the person chose (never the provider's own id).
+  voiceId        String
+  characters     Int
+  /// What the job was priced in (minutes, for VoiceOver) and the points it costs.
+  units          Int
+  costPoints     Int
+  state          AiJobState @default(working)
+  /// The hold that pays for the job, once taken.
+  holdId         String?
+  /// `provider_failed`, `provider_unavailable`, `points_gone`, `timed_out` or `store_failed`, for a failed job.
+  failureCode    String?
+  /// The stored audio's key (a `StorageObject` row), once the job is done.
+  audioKey       String?
+  createdAt      DateTime   @default(now())
+  finishedAt     DateTime?
+
+  @@unique([wawuUserId, idempotencyKey])
+  @@index([wawuUserId, createdAt])
+  @@index([state, createdAt])
 }

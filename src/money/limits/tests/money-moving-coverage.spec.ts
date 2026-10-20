@@ -821,6 +821,8 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
     ).toEqual([
       'POST bills/wallet/pay',
       'POST chats/:chatId/money-requests/:requestId/pay',
+      // INBOX-24: a private community's monthly pass pays from the wallet.
+      'POST communities/:id/pass',
       'POST content/:id/unlock/wallet',
       'POST credits/purchase/wallet',
       'POST dm/send/wallet/pay',

@@ -261,6 +261,26 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // AITOOLS-01: the AI tool jobs the person ran (no text is kept).
+    key: 'aiToolJobs',
+    models: ['AiToolJob'],
+    load: (prisma, me) =>
+      prisma.aiToolJob.findMany({
+        where: { wawuUserId: me },
+        orderBy: { createdAt: 'desc' },
+        take: 500,
+        select: {
+          tool: true,
+          state: true,
+          characters: true,
+          units: true,
+          costPoints: true,
+          createdAt: true,
+          finishedAt: true,
+        },
+      }),
+  },
+  {
     key: 'notificationSettings',
     models: ['NotificationSettings'],
     load: (prisma, me) =>
@@ -1325,6 +1345,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     },
     { model: 'ChatParticipant', reason: 'A read position, not content.' },
     { model: 'CommunityReadMarker', reason: 'A read position, not content.' },
+    {
+      model: 'CommunityPass',
+      reason:
+        'A pass is 30 days of a room, paid from the wallet; what was paid is exported with the payments, and the end date is on the membership.',
+    },
     {
       model: 'CommunityMessageKey',
       reason:

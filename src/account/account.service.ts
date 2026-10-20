@@ -19,6 +19,7 @@ import {
   type ReconcileOutcome,
 } from './account-deletion-money.service';
 import type { CancelDeletionResponseDto } from './dto/account-deletion.dto';
+import type { LeavingReason } from './dto/delete-account.dto';
 
 /** What a cancel is told once the purge has started. No em-dash. */
 export const DELETION_IN_PROGRESS_MESSAGE =
@@ -129,10 +130,14 @@ export class AccountService {
     private readonly identity: AccountDeletionIdentityService,
   ) {}
 
-  async deleteAccount(wawuUserId: string): Promise<AccountDeletionResponse> {
+  /** `reason`: why the person is leaving (Z7, SETTINGS-05), kept on the deletion row; absent when they did not say. */
+  async deleteAccount(
+    wawuUserId: string,
+    reason?: LeavingReason,
+  ): Promise<AccountDeletionResponse> {
     const ctx: DeleteContext = { touched: false, wallet: null };
     try {
-      return await this.deleteAccountSteps(wawuUserId, ctx);
+      return await this.deleteAccountSteps(wawuUserId, ctx, reason);
     } finally {
       // Whatever happened above, the wallet ends as the row says (round 5).
       // Not reached by a refusal before anything was touched (money to settle
@@ -146,6 +151,7 @@ export class AccountService {
   private async deleteAccountSteps(
     wawuUserId: string,
     ctx: DeleteContext,
+    reason: LeavingReason | undefined,
   ): Promise<AccountDeletionResponse> {
     let existing = await this.prisma.accountDeletion.findUnique({
       where: { wawuUserId },
@@ -223,6 +229,7 @@ export class AccountService {
     const recorded = await this.record(wawuUserId, wallet, {
       scheduledAt,
       purgeAfter,
+      reason,
     });
     if (!recorded) {
       // Another request for the same account got in first and is in force.
@@ -439,11 +446,12 @@ export class AccountService {
   private async record(
     wawuUserId: string,
     wallet: { walletId: string; provider: string } | null,
-    when: { scheduledAt: Date; purgeAfter: Date },
+    when: { scheduledAt: Date; purgeAfter: Date; reason?: LeavingReason },
   ): Promise<boolean> {
     const fields = {
       scheduledAt: when.scheduledAt,
       purgeAfter: when.purgeAfter,
+      leavingReason: when.reason ?? null,
       walletId: wallet?.walletId ?? null,
       walletProvider: wallet?.provider ?? null,
       walletFrozenAt: null,

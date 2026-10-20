@@ -138,6 +138,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'ProfileEducation', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'CourseEnrollment', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'CommunityMembership', column: 'userWawuId', disposition: 'OWNED' },
+  // The passes this person bought for private communities (INBOX-24, R-63):
+  // OWNED, like VerificationPurchase. The row exists only because this account
+  // paid and names no counterparty; the money's record is the payment, which
+  // stays and is anonymised below.
+  { model: 'CommunityPass', column: 'userWawuId', disposition: 'OWNED' },
   // How far this person has read in each community (INBOX-01).
   { model: 'CommunityReadMarker', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'Notification', column: 'userWawuId', disposition: 'OWNED' },
@@ -474,6 +479,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'PointLot', column: 'wawuUserId', disposition: 'OWNED' },
   // "Use wallet" (POINTS-03, PT3): this person's choice about points; theirs alone.
   { model: 'PointsSetting', column: 'wawuUserId', disposition: 'OWNED' },
+  // AI tool jobs (AITOOLS-01): what a person ran, how long and what it cost. No text is
+  // kept. The audio is a StorageObject of the person's, removed with the rest of their files.
+  { model: 'AiToolJob', column: 'wawuUserId', disposition: 'OWNED' },
   // Points turned into cash (POINTS-04): each row is WAWU's own movement of
   // cash from its account to this person's wallet, and the provider's record
   // of it (our reference, the amount, whether it was confirmed) must outlive

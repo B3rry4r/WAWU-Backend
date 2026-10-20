@@ -3,6 +3,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { ChatService } from '../chat/chat.service';
 import { CommunityMessageService } from '../community-message/community-message.service';
+import { CommunityPassAccess } from '../community/pass/community-pass-access.service';
 import { encodeLiveCursor } from './live-cursor';
 import { LiveConnections } from './live-connections.service';
 import type { LiveEvent, LiveLegalThreadEvent } from './live-event.type';
@@ -40,6 +41,7 @@ export class LiveDispatcher {
     private readonly blocks: BlockedAccountService,
     private readonly chats: ChatService,
     private readonly communityMessages: CommunityMessageService,
+    private readonly passAccess: CommunityPassAccess,
   ) {}
 
   /** Queues a signal behind the earlier ones for the same room. */
@@ -231,6 +233,13 @@ export class LiveDispatcher {
       select: { userWawuId: true },
     });
     const allowed = new Set(members.map((m) => m.userWawuId));
+    // INBOX-24 (R-63): a member whose pass has ended is not sent the room.
+    for (const id of await this.passAccess.lapsedMembers(
+      communityId,
+      [...allowed].filter((id) => id !== community.hostWawuId),
+    )) {
+      allowed.delete(id);
+    }
     if (connected.includes(community.hostWawuId)) {
       allowed.add(community.hostWawuId);
     }

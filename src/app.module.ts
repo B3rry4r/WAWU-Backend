@@ -11,6 +11,7 @@ import { AdminPaymentsModule } from './admin/payments/admin-payments.module';
 import { AdminCreatorsModule } from './admin/creators/admin-creators.module';
 import { AdminFinanceModule } from './admin/finance/admin-finance.module';
 import { AdminIdentityHoldsModule } from './admin/identity-holds/admin-identity-holds.module';
+import { AdminSupportModule } from './admin/support/admin-support.module';
 import { AdminEventsModule } from './admin/events/admin-events.module';
 import { AdminNotificationsModule } from './admin/notifications/admin-notifications.module';
 import { AdminFeaturedCreatorsModule } from './admin/featured-creators/admin-featured-creators.module';
@@ -78,6 +79,7 @@ import { AccountPurgeModule } from './account-purge/account-purge.module';
 import { WalletModule } from './wallet/wallet.module';
 import { MoneyModule } from './money/money.module';
 import { ChatModule } from './chat/chat.module';
+import { SupportModule } from './support/support.module';
 import { MoneyRequestModule } from './money-request/money-request.module';
 import { TgifModule } from './tgif/tgif.module';
 import { LiveModule } from './live/live.module';
@@ -87,6 +89,7 @@ import { PlansModule } from './plans/plans.module';
 import { PlanPurchasesModule } from './plans/purchases/plan-purchases.module';
 import { WalletBillsModule } from './wallet-bills/wallet-bills.module';
 import { CreditWalletModule } from './credit-purchase/wallet/credit-wallet.module';
+import { CommunityPassModule } from './community/pass/community-pass.module';
 import { UnlockWalletModule } from './content-piece/wallet/unlock-wallet.module';
 import { LegalFeeWalletModule } from './legal/wallet/legal-fee-wallet.module';
 import { TipWalletModule } from './purchase/wallet/tip-wallet.module';
@@ -94,6 +97,7 @@ import { EventWalletOrdersModule } from './event-ticketing/wallet/event-wallet-o
 import { PaidDmWalletModule } from './direct-message/wallet/paid-dm-wallet.module';
 import { PointsConvertModule } from './points/convert/points-convert.module';
 import { PointsSpendModule } from './points/spend/points-spend.module';
+import { AiToolsModule } from './ai-tools/ai-tools.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { NuvionWebhookModule } from './nuvion/webhook/nuvion-webhook.module';
@@ -265,6 +269,8 @@ import { PushModule } from './push/push.module';
     // `admin/identity-holds`, a first segment after `admin` that nothing else
     // declares, so it can neither shadow nor be shadowed (SHARED-CHANGES row).
     AdminIdentityHoldsModule,
+    // Staff replies to support threads (SUPPORT-01): /admin/support/*.
+    AdminSupportModule,
     // Admin event moderation, for the Events feature reinstated 22 Aug 2026 by
     // product-owner decision (see src/event/ for the app-facing half and
     // prisma/schema.prisma for the three new tables). Registered alongside the
@@ -391,6 +397,9 @@ import { PushModule } from './push/push.module';
     // Free chat between two users (task INBOX-06). `@Controller('chats')` is a
     // first segment nothing else declares, so it cannot shadow or be shadowed.
     ChatModule,
+    // Support chat (SUPPORT-01, R-30): POST /support/thread opens the person's
+    // thread with a payment already attached. After ChatModule.
+    SupportModule,
     // Money requests written into a chat (task INBOX-15): routes under
     // `chats/:chatId/money-requests`, deeper than every route ChatController
     // serves, so none is shadowed or shadows another.
@@ -428,6 +437,8 @@ import { PushModule } from './push/push.module';
     // literals CreditsStateModule's `credits` and CreditPurchaseModule's
     // `credits/purchase` do not declare; listed after PlansModule and MoneyModule.
     CreditWalletModule,
+    // A private community's monthly pass, paid from the wallet (INBOX-24, R-63).
+    CommunityPassModule,
     // Tip, unlock and pay a legal fee from the wallet (bundle B1). HOME-14: `tips/wallet`
     // (quote, tip, one tip by id) and the payment kind `tip`. HOME-15:
     // `content/:id/unlock/wallet` (quote, unlock, one unlock by id) and the kind
@@ -463,6 +474,10 @@ import { PushModule } from './push/push.module';
     // stale AI holds. After PointsConvertModule; `quote` and `shortfall` are
     // segments of `points` no other controller declares.
     PointsSpendModule,
+    // The AI tools catalogue and VoiceOver (task AITOOLS-01, SHARED-CHANGES
+    // AITOOLS-01 #1): `ai-tools`, `ai-tools/voiceover/jobs`, `ai-tools/jobs/:id`.
+    // `ai-tools` is a segment no other controller declares.
+    AiToolsModule,
     // The event registration link (task JOIN-01): `waitlist/offers/current`,
     // `waitlist/registrations` (register, verify, status) and the team's
     // `admin/waitlist/registrations` (list, export). `waitlist` and
