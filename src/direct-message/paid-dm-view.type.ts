@@ -1,4 +1,10 @@
 import type { DmOtherParty } from '../common/types';
+import type { PaidDmCreatorEarning } from './paid-dm-creator-earning.type';
+
+export type {
+  PaidDmCreatorEarning,
+  PaidDmEarningState,
+} from './paid-dm-creator-earning.type';
 
 /**
  * Every response shape the paid-question thread routes return (task
@@ -37,6 +43,12 @@ export interface PaidDmQuestion {
   respondedAt: string | null;
   /** Reply bubbles, oldest first. Empty while waiting. */
   replies: PaidDmReply[];
+  /**
+   * What the creator earns by this question, read by the creator only. Null
+   * for the person who asked, for a refunded question, and for a question
+   * that was not paid from a wallet (it holds no share).
+   */
+  creatorEarning: PaidDmCreatorEarning | null;
 }
 
 /** One person's thread of paid questions with another. */
@@ -87,6 +99,16 @@ export interface PaidDmQueuePage {
   nextCursor: string | null;
   /** Every question waiting for this creator, not just this page. */
   waitingTotal: number;
+}
+
+/**
+ * GET /paid-dm/waiting: the figures above the creator's waiting list (I9):
+ * how many questions wait on a reply and what they were paid, in kobo, over
+ * every question waiting and not only a page of them.
+ */
+export interface PaidDmWaiting {
+  count: number;
+  amountKobo: number;
 }
 
 /** Where a creator stands on unanswered paid questions (R-13). */

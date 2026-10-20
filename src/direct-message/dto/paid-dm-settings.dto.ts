@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform } from 'class-transformer';
 import { IsBoolean, IsInt, Max, Min, ValidateIf } from 'class-validator';
 import {
   DM_PRICE_MAX_NAIRA,
@@ -51,7 +51,12 @@ export class UpdatePaidDmSettingsDto {
 export class PaidDmEarnQueryDto {
   /** The price to price a message at, in kobo. */
   @ApiProperty({ type: 'integer' })
-  @Type(() => Number)
+  // Plain digits without leading zeros only: Number() also takes 0x1388, 0005000, " 5000" and +5000, which the PUT could never receive (INBOX-12 R2-1).
+  @Transform(({ value }: { value: unknown }) =>
+    typeof value === 'string' && /^(0|[1-9][0-9]{0,14})$/.test(value)
+      ? Number(value)
+      : value,
+  )
   @IsInt()
   @Min(DM_PRICE_MIN_NAIRA * 100)
   @Max(DM_PRICE_MAX_NAIRA * 100)

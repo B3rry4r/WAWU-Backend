@@ -360,6 +360,46 @@ describe('The daily TGIF notice (HOME-16)', () => {
       expect(await noticesOf(SIGNED_IN_A, D2)).toHaveLength(1);
     });
 
+    it('HOME-16 F1: a switch turned off between the claim and the write leaves no marker, and turning it on again that morning still gets the notice', async () => {
+      const original = notifications.emitTgifDaily.bind(notifications);
+      let flipped = false;
+      const spy = jest
+        .spyOn(notifications, 'emitTgifDaily')
+        .mockImplementation(async (event, ids, client) => {
+          // The moment between the job's claim statement and the write.
+          if (!flipped && ids.includes(S2)) {
+            flipped = true;
+            await prisma.tgifPreference.upsert({
+              where: { userWawuId: S2 },
+              create: { userWawuId: S2, show: false },
+              update: { show: false },
+            });
+          }
+          return original(event, ids, client);
+        });
+      try {
+        await job.run(AT_0700);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(flipped).toBe(true);
+      expect(await noticesOf(S2)).toHaveLength(0);
+      expect(
+        await prisma.tgifDailyNotice.count({ where: { userWawuId: S2 } }),
+      ).toBe(0);
+      // Off stays off: a later look writes nothing for them.
+      await job.run(AT_0810);
+      expect(await noticesOf(S2)).toHaveLength(0);
+      // Back on the same morning: the next look makes the day's one notice, and no more.
+      await prisma.tgifPreference.update({
+        where: { userWawuId: S2 },
+        data: { show: true },
+      });
+      await job.run(AT_0810);
+      await job.run(AT_0810);
+      expect(await noticesOf(S2)).toHaveLength(1);
+    });
+
     it('turning it off after the notice was made leaves that one and makes no second', async () => {
       await job.run(AT_0700);
       expect(await noticesOf(SIGNED_IN_A)).toHaveLength(1);

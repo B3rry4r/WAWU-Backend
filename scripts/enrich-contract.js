@@ -338,6 +338,8 @@ const NULLABLE_REF_AS_ALLOF_DIRS = [
  */
 const NULLABLE_TARGET_AS_ALLOF_DIRS = [
   path.join(ROOT, 'src', 'plans', 'tier-badge') + path.sep,
+  // INBOX-18: `creatorEarning` on a paid question, null for the asker.
+  path.join(ROOT, 'src', 'direct-message', 'paid-dm-creator-earning.type.ts'),
 ];
 
 /** True when `type`, or a member of the union it is, is declared under `dirs`. */
