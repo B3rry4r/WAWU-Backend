@@ -64,6 +64,20 @@ describe('SETTINGS-08: WAWU ID is told the deletion started, until it confirms',
   /** A moment after the 30 days (the pass takes its clock, so the row's date is left as it is). */
   const afterTheWait = () => new Date(Date.now() + 31 * 86400000);
 
+  /**
+   * FIX-92. A pass takes every due row in the table, and a clock 31 days ahead
+   * makes every scheduled row due, not only this spec's people. The deploy runs
+   * every spec in one process on one database, so a row another spec (or the
+   * seed) left behind, the seeded plain user's above all, would be purged here
+   * and every spec after this one would read an account that is gone. So the
+   * rows that exist before this spec starts are held for its length with the
+   * sweep's own marks: `reconcileClaimedUntil` in the future (no pass takes a
+   * held row) and `identityMarkNextAt` further out than any clock below (no
+   * pass asks WAWU ID about it). Raw SQL, so `updatedAt` is not touched. They
+   * are put back as they were in afterAll.
+   */
+  let others: { wawuUserId: string; claim: Date | null; markNext: Date | null }[] = [];
+
   beforeAll(async () => {
     const m = await Test.createTestingModule({
       imports: [
@@ -84,9 +98,23 @@ describe('SETTINGS-08: WAWU ID is told the deletion started, until it confirms',
     accounts = m.get(AccountService);
     sweep = m.get(AccountDeletionSweepService);
     identity = m.get(AccountDeletionIdentityService);
+    others = await prisma.$queryRaw<typeof others>`
+      SELECT "wawuUserId", "reconcileClaimedUntil" AS "claim", "identityMarkNextAt" AS "markNext"
+      FROM "AccountDeletion"`;
+    await prisma.$executeRaw`
+      UPDATE "AccountDeletion"
+      SET "reconcileClaimedUntil" = ${new Date(Date.now() + 86400000)},
+          "identityMarkNextAt" = ${new Date(Date.now() + 90 * 86400000)}
+      WHERE "wawuUserId" = ANY(${others.map((o) => o.wawuUserId)})`;
   });
 
   afterAll(async () => {
+    for (const o of others) {
+      await prisma.$executeRaw`
+        UPDATE "AccountDeletion"
+        SET "reconcileClaimedUntil" = ${o.claim}, "identityMarkNextAt" = ${o.markNext}
+        WHERE "wawuUserId" = ${o.wawuUserId}`;
+    }
     await prisma.accountDeletionContent.deleteMany({ where: { wawuUserId: { in: people } } });
     await prisma.accountDeletion.deleteMany({ where: { wawuUserId: { in: people } } });
     await prisma.pushStoppedAccount.deleteMany({ where: { userWawuId: { in: people } } });
