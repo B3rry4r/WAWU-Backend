@@ -605,7 +605,9 @@ export class WalletTransferService implements OnModuleInit {
         { tx },
       );
       await this.keys.attach(tx, scope, data.id!);
-      const row = await tx.walletTransfer.create({ data });
+      const row = await tx.walletTransfer.create({
+        data: { ...data, feeTransferDue: this.feeTransferDueNow(data) },
+      });
       await this.ledger.record(this.movement(row, 'out', 'pending'), tx);
       // A feature that sends on someone's behalf (INBOX-15: paying a money
       // request) ties its own record to this send HERE, in the claim, so a
@@ -992,6 +994,35 @@ export class WalletTransferService implements OnModuleInit {
   }
 
   /**
+   * Whether a transfer of WAWU's fee is due for a send made now (the fee is
+   * more than the provider's charge for moving it); written with the send in
+   * the claim, so a later schedule cannot change it. Null: no such transfer
+   * on this provider (SWEEP-MONEY-5a round 2, F2).
+   */
+  private feeTransferDueNow(
+    data: Prisma.WalletTransferCreateInput,
+  ): boolean | null {
+    if (this.provider.wawuFeeLeg !== true) return null;
+    const fee = BigInt(data.wawuFeeKobo);
+    return (
+      data.payerAccountNumber != null &&
+      fee > 0n &&
+      this.feeLegKobo(koboNumber(fee)) > 0
+    );
+  }
+
+  /**
+   * Whether a transfer of WAWU's fee may have been made for this send, from
+   * what the send recorded, never today's schedule: only "none due" is false,
+   * and a send with nothing recorded counts as due. A lookup that answers
+   * `unknown` means "not found" for the first and "unsure" for the rest
+   * (SWEEP-MONEY-5a, G2, G3, F2).
+   */
+  private feeTransferDue(t: TransferRow): boolean {
+    return this.feeLegDue(t) && t.feeTransferDue !== false;
+  }
+
+  /**
    * What the fee's transfer moves, in kobo. Nuvion charges for moving it on
    * what it moves (a banded schedule charges by band), so the amount is the
    * one whose own charge brings the sender's debit to WAWU's fee, to the
@@ -1077,16 +1108,18 @@ export class WalletTransferService implements OnModuleInit {
    * What the fee's transfer took from the sender, null when it took nothing,
    * or `unsure` when the provider's record of it is unfinished or in a status
    * word we do not know: that is never "took nothing" (read only). A lookup
-   * that answers `unknown` is still read as "took nothing": the provider's
-   * answer for a fee transfer it never held is the same as for one it could
-   * not read, and the nightly fee-leg compare names a fee that is missing.
+   * that answers `unknown` (the provider could not be read, or never held the
+   * transfer: its answer is the same) is `unsure` when a fee transfer was due
+   * for this send, so a send is never completed without a fee that was taken;
+   * where none was due it is "took nothing" (SWEEP-MONEY-5a, G3).
    */
   private async feeLegDebit(t: TransferRow): Promise<bigint | null | 'unsure'> {
     const rec = await this.legRecord(t, FEE_LEG_SUFFIX);
     if (
-      rec !== null &&
-      rec !== 'unknown' &&
-      (rec.outcome === 'pending' || rec.outcome === null)
+      (rec === 'unknown' && this.feeTransferDue(t)) ||
+      (rec !== null &&
+        rec !== 'unknown' &&
+        (rec.outcome === 'pending' || rec.outcome === null))
     ) {
       return 'unsure';
     }
@@ -1376,27 +1409,35 @@ export class WalletTransferService implements OnModuleInit {
    * often it is asked; if the provider took it and failed it, once more under
    * a new reference in a later pass (`moveFeeBack`, FIX-70). `none`: no fee was
    * taken. `pending`: not finished yet. `rest`: failed twice at the provider.
-   * `review`: the fee's own transfer was still unfinished, or not known, a
-   * day after the send; a person takes it, the fee still owed (SWEEP-MONEY-4
-   * round 2, F1).
+   * `review`: the fee's own transfer was still unfinished, or in a word we do
+   * not know, a day after the fee became owed; `missing`: the provider could
+   * not find it, or not be read for it, for a day. A person takes either, the
+   * fee still owed (SWEEP-MONEY-4 round 2, F1; SWEEP-MONEY-5a, G1 and G2).
    */
   private async returnFee(
     t: TransferRow,
     now: Date,
-  ): Promise<'done' | 'none' | 'pending' | 'rest' | 'review'> {
+  ): Promise<'done' | 'none' | 'pending' | 'rest' | 'review' | 'missing'> {
     if (!this.feeLegDue(t)) return 'none';
     const rec = await this.legRecord(t, FEE_LEG_SUFFIX);
-    // A day, by the sweep's own clock (a spec reaches it).
-    const old =
-      now.getTime() - (t.sentAt ?? t.createdAt).getTime() >
-      FEE_RETURN_GIVE_UP_MS;
+    // A day from when the fee became owed (the failure, or the reversal the
+    // Hub learned), by the sweep's own clock (a spec reaches it). Counted from
+    // the send, a late reversal made its first look already "old" and one
+    // unreadable answer sent it straight to a person (G1).
+    const old = now.getTime() - this.feeOwedSince(t) > FEE_RETURN_GIVE_UP_MS;
+    // The provider cannot say (unreadable, or it never held the transfer: its
+    // answer is the same). Where no fee transfer was due there is nothing to
+    // give back, and nothing reaches a person (G2). Where one was due, it is
+    // asked again for a day and then goes to a person, never closed as "no
+    // fee was taken" (the sender may be out the fee).
+    if (rec === 'unknown') {
+      if (!this.feeTransferDue(t)) return 'none';
+      return old ? 'missing' : 'pending';
+    }
     // A record in a status word we do not know (`outcome` null) says neither
     // that the fee was taken nor that it was not: asked again, like a pending
     // one, and never closed as "no fee was taken" (SWEEP-MONEY-4 C1).
-    if (
-      rec === 'unknown' ||
-      (rec !== null && (rec.outcome === 'pending' || rec.outcome === null))
-    ) {
+    if (rec !== null && (rec.outcome === 'pending' || rec.outcome === null)) {
       // Past the day it is no longer asked: a person takes it, and it is NOT
       // closed as "no fee was taken" (the sender may be out the fee).
       return old ? 'review' : 'pending';
@@ -1465,7 +1506,8 @@ export class WalletTransferService implements OnModuleInit {
 
   /** One try at giving a fee back; the mark stays while it is not done. */
   private async returnOwed(t: TransferRow, now = new Date()): Promise<void> {
-    let result: 'done' | 'none' | 'pending' | 'rest' | 'review' = 'pending';
+    let result: 'done' | 'none' | 'pending' | 'rest' | 'review' | 'missing' =
+      'pending';
     try {
       result = await this.returnFee(t, now);
     } catch (e) {
@@ -1481,7 +1523,15 @@ export class WalletTransferService implements OnModuleInit {
       await this.holdFeeReturn(
         t,
         now,
-        `WAWU's fee could not be given back: ${this.provider.label} has not said whether the fee transfer finished, a day after the send`,
+        `WAWU's fee could not be given back: ${this.provider.label} has not said whether the fee transfer finished, a day after the fee became owed`,
+      );
+      return;
+    }
+    if (result === 'missing') {
+      await this.holdFeeReturn(
+        t,
+        now,
+        `WAWU's fee could not be given back: the fee transfer could not be found or read at ${this.provider.label}, a day after the fee became owed`,
       );
       return;
     }

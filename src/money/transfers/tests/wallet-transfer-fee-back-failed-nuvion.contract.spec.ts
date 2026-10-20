@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { type INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
 import { PassportModule } from '@nestjs/passport';
 import { Test, type TestingModule } from '@nestjs/testing';
 import request from 'supertest';
@@ -38,12 +39,14 @@ import { nuvionWalletId } from '../../../nuvion/areas/accounts';
 import { NuvionBookArea } from '../../../nuvion/areas/book';
 import { PrismaNuvionBookStore } from '../../../nuvion/areas/book-store';
 import { sendReferenceOfFee } from '../../../nuvion/handlers/book';
+import { NuvionBookHandler } from '../../../nuvion/handlers/book.handler';
 import { NuvionClient } from '../../../nuvion/nuvion-client';
 import {
   NuvionWalletProvider,
   nuvionAreas,
 } from '../../../nuvion/nuvion-wallet-provider';
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
+import { FeeQuoteService } from '../../fees/fee-quote.service';
 import { MoneyModule } from '../../money.module';
 import { PaymentSettings } from '../../payments/payment-config';
 import type { FeeQuoteView, TransferView } from '../../money-view.type';
@@ -335,6 +338,52 @@ describe('A fee given back that Nuvion accepts and then fails is given back unde
         routes.findIndex((r) => r.handler === handler),
         1,
       );
+    };
+  };
+
+  /** Nuvion's own webhook for a transfer it holds (the handler the Hub runs). */
+  const deliver = (
+    event: string,
+    transfer: Record<string, unknown>,
+    p: Person,
+  ) =>
+    new NuvionBookHandler(prisma, moduleRef.get(ModuleRef)).handle({
+      id: randomUUID(),
+      eventId: randomUUID(),
+      event,
+      resourceId: transfer.id as string,
+      entityId: p.account.entity_id,
+      data: transfer,
+      receivedAt: new Date(),
+      attempts: 1,
+    });
+  const waitFor = async (
+    check: () => boolean | Promise<boolean>,
+    ms = 8000,
+  ) => {
+    const until = Date.now() + ms;
+    while (Date.now() < until) {
+      if (await check()) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return false;
+  };
+  /**
+   * WAWU's fee is not more than Nuvion's charge for moving it, so no transfer
+   * of it is due or made (`feeLegKobo` is 0): Nuvion's charge on every transfer
+   * is the whole of WAWU's fee. Returns the way back.
+   */
+  const feeNeverDue = (): (() => void) => {
+    const schedule = moduleRef.get(FeeQuoteService).providerFees as {
+      walletToWalletKobo: (amountKobo: number) => number;
+    };
+    const was = schedule.walletToWalletKobo;
+    const chargeWas = book.feeKobo;
+    schedule.walletToWalletKobo = () => WAWU_FEE;
+    book.feeKobo = () => WAWU_FEE;
+    return () => {
+      schedule.walletToWalletKobo = was;
+      book.feeKobo = chargeWas;
     };
   };
 
@@ -1012,6 +1061,249 @@ describe('A fee given back that Nuvion accepts and then fails is given back unde
     expect(available(me)).toBe(PERSON_START - AMOUNT - WAWU_FEE - FEE);
     expect(available(to)).toBe(AMOUNT);
     await bothEqualNuvion(me);
+  });
+
+  it('a late reversal on a send more than a day old is asked about again after one unreadable look at the fee transfer: the day is counted from the reversal, not from the send (SWEEP-MONEY-5a, G1)', async () => {
+    const me = await person(PERSON_START);
+    const to = await person(0);
+    const b = await prepare(me, to, AMOUNT);
+    book.mode = 'successful';
+    const view = body<TransferView>(await post(me, b)).data!;
+    expect(view.status).toBe('completed');
+    const fee = `${view.reference}-fee`;
+    // The send is a day and a half old when Nuvion reverses it.
+    const sent = new Date(Date.now() - 36 * HOUR);
+    await prisma.walletTransfer.update({
+      where: { id: view.id },
+      data: { createdAt: sent, sentAt: sent, completedAt: sent },
+    });
+    const restore = reviewBound(72);
+    const readable = unreadable(book.byReference(fee)[0].id);
+    try {
+      const reversed = book.settle(view.reference, 'reversed');
+      expect((await deliver('outflows.refunded', reversed, me)).outcome).toBe(
+        'done',
+      );
+      // The fee-back is looked at once, and the fee transfer cannot be read.
+      expect(
+        await waitFor(async () => {
+          const r = await rowOf(view.id);
+          return (
+            r.status === 'reversed' &&
+            (r.reviewSince !== null ||
+              (r.nextCheckAt?.getTime() ?? 0) > Date.now() + 60_000)
+          );
+        }),
+      ).toBe(true);
+      const asking = await rowOf(view.id);
+      expect(asking.reviewSince).toBeNull();
+      expect(asking.nextCheckAt).not.toBeNull();
+      expect(backPosts(view.reference)).toEqual([]);
+    } finally {
+      readable();
+      restore();
+    }
+    // Readable again: the fee comes back, once, and the person is whole.
+    await transfers.sweep(later());
+    await transfers.sweep(later());
+    expect(backPosts(view.reference)).toEqual([backRef(view.reference)]);
+    expect(available(me)).toBe(PERSON_START);
+    expect((await rowOf(view.id)).reviewSince).toBeNull();
+    expect((await rowOf(view.id)).nextCheckAt).toBeNull();
+    await bothEqualNuvion(me);
+  });
+
+  it('a send is not completed without a fee that was due while the fee transfer cannot be read: it is asked again, and completes at the full figures once it can be (SWEEP-MONEY-5a, G3)', async () => {
+    const me = await person(PERSON_START);
+    const to = await person(0);
+    const b = await prepare(me, to, AMOUNT);
+    const view = body<TransferView>(await post(me, b)).data!;
+    const fee = `${view.reference}-fee`;
+    book.settle(fee, 'successful');
+    await transfers.sweep(later(HALF_HOUR));
+    expect(book.byReference(view.reference)).toHaveLength(1);
+    book.settle(view.reference, 'successful');
+    const readable = unreadable(book.byReference(fee)[0].id);
+    try {
+      await transfers.sweep(later(HALF_HOUR));
+      await transfers.sweep(later(HALF_HOUR));
+      const row = await rowOf(view.id);
+      expect(row.status).toBe('pending');
+      expect(row.discrepancy ?? '').not.toContain('not collected');
+      expect(row.nextCheckAt).not.toBeNull();
+      expect(row.reviewSince).toBeNull();
+    } finally {
+      readable();
+    }
+    await transfers.sweep(later(HALF_HOUR));
+    const done = await rowOf(view.id);
+    expect(done.status).toBe('completed');
+    expect(done.discrepancy ?? '').not.toContain('not collected');
+    expect(available(me)).toBe(PERSON_START - AMOUNT - WAWU_FEE - FEE);
+    expect(available(to)).toBe(AMOUNT);
+    await bothEqualNuvion(me);
+  });
+
+  it('where no transfer of the fee was due, a fee lookup that finds nothing completes the send as before, and a failed send gives nothing back and never reaches a person (SWEEP-MONEY-5a, G3 and G2)', async () => {
+    const restore = feeNeverDue();
+    try {
+      const me = await person(PERSON_START);
+      const to = await person(0);
+      const ok = body<TransferView>(
+        await post(me, await prepare(me, to, AMOUNT)),
+      ).data!;
+      expect(book.byReference(`${ok.reference}-fee`)).toHaveLength(0);
+      book.settle(ok.reference, 'successful');
+      await transfers.sweep(later(HALF_HOUR));
+      const completed = await rowOf(ok.id);
+      expect(completed.status).toBe('completed');
+      expect(completed.reviewSince).toBeNull();
+      expect(completed.discrepancy ?? '').not.toContain('not collected');
+
+      const bad = body<TransferView>(
+        await post(me, await prepare(me, to, AMOUNT)),
+      ).data!;
+      const before = available(me);
+      expect(book.byReference(`${bad.reference}-fee`)).toHaveLength(0);
+      book.settle(bad.reference, 'failed');
+      await giveFeeBack(bad);
+      // Nothing was taken, so nothing is owed: closed at once, not asked for a day.
+      expect((await rowOf(bad.id)).status).toBe('failed');
+      expect((await rowOf(bad.id)).nextCheckAt).toBeNull();
+      for (const ms of [2 * 60_000, 3 * HOUR, 25 * HOUR]) {
+        await transfers.sweep(later(ms));
+      }
+      const after = await rowOf(bad.id);
+      expect(after.reviewSince).toBeNull();
+      expect(after.discrepancy ?? '').not.toContain('fee transfer');
+      expect(after.nextCheckAt).toBeNull();
+      expect(backPosts(bad.reference)).toEqual([]);
+      expect(available(me)).toBe(before + AMOUNT + WAWU_FEE);
+      // The ledger holds what Nuvion moved for the send that completed.
+      await bothEqualNuvion(me);
+    } finally {
+      restore();
+    }
+  });
+
+  it('a fee transfer that was due and cannot be found or read for a day goes to a person with a note that says so, never the note that it has not finished; nothing is sent and the fee stays owed (SWEEP-MONEY-5a, G2)', async () => {
+    const { me, view } = await sendNuvionFails();
+    const owing = available(me);
+    expect(owing).toBe(PERSON_START - WAWU_FEE);
+    const readable = unreadable(
+      book.byReference(`${view.reference}-fee`)[0].id,
+    );
+    const restore = reviewBound(72);
+    try {
+      await giveFeeBack(view);
+      for (const ms of [2 * 60_000, 30 * 60_000, 3 * HOUR]) {
+        await transfers.sweep(later(ms));
+      }
+      const asking = await rowOf(view.id);
+      expect(asking.nextCheckAt).not.toBeNull();
+      expect(asking.reviewSince).toBeNull();
+
+      await transfers.sweep(later(25 * HOUR));
+      const held = await rowOf(view.id);
+      expect(held.reviewSince).not.toBeNull();
+      expect(held.discrepancy).toContain(
+        'the fee transfer could not be found or read at',
+      );
+      expect(held.discrepancy).not.toContain('has not said whether');
+      expect(held.nextCheckAt).toBeNull();
+      expect(backPosts(view.reference)).toEqual([]);
+      expect(available(me)).toBe(owing);
+      await ledgerEqualsNuvion();
+
+      // Out of the sweep and not written again.
+      for (let i = 0; i < 3; i += 1) await transfers.sweep(later(2 * HOUR));
+      const after = await rowOf(view.id);
+      expect(after.reviewSince?.getTime()).toBe(held.reviewSince!.getTime());
+      expect(after.discrepancy).toBe(held.discrepancy);
+    } finally {
+      readable();
+      restore();
+    }
+  });
+
+  // SWEEP-MONEY-5a round 2, F2: whether a fee transfer was due is what the send
+  // recorded when it was made, never today's fee schedule.
+  for (const recorded of [true, null] as const) {
+    it(`a send whose fee transfer was made, the fee schedule changed after and the read fails (${recorded === null ? 'nothing recorded' : 'recorded as due'}): asked again for a day, then a person with the fee owed (SWEEP-MONEY-5a round 2, F2)`, async () => {
+      const { me, view } = await sendNuvionFails();
+      expect((await rowOf(view.id)).feeTransferDue).toBe(true);
+      if (recorded === null) {
+        await prisma.walletTransfer.update({
+          where: { id: view.id },
+          data: { feeTransferDue: null },
+        });
+      }
+      const owing = available(me);
+      expect(owing).toBe(PERSON_START - WAWU_FEE);
+      const readable = unreadable(
+        book.byReference(`${view.reference}-fee`)[0].id,
+      );
+      // After the send, the schedule changes: today no fee transfer is due.
+      const scheduleBack = feeNeverDue();
+      const restore = reviewBound(72);
+      try {
+        await giveFeeBack(view);
+        for (const ms of [2 * 60_000, 30 * 60_000, 3 * HOUR]) {
+          await transfers.sweep(later(ms));
+        }
+        const asking = await rowOf(view.id);
+        expect(asking.status).toBe('failed');
+        expect(asking.nextCheckAt).not.toBeNull();
+        expect(asking.reviewSince).toBeNull();
+
+        await transfers.sweep(later(25 * HOUR));
+        const held = await rowOf(view.id);
+        expect(held.reviewSince).not.toBeNull();
+        expect(held.discrepancy).toContain(
+          'the fee transfer could not be found or read at',
+        );
+        expect(held.nextCheckAt).toBeNull();
+        expect(backPosts(view.reference)).toEqual([]);
+        expect(available(me)).toBe(owing);
+        await ledgerEqualsNuvion();
+      } finally {
+        readable();
+        scheduleBack();
+        restore();
+      }
+    });
+  }
+
+  it('a send recorded as having no fee transfer due closes at once when the schedule later says one is due: nobody is called and nothing is sent (SWEEP-MONEY-5a round 2, F2)', async () => {
+    const scheduleBack = feeNeverDue();
+    let me: Person;
+    let bad: TransferView;
+    let before = 0;
+    try {
+      me = await person(PERSON_START);
+      const to = await person(0);
+      bad = body<TransferView>(
+        await post(me, await prepare(me, to, AMOUNT)),
+      ).data!;
+      expect((await rowOf(bad.id)).feeTransferDue).toBe(false);
+      expect(book.byReference(`${bad.reference}-fee`)).toHaveLength(0);
+      before = available(me);
+      book.settle(bad.reference, 'failed');
+    } finally {
+      scheduleBack();
+    }
+    await giveFeeBack(bad);
+    for (const ms of [2 * 60_000, 3 * HOUR, 25 * HOUR]) {
+      await transfers.sweep(later(ms));
+    }
+    const after = await rowOf(bad.id);
+    expect(after.status).toBe('failed');
+    expect(after.nextCheckAt).toBeNull();
+    expect(after.reviewSince).toBeNull();
+    expect(after.discrepancy ?? '').not.toContain('fee transfer');
+    expect(backPosts(bad.reference)).toEqual([]);
+    expect(available(me)).toBe(before + AMOUNT + WAWU_FEE);
+    await ledgerEqualsNuvion();
   });
 
   it('after every scenario of this spec WAWU operational ledger still equals Nuvion', async () => {
