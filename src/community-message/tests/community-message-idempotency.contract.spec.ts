@@ -13,7 +13,14 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { LivePublisher } from '../../live/live-publisher.service';
 import { AccountPurgeService } from '../../account-purge/account-purge.service';
+import { StorageService } from '../../storage/storage.service';
 import { CommunityMessageModule } from '../community-message.module';
+import {
+  expectSameAnswerSignedAgain,
+  moveClockForward,
+  restoreClock,
+} from './fresh-link';
+import { PhotoUploads, useTestBucket } from './photo-upload';
 
 /**
  * INBOX-05 round 5 (verifier defect 21): a community message is stored and
@@ -30,6 +37,10 @@ const HOST = '00000000-0000-4000-8000-000000000003';
 
 const ROOM = '20000000-0000-4000-8000-00000000a051';
 const OTHER_ROOM = '20000000-0000-4000-8000-00000000a052';
+// A photo must be the sender's own upload (FIX-77). Each sender here has one,
+// made in beforeAll, and every send of theirs carries that same link: a repeat
+// of a keyed send must be the same message, photo included.
+const restoreBucket = useTestBucket();
 
 const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
   ? new URL(process.env.WAWU_ID_JWKS_URL).port
@@ -79,6 +90,7 @@ async function boot(): Promise<{
   app: INestApplication;
   prisma: PrismaService;
   live: LivePublisher;
+  storage: StorageService;
 }> {
   const moduleRef = await Test.createTestingModule({
     imports: [
@@ -103,6 +115,7 @@ async function boot(): Promise<{
     app,
     prisma: moduleRef.get(PrismaService),
     live: moduleRef.get(LivePublisher),
+    storage: moduleRef.get(StorageService, { strict: false }),
   };
 }
 
@@ -117,6 +130,9 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
   let ownedMockWawuId = false;
   let userToken: string;
   let hostToken: string;
+  let photos: PhotoUploads;
+  // The sender's own photo link, by their token.
+  const photoOf = new Map<string, string>();
   let originalCreditsState: CreditsStateRow = null;
   let publishSpy: jest.SpyInstance;
 
@@ -161,7 +177,10 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
       .post(`/communities/${room}/messages`)
       .set('Authorization', `Bearer ${token}`);
     if (key !== undefined) req = req.set('Idempotency-Key', key);
-    return req.send(body);
+    // INBOX-22 (R-62): text is free, a photo costs 1 credit. Every send in this
+    // file is about being charged once, so each carries a photo (1 credit, from
+    // the admin setting's default) unless the test names its own attachment.
+    return req.send({ imageUrl: photoOf.get(token), ...body });
   }
 
   beforeAll(async () => {
@@ -180,8 +199,12 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
     userToken = await login('user@test.wawu.dev');
     hostToken = await login('creator-pro@test.wawu.dev');
 
-    ({ app, prisma, live } = await boot());
+    let storage: StorageService;
+    ({ app, prisma, live, storage } = await boot());
     ({ app: otherApp } = await boot());
+    photos = new PhotoUploads(prisma, storage);
+    photoOf.set(userToken, await photos.link(USER_PLAIN));
+    photoOf.set(hostToken, await photos.link(HOST));
 
     originalCreditsState = await prisma.creditsState.findUnique({
       where: { userWawuId: USER_PLAIN },
@@ -218,6 +241,7 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
 
   afterEach(() => {
     publishSpy.mockRestore();
+    restoreClock();
   });
 
   afterAll(async () => {
@@ -238,8 +262,10 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
         where: { userWawuId: USER_PLAIN },
       });
     }
+    await photos?.clean();
     await app?.close();
     await otherApp?.close();
+    restoreBucket();
     if (ownedMockWawuId && mockWawuId) mockWawuId.kill();
   });
 
@@ -271,9 +297,12 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
       expect(first.headers['idempotent-replayed']).toBeUndefined();
       expect(await balance()).toBe(9);
 
+      // Each answer signs the photo's link again (FIX-71), so the repeat's link
+      // is the same file signed in a later second, not the same string (FIX-84).
+      moveClockForward();
       const repeat = await post(app, userToken, { text: 'once only' }, key);
       expect(repeat.status).toBe(first.status);
-      expect(repeat.body).toEqual(first.body);
+      expectSameAnswerSignedAgain(repeat, first);
       expect(repeat.headers['idempotent-replayed']).toBe('true');
 
       expect(await balance()).toBe(9);
@@ -299,9 +328,10 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
       const first = await post(app, userToken, { text: 'last credit' }, key);
       expect(first.status).toBe(201);
       expect(await balance()).toBe(0);
+      moveClockForward();
       const repeat = await post(app, userToken, { text: 'last credit' }, key);
       expect(repeat.status).toBe(201);
-      expect(repeat.body).toEqual(first.body);
+      expectSameAnswerSignedAgain(repeat, first);
       expect(await balance()).toBe(0);
     });
 
@@ -310,9 +340,10 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
       const first = await post(app, hostToken, { text: 'host once' }, key);
       expect(first.status).toBe(201);
       expect(bodyOf(first).data.costInCredits).toBe(0);
+      moveClockForward();
       const repeat = await post(app, hostToken, { text: 'host once' }, key);
       expect(repeat.status).toBe(201);
-      expect(repeat.body).toEqual(first.body);
+      expectSameAnswerSignedAgain(repeat, first);
       expect(repeat.headers['idempotent-replayed']).toBe('true');
       expect(await rowsWith('host once', HOST)).toHaveLength(1);
     });
@@ -570,6 +601,8 @@ describe('CommunityMessage Idempotency-Key (contract)', () => {
           'senderWawuId',
           'sentAt',
           'text',
+          'videoUrl',
+          'voiceUrl',
         ].sort(),
       );
       const list = await request(app.getHttpServer() as App)

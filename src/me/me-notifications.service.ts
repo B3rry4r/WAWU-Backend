@@ -38,7 +38,8 @@ function kindsIn(filter: Exclude<FeedFilter, 'all'>): string[] {
  * TARGETS AS THEY ARE NOW. A target is resolved when the list is read: a
  * piece's or room's current title, a paid question's deadline. A target that
  * no longer exists is null, so the app falls back to routing by `kind`
- * rather than opening a 404.
+ * rather than opening a 404. WALLET-39: a `transaction` target is a ledger
+ * row of the reader's own wallet, nobody else's.
  *
  * BLOCKS (SETTINGS-04). The notification stays (it is the reader's own
  * record: a sale is money they earned), but a person a block hides is not
@@ -96,30 +97,38 @@ export class MeNotificationsService {
       rows
         .filter((r) => r.target?.targetKind === kind)
         .map((r) => r.target!.targetId);
-    const [pieces, questions, rooms, profiles] = await Promise.all([
-      this.prisma.contentPiece.findMany({
-        where: { id: { in: idsOf('content') } },
-        select: { id: true, title: true },
-      }),
-      this.prisma.directMessage.findMany({
-        where: { id: { in: idsOf('paid_question') } },
-        select: { id: true, deadlineAt: true },
-      }),
-      this.prisma.community.findMany({
-        where: { id: { in: idsOf('community') } },
-        select: { id: true, name: true },
-      }),
-      this.prisma.userProfile.findMany({
-        where: { wawuUserId: { in: idsOf('profile') } },
-        select: { wawuUserId: true },
-      }),
-    ]);
+    const [pieces, questions, rooms, profiles, transactions] =
+      await Promise.all([
+        this.prisma.contentPiece.findMany({
+          where: { id: { in: idsOf('content') } },
+          select: { id: true, title: true },
+        }),
+        this.prisma.directMessage.findMany({
+          where: { id: { in: idsOf('paid_question') } },
+          select: { id: true, deadlineAt: true },
+        }),
+        this.prisma.community.findMany({
+          where: { id: { in: idsOf('community') } },
+          select: { id: true, name: true },
+        }),
+        this.prisma.userProfile.findMany({
+          where: { wawuUserId: { in: idsOf('profile') } },
+          select: { wawuUserId: true },
+        }),
+        // WALLET-39: a transaction is shown only to the person whose wallet it
+        // is, and only while the ledger row exists.
+        this.prisma.fintavaLedgerEntry.findMany({
+          where: { id: { in: idsOf('transaction') }, wawuUserId: me },
+          select: { id: true },
+        }),
+      ]);
     const pieceTitle = new Map(pieces.map((p) => [p.id, p.title]));
     const questionDeadline = new Map(
       questions.map((q) => [q.id, q.deadlineAt]),
     );
     const roomName = new Map(rooms.map((c) => [c.id, c.name]));
     const profileIds = new Set(profiles.map((p) => p.wawuUserId));
+    const transactionIds = new Set(transactions.map((t) => t.id));
 
     const visibleActors = rows
       .map((r) => r.target?.actorWawuId)
@@ -152,6 +161,11 @@ export class MeNotificationsService {
           t.targetKind === 'profile' &&
           profileIds.has(t.targetId) &&
           !hidden.has(t.targetId)
+        ) {
+          target = view(null, null);
+        } else if (
+          t.targetKind === 'transaction' &&
+          transactionIds.has(t.targetId)
         ) {
           target = view(null, null);
         }

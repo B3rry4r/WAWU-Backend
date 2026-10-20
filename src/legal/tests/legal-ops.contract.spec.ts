@@ -21,6 +21,7 @@ import {
   type AdminTokens,
 } from '../../common/tests/admin-session.helper';
 import { LegalModule } from '../legal.module';
+import { LegalRequestsService } from '../legal.service';
 
 /**
  * WAWU Legal — the transitions that had no caller.
@@ -375,6 +376,254 @@ describe('WAWU Legal ops lifecycle (contract)', () => {
         .set(bearer(tokens.finance))
         .send({ amountNaira: 1000 })
         .expect(404);
+    });
+
+    // LEGAL-06 F1: a quote changed after the letter is signed, or on work that
+    // is paid, stranded the matter (the fee was no longer asked, signing again
+    // was refused) and on paid work moved the status back to `quoted`.
+    describe('a late re-quote (LEGAL-06 F1)', () => {
+      const requote = (id: string, amountNaira = 52_000) =>
+        request(app.getHttpServer())
+          .post(`/api/hub/legal/ops/requests/${id}/quote`)
+          .set(bearer(tokens.finance))
+          .send({ amountNaira });
+      const row = (id: string) =>
+        prisma.legalRequest.findUniqueOrThrow({ where: { id } });
+      // The repro of F1: the consultation was paid for, then quoted and signed.
+      const consulted = {
+        consultationPaidAt: new Date('2026-10-01T09:00:00Z'),
+      };
+
+      it('still re-prices a quote the client has not signed yet', async () => {
+        const record = await seed({
+          ...consulted,
+          status: 'quoted',
+          quoteAmount: 45_000,
+        });
+        const res = await requote(record.id).expect(200);
+        const data = (res.body as { data: Record<string, unknown> }).data;
+        expect(data).toMatchObject({ status: 'quoted', quoteAmount: 52_000 });
+      });
+
+      it('refuses once the letter is signed: 409, the matter stays as it was', async () => {
+        const signedAt = new Date('2026-10-10T09:00:00Z');
+        const record = await seed({
+          ...consulted,
+          status: 'contract_signed',
+          quoteAmount: 45_000,
+          quoteNote: 'As agreed.',
+          contractSignedAs: 'Ada Obi',
+          contractSignedAt: signedAt,
+        });
+        const res = await requote(record.id).expect(409);
+        expect(JSON.stringify(res.body)).toContain(
+          'signed the engagement letter',
+        );
+        expect(JSON.stringify(res.body)).not.toContain('\u2014');
+        expect(await row(record.id)).toMatchObject({
+          status: 'contract_signed',
+          quoteAmount: 45_000,
+          quoteNote: 'As agreed.',
+          contractSignedAt: signedAt,
+        });
+      });
+
+      it('refuses on a matter waiting for its payment, and never moves paid or running work back to quoted', async () => {
+        const waiting = await seed({
+          ...consulted,
+          status: 'awaiting_service_payment',
+          quoteAmount: 45_000,
+          contractSignedAs: 'Ada Obi',
+          contractSignedAt: new Date(),
+          serviceTxRef: `wawu-legal-${crypto.randomUUID()}`,
+        });
+        await requote(waiting.id).expect(409);
+        expect(await row(waiting.id)).toMatchObject({
+          status: 'awaiting_service_payment',
+          quoteAmount: 45_000,
+        });
+
+        const paidAt = new Date('2026-10-12T09:00:00Z');
+        const running = await seed({
+          ...consulted,
+          status: 'in_progress',
+          quoteAmount: 45_000,
+          contractSignedAs: 'Ada Obi',
+          contractSignedAt: new Date(),
+          servicePaidAt: paidAt,
+        });
+        const res = await requote(running.id).expect(409);
+        expect(JSON.stringify(res.body)).toContain('already paid for');
+        expect(await row(running.id)).toMatchObject({
+          status: 'in_progress',
+          quoteAmount: 45_000,
+          servicePaidAt: paidAt,
+        });
+      });
+
+      it('refuses to re-quote a cancelled request: 409, it stays closed at its old quote', async () => {
+        const record = await seed({
+          ...consulted,
+          status: 'cancelled',
+          quoteAmount: 45_000,
+          quoteNote: 'As agreed.',
+          cancelledAt: new Date('2026-10-11T09:00:00Z'),
+          cancellationReason: 'The client withdrew.',
+        });
+        const res = await requote(record.id).expect(409);
+        expect(JSON.stringify(res.body)).toContain('cancelled');
+        expect(JSON.stringify(res.body)).not.toContain('\u2014');
+        expect(await row(record.id)).toMatchObject({
+          status: 'cancelled',
+          quoteAmount: 45_000,
+          quoteNote: 'As agreed.',
+        });
+      });
+    });
+
+    // LEGAL-06 round 3: the signature is written for the quote that was READ.
+    // A re-quote that commits between the client's read (the letter is
+    // rendered from it) and the signature write used to be accepted, and the
+    // signature then landed on top: a letter at the old price on a matter
+    // priced, and charged, at the new one. Each case holds the read, lets the
+    // other writer commit, then lets the signature through.
+    describe('the signature is written for the quote that was read (LEGAL-06 round 3)', () => {
+      type Owned = { owned: (u: string, id: string) => Promise<unknown> };
+      const sign = (id: string, fullName = 'Ada Obi') =>
+        http()
+          .post(`/api/hub/legal/requests/${id}/contract/sign`)
+          .set('Authorization', `Bearer ${token}`)
+          .send({ fullName });
+      const row = (id: string) =>
+        prisma.legalRequest.findUniqueOrThrow({ where: { id } });
+      const quoted = () =>
+        seed({
+          consultationPaidAt: new Date('2026-10-01T09:00:00Z'),
+          status: 'quoted',
+          quoteAmount: 45_000,
+          quoteNote: 'As agreed.',
+        });
+
+      /**
+       * Runs `during` after the next signing request has read the matter and
+       * before it writes: the read is held, the other writer commits.
+       */
+      async function signHolding(
+        id: string,
+        during: () => Promise<void>,
+        fullName?: string,
+      ) {
+        const hooked = app.get<LegalRequestsService, Owned>(
+          LegalRequestsService,
+        );
+        const original = hooked.owned.bind(hooked);
+        const spy = jest
+          .spyOn(hooked, 'owned')
+          .mockImplementationOnce(async (u: string, i: string) => {
+            const read = await original(u, i);
+            await during();
+            return read;
+          });
+        try {
+          return await sign(id, fullName);
+        } finally {
+          spy.mockRestore();
+        }
+      }
+
+      it('a re-quote that commits after the read: 409, nothing signed, and the next signature is for the price now asked', async () => {
+        const record = await quoted();
+        const res = await signHolding(record.id, async () => {
+          await http()
+            .post(`/api/hub/legal/ops/requests/${record.id}/quote`)
+            .set(bearer(tokens.finance))
+            .send({ amountNaira: 52_000, note: 'Scope widened.' })
+            .expect(200);
+        });
+        expect(res.status).toBe(409);
+        expect(JSON.stringify(res.body)).toContain('nothing was signed');
+        expect(JSON.stringify(res.body)).not.toContain('\u2014');
+        expect(await row(record.id)).toMatchObject({
+          status: 'quoted',
+          quoteAmount: 52_000,
+          quoteNote: 'Scope widened.',
+          contractSignedAt: null,
+          contractSignedAs: null,
+          contractText: null,
+        });
+
+        const again = await sign(record.id).expect(200);
+        expect((again.body as { data: unknown }).data).toMatchObject({
+          status: 'contract_signed',
+          quoteAmount: 52_000,
+        });
+        const signed = await row(record.id);
+        expect(signed.contractText).toContain('NGN 52,000');
+        expect(signed.contractText).not.toContain('NGN 45,000');
+      });
+
+      it('a request cancelled after the read: 409, it stays cancelled and unsigned', async () => {
+        const record = await quoted();
+        const res = await signHolding(record.id, async () => {
+          await http()
+            .post(`/api/hub/legal/ops/requests/${record.id}/cancel`)
+            .set(bearer(tokens.finance))
+            .send({ reason: 'The client asked us to stop.' })
+            .expect(200);
+        });
+        expect(res.status).toBe(409);
+        expect(await row(record.id)).toMatchObject({
+          status: 'cancelled',
+          contractSignedAt: null,
+          contractText: null,
+        });
+      });
+
+      it('a request that is already cancelled and still carries its quote is not reopened by a signature: 409, it stays cancelled and unsigned (B3a L4)', async () => {
+        const record = await seed({
+          consultationPaidAt: new Date('2026-10-01T09:00:00Z'),
+          status: 'cancelled',
+          quoteAmount: 45_000,
+          quoteNote: 'As agreed.',
+          cancelledAt: new Date('2026-10-02T09:00:00Z'),
+          cancellationReason: 'The client asked us to stop.',
+        });
+        const res = await sign(record.id);
+        expect(res.status).toBe(409);
+        expect(JSON.stringify(res.body)).toContain('nothing was signed');
+        expect(await row(record.id)).toMatchObject({
+          status: 'cancelled',
+          contractSignedAt: null,
+          contractText: null,
+        });
+      });
+
+      it('another signature that lands after the read wins: 409 for the late one, the first signature stands', async () => {
+        const record = await quoted();
+        const res = await signHolding(
+          record.id,
+          async () => {
+            await sign(record.id, 'Bola Obi').expect(200);
+          },
+          'Ada Obi',
+        );
+        expect(res.status).toBe(409);
+        expect(JSON.stringify(res.body)).toContain('already been signed');
+        expect(await row(record.id)).toMatchObject({
+          status: 'contract_signed',
+          contractSignedAs: 'Bola Obi',
+        });
+      });
+
+      it('an undisturbed signature still works: 200, the letter for the quote', async () => {
+        const record = await quoted();
+        const res = await sign(record.id).expect(200);
+        expect((res.body as { data: unknown }).data).toMatchObject({
+          status: 'contract_signed',
+          quoteAmount: 45_000,
+        });
+        expect((await row(record.id)).contractText).toContain('NGN 45,000');
+      });
     });
   });
 

@@ -1,11 +1,7 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  ConsoleLogger,
-  INestApplication,
-  ValidationPipe,
-} from '@nestjs/common';
+import { ConsoleLogger, INestApplication } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { PassportModule } from '@nestjs/passport';
 import { Test } from '@nestjs/testing';
@@ -15,10 +11,10 @@ import type { App } from 'supertest/types';
 import { FintavaDouble } from '../../../../test/fintava/fintava-double';
 import { WawuIdClient } from '../../../common/auth/wawu-id.client';
 import { WawuJwtStrategy } from '../../../common/auth/wawu-jwt.strategy';
-import { AllExceptionsFilter } from '../../../common/filters/all-exceptions.filter';
-import { ResponseInterceptor } from '../../../common/interceptors/response.interceptor';
+import { configureHubApp } from '../../../hub-app-config';
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { unstorableTextMessage } from '../../../storable-text/storable-text';
 import type { MoneyErrorReason } from '../../dto/money-error.dto';
 import { NO_WALLET_MESSAGE } from '../../gate/wallet-gate';
 import { MoneyModule } from '../../money.module';
@@ -57,6 +53,23 @@ const newTag = () =>
     '',
   );
 let TAG = newTag();
+
+/**
+ * The BVN and NIN endings the identity row holds. They are never plain
+ * digits: an answer carries random ids, and four digits such as "4321" turn
+ * up inside a random id now and then without anything leaking (it failed a CI
+ * run on 16 Oct that way). The letters q, x, w and z cannot occur in a
+ * lowercase-hex id, an ISO timestamp or a number, so these only appear in an
+ * answer if the code really returns the stored value.
+ */
+const BVN_LAST4 = 'qz4321xk';
+const NIN_LAST4 = 'wj8765zq';
+
+/** Every object key in a JSON answer, at any depth, in lower case. */
+const keysOf = (v: unknown): string[] =>
+  v && typeof v === 'object'
+    ? Object.entries(v).flatMap(([k, x]) => [k.toLowerCase(), ...keysOf(x)])
+    : [];
 
 function mintToken(sub: string): string {
   const privateKey = readFileSync(
@@ -223,8 +236,8 @@ describe('Recipient search and recent recipients (WALLET-08) over HTTP', () => {
         data: {
           wawuUserId: who.id,
           bvnHash: randomUUID(),
-          bvnLast4: '4321',
-          ninLast4: '8765',
+          bvnLast4: BVN_LAST4,
+          ninLast4: NIN_LAST4,
           bvnVerifiedAt: new Date(),
           verifiedPhone: who.phone,
         },
@@ -321,16 +334,9 @@ describe('Recipient search and recent recipients (WALLET-08) over HTTP', () => {
       .compile();
     app = moduleRef.createNestApplication({ logger });
     app.useLogger(logger);
-    app.setGlobalPrefix('api/hub');
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
-        transform: true,
-      }),
-    );
-    app.useGlobalFilters(new AllExceptionsFilter());
-    app.useGlobalInterceptors(new ResponseInterceptor());
+    // Built as the Hub is (FIX-17 D2): prefix, pipe, the storable-text check,
+    // filter and interceptor all come from src/hub-app-config.ts.
+    configureHubApp(app);
     await app.init();
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
@@ -741,9 +747,15 @@ describe('Recipient search and recent recipients (WALLET-08) over HTTP', () => {
       await search(me, '@ab').expect(200);
       await search(me, '@a').expect(400);
       await search(me, 'a ').expect(400);
-      // A NUL byte cannot reach the database: it is dropped, never a 500.
+      // A NUL byte cannot reach the database: the Hub refuses it with a 400
+      // naming the field on every route (FIX-17), never a 500.
       await search(me, 'a\u0000').expect(400);
-      await search(me, 'a\u0000b').expect(200);
+      const nul = await search(me, 'a\u0000b').expect(400);
+      expect(nul.body).toEqual({
+        statusCode: 400,
+        message: unstorableTextMessage('q'),
+        data: null,
+      });
     });
 
     it('reads the text the way the route does (unit)', () => {
@@ -939,10 +951,8 @@ describe('Recipient search and recent recipients (WALLET-08) over HTTP', () => {
           b.phone.slice(-8),
           b.account,
           b.email,
-          '4321',
-          '8765',
-          'bvn',
-          'nin',
+          BVN_LAST4,
+          NIN_LAST4,
           'verifiedPhone',
           'accountNumber',
           'accountName',
@@ -951,6 +961,15 @@ describe('Recipient search and recent recipients (WALLET-08) over HTTP', () => {
             secret,
             leaked: false,
           });
+        }
+        // The names "bvn" and "nin" are checked as field names only. As plain
+        // text they can sit inside a random handle ("xxbvnxx") by chance.
+        const keys = keysOf(JSON.parse(text));
+        for (const word of ['bvn', 'nin']) {
+          expect({
+            word,
+            leaked: keys.some((k) => k.includes(word)),
+          }).toEqual({ word, leaked: false });
         }
       }
       // Whatever was answered in this file, for any person made here.

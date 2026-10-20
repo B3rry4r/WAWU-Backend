@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import type { Prisma } from '../../generated/prisma/client';
@@ -27,6 +28,15 @@ const CAMPAIGN_CHUNK = 500;
  * and is not a good idea.
  */
 export type NotificationPrismaClient = PrismaService | Prisma.TransactionClient;
+
+/**
+ * A switch a person can turn off: one of the NotificationSettings flags, or
+ * `tgifDaily` (HOME-16, Z2 "TGIF each morning"), which is the TGIF preference
+ * the app already saves with PATCH /settings/tgif (`TgifPreference.show`).
+ * It is not a column of NotificationSettings, so the one reading of it
+ * (`isSwitchOff`) knows where it lives.
+ */
+export type SwitchName = keyof NotificationSettings | 'tgifDaily';
 
 /**
  * Which NotificationSettings flag (if any) suppresses which kind.
@@ -65,9 +75,7 @@ export type NotificationPrismaClient = PrismaService | Prisma.TransactionClient;
  * This is the only place a notification is decided, so any push sender
  * (INBOX-03) must send only for a row emit() returned, never from the event.
  */
-export const SETTINGS_GATE: Partial<
-  Record<NotificationKind, keyof NotificationSettings>
-> = {
+export const SETTINGS_GATE: Partial<Record<NotificationKind, SwitchName>> = {
   new_follower: 'newFollowers',
   dm_deadline: 'dmReminders',
   dm_refunded: 'refunds',
@@ -77,12 +85,20 @@ export const SETTINGS_GATE: Partial<
   // nobody who has not touched the switch notices anything.
   tip_received: 'moneyIn',
   sale: 'moneyIn',
+  // WALLET-10. A bank transfer into the person's account is "Money in" too
+  // (Z3: "Tips, sales, transfers"). With the switch off nothing is written
+  // and nothing is kept to send later; the history row is there either way.
+  money_in: 'moneyIn',
   content_published: 'contentReviews',
   content_rejected: 'contentReviews',
   // ME-10. A buyer's star rating is a review too: whoever switched "Reviews"
   // off does not want it. Default (agent), owner may override: the Z3 row's
   // own words are "Approved or sent back" (BACKEND_GAPS, ME-10).
   review_received: 'contentReviews',
+  // HOME-16 (R-59). The daily TGIF notice follows the TGIF switch (Z2 "TGIF
+  // each morning"): with it off nothing is written, and a notice already
+  // written is not pushed.
+  tgif_daily: 'tgifDaily',
   // `communityMessages` is stored (Settings saves it) but gates NOTHING yet:
   // no community message notification kind or sender exists. The task that
   // adds that kind (and any other new kind) must add its entry here, or the
@@ -195,6 +211,34 @@ export class NotificationService {
   }
 
   /**
+   * WALLET-40. `emit()` for a caller whose write must stand or fall with its
+   * own transaction (`client`): the notification is written in it and a
+   * failure is NOT swallowed, so the caller's transaction is undone with it
+   * and tried again. Used where "told once" is the same fact as "the row
+   * exists" (the wallet row and its "account number is ready" notice).
+   *
+   * It does no network call, and the caller must not make one inside the
+   * transaction. Returns the written row, or `null` when the person's switch
+   * for this kind is off (a kind with no switch is never null).
+   */
+  async emitOrThrow(
+    event: NotificationEvent,
+    client: Prisma.TransactionClient,
+  ): Promise<Notification | null> {
+    if (!event.userWawuId) return null;
+    if (await this.isSuppressed(event.userWawuId, event.kind, client)) {
+      return null;
+    }
+    const target = targetFor(event);
+    return client.notification.create({
+      data: {
+        ...composeNotification(event),
+        ...(target ? { target: { create: target } } : {}),
+      },
+    });
+  }
+
+  /**
    * Batch form for the sweeps in SchedulerService, which resolve many
    * recipients at once. Sequential on purpose — these run on a cron with no
    * caller waiting, and a burst of parallel inserts is not worth the
@@ -287,6 +331,67 @@ export class NotificationService {
     return written;
   }
 
+  /**
+   * HOME-16. Write one daily TGIF notice for each of `recipientWawuIds`, in
+   * the caller's transaction `client`, and return how many were written.
+   *
+   * Still the single write path and still composed by `composeNotification`.
+   * Like `emitCampaign` it is a batch (two INSERTs and one read of the TGIF
+   * switch for the whole list, not three queries a person), and like it
+   * errors are NOT swallowed: the caller made the "this day is done for this
+   * person" marker in the same transaction, and a failed write must undo the
+   * marker so the next run tries again. It does no network call and the
+   * caller must not make one inside the transaction.
+   *
+   * Anyone who has the TGIF switch off right now is left out, the same
+   * reading `emit()` and the push sender use.
+   */
+  async emitTgifDaily(
+    event: { day: string; series: string; verseReference: string },
+    recipientWawuIds: readonly string[],
+    client: Prisma.TransactionClient,
+  ): Promise<number> {
+    if (recipientWawuIds.length === 0) return 0;
+    const off = new Set(
+      (
+        await client.tgifPreference.findMany({
+          where: { userWawuId: { in: [...recipientWawuIds] }, show: false },
+          select: { userWawuId: true },
+        })
+      ).map((r) => r.userWawuId),
+    );
+    // Someone who switched it off after the job claimed them and before this read
+    // is left out, and their claim goes with the notice: they are owed nothing
+    // today, but if they switch it back on this morning the next look gives them
+    // the day's one notice, instead of finding the marker and writing none
+    // (SWEEP-INBOX HOME-16 F1). The claim and this delete share one transaction.
+    if (off.size > 0) {
+      await client.tgifDailyNotice.deleteMany({
+        where: {
+          userWawuId: { in: [...off] },
+          day: new Date(`${event.day}T00:00:00.000Z`),
+        },
+      });
+    }
+    const recipients = recipientWawuIds.filter((id) => !off.has(id));
+    if (recipients.length === 0) return 0;
+
+    const rows = recipients.map((userWawuId) => ({
+      id: randomUUID(),
+      ...composeNotification({ kind: 'tgif_daily', userWawuId, ...event }),
+    }));
+    const written = await client.notification.createMany({ data: rows });
+    await client.notificationTarget.createMany({
+      data: rows.map((row) => ({
+        notificationId: row.id,
+        targetKind: 'tgif_day',
+        targetId: event.day,
+        actorWawuId: null,
+      })),
+    });
+    return written.count;
+  }
+
   private async isSuppressed(
     userWawuId: string,
     kind: NotificationKind,
@@ -306,9 +411,17 @@ export class NotificationService {
    */
   async isSwitchOff(
     userWawuId: string,
-    flag: keyof NotificationSettings,
+    flag: SwitchName,
     client: NotificationPrismaClient = this.prisma,
   ): Promise<boolean> {
+    if (flag === 'tgifDaily') {
+      // No row means the default, which is on (HOME-11).
+      const preference = await client.tgifPreference.findUnique({
+        where: { userWawuId },
+        select: { show: true },
+      });
+      return preference?.show === false;
+    }
     const settings = await client.notificationSettings.findUnique({
       where: { userWawuId },
     });

@@ -125,8 +125,9 @@ export class NewEventTicketTypeDto {
  * the app's wizard submits once) or PUT /events/:id/tickets. Selling a ticket
  * is EventTicketingService's, never this module's.
  *
- * Hosting is for verified accounts only (EventService.assertMayHost). The
- * moderation queue then decides whether anyone else ever sees the event.
+ * Hosting needs a running tier or a live verification tick
+ * (EventService.assertMayHost, EVENTS-12). The moderation queue then decides
+ * whether anyone else ever sees the event.
  */
 export class CreateEventDto {
   @IsString()

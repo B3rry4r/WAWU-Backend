@@ -58,7 +58,16 @@ type CoreNotificationKind =
   | 'paid_dm_paused'
   // LEGAL-03: documents WAWU delivered on a legal request.
   /** Documents were delivered on a legal request. Recipient: the client. */
-  | 'legal_delivered';
+  | 'legal_delivered'
+  // HOME-16 (R-59): TGIF reaches Home as a daily notification.
+  /** The day's TGIF is ready. Recipient: each person who keeps "TGIF each morning" on. */
+  | 'tgif_daily'
+  // INBOX-24 (R-63): a private community's monthly pass is about to end.
+  /** The pass ends in 3 days. Recipient: the member. The tap opens the renew sheet. */
+  | 'community_pass_ending'
+  // INBOX-25 (R-71): a removed member's unused pass days were paid back.
+  /** The unused days of a pass were paid back to the wallet. Recipient: the removed member. */
+  | 'community_pass_refunded';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -192,7 +201,59 @@ type NotificationEventCore =
       requestId: string;
       serviceName: string;
       fileCount: number;
+    }
+  /**
+   * HOME-16 (R-59). The day's TGIF is ready: the daily notice, made once per
+   * person per day by the TGIF job (src/scheduler/tgif-daily-notice.service.ts).
+   * Recipient: the person. `day` is the Lagos calendar day (YYYY-MM-DD) and is
+   * what a tap opens; `series` is the day's title as the book writes it and
+   * `verseReference` its verse.
+   */
+  | {
+      kind: 'tgif_daily';
+      userWawuId: string;
+      day: string;
+      series: string;
+      verseReference: string;
+    }
+  /**
+   * INBOX-24 (R-63). The member's monthly pass for a private community ends
+   * in 3 days. Made once per pass by the reminder sweep. Recipient: the
+   * member. `endsAt` is the pass's last moment; the tap opens the renew sheet
+   * for the room (`/communities/<id>/renew`, built from the id and never from
+   * input). Nothing is debited by itself: renewing is a payment the person
+   * confirms with their PIN.
+   */
+  | {
+      kind: 'community_pass_ending';
+      userWawuId: string;
+      communityId: string;
+      communityName: string;
+      endsAt: Date;
+    }
+  /**
+   * INBOX-25 (R-71). The host removed the member from a room that sells a
+   * monthly pass, and the unused days were paid back to their wallet. Once per
+   * removal, when the provider has confirmed the move. Recipient: the removed
+   * member. `amount` is the refund in naira.
+   */
+  | {
+      kind: 'community_pass_refunded';
+      userWawuId: string;
+      communityId: string;
+      communityName: string;
+      amount: number;
     };
+
+/** A pass's last day as the reminder writes it: "12 Nov 2026", Lagos time. */
+function passEndDay(endsAt: Date): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Africa/Lagos',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(endsAt);
+}
 
 /** The row `emit()` will write, before it reaches Prisma. */
 export interface NotificationDraft {
@@ -278,6 +339,45 @@ const MONTHS = [
 
 function formatDate(date: Date): string {
   return `${date.getUTCDate()} ${MONTHS[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
+}
+
+/** Words a title keeps in lower case (unless first): "What You Have in Christ". */
+const TITLE_SMALL_WORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'as',
+  'at',
+  'but',
+  'by',
+  'for',
+  'from',
+  'in',
+  'of',
+  'on',
+  'or',
+  'the',
+  'to',
+  'with',
+]);
+
+/**
+ * A TGIF series as the book writes it ("SONS, NOT SLAVES") in title case
+ * ("Sons, Not Slaves"; "WHAT YOU HAVE IN CHRIST" becomes "What You Have in
+ * Christ"). Pure, so the same day reads the same on every server.
+ */
+export function tgifSeriesTitle(series: string): string {
+  return series
+    .trim()
+    .split(/\s+/)
+    .map((word, i) => {
+      const lower = word.toLowerCase();
+      if (i > 0 && TITLE_SMALL_WORDS.has(lower.replace(/[^\p{L}]+$/u, ''))) {
+        return lower;
+      }
+      return lower.replace(/\p{L}/u, (c) => c.toUpperCase());
+    })
+    .join(' ');
 }
 
 /**
@@ -586,6 +686,61 @@ export function composeNotification(
     }
 
     /**
+     * HOME-16 (R-59). The title is the day's TGIF title (the series, as the
+     * book writes it in capitals, set in title case); the body says it is
+     * ready and names the day's verse. Nothing personal rides on a lock
+     * screen: no name, no reading. Routed by `kind`: the day it opens is the
+     * notification's target (`targetFor`), never a path.
+     */
+    case 'tgif_daily':
+      return {
+        ...base,
+        title: `TGIF: ${tgifSeriesTitle(event.series)}`,
+        body: `Today's TGIF is ready. ${event.verseReference}.`,
+        tone: 'accent',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'Read TGIF',
+        ...NO_RICH_MEDIA,
+      };
+
+    /**
+     * INBOX-24 (R-63). The reminder 3 days before a pass ends. It says the
+     * day and offers the renew tap; it never says money moves by itself,
+     * because none does.
+     */
+    case 'community_pass_ending':
+      return {
+        ...base,
+        title: 'Your pass is ending soon',
+        body: `Your pass for “${event.communityName}” ends on ${passEndDay(event.endsAt)}. Renew it to stay in.`,
+        tone: 'warning',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'Renew',
+        imageUrl: null,
+        actionHref: `/communities/${event.communityId}/renew`,
+        campaignId: null,
+      };
+
+    /**
+     * INBOX-25 (R-71). The wallet row says the same thing; this is the one
+     * notice. The member did nothing, so it says what came back and why, in
+     * plain words.
+     */
+    case 'community_pass_refunded':
+      return {
+        ...base,
+        title: 'Your pass was refunded',
+        body: `The host of “${event.communityName}” removed you from the room. ${formatNaira(event.amount)} for the days you had left is back in your wallet.`,
+        tone: 'info',
+        amount: Math.round(event.amount),
+        creditsCount: null,
+        actionLabel: null,
+        ...NO_RICH_MEDIA,
+      };
+
+    /**
      * NUV-02 round 2 (D6). No matter, name or number in the copy: a lock
      * screen shows it. The fixes are fixed sentences of ours.
      */
@@ -595,6 +750,34 @@ export function composeNotification(
         event.outcome,
         event.fixes ?? [],
       );
+
+    /**
+     * WALLET-10 (W15). Money reached the person's account. The amount is
+     * said in naira from the kobo the ledger holds; the sender only when the
+     * provider named one.
+     */
+    case 'money_in':
+      return composeMoneyIn(event);
+
+    /** WALLET-39. The correction of a `money_in` notice. */
+    case 'money_in_reversed':
+      return composeMoneyInReversed(event);
+
+    /**
+     * WALLET-40 (owner answer 31). Fixed words: no account number, name or
+     * bank on a lock screen. Routed by `kind` (a tap opens Wallet).
+     */
+    case 'wallet_ready':
+      return {
+        ...base,
+        title: 'Your account number is ready',
+        body: 'Tap to see it in your wallet.',
+        tone: 'success',
+        amount: null,
+        creditsCount: null,
+        actionLabel: null,
+        ...NO_RICH_MEDIA,
+      };
   }
 }
 
@@ -659,6 +842,223 @@ function composeIdentityReview(
   }
 }
 
+/**
+ * ₦ from whole kobo, exactly: `₦1,250` for a whole number of naira and
+ * `₦1,250.50` otherwise. Nothing is rounded and nothing goes through a float
+ * (the ledger holds BIGINT kobo, and a credit is told as it was credited).
+ * Naira only.
+ */
+export function formatNairaFromKobo(kobo: bigint): string {
+  const negative = kobo < 0n;
+  const abs = negative ? -kobo : kobo;
+  const whole = (abs / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const rest = Number(abs % 100n);
+  const fraction = rest === 0 ? '' : `.${String(rest).padStart(2, '0')}`;
+  return `${negative ? '-' : ''}₦${whole}${fraction}`;
+}
+
+/** Longest sender name the copy carries; a lock screen has no room for more. */
+const MONEY_IN_NAME_MAX = 60;
+
+/**
+ * The sender's name as another bank wrote it, made safe to show: control
+ * characters out, runs of space made one, an em-dash or en-dash written as a
+ * hyphen (R-5: nothing a person reads has one, and a name is not ours to
+ * keep them in), cut to MONEY_IN_NAME_MAX characters. Null when nothing is
+ * left.
+ */
+export function moneyInSenderName(
+  raw: string | null | undefined,
+): string | null {
+  if (typeof raw !== 'string') return null;
+  const cleaned = raw
+    .replace(/[\u2013\u2014]/g, '-')
+    .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    // A number written into a name (a phone, an account) is shown as its last
+    // four digits, the way the account field is (SWEEP-MONEY, WALLET-39 F1).
+    .replace(
+      /\d(?:[ -]?\d){5,}/g,
+      (run) => `****${run.replace(/\D/g, '').slice(-4)}`,
+    );
+  if (cleaned === '') return null;
+  const chars = Array.from(cleaned);
+  return chars.length <= MONEY_IN_NAME_MAX
+    ? cleaned
+    : chars.slice(0, MONEY_IN_NAME_MAX).join('').trimEnd();
+}
+
+/**
+ * The last four digits of the sender's account number as `****1234`, or null
+ * when the provider gave no number of at least six digits (a shorter one
+ * would show most of it).
+ */
+export function moneyInMaskedAccount(
+  raw: string | null | undefined,
+): string | null {
+  if (typeof raw !== 'string') return null;
+  const digits = raw.replace(/\D/g, '');
+  return digits.length >= 6 ? `****${digits.slice(-4)}` : null;
+}
+
+/**
+ * WALLET-39. "Tolu Bakare" as "Tolu B.": the first word and the first letter
+ * of the last, for a person who sent money from inside WAWU. A lock screen
+ * shows this text, so a surname is never spelt out. One word stays as it is.
+ * Null when nothing is left to show.
+ */
+export function moneyInShortName(
+  raw: string | null | undefined,
+): string | null {
+  const name = moneyInSenderName(raw);
+  if (name === null) return null;
+  const words = name.split(' ');
+  if (words.length < 2) return name;
+  // The initial is the first character that is not punctuation: "Adaeze
+  // (CEO)" is "Adaeze C.", not "Adaeze (.". A trailing Jr. or Sr. is not the
+  // surname, so "Ada Obi Jr." is "Ada O." (SWEEP-MONEY, WALLET-39 F4).
+  let rest = words.slice(1);
+  if (rest.length > 1 && /^(jr|sr)\.?$/i.test(rest[rest.length - 1])) {
+    rest = rest.slice(0, -1);
+  }
+  for (let i = rest.length - 1; i >= 0; i -= 1) {
+    const initial = Array.from(rest[i]).find((c) => !/^[\p{P}\p{Z}]$/u.test(c));
+    if (initial !== undefined) return `${words[0]} ${initial}.`;
+  }
+  return words[0];
+}
+
+/**
+ * What a money-in notice (and its correction) say, from one set of facts.
+ * `received` is the notice, `taken` is the correction. Both name the amount
+ * and where it came from, never a whole account number, never a dash, and no
+ * wallet, balance or cash-out language (WALLET-10), so a lock screen is safe.
+ */
+interface MoneyInWords {
+  title: string;
+  received: string;
+  taken: string;
+}
+
+function moneyInWords(
+  event: Extract<NotificationEvent, { kind: 'money_in' | 'money_in_reversed' }>,
+): MoneyInWords {
+  const amount = formatNairaFromKobo(event.amountKobo);
+  switch (event.source ?? 'bank') {
+    case 'transfer': {
+      const who = moneyInShortName(event.senderName) ?? 'a WAWU user';
+      return {
+        title: 'Money received',
+        // "Tolu B." already ends the sentence.
+        received: `You received ${amount} from ${who}${who.endsWith('.') ? '' : '.'}`,
+        taken: `The ${amount} you received from ${who} was reversed.`,
+      };
+    }
+    case 'earning':
+      return {
+        title: 'Earnings received',
+        received: `You received ${amount} in earnings.`,
+        taken: `The ${amount} in earnings was reversed.`,
+      };
+    case 'points':
+      return {
+        title: 'Money received',
+        received: `You received ${amount} from your points.`,
+        taken: `The ${amount} from your points was reversed.`,
+      };
+    case 'refund':
+      return {
+        title: 'Refund received',
+        received: `You received a refund of ${amount}.`,
+        taken: `The ${amount} refund was reversed.`,
+      };
+    default: {
+      // A bank transfer. The number is only ever shown with a name beside it
+      // (a person's, or the bank's), masked to its last four digits.
+      const name = moneyInSenderName(event.senderName);
+      const bank = name ? null : moneyInSenderName(event.senderBankName);
+      const label = name ?? bank;
+      const mask = label
+        ? moneyInMaskedAccount(event.senderAccountNumber)
+        : null;
+      const from = label
+        ? `${label}${mask ? (name ? ` (${mask})` : ` ${mask}`) : ''}`
+        : null;
+      return {
+        title: 'Money received',
+        received: from
+          ? `You received ${amount} from ${from}.`
+          : `You received ${amount} by bank transfer.`,
+        taken: from
+          ? `The ${amount} you received from ${from} was reversed.`
+          : `The ${amount} bank transfer was reversed.`,
+      };
+    }
+  }
+}
+
+/**
+ * WALLET-10 (bank transfers in), WALLET-39 (every credit, R-54).
+ * "You received ₦5,000 from Ada Obi (****1234)." with a sender name,
+ * "You received ₦5,000 by bank transfer." without one, "You received ₦5,000
+ * from Tolu B." from another person, "You received ₦2,550 in earnings.", "You
+ * received a refund of ₦1,200.". The number is only ever shown with a name
+ * beside it, masked to its last four digits: a lock screen shows this text.
+ * No wallet, balance or cash-out language, no dash.
+ *
+ * `amount` (whole naira, an Int column) is set only when the credit is a
+ * whole number of naira that fits: a credit with kobo in it is told in the
+ * body, never rounded into the column.
+ */
+function composeMoneyIn(
+  event: Extract<NotificationEvent, { kind: 'money_in' }>,
+): NotificationDraft {
+  const words = moneyInWords(event);
+  const wholeNaira =
+    event.amountKobo % 100n === 0n ? event.amountKobo / 100n : null;
+  return {
+    userWawuId: event.userWawuId,
+    kind: 'money_in',
+    title: words.title,
+    body: words.received,
+    tone: 'success',
+    amount:
+      wholeNaira !== null && wholeNaira <= 2147483647n
+        ? Number(wholeNaira)
+        : null,
+    creditsCount: null,
+    actionLabel: null,
+    imageUrl: null,
+    actionHref: null,
+    campaignId: null,
+  };
+}
+
+/**
+ * WALLET-39. The correction of a `money_in` notice: the credit was taken back.
+ * It names the same amount and source as the notice it corrects. No amount
+ * column: a list row must not show it as money in.
+ */
+function composeMoneyInReversed(
+  event: Extract<NotificationEvent, { kind: 'money_in_reversed' }>,
+): NotificationDraft {
+  const words = moneyInWords(event);
+  return {
+    userWawuId: event.userWawuId,
+    kind: 'money_in_reversed',
+    title: 'Money reversed',
+    body: words.taken,
+    tone: 'warning',
+    amount: null,
+    creditsCount: null,
+    actionLabel: null,
+    imageUrl: null,
+    actionHref: null,
+    campaignId: null,
+  };
+}
+
 /* ------------------------------------------------------------------ */
 /* ME-10: reviews, and what a notification is about                     */
 /* ------------------------------------------------------------------ */
@@ -672,7 +1072,14 @@ export type NotificationKind =
   | CoreNotificationKind
   | 'review_received'
   // NUV-02 round 2: the wallet provider's review of the person ended.
-  | 'identity_review';
+  | 'identity_review'
+  // WALLET-10: money reached the person's account by bank transfer.
+  // WALLET-39: and from another person, as earnings, as a refund.
+  | 'money_in'
+  // WALLET-39: a credit the person was told about was taken back.
+  | 'money_in_reversed'
+  // WALLET-40: the person's account number is ready, after opening began.
+  | 'wallet_ready';
 
 /**
  * ME-10. Somebody rated a piece for the first time (a changed rating is not
@@ -701,12 +1108,81 @@ interface IdentityReviewEvent {
 }
 
 /**
+ * WALLET-10 (W15). A bank transfer reached the person's account. Recipient:
+ * the person whose account it is. Sent once per credited ledger row
+ * (src/money/money-in-notice), after the credit is a completed `in` row, never
+ * from the webhook delivery. `amountKobo` is the whole kobo credited.
+ * `senderName` and `senderAccountNumber` are what the provider gave about the
+ * sender, null when it gave nothing; the copy shows the account number only as
+ * its last four digits and only beside a name.
+ */
+interface MoneyInEvent {
+  kind: 'money_in';
+  userWawuId: string;
+  amountKobo: bigint;
+  senderName?: string | null;
+  senderAccountNumber?: string | null;
+  /**
+   * WALLET-39 (R-54): where the money came from. Left out it is `bank`, which
+   * is every WALLET-10 caller. `transfer` is another person's send (the copy
+   * names them as "Tolu B."), `earning` is earnings landing, `points` is a
+   * points cash-out landing, `refund` is a refund.
+   */
+  source?: MoneyInSource;
+  /** The bank the transfer came from, when the provider named one (WALLET-39). */
+  senderBankName?: string | null;
+}
+
+/** Where a credit came from, as the copy says it (WALLET-39). */
+export type MoneyInSource =
+  'bank' | 'transfer' | 'earning' | 'points' | 'refund';
+
+/**
+ * WALLET-39. A credit the person was told about ("You received ...") was
+ * taken back: the ledger row went `reversed`. Recipient: the person. Sent once
+ * per credit, only when a `money_in` notice was written for it. The words
+ * name the same amount and source as the notice they correct.
+ */
+interface MoneyInReversedEvent {
+  kind: 'money_in_reversed';
+  userWawuId: string;
+  amountKobo: bigint;
+  senderName?: string | null;
+  senderAccountNumber?: string | null;
+  source?: MoneyInSource;
+  senderBankName?: string | null;
+}
+
+/**
+ * WALLET-40 (owner answer 31, 17 Oct 2026; BACKEND_GAPS G-823). The person's
+ * account number became ready after their wallet opening had started: A28
+ * promises "This usually takes a few minutes" and this is the alert. Recipient:
+ * the person. Written once per wallet, in the transaction that records the
+ * wallet (src/money/opening/wallet-ready-notice.ts), and never for a number
+ * that was ready in the request that opened the wallet. It carries no number,
+ * name or target: a lock screen shows it, and the tap opens Wallet by `kind`.
+ */
+interface WalletReadyEvent {
+  kind: 'wallet_ready';
+  userWawuId: string;
+}
+
+/**
  * ME-10. What a notification can be about: the thing opening it opens (M31).
  * `content` a piece, `paid_question` a paid question (DirectMessage),
- * `community` a room, `profile` a person.
+ * `community` a room, `profile` a person, `tgif_day` (HOME-16) a day of TGIF
+ * whose id is the day, YYYY-MM-DD.
  */
 export type NotificationTargetKind =
-  'content' | 'paid_question' | 'community' | 'profile';
+  | 'content'
+  | 'paid_question'
+  | 'community'
+  | 'profile'
+  // HOME-16: a day of TGIF; the id is the day, YYYY-MM-DD.
+  | 'tgif_day'
+  // WALLET-39: a wallet transaction; the id is the ledger row's, the one
+  // `GET /money/transactions/{id}` answers for its owner.
+  | 'transaction';
 
 /**
  * ME-10. Optional on every event: the thing it is about and the other person
@@ -727,7 +1203,12 @@ export interface NotificationAbout {
  * which may also say what it is about (ME-10).
  */
 export type NotificationEvent = (
-  NotificationEventCore | ReviewReceivedEvent | IdentityReviewEvent
+  | NotificationEventCore
+  | ReviewReceivedEvent
+  | IdentityReviewEvent
+  | MoneyInEvent
+  | MoneyInReversedEvent
+  | WalletReadyEvent
 ) & {
   about?: NotificationAbout;
 };
@@ -751,6 +1232,7 @@ export const NOTIFICATION_CATEGORY: Record<
   paid_dm_paused: 'messages',
   community_join_approved: 'messages',
   community_join_declined: 'messages',
+  community_pass_refunded: 'money',
   content_published: 'content',
   content_rejected: 'content',
   review_received: 'content',
@@ -760,6 +1242,15 @@ export const NOTIFICATION_CATEGORY: Record<
   verify_reminder: 'other',
   legal_delivered: 'other',
   identity_review: 'other',
+  money_in: 'money',
+  money_in_reversed: 'money',
+  tgif_daily: 'other',
+  // INBOX-24. Default (agent), owner may override: under "Messages", beside
+  // the room it belongs to.
+  community_pass_ending: 'messages',
+  // WALLET-40. Default (agent), owner may override: under "Money", beside the
+  // wallet it opens.
+  wallet_ready: 'money',
 };
 
 /** The NotificationTarget row emit() writes beside a notification, minus its id. */
@@ -771,7 +1262,8 @@ export interface NotificationTargetDraft {
 
 /**
  * ME-10. What a notification is about, from its event. A join approval names
- * its room by itself; every other kind says so through `about`. An actor who
+ * its room by itself, and a daily TGIF notice its day (HOME-16); every other
+ * kind says so through `about`. An actor who
  * is the recipient is dropped (nobody is "the other person" to themselves).
  * Null when the event names nothing, which leaves the row routed by `kind`.
  */
@@ -780,9 +1272,12 @@ export function targetFor(
 ): NotificationTargetDraft | null {
   const target =
     event.about?.target ??
-    (event.kind === 'community_join_approved'
+    (event.kind === 'community_join_approved' ||
+    event.kind === 'community_pass_ending'
       ? { kind: 'community' as const, id: event.communityId }
-      : null);
+      : event.kind === 'tgif_daily'
+        ? { kind: 'tgif_day' as const, id: event.day }
+        : null);
   if (!target || !target.id) return null;
   const actor = event.about?.actorWawuId ?? null;
   return {

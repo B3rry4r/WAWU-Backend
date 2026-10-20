@@ -45,6 +45,7 @@ const SENTINELS = {
   otherReply: 'SENTINEL_OTHER_PERSON_REPLY',
   dmAnswer: 'SENTINEL_CREATOR_ANSWER',
   inboundDm: 'SENTINEL_MESSAGE_SENT_TO_USER',
+  inboundDraft: 'SENTINEL_UNPAID_QUESTION_TO_USER',
   strangerComment: 'SENTINEL_STRANGER_COMMENT',
   pinHash: 'SENTINEL_PIN_HASH_$argon2',
   bankNumber: '0099887766',
@@ -52,6 +53,8 @@ const SENTINELS = {
 };
 const OWN_COMMENT_TEXT = 'S04 export: my own comment';
 const OWN_DM_TEXT = 'S04 export: what I paid to ask';
+// INBOX-17: the words of a paid question the requester wrote and has not paid for.
+const OWN_DRAFT_TEXT = 'S04 export: a question I have not paid for';
 
 const ID = {
   ownComment: '5b040000-0000-4000-8000-000000000001',
@@ -62,6 +65,8 @@ const ID = {
   block: '5b040000-0000-4000-8000-000000000007',
   follower: '5b040000-0000-4000-8000-000000000008',
   following: '5b040000-0000-4000-8000-00000000000a',
+  draftOwn: '5b040000-0000-4000-8000-00000000000b',
+  draftToUser: '5b040000-0000-4000-8000-00000000000c',
 };
 
 async function waitForHealth(url: string, timeoutMs = 15000): Promise<boolean> {
@@ -177,6 +182,9 @@ describe('Data export (contract)', () => {
     await prisma.directMessage.deleteMany({
       where: { id: { in: [ID.dmSent, ID.dmReceived] } },
     });
+    await prisma.paidDmDraft.deleteMany({
+      where: { id: { in: [ID.draftOwn, ID.draftToUser] } },
+    });
     await prisma.comment.deleteMany({
       where: { id: { in: [ID.ownComment, ID.strangerComment] } },
     });
@@ -218,6 +226,25 @@ describe('Data export (contract)', () => {
           amount: 300,
           flutterwaveTxRef: 's04-export-dm-received',
           deadlineAt: soon,
+        },
+      ],
+    });
+    await prisma.paidDmDraft.createMany({
+      data: [
+        {
+          id: ID.draftOwn,
+          senderWawuId: USER,
+          creatorWawuId: OTHER,
+          text: OWN_DRAFT_TEXT,
+          responseWindowHours: 24,
+          requestKey: 's04-export-draft-key',
+        },
+        {
+          id: ID.draftToUser,
+          senderWawuId: OTHER,
+          creatorWawuId: USER,
+          text: SENTINELS.inboundDraft,
+          responseWindowHours: 24,
         },
       ],
     });
@@ -277,6 +304,9 @@ describe('Data export (contract)', () => {
     await prisma.dmReply.deleteMany({ where: { id: ID.dmReply } });
     await prisma.directMessage.deleteMany({
       where: { id: { in: [ID.dmSent, ID.dmReceived] } },
+    });
+    await prisma.paidDmDraft.deleteMany({
+      where: { id: { in: [ID.draftOwn, ID.draftToUser] } },
     });
     await prisma.comment.deleteMany({
       where: { id: { in: [ID.ownComment, ID.strangerComment] } },
@@ -374,6 +404,16 @@ describe('Data export (contract)', () => {
     const text = (rows: unknown) => JSON.stringify(rows);
     expect(text(file.data.comments)).toContain(OWN_COMMENT_TEXT);
     expect(text(file.data.paidMessagesSent)).toContain(OWN_DM_TEXT);
+    // INBOX-17: the person's own unpaid question is in their file, and the
+    // technical idempotency key and somebody else's unpaid question to them
+    // are not.
+    expect(text(file.data.paidQuestionDrafts)).toContain(OWN_DRAFT_TEXT);
+    expect(text(file.data.paidQuestionDrafts)).not.toContain(
+      's04-export-draft-key',
+    );
+    expect(text(file.data.paidQuestionDrafts)).not.toContain(
+      SENTINELS.inboundDraft,
+    );
     const followedInDb = (
       await prisma.followRelationship.findMany({
         where: { followerWawuId: USER },
@@ -481,6 +521,37 @@ describe('Data export (contract)', () => {
       .get(`${route}?token=${foreign}`)
       .expect(404);
     // The genuine link still works after all of that.
+    await request(app.getHttpServer())
+      .get(`${route}?token=${good}`)
+      .expect(200);
+  });
+
+  it('a repeated token opens nothing and answers the 404 every failed link gets, byte for byte (FIX-18)', async () => {
+    const req = await ask();
+    await fulfil.fulfil(req.id);
+    const mail = await mailFor(req.id);
+    const good = new URL(mail.downloadUrl).searchParams.get('token') as string;
+    const route = '/settings/privacy/export/download';
+
+    const failed = await request(app.getHttpServer())
+      .get(`${route}?token=nonsense`)
+      .expect(404);
+    for (const query of [
+      'token=a&token=b',
+      'token=&token=',
+      'token=a&token=',
+      `token=${good}&token=${good}`,
+      `token=${good}&token=nonsense`,
+      `token=nonsense&token=${good}`,
+      'token=a&token=b&token=c',
+    ]) {
+      const res = await request(app.getHttpServer())
+        .get(`${route}?${query}`)
+        .expect(404);
+      expect(res.text).toBe(failed.text);
+      expect(res.headers['content-type']).toBe(failed.headers['content-type']);
+    }
+    // One genuine token is still the link, and still downloads.
     await request(app.getHttpServer())
       .get(`${route}?token=${good}`)
       .expect(200);
@@ -785,6 +856,52 @@ describe('Data export (contract)', () => {
       } else {
         await prisma.profileDetails.deleteMany({ where: { wawuUserId: USER } });
       }
+    }
+  });
+
+  it('a points pack ordered by bank transfer is in the file with its kind, points and bonus (POINTS-02 L2)', async () => {
+    const order = await prisma.planTransferOrder.create({
+      data: {
+        wawuUserId: USER,
+        paymentKind: 'points_pack',
+        targetId: 'pack-s',
+        priceKobo: 500_000,
+        providerFeeKobo: 5_000,
+        totalKobo: 505_000,
+        terms: {
+          v: 1,
+          packId: 's',
+          points: 120,
+          bonusPoints: 12,
+          boughtExpiryDays: 365,
+        },
+        status: 'awaiting',
+        expiresAt: new Date(Date.now() + 86_400_000),
+      },
+    });
+    try {
+      const req = await ask();
+      await fulfil.fulfil(req.id);
+      const mail = await mailFor(req.id);
+      const file = JSON.parse(
+        (await openLink(mail.downloadUrl).expect(200)).text,
+      ) as {
+        data: {
+          tierTransferPurchases: Array<{
+            targetId: string;
+            paymentKind: string;
+            terms: { points: number; bonusPoints: number };
+          }>;
+        };
+      };
+      expect(file.data.tierTransferPurchases).toHaveLength(1);
+      const [exported] = file.data.tierTransferPurchases;
+      expect(exported.targetId).toBe('pack-s');
+      expect(exported.paymentKind).toBe('points_pack');
+      expect(exported.terms.points).toBe(120);
+      expect(exported.terms.bonusPoints).toBe(12);
+    } finally {
+      await prisma.planTransferOrder.delete({ where: { id: order.id } });
     }
   });
 });

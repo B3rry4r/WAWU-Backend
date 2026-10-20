@@ -22,7 +22,9 @@ import { ContentPieceModule } from '../content-piece.module';
  * id; both are removed in afterAll (pieces cascade their ratings, details and
  * lessons; purchases are removed first because they restrict the delete).
  * The one seeded account used is creator-pro, for the edit that moves
- * "updated at".
+ * "updated at". That account comes from the seed: run `npm run db:seed` on a
+ * migrated database first, or one case fails on the seeded creator's foreign
+ * key (SWEEP-APP row HOME-03 S1b F4).
  */
 
 const MOCK_PORT = process.env.WAWU_ID_JWKS_URL
@@ -724,6 +726,58 @@ describe('Content detail: previews, fair ratings, counts (contract)', () => {
       ).data;
       expect(data.buyerCount).toBe(2);
       expect(data.studentCount).toBeNull(); // a pdf has buyers, not students
+    });
+
+    it('a user sees who made a piece: name, headline and the people who follow them, from the same call', async () => {
+      const id = await piece();
+      const handle = `detail-spec-${creator.sub.slice(0, 8)}`;
+      await prisma.userProfile.upsert({
+        where: { wawuUserId: creator.sub },
+        update: { headline: 'Business coach', handle },
+        create: {
+          wawuUserId: creator.sub,
+          headline: 'Business coach',
+          handle,
+          accountType: 'creator',
+        },
+      });
+      await prisma.followRelationship.createMany({
+        data: [buyer, buyer2].map((w) => ({
+          followerWawuId: w.sub,
+          followingWawuId: creator.sub,
+        })),
+        skipDuplicates: true,
+      });
+      try {
+        const d = await detail(stranger, id).expect(200);
+        const maker = (
+          d.body as {
+            data: {
+              creator: {
+                wawuId: string;
+                displayName: string | null;
+                headline: string | null;
+                followerCount: number;
+                verification: object;
+              };
+            };
+          }
+        ).data.creator;
+        expect(maker.wawuId).toBe(creator.sub);
+        // The person's name from WAWU ID, else their handle: never empty for someone who has one.
+        expect([handle, 'Detail Spec creator']).toContain(maker.displayName);
+        expect(maker.headline).toBe('Business coach');
+        expect(maker.followerCount).toBe(2);
+        expect(maker.verification).toBeDefined();
+      } finally {
+        await prisma.followRelationship.deleteMany({
+          where: { followingWawuId: creator.sub },
+        });
+        await prisma.userProfile.update({
+          where: { wawuUserId: creator.sub },
+          data: { headline: null, handle: null },
+        });
+      }
     });
 
     it('a user sees the student count of a paid course, and none for a free one', async () => {

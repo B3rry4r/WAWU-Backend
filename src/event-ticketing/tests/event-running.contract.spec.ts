@@ -241,27 +241,26 @@ describe('Running an event: organiser numbers and door staff (EVENTS-05)', () =>
       },
     });
 
+    // The tiers are written directly. Setting them through PUT
+    // /events/:id/tickets needs a verified host and sends a published event
+    // back to review (R-40, EVENTS-11); this suite tests running an event
+    // that is on sale, not setting its tiers, so its fixtures are seeded
+    // on sale, as the events above are.
     for (const eventId of [EV_MAIN, EV_OTHER]) {
-      const res = await http()
-        .put(`/api/hub/events/${eventId}/tickets`)
-        .set(auth(hostToken))
-        .send({
-          types: [
-            { tier: 'free', name: 'Free', priceNaira: 0, quantity: 50 },
-            {
-              tier: 'regular',
-              name: 'Regular',
-              priceNaira: 7500,
-              quantity: 70,
-            },
-          ],
-        })
-        .expect(200);
-      for (const t of data<unknown>(res) as Array<{
-        id: string;
-        tier: string;
-      }>) {
-        tiers[`${eventId}:${t.tier}`] = t.id;
+      for (const t of [
+        { tier: 'free' as const, name: 'Free', priceNaira: 0, quantity: 50 },
+        {
+          tier: 'regular' as const,
+          name: 'Regular',
+          priceNaira: 7500,
+          quantity: 70,
+        },
+      ]) {
+        const row = await prisma.eventTicketType.create({
+          data: { eventId, ...t },
+          select: { id: true },
+        });
+        tiers[`${eventId}:${t.tier}`] = row.id;
       }
     }
 
@@ -322,6 +321,27 @@ describe('Running an event: organiser numbers and door staff (EVENTS-05)', () =>
       expect(data<{ ticketsSold: number }>(dash).ticketsSold).toBe(
         byId.get(EV_MAIN),
       );
+    });
+
+    it('the call-off preview counts the people a call-off would refund, not the tickets, and only for the host', async () => {
+      // Three paid tickets in one order and three free ones: one person has
+      // money to get back, so the sheet says one buyer, not six tickets.
+      const preview = await http()
+        .get(`/api/hub/events/${EV_MAIN}/call-off`)
+        .set(auth(hostToken))
+        .expect(200);
+      expect(data<{ buyersToRefund: number }>(preview).buyersToRefund).toBe(1);
+
+      const empty = await http()
+        .get(`/api/hub/events/${EV_EMPTY}/call-off`)
+        .set(auth(hostToken))
+        .expect(200);
+      expect(data<{ buyersToRefund: number }>(empty).buyersToRefund).toBe(0);
+
+      await http()
+        .get(`/api/hub/events/${EV_MAIN}/call-off`)
+        .set(auth(buyerToken))
+        .expect(403);
     });
 
     it("My events sold counts are the caller's own: another account sees none of these events", async () => {

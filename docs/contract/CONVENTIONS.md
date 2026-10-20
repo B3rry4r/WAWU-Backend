@@ -220,6 +220,9 @@ Every refusal is the envelope this backend already answers with
 | `amount_out_of_range` | 400 | below the minimum, or above `MERCHANT_MAX_PER_TXN_KOBO` on money through WAWU's merchant wallet | `minimumKobo`, `maximumKobo` |
 | `quote_changed` | 409 | `expectedTotalKobo` differs from the server's total | `feeQuote` or `paymentQuote` |
 | `name_check_failed` | 422 | the bank did not confirm the account | |
+| `account_name_changed` | 409 | a saved bank account whose holder's name, or whose bank's name, at the bank is no longer the one kept, or an account that is not saved whose holder at the bank is no longer the one the name check showed (WALLET-09, section 24): `accountName` and `bankName` as they stand now; nothing was sent. A saved account is confirmed by saving it again with `confirmCurrentName: true`; an unsaved one by a new name check |
+| `account_not_in_your_name` | 409 | a payout account whose holder at the bank is not the person's verified name (the BVN name kept by the check, else the wallet's own account name; with neither, the answer is the same code with a plain reason and no `verifiedName`), on `PUT /money/payout-account`; or a withdrawal (a bank send to the saved payout account) while its holder is not, on `POST /money/transfers/bank`, answered before the PIN (no try used, the Idempotency-Key given back). Nothing is saved or sent. `accountName` and `bankName` are the bank's; `verifiedName` is the name on the person's wallet, left out when the wallet holds none. Sends to anyone else's account are unchanged (WALLET-37, R-51, G-765) | `accountName`, `bankName`, `verifiedName` |
+| `name_check_rate_limited` | 429 | the person has run `name_check_per_hour` (launch value 30; an admin setting, read at every check) bank name checks in the hour, counted per signed-in person and never per address: `POST /money/banks/name-check`, `PUT /money/payout-account` and `POST /money/beneficiaries` for a bank account share the count, and so does `POST /money/transfers/bank` to an account that is not saved when its `nameToken` is not one this person got for that bank and account number (or is old, or missing). No check is made. The message gives the minutes left in plain words; also sent as the `Retry-After` header (WALLET-37, R-51, G-764) | `retryAfterSeconds` |
 | `recipient_not_found` | 404 | no such WAWU user | |
 | `recipient_has_no_wallet` | 409 | they have not opened a wallet | |
 | `recipient_blocked` | 403 | a block between the two people | |
@@ -244,18 +247,23 @@ Every refusal is the envelope this backend already answers with
 | `reset_codes_exhausted` | 429 | the person or the phone has had today's PIN reset texts (MONEY-14); nothing is sent | `retryAfterSeconds` |
 | `device_approval_refused` | 403 | `X-Device-Approval` not accepted: not the registered phone, a wrong signature, a used, expired or another person's challenge, or no phone registered; never uses a PIN try (MONEY-14) | |
 | `payment_in_progress` | 409 | a payment for this item by this person is still being confirmed (or is under review); a second one is not taken, under any Idempotency-Key (MONEY-17) | `paymentId` |
+| `event_order_limit` | 409 | the buyer already holds the most open paid ticket orders one event allows (`events.open_orders_per_buyer` in the admin settings, launch value 10; an order that failed or was refunded does not count, a free order is never counted): refused on `POST /events/{id}/orders/wallet` when they are already at it, and again on `POST /events/orders/wallet/pay` inside the payment's claim, before anything is recorded or sent. "You have reached the order limit for this event." (EVENTS-13) | |
+| `question_already_waiting` | 409 | the fan already has a paid question waiting on this creator (asked and not yet answered or refunded, or a payment for another still being confirmed): refused on `POST /dm/{creatorWawuId}/send/wallet` and again on `POST /dm/send/wallet/pay` inside the payment's claim. "You can send once they reply." (INBOX-17, G-75) | |
 | `statement_rate_limited` | 429 | the person has asked for 5 statements in the last minute or 30 in the last hour (`STATEMENT_RATE_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-27) | `retryAfterSeconds` |
 | `statement_busy` | 503 | two statements are already being built and no place came free within 5 s (`STATEMENT_CONCURRENCY`, PROVISIONAL) (WALLET-27) | `retryAfterSeconds` |
 | `email_not_verified` | 409 | the account has no email address that WAWU ID says is confirmed (the token's `emailVerified` is not `true`, or its `email` is empty or not an address), so a statement is not emailed (WALLET-35); never counted against the statement limit | |
-| `statement_email_failed` | 503 | the mail could not be handed to WAWU ID's sender (it was unreachable, busy, over its day's cap or refused it, or is not set up on this server); nothing was sent and asking again is right (WALLET-35). The answer never names the address or WAWU ID's reason | |
+| `statement_email_failed` | 503 | the mail could not be handed to WAWU ID's sender (it was unreachable, busy, over its day's cap or refused it, or is not set up on this server), or WAWU ID did not say it took the file (its answer carries `attachments`, the number of files taken, and it must equal the one sent; a relay from before WALLET-35 answers none); asking again is right once WAWU ID is current (WALLET-35). The answer never names the address or WAWU ID's reason | |
 | `recipient_search_rate_limited` | 429 | the person has searched for recipients 20 times in the last minute, 120 in the last hour or 500 in the last day (`RECIPIENT_SEARCH_PERSON_LIMITS`, PROVISIONAL), counted after the token is verified (WALLET-08); also sent as the `Retry-After` header | `retryAfterSeconds` |
-| `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27) | |
+| `statement_too_large` | 400 | the period holds more movements than one statement lists (`STATEMENT_MAX_ROWS`, 50,000); counted before anything is written, and the person picks a shorter range (WALLET-27). Also on `POST /money/statements/email`: the file is over 12 MiB (`STATEMENT_EMAIL_MAX_BYTES`, WAWU ID's cap), measured before anything is sent; it can never succeed on a retry (WALLET-35) | |
 | `phone_held_by_other_identity` | 409 | account opening where Fintava already has a customer for the person's phone whose record does not carry the checked BVN (or carries none): nothing is adopted or created, and the opening stops for review (MONEY-12, BACKEND_GAPS G-37) | |
 | `fees_not_set` | 503 | the running wallet provider's fees are settings not filled in yet (Nuvion's `NUVION_FEE_*`, R-42): every fee quote and every money-moving route answers it before anything is sent to the provider; the balance, the history and the account number are unaffected (NUV-07, section 11) | |
 | `limit_reached` | 403 | the movement passes a limit: WAWU's own setting for its kind (`WAWU_LIMIT_<KIND>_<LIMIT>_KOBO`), checked before anything is sent, or the provider's own (Nuvion's per-transaction, daily or monthly refusal); the same answer either way (NUV-07, section 11) | `limit`: `per_transaction`, `daily` or `monthly` |
 | `open_address_limited` | 429 | under a provider that reviews the person (Nuvion): one address has made `OPEN_ATTEMPTS_PER_ADDRESS_PER_HOUR` opening tries (default 10, PROVISIONAL) in the last hour, across every account; a plain 429 before anything is claimed, sent or counted for the account. A call with no client address (made on the server itself) is not limited by address (NUV-02 round 3, section 9a) | `retryAfterSeconds` |
 | `identity_under_review` | 409 | under a provider that reviews the person itself (Nuvion): the person's details are with the provider's compliance review; they wait and nothing is sent again. The sentence promises a notification, and one is written when the review ends (NUV-02, section 9a). Any money route can answer it when the provider says so (`walletProviderErrorToHttp`) | |
 | `step_not_used` | 409 | `POST /money/identity/bvn` under a provider with no BVN lookup (Nuvion): that step does not exist there, the BVN is checked inside the review when the details are sent to open the wallet. Permanent, never "try again"; nothing is hashed, counted or sent (NUV-02 round 2, section 9a) | |
+| `below_minimum` | 422 | `POST /points/convert` with fewer points than the config's minimum; answered before the PIN, nothing held or changed (POINTS-04, section 20) | `minimumPoints`, `balancePoints` |
+| `insufficient_points` | 402 | more points than the person has (`PointsError`, section 16); answered before the PIN by the conversion, and again under the person's points lock (POINTS-04) | `balancePoints`, `neededPoints`, `shortfallPoints` |
+| `currency_not_supported` | 409 | `GET /points/convert/quote` or `POST /points/convert` for a person billed in dollars: their cash would be dollars and the dollar wallet is not built (NUV-09). Nothing is held (POINTS-04) | |
 
 The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
 operation in the contract lists the codes it can answer with, grouped by
@@ -323,6 +331,44 @@ credit is taken). The same key for other words or another room is
 `409` with `reason: idempotency_key_reused`. A refusal (402, 403, 400) stores nothing and
 leaves the key free to use once the cause is fixed. The app makes one key per message and
 sends it again unchanged on every retry of that message.
+
+**Not only money: a creator's reply to a paid question.** `POST
+/paid-dm/questions/:messageId/replies` takes an OPTIONAL `Idempotency-Key` too (the
+same 8 to 128 characters of `[A-Za-z0-9_-]`; INBOX-18 round 2). Without it the route
+behaves exactly as it always has: every call is a bubble. With it, per `(creatorWawuId,
+key)` the bubble is stored once (`DmReplyKey`, primary key creator plus key, written with
+the bubble by one nested create, so the unique index is the lock). A repeat, and a second
+request with the same key at the same moment on one server or two, answers `201` with the
+question as it stands (the first bubble in it once, and any later bubble too) and
+`Idempotent-Replayed: true`, and stores nothing, releases nothing and asks no one again.
+A key still in flight is answered this way, not with `idempotency_in_progress`: the second
+request waits on the index for the first to commit and then answers with its bubble. The
+same key for another question or other words is `409` with `reason:
+idempotency_key_reused`. A header that is not 8 to 128 of `[A-Za-z0-9_-]` is `400`. A
+refusal (403, 404, 409 for the window) stores nothing and leaves the key free. The app
+makes one key per reply attempt, keeps it across a retry of that attempt, and makes a new
+one for a new reply.
+
+**What a community message costs (INBOX-22, R-62).** By kind, in WAWU Credits (a count,
+never naira): text and emoji 0, a photo `community_credit_cost_photo` (1), a video
+`community_credit_cost_video` (3), a voice note `community_credit_cost_voice` (3), the admin
+settings of TIER-06, read when the message is sent. `GET /communities/message-cost` answers
+`creditsPerMessage` (what a plain message costs: 0) and `creditsByKind` (`text`, `photo`,
+`video`, `voice`). A message carries at most one of `imageUrl`, `videoUrl` and `voiceUrl`
+(a second is `400`); a `videoUrl` or `voiceUrl` must be the sender's own confirmed upload
+(`POST /uploads/presign` for `community/message-video` or `community/message-voice`, then
+`POST /uploads/confirm`) and the link must be the `fileUrl` presign handed back, on this bucket's
+own host, or it is `400` and nothing is charged. An `imageUrl` is held to the same rule (FIX-77):
+the `fileUrl` of the sender's own `POST /uploads/presign` for `community/message`, on this
+bucket's own host; it needs no confirm (the web never confirms a photo), so a presigned or a
+confirmed upload both pass, and any other link, another person's file or another folder's file
+is `400` ("That photo could not be sent. Choose it again.") with nothing stored or charged. Text sent with an
+attachment adds nothing. The host sends every kind free in their own room. A free message
+writes no credit row at all (no balance row is made, no ledger row, no host earning). A sender
+whose credits do not cover the message gets `402` with `reason: "insufficient_credits"` and a
+sentence that says what the kind costs, what they have and how many they are short; nothing
+is stored or taken, and the key stays free. The message, the debit and the ledger row are
+one transaction, so a send that fails after the debit gives the credits back.
 
 **On the PIN routes (optional).** `PUT /money/pin` and `POST /money/pin/reset/confirm`
 move no money, so they do not need a key, but they take one if it is sent
@@ -1198,10 +1244,21 @@ this applies and every answer is as in section 9.
   true when every word of the BVN's first name and of its last name is a
   word of the bank's account name, in any order (the middle name is not
   needed; an initial in place of a name does not match). Default (agent),
-  owner may override. `false` is A21's flag: the account is saved and
-  shown as not matching, not refused (mobile repo BACKEND_GAPS G-46 for
-  what a withdrawal does with it). `null` when there is nothing to compare
-  with: no passed check, no name kept, `IDENTITY_HASH_KEY` unset, the
+  owner may override. `false` means the bank's name is not the
+  BVN name: since WALLET-37 (R-51, G-765) such an account is refused on save
+  (`409 account_not_in_your_name`, the bank's name beside the name on the
+  wallet, nothing stored) and a withdrawal to a saved one that reads `false`
+  is refused before the PIN with the same code; only a row saved before the
+  rule can read `false`. With `null` there is no BVN name, and the
+  verified name is the wallet's own account name as the provider gave it (a
+  wallet opened under Nuvion keeps no BVN name; the provider verified the
+  identity when it opened it): the account is saved when every word of the
+  shorter of the two names (the wallet's, the bank's) is a word of the longer,
+  in any order, and at least two words match (either side may leave a middle
+  name out; a different word, or one word alone, does not match), and refused
+  with the same code otherwise (round 4); with no wallet account name either it is refused
+  with a plain reason (WALLET-37 round 2). The flag itself stays `null`.
+  `null` when there is no BVN name to compare with: no passed check, no name kept, `IDENTITY_HASH_KEY` unset, the
   wallet opened under a different BVN check (`FintavaWalletOpening.bvnHash`)
   than the one that kept the name, or keys that cannot be compared (the
   first scheme's unbound `{ first, last }`, or a `check` that does not
@@ -1311,14 +1368,19 @@ this applies and every answer is as in section 9.
   - calls `MoneyLimits.assertMayMove({ wawuUserId, kind, amountKobo }, { tx
     })` in the transaction that writes the movement's pending ledger row,
     before the provider is called: `fees_not_set`, then `403 limit_reached`
-    with `limit` (per transaction, then today, then this month). With `tx`
-    it takes a per-person lock first, so two movements by one person are
-    checked one after the other. That transaction stays at READ COMMITTED
-    (Prisma's default: no `isolationLevel`): the lock orders the reads only
-    there, so with `tx` the check first reads `transaction_isolation` and
-    refuses any other level with an `IsolationLevelError` naming it, a
-    programming error answered as a 500 (FIX-21,
-    `src/money/limits/read-committed.ts`);
+    with `limit` (per transaction, then today, then this month). `tx` is
+    required: the check takes a per-person lock for that transaction, so two
+    movements by one person are checked one after the other. It is the `tx`
+    of `prisma.$transaction(async (tx) => ...)`, never the service's own
+    client: the types refuse the root client, and a check given nothing, the
+    service's own client or any root client throws a `NotInTransactionError`
+    before anything is locked, read or written (FIX-26,
+    `src/money/limits/movement-tx.ts`). That transaction stays at READ
+    COMMITTED (Prisma's default: no `isolationLevel`): the lock orders the
+    reads only there, so the check first reads `transaction_isolation` and
+    refuses any other level with an `IsolationLevelError` naming it (FIX-21,
+    `src/money/limits/read-committed.ts`). Both are programming errors,
+    answered as a 500;
   - answers a provider failure with `error.toHttpException()`: the
     provider's own limit refusal (a `WalletProviderLimitError`; Nuvion's
     `error_transfer_transaction_limit_exceeded`,
@@ -1434,8 +1496,14 @@ this applies and every answer is as in section 9.
     email_not_verified`. The Hub holds no address of its own.
   - Order of answers: the route's own 400s (the period, the body), then the
     409, then the person is counted, then the file is built, then the mail is
-    handed over. `400 statement_too_large` gives the place back; a mail that
-    could not be handed over is `503 statement_email_failed` and counts.
+    handed over. `400 statement_too_large` gives the place back (a file over
+    12 MiB is measured before the mail is built, and is that 400, not a 503);
+    a mail that could not be handed over is `503 statement_email_failed` and
+    counts. WAWU ID answers `200 { id, attachments }` for a mail that carried
+    files, `attachments` being how many it took; the Hub calls the mail sent
+    only when that number is the one it sent (a relay from before WALLET-35
+    drops the file and answers `{ id }`, which is a failure here). A mail with
+    no files (a campaign, the money check's report) is judged as before.
   - `200` answers `StatementEmailView`: `sentTo` (the address masked,
     `a***@example.com`), `from`, `to`, `format`, `fileName`, `rowCount`,
     `sentAt`. `no-store`. An optional `Idempotency-Key` (8 to 128 of
@@ -1695,7 +1763,19 @@ Fintava or on Nuvion, whichever the server runs.
   paid for is delivered (the feature's record that the buyer owns it is then
   in place), never at the moment the provider confirms. The claim is taken before
   the feature's "already owned" rule is read for the last time, and given
-  back (nothing sent, failed, the key freed) when that now refuses.
+  back (nothing sent, failed, the key freed) when that now refuses. The
+  quote (`GET /money/payments/quote`) of a SCHOOL FEE answers the same `409
+  payment_in_progress` with `reason.paymentId` when the SAME payer holds the
+  open payment for the SAME target (FIX-58), so a second phone is never
+  shown a Pay the PIN tap would refuse; it is read after the item (an item
+  gone or not payable is that answer first) and before anything is priced.
+  Every other kind is quoted as before, open payment or not (the 409 meets
+  the payer at the PIN tap); a kind joins `QUOTE_REFUSES_OPEN_KINDS`
+  (`src/money/payments/wallet-payment.service.ts`) when its app caller reads
+  the 409 at the quote. Another person's open payment, or this payer's for
+  another item, changes nothing. The routes of the features that quote
+  through the same service (plans, points packs, bills, credit packs, event
+  orders) are unchanged.
 - **Before money moves**, in order, none of which stores anything: the
   wallet gate, the Idempotency-Key, the PIN, the body, the target, the
   quote, the merchant cap (`amount_out_of_range`), an open payment for the
@@ -1710,7 +1790,8 @@ Fintava or on Nuvion, whichever the server runs.
 - **The split** is recorded on the payment (`WalletPayment`), of the price
   only: the payee's 85% rounded down to the kobo, WAWU's 15% the rest (R-5;
   ₦1,000 is ₦850 and ₦150, ₦999.99 is ₦849.99 and ₦150.00). No payee: all
-  of it is WAWU's. Landing the 85% in the payee's wallet is WALLET-16's.
+  of it is WAWU's. Landing the 85% in the payee's wallet is WALLET-16's
+  (section 19).
   Deleting the payer's account keeps the payment (the payee's share may be
   unpaid) with the payer side set to null (`ANONYMISED` in the account data
   map).
@@ -1816,6 +1897,68 @@ Fintava or on Nuvion, whichever the server runs.
 
 ---
 
+## 15. A NUL, or other text Postgres cannot take (FIX-17)
+
+Postgres refuses a NUL (U+0000) in a text parameter (error 22021), so a `%00`
+that reached a query answered 500: on the 23 routes FIX-07's verifier found
+and seven more FIX-17's sweep found. The code base had no single rule: a NUL
+was stripped (money searches, AI text), refused (legal documents,
+the assistant, the profile audience) or replaced with U+FFFD (the Fintava
+webhook). From FIX-17 on there is ONE rule, and it holds for every route,
+money routes included:
+
+- **Refuse it with 400 naming the field, before any query runs.** The body is
+  the plain 400 (no `reason`):
+
+  ```json
+  { "statusCode": 400, "message": "<field> must have text in it, with no null characters or broken characters", "data": null }
+  ```
+
+  One sentence for this fault everywhere (`unstorableTextMessage` in
+  `src/storable-text/storable-text.ts`); `/search` (FIX-07) and `/schools`
+  (SCHOOLS-04) already answered it for `q`. The app treats it as any
+  malformed request.
+- **What counts:** a NUL, or a lone UTF-16 surrogate, anywhere in the value
+  (`isStorableText`). Over HTTP only the NUL arrives: Express turns a
+  percent-encoded surrogate or broken UTF-8 into U+FFFD, which is searched
+  for like any other character. A blank value is not this rule's business,
+  and every other character (control characters, U+FFFD, U+FFFE, emoji) is
+  accepted.
+- **Where, with no line per route:** every query and path value of every
+  route, every method. `checkStorableTextOnEveryRoute(app)` puts one pipe last
+  on every argument of every route the app mounts, so a route added later is
+  covered automatically. It is called from `configureHubApp(app)`
+  (`src/hub-app-config.ts`), the one function `src/main.ts` calls between
+  creating the app and listening, and it must run before `app.init()` or
+  `app.listen()` (Nest reads each handler's arguments then). A test app that
+  should answer as the Hub does calls `configureHubApp(app)` too (the Hub spec
+  in `src/storable-text/tests` does, and pins that `main.ts` calls it first and
+  never calls `init()` itself).
+- **What answers first, unchanged:** a guard (`401`, `403`, `409
+  wallet_not_open`, `423`), every check that already refused the value (the
+  ValidationPipe's `MaxLength`, `IsUUID`, `IsIn` and so on, the argument's
+  own pipe such as `ParseUUIDPipe`), and a fault in another argument (an
+  undeclared query key, a bad body). Only text that every other check let
+  through is refused here. Query keys are never read: an undeclared key is
+  the ValidationPipe's (`property x should not exist`) or is ignored.
+- **Request bodies are not in this rule yet.** FIX-17 changed no body. What
+  a body does today stays: money text and AI text strip a NUL, legal
+  documents, the assistant and the profile audience refuse it (`IsCleanText`,
+  the same sentence). A new body field that stores text refuses it the same
+  way (`@IsCleanText()`, or `isStorableText` for a field that may be blank).
+  A provider's webhook body is the one standing exception: it is recorded,
+  with a NUL replaced by U+FFFD, because refusing it would lose the
+  provider's event.
+- **Money searches.** `GET /money/transactions?q=` and `GET
+  /money/recipients?q=` stripped a NUL in code (`searchText` in
+  `transaction-history.service.ts`, `recipient-query.ts`). For a person with
+  a wallet the refusal now answers first (`409 wallet_not_open` still comes
+  first for a person without one), and a refused recipient search does not
+  count towards the person's limit (section 13). The strip code no longer
+  sees a NUL from a query string; it stays until the money owner removes it.
+
+---
+
 ## 16. Points (POINTS-01)
 
 Points are not money: no provider holds them, no route converts them to
@@ -1872,6 +2015,62 @@ written here because the tasks that sell, spend and cash them out
   transaction, and never wait on a provider while you hold a person's points
   lock: this service's own transactions use Prisma's 5 s default, so a
   points call for that person would fail meanwhile.
+
+### 16a. Spending points on AI tools (POINTS-03)
+
+Every cost, cap and rate is an admin setting (R-65), read from the live plan on
+each call: `points.action.<id>` (points for one unit), `points.daily_cap`,
+`points.max_chars_per_job`, `points.max_audio_min_per_job`,
+`points.price_kobo_per_1000` (the pack rate a shortfall is sold at) and
+`points.job_max_run_minutes` (how long an AI job may hold points). Points are
+a count, never naira; money fields end in `Kobo`.
+
+- **The internal service.** `PointsSpendService` (`src/points/spend/`,
+  exported by `PointsSpendModule`) is what the AI tools' server code calls:
+  `hold(input)` before the job, `commit(holdId)` when it worked,
+  `release(holdId)` when it did not. `hold` prices the job (`action`,
+  `units`, `languages` for dubbing, `characters`), checks the caps, and takes
+  the points, all under the person's points lock in ONE database-only
+  transaction with the hold as its last write: two jobs at once never pass
+  the daily cap together and never take the balance below zero. A call that
+  waits on an AI provider must do it OUTSIDE `hold`, holding nothing. Every
+  attempt needs its own `reference` (`jobHoldReference(jobId, attempt)`): a
+  reference that was spent or given back is `409 points_hold_settled`, never
+  returned as a hold. `commit` and `release` settle `ai_job` holds only.
+- **`POST /points/quote`** (PT1 to PT3, PT7), body `{ action, units,
+  languages?, characters? }`: `costPoints`, `balancePoints`, `shortfallPoints`,
+  `canRun`, `useWallet`, `cap` (the cap that stops the job, or null) and
+  `wallet` (with a shortfall and "Use wallet" on: the wallet money for exactly
+  the shortfall at the pack rate, with the wallet payment's own signed quote)
+  or `walletNote` (why not: no wallet yet, a dollar-billed person, fees not
+  set). Always 200; it holds and takes nothing. A cap that stops the job
+  shows no wallet money.
+- **A cap names itself.** `cap` is `daily` (points of AI jobs held or spent
+  since the Lagos day began; a given-back job does not count; `resetsAt` is the
+  next Lagos midnight), `characters_per_job` or `minutes_per_job` (`resetsAt`
+  null). Held, the answer is `422 points_cap_reached` with `cap`, `capLimit`,
+  `capUnit` and, for the day's, `usedPoints`, `remainingPoints`, `resetsAt`;
+  nothing is held.
+- **`POST /points/shortfall`** (PIN, `Idempotency-Key`), body = the quote's
+  job + `expectedTotalKobo` (`wallet.payment.totalKobo`) + `quoteToken`
+  (`wallet.payment.quoteToken`): buys exactly the shortfall from the wallet as
+  a wallet payment of kind `points_shortfall` (target `shortfall-<points>`, the
+  provider's charge on top, WAWU's own sale, not held) and adds one lot
+  (source `shortfall`, keyed by the payment) once, last in a database-only
+  transaction; nothing is held across the provider call. `201` with a
+  `PointsShortfallView` (`paid`, `pending`, `failed`); poll
+  `GET /points/shortfall/{id}`. Points, rate and expiry are the payment's terms:
+  a balance, rate or expiry that changed since the quote is `409 quote_changed`
+  with the new quote, nothing moved. Not short any more (including the same
+  quote sent again under another key) is `409 points_not_short`; a cap is `422
+  points_cap_reached`. "Use wallet" only decides whether the quote offers the
+  money; the PIN is the confirmation. Naira only (R-16): a dollar-billed
+  person is `409 target_not_payable`.
+- **`GET` and `PUT /me/points/settings`**: `{ useWallet }`, off by default, each
+  person's own.
+- **The sweep.** Every five minutes, `ai_job` holds still `held` after
+  `points.job_max_run_minutes` are given back by id. A late commit and the
+  sweep cannot both win: the second is `points_hold_settled` and is skipped.
 
 ---
 
@@ -2010,7 +2209,8 @@ added up into one.
   (`status: held`), `GET /money/payments/quote` says `willBeHeld: true`, and
   the feature's `onCompleted` is told its id (`CompletedPayment.holdId`).
   What releases each kind is fixed: `paid_dm` `dm_answered`, `event_ticket`
-  `event_took_place`, `bill` `bill_delivered` (`holds/hold-rules.ts`). The
+  `event_took_place`, `bill` `bill_delivered`, `school_fee` `intake_started`
+  (`holds/hold-rules.ts`). The
   buyer's ledger row stays a `purchase`; they paid the price and the
   provider's charge (R-10) and the price is not spendable: it is already in
   WAWU's account.
@@ -2021,8 +2221,19 @@ added up into one.
     (a bill) or a share under a kobo nothing moves and the hold is over.
     The payment's `payeeSettledAt` is set when it is paid, so WALLET-16 never
     lands the same share again (WALLET-16 skips a payment that has a hold).
+    **Asked with `asEarning`** (a paid question, an event ticket; R-55, lead
+    ruling 17 Oct 2026) the share is not a transfer of its own: the release is
+    one database write that makes the hold `released` (no `transferKobo`, no
+    reference) and makes the payee's `EarningSettlement` for the payment, which
+    goes to their wallet in their ONE move a day with their other earnings
+    (section 26); `payeeSettledAt` is set when that move lands. The money stays
+    in WAWU's account until then (R-19).
   - `refund(...)`: the **price** moves back to the payer's wallet. The
-    provider's charge on the original payment is not returned (R-10).
+    provider's charge on the original payment is not returned (R-10), unless
+    the owning feature asks `returnCharge` because the payer did not cause the
+    refund (a lapsed paid question, a tip, unlock or legal fee that could not
+    be delivered, a called-off event, a failed bill): every naira comes back
+    and WAWU bears the charge of the refund transfer (lead ruling 17 Oct 2026).
   - The provider's charge on either move is WAWU's, paid from its 15% (R-31):
     the person receives the whole figure. It is recorded on the hold
     (`providerFeeKobo`) and on the merchant-side ledger row.
@@ -2090,7 +2301,10 @@ added up into one.
     (section 14) read the flag nowhere: they keep treating a lost write as an
     unknown outcome.
   - `refused`: the provider refused and nothing moved; retried under the same
-    reference, and a person looks past the review bound.
+    reference, and a person looks past the review bound (`PAYMENT_REVIEW_AFTER_HOURS`,
+    counted from when the release or refund was asked for): the first refusal
+    at or after it sends the hold to review. A frozen wallet, a missing wallet
+    and an unreachable provider have no such bound.
   Nothing is refunded because a release is stuck, or the other way round.
 - **Limits.** A move above the cap on one move through WAWU's account
   (`MERCHANT_MAX_PER_TXN_KOBO`, Fintava) is refused, never split: review. The
@@ -2186,8 +2400,8 @@ completed payment).
 ## 19. Send to a WAWU user (WALLET-07)
 
 `POST /money/transfers/wawu` and `GET /money/transfers/{id}`
-(`src/money/transfers/`), served; sending to a bank account (WALLET-09) is
-still declared. Finding the person is WALLET-08.
+(`src/money/transfers/`), served; sending to a bank account is section 24
+(WALLET-09). Finding the person is WALLET-08.
 
 - **The request.** Headers `Idempotency-Key` (required, section 4) and
   `X-Transaction-Pin` or `X-Device-Approval` (section 5). Body
@@ -2269,6 +2483,190 @@ still declared. Finding the person is WALLET-08.
 - **Deleting an account** keeps the send for the other person: each side's
   user id, account number and name are set to null when that person is
   purged, and the sender's note goes with the sender.
+
+## 20. Points to cash (POINTS-04)
+
+A person turns points into naira in their wallet at the config's rate
+(`plans.config.json`, `cash_out`: kobo for 1,000 points, and the fewest points
+one conversion takes; TIER-01, R-43). The cash is WAWU's own money moving
+from its account at the wallet provider into the person's wallet: Fintava's
+merchant wallet or Nuvion's operational account, whichever `WALLET_PROVIDER`
+runs, through the seam only (MONEY-20). The provider's charge on the move is
+WAWU's (R-31); the person pays nothing to convert.
+
+- **Routes** (`src/points/convert/`, `PointsConvertModule`; `points/convert` is
+  a path nothing else declares):
+  - `GET /points/convert/quote?points=` (wallet gate, `fees_not_set` first,
+    `no-store`): `balancePoints`, `minimumPoints`, `maximumPoints` (from the
+    provider's cap on one move, or null), `rate` (`points: 1000`, `kobo`),
+    `points` (the ones asked about, else the whole balance), `cashKobo`,
+    `feeKobo` 0, `wawuPaysProviderCharge` true, `canConvert` and `blockedBy`
+    (`below_minimum`, `insufficient_points` or `above_maximum`). It answers
+    the figures instead of refusing, so PT6 can draw "below the minimum".
+    A dollar-billed person is `409 currency_not_supported`.
+  - `POST /points/convert` `{ points }` with `Idempotency-Key` and
+    `X-Transaction-Pin` (or a device approval): answers `201` with the
+    conversion `{ id, status, currency, points, cashKobo, reference,
+    statusMessage, failureReason, createdAt, completedAt }`.
+  - `GET /points/convert/{id}`: the same view for its owner (anybody else, and
+    an id nobody holds, are the same `404 not_found`), from our records only.
+- **Status** is `completed` (the provider confirmed the cash; the points are
+  spent), `pending` (the points are on hold and the cash is not confirmed yet:
+  poll the id; the move is never sent again) or `failed` (the cash did not
+  move and the points are back; `failureReason` says so in words). A `pending`
+  answer is stored for replays like any other: the app polls the id.
+- **Cash** = `floor(points x kobo per 1,000 points / 1,000)`: rounded down, so
+  nobody is paid more than the rate says. A conversion worth no kobo is
+  refused (`400 amount_out_of_range`). The migration holds the same sum as a
+  CHECK, with the rate the row was worked out at stored on it.
+- **Before the PIN, changing nothing** (a guard between the Idempotency-Key and
+  the PIN; `RequireIdempotentApproval(route, ...guards)`): no wallet is the
+  wallet gate's `409 wallet_not_open` (it runs first, takes no key); then a
+  dollar-billed person `409 currency_not_supported`, fewer points than the
+  minimum `422 below_minimum` (`minimumPoints`, `balancePoints`), more cash
+  than one move may carry `400 amount_out_of_range` (`maximumKobo`), more
+  points than the person has `402 insufficient_points` (`balancePoints`,
+  `neededPoints`, `shortfallPoints`). None uses a PIN try, holds a point or
+  keeps the Idempotency-Key. A repeat of a finished request is answered
+  before any of them, so a balance that has since changed never turns a replay
+  into a refusal. `points` that is not a whole number of 1 or more is the
+  validation pipe's plain `400`, also before the PIN.
+- **The order of the steps.** (1) The conversion row, the key's link to it and
+  the points hold are written in ONE transaction (the hold last, so the
+  person's points lock is taken after everything else and let go at once):
+  there is no row without held points and no held points without a row. The
+  points leave their lots soonest-ending first (POINTS-01). (2) The provider is
+  asked to move the cash, outside every transaction: nothing waits on a
+  provider while it holds a person's points lock. (3) Only when the provider
+  has CONFIRMED the move, one transaction marks the conversion `paid` and
+  commits the hold; when its own record, or a refusal that proves nothing
+  moved, says the cash did not move, one transaction marks it `cancelled` and
+  releases the hold, back to the lots it came from with their own end dates
+  (a lot that ended meanwhile loses them, as POINTS-01 says). At commit the
+  database requires the conversion and its hold to agree (a deferred trigger).
+- **Once.** The Idempotency-Key links to one conversion; the conversion has
+  one reference at the provider, `wawu-pts-<id>` (45 characters, inside
+  Nuvion's 64; unique in our table, refused as a repeat by the provider); the
+  move is handed over by a lease (`sentAt`) only one caller wins, whichever
+  Hub process or sweep it is. A new reference exists only for a NEW
+  conversion: one the provider did not make is cancelled, and asking again is
+  a new request with a new key.
+- **The provider's record is the truth** (the rules of sections 14 and 18).
+  A move whose outcome is unknown (a timeout, a 5xx, a transfer accepted and
+  not finished, a repeated reference, a Hub killed between the provider's
+  answer and our write) is `pending`: `sentAt` is set, the provider is asked
+  about our reference (`reconcileSend` on WAWU's own account; backing off 1,
+  2, 4 ... 60 minutes), the move is never sent again and never read as
+  "nothing moved", and the points stay HELD. Nothing times a `cash_out` hold
+  out. Past `PAYMENT_REVIEW_AFTER_HOURS` (72) with no answer it goes to review
+  (`reviewSince`): out of the sweep, still held, a person decides. A record
+  that it was completed and then reversed, another amount than asked, or
+  cash confirmed for points already given back, is review too. Only a
+  refusal that proves nothing moved (`recordMayExist` false or
+  `requestNotSent`: WAWU's account short, a frozen wallet, the provider's
+  limits, a body it refused) or the provider's own record that the move
+  failed gives the points back.
+- **A sweep** every minute (`points-cash-out-settle`) drives every held
+  conversion that is due, of the provider this server runs, by a keyset cursor
+  with a time budget (the hold sweep's shape): it sends what a request that
+  died after the hold never sent, and asks about every move whose answer was
+  lost. A conversion of the other provider is left alone.
+- **Ledger.** Both sides of the move, under our reference: WAWU's account (out,
+  the provider's charge on top, `wawuFeeKobo` 0) and the person's wallet (in),
+  category `earning`, counterparty "Who Made This", link kind
+  `points_cash_out` (a `PAYMENT_KINDS` value that no feature registers, so a
+  payment for it is `target_not_payable`), link title the points. History
+  reads "Points to cash". The provider's balance is still the only balance.
+- **Deleting an account.** The row is `ANONYMISED` (the person and the wallet
+  account it paid into are set to null); its hold goes with the person's
+  points. A conversion not yet sent is then cancelled by the sweep; one the
+  provider already moved is paid with no person on it.
+- **For MONEY-16 / NUV-08:** `PointsCashOutService.inFlightTotals()` counts and
+  sums (kobo) the conversions still held of the running provider: cash that
+  may already have left WAWU's account without our record knowing yet.
+
+## 21. Provider webhook deliveries are not kept for ever (FIX-20)
+
+(Numbered 21 because MONEY-16 and WALLET-16 both add a section 19 on their
+branches; the lead renumbers at merge.)
+
+`FintavaWebhookEvent` and `NuvionWebhookEvent` keep each signed delivery's raw
+body and a parsed copy of it: names, account numbers, narrations. Neither table
+has a person column, so **retention, not the account purge or the data export,
+covers these rows**. The purge map (`src/account-purge/account-data-map.ts`)
+and the export list (`src/data-export-request/data-export-sections.ts`) say so
+in their comments and name neither table; a person's own money history is the
+ledger, which the purge and the export do cover.
+
+**The rule.** A daily job (`src/webhook-retention/`, 02:40 server time) clears
+the raw body (`rawBody` becomes empty) and the parsed copy (`payload` becomes
+JSON null) of a delivery when both are true:
+
+- it was received more than `WEBHOOK_RETENTION_DAYS` ago (default **90**,
+  PROVISIONAL, whole days from 7 to 3650, anything else stops the app at boot);
+  the period counts from the time received, not the time processed; and
+- its state says nothing can still read it.
+
+**Which states are cleared, and which are held.** A held row keeps its body
+whatever its age, and the job reports how many such rows are past the period.
+The table is `WEBHOOK_STATE_RULES` in
+`src/webhook-retention/webhook-retention-config.ts`, typed over each enum, so a
+new state does not compile until it is classified.
+
+| State | Fintava | Nuvion | Why |
+|---|---|---|---|
+| `processed` | cleared | cleared | Every consumer is finished with it. The ledger keeps the references and the figures; each Nuvion handler re-fetches from Nuvion before it acts on money. |
+| `test` | no such state | cleared | Nuvion's own test delivery: no data, nothing acts on it. |
+| `pending` | held | held | A consumer has not used it yet: the ledger sweep and the Nuvion dispatcher read its payload. It may be resting after a wait, held by a worker, waiting for a consumer that is not built yet (Fintava cards, an event no Nuvion handler lists), or left for a rollback to the other provider. |
+| `failed` | held | held | The consumer could not use it. That is a stop for review (a reversal with no debit), and the body is the evidence. A delivery that disagrees with the ledger is `processed`; its evidence is the discrepancy on the ledger row, not the body. |
+| `unrecognised` | held | held | Kept for review: an event nobody documents is how a real payload format is learned. |
+
+Nothing marks a review closed, so a held row stays until a person or a
+consumer finishes with it (BACKEND_GAPS G-750).
+
+**What stays on a cleared row.** Everything the repeat check and every reader
+needs: the id, the event, the references (`reference`, `dataReference`,
+`dataCustomerReference`; the ledger's absent check reads them), the SHA-256 of
+the body, the outcome (`processingStatus`, `note`), `receivedAt` and
+`processedAt`, and `bodyClearedAt`, the time the body went. The database holds
+the rule: `*_body_cleared_check` refuses `bodyClearedAt` on a row that still has
+a body (and on a Fintava row without its `bodySha256`).
+
+**A delivery sent again after clearing is still a repeat.** The receivers'
+inserts are `ON CONFLICT DO NOTHING` on unique keys the job never touches, so
+the answer is `200 duplicate`, no row is written, the body is not put back, and
+the ledger or the handler is not told again:
+
+- Fintava sends no event id and no timestamp, so its key is `bodySha256`, the
+  SHA-256 of the exact bytes it signed. It is the only protection against a
+  captured signed body being replayed, which is why a Fintava row without one
+  is never cleared.
+- Nuvion's keys are `eventId` and the signed pair (`signedAt`, `bodySha256`),
+  and the signature check refuses a timestamp more than 20 minutes from our
+  clock before the insert is reached.
+
+**Safe to run twice, on two servers, and while a delivery arrives.**
+
+- A batch is one statement: it picks up to 200 rows, locks them
+  (`FOR UPDATE SKIP LOCKED`) and clears them together. It is a transaction of
+  its own, so no lock outlives it. A run stops starting batches after 10
+  minutes and leaves the rest to the next day.
+- Two servers running the job at once share the rows between them; a row is
+  cleared by one of them. A row a consumer holds is skipped and cleared by the
+  next run. A second run finds nothing to clear and writes nothing.
+- A new delivery never waits for the job: it is a new row, received after the
+  cutoff, and its insert conflicts with nothing. A repeat of a delivery whose
+  row is in the batch being cleared right now waits for that one statement
+  (Postgres makes an insert that conflicts with a row being updated wait for the
+  updater, a few milliseconds for 200 rows) and then answers `duplicate`; a
+  repeat of any other row does not wait at all.
+
+**A new reader of these tables.** A reader of `rawBody` or `payload` reads only
+rows in a held state, as the ledger sweep and the Nuvion dispatcher do (they
+read `pending` rows, locked and re-checked as `pending`). The readers are listed
+in `WEBHOOK_TABLE_READERS`, and `webhook-retention-readers.spec.ts` fails when a
+file touches either table without being listed there. A reader that needs a
+cleared state's body changes `WEBHOOK_STATE_RULES` in its own task, on purpose.
 
 ## 22. The nightly check against the provider (MONEY-16)
 
@@ -2390,3 +2788,418 @@ provider the server runs (their `provider` column).
   decimal text.
 - **Rows.** `MoneyCheckRun.report` holds the first 500 mismatches and the first 500 looks
   and counts the rest; finished runs are kept `MONEY_CHECK_KEEP_DAYS` (120).
+
+## 23. Publishing needs a tier (TIER-02)
+
+Publishing a piece, or taking a file for one, answers `402` in this one error
+shape when the person has no way to publish or has used every product they
+may have:
+
+| `reason.code` | HTTP | When | Extra fields |
+|---|---|---|---|
+| `tier_required` | 402 | no running tier and no verification tick that has not ended | `tierState` (`none` or `ended`), `productsUsed`, `productsAllowed`, `currency`, `tiers`, `extraProducts` |
+| `product_limit_reached` | 402 | every product the person may have is published | the same fields |
+| `identity_paused` | 403 | the person's identity check is paused: waiting for documents, refused, stopped, or closed unfinished (S7 round 2). A check that passed, one under way, and one never started are not refused. Asked after the tier, before the room | `stage` (`needs_documents`, `rejected`, `stopped` or `expired`); `message` is the Hub's own sentence, no offers |
+| `draft_limit_reached` | 409 | a person already keeps `PRODUCT_DRAFTS_MAX` drafts (`POST /product-drafts`) | `draftsKept`, `draftsAllowed` |
+| `draft_incomplete` | 400 | a draft being published still lacks details | `missing` |
+
+The offers inside `reason` are `GET /plans`' figures in the person's billing
+currency only (`priceMinor` in the minor unit of `currency`). The rules, the
+routes that ask and the drafts are in [`PLANS.md`](PLANS.md) section 6.
+
+`tier_required` is also a money error code (TIER-04): `GET
+/plans/purchases/quote` and `POST /plans/purchases` answer `402 tier_required`
+in the money error shape (`reason.code` and `reason.message` only) when the
+person asks to add more products without a tier that is running. The status is
+the same 402, so one handler covers both. Nothing is taken, and a bank-transfer
+purchase waiting for its money when the tier ends is closed with nothing taken
+([`PLANS.md`](PLANS.md) section 11).
+
+## 24. Send to a bank account (WALLET-09)
+
+`GET /money/banks`, `POST /money/banks/name-check` and `POST
+/money/transfers/bank` (`src/money/transfers/`, `src/money/saved-accounts/`),
+served. A withdrawal (W17) is a bank send to the payout account; it has no
+route of its own. Reading one send, of either kind, is `GET
+/money/transfers/{id}` (section 19).
+
+- **The bank list and the name check** read no wallet and move no money. `GET
+  /money/banks` is the provider's list in one unpaged array (`code`, `name`;
+  key on `code`), kept in memory for an hour. `POST /money/banks/name-check`
+  answers `AccountNameView` with the holder's name AS THE BANK GIVES IT, or
+  `422 name_check_failed` with the sentence that says why (CONVENTIONS
+  section 10), or `503 provider_unreachable`. W8's Continue unlocks only after
+  it answers. The answer carries `nameToken`, signed for this person and good
+  for 15 minutes: the send to an account that is not saved sends it back.
+- **Name checks are limited per person** (WALLET-37, R-51, G-764): at most
+  `name_check_per_hour` (launch value 30) an hour for one signed-in person,
+  in one count shared by `POST /money/banks/name-check`, `PUT
+  /money/payout-account` and `POST /money/beneficiaries` for a bank account;
+  the 31st is `429 name_check_rate_limited` with the minutes left, no check
+  made. It is per person, never per address: two people on one address each
+  have their own count. A check the bank could not answer (`503`) is not
+  counted. A bank send's own check just before the money goes is not
+  counted when it is the person's own: a send to a saved account, or to an
+  account that is not saved with a `nameToken` this person got for that bank
+  code and account number (not older than 15 minutes). Any other send to an
+  account that is not saved is a name check (round 5, G-764): it spends one of
+  the 30, and past them it is `429 name_check_rate_limited` before the PIN,
+  the key given back, the bank not asked, no holder name in the answer.
+- **A withdrawal goes only to the person's own name** (WALLET-37, R-51,
+  G-765). A withdrawal is a bank send to the saved payout account. The bank
+  is asked as for any send; when the holder it gives is not the person's
+  verified name (the BVN name kept by the check, else the wallet's own
+  account name; with neither, nothing vouches for the account) the answer is
+  `409 account_not_in_your_name` before the PIN, the key given back, nothing
+  sent. A holder that differs from the one kept
+  is `409 account_name_changed` first, as above. Sends to other accounts (W8)
+  are unchanged.
+- **The request.** Headers `Idempotency-Key` (required, section 4) and
+  `X-Transaction-Pin` or `X-Device-Approval` (section 5). Body
+  `BankTransferDto`: `bankCode`, `accountNumber` (ten digits), `amountKobo`
+  (what the account gets), `expectedTotalKobo` and `quoteToken` (both from
+  `GET /money/fees/quote?kind=bank_transfer`, BACKEND_GAPS G-64), an
+  optional `note` (trimmed, at most 100 characters) and, for an account that
+  is not saved, the `nameToken` of the name check the person saw (required
+  for such an account: without it the answer is `400`, FIX-41). The app
+  never sends a name: the server asks the bank again, just before the send, and sends to
+  the name it gets. Answers `201` with `TransferView` (`kind: bank_account`,
+  `toBankAccount`: the bank's code and name, the account number and the
+  holder's name as the bank gave it, `timeline`: `requested`, `sent_to_bank`
+  once the provider has taken it, then `completed`; a send that `failed` or
+  was `reversed` shows `requested` and that outcome only).
+- **What it costs.** The amount, the provider's charge for a bank send and
+  WAWU's fee on top (R-10, from the fee settings; with Fintava's dashboard
+  rates, ₦40 + ₦25 = ₦65, so a ₦25,000 send debits ₦25,065). The provider
+  collects both in the one transfer; what its own record says it took is the
+  record, as for a send to a WAWU user (section 19). A send has no receiver's
+  ledger row: the money is at another bank.
+- **Before money moves**, in order: `fees_not_set`, the wallet, the key, the
+  ACCOUNT (below), the PIN, the body, the quote (`409 quote_changed`), the
+  provider's available balance (`402 insufficient_funds` with `balanceKobo`,
+  `totalKobo`, `shortfallKobo`), WAWU's limits and the provider's daily limit
+  inside the claim (`403 limit_reached`, WALLET-23's check, section 3). A
+  refusal at any step before the PIN uses no PIN try and gives the key back.
+- **The account, answered before the PIN.** A `bankCode` or `accountNumber`
+  that is not a bank code or ten digits (missing, the wrong type, or the
+  wrong shape) is the route's `400` with the validation sentence for that
+  field, before the bank is asked. Your own wallet at the provider's own
+  bank is `400 self_transfer`. The bank is asked; an account it does not
+  confirm is `422 name_check_failed`. A SAVED account (one of your
+  beneficiaries, or your payout account) goes through the saved-account gate
+  (NUV-06): the bank code the provider knows the bank by, and the payee ids
+  kept after the first send. The kept holder name, and the kept bank name
+  against the provider's name for the code, are compared with the answer of
+  the bank just now; any difference is `409 account_name_changed`, with
+  `reason.accountName` and `reason.bankName` as they stand now, and NOTHING
+  is sent. The person is shown both and confirms them by saving the account
+  again with `confirmCurrentName: true` (`POST /money/beneficiaries`; a
+  payout account is confirmed by `PUT /money/payout-account`, which takes no
+  flag: a plain PUT keeps what the bank says now, and refuses it with
+  `409 account_not_in_your_name` when the name is not theirs). Saving without the flag
+  answers the row as it is, as before. An account that is NOT saved is bound
+  to the name the person was shown: with `nameToken` on the send, a holder
+  or bank that the bank names differently now, or a token that is not this
+  person's, this account's, or is past its 15 minutes, is the same
+  `409 account_name_changed` and nothing is sent; the app shows the names
+  and runs the name check again. A send to an account that is not saved with
+  no token is `400` with one plain sentence, before the PIN: nothing is sent,
+  no PIN try is used and the key is given back (FIX-41). A saved account and
+  a withdrawal to the payout account need no token.
+- **Once per key, written first.** The send, its pending ledger row (with the
+  quoted `providerFeeKobo` and `wawuFeeKobo`) and the key's link to it are
+  written in one transaction BEFORE the provider hears of the send. The
+  provider is called once. A request that provably never left is failed and
+  the key given back; an unknown outcome (a lost answer, a 5xx, a transfer
+  accepted and not finished, a repeated reference, or any refusal that may
+  have created a transfer) is `pending` with the
+  same `statusMessage` as section 19, and is found again by OUR reference
+  (the sweep asks the provider; under Nuvion the sender's transfers are
+  walked, never read as "no money moved"). Nothing sends it a second time.
+  A refusal the provider makes before it takes the money (not enough in the
+  wallet, a frozen wallet, payouts not available) fails the send at once,
+  voids its pending ledger row and gives the key back: `402
+  insufficient_funds` with the figures, `423 wallet_frozen`, `503
+  provider_unreachable`. The same request again is a new send under a new
+  reference.
+- **A failed send is reversed once.** A send the provider reports as failed is
+  `failed`; the provider's reversal of the debit (`debit_transfer_reversal`)
+  then moves it to `reversed`, with `reversal.returnedKobo` and `keptKobo`
+  from the provider's own report, once however often it is reported.
+
+## 25. Delete account: money first, 30 days, cancel (SETTINGS-06)
+
+`DELETE /account` (R-17) asks to delete the signed-in account. It waits 30
+days; signing in during them cancels it (WAWU ID, SETTINGS-08).
+
+- **Money first (Z6).** Refused with `409`, `reason.code`
+  `account_deletion_blocked`, nothing changed, while any of these holds.
+  `reason.blockers` lists them; the app leads with `wallet_balance` (the
+  Withdraw button) and shows `reason.balanceKobo`, the wallet provider's
+  balance, never a sum of our rows. `reason.message` is a sentence to show as
+  it is.
+  - `wallet_balance`: the wallet holds money (available or booked above 0).
+  - `open_hold`: a held payment (paid DM, ticket, bill) where the person is
+    the payer or the payee (R-19). `reason.openHolds` counts them.
+  - `waiting_earnings`: a completed sale whose 85% has not reached their
+    wallet (R-11, `WalletPayment.payeeSettledAt` unset, no open hold), or a
+    community host's share of spent credits still owed (WALLET-17).
+    `reason.waitingEarnings` counts them. A person with no wallet can have
+    these.
+  - `payment_in_progress`: a payment of theirs with no final answer.
+  - `cash_out_in_flight`: points held for a cash-out.
+  - `wallet_opening`: their wallet is being opened right now.
+- **`503 provider_unreachable`** when the provider does not answer, never a
+  guess that the wallet is empty. A wallet another provider holds (after a
+  rollback) answers the same.
+- **Otherwise `200 { deletionScheduledAt }`**, 30 days out, and: the Naira
+  wallet is frozen at the provider (it can neither send nor receive, so money
+  due to it waits in WAWU's account and is paid on unfreeze, as the hold sweep
+  does, G-10; a provider with no freeze leaves the wallet as it is), the
+  person's content is hidden (`removed`, remembered piece by piece), phone push
+  stops, and WAWU ID starts its grace period. Asking again keeps the date.
+  The money is looked at before the wallet is frozen, and the deletion is
+  recorded before the freeze call, so a freeze whose answer is lost is undone
+  by a cancel or a new request. A request that fails after the freeze lets
+  the wallet go again before it answers.
+- **The wallet follows the row** (round 5, R-1 wallet safety): a deletion in
+  force (`freezing`, `scheduled`, `purging`, `purged`) always has a frozen
+  wallet, and a cancelled or absent one never does. One function
+  (`reconcileWallet`) enforces it: it reads the row and freezes or unfreezes
+  to match, idempotently, acts only on a wallet of the provider the server
+  runs (the person's current wallet, so one opened during the 30 days is
+  frozen too), and never throws. It holds no transaction, no pooled connection
+  and no lock while the provider answers (round 6): it reads the row, asks the
+  provider, reads the row again, and acts again if the row changed (3 rounds at
+  most). Every request that can change the row or the wallet ends with it (a
+  repeat cancel and a refused `DELETE` included), and the hourly sweep runs it
+  for every row in force whatever its age and for every cancelled row until one
+  reconcile was confirmed for it (`AccountDeletion.walletSyncedAt`), so a
+  freeze or unfreeze whose answer was lost, or that the provider refused, is
+  put right within the hour.
+  A repeat `DELETE /account` on a row the purge has finished answers the date
+  it was due and schedules nothing.
+- **`POST /account/cancel-deletion`** (the person's own token; WAWU ID sends
+  the new one when they sign in) unfreezes the wallet, brings back exactly the
+  hidden pieces, resumes push and answers `200 { cancelled, walletUnfrozen,
+  contentRestored }`. With nothing scheduled it changes nothing and answers
+  `cancelled: false`. If the provider does not answer the unfreeze it answers
+  `503` having changed nothing, and can be called again (the wallet is frozen
+  again if that call was applied and only its answer was lost).
+  `walletUnfrozen` is `true` only when the provider confirmed the unfreeze
+  after the cancel; if it could not, the cancel stands with `false` and the
+  hourly sweep lets the wallet go. Once the purge has
+  started it answers `200 { cancelled: false, deletionInProgress: true,
+  message }` (data may already be gone, so it is never answered as restored);
+  the app shows `message` as it is.
+- **After the 30 days** an hourly sweep (`account-deletion-purge`) looks at
+  the money once more (a balance, hold or earning that appeared keeps the
+  account; `AccountDeletion.purgeBlockedBy` says why), then claims the row
+  (`purging`; no cancel from here), releases held points, deletes the Hub's
+  data (`AccountPurgeService`, points first), asks WAWU ID to anonymise the
+  identity, and marks the row `purged` only when all of that worked. A table
+  that would not clear, or WAWU ID not answering, leaves the row `purging`
+  (`purgeBlockedBy` says which) and the next pass carries on; WAWU ID is not
+  asked before the Hub's side is done.
+- **Buyers keep what they paid for, from the DELETE on** (owner ruling, 16 Oct
+  2026; lead rulings 17 Oct 2026). A piece with a completed paid purchase is
+  hidden from everything public (`removed`) the moment the deletion is
+  scheduled, and still opens on `GET /content/:id`, `GET /content/:id/detail`
+  and `GET /content/:id/media` for each buyer with a completed purchase and
+  for nobody else: the creator, a buyer whose purchase is pending, failed or a
+  tip, and a signed-out caller get `404`. A non-buyer also gets `404` on that
+  piece's comments (read, post, like), on save and on rate. Every other
+  removed piece answers exactly as before. A cancel puts the pieces back as
+  they were. At the purge the piece stays whole (title and description as
+  bought, with any email address or phone number in them replaced by
+  `[removed]`; files, lessons and frames), and loses the creator: its creator
+  id becomes `deleted-account`, its slug and tags go. File keys are not
+  renamed (they carry the creator's id in the path but are never shown as
+  text). Pieces with only a pending, failed or tip purchase are stripped to
+  "Removed content" and re-keyed to `deleted-account` too. `AccountDeletion.purgeNote`
+  says how many pieces were kept this way.
+
+## 26. Earnings land in the wallet by themselves (WALLET-16)
+
+R-11: a sale's 85% reaches the payee's wallet without anyone tapping anything,
+and a creator without a wallet keeps earning: the money waits and is moved the
+day they open one. R-55 (owner, 16 Oct 2026): a creator's earnings go to their
+wallet ONCE A DAY, in one transfer per creator, and a day's total under N200
+waits for the next day (the rules are in the bullets below: "The move",
+"One transfer a day" and "A refusal gets a person after 72 hours"). Section 18 does this for a held kind (the hold's
+release); this section does it for every other kind with a payee (an unlock, a
+tip, a legal fee, school fees). The provider's balance is still the only
+balance (MONEY-11): nothing here is added up into one, and the routes say
+"earned" and "waiting", never "balance".
+
+- **What an earning is.** The payee's 85% (R-5, rounded down to the kobo, as
+  recorded on the payment: `WalletPayment.payeeShareKobo`) of a finished sale.
+  An ordinary sale is finished when its payment is `completed`, what was paid
+  for is delivered (or has nothing to deliver: `openKey` is given up, section
+  14) and neither `reviewSince` nor `chargeReviewSince` is set; a delivery or a
+  charge in question waits for a person, and its earning with it. A held kind
+  is earned once the owning feature has RELEASED its hold to the payee
+  (section 18; earned at once, `waiting` until the provider confirmed the
+  move); a hold nobody has decided is `held` (money paid, not earned), a
+  refunded one is the payer's. WAWU's own sales (credits, ticks, bills: no payee), a share under a
+  kobo, and the web's Flutterwave sales (`GET /content/mine/earnings`, which is
+  unchanged) are not earnings here.
+- **Routes** (`src/money/earnings/`, `no-store`, from our own records of the
+  sales: they never call the provider, so neither answers
+  `provider_unreachable`). **Not behind the wallet gate**: a creator with no
+  wallet reads them (no `409 wallet_not_open`), because that is the person who
+  has to see the money waiting. Any signed-in person reads their own and only
+  their own; a person with no sales gets zeros.
+  - `GET /money/earnings?month=YYYY-MM` (`EarningsView`): `allTime` and
+    `thisMonth` (each `earnedKobo`, `sales` and `streams`, one entry per kind
+    sold, largest first; the streams add up to `earnedKobo` exactly), `month`
+    (YYYY-MM in Africa/Lagos time, the current month unless asked), `waiting`
+    (`count`, `amountKobo`: earned and not in the wallet yet, part of `allTime`),
+    `held` (paid for, not earned yet) and `walletOpen` (the caller has a wallet
+    of the provider this server runs; false with money waiting is "Open your
+    wallet" on W39). Every figure comes from one statement, so they always agree.
+  - `GET /money/earnings/content?month=&cursor=&limit=` (`EarningContentPage`):
+    that month piece by piece (`kind`, `targetId`, `title` as the piece last
+    sold, `earnedKobo`, `sales`, `lastAt`), largest first, then kind, then
+    target. Every page together adds up to the month's `thisMonth.earnedKobo`.
+    The cursor is `e1.` plus base64url of the month and the last row's figure,
+    kind and target; one the server did not write, or one given for another
+    month, is a plain `400` ("cursor is not one this list gave.").
+  - A month is the Africa/Lagos calendar month of when the sale completed (a
+    release's time for a held kind). `month` that is not `YYYY-MM`, or is year
+    0000, is a plain `400` ("month must look like 2026-09").
+- **The move** (`EarningSettlementService`, exported by `MoneyModule`; nothing
+  else moves an earning, no client request does). One row per finished
+  ordinary sale records what it earned (`EarningSettlement`, made by the
+  sweep; the payment id is unique). The earnings travel in `EarningMove`
+  (R-55): ONE row, and one transfer, per creator per day. The payee's 85% of
+  every sale in it moves from WAWU's own account (the account the sales were
+  paid into) to the payee's wallet by a wallet-to-wallet transfer through the
+  seam (`walletToWallet`; a book transfer on Nuvion, section 14). The 15% is
+  WAWU's and stays. The provider's charge on the transfer is WAWU's, paid from
+  its 15% (R-31): the payee receives the whole total, and WAWU pays the charge
+  once per creator per day, not once per sale (G-703). The charge is on the
+  merchant-side ledger row and on the move's `providerFeeKobo`.
+- **One transfer a day** (R-55). A day is the Africa/Lagos calendar day.
+  The sweep makes a creator's move for the day when, all at once: they have
+  earnings no move has taken yet (`moveId` null), a wallet of the provider
+  this server runs, a total of those earnings of at least the floor
+  (`EARNINGS_MOVE_MIN_KOBO`, default 20000 = N200; a total of exactly the floor
+  moves), no open move (owed, not in review), and no move made or landed today
+  (a retried move that lands today is the day's transfer). A total under the
+  floor waits and is added to the next day's; it is still earned and still
+  counted under `waiting`. The move takes every such earning of one account of
+  WAWU's, oldest first, up to the provider's cap on one transfer
+  (`MERCHANT_MAX_PER_TXN_KOBO`) and 1000 earnings; the rest wait for the next
+  day. One earning that alone is over the cap goes to review, never split. The
+  earnings in a move are fixed when it is made: those that arrive later wait
+  for the next. An earning whose sale stops being a finished one before the
+  move is sent leaves it for review, and the move is made again without it,
+  under the next reference. All of a move's earnings land together, in one
+  write with the move.
+- **Exactly once.** The provider sees one reference per move,
+  `wawu-earn-d-<YYYYMMDD of the Lagos day>-<24 hex of sha256 of the creator's
+  id>` (45 characters, inside Nuvion's 64; a later try adds `-2`, `-3`). The
+  move row is unique per creator and day, so two servers make one, and only
+  one open move per creator and provider exists (a partial unique index).
+  The move is handed over by a lease (`sentAt`) only one caller wins, taken
+  with the move's row locked and its sales read FOR SHARE so a review mark set
+  meanwhile is seen (nothing is sent) or waits. A replay, the sweep and a
+  second Hub process asking at once, or a restart therefore send one move. The
+  database holds the same rules (the migrations' CHECKs and triggers): one row
+  per sale, a row only for a completed payment of this payee for exactly the
+  payee's share, never for a payment that has a hold (and no hold for a payment
+  that has a row), what is owed and to whom never changes, a landed row never
+  changes; an earning joins only a move of the same person and provider that
+  has not been sent; the first refusal's time and the review mark are never
+  moved once set.
+- **The provider's record is the truth** (the same rules as sections 14 and
+  18). A move whose outcome is unknown (a timeout, a 5xx, a transfer accepted
+  and not finished, a repeated reference, a Hub killed between the provider's
+  answer and our write) is `pending`: the provider is asked about our reference
+  (`reconcileSend` on WAWU's own account, backing off 1, 2, 4 ... 60 minutes),
+  the move is never sent again and never read as "nothing moved". Past
+  `PAYMENT_REVIEW_AFTER_HOURS` (72) with no answer it goes to review
+  (`reviewSince`): out of the sweep, the money where it is, a person decides.
+  Only the provider's own record that the move FAILED starts a new try, under
+  a new reference (`...-2`); a record that it completed and was then REVERSED,
+  or that another amount moved, is review. The move, and with it every earning
+  in it, is `landed` only when the provider confirmed the transfer, and each
+  sale's `payeeSettledAt` is set in the same write.
+- **Waiting is not failing** (`waiting` on the earning; the earning stays
+  `owed` and the money stays in WAWU's account):
+  - `payee_wallet`: the person has no wallet of this provider yet. Their
+    earnings are marked so and no move is made for them (R-11: they keep
+    earning); the first sweep after the person HAS a wallet makes their move,
+    which takes everything waiting, so the money is moved the day the wallet
+    opens, within a minute of it. No review bound. A wallet of the other
+    provider is not a place to send to.
+  - `recipient_frozen`: the provider refuses a move into a frozen wallet (G-10).
+    Paid on unfreeze, tried hourly.
+  - `funds`: the provider says WAWU's own account cannot cover the move: an
+    error in the log on every try.
+  - `provider`: the provider is out of reach or not set up, one of its limits
+    was hit, or it is another provider's sale (written before a switch of
+    `WALLET_PROVIDER`; this server sends nothing for it). A request that
+    provably never reached the provider (`requestNotSent`) is this, and is
+    sent again under the same reference.
+  - `not_supported`: the running provider has no way to make this move yet
+    (a Nuvion adapter without its book transfers, NUV-05). An error in the log on every
+    try saying so; the earning waits and lands once the provider can.
+  - `refused`: the provider refused and nothing moved; retried under the same
+    reference. See the next bullet for when a person looks. A frozen wallet, a
+    missing wallet and an unreachable provider have no such bound.
+- **A refusal gets a person after 72 hours** (R-55, F3). The FIRST time the
+  provider refuses a move with nothing moved (`waiting` `refused`, or its own
+  record that the transfer failed) the move's `firstRefusedAt` is written, once.
+  `EARNINGS_REFUSED_REVIEW_AFTER_HOURS` (default 72) after that moment, if the
+  move has not landed and nothing is in flight, it goes to review
+  (`reviewSince`, set once; out of the sweep, the money where it is). Later
+  refusals do not restart the count and make no second review; the look after a
+  refusal is never set later than the 72nd hour, so the review is not up to an
+  hour late. It is a clock on time, not a count of tries.
+- **The sweep** (`EarningSettlementService.sweep`, every minute, where
+  ScheduleModule.forRoot() is loaded) first makes the earning of every finished
+  ordinary sale of the running provider that has none, then makes the day's
+  move for every creator who is ready for it (see "One transfer a day"), then
+  walks every due move by a keyset cursor (creation time, then id) with no cap
+  on the rows it looks at, stopping only at the end or when its time
+  (`EARNING_SWEEP_BUDGET_MS`, 45 s) is used. The first sale of a day that
+  brings a creator's total to the floor is moved in the next pass; sales after
+  that wait for the next day's move.
+- **The ledger.** On confirmation one pair is written under the move's
+  reference, category `earning`: WAWU's account `out` (with the provider's
+  charge) and the payee's wallet `in`, for the whole transfer, so the ledger
+  equals the provider's record. A move of ONE sale keeps that sale's link and
+  names its payer (the history groups unlock earnings by that link, section 6;
+  WAWU when the payer's account is gone); a move of several sales has no link
+  and comes from WAWU. Best effort, like every ledger write after the money
+  moved; the signed delivery and the status check write them too.
+- **For the nightly check (MONEY-16):** `EarningSettlementService.owedTotals()`
+  is the count and the sum, in kobo, of the earnings still `owed` for the
+  running provider (those in a move that has not landed, and those no move has
+  taken yet). That money is in WAWU's account beside the open holds
+  (`WalletHoldService.openTotals()`) and WAWU's own shares. Compared with the
+  provider's own balance, never shown as one.
+- **Account deletion.** The payee's id on an earning is a `COUNTERPARTY`: the
+  payer's payment and the share it owes survive (BACKEND_GAPS G-702 for what is
+  owed to an account that is gone).
+- **Not here** (BACKEND_GAPS G-700 to G-702): refunding or reversing a sale
+  after its earning landed; credits' host shares and event hosts' payouts
+  (WALLET-17). The daily move is for ordinary sales: a held kind's release
+  (section 18) is still its own transfer. G-703 is answered by the daily move.
+- **The sweep pays only sales made on or after a start time** (lead ruling,
+  17 Oct 2026; the owner may override). The start is the setting
+  `EARNINGS_SWEEP_START` (ISO 8601 with a zone) when it is set, else the moment
+  this code first reached the environment, stored once in `EarningSweepStart`
+  (one row, written by its migration; a missing row is written by the first
+  sweep that finds it missing, and never changed after). A finished sale with a
+  payee made before the start gets no earning from the sweep, ever: it is not
+  paid by surprise on deploy. `GET /admin/money/earnings/before-start`
+  (superadmin and finance, `limit` and `cursor`, oldest first) lists those sales
+  for a person to decide; it moves nothing and cannot mark one paid. It is a
+  cursor page (section 6): `data` is `{ startsAt, source, count, items,
+  nextCursor }`, `count` being how many such sales there are in all. It is not
+  called `total` because the response interceptor rewrites any `items` beside a
+  numeric `total` as an offset page and would drop the cursor and the start. A sale at
+  exactly the start is paid; the millisecond before it is not.

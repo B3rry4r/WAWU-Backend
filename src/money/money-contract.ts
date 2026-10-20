@@ -42,6 +42,12 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   amount_out_of_range: 400,
   quote_changed: 409,
   name_check_failed: 422,
+  account_name_changed: 409,
+  // WALLET-37 (R-51). Default (agent), owner may override: 409, the request is
+  // understood and the account is the problem; and 429 for the per-person
+  // limit on bank name checks, as recipient_search_rate_limited.
+  account_not_in_your_name: 409,
+  name_check_rate_limited: 429,
   recipient_not_found: 404,
   recipient_has_no_wallet: 409,
   recipient_blocked: 403,
@@ -102,6 +108,30 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // NUV-02 round 3. Default (lead), owner may override: 429, as
   // identity_checks_exhausted, with retryAfterSeconds.
   open_address_limited: 429,
+  // POINTS-04. Default (agent), owner may override: 422 for fewer points than
+  // the minimum (the request is understood, the amount is the problem); 402
+  // for more points than the person has, as insufficient_funds and as
+  // PointsError's own insufficient_points (one code, one status); 409 for a
+  // dollar-billed person, as wallet_already_open (this account cannot do it).
+  below_minimum: 422,
+  insufficient_points: 402,
+  currency_not_supported: 409,
+  // EVENTS-13. Default (agent), owner may override: 409, as target_not_payable.
+  // The request is understood; this buyer holds the most open ticket orders
+  // one event allows, so another cannot be paid until one is refunded or fails.
+  event_order_limit: 409,
+  // INBOX-17 (G-75). Default (agent), owner may override: 409, as event_order_limit.
+  // The request is understood; one question to this creator is still waiting.
+  question_already_waiting: 409,
+  // POINTS-03. Default (agent), owner may override: 422 for a cap (the request
+  // is understood, the size of the job or the day's count is the problem, as
+  // below_minimum); 409 when the person is not short of points (nothing to
+  // buy, as wallet_already_open).
+  points_cap_reached: 422,
+  points_not_short: 409,
+  // TIER-04. 402, as the publishing gate answers the same code (TIER-02,
+  // CONVENTIONS section 23): the person has to pay for a tier first.
+  tier_required: 402,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

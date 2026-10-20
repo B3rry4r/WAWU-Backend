@@ -21,14 +21,17 @@ import {
 } from './dto/me-query.dto';
 import { MeSavedService } from './me-saved.service';
 import { MePurchasesService } from './me-purchases.service';
+import { MePaidPurchasesService } from './me-paid-purchases.service';
 import { MeNotificationsService } from './me-notifications.service';
 import { MeEarningsService } from './me-earnings.service';
+import { MeCoursesService } from './me-courses.service';
 import type {
   EarningSalePage,
   LessonDoneState,
   MeCountsView,
   MyEarningsView,
   NotificationFeedPage,
+  PaidPurchasePage,
   PurchasePage,
   SavedCreatorState,
   SavedPage,
@@ -49,19 +52,23 @@ export class MeController {
   constructor(
     private readonly saved: MeSavedService,
     private readonly purchases: MePurchasesService,
+    private readonly paidPurchases: MePaidPurchasesService,
     private readonly notifications: MeNotificationsService,
     private readonly earnings: MeEarningsService,
+    private readonly courses: MeCoursesService,
   ) {}
 
-  /** M7's figures in one read: purchases, saved, unread notifications. */
+  /** M7's figures in one read: purchases, saved, unread notifications, enrolled courses. */
   @Get('counts')
   async counts(@CurrentUser() user: WawuJwtClaims): Promise<MeCountsView> {
-    const [purchases, saved, unreadNotifications] = await Promise.all([
-      this.purchases.count(user.sub),
-      this.saved.count(user.sub),
-      this.notifications.unreadCount(user.sub),
-    ]);
-    return { purchases, saved, unreadNotifications };
+    const [purchases, saved, unreadNotifications, enrolledCourses] =
+      await Promise.all([
+        this.purchases.count(user.sub),
+        this.saved.count(user.sub),
+        this.notifications.unreadCount(user.sub),
+        this.courses.enrolledCount(user.sub),
+      ]);
+    return { purchases, saved, unreadNotifications, enrolledCourses };
   }
 
   /** Saved (M30): content, events and creators, newest first, by tab. */
@@ -105,6 +112,25 @@ export class MeController {
     @Query() query: PurchasesQueryDto,
   ): Promise<PurchasePage> {
     return this.purchases.list(
+      user.sub,
+      query.q,
+      query.cursor,
+      query.limit ?? 20,
+    );
+  }
+
+  /**
+   * My purchases across every paid kind (M29, FIX-59): unlocks, tickets,
+   * credit packs, school fees and community passes, newest first, searchable
+   * by title, paid-back ones marked `refunded`. A separate route so
+   * `GET /me/purchases` above answers exactly as it always has.
+   */
+  @Get('purchases/all')
+  paidPurchaseList(
+    @CurrentUser() user: WawuJwtClaims,
+    @Query() query: PurchasesQueryDto,
+  ): Promise<PaidPurchasePage> {
+    return this.paidPurchases.list(
       user.sub,
       query.q,
       query.cursor,

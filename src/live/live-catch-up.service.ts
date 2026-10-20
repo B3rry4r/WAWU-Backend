@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { ChatService } from '../chat/chat.service';
 import { CommunityMessageService } from '../community-message/community-message.service';
+import { CommunityPassAccess } from '../community/pass/community-pass-access.service';
 import {
   decodeLiveCursor,
   encodeLiveCursor,
@@ -38,6 +39,7 @@ export class LiveCatchUpService {
     private readonly prisma: PrismaService,
     private readonly chats: ChatService,
     private readonly communityMessages: CommunityMessageService,
+    private readonly passAccess: CommunityPassAccess,
   ) {}
 
   async catchUp(
@@ -60,7 +62,10 @@ export class LiveCatchUpService {
      * exact: lists before it are read past that time, the list it names past
      * that row, and lists after it from that time on.
      */
-    const after = (kind: LiveKind, time: 'createdAt' | 'readAt' | 'sentAt') => {
+    const after = (
+      kind: LiveKind,
+      time: 'createdAt' | 'readAt' | 'sentAt' | 'changedAt',
+    ) => {
       const p = parsed.position;
       if (!p) return { [time]: { gte: since } };
       const rank = LIVE_KIND_RANK[kind] - LIVE_KIND_RANK[p.kind];
@@ -103,9 +108,16 @@ export class LiveCatchUpService {
           !blockedIds.has(c.userAWawuId === me ? c.userBWawuId : c.userAWawuId),
       )
       .map((c) => c.id);
+    // INBOX-24 (R-63): a room whose pass has ended sends nothing to catch up on.
+    const lapsedRooms = await this.passAccess.lapsedRooms(
+      me,
+      memberships.map((m) => m.communityId),
+    );
     const communityIds = [
       ...new Set([
-        ...memberships.map((m) => m.communityId),
+        ...memberships
+          .map((m) => m.communityId)
+          .filter((id) => !lapsedRooms.has(id)),
         ...hosted.map((c) => c.id),
       ]),
     ];
@@ -126,7 +138,7 @@ export class LiveCatchUpService {
     })();
 
     const take = limit + 1;
-    const [messages, reads, posts] = await Promise.all([
+    const [messages, reads, posts, requests] = await Promise.all([
       this.prisma.chatMessage.findMany({
         where: { conversationId: { in: chatIds }, ...after('m', 'createdAt') },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -148,6 +160,17 @@ export class LiveCatchUpService {
           senderWawuId: { notIn: [...blockedIds] },
         },
         orderBy: [{ sentAt: 'asc' }, { id: 'asc' }],
+        take,
+      }),
+      // Money requests paid, declined or cancelled (INBOX-15).
+      this.prisma.moneyRequest.findMany({
+        where: {
+          conversationId: { in: chatIds },
+          messageId: { not: null },
+          changedAt: { not: null },
+          ...after('q', 'changedAt'),
+        },
+        orderBy: [{ changedAt: 'asc' }, { id: 'asc' }],
         take,
       }),
     ]);
@@ -186,16 +209,33 @@ export class LiveCatchUpService {
             ]
           : [],
       ),
+      ...requests.map((row) => ({
+        kind: 'q' as const,
+        at: row.changedAt as Date,
+        id: row.id,
+        build: async (): Promise<LiveEvent> => {
+          const message = await this.prisma.chatMessage.findUniqueOrThrow({
+            where: { id: row.messageId as string },
+          });
+          return {
+            type: 'money_request.updated',
+            cursor: encodeLiveCursor(row.changedAt as Date),
+            chatId: row.conversationId,
+            message: await this.chats.viewMessage(me, message),
+          };
+        },
+      })),
       ...posts.map((row) => ({
         kind: 'p' as const,
         at: row.sentAt,
         id: row.id,
-        build: (): LiveEvent => ({
+        build: async (): Promise<LiveEvent> => ({
           type: 'community.message',
           cursor: encodeLiveCursor(row.sentAt),
           communityId: row.communityId,
-          // `sender` is filled in below, once for the whole page.
-          message: row,
+          // `sender` is filled in below, once for the whole page. The links
+          // are signed fresh, as the list signs them (FIX-71).
+          message: await this.communityMessages.withFreshMedia(row),
         }),
       })),
       // Each list already comes in time-then-id order, and the sort is stable,

@@ -23,6 +23,7 @@ import {
   type BookTransferRow,
   type NuvionBookStore,
 } from '../areas/book-store';
+import { FEE_LEG_SUFFIX, sendReferenceOfFee } from '../fee-legs';
 import { nuvionTransferStatus } from '../nuvion-ledger-delivery';
 import { NUVION_ACCOUNTS_WAIT_MS } from './accounts';
 import type {
@@ -38,6 +39,10 @@ const failed = (note: string): NuvionHandlerResult => ({
 
 /** The ledger's two sides of a transfer, the sender's debit first. */
 const SIDES: readonly LedgerDirection[] = ['out', 'in'];
+
+// The words of a fee transfer's reference live in ../fee-legs (FIX-67), where the
+// statement reader reads them too; they stay importable from here.
+export { FEE_LEG_SUFFIX, sendReferenceOfFee };
 
 /** What each event expects Nuvion's own record to say now. */
 const EXPECTED: Record<string, readonly TransferStatus[] | null> = {
@@ -116,6 +121,10 @@ export class NuvionBookRecorder {
     if (!row) {
       return done('not a transfer WAWU sent: left alone');
     }
+    // The transfer that moved WAWU's fee on a send (FIX-52) is the send's
+    // gate: the send goes on once it is finished, so its delivery wakes the
+    // send now and the send does not wait for its sweep.
+    const sendOfFee = sendReferenceOfFee(row.reference);
 
     // The transfer the delivery is about (for a reversal's credit record, the
     // transfer it reverses) must be the one the log holds under our reference.
@@ -209,6 +218,13 @@ export class NuvionBookRecorder {
       }
       throw e;
     }
+    if (sendOfFee !== null) {
+      const woken = await this.ledger.wakeTransfer(
+        row.fromAccountNumber,
+        sendOfFee,
+      );
+      notes.push(woken ? 'the send is woken' : 'no send row to wake');
+    }
     return done(
       `${fresh.status}${notes.length > 0 ? `: ${notes.join('; ')}` : ''}`,
     );
@@ -284,9 +300,24 @@ export class NuvionBookRecorder {
       const amount = Number(t.amountKobo);
       // The charge: Nuvion's record states it on a completed debit; a failed
       // or reversed transfer owes nothing, so the row's own figures stand.
+      // A send's row also holds what moved WAWU's fee (FIX-52): Nuvion's
+      // charge on the send carries none of it, the fee's own transfer does,
+      // so the row takes that transfer's record (the amount it moved and the
+      // charge Nuvion states on it), never the fee as quoted. A fee that was
+      // not moved, or that Nuvion has not finished or failed, adds nothing.
+      const legDebit =
+        outcome === 'completed' && side === 'out' && t.feeStated
+          ? await this.feeLegDebit(row.reference)
+          : 0;
       const charge =
         outcome === 'completed' && side === 'out' && t.feeStated
-          ? { feeKobo: t.feeKobo, totalKobo: amount + t.feeKobo }
+          ? {
+              feeKobo: t.feeKobo + legDebit,
+              totalKobo: amount + t.feeKobo + legDebit,
+              ...(legDebit > 0
+                ? { providerFeeKobo: t.feeKobo, wawuFeeKobo: legDebit }
+                : {}),
+            }
           : side === 'out'
             ? {
                 feeKobo: Number(e.feeKobo),
@@ -326,6 +357,18 @@ export class NuvionBookRecorder {
       }
     }
     return notes;
+  }
+
+  /**
+   * What the transfer that moved WAWU's fee on the send under `reference`
+   * took from the sender: its amount and the charge Nuvion states on it.
+   * Zero when there is none, or Nuvion has not finished it, or it did not
+   * state a charge.
+   */
+  private async feeLegDebit(reference: string): Promise<number> {
+    const leg = await this.store.byReference(`${reference}${FEE_LEG_SUFFIX}`);
+    if (!leg || leg.status !== 'successful' || leg.feeKobo === null) return 0;
+    return Number(leg.amountKobo + leg.feeKobo);
   }
 
   /** `wait`, or `failed` for review once the delivery has waited too long. */

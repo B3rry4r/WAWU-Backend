@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import type { Prisma } from '../../generated/prisma/client';
 import {
   PLANS_CONFIG,
   tierById,
@@ -30,6 +31,14 @@ export interface HeldTier {
   voiceIntroIncluded: boolean;
   /** The highest event pass the person holds, by the config's order. */
   eventPass: PlanEventPass | null;
+}
+
+/** A stored tier row as the publishing gate reads it. */
+export interface HeldTierRow {
+  state: Exclude<MyTierState, 'none'>;
+  tierId: string;
+  productsIncluded: number;
+  extraProducts: number;
 }
 
 /**
@@ -99,6 +108,45 @@ export class MakerTierService {
       voiceIntroIncluded: row.voiceIntroIncluded,
       eventPass,
     };
+  }
+
+  /**
+   * The stored tier of each person asked about, with its state at `now`, for
+   * the publishing gate and the places that show what a person may publish
+   * (TIER-02). One query for any number of people; a person with no tier is
+   * not in the map. Reads the same row `tierOf` reads, so the two cannot
+   * disagree about a state or a product count.
+   *
+   * `db` is the client to read with: a caller inside a transaction passes
+   * its own, so the read does not need a second pooled connection while the
+   * transaction holds the first (ME-04 round 6).
+   */
+  async heldRowsOf(
+    wawuUserIds: readonly string[],
+    now: Date = new Date(),
+    db: Pick<Prisma.TransactionClient, 'makerTier'> = this.prisma,
+  ): Promise<Map<string, HeldTierRow>> {
+    const out = new Map<string, HeldTierRow>();
+    if (wawuUserIds.length === 0) return out;
+    const rows = await db.makerTier.findMany({
+      where: { wawuUserId: { in: [...wawuUserIds] } },
+      select: {
+        wawuUserId: true,
+        tierId: true,
+        activeUntil: true,
+        productsIncluded: true,
+        extraProducts: true,
+      },
+    });
+    for (const r of rows) {
+      out.set(r.wawuUserId, {
+        state: tierStateAt(r.activeUntil, now, this.config.tierEndingDays),
+        tierId: r.tierId,
+        productsIncluded: r.productsIncluded,
+        extraProducts: r.extraProducts,
+      });
+    }
+    return out;
   }
 
   /** True while the person's tier lets them publish (`active` or `ending`). */

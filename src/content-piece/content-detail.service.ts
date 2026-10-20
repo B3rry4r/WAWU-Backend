@@ -10,6 +10,8 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { NotificationService } from '../notification/notification.service';
 import type { SetPreviewDto } from './dto/set-preview.dto';
+import { readHidden } from './deletion-hid';
+import { FeedCardsService, type FeedCreator } from './feed-cards.service';
 
 /** The one wording for a piece that is missing, hidden or not the caller's. */
 const NOT_FOUND = 'Content not found';
@@ -47,6 +49,14 @@ export interface RatingState {
   cannotRateReason: CannotRateReason | null;
 }
 
+/** Who made the piece, for the head of the piece's own page (HOME-03: H19, H24, H25). */
+export interface DetailCreator extends FeedCreator {
+  /** The creator's own line under their name ("Business coach"), or null when they wrote none. */
+  headline: string | null;
+  /** People who follow them. */
+  followerCount: number;
+}
+
 export interface ContentDetail {
   contentId: string;
   contentType: string;
@@ -62,6 +72,8 @@ export interface ContentDetail {
   /** The course's lessons in order; empty for a piece that is not a course. */
   lessons: DetailLesson[];
   rating: RatingState;
+  /** Name, avatar, ticks, headline and followers of whoever made it: the page needs no second call. */
+  creator: DetailCreator;
 }
 
 /** One kind of piece takes one kind of preview. */
@@ -86,6 +98,7 @@ export class ContentDetailService {
     private readonly prisma: PrismaService,
     private readonly blocked: BlockedAccountService,
     private readonly notifications: NotificationService,
+    private readonly cards: FeedCardsService,
   ) {}
 
   /**
@@ -145,34 +158,59 @@ export class ContentDetailService {
 
   /** GET /content/:id/detail. */
   async detail(contentId: string, viewer: string): Promise<ContentDetail> {
-    const piece = await this.prisma.contentPiece.findUnique({
+    const first = await this.prisma.contentPiece.findUnique({
       where: { id: contentId },
     });
-    if (!piece || piece.status === 'removed') {
+    if (!first) throw new NotFoundException(NOT_FOUND);
+    // A sold piece its creator's account deletion hid stays readable to the
+    // people who paid for it, from the moment of DELETE (owner ruling, 16 Oct
+    // 2026, SETTINGS-06; lead ruling 17 Oct 2026): hidden (`removed`), opened
+    // only with a completed purchase. Every other removed piece is gone for
+    // everyone. `piece` is the row as it is when that is decided: a purge or
+    // a cancel that lands between the read and the check is not a 404 (round 9).
+    const { piece, hidden: keptForBuyers } = await readHidden(
+      this.prisma,
+      first,
+    );
+    if (!piece || (piece.status === 'removed' && !keptForBuyers)) {
       throw new NotFoundException(NOT_FOUND);
     }
-    if (piece.status !== 'live' && piece.creatorWawuId !== viewer) {
+    if (
+      !keptForBuyers &&
+      piece.status !== 'live' &&
+      piece.creatorWawuId !== viewer
+    ) {
       throw new NotFoundException(NOT_FOUND);
     }
 
     const purchase = await this.completedPurchase(contentId, viewer);
+    if (keptForBuyers && !purchase) throw new NotFoundException(NOT_FOUND);
     // Same rule as GET /content/:id: somebody who already paid keeps their
     // copy after a block, so the detail of what they bought stays readable.
     if (!purchase) await this.assertNotHidden(viewer, piece.creatorWawuId);
 
-    const [extra, lessons, buyers] = await Promise.all([
-      this.prisma.contentDetail.findUnique({ where: { contentId } }),
-      piece.contentType === 'course'
-        ? this.prisma.courseLesson.findMany({
-            where: { contentId },
-            orderBy: { order: 'asc' },
-          })
-        : Promise.resolve([]),
-      this.prisma.purchase.groupBy({
-        by: ['buyerWawuId'],
-        where: { contentId, type: 'content', status: 'completed' },
-      }),
-    ]);
+    const [extra, lessons, buyers, creators, maker, followerCount] =
+      await Promise.all([
+        this.prisma.contentDetail.findUnique({ where: { contentId } }),
+        piece.contentType === 'course'
+          ? this.prisma.courseLesson.findMany({
+              where: { contentId },
+              orderBy: { order: 'asc' },
+            })
+          : Promise.resolve([]),
+        this.prisma.purchase.groupBy({
+          by: ['buyerWawuId'],
+          where: { contentId, type: 'content', status: 'completed' },
+        }),
+        this.cards.creatorsFor([piece.creatorWawuId]),
+        this.prisma.userProfile.findUnique({
+          where: { wawuUserId: piece.creatorWawuId },
+          select: { headline: true },
+        }),
+        this.prisma.followRelationship.count({
+          where: { followingWawuId: piece.creatorWawuId },
+        }),
+      ]);
     const freeLessons = extra?.freePreviewLessons ?? null;
     const buyerCount = buyers.length;
 
@@ -199,6 +237,11 @@ export class ContentDetailService {
         isFree: freeLessons !== null && i < freeLessons,
       })),
       rating: await this.ratingState(contentId, viewer, piece, !!purchase),
+      creator: {
+        ...(creators.get(piece.creatorWawuId) as FeedCreator),
+        headline: maker?.headline?.trim() || null,
+        followerCount,
+      },
     };
   }
 

@@ -8,9 +8,11 @@ import {
   ParseUUIDPipe,
   Post,
   Put,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import {
   CreateBeneficiaryDto,
@@ -24,6 +26,7 @@ import {
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import type { BeneficiaryView, PayoutAccountView } from '../money-view.type';
 import { BeneficiaryService } from './beneficiary.service';
+import { NameCheckBudget } from './name-check-budget';
 import { PayoutAccountService } from './payout-account.service';
 
 /**
@@ -45,6 +48,7 @@ export class MoneySavedAccountsController {
   constructor(
     private readonly beneficiaries: BeneficiaryService,
     private readonly payout: PayoutAccountService,
+    private readonly budget: NameCheckBudget,
   ) {}
 
   /** Saved beneficiaries, newest first (W8). Their number is WalletView.beneficiaryCount (W35). */
@@ -75,12 +79,20 @@ export class MoneySavedAccountsController {
     'beneficiary_limit_reached',
     'name_check_failed',
     'provider_unreachable',
+    'name_check_rate_limited',
   )
   add(
     @CurrentWallet() wallet: OpenWallet,
     @Body() dto: CreateBeneficiaryDto,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<BeneficiaryView> {
-    return this.beneficiaries.add(wallet.wawuUserId, dto);
+    // A bank account is name-checked by the bank, which tells the person
+    // whose it is: it spends the same hourly budget as the name check route.
+    return dto.kind === 'bank_account'
+      ? this.budget.run(wallet.wawuUserId, res, () =>
+          this.beneficiaries.add(wallet.wawuUserId, dto),
+        )
+      : this.beneficiaries.add(wallet.wawuUserId, dto);
   }
 
   /** Remove a saved beneficiary. Removing one already gone, or not the caller's, is a 200 that removes nothing. */
@@ -111,7 +123,10 @@ export class MoneySavedAccountsController {
   /**
    * Save or replace the payout account. The server name-checks it with the
    * bank and compares the bank's name with the BVN name: an account in
-   * another name is saved and flagged (`matchesBvnName: false`).
+   * another name is refused, `409 account_not_in_your_name`, with the bank's
+   * name beside the name on the wallet, and nothing is saved (WALLET-37,
+   * R-51). The check spends the hourly name check budget (`429
+   * name_check_rate_limited`).
    */
   @Put('payout-account')
   @Header('Cache-Control', 'no-store')
@@ -121,11 +136,16 @@ export class MoneySavedAccountsController {
     ...WALLET_GATE_ERRORS,
     'name_check_failed',
     'provider_unreachable',
+    'account_not_in_your_name',
+    'name_check_rate_limited',
   )
   setPayoutAccount(
     @CurrentWallet() wallet: OpenWallet,
     @Body() dto: PayoutAccountDto,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<PayoutAccountView> {
-    return this.payout.set(wallet.wawuUserId, dto);
+    return this.budget.run(wallet.wawuUserId, res, () =>
+      this.payout.set(wallet.wawuUserId, dto),
+    );
   }
 }

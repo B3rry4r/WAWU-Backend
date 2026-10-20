@@ -5,6 +5,7 @@ import {
   type BillingClaims,
 } from './billing-currency.service';
 import { MakerTierService } from './maker-tier.service';
+import { PublishingAllowanceService } from './publishing-allowance.service';
 import {
   countIn,
   PLANS_CONFIG,
@@ -29,6 +30,7 @@ export class PlansService {
     @Inject(PLANS_CONFIG) private readonly config: PlansConfig,
     private readonly currency: BillingCurrencyService,
     private readonly tiers: MakerTierService,
+    private readonly publishing: PublishingAllowanceService,
   ) {}
 
   /** The plan as the caller pays for it. */
@@ -48,7 +50,10 @@ export class PlansService {
     wawuUserId: string,
     now: Date = new Date(),
   ): Promise<MyTierView> {
-    const held = await this.tiers.tierOf(wawuUserId, now);
+    const [held, allowance] = await Promise.all([
+      this.tiers.tierOf(wawuUserId, now),
+      this.publishing.of(wawuUserId, now),
+    ]);
     return {
       state: held.state,
       tier:
@@ -62,16 +67,32 @@ export class PlansService {
       activeFrom: held.activeFrom?.toISOString() ?? null,
       activeUntil: held.activeUntil?.toISOString() ?? null,
       productsAllowed: held.productsAllowed,
+      productsUsed: allowance.productsUsed,
       extraProducts: held.extraProducts,
       pointsIncluded: held.pointsIncluded,
       firstVoiceIntroIncluded: held.voiceIntroIncluded,
-      eventPass: held.eventPass ? passView(held.eventPass) : null,
+      eventPass: held.eventPass
+        ? passView(held.eventPass, this.config.eventDate)
+        : null,
     };
   }
 }
 
-function passView(p: PlanEventPass): PlanEventPassView {
-  return { id: p.id, name: p.name };
+/**
+ * A pass as the app reads it. The benefit lines and the event date are admin
+ * settings (TIER-06): each is left out until one is set, so a pass nobody has
+ * written lines for reads exactly as it did before.
+ */
+function passView(
+  p: PlanEventPass,
+  eventDate: string | null | undefined,
+): PlanEventPassView {
+  return {
+    id: p.id,
+    name: p.name,
+    ...(p.benefits ? { benefits: [...p.benefits] } : {}),
+    ...(eventDate ? { eventDate } : {}),
+  };
 }
 
 /** The config in one currency: what GET /plans answers, less `currencyFixed`. */
@@ -91,7 +112,7 @@ export function planIn(
       bonusPointsExpireDays: t.bonusExpiryDays,
       priceMinor: priceIn(t.price, currency),
       // The config check guarantees every tier's pass is listed.
-      eventPass: passView(passes.get(t.eventPass)!),
+      eventPass: passView(passes.get(t.eventPass)!, config.eventDate),
       badge: { ...t.badge },
       packBonusPercent: t.packBonusPct,
       firstVoiceIntroIncluded: t.firstVoiceIntro,

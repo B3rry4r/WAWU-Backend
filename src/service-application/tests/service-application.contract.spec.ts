@@ -822,7 +822,7 @@ describe('ServiceApplication contract', () => {
         kind: 'nepc',
         title: 'NEPC export registration',
         status: QUEUE_STATUS,
-        statusLabel: 'Submitted — under review',
+        statusLabel: 'Submitted, under review',
         appliedDate: OLDEST.toISOString(),
         waitingDays: expect.any(Number),
         amountPaid: null,

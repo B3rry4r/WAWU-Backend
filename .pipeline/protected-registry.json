@@ -7273,9 +7273,9 @@
       }
     ],
     "lock": {
-      "lockedAt": "2026-10-02T15:31:28.117Z",
-      "lockedAgainst": "bf9538ceca8050f43fddb825c5756f77cc11ab37",
-      "sha256": "1916cf7aa5b8482d254ff67e6bb1811798d229a7683ac217d77072766fe92321"
+      "lockedAt": "2026-10-20T09:27:32.477Z",
+      "lockedAgainst": "788e2422f5afdf7a39a83914fa091342fb003582",
+      "sha256": "43f8a5055daed3113c1831c6d6fe91f5edbd24c651073ca556275530751a1d12"
     },
     "routes": [
       {
@@ -12861,7 +12861,9 @@
               "imageUrl": "null",
               "senderWawuId": "string",
               "sentAt": "string",
-              "text": "string"
+              "text": "string",
+              "videoUrl": "null",
+              "voiceUrl": "null"
             },
             "message": "string",
             "statusCode": "number"
@@ -12919,7 +12921,9 @@
                 },
                 "senderWawuId": "string",
                 "sentAt": "string",
-                "text": "string"
+                "text": "string",
+                "videoUrl": "null",
+                "voiceUrl": "null"
               }
             ],
             "message": "string",
@@ -13291,6 +13295,7 @@
                 ],
                 "startsAt": "string",
                 "status": "string",
+                "ticketTypes": [],
                 "timeLabel": "string",
                 "timezone": "string",
                 "type": "string",
@@ -13458,6 +13463,7 @@
               ],
               "startsAt": "string",
               "status": "string",
+              "ticketTypes": [],
               "timeLabel": "string",
               "timezone": "string",
               "type": "string",
@@ -13937,7 +13943,17 @@
                 "quantity": 100
               }
             ]
-          }
+          },
+          "after": [
+            {
+              "api": "POST /admin/events/:id/approve",
+              "as": "superadmin",
+              "params": {
+                "id": "{{eventId}}"
+              }
+            }
+          ],
+          "why": "R-40 (owner, 7 Oct 2026): a tier change on a published event sends it back to review. The approve after it succeeds only from pending, so this probe fails if the event stayed published; it also puts the event back on sale, as an admin would, for the probes that follow."
         },
         "expect": {
           "status": 200,
@@ -14900,30 +14916,40 @@
             ],
             "status": "live"
           },
-          "before": [
-            {
-              "sql": "INSERT INTO \"Product\" (id, name, slug, brand, description, category, subcategory, \"priceNaira\", \"compareAtNaira\", stock, images, \"wawuVerified\", \"wawuPick\", status, \"updatedAt\") VALUES (gen_random_uuid(), 'Protected Ring Light', 'protected-ring-light-' || $1, 'WAWU', 'An 18 inch ring light the protected route suite lists.', 'lighting_studio', 'ring-lights', 24000, 30000, 10, ARRAY['https://cdn.wawu.test/ring.png'], true, true, 'live', now()) RETURNING id, slug",
-              "values": [
-                "{{nonce}}"
-              ],
-              "capture": {
-                "productId": "id",
-                "productSlug": "slug"
-              }
-            }
-          ],
-          "why": "Shop is retired (R-2, OPS-08): creating a product answers 410. The product the shop already stocked is written directly, because no route creates one any more; the catalogue reads and the past order below point at it."
+          "capture": {
+            "productId": "data.id",
+            "productSlug": "data.slug"
+          }
         },
         "expect": {
-          "status": 410,
-          "coverage": "refusal",
+          "status": 201,
+          "coverage": "success",
           "shape": {
-            "data": "null",
-            "message": "string",
-            "reason": {
-              "code": "string",
-              "message": "string"
+            "data": {
+              "brand": "string",
+              "category": "string",
+              "compareAtNaira": "number",
+              "createdAt": "string",
+              "description": "string",
+              "id": "string",
+              "images": [
+                "string"
+              ],
+              "inStock": "boolean",
+              "lowStock": "boolean",
+              "name": "string",
+              "priceNaira": "number",
+              "ratingAvg": "null",
+              "ratingCount": "number",
+              "slug": "string",
+              "status": "string",
+              "stock": "number",
+              "subcategory": "string",
+              "updatedAt": "string",
+              "wawuPick": "boolean",
+              "wawuVerified": "boolean"
             },
+            "message": "string",
             "statusCode": "number"
           }
         }
@@ -14972,15 +14998,34 @@
           }
         },
         "expect": {
-          "status": 410,
-          "coverage": "refusal",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
-            "message": "string",
-            "reason": {
-              "code": "string",
-              "message": "string"
+            "data": {
+              "brand": "string",
+              "category": "string",
+              "compareAtNaira": "number",
+              "createdAt": "string",
+              "description": "string",
+              "id": "string",
+              "images": [
+                "string"
+              ],
+              "inStock": "boolean",
+              "lowStock": "boolean",
+              "name": "string",
+              "priceNaira": "number",
+              "ratingAvg": "null",
+              "ratingCount": "number",
+              "slug": "string",
+              "status": "string",
+              "stock": "number",
+              "subcategory": "string",
+              "updatedAt": "string",
+              "wawuPick": "boolean",
+              "wawuVerified": "boolean"
             },
+            "message": "string",
             "statusCode": "number"
           }
         }
@@ -15133,14 +15178,37 @@
           "as": "buyer"
         },
         "expect": {
-          "status": 410,
-          "coverage": "refusal",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": [
+              {
+                "brand": "string",
+                "category": "string",
+                "compareAtNaira": "number",
+                "description": "string",
+                "id": "string",
+                "images": [
+                  "string"
+                ],
+                "inStock": "boolean",
+                "lowStock": "boolean",
+                "name": "string",
+                "priceNaira": "number",
+                "ratingAvg": "null",
+                "ratingCount": "number",
+                "slug": "string",
+                "subcategory": "string",
+                "wawuPick": "boolean",
+                "wawuVerified": "boolean"
+              }
+            ],
             "message": "string",
-            "reason": {
-              "code": "string",
-              "message": "string"
+            "pagination": {
+              "currentPage": "number",
+              "nextPage": "null",
+              "perPage": "number",
+              "total": "number"
             },
             "statusCode": "number"
           }
@@ -15170,15 +15238,30 @@
           }
         },
         "expect": {
-          "status": 410,
-          "coverage": "refusal",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
-            "message": "string",
-            "reason": {
-              "code": "string",
-              "message": "string"
+            "data": {
+              "brand": "string",
+              "category": "string",
+              "compareAtNaira": "number",
+              "description": "string",
+              "id": "string",
+              "images": [
+                "string"
+              ],
+              "inStock": "boolean",
+              "lowStock": "boolean",
+              "name": "string",
+              "priceNaira": "number",
+              "ratingAvg": "null",
+              "ratingCount": "number",
+              "slug": "string",
+              "subcategory": "string",
+              "wawuPick": "boolean",
+              "wawuVerified": "boolean"
             },
+            "message": "string",
             "statusCode": "number"
           }
         }
@@ -15207,15 +15290,13 @@
           }
         },
         "expect": {
-          "status": 410,
-          "coverage": "refusal",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
+            "data": [
+              "string"
+            ],
             "message": "string",
-            "reason": {
-              "code": "string",
-              "message": "string"
-            },
             "statusCode": "number"
           }
         }
@@ -15245,15 +15326,43 @@
           }
         },
         "expect": {
-          "status": 410,
-          "coverage": "refusal",
+          "status": 201,
+          "coverage": "success",
           "shape": {
-            "data": "null",
-            "message": "string",
-            "reason": {
-              "code": "string",
-              "message": "string"
+            "data": {
+              "deliveryNaira": "number",
+              "itemCount": "number",
+              "items": [
+                {
+                  "id": "string",
+                  "lineTotalNaira": "number",
+                  "product": {
+                    "brand": "string",
+                    "category": "string",
+                    "compareAtNaira": "number",
+                    "description": "string",
+                    "id": "string",
+                    "images": [
+                      "string"
+                    ],
+                    "inStock": "boolean",
+                    "lowStock": "boolean",
+                    "name": "string",
+                    "priceNaira": "number",
+                    "ratingAvg": "null",
+                    "ratingCount": "number",
+                    "slug": "string",
+                    "subcategory": "string",
+                    "wawuPick": "boolean",
+                    "wawuVerified": "boolean"
+                  },
+                  "quantity": "number"
+                }
+              ],
+              "subtotalNaira": "number",
+              "totalNaira": "number"
             },
+            "message": "string",
             "statusCode": "number"
           }
         }
@@ -15285,15 +15394,43 @@
           }
         },
         "expect": {
-          "status": 410,
-          "coverage": "refusal",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
-            "message": "string",
-            "reason": {
-              "code": "string",
-              "message": "string"
+            "data": {
+              "deliveryNaira": "number",
+              "itemCount": "number",
+              "items": [
+                {
+                  "id": "string",
+                  "lineTotalNaira": "number",
+                  "product": {
+                    "brand": "string",
+                    "category": "string",
+                    "compareAtNaira": "number",
+                    "description": "string",
+                    "id": "string",
+                    "images": [
+                      "string"
+                    ],
+                    "inStock": "boolean",
+                    "lowStock": "boolean",
+                    "name": "string",
+                    "priceNaira": "number",
+                    "ratingAvg": "null",
+                    "ratingCount": "number",
+                    "slug": "string",
+                    "subcategory": "string",
+                    "wawuPick": "boolean",
+                    "wawuVerified": "boolean"
+                  },
+                  "quantity": "number"
+                }
+              ],
+              "subtotalNaira": "number",
+              "totalNaira": "number"
             },
+            "message": "string",
             "statusCode": "number"
           }
         }
@@ -15319,15 +15456,43 @@
           "as": "buyer"
         },
         "expect": {
-          "status": 410,
-          "coverage": "refusal",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
-            "message": "string",
-            "reason": {
-              "code": "string",
-              "message": "string"
+            "data": {
+              "deliveryNaira": "number",
+              "itemCount": "number",
+              "items": [
+                {
+                  "id": "string",
+                  "lineTotalNaira": "number",
+                  "product": {
+                    "brand": "string",
+                    "category": "string",
+                    "compareAtNaira": "number",
+                    "description": "string",
+                    "id": "string",
+                    "images": [
+                      "string"
+                    ],
+                    "inStock": "boolean",
+                    "lowStock": "boolean",
+                    "name": "string",
+                    "priceNaira": "number",
+                    "ratingAvg": "null",
+                    "ratingCount": "number",
+                    "slug": "string",
+                    "subcategory": "string",
+                    "wawuPick": "boolean",
+                    "wawuVerified": "boolean"
+                  },
+                  "quantity": "number"
+                }
+              ],
+              "subtotalNaira": "number",
+              "totalNaira": "number"
             },
+            "message": "string",
             "statusCode": "number"
           }
         }
@@ -15359,32 +15524,25 @@
             "deliveryState": "Lagos",
             "deliveryNote": "Call on arrival."
           },
-          "before": [
-            {
-              "sql": "WITH o AS (INSERT INTO \"ShopOrder\" (id, \"buyerWawuId\", status, \"subtotalNaira\", \"totalNaira\", \"deliveryName\", \"deliveryPhone\", \"deliveryAddress\", \"deliveryCity\", \"deliveryState\", \"deliveryNote\", fulfilment, \"flutterwaveTxRef\", \"flutterwaveTxId\", \"createdAt\", \"paidAt\") VALUES (gen_random_uuid(), $1, 'paid', 24000, 24000, 'Bola Buyer', '+2348012345678', '12 Protected Close, Yaba', 'Lagos', 'Lagos', 'Call on arrival.', 'awaiting_dispatch', 'protected-shop-' || $2, 'protected-tx-shop', now(), now()) RETURNING id, \"flutterwaveTxRef\"), i AS (INSERT INTO \"ShopOrderItem\" (id, \"orderId\", \"productId\", \"nameSnapshot\", \"priceNairaSnapshot\", quantity) SELECT gen_random_uuid(), o.id, $3, 'Protected Ring Light', 24000, 1 FROM o) SELECT id, \"flutterwaveTxRef\" AS \"txRef\" FROM o",
-              "values": [
-                "{{buyer.sub}}",
-                "{{nonce}}",
-                "{{productId}}"
-              ],
-              "capture": {
-                "shopOrderId": "id",
-                "shopTxRef": "txRef"
-              }
-            }
-          ],
-          "why": "Shop is retired (R-2, OPS-08): checkout answers 410 and opens no order. A paid order the buyer placed before the shop closed is written directly, so the order routes after this one prove a past order stays readable, settles idempotently and can still be dispatched."
+          "capture": {
+            "shopOrderId": "data.orderId",
+            "shopTxRef": "data.flutterwaveConfig.txRef"
+          }
         },
         "expect": {
-          "status": 410,
-          "coverage": "refusal",
+          "status": 201,
+          "coverage": "success",
           "shape": {
-            "data": "null",
-            "message": "string",
-            "reason": {
-              "code": "string",
-              "message": "string"
+            "data": {
+              "flutterwaveConfig": {
+                "amount": "number",
+                "currency": "string",
+                "publicKey": "string",
+                "txRef": "string"
+              },
+              "orderId": "string"
             },
+            "message": "string",
             "statusCode": "number"
           }
         }
@@ -15598,18 +15756,29 @@
           "params": {
             "productId": "{{productId}}"
           },
-          "why": "Shop is retired (R-2, OPS-08): the cart answers 410, so there is nothing to put in it first."
+          "before": [
+            {
+              "api": "POST /shop/cart",
+              "as": "buyer",
+              "body": {
+                "productId": "{{productId}}",
+                "quantity": 1
+              }
+            }
+          ]
         },
         "expect": {
-          "status": 410,
-          "coverage": "refusal",
+          "status": 200,
+          "coverage": "success",
           "shape": {
-            "data": "null",
-            "message": "string",
-            "reason": {
-              "code": "string",
-              "message": "string"
+            "data": {
+              "deliveryNaira": "number",
+              "itemCount": "number",
+              "items": [],
+              "subtotalNaira": "number",
+              "totalNaira": "number"
             },
+            "message": "string",
             "statusCode": "number"
           }
         }

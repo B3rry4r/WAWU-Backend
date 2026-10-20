@@ -90,16 +90,19 @@ export interface WalletAccountView {
 }
 
 /**
- * The daily send limit and what is left of it today (limits.md in the
- * mobile repo). The figures come from config per tier, marked provisional
- * there; `tier` is whatever Fintava reports, or null when it reports none.
+ * The daily limit the wallet provider puts on the account, what was moved
+ * today and what is left (W35; task WALLET-23, `AccountLimits`). The limit is
+ * the provider's: Fintava reports the wallet's tier on every balance read and
+ * the tier's daily limit is a setting (limits.md in the mobile repo). `tier`
+ * is always null: the limits row names no tier (BRIEF W35), and the provider's
+ * own name for the level stays on the wallet row for ops.
  */
 export interface WalletLimitsView {
   tier: string | null;
   dailyLimitKobo: number;
   usedTodayKobo: number;
   remainingTodayKobo: number;
-  /** When today's limit starts again. The day boundary is Fintava's policy, read from config. */
+  /** When today's limit starts again: the next midnight in Lagos, where WAWU's own daily limits also turn over. */
   resetsAt: string;
 }
 
@@ -137,7 +140,7 @@ export interface WalletView {
   state: WalletState;
   /** Null while state is not_open or opening. */
   account: WalletAccountView | null;
-  /** Null when no limit is known; the screen hides the row (A8, W35). */
+  /** Null until a balance read has kept the provider's limit, and when it names none; the screen hides the row (A8, W35). */
   limits: WalletLimitsView | null;
   pin: PinStateView;
   bankTransfers: BankTransferAccessView;
@@ -322,6 +325,29 @@ export interface AccountNameView {
   bankName: string;
   accountNumber: string;
   accountName: string;
+  /**
+   * Binds a send to an account that is not saved to this holder's name: send
+   * it back as `nameToken` on `POST /money/transfers/bank`. Signed, for this
+   * person, short-lived (15 minutes).
+   */
+  nameToken: string;
+}
+
+/** One quick amount on W9: whole naira, in kobo. */
+export interface TransferQuickAmountView {
+  amountKobo: number;
+}
+
+/**
+ * GET /money/transfers/presets: what W9 draws that is not the person's own
+ * (task WALLET-02). The quick amounts come from settings, not from the design
+ * (the setting is documented in transfer-presets.ts); the note's length is the send's own limit.
+ */
+export interface TransferPresetsView {
+  /** Smallest first, at most four. */
+  quickAmounts: TransferQuickAmountView[];
+  /** The longest note a send takes, in characters. */
+  noteMaxLength: number;
 }
 
 /** A WAWU user who can be sent money (W7). Only people with an open wallet. */
@@ -540,12 +566,18 @@ export type HoldStatus = 'held' | 'released' | 'refunded';
  * be granted after the payment confirmed, and it is refunded at once.
  */
 export type HoldReleaseCondition =
-  'dm_answered' | 'event_took_place' | 'bill_delivered' | 'plan_granted';
+  | 'dm_answered'
+  | 'event_took_place'
+  | 'bill_delivered'
+  | 'intake_started'
+  | 'plan_granted';
 
 /**
  * Money held between payer and payee in WAWU's merchant wallet (R-19). The
  * price is held; the provider charge on the original payment is not part of
- * it and is not refunded (R-10: a refund returns the price).
+ * it. A refund the payer caused returns the price (R-10); a refund they did
+ * not cause (a question that lapsed, an order that failed) returns every
+ * naira, the charge too, and `refundedKobo` says which.
  */
 export interface HoldView {
   id: string;
@@ -561,13 +593,98 @@ export interface HoldView {
   heldAt: string;
   /** When it was released or refunded. */
   settledAt: string | null;
-  /** Set when refunded: what came back to the payer. */
+  /** Set when refunded: what really came back to the payer, read from the refund's own move (the price, or the price and the payment's charge). */
   refundedKobo: number | null;
 }
 
 /** A page of holds, newest first. `nextCursor` null means the last page. */
 export interface HoldPage {
   items: HoldView[];
+  nextCursor: string | null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Earnings (W39, WALLET-16)                                           */
+/* ------------------------------------------------------------------ */
+
+/**
+ * What one kind of sale earned: the payee's 85% (R-5) of what was sold,
+ * counted from our own records of the sales, labelled as earnings and never
+ * as a balance (the provider's balance is the only one, MONEY-11).
+ */
+export interface EarningStreamView {
+  /** What was sold: `content_unlock` (Unlocks), `tip` (Tips), `paid_dm` (Paid DMs), and so on. */
+  kind: PaymentKind;
+  /** The payee's share of those sales, in kobo. */
+  earnedKobo: number;
+  /** How many sales it is the share of. */
+  sales: number;
+}
+
+/** The earnings of a period; `streams` add up to `earnedKobo` exactly. */
+export interface EarningsPeriodView {
+  earnedKobo: number;
+  sales: number;
+  /** One entry per kind with a sale in the period, largest first. */
+  streams: EarningStreamView[];
+}
+
+/**
+ * What the caller has earned (W39). Reads our records of the sales; it never
+ * calls the provider and is not behind the wallet gate: a creator without a
+ * wallet keeps earning, and sees the money waiting (R-11).
+ *
+ * An earning is the payee's 85% of a finished sale: an ordinary sale (unlock,
+ * tip, legal fee, school fees) once it is paid and delivered, a held kind
+ * (paid DM, ticket) once the owning feature has released its hold to the
+ * payee (it is then earned, and waiting until the move is confirmed). A held
+ * price not yet released is `held`, not earned.
+ */
+export interface EarningsView {
+  /** Everything ever earned. */
+  allTime: EarningsPeriodView;
+  /** The month `thisMonth` is about, YYYY-MM in Africa/Lagos time. */
+  month: string;
+  /** The earnings of `month` (the current month unless the caller asked for another). */
+  thisMonth: EarningsPeriodView;
+  /**
+   * Earned and not in the wallet yet: no wallet opened, a frozen wallet, or
+   * the move not confirmed yet. It lands by itself; there is nothing to tap.
+   * Part of `allTime`, not on top of it.
+   */
+  waiting: EarningsWaitingView;
+  /** Paid for and not earned yet: a paid DM unanswered, a ticket before its event. */
+  held: EarningsWaitingView;
+  /** Whether the caller has a wallet to receive earnings; false shows "Open your wallet" beside the waiting money. */
+  walletOpen: boolean;
+}
+
+/** A count and a sum in kobo. */
+export interface EarningsWaitingView {
+  count: number;
+  amountKobo: number;
+}
+
+/** One piece of content, service or event and what it earned in a month (W39 "per content"). */
+export interface EarningContentView {
+  kind: PaymentKind;
+  targetId: string;
+  /** The item as it was named when it was sold. */
+  title: string;
+  earnedKobo: number;
+  sales: number;
+  /** The latest sale counted, ISO 8601. */
+  lastAt: string;
+}
+
+/**
+ * A page of per-content earnings for one month, largest first. Every page
+ * together adds up to the month's `thisMonth.earnedKobo`. `nextCursor` null
+ * means the last page.
+ */
+export interface EarningContentPage {
+  month: string;
+  items: EarningContentView[];
   nextCursor: string | null;
 }
 

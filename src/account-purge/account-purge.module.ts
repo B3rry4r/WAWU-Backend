@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { AccountPurgeHooks } from './purge-hooks';
 import { AccountPurgeService } from './account-purge.service';
+import { StorageRemover } from '../storage/storage-remover';
 import { WawuIdAccountClient } from '../account/wawu-id-account.client';
 import { WAWU_ID_ACCOUNT_GATEWAY } from '../account/wawu-id-account.gateway';
 
@@ -16,9 +18,14 @@ import { WAWU_ID_ACCOUNT_GATEWAY } from '../account/wawu-id-account.gateway';
 @Module({
   imports: [ConfigModule],
   providers: [
+    AccountPurgeHooks,
     AccountPurgeService,
+    // The purge removes a person's files from the bucket (FIX-65). It reaches
+    // the bucket the way StorageService does (one client factory) without
+    // importing the upload routes.
+    StorageRemover,
     { provide: WAWU_ID_ACCOUNT_GATEWAY, useClass: WawuIdAccountClient },
   ],
-  exports: [AccountPurgeService],
+  exports: [AccountPurgeService, AccountPurgeHooks, StorageRemover],
 })
 export class AccountPurgeModule {}

@@ -251,6 +251,36 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // POINTS-03: the person's "Use wallet" choice for points (PT3).
+    key: 'pointsSettings',
+    models: ['PointsSetting'],
+    load: (prisma, me) =>
+      prisma.pointsSetting.findUnique({
+        where: { wawuUserId: me },
+        select: { useWallet: true, updatedAt: true },
+      }),
+  },
+  {
+    // AITOOLS-01: the AI tool jobs the person ran (no text is kept).
+    key: 'aiToolJobs',
+    models: ['AiToolJob'],
+    load: (prisma, me) =>
+      prisma.aiToolJob.findMany({
+        where: { wawuUserId: me },
+        orderBy: { createdAt: 'desc' },
+        take: 500,
+        select: {
+          tool: true,
+          state: true,
+          characters: true,
+          units: true,
+          costPoints: true,
+          createdAt: true,
+          finishedAt: true,
+        },
+      }),
+  },
+  {
     key: 'notificationSettings',
     models: ['NotificationSettings'],
     load: (prisma, me) =>
@@ -267,6 +297,16 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           contentReviews: true,
           communityMessages: true,
         },
+      }),
+  },
+  {
+    key: 'recentSearches',
+    models: ['SearchHistory'],
+    load: (prisma, me) =>
+      prisma.searchHistory.findMany({
+        where: { userWawuId: me },
+        select: { query: true, searchedAt: true },
+        orderBy: { searchedAt: 'desc' },
       }),
   },
   {
@@ -368,6 +408,42 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         where: { userWawuId: me },
         select: { eventId: true, savedAt: true },
         orderBy: { savedAt: 'desc' },
+      }),
+  },
+  {
+    // SCHOOLS-10: the school sites this person opened from "Apply on their
+    // site" (SC9): which school and course, and when.
+    key: 'schoolLinkClicks',
+    models: ['SchoolLinkClick'],
+    load: (prisma, me) =>
+      prisma.schoolLinkClick.findMany({
+        where: { userWawuId: me },
+        select: { schoolId: true, courseId: true, clickedAt: true },
+        orderBy: { clickedAt: 'desc' },
+      }),
+  },
+  {
+    // SCHOOLS-07: the places this person held or paid for in a school's
+    // classes (SC4 to SC7): the course, school and class as they were, the
+    // fee, and the reference on the receipt.
+    key: 'schoolEnrolments',
+    models: ['SchoolEnrolment'],
+    load: (prisma, me) =>
+      prisma.schoolEnrolment.findMany({
+        where: { wawuUserId: me },
+        select: {
+          reference: true,
+          status: true,
+          courseTitle: true,
+          schoolName: true,
+          intakeStartDate: true,
+          intakeSchedule: true,
+          intakeLocation: true,
+          priceKobo: true,
+          createdAt: true,
+          enrolledAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
       }),
   },
   {
@@ -502,6 +578,26 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           refundedAt: true,
         },
         orderBy: { sentAt: 'desc' },
+      }),
+  },
+  {
+    key: 'paidQuestionDrafts',
+    models: ['PaidDmDraft'],
+    // The words of a paid question the requester wrote and has not paid for
+    // (INBOX-17): their own writing, kept until paid or removed after a
+    // fortnight. The idempotency key of the request that made it is a
+    // technical mark and is not selected.
+    load: (prisma, me) =>
+      prisma.paidDmDraft.findMany({
+        where: { senderWawuId: me },
+        select: {
+          id: true,
+          creatorWawuId: true,
+          text: true,
+          responseWindowHours: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
       }),
   },
   {
@@ -646,6 +742,7 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           extraProducts: true,
           pointsIncluded: true,
           voiceIntroIncluded: true,
+          badgeNumber: true,
         },
       }),
   },
@@ -671,6 +768,49 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // The products this person added to their tier (TIER-04). The payment
+  // reference is a payment id, so it stays out (rule 3).
+  {
+    key: 'extraProductsPurchases',
+    models: ['MakerExtraProducts'],
+    load: (prisma, me) =>
+      prisma.makerExtraProducts.findMany({
+        where: { wawuUserId: me },
+        select: {
+          tierId: true,
+          products: true,
+          currency: true,
+          amountMinor: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  // What this person chose to pay for by bank transfer (TIER-05) and where it
+  // stands. The payment that paid it is a payment id, so it stays out (rule 3).
+  {
+    key: 'tierTransferPurchases',
+    models: ['PlanTransferOrder'],
+    load: (prisma, me) =>
+      prisma.planTransferOrder.findMany({
+        where: { wawuUserId: me },
+        select: {
+          // The kind and the goods the quote promised (a tier, or a points
+          // pack's points and bonus), so a pack order says what it was.
+          paymentKind: true,
+          targetId: true,
+          terms: true,
+          priceKobo: true,
+          providerFeeKobo: true,
+          totalKobo: true,
+          status: true,
+          statusMessage: true,
+          expiresAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
   {
     key: 'eventPasses',
     models: ['EventPass'],
@@ -678,6 +818,29 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       prisma.eventPass.findMany({
         where: { wawuUserId: me },
         select: { type: true, createdAt: true },
+        orderBy: NEWEST,
+      }),
+  },
+  // The products this person was still drafting (TIER-02): what they wrote,
+  // no file. The details are the person's own words, so they all go in.
+  {
+    key: 'productDrafts',
+    models: ['ProductDraft'],
+    load: (prisma, me) =>
+      prisma.productDraft.findMany({
+        where: { wawuUserId: me },
+        select: {
+          title: true,
+          contentType: true,
+          description: true,
+          category: true,
+          specializations: true,
+          tags: true,
+          accessType: true,
+          price: true,
+          createdAt: true,
+          updatedAt: true,
+        },
         orderBy: NEWEST,
       }),
   },
@@ -910,6 +1073,80 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // REF-02: the person's own referral code, and the code they used. Only
+    // their own code and the day they used someone's: no one else's name.
+    key: 'referralCode',
+    models: ['PersonReferralCode', 'PersonReferral'],
+    load: async (prisma, me) => {
+      const [mine, used] = await Promise.all([
+        prisma.personReferralCode.findUnique({
+          where: { wawuUserId: me },
+          select: { code: true, createdAt: true },
+        }),
+        prisma.personReferral.findUnique({
+          where: { referredWawuUserId: me },
+          select: { code: true, claimedAt: true },
+        }),
+      ]);
+      return { mine, used };
+    },
+  },
+  {
+    // REF-02: the points each person they invited earned them, and the
+    // milestones. Points and dates only; the invited person is not named.
+    key: 'referralRewards',
+    models: ['ReferralReward', 'ReferralMilestone'],
+    load: async (prisma, me) => {
+      const [rewards, milestones] = await Promise.all([
+        prisma.referralReward.findMany({
+          where: { referrerWawuUserId: me },
+          select: {
+            id: true,
+            tierId: true,
+            basePoints: true,
+            multiplierMilli: true,
+            points: true,
+            state: true,
+            availableAt: true,
+            createdAt: true,
+            settledAt: true,
+          },
+          orderBy: NEWEST,
+        }),
+        prisma.referralMilestone.findMany({
+          where: { referrerWawuUserId: me },
+          select: { count: true, points: true, grantedAt: true },
+          orderBy: { count: 'asc' },
+        }),
+      ]);
+      return { rewards, milestones };
+    },
+  },
+  {
+    // POINTS-04: each time the person turned points into cash, in kobo: how
+    // many points, how much cash, how it ended. No account number and no
+    // provider reference.
+    key: 'pointConversions',
+    models: ['PointConversion'],
+    load: async (prisma, me) => {
+      const rows = await prisma.pointConversion.findMany({
+        where: { wawuUserId: me },
+        select: {
+          id: true,
+          points: true,
+          cashKobo: true,
+          status: true,
+          failureReason: true,
+          createdAt: true,
+          settledAt: true,
+        },
+        orderBy: NEWEST,
+      });
+      // A file carries numbers, not BigInt: kobo as a whole number.
+      return rows.map((r) => ({ ...r, cashKobo: Number(r.cashKobo) }));
+    },
+  },
+  {
     key: 'pointMovements',
     models: ['PointLedger'],
     load: (prisma, me) =>
@@ -973,9 +1210,19 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
         'A send log: every notification it names is already in the Notifications section.',
     },
     {
+      model: 'TgifDailyNotice',
+      reason:
+        'A marker that the TGIF notice of a day was made, kept a few days: the notice itself is in the Notifications section.',
+    },
+    {
       model: 'PushStoppedAccount',
       reason:
         'A switch the server keeps after the person asked to delete the account: it holds nothing but the time of that request.',
+    },
+    {
+      model: 'AccountDeletionContent',
+      reason:
+        'Bookkeeping for a deletion that is waiting: the ids of the pieces it hid and the status each had. The pieces themselves are exported in their own section.',
     },
     { model: 'TransactionPin', reason: 'A PIN hash is a secret.' },
     { model: 'TransactionPinReset', reason: 'A reset code hash is a secret.' },
@@ -1013,6 +1260,13 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     // person column (like FintavaWebhookEvent): it is Nuvion's record of
     // events, not the person's, so neither the purge map nor this list
     // names it.
+    // FIX-20. Both webhook tables keep a delivery's raw body and parsed
+    // copy, so they are not kept for ever: RETENTION covers them, not the
+    // export or the purge. A daily job (src/webhook-retention/) clears the
+    // body and the parsed copy after WEBHOOK_RETENTION_DAYS (90 by default)
+    // once a delivery is finished with (docs/contract/CONVENTIONS.md section
+    // 21). What a person is owed of their money history is the ledger
+    // (FintavaLedgerEntry below), which this list covers.
     // NUV-05. NuvionBookTransfer, the log of book transfers sent on Nuvion,
     // has no person column either: it holds account ids, an account number,
     // an amount and WAWU's reference, and the person's own transfers reach
@@ -1096,9 +1350,19 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     { model: 'ChatParticipant', reason: 'A read position, not content.' },
     { model: 'CommunityReadMarker', reason: 'A read position, not content.' },
     {
+      model: 'CommunityPass',
+      reason:
+        'A pass is 30 days of a room, paid from the wallet; what was paid is exported with the payments, and the end date is on the membership.',
+    },
+    {
       model: 'CommunityMessageKey',
       reason:
         'The key one community message was sent under, so a repeat is not stored twice; the message itself is exported under communityMessages.',
+    },
+    {
+      model: 'DmReplyKey',
+      reason:
+        'The key one paid-question reply was sent under, so a repeat is not stored twice; the reply itself is exported under paidMessageRepliesWritten.',
     },
     { model: 'CartItem', reason: 'A transient basket, not a record.' },
     {

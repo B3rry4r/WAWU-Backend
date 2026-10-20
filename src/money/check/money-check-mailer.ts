@@ -172,11 +172,13 @@ export class MoneyCheckMailer {
         `WAWU ID refused the money check report (HTTP ${res.status}).`,
       );
     }
-    // A 200 that says nothing was sent (no address to send to) is not taken.
+    // Only `{ data: { emailed: true } }` counts as mailed (SWEEP-MONEY RF-1):
+    // a 200 that says nothing was sent, says nothing, or is not JSON is not
+    // taken, so the run keeps the report and the sweep tries again.
     const answer = (await res.json().catch(() => null)) as {
-      data?: { emailed?: unknown; sent?: unknown };
+      data?: { emailed?: unknown };
     } | null;
-    if (answer?.data?.emailed === false || answer?.data?.sent === false) {
+    if (answer?.data?.emailed !== true) {
       throw new MoneyCheckMailRefused(
         'WAWU ID took the money check report and sent no mail.',
       );

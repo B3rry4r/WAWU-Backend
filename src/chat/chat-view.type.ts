@@ -1,4 +1,5 @@
 import type { VerificationState } from '../common/verification/verification-state';
+import type { MoneyRequestView } from '../money-request/money-request-view.type';
 
 /**
  * Every response shape the free chat routes return (task INBOX-06). One named
@@ -6,8 +7,12 @@ import type { VerificationState } from '../common/verification/verification-stat
  * can import.
  */
 
-/** What a message holds: words, a photo, a video, or a PDF. */
-export type ChatMessageKind = 'text' | 'image' | 'video' | 'file';
+/**
+ * What a message holds: words, a photo, a video, a PDF, or a request for
+ * money (INBOX-15: `moneyRequest` is set, `text` is its reason).
+ */
+export type ChatMessageKind =
+  'text' | 'image' | 'video' | 'file' | 'money_request';
 
 /**
  * Read state on a message the caller sent: `sent` until the other person has
@@ -23,6 +28,12 @@ export interface ChatPerson {
   handle: string | null;
   avatarUrl: string | null;
   verification: VerificationState;
+  /**
+   * True only for the support side of a support thread (SUPPORT-01): the
+   * app draws its own mark for it and offers no money actions in that chat.
+   * Left out for every ordinary person.
+   */
+  support?: boolean;
 }
 
 export interface ChatAttachment {
@@ -47,6 +58,12 @@ export interface ChatMessage {
   kind: ChatMessageKind;
   text: string | null;
   attachment: ChatAttachment | null;
+  /**
+   * The request this bubble is, as the caller sees it, with its status now
+   * (pending, paid, declined or cancelled). Set exactly when `kind` is
+   * `money_request`.
+   */
+  moneyRequest: MoneyRequestView | null;
   /** The sender app's own id, echoed back on the sender's copy only. */
   clientMessageId: string | null;
   /** ISO time the server stored it. */

@@ -192,6 +192,13 @@ function tokenPairFor(claims) {
   };
 }
 
+// The real WAWU ID answers a token pair as { data: { accessToken, refreshToken, user } } (the mobile app reads data.*).
+// The mock keeps its flat fields too, because the Hub's own specs read them flat, and adds the same pair under `data`
+// (SWEEP-APP-4 row 154).
+function withEnvelope(pair) {
+  return { ...pair, data: pair };
+}
+
 app.get("/.well-known/jwks.json", (_req, res) => {
   const keyObject = crypto.createPublicKey(PUBLIC_KEY);
   const jwk = keyObject.export({ format: "jwk" });
@@ -241,7 +248,7 @@ app.post("/auth/login", (req, res) => {
   if (!user) {
     return res.status(404).json({ code: "USER_NOT_IN_WAWUID", message: "No such test user" });
   }
-  res.json(tokenPairFor(user));
+  res.json(withEnvelope(tokenPairFor(user)));
 });
 
 app.post("/auth/otp/start", (req, res) => {
@@ -251,7 +258,7 @@ app.post("/auth/otp/start", (req, res) => {
 app.post("/auth/otp/verify", (req, res) => {
   const identifier = req.body?.phone || req.body?.email;
   const user = Object.values(USERS).find((u) => u.phone === identifier || u.email === identifier) || USERS["user@test.wawu.dev"];
-  res.json(tokenPairFor(user));
+  res.json(withEnvelope(tokenPairFor(user)));
 });
 
 // Anti-enumeration: always the same message, matching the real service.
@@ -270,7 +277,7 @@ app.post("/auth/reset-password", (req, res) => {
   if (identifier && code && newPassword) {
     const user = USERS[identifier];
     if (!user) return res.status(400).json({ statusCode: 400, message: "Invalid or expired code" });
-    return res.json(tokenPairFor(user));
+    return res.json(withEnvelope(tokenPairFor(user)));
   }
   res.status(400).json({ statusCode: 400, message: "Provide either {token,email,password} or {identifier,code,newPassword}" });
 });
@@ -281,10 +288,38 @@ app.post("/auth/refresh", (req, res) => {
     const user = Object.values(USERS).find((u) => u.sub === decoded.sub);
     if (!user) return res.status(401).json({ message: "invalid refresh token" });
     const { user: _unused, ...pair } = tokenPairFor(user);
-    res.json(pair);
+    res.json(withEnvelope(pair));
   } catch {
     res.status(401).json({ message: "invalid refresh token" });
   }
+});
+
+// The sign-up sequence (AUTH-05). The app reads where a signed-in account stands before it opens Home
+// (GET /auth/signup/progress). An account made here (POST /auth/register) did not come through the mobile sign-up,
+// so it is in no sequence: the real service answers one with no progress row as step `done`, `inSequence: false`
+// (wawu-id src/auth/signup-sequence.service.ts, `view`), and refuses a step with 409 SIGNUP_ALREADY_FINISHED.
+// Before this the mock answered 404 and every stack walk of the app logged one console 404 (SWEEP-APP-6, DV2-05 L2).
+function accountForBearer(req, res) {
+  const header = req.header("Authorization") || "";
+  try {
+    const decoded = jwt.verify(header.replace(/^Bearer /i, ""), PUBLIC_KEY, { algorithms: ["RS256"] });
+    const user = decoded.type === "refresh" ? null : Object.values(USERS).find((u) => u.sub === decoded.sub);
+    if (user) return user;
+  } catch {
+    // falls through to the 401
+  }
+  res.status(401).json({ statusCode: 401, code: "SESSION_INVALID", message: "Sign in again." });
+  return null;
+}
+app.get("/auth/signup/progress", (req, res) => {
+  const user = accountForBearer(req, res);
+  if (!user) return;
+  res.json({ data: { step: "done", inSequence: false, accountType: null, steps: [], emailProven: false } });
+});
+app.post("/auth/signup/progress", (req, res) => {
+  const user = accountForBearer(req, res);
+  if (!user) return;
+  res.status(409).json({ statusCode: 409, code: "SIGNUP_ALREADY_FINISHED", message: "Your sign-up is already finished." });
 });
 
 // Internal service-to-service surface — same X-Service-Key pattern as
@@ -424,7 +459,9 @@ app.post("/internal/users/:userId/pin-reset-code", requireServiceKey, (req, res)
 // WAWU ID's mail relay (EMAIL-02, WALLET-35 adds `attachments`):
 // POST /internal/mail/send { to, subject, html, text, headers?, tag?,
 // attachments?: [{ filename, content (base64), contentType? }] } with an
-// optional Idempotency-Key (the same key answers with the first mail). The
+// optional Idempotency-Key (the same key answers with the first mail). It
+// answers { id } and, when the body had an `attachments` list, { id,
+// attachments: <how many it took> }, as the real relay does. The
 // mock sends nothing: it records the mail, each attachment decoded, in the
 // outbox the contract suite reads. A bad body is a 400, as on the real one.
 const RELAYED_BY_KEY = new Map();
@@ -451,7 +488,9 @@ app.post("/internal/mail/send", requireServiceKey, (req, res) => {
     }
   }
   const key = req.header("Idempotency-Key");
-  if (key && RELAYED_BY_KEY.has(key)) return res.json({ id: RELAYED_BY_KEY.get(key) });
+  // Like the real relay, a mail that carried a list of files is answered with how many it took.
+  const answer = (id) => (body.attachments === undefined ? { id } : { id, attachments: attachments.length });
+  if (key && RELAYED_BY_KEY.has(key)) return res.json(answer(RELAYED_BY_KEY.get(key)));
   const id = `mock-mail-${MAIL_OUTBOX.length + 1}`;
   if (key) RELAYED_BY_KEY.set(key, id);
   MAIL_OUTBOX.push({
@@ -464,7 +503,7 @@ app.post("/internal/mail/send", requireServiceKey, (req, res) => {
     attachments,
     sentAt: new Date().toISOString(),
   });
-  res.json({ id });
+  res.json(answer(id));
 });
 // The nightly money check's report email (MONEY-16). Mirrors the route WAWU ID
 // builds (BACKEND_GAPS G-690, wawu-id wmt/MONEY-16):
@@ -510,7 +549,13 @@ console.log(
 );
 
 const PORT = process.env.MOCK_WAWU_ID_PORT || 4001;
-app.listen(PORT, () => {
+// Express 5 hands a listen failure (EADDRINUSE) to this callback, so it must stop here: it used to log "listening" after losing
+// the port and exit 0 (SWEEP-APP-4 row 135).
+app.listen(PORT, (error) => {
+  if (error) {
+    console.error(`[mock-wawu-id] could not listen on :${PORT}: ${error.code ?? error.message}`);
+    process.exit(1);
+  }
   console.log(`[mock-wawu-id] listening on :${PORT}`);
   console.log(`[mock-wawu-id] JWKS: http://localhost:${PORT}/.well-known/jwks.json`);
   console.log(`[mock-wawu-id] seeded users: ${Object.keys(USERS).join(", ")}`);

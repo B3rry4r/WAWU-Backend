@@ -13,6 +13,12 @@ import { BlockedAccountService } from '../blocked-account/blocked-account.servic
 import { StorageService } from '../storage/storage.service';
 import { LivePublisher } from '../live/live-publisher.service';
 import {
+  MONEY_REQUEST_MESSAGE_KIND,
+  toMoneyRequestView,
+} from '../money-request/money-request-view.type';
+import { isSupportAccount, supportPerson } from '../support/support-account';
+import type { Prisma } from '../../generated/prisma/client';
+import {
   CHAT_LIMITS,
   CHAT_UPLOAD_FOLDERS,
   type ChatUploadFolder,
@@ -38,7 +44,7 @@ const DEFAULT_PAGE_SIZE = 20;
 /** The message every block refusal carries. It never says who blocked whom. */
 const BLOCKED_MESSAGE = 'You can no longer message this person.';
 
-interface ConversationRow {
+export interface ConversationRow {
   id: string;
   userAWawuId: string;
   userBWawuId: string;
@@ -148,7 +154,20 @@ export class ChatService {
     }
     await this.assertPersonExists(otherId);
     await this.assertCanMessage(me, otherId);
+    const row = await this.ensureConversation(me, otherId);
+    const [summary] = await this.summaries(me, [row]);
+    return summary;
+  }
 
+  /**
+   * The one conversation between two accounts, made now if there is none.
+   * Checks nothing about either account: `open` checks the other person, and
+   * the support thread (SUPPORT-01) is with an account that has no profile.
+   */
+  async ensureConversation(
+    me: string,
+    otherId: string,
+  ): Promise<ConversationRow> {
     const [userAWawuId, userBWawuId] = [me, otherId].sort();
     let row = await this.prisma.chatConversation.findUnique({
       where: { userAWawuId_userBWawuId: { userAWawuId, userBWawuId } },
@@ -176,8 +195,7 @@ export class ChatService {
         });
       }
     }
-    const [summary] = await this.summaries(me, [row]);
-    return summary;
+    return row;
   }
 
   /** GET /chats: the caller's chats, newest activity first. */
@@ -218,6 +236,70 @@ export class ChatService {
     const row = await this.conversationFor(me, chatId);
     const [summary] = await this.summaries(me, [row]);
     return summary;
+  }
+
+  // ── for the money requests written into a chat (INBOX-15) ────────────────
+
+  /**
+   * The other person in a chat the caller is in. Someone else's chat answers
+   * 404 exactly as one that does not exist. A block in either direction is
+   * refused with 403 `chat_blocked` when `forSending` is set, as a message is.
+   */
+  async otherInChat(
+    me: string,
+    chatId: string,
+    forSending = false,
+  ): Promise<string> {
+    const chat = await this.conversationFor(me, chatId);
+    const other = this.otherOf(chat, me);
+    if (forSending) {
+      // A support thread carries no money: nothing is asked of, or sent to,
+      // the support side (SUPPORT-01).
+      if (isSupportAccount(other) || isSupportAccount(me)) {
+        throw new ForbiddenException({
+          message: 'Money cannot be requested in a support chat.',
+          reason: { code: 'chat_support_no_money' },
+        });
+      }
+      await this.assertCanMessage(me, other);
+    }
+    return other;
+  }
+
+  /**
+   * Writes one message of a kind this service does not make itself (a money
+   * request) inside the caller's transaction: the row, the chat's activity
+   * time, and the sender's own read mark, as a sent message moves all three.
+   * The caller publishes the live signal after its transaction commits.
+   */
+  async writeMessage(
+    tx: Prisma.TransactionClient,
+    me: string,
+    chatId: string,
+    kind: string,
+    text: string | null,
+    clientMessageId: string | null = null,
+  ): Promise<MessageRow> {
+    const created = await tx.chatMessage.create({
+      data: {
+        conversationId: chatId,
+        senderWawuId: me,
+        kind,
+        text,
+        clientMessageId,
+      },
+    });
+    await tx.chatConversation.update({
+      where: { id: chatId },
+      data: { lastActivityAt: created.createdAt },
+    });
+    await this.advanceMark(tx, chatId, me, created);
+    return created;
+  }
+
+  /** One message of a chat as `viewer` sees it, signed links and request included. */
+  async viewMessage(viewer: string, row: MessageRow): Promise<ChatMessage> {
+    return this.toMessageWithMarks(viewer, row);
   }
 
   // ── messages ─────────────────────────────────────────────────────────────
@@ -640,8 +722,8 @@ export class ChatService {
    * chats: one WAWU ID call and one profile query per page, the same way the
    * blocked list and community messages read people.
    */
-  private async people(ids: string[]): Promise<Map<string, ChatPerson>> {
-    const unique = [...new Set(ids)];
+  async people(ids: string[]): Promise<Map<string, ChatPerson>> {
+    const unique = [...new Set(ids)].filter((id) => !isSupportAccount(id));
     const [identities, profiles] = await Promise.all([
       this.wawuId.lookupPublicIdentities(unique),
       this.prisma.userProfile.findMany({
@@ -673,6 +755,10 @@ export class ChatService {
         avatarUrl: profile?.avatarUrl ?? null,
         verification: deriveVerificationState(profile ?? null),
       });
+    }
+    // The support side of a support thread has no WAWU ID and no profile.
+    for (const id of ids) {
+      if (isSupportAccount(id)) out.set(id, supportPerson());
     }
     return out;
   }
@@ -720,6 +806,12 @@ export class ChatService {
     const mine = row.senderWawuId === me;
     const otherRead = marks?.other ?? null;
     const otherReadId = marks?.otherMessageId ?? '';
+    const request =
+      row.kind === MONEY_REQUEST_MESSAGE_KIND
+        ? await this.prisma.moneyRequest.findUnique({
+            where: { messageId: row.id },
+          })
+        : null;
     return {
       id: row.id,
       chatId: row.conversationId,
@@ -736,6 +828,7 @@ export class ChatService {
               name: row.attachmentName,
             }
           : null,
+      moneyRequest: request ? toMoneyRequestView(request, me) : null,
       clientMessageId: mine ? row.clientMessageId : null,
       createdAt: row.createdAt.toISOString(),
       readState: mine

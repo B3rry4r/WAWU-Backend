@@ -8,7 +8,7 @@ import type { HoldReleaseCondition, HoldStatus } from '../money-view.type';
  * account at the wallet provider, and the price waits there until something
  * happens. What releases it is fixed by the kind, so a feature never says
  * it: a paid DM when the creator answers, a ticket when the event takes
- * place, a bill when the biller delivers. The opposite outcome refunds the
+ * place, a bill when the biller delivers, a school fee when the intake starts. The opposite outcome refunds the
  * payer (no answer in time, an event called off, a biller failure); which
  * outcome happened is the owning feature's to know and to ask for.
  */
@@ -18,6 +18,7 @@ export const HOLD_RELEASE_CONDITIONS: Readonly<
   paid_dm: 'dm_answered',
   event_ticket: 'event_took_place',
   bill: 'bill_delivered',
+  school_fee: 'intake_started',
 };
 
 /** The release condition of a held kind; null for a kind that is not held. */
@@ -121,6 +122,31 @@ export type HoldRequestErrorCode =
   | 'no_such_hold'
   /** The other outcome was already chosen: a hold is settled once, one way. */
   | 'other_action_chosen';
+
+/**
+ * How a refund differs from the plain one. `returnCharge`: the person gets back
+ * everything the payment took from them, the provider's charge and WAWU's fee
+ * included, and WAWU carries the charge (EVENTS-07 round 2: an order that
+ * failed after the debit, as a failed bill is). It changes only the amount of
+ * the move; the hold's stored `refundedKobo` stays the held price (a database
+ * rule) and the hold view serves the move's figure as what came back.
+ */
+export interface RefundOptions {
+  returnCharge?: boolean;
+}
+
+/**
+ * How a release differs from the plain one. `asEarning` (R-55, lead ruling 17
+ * Oct 2026): the payee's share does not travel as a transfer of its own. The
+ * release is one database write that settles the hold and makes the payee's
+ * `EarningSettlement` for the payment, and the share then goes to their
+ * wallet in their ONE move a day with every other earning they have. The
+ * money stays in WAWU's account until that move lands (R-19), and the hold is
+ * `released` from the moment the owning feature decided.
+ */
+export interface ReleaseOptions {
+  asEarning?: boolean;
+}
 
 /** A request to release or refund that cannot be honoured. Not an HTTP answer: the feature decides what to do. */
 export class HoldRequestError extends Error {

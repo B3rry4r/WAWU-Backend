@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -16,8 +17,13 @@ import { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { ContentPieceService } from '../content-piece/content-piece.service';
 import { UserProfileService } from './user-profile.service';
 import { UpdateUserProfileDto } from './dto/update-user-profile.dto';
+import { SetAccountTypeDto } from './dto/set-account-type.dto';
+import { SaveInterestsDto } from './dto/save-interests.dto';
+import { SignupProfileService } from './signup-profile.service';
 import { ProfileExperienceService } from './profile-experience.service';
 import { ProfileDetailsService } from './profile-details.service';
+import { VisitorProfileService } from './visitor-profile.service';
+import type { VisitorProfileView } from './visitor-profile.type';
 import { UpdateProfileFieldsDto } from './dto/update-profile-fields.dto';
 import {
   CreateProfileExperienceDto,
@@ -48,6 +54,8 @@ export class UserProfileController {
     private readonly contentPieceService: ContentPieceService,
     private readonly profileExperienceService: ProfileExperienceService,
     private readonly profileDetailsService: ProfileDetailsService,
+    private readonly signupProfile: SignupProfileService,
+    private readonly visitorProfileService: VisitorProfileService,
   ) {}
 
   @Get('me')
@@ -61,6 +69,35 @@ export class UserProfileController {
     @Body() dto: UpdateUserProfileDto,
   ) {
     return this.userProfileService.upsertMe(user, dto);
+  }
+
+  /*
+    ── WHAT SIGN-UP WRITES (AUTH-06) ────────────────────────────────────────
+
+    The account type picked at A2 and the interests picked at A12, on routes of
+    their own because `PATCH /users/me` opens a wallet for a creator and R-6
+    says nobody has one until they open it. Both take the owner from the token.
+    Declared above the `:wawuId` routes for the reason `me/profile-stats` gives.
+  */
+  @Put('me/account-type')
+  setAccountType(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: SetAccountTypeDto,
+  ) {
+    return this.signupProfile.setAccountType(user.sub, dto.accountType);
+  }
+
+  @Get('me/interests')
+  getMyInterests(@CurrentUser() user: WawuJwtClaims) {
+    return this.signupProfile.getInterests(user.sub);
+  }
+
+  @Put('me/interests')
+  saveMyInterests(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: SaveInterestsDto,
+  ) {
+    return this.signupProfile.saveInterests(user.sub, dto.interests);
   }
 
   /**
@@ -157,6 +194,20 @@ export class UserProfileController {
     @CurrentUser() user: WawuJwtClaims,
   ) {
     return this.userProfileService.getPublicProfile(wawuId, user.sub);
+  }
+
+  /**
+   * ME-02: everything M5, M6 and M33 draw about somebody else, in one answer
+   * (the public profile, the profile fields, the person's name, whether the
+   * caller follows them, their live listings). A person the public profile
+   * hides is a 404 here as well.
+   */
+  @Get(':wawuId/visitor-profile')
+  getVisitorProfile(
+    @Param('wawuId') wawuId: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<VisitorProfileView> {
+    return this.visitorProfileService.get(wawuId, user.sub);
   }
 
   /** Somebody else's profile fields: what M5 and M33 draw for a visitor. */

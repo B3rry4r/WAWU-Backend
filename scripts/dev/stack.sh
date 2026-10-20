@@ -9,10 +9,14 @@
 #   scripts/dev/stack.sh down   --name <n> [--scratch <dir>]
 #
 # Always started (from this repo): a database <n>_wawu_hub_test, its migrations,
-# the Hub on port a, and the mock WAWU ID (the one the contract suite uses) on
-# port b, the last port of the range. Payments use the repo's own in-process
-# Flutterwave mock (no key set); Fintava points at a closed port on this
-# machine; block-net.cjs refuses any request to a host that is not this machine.
+# the Hub on port a, a local Nuvion stand-in (scripts/dev/nuvion-standin.cjs) on
+# port b-1, and the mock WAWU ID (the one the contract suite uses) on port b, the
+# last port of the range. The Hub always runs WALLET_PROVIDER=nuvion: every wallet
+# call goes to the stand-in (nuvion-redirect.cjs sends the one Nuvion sandbox host
+# there; the stand-in signs its webhooks with a test secret the stack sets).
+# Payments use the repo's own in-process Flutterwave mock (no key set); Fintava
+# stays pointed at a closed port on this machine and is never used;
+# block-net.cjs refuses any request to a host that is not this machine.
 # With --with:
 #   id      the real wawu-id (--id <path>) on a+1, database <n>_wawu_id_test;
 #           the Hub then signs people in through it instead of the mock
@@ -28,6 +32,16 @@
 # (defaults for --id, --web, --mobile), STACK_NM_HUB, STACK_NM_ID, STACK_NM_WEB,
 # STACK_NM_MOBILE (a node_modules folder to hard-link when the lockfile is the same;
 # otherwise npm ci runs).
+# STACK_STORAGE_ENDPOINT / STACK_STORAGE_PATH_STYLE=true point the Hub's object storage at a stand-in on this
+# machine (for example http://127.0.0.1:7184), so a spec can see the Hub's own storage calls (deletes included).
+# Left unset, the endpoint is a name block-net.cjs refuses, which is what a spec that never reaches storage wants.
+#
+# A service is UP only when its own process (or a child of it) is the listener on its port, not merely when the
+# port answers (FIX-57; scripts/dev/stack-ports.sh). `up` refuses when any port of the range is already listening,
+# `status` says NOT OURS for a port another process holds, and scripts/dev/stack-selftest.sh checks all of it.
+#
+# The stand-in's control routes, and how to seed a funded wallet and fire a webhook:
+# README.md, "Local test stack", and scripts/dev/nuvion-tool.cjs.
 #
 # It never calls a real provider, a wawuafrica.com host or the production Hub.
 set -uo pipefail
@@ -80,27 +94,16 @@ DB_HUB="${NAME}_wawu_hub_test"
 DB_ID="${NAME}_wawu_id_test"
 
 # ---------------------------------------------------------------- helpers
-port_open() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+# port_open, port_listening, listener_pids, owns_port, wait_owned and descendants (FIX-57: a port that
+# answers is not proof the service holds it; its own process must be the listener).
+# shellcheck source=scripts/dev/stack-ports.sh
+. "$DEV_DIR/stack-ports.sh"
 
 # Field 22 of /proc/<pid>/stat: when the process started. A PID that was reused
 # by another process has a different value, so a recorded PID is only trusted
 # when this still matches.
 proc_ticks() { awk '{ sub(/^.*\) /, ""); print $20 }' "/proc/$1/stat" 2>/dev/null; }
 alive_same() { [ -d "/proc/$1" ] && [ "$(proc_ticks "$1")" = "$2" ]; }
-
-# Every descendant of a PID, one per line.
-descendants() {
-  ps -e -o pid= -o ppid= | awk -v root="$1" '
-    { ppid[$1] = $2; ids[NR] = $1 }
-    END {
-      keep[root] = 1; changed = 1
-      while (changed) {
-        changed = 0
-        for (i in ids) { p = ids[i]; if (!(p in keep) && (ppid[p] in keep)) { keep[p] = 1; changed = 1 } }
-      }
-      for (p in keep) if (p != root) print p
-    }'
-}
 
 # Stops a PID and its children: TERM, up to 8 seconds of grace, then KILL.
 stop_tree() {
@@ -130,14 +133,27 @@ rand_hex() { node -p 'require("crypto").randomBytes(24).toString("hex")'; }
 # ---------------------------------------------------------------- status
 cmd_status() {
   if [ ! -f "$PIDS" ]; then say "stack $NAME: not running (no pids in $STATE)"; return 0; fi
-  local bad=0 name pid port ticks state
+  local bad=0 name pid port ticks state alive foreign=""
   while read -r name pid port ticks; do
     [ -n "$name" ] || continue
-    if port_open "$port"; then state="listening"
-    elif alive_same "$pid" "$ticks"; then state="NOT listening (process alive)"; bad=1
+    alive=0; alive_same "$pid" "$ticks" && alive=1
+    # UP means this service's own process holds the port, not just that the port answers.
+    if (( alive )) && owns_port "$pid" "$port"; then state="listening"
+    elif port_listening "$port"; then
+      state="NOT OURS: port held by $(holder_text "$port") ($( (( alive )) && echo "this process alive, not the listener" || echo "this process gone"))"
+      bad=1; foreign="$foreign $name"
+    elif (( alive )); then state="NOT listening (process alive)"; bad=1
     else state="NOT listening (process gone)"; bad=1; fi
     printf '%-9s :%-5s pid %-7s %s\n' "$name" "$port" "$pid" "$state"
   done < "$PIDS"
+  for name in $foreign; do
+    [ -f "$LOGS/$name.log" ] || continue
+    say "last 10 lines of $LOGS/$name.log:"
+    tail -n 10 "$LOGS/$name.log" | cut -c1-200 | sed 's/^/  | /'
+  done
+  local prov="" nport=""
+  [ -f "$ENVF" ] && prov="$(sed -n 's/^WALLET_PROVIDER=//p' "$ENVF")" && nport="$(sed -n 's/^NUV_PORT=//p' "$ENVF")"
+  [ -n "$prov" ] && printf 'provider  %s (stand-in on :%s)\n' "$prov" "$nport"
   return "$bad"
 }
 
@@ -209,6 +225,7 @@ ID_PORT=$((PORT_A + 1))
 WEB_PORT=$((PORT_A + 2))
 MOB_PORT=$((PORT_A + 3))
 MOCK_PORT=$PORT_B
+NUV_PORT=$((PORT_B - 1))
 TOP=$HUB_PORT
 (( WITH_ID )) && TOP=$ID_PORT
 (( WITH_WEB )) && TOP=$WEB_PORT
@@ -218,12 +235,12 @@ USED_PORTS=("$HUB_PORT:hub")
 (( WITH_ID )) && USED_PORTS+=("$ID_PORT:wawu-id")
 (( WITH_WEB )) && USED_PORTS+=("$WEB_PORT:web")
 (( WITH_MOBILE )) && USED_PORTS+=("$MOB_PORT:mobile")
-if (( MOCK_PORT <= TOP )); then
+if (( NUV_PORT <= TOP )); then
   ASKED=""
   for pair in "${USED_PORTS[@]}"; do ASKED="$ASKED ${pair#*:} ${pair%%:*},"; done
-  die "the range $PORTS is too small. Needed:${ASKED% ,} and the mock WAWU ID on the last port, which must be above $TOP (for example --ports $PORT_A-$((TOP + 1)))"
+  die "the range $PORTS is too small. Needed:${ASKED% ,}, the Nuvion stand-in on the port below the last, and the mock WAWU ID on the last port, which must be above $((TOP + 1)) (for example --ports $PORT_A-$((TOP + 2)))"
 fi
-USED_PORTS+=("$MOCK_PORT:mock-id")
+USED_PORTS+=("$NUV_PORT:nuvion" "$MOCK_PORT:mock-id")
 
 # ---------------------------------------------------------------- refusals (nothing is changed before these pass)
 [ ! -f "$ENVF" ] || die "stack $NAME already exists ($STATE). Stop it first: scripts/dev/stack.sh down --name $NAME"
@@ -233,9 +250,19 @@ FREE="$(free_gb)"
 [[ "$FREE" =~ ^[0-9]+$ ]] || die "cannot read free memory from \`free -g\`"
 (( FREE >= MIN_FREE_GB )) || die "only ${FREE} GB of memory available; a stack needs at least $MIN_FREE_GB GB. Wait a minute and try again. Nothing was started."
 
+# Every port of the range, not only the ones this stack uses (FIX-57): a listener anywhere in the range means
+# two stacks were given overlapping ranges.
+[ -r /proc/net/tcp ] || die "this needs Linux (/proc/net/tcp) to tell which process holds a port"
 BUSY=""
-for pair in "${USED_PORTS[@]}"; do
-  port_open "${pair%%:*}" && BUSY="$BUSY ${pair%%:*} (${pair#*:})"
+LISTENING=" $(listening_hexes | tr '\n' ' ')"
+for (( p = PORT_A; p <= PORT_B; p++ )); do
+  printf -v hex '%04X' "$p"
+  if [[ "$LISTENING" == *" $hex "* ]] || port_open "$p"; then
+    label="in the range"
+    for pair in "${USED_PORTS[@]}"; do [ "${pair%%:*}" = "$p" ] && label="${pair#*:}"; done
+    BUSY="$BUSY $p ($label)"
+    printf 'stack.sh: port %s is held by %s\n' "$p" "$(holder_text "$p")" >&2
+  fi
 done
 [ -z "$BUSY" ] || die "already in use:$BUSY. Choose other ports with --ports, or stop what uses them. Nothing was started."
 
@@ -276,6 +303,8 @@ mkdir -p "$LOGS" || die "cannot create $LOGS"
   echo "WITH=$WITH"
   echo "HUB_PORT=$HUB_PORT"
   echo "MOCK_PORT=$MOCK_PORT"
+  echo "NUV_PORT=$NUV_PORT"
+  echo "WALLET_PROVIDER=nuvion"
   echo "DB_HUB=$DB_HUB"
   (( WITH_ID )) && { echo "ID_PORT=$ID_PORT"; echo "DB_ID=$DB_ID"; echo "ID_DIR=$ID_DIR"; }
   (( WITH_WEB )) && { echo "WEB_PORT=$WEB_PORT"; echo "WEB_DIR=$WEB_DIR"; }
@@ -284,7 +313,7 @@ mkdir -p "$LOGS" || die "cannot create $LOGS"
 : > "$PIDS"
 
 SUMMARY=()   # name|url|pid|state
-FAIL_NAME=""; FAIL_LOG=""
+FAIL_NAME=""; FAIL_LOG=""; FAIL_WHY=""
 
 # A Ctrl-C or kill during `up` stops what it started.
 on_signal() { echo; echo "interrupted: stopping stack $NAME"; cmd_down >/dev/null 2>&1; exit 130; }
@@ -303,15 +332,10 @@ launch() {
   LAST_PID=$pid
 }
 
-# wait_up <name> <url> <seconds>: 0 when the URL answers 2xx, 1 when the process died or time ran out.
+# wait_up <name> <port> <url> <seconds>: 0 when the URL answers 2xx and this service's own process (LAST_PID) holds
+# the port, 1 when the process died or time ran out. An answer from another process on the port does not count (FIX-57).
 wait_up() {
-  local name="$1" url="$2" secs="$3" i
-  for i in $(seq 1 "$secs"); do
-    curl -sf -m 3 -o /dev/null "$url" 2>/dev/null && return 0
-    [ -d "/proc/$LAST_PID" ] || return 1
-    sleep 1
-  done
-  return 1
+  wait_owned "$LAST_PID" "$2" "$3" "$4"
 }
 
 # run_step <log-name> <cwd> <command...>: full output to the log; 0 on success.
@@ -324,12 +348,12 @@ run_step() {
 service() {
   local name="$1" port="$2" cwd="$3" url="$4" secs="$5"; shift 5
   launch "$name" "$port" "$cwd" "$@"
-  if wait_up "$name" "$url" "$secs"; then
+  if wait_up "$name" "$port" "$url" "$secs"; then
     SUMMARY+=("$name|$url|$LAST_PID|UP")
     return 0
   fi
   SUMMARY+=("$name|$url|$LAST_PID|FAILED")
-  FAIL_NAME="$name"; FAIL_LOG="$LOGS/$name.log"
+  FAIL_NAME="$name"; FAIL_LOG="$LOGS/$name.log"; FAIL_WHY="$WAIT_WHY"
   return 1
 }
 
@@ -361,6 +385,16 @@ BUILD_LOCK="$SCRATCH/.build.lock"
 mkdir -p "$SCRATCH"
 SERVICE_KEY="stack-$NAME-$(rand_hex)"
 ADMIN_SECRET="$(rand_hex)"; ADMIN_REFRESH="$(rand_hex)"
+# Nuvion on this stack: a test webhook secret shared by the stand-in (signs) and the Hub (verifies), kept off disk,
+# WAWU's operational account, and the fees (kobo; the stand-in charges what the Hub is told to quote).
+NUVION_SECRET="stack-nuvion-whsec-$(rand_hex)"
+NUVION_OPS_ID="01STACKOPERATIONAL0000001"
+# The hosted selfie (FIX-47 L2): STACK_NUVION_LIVENESS=on gives the Hub NUVION_HOSTED_LIVENESS=on, and the app's return
+# address (a string the Hub compares; nothing is ever sent to it) as the one it may hand the stand-in. Left unset it is off.
+NUVION_LIVENESS="${STACK_NUVION_LIVENESS:-}"
+case "$NUVION_LIVENESS" in ''|off|on) ;; *) echo "STACK_NUVION_LIVENESS must be on or off" >&2; exit 2;; esac
+NUVION_LIVENESS_RETURN=""; [ "$NUVION_LIVENESS" = on ] && NUVION_LIVENESS_RETURN="https://wawuafrica.com/selfie"
+NUVION_FEE_BOOK="${STACK_NUVION_FEE_BOOK:-0}"; NUVION_FEE_BANK="${STACK_NUVION_FEE_BANK:-2500}"; NUVION_FEE_IN="${STACK_NUVION_FEE_INFLOW:-0}"
 HUB_DB_URL="$PG_BASE/$DB_HUB?schema=public"
 ID_DB_URL="$PG_BASE/$DB_ID?schema=public"
 BLOCK_NET="--require=$DEV_DIR/block-net.cjs"
@@ -388,6 +422,13 @@ build_all() {
   service mock-id "$MOCK_PORT" "$HUB_DIR" "http://127.0.0.1:$MOCK_PORT/health" 30 node mock-wawu-id/server.js || { flock -u 9; return 1; }
   flock -u 9
 
+  # ---- the Nuvion stand-in (the Hub's only wallet provider on this stack)
+  LENV=(NUVION_STANDIN_PORT="$NUV_PORT" HUB_WEBHOOK_URL="http://127.0.0.1:$HUB_PORT/api/hub/webhooks/nuvion"
+    NUVION_WEBHOOK_SECRET="$NUVION_SECRET" NUVION_OPERATIONAL_ACCOUNT_ID="$NUVION_OPS_ID"
+    NUVION_FEE_BOOK_TRANSFER="$NUVION_FEE_BOOK" NUVION_FEE_BANK_PAYOUT="$NUVION_FEE_BANK" NUVION_FEE_INFLOW="$NUVION_FEE_IN"
+    NODE_OPTIONS="$BLOCK_NET")
+  service nuvion "$NUV_PORT" "$HUB_DIR" "http://127.0.0.1:$NUV_PORT/health" 30 node scripts/dev/nuvion-standin.cjs || return 1
+
   # ---- the real wawu-id
   if (( WITH_ID )); then
     ensure_modules "$ID_DIR" id "${STACK_NM_ID:-}" || { fail_step id-install; return 1; }
@@ -409,7 +450,7 @@ build_all() {
     LENV=(DATABASE_URL="$ID_DB_URL" PORT="$ID_PORT" NODE_ENV=development
       RS256_PRIVATE_KEY="$(cat "$STATE/keys/private.pem")" RS256_PUBLIC_KEY="$(cat "$STATE/keys/public.pem")"
       JWT_EXPIRES_IN=15m REFRESH_EXPIRES_IN=30d INTERNAL_SERVICE_KEY="$SERVICE_KEY"
-      RESEND_API_KEY= APP_URL="http://localhost:$ID_PORT" ALLOWED_ORIGINS=
+      RESEND_API_KEY="${STACK_RESEND_API_KEY:-}" APP_URL="http://localhost:$ID_PORT" ALLOWED_ORIGINS=
       WAWUAFRICA_API_URL="http://127.0.0.1:$HUB_PORT" NODE_OPTIONS="$BLOCK_NET --max-old-space-size=1024")
     service wawu-id "$ID_PORT" "$ID_DIR" "http://127.0.0.1:$ID_PORT/health" 60 node dist/main.js || return 1
   fi
@@ -423,13 +464,19 @@ build_all() {
     WAWU_ID_INTERNAL_SERVICE_KEY="$SERVICE_KEY"
     FLUTTERWAVE_SECRET_KEY= FLUTTERWAVE_PUBLIC_KEY=FLWPUBK_TEST-placeholder FLUTTERWAVE_SECRET_HASH=stack-webhook-hash
     ADMIN_JWT_SECRET="$ADMIN_SECRET" ADMIN_JWT_REFRESH_SECRET="$ADMIN_REFRESH"
-    STORAGE_ENDPOINT=https://bucket.example-storage.dev STORAGE_ACCESS_KEY_ID=stack-key
+    STORAGE_ENDPOINT="${STACK_STORAGE_ENDPOINT:-https://bucket.example-storage.dev}" STORAGE_ACCESS_KEY_ID=stack-key
     STORAGE_SECRET_ACCESS_KEY=stack-secret STORAGE_BUCKET=stack-bucket STORAGE_REGION=auto
+    STORAGE_FORCE_PATH_STYLE="${STACK_STORAGE_PATH_STYLE:-}"
     FINTAVA_BASE_URL=http://127.0.0.1:1/api/dev FINTAVA_API_KEY=stack-key-not-real
+    WALLET_PROVIDER=nuvion NUVION_BASE_URL=https://api.nuvion.dev NUVION_API_KEY=stack-nuvion-key-not-real
+    NUVION_WEBHOOK_SECRET="$NUVION_SECRET" NUVION_OPERATIONAL_ACCOUNT_ID="$NUVION_OPS_ID"
+    NUVION_FEE_BOOK_TRANSFER="$NUVION_FEE_BOOK" NUVION_FEE_BANK_PAYOUT="$NUVION_FEE_BANK" NUVION_FEE_INFLOW="$NUVION_FEE_IN"
+    NUVION_HOSTED_LIVENESS="$NUVION_LIVENESS" NUVION_LIVENESS_REDIRECT_ORIGINS="$NUVION_LIVENESS_RETURN"
+    STACK_NUVION_STANDIN_PORT="$NUV_PORT"
     FINTAVA_WEBHOOK_SECRET="whsec_stack_$NAME" FEE_QUOTE_KEY="stack-fee-quote-key-$SERVICE_KEY"
     MERCHANT_MAX_PER_TXN_KOBO=1000000000 IDENTITY_HASH_KEY="$SERVICE_KEY"
     CARDEX_API_KEY= GEMINI_API_KEY= EXPO_ACCESS_TOKEN= PUSH_ENABLED=false
-    NODE_OPTIONS="$BLOCK_NET --max-old-space-size=1536")
+    NODE_OPTIONS="$BLOCK_NET --require=$DEV_DIR/nuvion-redirect.cjs --max-old-space-size=1536")
   service hub "$HUB_PORT" "$HUB_DIR" "http://127.0.0.1:$HUB_PORT/api/hub/health" 90 node dist/src/main.js || return 1
 
   # ---- the web production build
@@ -479,6 +526,7 @@ export DATABASE_URL="$HUB_DB_URL"
 export WAWU_ID_JWKS_URL="http://localhost:$MOCK_PORT/.well-known/jwks.json"
 export WAWU_ID_BASE_URL="http://localhost:$MOCK_PORT"
 export HUB_URL="http://localhost:$HUB_PORT"
+export NUVION_STANDIN_URL="http://127.0.0.1:$NUV_PORT"
 EOF
 
 # ---------------------------------------------------------------- summary
@@ -489,6 +537,7 @@ for row in "${SUMMARY[@]}"; do
 done
 if [ "$RESULT" -ne 0 ]; then
   say ""
+  [ -z "$FAIL_WHY" ] || say "  why: $FAIL_WHY"
   say "FAILED at ${FAIL_NAME:-?}. Last 15 lines of ${FAIL_LOG:-the log}:"
   [ -f "$FAIL_LOG" ] && tail -n 15 "$FAIL_LOG" | cut -c1-200 | sed 's/^/  | /'
   say "What is running stays up. Stop it: scripts/dev/stack.sh down --name $NAME${SCRATCH_ARG:+ --scratch $SCRATCH}"

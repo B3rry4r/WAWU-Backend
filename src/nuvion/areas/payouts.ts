@@ -14,6 +14,7 @@ import type { NuvionClient, NuvionOp } from '../nuvion-client';
 import { maskNuvionText, NuvionError } from '../nuvion-error';
 import {
   type NuvionTransferReading,
+  nuvionTransferStatus,
   readNuvionTransfer,
 } from '../nuvion-ledger-delivery';
 import {
@@ -359,12 +360,19 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
    *   again under a new one;
    * - a transfer that is this very send and that Nuvion's record says
    *   `failed` (a new reference answered so at once, or a repeat's original)
-   *   is a failed send of the kind its reason names, `recordMayExist` false;
+   *   is a failed send of the kind its reason names, `recordMayExist` false
+   *   and `providerFailed` true (FIX-72: Nuvion made it, so the reference is
+   *   spent and a caller that may send again reads the record and uses a
+   *   new one);
    *   a repeated reference whose original differs from this send, was
    *   reversed, or (told by a 409) has failed, is `duplicate_reference` (the
    *   reference is used up);
    * - a transfer whose record states no `applicable_fee` is not a receipt
-   *   (`not_confirmed`, `recordMayExist` true): a charge is never taken as 0.
+   *   (`not_confirmed`, `recordMayExist` true): a charge is never taken as 0;
+   * - a transfer Nuvion has accepted and not finished (`pending`,
+   *   `processing`, or a word we do not know) is a receipt with `pending`
+   *   set (FIX-54): the money has left the wallet, but the send is not done
+   *   until Nuvion says `successful`, and it may yet fail and come back.
    */
   async bankTransfer(
     input: ProviderBankTransferInput,
@@ -502,6 +510,13 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
         counterpartyId: sent.payee.counterpartyId,
         paymentDetailId: sent.payee.paymentDetailId,
       },
+      // A NIP send is asynchronous ("all transfers are asynchronous"): Nuvion
+      // accepts it `pending` and may still fail it, handing the money back.
+      // Only a record that says `successful` is a finished transfer; any
+      // other word, one we do not know included, is not (FIX-54).
+      ...(nuvionTransferStatus(transfer.status) === 'completed'
+        ? {}
+        : { pending: true }),
     };
   }
 
@@ -646,6 +661,17 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
       // that had failed): it is a failed send, and nothing moved. The
       // reason Nuvion gives names the kind. The reference now names that
       // failed transfer, so a new attempt takes a new reference.
+      //
+      // `providerFailed` (FIX-72): Nuvion MADE the transfer and its own
+      // record (`status: failed`, api-reference__transfers.md "Transfer
+      // statuses", line 119: "Could not be completed") says it failed, so the
+      // money is where it was, but `unique_reference` is its idempotency key
+      // (api-reference__transfers.md line 174: "If a transfer with this
+      // reference already exists for the account, the original transfer is
+      // returned rather than creating a duplicate"). A repeat of this
+      // reference answers with this same failed record for ever, so a caller
+      // that may send again reads the record and does it under a NEW
+      // reference. A refusal at the door (no transfer made) never sets it.
       throw new NuvionError({
         kind: payoutFailureKind(t.statusReason),
         operation: op.name,
@@ -655,6 +681,7 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
         ],
         reference: ctx.reference,
         recordMayExist: false,
+        providerFailed: true,
         requestId: answer.requestId,
       });
     }

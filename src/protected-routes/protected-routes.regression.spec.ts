@@ -13,6 +13,7 @@ import request from 'supertest';
 import { AppModule } from '../app.module';
 import { FlutterwaveWalletClient } from '../wallet/flutterwave-wallet.client';
 import { FLUTTERWAVE_WALLET_GATEWAY } from '../wallet/flutterwave-wallet.gateway';
+import { checkStorableTextOnEveryRoute } from '../storable-text/storable-text.pipe';
 import { AllExceptionsFilter } from '../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../common/interceptors/response.interceptor';
 import {
@@ -28,6 +29,7 @@ import {
   createAdmins,
   ensureMockWawuId,
   fillPath,
+  grantVerifyTier,
   loginSeeded,
   pick,
   registerIdentity,
@@ -155,6 +157,12 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
       ctx.set(`${who}.sub`, id.sub);
     }
     await createAdmins(DATABASE_URL, nonce);
+    // Publishing needs a tier (TIER-02): the two creators hold a running
+    // Verify tier, as a paying creator does. Removed by the snapshot restore.
+    await grantVerifyTier(DATABASE_URL, [
+      ctx.get('creator.sub')!,
+      ctx.get('creator2.sub')!,
+    ]);
     ctx.set('absentUuid', ABSENT_UUID);
     ctx.set('nonce', nonce);
     // Events and consultations refuse a date in the past.
@@ -195,6 +203,10 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
     );
     app.useGlobalFilters(new AllExceptionsFilter());
     app.useGlobalInterceptors(new ResponseInterceptor());
+    // FIX-17 F5: the pipe that refuses text Postgres cannot take is wired in as
+    // the Hub installs it, so this suite shows the routes the web calls answer
+    // as before with it on, not only that the lock is intact.
+    checkStorableTextOnEveryRoute(app);
     await app.init();
     live = liveRoutes(app);
 
@@ -221,7 +233,7 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
     for (const step of section.setup ?? []) await runStep(step, 'setup');
   }, 120_000);
 
-  /** Runs a setup or `before` step; a step that fails stops the run with its own error. */
+  /** Runs a setup, `before` or `after` step; a step that fails stops the run with its own error. */
   async function runStep(step: Step, where: string): Promise<void> {
     if ('sql' in step) {
       const client = new Client({ connectionString: DATABASE_URL });
@@ -450,6 +462,8 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
               ? EMPTY_BODY
               : fingerprint(actual, probe.mapPaths ?? []),
         });
+        for (const step of probe.after ?? [])
+          await runStep(step, `${route.id} after`);
         return;
       }
 
@@ -474,6 +488,8 @@ describe('Protected routes (MONEY-01, V3 regression)', () => {
         route: route.id,
         shapeProblems: [],
       });
+      for (const step of probe.after ?? [])
+        await runStep(step, `${route.id} after`);
     });
   });
 });

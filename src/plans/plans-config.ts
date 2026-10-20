@@ -16,8 +16,12 @@ import type { BillingCurrency } from '../../generated/prisma/enums';
  * Read once, at boot, and checked whole: a file that is not JSON, a field
  * that is missing, misspelt, of the wrong kind or out of range stops the
  * server with a message naming the field (`tiers[1].price.kobo must be a
- * whole number of 1 or more`). Changing a figure is editing the file and
- * restarting; no code changes.
+ * whole number of 1 or more`). The file is the DEFAULT plan (TIER-06, R-65):
+ * an admin changes a figure in the dashboard (`/admin/plan-settings`) with no
+ * restart and no code change, and the live plan every reader injects is these
+ * defaults with the saved settings laid over them (src/plan-settings). The
+ * file stays as the seed for two weeks after launch, then a removal task
+ * takes it out.
  *
  * Money is in minor units, whole numbers only: `kobo` for people billed in
  * naira, `cents` for people billed in dollars (R-21: never naira or dollar
@@ -53,6 +57,12 @@ export interface PerCurrency {
 export interface PlanEventPass {
   id: string;
   name: string;
+  /**
+   * The lines W44 prints under the pass. Not in the file: an admin setting
+   * (TIER-06, `plan.event_pass.<id>.benefits`), so the file's own reading
+   * leaves it unset and only the live config (src/plan-settings) carries it.
+   */
+  benefits?: readonly string[] | null;
 }
 
 export interface PlanBadge {
@@ -179,6 +189,12 @@ export interface PlansConfig {
   tiers: readonly PlanTier[];
   /** Event registration offers (JOIN-01); the list may be empty. */
   eventOffers: readonly EventOffer[];
+  /**
+   * The day of the event the passes are for, as `YYYY-MM-DD`, or null until
+   * the owner sets it (W44 reads "Date to be announced"). An admin setting
+   * (TIER-06, `plan.event_date`), not in the file.
+   */
+  eventDate?: string | null;
   /** The tier VF5 shows selected. */
   preselectedTier: string;
   /** A tier is `ending` this many days or fewer before it ends (VF14). */
@@ -265,6 +281,16 @@ export function priceIn(price: MinorPrice, currency: BillingCurrency): number {
 /** Picks the count for a person billed in `currency`. */
 export function countIn(count: PerCurrency, currency: BillingCurrency): number {
   return currency === 'USD' ? count.USD : count.NGN;
+}
+
+/**
+ * A percent of a number of points, rounded down to a whole point. Exact for
+ * whole inputs: the product is a whole number far below 2^53, and the
+ * remainder is taken off before the division.
+ */
+export function percentOf(points: number, percent: number): number {
+  const product = points * percent;
+  return (product - (product % 100)) / 100;
 }
 
 /** The tier with this id, or null when the config no longer has it. */
@@ -469,8 +495,7 @@ class Check {
   text(v: unknown, path: string): string {
     if (typeof v !== 'string' || v.trim() === '' || v.trim() !== v)
       this.fail(path, 'must be text, not empty, with no spaces around it');
-    if (v.includes('\u2014'))
-      this.fail(path, 'must not contain an em-dash (R-5)');
+    if (/\u2014/.test(v)) this.fail(path, 'must not contain an em-dash (R-5)');
     return v;
   }
 

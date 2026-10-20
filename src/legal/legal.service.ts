@@ -51,6 +51,56 @@ const SLOT_HOLDING_STATUSES = [
 ] as const;
 
 /**
+ * Statuses a matter is in once its price is agreed and signed for: the quote
+ * cannot be changed from any of them (LEGAL-06 F1).
+ */
+const REQUOTE_LOCKED_STATUSES = [
+  'contract_signed',
+  'awaiting_service_payment',
+  'in_progress',
+  'delivered',
+] as const;
+
+const REQUOTE_SIGNED =
+  'The client has already signed the engagement letter at the current price, so the quote can no longer be changed.';
+const REQUOTE_PAID =
+  'This work is already paid for, so its quote can no longer be changed.';
+const REQUOTE_CANCELLED = 'This request is cancelled, so it cannot be quoted.';
+const REQUOTE_CHANGED =
+  'This request changed while the quote was being saved, so the quote was not changed. Open it again to see where it stands.';
+const SIGN_CHANGED =
+  'This request changed while you were signing, so nothing was signed. Open the engagement letter again to see where it stands.';
+const SIGN_CLOSED =
+  'This request is closed, so nothing was signed. Open it to see where it stands.';
+
+/**
+ * Why a request can no longer be re-quoted, or null when it still can: it is
+ * cancelled (a closed request is not reopened by a quote), the letter is
+ * signed, or the work is paid or under way (LEGAL-06 F1).
+ */
+function requoteRefusal(r: {
+  status: string;
+  contractSignedAt: Date | null;
+  servicePaidAt: Date | null;
+}): string | null {
+  if (r.status === 'cancelled') return REQUOTE_CANCELLED;
+  if (
+    r.servicePaidAt ||
+    r.status === 'in_progress' ||
+    r.status === 'delivered'
+  ) {
+    return REQUOTE_PAID;
+  }
+  if (
+    r.contractSignedAt ||
+    (REQUOTE_LOCKED_STATUSES as readonly string[]).includes(r.status)
+  ) {
+    return REQUOTE_SIGNED;
+  }
+  return null;
+}
+
+/**
  * How long an unpaid booking holds its hour.
  *
  * Booking and paying are two calls, and plenty of people never make the
@@ -495,13 +545,34 @@ export class LegalRequestsService {
         'This request cannot be quoted until its consultation has been paid for.',
       );
     }
-    const updated = await this.prisma.legalRequest.update({
-      where: { id },
+    // A quote is the price the client signs and then pays (LEGAL-06 F1). Once
+    // the letter is signed, or the work is paid or under way, a new quote
+    // would strand the matter (the fee is no longer asked, signing again is
+    // refused), and on paid work it would move the status back to `quoted`.
+    // Refused here, and again in the write itself so a client signing at the
+    // same moment cannot slip between the check and the update.
+    const locked = requoteRefusal(record);
+    if (locked) throw new ConflictException(locked);
+    const { count } = await this.prisma.legalRequest.updateMany({
+      where: {
+        id,
+        contractSignedAt: null,
+        servicePaidAt: null,
+        status: { notIn: [...REQUOTE_LOCKED_STATUSES, 'cancelled'] },
+      },
       data: {
         quoteAmount: dto.amountNaira,
         quoteNote: dto.note ?? null,
         status: 'quoted',
       },
+    });
+    if (count === 0) {
+      const now = await this.prisma.legalRequest.findUnique({ where: { id } });
+      if (!now) throw new NotFoundException('Legal request not found.');
+      throw new ConflictException(requoteRefusal(now) ?? REQUOTE_CHANGED);
+    }
+    const updated = await this.prisma.legalRequest.findUniqueOrThrow({
+      where: { id },
     });
     // The price a client is billed used to be set anonymously behind a shared
     // key. The naira figure is recorded with it, not just the fact of a quote.
@@ -719,6 +790,9 @@ export class LegalRequestsService {
     if (record.contractSignedAt) {
       throw new ConflictException('This contract has already been signed.');
     }
+    // A closed matter that still carries its quote is not reopened by a
+    // signature (SWEEP-MONEY, LEGAL-06 B3a L4).
+    if (record.status === 'cancelled') throw new ConflictException(SIGN_CLOSED);
     if (record.quoteAmount == null) {
       throw new BadRequestException('This request has not been quoted yet.');
     }
@@ -733,8 +807,20 @@ export class LegalRequestsService {
       requestId: record.id,
     });
 
-    const updated = await this.prisma.legalRequest.update({
-      where: { id: record.id },
+    // The letter above was written from the quote and status just read. The
+    // signature goes down only if the matter is still exactly that (LEGAL-06
+    // round 3): a re-quote, a cancel or another signature that committed
+    // since the read would otherwise leave a letter at one price on a matter
+    // priced, and charged, at another. Nothing is held across the two steps;
+    // the write itself decides.
+    const { count } = await this.prisma.legalRequest.updateMany({
+      where: {
+        id: record.id,
+        contractSignedAt: null,
+        status: record.status,
+        quoteAmount: record.quoteAmount,
+        quoteNote: record.quoteNote,
+      },
       data: {
         contractText,
         contractSignedAs: fullName,
@@ -742,6 +828,20 @@ export class LegalRequestsService {
         contractSignedIp: ip ?? null,
         status: 'contract_signed',
       },
+    });
+    if (count === 0) {
+      const now = await this.prisma.legalRequest.findUnique({
+        where: { id: record.id },
+        select: { contractSignedAt: true },
+      });
+      throw new ConflictException(
+        now?.contractSignedAt
+          ? 'This contract has already been signed.'
+          : SIGN_CHANGED,
+      );
+    }
+    const updated = await this.prisma.legalRequest.findUniqueOrThrow({
+      where: { id: record.id },
     });
     return this.toResponse(updated);
   }

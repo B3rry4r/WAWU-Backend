@@ -60,13 +60,15 @@ decides nothing about categories by itself:
 
 | Pushed | Switch |
 |---|---|
-| `sale`, `tip_received` | Money in (`moneyIn`) |
+| `sale`, `tip_received`, `money_in` | Money in (`moneyIn`) |
+| `money_in_reversed` | Money in (`moneyIn`), for push only (the list always carries it, WALLET-39) |
 | `dm_refunded` | Refunds (`refunds`) |
 | `new_follower` | New followers (`newFollowers`) |
 | `dm_deadline` | Paid questions (`dmReminders`) |
 | `dm_received` | Paid questions (`dmReminders`), for push only (the list is unchanged, G-24) |
 | `content_published`, `content_rejected`, `review_received` | Reviews (`contentReviews`) |
 | `community_join_approved`, `community_join_declined` | none (G-32) |
+| `community_pass_ending` | none (G-INBOX-24-1): the reminder 3 days before a private room's pass ends (R-63), always pushed |
 
 **Held, not pushed** (they stay in the in-app list): `paid_dm_warning`,
 `paid_dm_paused`, `credits_low`, `kyc_verified`, `verify_reminder`, `campaign`.
@@ -91,7 +93,17 @@ with one exception: `content_rejected`'s list body carries the admin's
 free-text reason, which never goes on a lock screen, so its push body is
 "“<piece title>” was sent back. Tap to see why." (the reason is read in the
 app). `review_received` keeps the piece title and the stars (reviews are
-public); the amount-bearing kinds are as BACKEND_GAPS G-266 says.
+public); the amount-bearing kinds are as BACKEND_GAPS G-266 says. `money_in` (WALLET-10)
+also names the sender, with only the last four digits of their account number,
+when the provider gave a name (G-737); without a name it says the amount alone.
+Since WALLET-39 (R-54) `money_in` is every credit to a wallet, and says where it
+came from: "from Tolu B." (another person, a short name and no number), "in
+earnings", "from your points", "a refund of ...", "by bank transfer". A credit
+that was told and is later reversed is followed by one `money_in_reversed`
+("The ₦5,000 you received from Tolu B. was reversed."). Both carry the ledger
+row's id as `target: { "kind": "transaction", "id": "<id>" }`, the id
+`GET /money/transactions/{id}` answers: the app opens that receipt (or W46 for
+a bank transfer in).
 `actionHref` and `target` are present only when the notification has them. A
 body that would pass Expo's 4096 byte payload limit is shortened; `data` never
 is. INBOX-21 reads `data` on a tap.

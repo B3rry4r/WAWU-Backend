@@ -33,6 +33,19 @@ export interface LiveChatReadEvent extends LiveEventBase {
   lastReadMessageId: string | null;
 }
 
+/**
+ * A money request in one of the caller's chats changed: it was paid,
+ * declined or cancelled (INBOX-15). `message` is the chat bubble that carries
+ * it, as the caller sees it, with the request's status now (`moneyRequest`);
+ * the app replaces the bubble it holds with the same id. A request being
+ * made arrives as a plain `chat.message`.
+ */
+export interface LiveMoneyRequestEvent extends LiveEventBase {
+  type: 'money_request.updated';
+  chatId: string;
+  message: ChatMessage;
+}
+
 /** A message in a community the caller is in. Same shape as `GET /communities/:id/messages`. */
 export interface LiveCommunityMessageEvent extends LiveEventBase {
   type: 'community.message';
@@ -53,7 +66,10 @@ export interface LiveLegalThreadEvent extends LiveEventBase {
 }
 
 export type LiveEvent =
-  LiveChatMessageEvent | LiveChatReadEvent | LiveCommunityMessageEvent;
+  | LiveChatMessageEvent
+  | LiveChatReadEvent
+  | LiveMoneyRequestEvent
+  | LiveCommunityMessageEvent;
 
 /** First frame the server sends once a token is accepted. */
 export interface LiveReadyFrame {

@@ -10,14 +10,16 @@ import type { AdPlacementName } from './dto/ads.dto';
  *   1. its placement is the one asked for;
  *   2. its status is `scheduled` or `live` (never `draft`, `paused`, `ended`);
  *   3. startsAt <= now < endsAt (the start instant is in, the end instant is out);
- *   4. it has a creative;
+ *   4. it has a creative with artwork (R-59: a card is never drawn without a
+ *      picture; campaigns saved before ADS-07 without one are skipped);
  *   5. what the button opens is still open: for `event`, the Event exists, is
  *      `published`, is not cancelled, has not finished (the same "upcoming"
  *      test GET /events uses) and its host is not hidden from the viewer by a
  *      block (the same rule GET /events/:id uses, so the button never leads
  *      to a 404).
- * Of the campaigns that pass, ONE is served: the highest weight first, then
- * the order in AD_TIE_BREAK. A campaign that fails (5) is skipped and the next
+ * Of the campaigns that pass, ONE is served for `tgif_card` and `today_slot`:
+ * the highest weight first, then the order in AD_TIE_BREAK. The Explore slider
+ * (`explore_slider`, ADS-07) serves ALL of them, in that same order. A campaign that fails (5) is skipped and the next
  * one is tried, so a card whose event was called off is replaced, not shown.
  * Nothing eligible answers `null`, which the app draws as no card at all.
  *
@@ -49,7 +51,7 @@ export interface ServableCampaign {
     ctaLabel: string;
     ctaDestination: 'event';
     ctaDestinationId: string;
-    artworkUrl: string | null;
+    artworkUrl: string;
   };
 }
 
@@ -73,7 +75,7 @@ export async function servableCampaigns(
       status: { in: [...SERVED_STATUSES] },
       startsAt: { lte: now },
       endsAt: { gt: now },
-      creative: { isNot: null },
+      creative: { is: { artworkUrl: { not: null } } },
     },
     orderBy: [...AD_TIE_BREAK],
     select: {
@@ -109,11 +111,16 @@ export async function servableCampaigns(
     const creative = c.creative;
     // Anything this code cannot check is not served.
     if (!creative || creative.ctaDestination !== 'event') continue;
+    if (!creative.artworkUrl) continue;
     if (!open.has(creative.ctaDestinationId)) continue;
     out.push({
       id: c.id,
       advertiser: c.advertiser,
-      creative: { ...creative, ctaDestination: 'event' },
+      creative: {
+        ...creative,
+        ctaDestination: 'event',
+        artworkUrl: creative.artworkUrl,
+      },
     });
   }
   return out;

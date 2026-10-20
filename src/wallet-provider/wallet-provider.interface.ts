@@ -342,6 +342,36 @@ export interface ProviderBalance {
   availableKobo: bigint;
   /** Including what is pending settlement. */
   bookedKobo: bigint;
+  /**
+   * What the provider says this account may move (WALLET-23), when the same
+   * answer says it. Absent when the provider's balance answer names no limit
+   * (Nuvion documents no account level and publishes no limit).
+   */
+  accountLimits?: ProviderAccountLimits;
+}
+
+/**
+ * An account's limit as its provider reports it (WALLET-23). The provider
+ * enforces it; WAWU reads it to refuse early, with the limit shown, and to
+ * fill W35's limits row. Never a figure of WAWU's own.
+ */
+export interface ProviderAccountLimits {
+  /**
+   * The provider's own name for the account's level ("TIER_2"). Kept for
+   * ops. The app is never shown it (BRIEF W35: the limits row names no tier).
+   */
+  tier: string | null;
+  /** The most the account may send in a day, in kobo; null when none is known. */
+  dailyKobo: bigint | null;
+}
+
+/**
+ * Whether one person's wallet can send and receive (SETTINGS-06). A frozen
+ * wallet does neither; its balance can still be read.
+ */
+export interface ProviderWalletState {
+  walletId: string;
+  frozen: boolean;
 }
 
 /** WAWU's own account at the provider (its merchant or operational account). */
@@ -449,6 +479,37 @@ export interface ProviderTransaction {
    * not say, which is not the same as zero.
    */
   merchantChargeKobo?: bigint | null;
+  /**
+   * Which way the money went on the holder's account, when the provider's
+   * record says (NUV-08: Nuvion's statement lines). Absent or null: the
+   * record does not say.
+   */
+  direction?: 'in' | 'out' | null;
+  /**
+   * The holder's balance right after this movement, in kobo, when the
+   * provider's record says (NUV-08: a statement's running balance). Only
+   * the provider's own figure: never one added up from our records.
+   */
+  balanceAfterKobo?: bigint | null;
+  /**
+   * Set when this record is the transfer that moved WAWU's fee on a send (a
+   * provider with `wawuFeeLeg`): the reference of the send it belongs to.
+   * The nightly check (FIX-67) matches the leg to its send by this, never by
+   * parsing a reference itself. Absent or null: it is not a fee transfer.
+   */
+  feeLegOf?: string | null;
+  /**
+   * Set when this record is the transfer that gave a send's fee back (the
+   * send did not stand): the reference of that send. Absent or null: it is not.
+   */
+  feeReturnOf?: string | null;
+  /**
+   * Set when this record gives a move back (the move was reversed, or a bank
+   * send was returned): the reference of the move it gives back. The nightly
+   * check (FIX-80) matches it to that move by this, never by parsing a
+   * reference itself. Absent or null: it is not a return.
+   */
+  returnOf?: string | null;
 }
 
 export type ProviderTransactionKind = 'transfer' | 'charge' | 'other';
@@ -547,6 +608,14 @@ export interface ProviderPayee {
   paymentDetailId: string | null;
 }
 
+/**
+ * How the reference of a send to a bank account begins (WALLET-09): ours,
+ * `wawu-bank-<id>`, so an adapter can tell a bank send from a send to another
+ * WAWU user (`wawu-send-<id>`) by the reference alone when it must find the
+ * send again.
+ */
+export const BANK_SEND_REFERENCE_PREFIX = 'wawu-bank-';
+
 export interface ProviderBankTransferInput {
   /** Whose money: a person's (their customerId) or WAWU's own account. */
   from: ProviderHolder;
@@ -583,6 +652,15 @@ export interface ProviderTransferReceipt {
   sourceAvailableKobo: bigint | null;
   /** The payee ids this send used or made, for the caller to keep (NUV-06). */
   payee?: ProviderPayee | null;
+  /**
+   * True when the provider ACCEPTED the transfer and has not finished it
+   * (FIX-54: a bank send on Nuvion is `pending` first, and says so). The
+   * money may fail to arrive and come back, so the caller must not treat the
+   * send as done: it stays pending until the provider's word (a delivery, or
+   * a read of the transfer) says completed. Absent or false: the receipt is
+   * for a transfer the provider finished, as every other receipt is.
+   */
+  pending?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -687,6 +765,16 @@ export interface WalletProvider {
   readonly configured: boolean;
   readonly timings: WalletProviderTimings;
   readonly capabilities: WalletProviderCapabilities;
+  /**
+   * The provider's own charge cannot carry WAWU's fee (FIX-52: Nuvion's
+   * `applicable_fee` is Nuvion's, and a transfer has no field for ours), so a
+   * send's WAWU fee moves as a transfer of its own from the sender to WAWU's
+   * account, under the send's reference plus `-fee`, once the send is
+   * confirmed. Absent or false: the provider's one charge carries it (Fintava's
+   * merchant charges), and nothing else is moved.
+   */
+  readonly wawuFeeLeg?: boolean;
+
   /**
    * The bank code of every wallet at this provider: a party named at a bank
    * is a WAWU wallet only at this bank.
@@ -793,6 +881,23 @@ export interface WalletProvider {
    * `WalletProviderError` when the provider cannot say.
    */
   isSameAccount?(a: string, b: string): Promise<boolean>;
+
+  // Freezing (SETTINGS-06, R-17)
+  /**
+   * Freezes one person's wallet: it can neither send nor receive, and its
+   * balance can still be read. Used for the 30 days between asking to delete
+   * an account and the deletion. Optional, like `isSameAccount`: a provider
+   * without it (Nuvion, until it is built) leaves the wallet as it is, and
+   * the caller says so; it never guesses. Idempotent at Fintava. Fails with a
+   * `WalletProviderError`; an unknown outcome (`recordMayExist`) may have
+   * frozen it.
+   */
+  freezeWallet?(
+    wallet: { walletId: string },
+    reason: string,
+  ): Promise<ProviderWalletState>;
+  /** Undoes `freezeWallet`. Optional and idempotent in the same way. */
+  unfreezeWallet?(wallet: { walletId: string }): Promise<ProviderWalletState>;
 }
 
 /** One PIN reset code for one person, as an `OtpSender` sends it (NUV-01). */

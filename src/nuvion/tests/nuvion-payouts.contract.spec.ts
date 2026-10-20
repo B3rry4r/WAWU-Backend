@@ -31,7 +31,10 @@ import { ResponseInterceptor } from '../../common/interceptors/response.intercep
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../hub-app-options';
-import { LedgerService } from '../../money/ledger/ledger.service';
+import {
+  LedgerProviderConflictError,
+  LedgerService,
+} from '../../money/ledger/ledger.service';
 import { MoneyError } from '../../money/money-error';
 import { MoneyModule } from '../../money/money.module';
 import {
@@ -377,6 +380,28 @@ describe('NUV-06: sending to a bank and paying out', () => {
         failureReason: null,
         source: 'webhook',
       });
+    });
+
+    it('NUV-06 F3: a row of another provider on the send reference is a stop kept for review, not a delivery that waits', async () => {
+      const p = await person();
+      const { id } = await sendFrom(p);
+      pay.settle(id, 'successful');
+      // The ledger refuses to fold into another provider's row (a rollback).
+      const record = jest
+        .spyOn(moduleRef.get(LedgerService), 'record')
+        .mockRejectedValueOnce(new LedgerProviderConflictError(['row-1']));
+      try {
+        const d = await deliverAndDispatch(
+          'outflows.completed',
+          pay.delivery(id),
+        );
+        expect([d.processingStatus, d.note]).toEqual([
+          'failed',
+          expect.stringMatching(/held by another provider/),
+        ]);
+      } finally {
+        record.mockRestore();
+      }
     });
 
     it('a replay, the same send under another event id, and two at once are still one row', async () => {
@@ -1319,6 +1344,24 @@ describe('NUV-06: sending to a bank and paying out', () => {
       const payout = moduleRef.get(PayoutAccountService);
       const owner = randomUUID();
       people.push(owner);
+      // R-51 (WALLET-37 round 2): a Nuvion wallet keeps no BVN name, so a
+      // payout account must be in the wallet's own account name. This test is
+      // about the payee ids, so the wallet is named for each account in turn.
+      const walletRef = randomUUID().replace(/-/g, '');
+      const nameWalletAs = (accountName: string) =>
+        prisma.fintavaWallet.upsert({
+          where: { wawuUserId: owner },
+          create: {
+            wawuUserId: owner,
+            customerId: `w37-${walletRef}`,
+            walletId: `w37-${walletRef}-w`,
+            accountNumber: `7${walletRef.slice(0, 9)}`,
+            accountName,
+            provider: 'nuvion',
+          },
+          update: { accountName },
+        });
+      await nameWalletAs(HOLDER);
       // Saved under Nuvion: already matched and checked.
       const view = await payout.set(owner, {
         bankCode: '044',
@@ -1361,6 +1404,7 @@ describe('NUV-06: sending to a bank and paying out', () => {
       });
       // Another number at the same bank takes none of the old account's ids.
       pay.addAccountAtBank('044', '0123456741', 'Third Account');
+      await nameWalletAs('Third Account');
       await payout.set(owner, { bankCode: '044', accountNumber: '0123456741' });
       expect(await targets.forPayoutAccount(owner, 'wawu')).toMatchObject({
         target: { bankCode: '044', payee: null },
@@ -1379,6 +1423,7 @@ describe('NUV-06: sending to a bank and paying out', () => {
       });
       // Another account takes none of the old account's ids.
       pay.addAccountAtBank('058', '0123456740', 'Second Account');
+      await nameWalletAs('Second Account');
       await payout.set(owner, { bankCode: '058', accountNumber: '0123456740' });
       expect(await targets.forPayoutAccount(owner, 'wawu')).toMatchObject({
         target: { bankCode: '058', payee: null },

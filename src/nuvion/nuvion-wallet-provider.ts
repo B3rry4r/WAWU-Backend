@@ -32,7 +32,9 @@ import {
   NuvionReconcileArea,
   type NuvionReconcileMethods,
 } from './areas/reconcile';
+import { BANK_SEND_REFERENCE_PREFIX } from '../wallet-provider/wallet-provider.interface';
 import type { NuvionClient } from './nuvion-client';
+import { reconcileBankSend } from './handlers/outflows-bank';
 
 /**
  * What Nuvion can do, said ahead (the seam's `capabilities`):
@@ -97,7 +99,7 @@ export function nuvionAreas(
  * | accounts.ts | NUV-04 | getWalletAccount, getBalance |
  * | book.ts | NUV-05 | getPlatformAccount, walletToWallet, isSameAccount, and for book transfers findTransactionByReference, findTransactionById, reconcileSend, decideRetry, confirmMovement, secondaryReferenceOf |
  * | payouts.ts | NUV-06 | listBanks, checkAccountName, bankTransfer |
- * | reconcile.ts | NUV-08 | deliveries, listTransactions (the statement); NUV-08 widens the lookups above to every rail |
+ * | reconcile.ts | NUV-08 | deliveries, listTransactions (the statement); the lookups above are widened to every rail by id (findTransactionById, confirmMovement) |
  *
  * A method whose area has no Nuvion call yet answers `not_supported`:
  * nothing is sent and nothing moves.
@@ -107,6 +109,11 @@ export class NuvionWalletProvider implements WalletProvider {
   readonly label = 'Nuvion';
   /** Built only with every Nuvion setting present (nuvion-config.ts). */
   readonly configured = true;
+  /**
+   * Nuvion's transfer has no field for a fee of ours, so WAWU's fee on a send
+   * is its own book transfer to the operational account (FIX-52).
+   */
+  readonly wawuFeeLeg = true;
   /** NUVION_CAPABILITIES, with the hosted selfie as the documents area says now (NUV-03). */
   get capabilities(): WalletProviderCapabilities {
     return {
@@ -156,6 +163,15 @@ export class NuvionWalletProvider implements WalletProvider {
     const area = this.areas.documents;
     if (!(area instanceof NuvionDocumentsArea)) {
       throw new Error("The documents area of this adapter is not Nuvion's.");
+    }
+    return area;
+  }
+
+  /** The reconciliation area (NUV-08): statements, the sweep's reads, the subscription and fee simulations. */
+  get reconcile(): NuvionReconcileArea {
+    const area = this.areas.reconcile;
+    if (!(area instanceof NuvionReconcileArea)) {
+      throw new Error("The reconcile area of this adapter is not Nuvion's.");
     }
     return area;
   }
@@ -234,14 +250,44 @@ export class NuvionWalletProvider implements WalletProvider {
   findTransactionByReference(reference: string) {
     return this.areas.book.findTransactionByReference(reference);
   }
-  findTransactionById(id: string) {
-    return this.areas.book.findTransactionById(id);
+  /**
+   * A book transfer is found through the book log (NUV-05). An id the log
+   * never held (a payout, an inflow, a refund) is asked of Nuvion as WAWU's
+   * own entity by the reconciliation area (NUV-08); a person's transfer
+   * needs its entity, so there the answer stays `unknown`, never `absent`.
+   */
+  async findTransactionById(id: string) {
+    const book = await this.areas.book.findTransactionById(id);
+    return book.state === 'unknown'
+      ? this.areas.reconcile.findTransactionById(id)
+      : book;
   }
   listTransactions(holder: ProviderHolder, query: ProviderPageQuery) {
     return this.areas.reconcile.listTransactions(holder, query);
   }
-  reconcileSend(reference: string, holder: ProviderHolder, since?: Date) {
-    return this.areas.book.reconcileSend(reference, holder, since);
+  /**
+   * What Nuvion knows of one of our sends. A book transfer is found through
+   * the book log (NUV-05). A reference the log never held is another rail's;
+   * one of ours that names a bank send (`BANK_SEND_REFERENCE_PREFIX`, NUV-06)
+   * is then asked of the payouts area by the sender's transfers
+   * (`reconcileBankSend`, WALLET-09), which never makes a transfer and never
+   * reads silence as "no money moved". Any other reference is not asked.
+   */
+  async reconcileSend(
+    reference: string,
+    holder: ProviderHolder,
+    since?: Date,
+  ): Promise<ProviderReconciliation> {
+    const book = await this.areas.book.reconcileSend(reference, holder, since);
+    if (
+      book.state === 'unknown' &&
+      book.why === 'unrecognised' &&
+      reference.startsWith(BANK_SEND_REFERENCE_PREFIX) &&
+      this.areas.payouts instanceof NuvionPayoutsArea
+    ) {
+      return reconcileBankSend(this.areas.payouts, reference, holder, since);
+    }
+    return book;
   }
   decideRetry(
     kind: ProviderSendKind,
@@ -250,14 +296,19 @@ export class NuvionWalletProvider implements WalletProvider {
   ) {
     return this.areas.book.decideRetry(kind, reconciliation, clock);
   }
-  confirmMovement(input: {
+  async confirmMovement(input: {
     references: readonly string[];
     sender: ProviderHolder | null;
     amountKobo: number;
     around: Date;
     limits: ProviderConfirmLimits;
   }) {
-    return this.areas.book.confirmMovement(input);
+    const book = await this.areas.book.confirmMovement(input);
+    return book.state === 'unknown'
+      ? this.areas.reconcile
+          .confirmMovement(input)
+          .then((r) => (r.state === 'found' ? r : book))
+      : book;
   }
   secondaryReferenceOf(t: ProviderTransaction) {
     return this.areas.book.secondaryReferenceOf(t);

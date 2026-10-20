@@ -436,6 +436,21 @@ export class PointsService {
   }
 
   /**
+   * The points a person can spend now: every live lot that has points and
+   * has not ended, summed. The same figure `view` calls `balance`, read
+   * alone for the routes that only need the number (POINTS-04's quote and
+   * its checks before the PIN). A read, never a lock: a hold that follows
+   * still takes the person's lock and checks again.
+   */
+  async balanceOf(wawuUserId: string, now: Date = new Date()): Promise<number> {
+    const sum = await this.prisma.pointLot.aggregate({
+      where: { wawuUserId, remaining: { gt: 0 }, expiresAt: { gt: now } },
+      _sum: { remaining: true },
+    });
+    return sum._sum.remaining ?? 0;
+  }
+
+  /**
    * PT5: the caller's balance, their live lots soonest-expiring first, the
    * soonest points to end, and the last 20 ledger rows, newest first. Only
    * the given person's rows are read.

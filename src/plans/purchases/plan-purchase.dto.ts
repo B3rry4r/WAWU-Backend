@@ -10,16 +10,27 @@ import {
   Matches,
   Max,
   Min,
+  ValidateIf,
 } from 'class-validator';
 import {
-  PLAN_PURCHASE_KINDS,
   PLAN_PURCHASE_METHODS,
-  type PlanPurchaseKind,
+  PLAN_PURCHASE_REQUEST_KINDS,
+  PLAN_PURCHASE_KINDS,
+  POINTS_PACK_KIND,
   type PlanPurchaseMethod,
+  type PlanPurchaseRequestKind,
 } from './plan-purchase-terms';
 
 /** A tier id as the plans file writes it. */
 const TIER_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+
+/** A points pack id as the plans file writes it (same shape as a tier id). */
+const PACK_ID_PATTERN = TIER_ID_PATTERN;
+
+/** A tier purchase carries a `tierId`; a points pack purchase carries a `packId` instead. */
+const isTier = (o: { kind?: unknown }): boolean =>
+  (PLAN_PURCHASE_KINDS as readonly unknown[]).includes(o.kind);
+const isPack = (o: { kind?: unknown }): boolean => o.kind === POINTS_PACK_KIND;
 
 /**
  * The largest amount a body carries exactly (the money contract's bound): a
@@ -31,19 +42,31 @@ const MAX_EXACT_KOBO = Number.MAX_SAFE_INTEGER;
 const readFlag = ({ value }: { value: unknown }): unknown =>
   value === 'true' ? true : value === 'false' ? false : value;
 
-/** GET /plans/purchases/quote?kind=&tierId=&bump= */
+/** GET /plans/purchases/quote?kind=&tierId=&bump= (or ?kind=points_pack&packId=) */
 export class PlanPurchaseQuoteQueryDto {
-  /** `tier` (a first purchase, or after the last ended), `renew` (the tier held) or `upgrade` (to a bigger tier). */
-  @ApiProperty({ enum: PLAN_PURCHASE_KINDS })
-  @IsIn(PLAN_PURCHASE_KINDS)
-  kind!: PlanPurchaseKind;
+  /**
+   * `tier` (a first purchase, or after the last ended), `renew` (the tier
+   * held), `upgrade` (to a bigger tier), `points_pack` (a points pack,
+   * POINTS-02) or `extra_products` (more product places on the tier held,
+   * TIER-04, with no `tierId`, `packId` or `bump`).
+   */
+  @ApiProperty({ enum: PLAN_PURCHASE_REQUEST_KINDS })
+  @IsIn(PLAN_PURCHASE_REQUEST_KINDS)
+  kind!: PlanPurchaseRequestKind;
 
-  /** A tier in the plans file (`GET /plans`). */
-  @ApiProperty({ pattern: TIER_ID_PATTERN.source })
+  /** A tier in the plans file (`GET /plans`). Required for a tier purchase; not sent for a points pack. */
+  @ApiPropertyOptional({ pattern: TIER_ID_PATTERN.source })
+  @ValidateIf(isTier)
   @Matches(TIER_ID_PATTERN, { message: 'tierId is not a valid tier id' })
-  tierId!: string;
+  tierId?: string;
 
-  /** Buy the checkout bump's extra points with it (VF6). */
+  /** A pack in the plans file (`GET /plans` `packs`). Required for `points_pack`; not sent for a tier purchase. */
+  @ApiPropertyOptional({ pattern: PACK_ID_PATTERN.source })
+  @ValidateIf(isPack)
+  @Matches(PACK_ID_PATTERN, { message: 'packId is not a valid pack id' })
+  packId?: string;
+
+  /** Buy the checkout bump's extra points with it (VF6). Not for a points pack. */
   @Transform(readFlag)
   @ApiPropertyOptional({ type: 'boolean' })
   @IsOptional()
@@ -53,21 +76,33 @@ export class PlanPurchaseQuoteQueryDto {
 
 /** POST /plans/purchases. Headers: Idempotency-Key, X-Transaction-Pin. */
 export class PlanPurchaseDto {
-  @ApiProperty({ enum: PLAN_PURCHASE_KINDS })
-  @IsIn(PLAN_PURCHASE_KINDS)
-  kind!: PlanPurchaseKind;
+  @ApiProperty({ enum: PLAN_PURCHASE_REQUEST_KINDS })
+  @IsIn(PLAN_PURCHASE_REQUEST_KINDS)
+  kind!: PlanPurchaseRequestKind;
 
-  @ApiProperty({ pattern: TIER_ID_PATTERN.source })
+  /** Required for a tier purchase; not sent for a points pack. */
+  @ApiPropertyOptional({ pattern: TIER_ID_PATTERN.source })
+  @ValidateIf(isTier)
   @Matches(TIER_ID_PATTERN, { message: 'tierId is not a valid tier id' })
-  tierId!: string;
+  tierId?: string;
 
-  /** Buy the checkout bump's extra points with it. Default: no. */
+  /** Required for `points_pack`; not sent for a tier purchase. */
+  @ApiPropertyOptional({ pattern: PACK_ID_PATTERN.source })
+  @ValidateIf(isPack)
+  @Matches(PACK_ID_PATTERN, { message: 'packId is not a valid pack id' })
+  packId?: string;
+
+  /** Buy the checkout bump's extra points with it. Default: no. Not for a points pack. */
   @ApiPropertyOptional({ type: 'boolean' })
   @IsOptional()
   @IsBoolean()
   bump?: boolean;
 
-  /** How it is paid: from the wallet. */
+  /**
+   * How it is paid: `wallet` from the balance now, or `transfer`: the answer
+   * carries the wallet's own account number and the amount still needed, and
+   * the purchase is paid from the wallet when the money lands.
+   */
   @ApiProperty({ enum: PLAN_PURCHASE_METHODS })
   @IsIn(PLAN_PURCHASE_METHODS)
   method!: PlanPurchaseMethod;

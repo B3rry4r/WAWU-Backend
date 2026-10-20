@@ -35,24 +35,27 @@ caller from the token.
 | `DELETE /money/device` | `ApprovalDeviceView` | | MONEY-14 (served) |
 | `POST /money/device/challenge` | `ApprovalChallengeView` | | MONEY-14 (served) |
 | `POST /money/approval/verify` | `PinStateView` | `X-Transaction-Pin` or `X-Device-Approval` | MONEY-14 (served) |
-| `GET /money/banks` | `BankView[]` | | WALLET-09 |
-| `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 |
+| `GET /money/banks` | `BankView[]` | | WALLET-09 (served; CONVENTIONS.md section 24) |
+| `POST /money/banks/name-check` | `AccountNameView` | `NameCheckDto` | WALLET-09 (served; CONVENTIONS.md section 24); 30 an hour per person, `429 name_check_rate_limited` (WALLET-37) |
 | `GET /money/recipients?q=` | `RecipientView[]` (at most 20) | | WALLET-08 (served; CONVENTIONS.md section 13) |
 | `GET /money/recipients/recent` | `RecipientView[]` (at most 10) | | WALLET-08 (served; CONVENTIONS.md section 13) |
 | `GET /money/beneficiaries` | `BeneficiaryView[]` | | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `POST /money/beneficiaries` | `BeneficiaryView` | `CreateBeneficiaryDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `DELETE /money/beneficiaries/{id}` | `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
 | `GET /money/payout-account` | `PayoutAccountView` or `null` | | WALLET-14 (served; CONVENTIONS.md section 10) |
-| `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10) |
+| `PUT /money/payout-account` | `PayoutAccountView` | `PayoutAccountDto` | WALLET-14 (served; CONVENTIONS.md section 10); only an account in the person's own name, else `409 account_not_in_your_name` (WALLET-37) |
 | `GET /money/fees/quote?kind=&amountKobo=&billCategory=` | `FeeQuoteView` | | WALLET-15 (served; CONVENTIONS.md section 11) |
 | `POST /money/transfers/wawu` | `TransferView` | `WawuTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-07 (served; CONVENTIONS.md section 19) |
-| `POST /money/transfers/bank` | `TransferView` | `BankTransferDto`, `Idempotency-Key`, `X-Transaction-Pin` | WALLET-09 |
+| `POST /money/transfers/bank` | `TransferView` | `BankTransferDto` (with `quoteToken`), `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | WALLET-09 (served; CONVENTIONS.md section 24); `429 name_check_rate_limited` for an unsaved account whose name token is not the person's own (WALLET-37) |
 | `GET /money/transfers/{id}` | `TransferView` | | WALLET-07 (served; CONVENTIONS.md section 19) |
+| `GET /money/transfers/presets` | `TransferPresetsView` | | WALLET-02 (served; the quick amounts under W9's keypad from `TRANSFER_AMOUNT_PRESETS_KOBO`, a provisional setting owned by YOU, and the note's longest length) |
 | `GET /money/payments/quote?kind=&targetId=&amountKobo=` | `PaymentQuoteView` | | MONEY-17 (served; CONVENTIONS.md section 14) |
 | `POST /money/payments` | `PaymentView` | `PaymentDto`, `Idempotency-Key`, `X-Transaction-Pin` or `X-Device-Approval` | MONEY-17 (served; CONVENTIONS.md section 14) |
 | `GET /money/payments/{id}` | `PaymentView` | | MONEY-19 (served; CONVENTIONS.md section 14a) |
 | `GET /money/holds?role=&cursor=&limit=` | `HoldPage` | | MONEY-18 (served; CONVENTIONS.md section 18) |
 | `GET /money/holds/{id}` | `HoldView` | | MONEY-18 (served; CONVENTIONS.md section 18) |
+| `GET /money/earnings?month=` | `EarningsView` | | WALLET-16 (served; CONVENTIONS.md section 26; not behind the wallet gate) |
+| `GET /money/earnings/content?month=&cursor=&limit=` | `EarningContentPage` | | WALLET-16 (served; CONVENTIONS.md section 26; not behind the wallet gate) |
 | `GET /money/transactions?filter=&q=&month=&group=&cursor=&limit=` | `TransactionPage` | | MONEY-15 (served; CONVENTIONS.md section 6) |
 | `GET /money/transactions/summary?month=` | `MonthlySummaryView` | | MONEY-15 (served) |
 | `GET /money/transactions/{id}` | `TransactionView` | | MONEY-15 (served) |
@@ -127,14 +130,247 @@ payment onto the wallet.
 |---|---|---|---|---|
 | `content_unlock` | HOME-15 | the content piece id (`POST /content/:id/unlock`) | no | no |
 | `tip` | HOME-14 | the creator's wawuUserId (`POST /tips` takes `creatorWawuId`); `note` is the tip's message | yes, `amountKobo` | no |
-| `credit_pack` | INBOX-16 | the pack: `starter`, `popular` or `pro` (`POST /credits/purchase`) | no | no |
+| `credit_pack` | INBOX-16 | the pack: `starter`, `popular` or `pro` (`GET /credits/packs` lists them; `POST /credits/purchase` is the web's Flutterwave route and stays as it is) | no | no (WAWU's own sale: the price stays in WAWU's account and the 85/15 split is applied per spent credit, as for a Flutterwave pack) |
+| `community_pass` | INBOX-24 | the community's id (`POST /communities/{id}/pass`); the price is the host's monthly price for that private room | no | no (WAWU's account holds it, the host's 85% is an earning in their one move a day, R-55; a pass that cannot be given is paid back in full, the charge included) |
 | `verification` | ME-18 | the tick: `creator` or `professional` | no | no |
 | `legal_fee` | LEGAL-05 | the legal request id | no | no |
-| `school_fee` | SCHOOLS-07 | the enrolment order id | no | no |
-| `paid_dm` | INBOX-17 | the message id `POST /dm/:creatorWawuId/send` returns | no | until the creator answers |
-| `event_ticket` | EVENTS-07 | the order id `POST /events/:id/orders` returns | no | until the event takes place |
-| `bill` | BILLS-04 | the bill id `POST /bills/init` returns | no | until the biller delivers |
+| `school_fee` | SCHOOLS-07 | the enrolment order id `POST /schools/enrolments` returns; the price is the course fee quoted when the place was held, and the 85/15 split (R-12) is recorded with the payment and its hold although the school is not on WAWU | no | until the intake starts |
+| `paid_dm` | INBOX-17 | the question id `POST /dm/{creatorWawuId}/send/wallet` returns (`POST /dm/:creatorWawuId/send` is the web's Flutterwave route and stays as it is); it is also the id of the message once it is sent | no | until the creator answers |
+| `event_ticket` | EVENTS-07 | the order id `POST /events/:id/orders/wallet` returns (`POST /events/:id/orders` is the web's Flutterwave route and stays as it is); one order holds a line per ticket type; a basket that costs nothing is issued with no payment (R-8) | no | until the event takes place |
+| `bill` | BILLS-04 | the bill id `POST /bills/wallet` returns (`POST /bills/init` is the web's Flutterwave route and stays as it is); the price moved is the bill, Fintava's bill charge and WAWU's bill fee, in one transfer (R-31) | no | until the biller delivers |
 | `tier`, `tier_bump` | TIER-03 | the terms: `tier-<tierId>`, `renew-<tierId>` or `upgrade-<fromTierId>-<tierId>` (`GET /plans/purchases/quote` builds it; `tier_bump` adds the checkout bump) | no | no (WAWU's own sale, no seller split; a payment whose plan cannot be granted when it confirms is refunded in full, docs/contract/PLANS.md section 8) |
+| `points_pack` | POINTS-02 | the pack: `pack-<packId>` (`GET /plans` `packs` lists the ids; `GET /plans/purchases/quote?kind=points_pack&packId=` builds it). The pack's points, the Founding Maker's bonus and the expiry are the quote's terms (a change since the quote is `409 quote_changed`) | no | no (WAWU's own sale, no seller split; one lot of points is added once, docs/contract/PLANS.md section 10) |
+| `extra_products` | TIER-04 | the add-on: `extra-products` (`GET /plans/purchases/quote?kind=extra_products` builds it). The number of products is the quote's terms (a change since the quote is `409 quote_changed`). Needs a running tier: without one it is `402 tier_required` | no | no (WAWU's own sale, no seller split; the products are added once to the tier the person holds, docs/contract/PLANS.md section 11) |
+| `points_shortfall` | POINTS-03 | the points: `shortfall-<points>` (`POST /points/quote` builds the quote; `POST /points/shortfall` buys). The points, the pack rate and the expiry are the quote's terms (a change since the quote is `409 quote_changed`) | no | no (WAWU's own sale at the pack rate, no seller split; one lot of points is added once, docs/contract/CONVENTIONS.md section 16a) |
+| `points_cash_out` | POINTS-04 | the conversion id `POST /points/convert` returns | no | no (never paid by a person: it is the ledger link of WAWU's cash paid into the wallet for points, docs/contract/CONVENTIONS.md section 20; a payment for it is `target_not_payable`) |
+
+#### Credits from the wallet (INBOX-16)
+
+A pack is bought with the wallet through four routes, all declared in
+`contract/openapi.json` and all new (the web's `POST /credits/purchase` and
+`/verify` are unchanged):
+
+- `GET /credits/packs`: the server's pack table, cheapest first
+  (`{ pack, credits, priceKobo, badge }`; `badge` is the tag I28 draws:
+  `popular` on the 120-credit pack, `best_value` on the 300-credit one, else
+  null). Needs no wallet. Credits are a count, never
+  naira (R-5).
+- `GET /credits/purchase/wallet/quote?pack=`: the pack and the payment quote
+  (price, the provider's charge on top, total, balance, shortfall, token).
+  For `popular`: ₦1,000 + ₦23.25 = ₦1,023.25.
+- `POST /credits/purchase/wallet` `{ pack, expectedTotalKobo, quoteToken }`
+  with `Idempotency-Key` and the PIN: pays and answers 201 with the purchase
+  (`paid`, `pending` or `failed`). The same key and body answer the first
+  result again and charge once. One payment gives one purchase row, one
+  balance increase and one cost-basis lot, in one database transaction.
+- `GET /credits/purchase/wallet/{id}`: the purchase as it stands now (what the
+  app polls after `pending`). `creditBalance` is the person's count once the
+  purchase had landed; `GET /credits` is the live count.
+
+A payment whose credits cannot be written yet (`payment.delivered` false) is
+`pending`: the sweep writes them once, and no second charge is possible.
+`CreditPurchase.walletPaymentId` (unique) is the link from a purchase to its
+payment; `flutterwaveTxRef` carries `wallet:<payment id>` on these rows.
+
+#### Tips from the wallet (HOME-14)
+
+A tip is paid with three new routes (the web's `POST /tips` and
+`/tips/verify` are unchanged). The kind is `tip`; the target is the creator's
+wawuUserId and the amount is the payer's, a whole number of naira from ₦1 to
+₦10,000,000 in kobo (`amount_out_of_range` otherwise).
+
+- `GET /tips/wallet/quote?creatorWawuId=&amountKobo=`: `{ creator, amountKobo,
+  payment }`. ₦2,000 plus the provider's charge is the total.
+- `POST /tips/wallet` `{ creatorWawuId, amountKobo, note?, expectedTotalKobo,
+  quoteToken }` with `Idempotency-Key` and the PIN: 201 with the tip
+  (`id`, `status` `paid`, `pending`, `failed`, `reversed` or `refunded`,
+  `creator`, `amountKobo`, `note`, `payment`, `paidAt`).
+- `GET /tips/wallet/{id}`: the same tip, for the payer only.
+
+The tip is recorded once per payment as the web's own `Purchase` row of type
+`tip` (`flutterwaveTxRef` is `wallet:<payment id>`, unique), so the creator's
+earnings, the admin streams and the "you were tipped" notification read it as
+they read a Flutterwave tip. The creator's 85% lands by itself (WALLET-16,
+R-11); WAWU keeps 15%. A tip that cannot be delivered (the creator's account
+is gone, or they blocked the payer since) is paid back through MONEY-18's
+refund: the price and everything the payment took return, the provider's
+charge included, and WAWU bears the refund's own charge (lead ruling 17 Oct
+2026, as Q-03 and EVENTS-10; the payer did not cause it).
+
+#### A private community's monthly pass (INBOX-24, R-63)
+
+A private room whose host set a price sells 30 days at a time, paid from the
+wallet with the PIN. The kind is `community_pass`; the target is the community
+id; the price is the host's, in kobo, set when the room is made
+(`POST /communities/rooms` takes `passPriceKobo`, private rooms only, between
+`COMMUNITY_PASS_MIN_KOBO` and `COMMUNITY_PASS_MAX_KOBO`). A private room with no
+price keeps the older join requests. There is no host approval step and no
+automatic debit anywhere: renewing is a new payment the person confirms.
+
+- `GET /communities/{id}/pass`: `{ communityId, sellsPass, priceKobo,
+  periodDays, passUntil, active, canRenew, canBuy, isHost }`. Needs no wallet.
+- `GET /communities/{id}/pass/quote`: `{ communityId, title, host, priceKobo,
+  periodDays, passUntil, newPassUntil, payment }`.
+- `POST /communities/{id}/pass` `{ expectedTotalKobo, quoteToken }` with
+  `Idempotency-Key` and the PIN: 201 with the purchase (`status` `pending`,
+  `paid`, `failed`, `reversed` or `refunded`; `passUntil` once paid; `payment`).
+- `GET /communities/{id}/pass/{paymentId}`: the same purchase, for the payer.
+- `GET /communities/{id}/membership` additionally returns `passUntil` (ISO 8601
+  or null) and `canRenew` (boolean), in a room that sells a pass only; any
+  other room answers exactly as before.
+
+A pass runs 30 days from the later of today and the current end date. A member
+whose pass has ended keeps their membership row and loses the room, reading and
+posting (`403`), until they renew; `GET /communities/{id}/room` shows them as
+`none`, `GET /communities/mine` still lists the room with no message and no
+unread count. `POST /communities/{id}/join` in a room that sells a pass is
+`409` without a running pass, and joins without paying for someone who left
+with time on theirs. The reminder 3 days before the end is the notification
+kind `community_pass_ending` (in-app and pushed), whose `actionHref` is
+`/communities/{id}/renew`. The host's 85% is an earning (kind `community_pass`
+in `GET /money/earnings`) and travels in their one move a day. A pass that
+cannot be given (the room stopped selling, or the host and the person can no
+longer deal) is paid back in full, the provider's charge included.
+
+#### Unlocks from the wallet (HOME-15)
+
+A piece is unlocked with three new routes (the web's `POST /content/:id/unlock`
+and `/unlock/verify` are unchanged). The kind is `content_unlock`; the target
+is the content piece id; the price is the piece's own.
+
+- `GET /content/{id}/unlock/wallet/quote`: `{ contentId, title, creator,
+  priceKobo, payment }`. A free piece, your own, one that is gone or one you
+  already own is `target_not_payable` or `target_not_found`.
+- `POST /content/{id}/unlock/wallet` `{ expectedTotalKobo, quoteToken }` with
+  `Idempotency-Key` and the PIN: 201 with the unlock (`status`, `purchased`,
+  `fullAssetUrl` once paid, `payment`).
+- `GET /content/{id}/unlock/wallet/{paymentId}`: the same unlock, for the
+  payer only.
+
+Access is the web's own `Purchase` row of type `content`, written once per
+payment (`wallet:<payment id>`). A debited-but-not-granted payment is granted
+by the payment sweep; one that cannot be granted (the piece was taken down
+since the quote, or the person already owned it by another payment) is paid
+back (`status: refunded`).
+
+#### Legal fees from the wallet (LEGAL-05)
+
+A legal fee is paid with three new routes (the web's `/consultation`,
+`/consultation/verify`, `/payment/init` and `/payment/verify` are unchanged).
+The kind is `legal_fee`; the target is the legal request id, and WAWU is the
+seller (no payee, nothing held).
+
+- `GET /legal/requests/{id}/pay/wallet/quote`: `{ requestId, stage, title,
+  priceKobo, payment }`. The fee due is the consultation fee recorded on the
+  request when the hour was booked (`stage: consultation`, status
+  `awaiting_consultation_payment`, the hold on the hour still good), else the
+  quoted fee once the engagement letter is signed (`stage: service`). Nothing
+  due, a cancelled request or another person's is `target_not_payable` or
+  `target_not_found`.
+- `POST /legal/requests/{id}/pay/wallet` `{ expectedTotalKobo, quoteToken }`
+  with `Idempotency-Key` and the PIN: 201 with the payment (`status`, `stage`,
+  `requestStatus`, `payment`).
+- `GET /legal/requests/{id}/pay/wallet/{paymentId}`: the same, for the payer.
+
+The price is the one on the request (R-14); the quote is bound to the stage
+and the fee, so a request re-booked or re-quoted since is `409 quote_changed`.
+Paying marks the stage paid with one conditional write and records
+`wallet:<payment id>` as the request's `consultationTxRef` or `serviceTxRef`.
+A fee that cannot be applied (the request was cancelled while the debit was
+confirming, the hour was given up, or it was paid another way) is paid back.
+
+#### Paid questions from the wallet (INBOX-17)
+
+A paid question is drafted, priced and paid with four new routes (the web's
+`POST /dm/{creatorWawuId}/send` and `POST /dm/{messageId}/send/verify` are
+unchanged). The kind is `paid_dm`; the target is the question id; the payee is
+the creator; the price is the creator's own (`CreatorState.dmPrice`), never the
+app's. The price is held (R-19) until the creator answers.
+
+- `POST /dm/{creatorWawuId}/send/wallet` `{ text }` (optional
+  `Idempotency-Key`): drafts the question and answers the pay sheet (I3):
+  `{ question: { id, creator, text, priceKobo, replyWindowHours }, payment }`
+  where `payment` is the wallet payment's quote (₦1,500 plus the provider's
+  charge is the total; `willBeHeld` is true). Nothing is reserved or debited,
+  and the creator's inbox does not show the question yet. The same key and
+  question answer the same draft; another question under that key is `409
+  idempotency_key_reused`. A creator who has not switched paid messages on,
+  one paused by the no-reply rule (INBOX-09), a block between the two and your
+  own account are `409 target_not_payable`; no creator is `404
+  target_not_found`; a question to this creator still waiting is `409
+  question_already_waiting` (G-75).
+- `GET /dm/send/wallet/{questionId}/quote`: the same answer again (I3
+  reopened, or a quote past its `expiresAt`).
+- `POST /dm/send/wallet/pay` `{ questionId, expectedTotalKobo, quoteToken }`
+  with `Idempotency-Key` and the PIN: 201 with the question (`status`
+  `pending`, `asked`, `failed`, `refunding` or `refunded`; `payment`; `sentAt`
+  and `deadlineAt` once it is sent). The same key and body answer the first
+  result again and charge once; two taps with two keys are `409
+  payment_in_progress`; two drafts to one creator paid at once are `409
+  question_already_waiting` on the second, decided in the payment's claim
+  under a lock.
+- `GET /dm/send/wallet/{questionId}`: the question as it stands, for the asker
+  only (`unpaid`, `pending`, `asked`, `answered`, `refunding`, `refunded`,
+  `failed`, `reversed`); what the app polls after `pending` and for I4 and I5.
+
+Paying holds the price in WAWU's own account. The question reaches the
+creator's inbox once, when the debit is confirmed: a `DirectMessage` row with
+`flutterwaveTxRef` `wallet:<payment id>`, the amount of the price in naira,
+and a deadline of the creator's reply window from that moment.
+
+- **The creator answers** (either reply route): the answer flips the question
+  `awaiting_response` to `responded` with one conditional write, and then the
+  hold is released as an earning (R-55): in one database write the hold is
+  `released` and the creator's 85% (R-5) becomes an earning of kind `paid_dm`
+  that goes to their wallet in their ONE move of the day with their other
+  earnings (a day's total under ₦200 waits; WAWU carries the charge, R-31), or
+  waits for the wallet they have not opened (R-11); WAWU keeps 15%. The money
+  stays in WAWU's account until that move lands (R-19). Further reply bubbles
+  ask nothing more.
+- **The window passes** with no answer: the question is flipped to `refunded`
+  by one conditional write and the hold is refunded: the fan gets back every
+  naira, the price and the charge the payment took (the fan did not cause it;
+  lead ruling 17 Oct 2026), and WAWU bears the refund transfer's own charge.
+  `dm_refunded` is sent once, when the provider has confirmed the refund.
+- **Never both.** The two writes cannot both match one question, and the hold
+  refuses the second outcome after the first (`other_action_chosen`). A
+  minute sweep asks again for anything a request did not finish.
+- **A question that cannot be sent** (the creator went, switched paid
+  messages off, was paused or blocked the payer between the quote and the
+  confirmed debit) is paid back whole: the price and everything the payment
+  took return, and WAWU carries the charge.
+- The web's Flutterwave refund sweep leaves a wallet question alone.
+
+#### Hosts' shares: community credits and event tickets (WALLET-17)
+
+No new route: both shares reach the host's wallet by themselves (R-11), in the
+host's one move a day (R-55), and show in the earnings reads (`GET /money/earnings`) and the history like any earning.
+A host without a wallet keeps the share and it lands once, within a minute of
+the wallet opening.
+
+- **Community credits.** The host's 85% (R-5) of the credits spent in their
+  room (`CreditSpendEarning.hostShareKobo`) becomes an earning of kind
+  `community_credits` (a stream the app reads as "Community credits"; the
+  contract's `PaymentKind` enum does not list it, as an earning stream is
+  "a kind this version does not know, kept, last"). It travels in the host's
+  ONE move of the day with their sales (R-55): one transfer a day, a day's
+  total under ₦200 waits, WAWU carries the provider's charge (R-31). Only
+  credits bought with the wallet are paid here: their price is in WAWU's
+  account. Credits from the web's Flutterwave packs, and a spend that mixed
+  both, wait for the web to follow after launch. A spend before the earnings
+  sweep's start (`EARNINGS_SWEEP_START`) is never paid.
+- **Event tickets.** A wallet order's price waits in WAWU's account as a
+  `held` `event_ticket` hold with the host as payee (EVENTS-07). When the
+  event has taken place (`endsAt ?? startsAt` gone by, plus
+  `EVENT_PAYOUT_DELAY_HOURS` if set, none by default), each paid order's hold
+  is RELEASED as an earning (R-55): the hold becomes `released` and the host's
+  85% becomes an earning of kind `event_ticket` that goes to their wallet in
+  their ONE move of the day with their other earnings (one transfer a day, a
+  day's total under ₦200 waits, WAWU carries the charge, R-31); WAWU keeps
+  15%. The money stays in WAWU's account until that move lands (R-19). The
+  hold decides once and one way, so the job running twice, on two servers or
+  at the moment the event is called off pays once or refunds once. An event
+  called off, removed or not over, and an order that is not paid, pays nobody.
 
 ## 2. The named schemas (G-1)
 
@@ -221,7 +457,7 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | W27 Transaction detail | type, counterparty, linked content, destination, reference, fee breakdown | `GET /money/transactions/{id}` → `category`, `counterparty`, `link`, `fee`, `reference` |
 | | Report a problem (support chat with the reference) | no support route exists: gap (section 5) |
 | W28 No results | a filtered, empty month | `filter=bills&month=2026-09` → `items: []` |
-| W35 Wallet settings | limits row (fill or hide) | `WalletView.limits` (null hides; section 5: no task fills it yet) |
+| W35 Wallet settings | limits row (fill or hide) | `WalletView.limits` (null hides; filled by WALLET-23, section 5) |
 | | PIN last changed | `WalletView.pin.changedAt` |
 | | beneficiaries count | `WalletView.beneficiaryCount` |
 | | account details | `WalletView.account` |
@@ -237,8 +473,10 @@ brief (`docs/designer/BRIEF.md`) and the rulings.
 | W36 PIN create | set; confirm | `POST /money/pin` (`pin`, `pinConfirmation`); change is `PUT /money/pin` |
 | W37 PIN reset | code to the phone on file, resend timer | `POST /money/pin/reset` → `sentTo` (last 4 digits), `resendAvailableAt`, `expiresAt`; `429 reset_codes_exhausted`, `503 provider_unreachable` (MONEY-14) |
 | | code check, then W36 | `POST /money/pin/reset/confirm` (`code`, `newPin`, `newPinConfirmation`) |
-| W39 Earnings | earned, by stream, by content | WALLET-16 (`GET /content/mine/earnings` today); not a money-contract route |
-| | paid DM money still held for the creator | `GET /money/holds?role=payee` |
+| W39 Earnings | earned all time and this month, by stream (Unlocks, Tips, Paid DMs), by content | `GET /money/earnings` → `allTime`, `thisMonth` (`earnedKobo`, `streams`), `GET /money/earnings/content?month=` → `EarningContentPage` (WALLET-16). The web's `GET /content/mine/earnings` is unchanged |
+| | no "Ready to move", no button; the money lands by itself (R-11) | nothing to call: `EarningSettlementService` moves a creator's earnings once a day in one transfer (R-55) |
+| | a creator with no wallet: the money is waiting, "Open your wallet" | `EarningsView.waiting` (`count`, `amountKobo`) and `walletOpen: false`; both routes work without a wallet |
+| | paid DM money still held for the creator | `GET /money/holds?role=payee` (behind the wallet gate, G-449) or `EarningsView.held` (not gated) |
 | A21 Payout bank | bank list, name check | `GET /money/banks`, `POST /money/banks/name-check` |
 | | name against the BVN name | `PayoutAccountView.matchesBvnName` |
 | | save | `PUT /money/payout-account` |
@@ -286,6 +524,10 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
    money into WAWU's merchant wallet (the buyer pays Fintava's charge, R-10),
    and the creator's 85% then has to move from WAWU's wallet to the creator's
    (R-11): a second wallet to wallet move, charged ₦15.75 to ₦23.25 again.
+   R-31 (lead default, until the owner rules) makes that second charge WAWU's:
+   the creator receives the whole 85% and the charge is taken from WAWU's 15%
+   (WALLET-16 and MONEY-18 build it so). On a ₦100 sale the 15% is ₦15, less
+   than the ₦23.25 move, so WAWU pays more than it keeps (BACKEND_GAPS G-703).
    The same holds for releasing or refunding a hold (R-19) and for bills
    (`naira-api.md`, "Bills are paid from WAWU's merchant wallet"). Who pays
    that second charge (WAWU, the creator out of the 85%, or the buyer) is not
@@ -325,7 +567,11 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
 6. **Refunds return the price, and reversals may keep a charge.** The canvas
    says "Nothing was taken" and "The full ₦25,010 is back" (W14), and refund
    copy elsewhere promises everything back. R-10's default: a refund returns
-   the price, Fintava's charge is not returned. For a failed bank send, two
+   the price, Fintava's charge is not returned. A refund the person did not
+   cause returns every naira, the charge included, and WAWU bears the refund
+   transfer's own charge (lead ruling 17 Oct 2026: a lapsed paid question, a
+   tip, unlock or legal fee that cannot be delivered, a ticket order for an
+   event called off). For a failed bank send, two
    things are open: whether Fintava's reversal (`debit_transfer_reversal`,
    payload unseen) returns its own ₦40, and whether WAWU's ₦25 comes back
    (R-10 does not say). The contract reports what actually came back
@@ -366,17 +612,34 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
 
 ## 5. Gaps this task found (not done here)
 
-- **Daily limits have no owner task.** `limits.md` wants `TIER_LIMITS` in
-  config, the day's limit and what is left on W35 and A8, and a send over it
-  stopped before the PIN. The contract has the fields
-  (`WalletView.limits`, `FeeQuoteView.withinDailyLimit`,
-  `daily_limit_exceeded`), but no launch task fills them. Until one does,
-  `limits` is null and the row is hidden.
+- **Daily limits are served by WALLET-23** (the provider's limit on the
+  account). Fintava publishes no limit; it reports the wallet's tier on every
+  balance read (`data.tier`), and the tier's daily limit is the setting
+  `FINTAVA_TIER_DAILY_LIMITS_KOBO` (unset: Fintava's policy of 2 Oct 2026 in
+  `limits.md`, Tier 1 ₦50,000, Tier 2 ₦500,000, Tier 3 ₦5,000,000). The read
+  is kept on the wallet row (`accountTier`, `dailyLimitKobo`, `limitsReadAt`),
+  so `GET /money/wallet` still never calls the provider.
+  - `WalletView.limits` is filled once a balance read has kept a limit, with
+    `tier: null` (the row names no tier, BRIEF W35), and stays null (the row
+    hides) before that and for a tier the setting does not know. Nuvion names
+    no limit, so it is null there.
+  - The check (`MoneyLimits.assertMayMove`) counts every kind of movement out
+    of the wallet today in Lagos together, by amount before fees, and refuses
+    `403 limit_reached` with `limit: daily`, `limitKobo` (the limit) and
+    `remainingTodayKobo` (what is left), the sentence carrying both in naira.
+    The quote's `withinDailyLimit` and `remainingTodayKobo` use the tighter of
+    this and WAWU's own daily limit for the kind.
+  - The code stays `limit_reached` (NUV-07), not `daily_limit_exceeded`, which
+    the send routes list (WALLET-07), and the bank send (WALLET-09, served)
+    does not.
+  - Fintava's own refusal for a limit has never been seen in the sandbox
+    (`limits.md`), so there is no mapping for it yet; WAWU's early refusal is
+    what a person sees.
 - **Biometric approval routes** are served by MONEY-14 (`/money/device`,
   `/money/approval/verify`, the `X-Device-Approval` format: a device key's
   signature, CONVENTIONS.md section 5). The declared debits still document
   `X-Transaction-Pin` alone; the tasks that serve them (WALLET-07, served;
-  WALLET-09, MONEY-17, served) put `@RequireApproval()` on the route, which
+  WALLET-09, MONEY-17, all served) put `@RequireApproval()` on the route, which
   documents both headers.
 - **The request that opens a wallet** is served by MONEY-12: `POST
   /money/wallet/open` (CONVENTIONS.md section 9). It carries the BVN, NIN,

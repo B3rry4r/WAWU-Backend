@@ -1,6 +1,9 @@
 import type { NotificationSettings } from '../common/types';
 import type { NotificationKind } from '../notification/notification-event';
-import { SETTINGS_GATE } from '../notification/notification.service';
+import {
+  SETTINGS_GATE,
+  type SwitchName,
+} from '../notification/notification.service';
 
 /**
  * Which notifications reach a phone, decided once per kind (INBOX-03).
@@ -25,9 +28,23 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   // Money in, refunds, followers, reviews: each has its Z3 switch.
   sale: 'send',
   tip_received: 'send',
+  // WALLET-10. A bank transfer into the account: "Money in" (Z3) mutes it.
+  money_in: 'send',
+  // WALLET-39. A credit the person was told about was taken back. Pushed, so
+  // a phone that showed "You received" is corrected; "Money in" mutes the push
+  // (PUSH_ONLY_GATE), but the list always carries the correction.
+  money_in_reversed: 'send',
   dm_refunded: 'send',
   new_follower: 'send',
   dm_deadline: 'send',
+  // HOME-16 (R-59). The morning TGIF notice; the TGIF switch (Z2) mutes it.
+  tgif_daily: 'send',
+  // WALLET-40 (owner answer 31, 17 Oct 2026: "the person gets an alert when
+  // the account number is ready"). Pushed, once per wallet. No Z3 switch
+  // covers it, and the owner asked for the alert, so the G-265 hold below does
+  // not apply to it; it stays the one push the person cannot mute in
+  // Settings (the phone's own notification setting still can).
+  wallet_ready: 'send',
   content_published: 'send',
   content_rejected: 'send',
   review_received: 'send',
@@ -38,6 +55,15 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   // themselves and no switch covers them (G-32).
   community_join_approved: 'send',
   community_join_declined: 'send',
+  // INBOX-24 (R-63). The reminder 3 days before a pass ends, with the renew
+  // tap. It is the one thing the task asks to reach the phone; no Z3 switch
+  // covers it (it is about money the person already paid), so like the join
+  // decisions it is always sent.
+  community_pass_ending: 'send',
+  // INBOX-25 (R-71). A removed member's unused pass days landed in their
+  // wallet. It is money in, so the "Money in" switch mutes the push (see
+  // PUSH_ONLY_GATE); the list always carries it.
+  community_pass_refunded: 'send',
   // The state of the person's own account or a marketing send, with no switch
   // that is agreed to cover them. Held until the owner answers (G-265).
   paid_dm_warning: 'hold',
@@ -67,12 +93,15 @@ export const PUSH_ONLY_GATE: Partial<
   Record<NotificationKind, keyof NotificationSettings>
 > = {
   dm_received: 'dmReminders',
+  // WALLET-39. A "received" notice that stands in the list must always be
+  // followed by its correction, so the list is not gated; the phone does not
+  // buzz for it when "Money in" is off.
+  money_in_reversed: 'moneyIn',
+  community_pass_refunded: 'moneyIn',
 };
 
 /** The Z3 switch that mutes `kind` on a phone, if any. */
-export function pushGateFor(
-  kind: string,
-): keyof NotificationSettings | undefined {
+export function pushGateFor(kind: string): SwitchName | undefined {
   const k = kind as NotificationKind;
   return PUSH_ONLY_GATE[k] ?? SETTINGS_GATE[k];
 }

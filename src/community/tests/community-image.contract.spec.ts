@@ -17,6 +17,20 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { CommunityModule } from '../community.module';
 import { CommunityMessageModule } from '../../community-message/community-message.module';
+import {
+  expectLinkSignedAgain,
+  moveClockForward,
+  restoreClock,
+} from '../../community-message/tests/fresh-link';
+import {
+  PhotoUploads,
+  useTestBucket,
+} from '../../community-message/tests/photo-upload';
+import { StorageService } from '../../storage/storage.service';
+
+// A photo posted in a room must be the sender's own upload (FIX-77), so the
+// photo tests below make one for each sender.
+const restoreBucket = useTestBucket();
 
 /**
  * Community images — the room's own picture, and photos posted inside it.
@@ -42,8 +56,6 @@ const MOCK_WAWU_ID_BASE = `http://localhost:${MOCK_WAWU_ID_PORT}`;
 // the same thing to the API, which stores what it validated.
 const IMAGE_A = 'https://storage.example.com/community/image/a-cover.jpg';
 const IMAGE_B = 'https://storage.example.com/community/image/b-cover.webp';
-const MESSAGE_IMAGE =
-  'https://storage.example.com/community/message/a-photo.png';
 
 /** Names this spec asks the API to create — swept in afterAll. */
 const CREATED_COMMUNITY_NAMES = [
@@ -114,6 +126,10 @@ describe('Community images (contract)', () => {
 
   const ownedSubs: string[] = [];
   const createdCommunityIds: string[] = [];
+  let photos: PhotoUploads;
+  /** Each sender's own photo link (made in the photo describe's beforeAll). */
+  let posterPhoto: string;
+  let hostPhoto: string;
 
   /**
    * Sets one of this spec's own identities' balances. Never a seeded row.
@@ -185,6 +201,10 @@ describe('Community images (contract)', () => {
     await app.init();
 
     prisma = moduleRef.get(PrismaService);
+    photos = new PhotoUploads(
+      prisma,
+      moduleRef.get(StorageService, { strict: false }),
+    );
 
     // Both are paid creators with KYC still pending — hosting is gated on the
     // subscription, never on KYC (CLAUDE.md: the two gates are independent).
@@ -242,7 +262,9 @@ describe('Community images (contract)', () => {
         where: { wawuUserId: { in: ownedSubs } },
       });
     }
+    await photos?.clean();
     await app?.close();
+    restoreBucket();
     if (ownedMockWawuId && mockWawuId) {
       mockWawuId.kill();
     }
@@ -417,7 +439,19 @@ describe('Community images (contract)', () => {
           joinedAt: new Date(),
         },
       });
+      posterPhoto = await photos.link(posterSub);
+      hostPhoto = await photos.link(hostSub);
     });
+
+    // Every answer signs the photo's link again (FIX-71), so the link in an
+    // answer is the sender's own file with a new signature, never the string
+    // that was sent (FIX-84). The tests move the clock two seconds before each
+    // send so every run meets that; the real clock is put back after each test.
+    afterEach(() => {
+      restoreClock();
+    });
+    const imageOf = (res: { body: unknown }): string | null =>
+      (res.body as { data: { imageUrl: string | null } }).data.imageUrl;
 
     // The photo-price tests are asked of an ordinary PAYING member, not of
     // the host: the host of a room never pays to post in it, so a price
@@ -433,7 +467,8 @@ describe('Community images (contract)', () => {
     it('accepts an image with no text, and charges exactly 1 credit for it', async () => {
       await setCredits(posterSub, 10);
 
-      const res = await send({ imageUrl: MESSAGE_IMAGE });
+      moveClockForward();
+      const res = await send({ imageUrl: posterPhoto });
       expect([200, 201]).toContain(res.status);
 
       expect(res.body.data).toEqual(
@@ -441,12 +476,12 @@ describe('Community images (contract)', () => {
           communityId,
           senderWawuId: posterSub,
           text: null,
-          imageUrl: MESSAGE_IMAGE,
           // The rule: 1 credit = 1 message, whatever is in it. A photo is
           // NOT priced differently — see MESSAGE_COST_IN_CREDITS.
           costInCredits: 1,
         }),
       );
+      expectLinkSignedAgain(imageOf(res), posterPhoto);
 
       expect(await balanceOf(posterSub)).toBe(9); // 10 - 1, not 10 - anything-else
 
@@ -462,19 +497,20 @@ describe('Community images (contract)', () => {
     it('charges the same 1 credit for text AND an image together', async () => {
       await setCredits(posterSub, 10);
 
+      moveClockForward();
       const res = await send({
         text: 'Fresh batch, this morning.',
-        imageUrl: MESSAGE_IMAGE,
+        imageUrl: posterPhoto,
       });
       expect([200, 201]).toContain(res.status);
 
       expect(res.body.data).toEqual(
         expect.objectContaining({
           text: 'Fresh batch, this morning.',
-          imageUrl: MESSAGE_IMAGE,
           costInCredits: 1,
         }),
       );
+      expectLinkSignedAgain(imageOf(res), posterPhoto);
       expect(await balanceOf(posterSub)).toBe(9);
     });
 
@@ -487,10 +523,11 @@ describe('Community images (contract)', () => {
         expect.objectContaining({
           text: 'No photo on this one.',
           imageUrl: null,
-          costInCredits: 1,
+          // INBOX-22 (R-62): text is free. This used to cost 1 credit.
+          costInCredits: 0,
         }),
       );
-      expect(await balanceOf(posterSub)).toBe(9);
+      expect(await balanceOf(posterSub)).toBe(10);
     });
 
     it('400s a message with neither text nor an image, and charges nothing for it', async () => {
@@ -501,7 +538,7 @@ describe('Community images (contract)', () => {
 
       const res = await send({}).expect(400);
       expect(res.body.message).toBe(
-        'A message needs something in it — write something, attach a photo, or both.',
+        'A message needs something in it. Write something, attach a photo, or both.',
       );
 
       // The empty message cost nobody a credit and stored nothing.
@@ -535,18 +572,19 @@ describe('Community images (contract)', () => {
       // that pays them for it either.
       await setCredits(hostSub, 10);
 
+      moveClockForward();
       const res = await request(app.getHttpServer())
         .post(`/communities/${communityId}/messages`)
         .set('Authorization', `Bearer ${hostToken}`)
-        .send({ imageUrl: MESSAGE_IMAGE, text: 'Same photo, from the host.' });
+        .send({ imageUrl: hostPhoto, text: 'Same photo, from the host.' });
       expect([200, 201]).toContain(res.status);
       expect(res.body.data).toEqual(
         expect.objectContaining({
           senderWawuId: hostSub,
-          imageUrl: MESSAGE_IMAGE,
           costInCredits: 0,
         }),
       );
+      expectLinkSignedAgain(imageOf(res), hostPhoto);
 
       expect(await balanceOf(hostSub)).toBe(10);
       expect(

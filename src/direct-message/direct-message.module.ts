@@ -4,10 +4,13 @@ import { DirectMessageService } from './direct-message.service';
 import { PaidDmController } from './paid-dm.controller';
 import { PaidDmService } from './paid-dm.service';
 import { DmReplyWriter } from './dm-reply-writer';
+import { DmAnsweredHooks } from './dm-answered-hooks';
+import { DmCreatorEarningHooks } from './dm-creator-earning-hooks';
 import { PaidDmPauseService } from './paid-dm-pause.service';
+import { PaidDmSettingsService } from './paid-dm-settings.service';
 import { PaidDmStandingSweep } from './paid-dm-standing.sweep';
 import { DmRefundService } from './dm-refund.service';
-import { CreatorAccountGuard } from './guards/creator-account-guard';
+import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 import { FLUTTERWAVE_CLIENT } from './flutterwave-client.interface';
 import { RealFlutterwaveAdapter } from './real-flutterwave.adapter';
 import { MockFlutterwaveAdapter } from './mock-flutterwave.adapter';
@@ -45,7 +48,10 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
     DmRefundService,
     PaidDmService,
     DmReplyWriter,
+    DmAnsweredHooks,
+    DmCreatorEarningHooks,
     PaidDmPauseService,
+    PaidDmSettingsService,
     PaidDmStandingSweep,
     CreatorAccountGuard,
     RealFlutterwaveAdapter,
@@ -72,6 +78,8 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
     DirectMessageService,
     DmRefundService,
     PaidDmPauseService,
+    DmAnsweredHooks,
+    DmCreatorEarningHooks,
     FLUTTERWAVE_CLIENT,
   ],
 })

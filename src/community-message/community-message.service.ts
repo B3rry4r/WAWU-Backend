@@ -4,6 +4,7 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   NotFoundException,
   ForbiddenException,
 } from '@nestjs/common';
@@ -11,9 +12,11 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { deriveVerificationState } from '../common/verification/verification-state';
 import {
   CreditSpendService,
-  DEFAULT_CREDITS_SPENT,
   type CreditSpendPrismaClient,
 } from '../credit-spend/credit-spend.service';
+import { PlanSettingsService } from '../plan-settings/plan-settings.service';
+import { StorageService, deliverableKeyFrom } from '../storage/storage.service';
+import { withFreshMedia, type MessageMediaRow } from './message-media';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { CommunityKind } from '../../generated/prisma/enums';
 import type { CommunityMessage, CommunityMessageSender } from '../common/types';
@@ -21,31 +24,40 @@ import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { NotificationService } from '../notification/notification.service';
 import { LivePublisher } from '../live/live-publisher.service';
+import {
+  CommunityPassAccess,
+  PASS_ENDED_MESSAGE,
+} from '../community/pass/community-pass-access.service';
 import type { CreateCommunityMessageDto } from './dto/create-community-message.dto';
+import {
+  COST_SETTING,
+  PAID_KINDS,
+  attachmentCount,
+  kindOf,
+  shortfallSentence,
+  type MessageKind,
+  type PaidMessageKind,
+} from './message-kind';
 
 /**
- * Price of one community message, mirroring `CommunityMessage.costInCredits`'s
- * schema default. Written explicitly onto the row (rather than left to the
- * default) so the row, the balance debit and the CreditSpend ledger row all
- * agree on one number — they were previously free to diverge.
- *
- * ONE PRICE, WHATEVER IS IN THE MESSAGE. A message carrying an image costs
- * the same 1 credit as a message carrying text, and a message carrying both
- * still costs 1. docs/01_SPEC.md defines a credit as "1 credit = 1 message";
- * pricing by content type would make a member's balance unpredictable
- * ("how many photos is 48 credits?") and would invent a rate the spec does
- * not contain. The count stays the count.
- */
-const MESSAGE_COST_IN_CREDITS = DEFAULT_CREDITS_SPENT;
-
-/**
- * What an ENTITLED message costs: nothing. Written onto
+ * What a message that costs nothing is stored with. Written onto
  * `CommunityMessage.costInCredits` so the stored row says, truthfully, that
- * this message was not paid for — the same 0 the seeded host message already
- * carries (prisma/seed.ts, MESSAGE_FOUNDERS_1). Nothing is debited and NO
- * `CreditSpend` row is written for one of these; see `resolveEntitlement`.
+ * this message was not paid for. Nothing is debited and NO `CreditSpend` row
+ * is written for one of these; see `store`. A message is free when its
+ * sender hosts the room, or when it is text and emoji (R-62).
  */
 const FREE_MESSAGE_COST_IN_CREDITS = 0;
+
+/**
+ * Where a photo, a video or a voice note must have been uploaded, and the
+ * files a phone or a person may send for it (the folders and their
+ * allowlists are FOLDER_CONTENT_TYPES in storage/dto/presign-upload.dto.ts).
+ */
+const MEDIA_FOLDERS = {
+  photo: { folder: 'community/message', words: 'photo' },
+  video: { folder: 'community/message-video', words: 'video' },
+  voice: { folder: 'community/message-voice', words: 'voice note' },
+} as const;
 
 /**
  * Warn the sender once their remaining WAWU Credits drop to this COUNT or
@@ -112,9 +124,23 @@ function isUniqueViolation(err: unknown): boolean {
  * for free. `resolveEntitlement()` runs first and decides that; everything
  * below describes the metered path it falls through to.
  *
+ * WHAT A MESSAGE COSTS (INBOX-22, R-62, which replaces "every metered
+ * message costs 1 credit"). The price depends on the KIND of message, and
+ * each price is an admin setting read from PlanSettingsService, never a
+ * number in this file: text and emoji are free, a photo is
+ * `community_credit_cost_photo` (1), a video `community_credit_cost_video`
+ * (3), a voice note `community_credit_cost_voice` (3). A message carries at
+ * most one attachment, so it costs exactly one kind's price. A free message
+ * (text, or any message from the host) is one plain INSERT: no CreditsState
+ * row is read or made, no CreditSpend row is written, so a sender with a
+ * balance of 0 can still talk and a host's 85% of credits spent in their
+ * room is computed on credits actually spent and on nothing else. The
+ * paragraphs below describe the PAID path with `cost` standing where they
+ * say 1.
+ *
  * Gate + decrement semantics (judgment call, since the task brief leaves
  * the exact interaction underspecified):
- *   - A sender whose balance covers `costInCredits` (schema default 1)
+ *   - A sender whose balance covers `costInCredits` (this message's price)
  *     spends from that real balance. The debit is a conditional UPDATE
  *     guarded on sufficient balance, so it can never go negative and never
  *     double-spend under concurrency (see create()).
@@ -170,7 +196,28 @@ export class CommunityMessageService {
     private readonly wawuId: WawuIdClient,
     private readonly live: LivePublisher,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly passAccess: CommunityPassAccess,
+    private readonly settings: PlanSettingsService,
+    private readonly storage: StorageService,
   ) {}
+
+  private readonly logger = new Logger(CommunityMessageService.name);
+
+  /**
+   * FIX-71. The message with its photo, video and voice note links signed
+   * fresh (see message-media.ts). Every path that returns a stored message
+   * passes it through here: the list, the answer to a send, the live event, the
+   * catch-up page and the last message of "my communities". Only database-free
+   * work: signing is a local computation, never a network call.
+   */
+  withFreshMedia<T extends MessageMediaRow>(row: T): Promise<T> {
+    return withFreshMedia(this.storage, row);
+  }
+
+  /** `withFreshMedia` for a page of messages, in the same order. */
+  withFreshMediaAll<T extends MessageMediaRow>(rows: T[]): Promise<T[]> {
+    return Promise.all(rows.map((row) => this.withFreshMedia(row)));
+  }
 
   /**
    * Batch sender-identity lookup for a page of messages — same shape as
@@ -257,9 +304,9 @@ export class CommunityMessageService {
    *     resource - `assertMember` short-circuits on the host for READS - and
    *     the seeded host message already carries `costInCredits: 0`.
    *
-   *  2. **Everyone else - 1 credit**, or the 7-day trial, or 402. This is the
-   *     documented model for ordinary users (docs/01_SPEC.md §3: "After trial:
-   *     must hold credits to send messages in general/open communities").
+   *  2. **Everyone else - the price of the message's kind** (R-62: text and
+   *     emoji free, a photo, a video and a voice note by admin setting), or
+   *     402 when their credits do not cover it. The 7-day trial is gone.
    *
    * A paid subscription used to buy a creator free messages in OPEN
    * communities. Subscriptions are gone, so a creator is now an ordinary
@@ -278,19 +325,44 @@ export class CommunityMessageService {
   }
 
   /**
-   * INBOX-05. What one message costs a sender who is not entitled to send
-   * free, in WAWU Credits: the price the app states on the Communities card
-   * (I24, "1 credit per message you send"). A count, never naira.
+   * What ONE PLAIN MESSAGE costs a sender who is not the host, in WAWU Credits:
+   * the price of text and emoji, which R-62 makes nothing. `creditsPerMessage`
+   * of `GET /communities/message-cost` is this figure, so the I24 strip and
+   * the composer of the app as built before INBOX-23 state no price for a
+   * message anybody can send. The prices of photos, videos and voice notes are
+   * `costsByKind`. A count, never naira.
    */
   meteredMessageCost(): number {
-    return MESSAGE_COST_IN_CREDITS;
+    return this.costOf('text');
   }
 
   /**
-   * INBOX-05. What `senderWawuId` would spend on one message in this room,
-   * by the same rule `store` charges by: nothing for an entitled sender (the
-   * host), the metered cost for everyone else. The app's composer states it
-   * ("Message · 1 credit", "Send · 1"), so the price shown is the price paid.
+   * INBOX-22. What each kind of message costs, from the admin settings in
+   * force now (TIER-06). Text is always 0: no setting prices it.
+   */
+  costsByKind(): Record<MessageKind, number> {
+    const costs: Record<MessageKind, number> = {
+      text: 0,
+      photo: 0,
+      video: 0,
+      voice: 0,
+    };
+    for (const kind of PAID_KINDS) costs[kind] = this.costOf(kind);
+    return costs;
+  }
+
+  /** The price of one kind of message, in credits. Only a paid kind reads a setting. */
+  private costOf(kind: MessageKind): number {
+    if (kind === 'text') return 0;
+    return this.settings.number(COST_SETTING[kind]);
+  }
+
+  /**
+   * INBOX-05. What `senderWawuId` would spend on one PLAIN message in this
+   * room, by the same rule `store` charges by: nothing for the host, the text
+   * price (nothing, R-62) for everyone else. The app's composer states it, so
+   * the price shown is the price paid. A photo, a video or a voice note costs
+   * its own price (`costsByKind`), and the host pays none of them.
    */
   async messageCostFor(
     community: { hostWawuId: string; kind: CommunityKind },
@@ -298,7 +370,7 @@ export class CommunityMessageService {
   ): Promise<number> {
     const entitlement = await this.resolveEntitlement(community, senderWawuId);
     return entitlement === 'credits'
-      ? MESSAGE_COST_IN_CREDITS
+      ? this.costOf('text')
       : FREE_MESSAGE_COST_IN_CREDITS;
   }
 
@@ -323,6 +395,11 @@ export class CommunityMessageService {
       throw new ForbiddenException(
         'Join this community to read or post in it.',
       );
+    }
+    // INBOX-24 (R-63). In a private room that sells a pass, a member whose
+    // pass has ended reads and posts nothing until they renew.
+    if (!(await this.passAccess.mayEnter(communityId, userWawuId))) {
+      throw new ForbiddenException(PASS_ENDED_MESSAGE);
     }
   }
 
@@ -363,8 +440,11 @@ export class CommunityMessageService {
       this.prisma.communityMessage.count({ where }),
     ]);
 
-    const senders = await this.lookupSenders(items.map((m) => m.senderWawuId));
-    const enriched: CommunityMessage[] = items.map((m) => ({
+    const [senders, fresh] = await Promise.all([
+      this.lookupSenders(items.map((m) => m.senderWawuId)),
+      this.withFreshMediaAll(items),
+    ]);
+    const enriched: CommunityMessage[] = fresh.map((m) => ({
       ...m,
       sender: senders.get(m.senderWawuId),
     }));
@@ -440,7 +520,8 @@ export class CommunityMessageService {
         messageId: sent.message.id,
       });
     }
-    return sent;
+    // The answer carries links that load today, as the list does (FIX-71).
+    return { ...sent, message: await this.withFreshMedia(sent.message) };
   }
 
   /**
@@ -459,17 +540,23 @@ export class CommunityMessageService {
     return row?.message ?? null;
   }
 
-  /** A repeat answers with the first message; the same key for other words or another room is refused. */
+  /** A repeat answers with the first message; the same key for other words, another attachment or another room is refused. */
   private replayOf(
     earlier: CommunityMessage,
     communityId: string,
     text: string | null,
-    imageUrl: string | null,
+    attachments: {
+      imageUrl: string | null;
+      videoUrl: string | null;
+      voiceUrl: string | null;
+    },
   ): SentMessage {
     if (
       earlier.communityId !== communityId ||
       earlier.text !== text ||
-      earlier.imageUrl !== imageUrl
+      earlier.imageUrl !== attachments.imageUrl ||
+      earlier.videoUrl !== attachments.videoUrl ||
+      earlier.voiceUrl !== attachments.voiceUrl
     ) {
       throw new ConflictException({
         message:
@@ -480,6 +567,71 @@ export class CommunityMessageService {
     return { message: earlier, replayed: true };
   }
 
+  /**
+   * INBOX-22, FIX-77. A photo, a video or a voice note must be a file the
+   * SENDER uploaded through the presign path into that kind's own folder
+   * (`community/message`, `community/message-video`,
+   * `community/message-voice`). The link must be one of THIS bucket's own
+   * (its origin and key prefix, read from the storage client: another host,
+   * a look-alike host, userinfo, a `%` escape or a backslash is refused) and
+   * its key must be exactly `<folder>/<sender>/<uuid>.<ext>`; another
+   * person's file, another folder's file and a link to anywhere else are
+   * refused. The sender's `StorageObject` row for that key must exist.
+   *
+   * A video or a voice note must also have landed (`POST /uploads/confirm`
+   * made its row `confirmed`). A photo needs no confirm: the web's photo path
+   * is presign then PUT and never confirms, so a row that is `pending` or
+   * `confirmed` passes and only a given-up (`abandoned`) one is refused.
+   *
+   * No network call (the bucket's address is worked out by signing a link
+   * locally) and no lock, and it runs before anything is charged, so a
+   * refused file costs nothing.
+   */
+  private async assertUploaded(
+    senderWawuId: string,
+    kind: keyof typeof MEDIA_FOLDERS,
+    url: string,
+  ): Promise<void> {
+    const { folder, words } = MEDIA_FOLDERS[kind];
+    const unusable = new BadRequestException(
+      kind === 'photo'
+        ? 'That photo could not be sent. Choose it again.'
+        : `That ${words} could not be used. Upload it again, then send it.`,
+    );
+    // The strict check LEGAL-03 uses: this bucket's own host and prefix, the
+    // kind's own folder, two plain segments after it. A storage that is not
+    // configured has no address, so nothing passes there.
+    const key = deliverableKeyFrom(url, await this.storage.bucketLocation(), [
+      folder,
+    ]);
+    if (key === null) throw unusable;
+    const parts = key.split('/');
+    const folderParts = folder.split('/');
+    const ownFile =
+      parts.length === folderParts.length + 2 &&
+      folderParts.every((part, i) => parts[i] === part) &&
+      parts[folderParts.length] === senderWawuId &&
+      /^[0-9a-f-]{36}\.[a-z0-9]{2,4}$/.test(parts[parts.length - 1]);
+    if (!ownFile) throw unusable;
+    const row = await this.prisma.storageObject.findUnique({
+      where: { key },
+      select: { wawuUserId: true, folder: true, status: true },
+    });
+    if (
+      !row ||
+      row.wawuUserId !== senderWawuId ||
+      row.folder !== folder ||
+      (row.status !== 'confirmed' && row.status !== 'pending')
+    ) {
+      throw unusable;
+    }
+    if (kind !== 'photo' && row.status !== 'confirmed') {
+      throw new BadRequestException(
+        `That ${words} has not finished uploading. Wait a moment, then send it again.`,
+      );
+    }
+  }
+
   /** Checks, charges and stores one message (everything `create` did before INBOX-02). */
   private async store(
     communityId: string,
@@ -487,15 +639,26 @@ export class CommunityMessageService {
     dto: CreateCommunityMessageDto,
     idempotencyKey?: string,
   ): Promise<SentMessage> {
-    // Text, an image, or both — never neither. Checked before the community
-    // is even looked up, and long before a credit is debited: an empty
-    // message must never cost anybody anything. (The DTO cannot express this
-    // either/or per field; the table's CHECK constraint backs it up.)
+    // Text, a photo, a video, a voice note, or text with one of them, never
+    // neither. Checked before the community is even looked up, and long
+    // before a credit is debited: an empty message must never cost anybody
+    // anything. (The DTO cannot express this either/or per field; the
+    // table's CHECK constraint backs it up.)
     const text = dto.text?.trim() ?? null;
     const imageUrl = dto.imageUrl ?? null;
-    if (!text && !imageUrl) {
+    const videoUrl = dto.videoUrl ?? null;
+    const voiceUrl = dto.voiceUrl ?? null;
+    const attachments = { imageUrl, videoUrl, voiceUrl };
+    if (!text && attachmentCount(attachments) === 0) {
       throw new BadRequestException(
-        'A message needs something in it — write something, attach a photo, or both.',
+        'A message needs something in it. Write something, attach a photo, or both.',
+      );
+    }
+    // One attachment at most (INBOX-22): a message costs one kind's price,
+    // and no ruling says what two of them add up to.
+    if (attachmentCount(attachments) > 1) {
+      throw new BadRequestException(
+        'A message can carry one photo, one video or one voice note. Send each as its own message.',
       );
     }
 
@@ -511,10 +674,22 @@ export class CommunityMessageService {
     // stored or charged (see create() for why the index, not this, decides).
     if (idempotencyKey) {
       const earlier = await this.earlierSend(senderWawuId, idempotencyKey);
-      if (earlier) return this.replayOf(earlier, communityId, text, imageUrl);
+      if (earlier)
+        return this.replayOf(earlier, communityId, text, attachments);
     }
 
+    // A photo must be the sender's own upload (presigned or confirmed), a
+    // video or a voice note their own confirmed one. Reads only, before any
+    // charge: a refused file costs nothing.
+    if (imageUrl) await this.assertUploaded(senderWawuId, 'photo', imageUrl);
+    if (videoUrl) await this.assertUploaded(senderWawuId, 'video', videoUrl);
+    if (voiceUrl) await this.assertUploaded(senderWawuId, 'voice', voiceUrl);
+
+    const kind = kindOf(attachments);
     const entitlement = await this.resolveEntitlement(community, senderWawuId);
+    // The host pays nothing for anything in their own room; everyone else
+    // pays the price of this message's kind, which for text is nothing.
+    const cost = entitlement === 'credits' ? this.costOf(kind) : 0;
 
     // The key's row, written with the message by the same nested create.
     const keyRow = idempotencyKey
@@ -522,27 +697,27 @@ export class CommunityMessageService {
       : undefined;
 
     try {
-      // ENTITLED SEND — the host in their own room. Nothing about credits
-      // happens on this path AT ALL:
-      //   - no CreditsState row is read, created or debited (so an entitled
-      //     sender's 7-day trial is neither consumed nor started by sending,
-      //     and no balance they bought is silently drained);
+      // FREE SEND: the host in their own room, or text and emoji from anyone
+      // (R-62). Nothing about credits happens on this path AT ALL:
+      //   - no CreditsState row is read, created or debited, so a sender with
+      //     a balance of 0 (or no row at all) can still talk;
       //   - the 402 gate is never reached, so a host can never be locked out
       //     of their own community;
-      //   - NO CreditSpend row is written. That ledger is what the host's 90%
+      //   - NO CreditSpend row is written. That ledger is what the host's 85%
       //     is computed from (CreatorEarningsService), and no credit was spent
       //     here by anybody. Writing a row for a free message would invent
-      //     earnings out of nothing — and for the host's own messages it would
-      //     be the host paying themselves, inflating their own payout every
-      //     time they answered a question in their room.
+      //     earnings out of nothing, and for the host's own messages it would
+      //     be the host paying themselves.
       // The message row records `costInCredits: 0`, which is the truth.
-      if (entitlement !== 'credits') {
+      if (cost === 0) {
         const message = await this.prisma.communityMessage.create({
           data: {
             communityId,
             senderWawuId,
             text,
             imageUrl,
+            videoUrl,
+            voiceUrl,
             costInCredits: FREE_MESSAGE_COST_IN_CREDITS,
             idempotencyKey: keyRow,
           },
@@ -550,11 +725,9 @@ export class CommunityMessageService {
         return { message, replayed: false };
       }
 
-      const cost = MESSAGE_COST_IN_CREDITS;
-
       // Hoisted out of the transaction closure so the credits-low warning
-      // below can tell a real debit from a trial-covered send. Read only after
-      // the transaction has committed.
+      // below can tell a real debit from a refused one. Read only after the
+      // transaction has committed.
       let spentRealBalance = false;
 
       const message = await this.prisma.$transaction(async (tx) => {
@@ -569,6 +742,8 @@ export class CommunityMessageService {
             senderWawuId,
             text,
             imageUrl,
+            videoUrl,
+            voiceUrl,
             costInCredits: cost,
             idempotencyKey: keyRow,
           },
@@ -580,14 +755,22 @@ export class CommunityMessageService {
         });
         spentRealBalance = count > 0;
 
-        // Every metered message costs a credit now that the trial is gone, so
-        // a failed debit is the whole test: there is no second way through.
-        // Throwing rolls the message row back with it.
+        // The debit is the whole test: a balance that does not cover this
+        // message's price is refused with what it costs, what the sender has
+        // and how many credits short they are. Throwing rolls the message
+        // row back with it, so nothing is stored and nothing is taken.
         if (!spentRealBalance) {
+          const state = await tx.creditsState.findUnique({
+            where: { userWawuId: senderWawuId },
+            select: { creditBalance: true },
+          });
           throw new HttpException(
             {
-              message:
-                'You are out of WAWU Credits. Buy more to keep messaging in this community.',
+              message: shortfallSentence(
+                kind as PaidMessageKind,
+                cost,
+                state?.creditBalance ?? 0,
+              ),
               reason: 'insufficient_credits',
             },
             HttpStatus.PAYMENT_REQUIRED,
@@ -608,10 +791,17 @@ export class CommunityMessageService {
       });
 
       // AFTER the commit, never inside it: a notification must not be able to
-      // roll back a message the sender has already paid a credit for, and the
-      // balance it reports has to be the committed one.
+      // roll back a message the sender has already paid for, and the balance
+      // it reports has to be the committed one. It also must not turn a sent,
+      // charged message into an error: the sender would send it again.
       if (spentRealBalance) {
-        await this.warnIfCreditsLow(senderWawuId, cost);
+        try {
+          await this.warnIfCreditsLow(senderWawuId, cost);
+        } catch (e) {
+          this.logger.warn(
+            `Could not send the credits-low notice: ${String(e)}`,
+          );
+        }
       }
 
       return { message, replayed: false };
@@ -622,7 +812,8 @@ export class CommunityMessageService {
       // it), so its message is the answer.
       if (idempotencyKey && isUniqueViolation(error)) {
         const earlier = await this.earlierSend(senderWawuId, idempotencyKey);
-        if (earlier) return this.replayOf(earlier, communityId, text, imageUrl);
+        if (earlier)
+          return this.replayOf(earlier, communityId, text, attachments);
       }
       throw error;
     }

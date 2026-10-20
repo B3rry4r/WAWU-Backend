@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import type { TransferStatus } from '../../src/money/money-view.type';
 import {
   type ProviderAccountName,
+  type ProviderAccountNameInput,
   type ProviderBalance,
+  type ProviderBankTransferInput,
   type ProviderBank,
   type ProviderCustomer,
   type ProviderCustomerLookup,
@@ -109,10 +111,13 @@ export interface NuvionBookTransferRequest {
   account_id: string;
   amount: number;
   currency: string;
-  payment_type: 'book-transfer';
+  payment_type: 'book-transfer' | 'bank-transfer';
   nuvion_ban: string;
   unique_reference: string;
   narration: string;
+  /** A bank send (SCHOOLS-11): where it goes. */
+  bank_code?: string;
+  account_number?: string;
 }
 
 /**
@@ -312,10 +317,46 @@ export class NuvionSeamStandIn implements WalletProvider {
   feeKobo: (amountKobo: bigint) => bigint = () => 0n;
   /** References whose record the adapter cannot read yet (Nuvion lagging). */
   readonly unseen = new Set<string>();
+  /**
+   * Holds the answer to a question about a send (`reconcileSend`) until the
+   * promise this returns settles: a spec decides which of several overlapping
+   * sweeps gets its answer first. The question is recorded in `calls` when it
+   * arrives, before the wait. Unset: answered at once (FIX-76).
+   */
+  holdLook: ((reference: string) => Promise<void> | undefined) | null = null;
   /** WAWU's operational account. */
   readonly operational: NuvionAccount;
   /** The answer `getPlatformAccount` gives instead of the operational account. */
   platformOverride: ProviderPlatformAccount | null = null;
+
+  // ---- Bank sends (SCHOOLS-11): Nuvion's NIP payouts, as NUV-06 reads them ----
+  /** `bank_code:account_number` to the holder's name, for the name check. */
+  readonly bankDirectory = new Map<string, string>();
+  /** Nuvion's bank list. */
+  banks: ProviderBank[] = [
+    { code: '058', name: 'Guaranty Trust Bank' },
+    { code: '044', name: 'Access Bank' },
+  ];
+  /**
+   * What the next bank sends do: `pending` (accepted, the first answer),
+   * `successful`, `lost_answer` (taken, the answer never arrives),
+   * `not_sent` (the request provably never reached Nuvion), `insufficient`.
+   */
+  bankMode:
+    'pending' | 'successful' | 'lost_answer' | 'not_sent' | 'insufficient' =
+    'pending';
+  /** Nuvion's `applicable_fee` on a bank send. */
+  bankFeeKobo: (amountKobo: bigint) => bigint = () => 2_500n;
+  /** Where a bank send's money goes: an account at another bank, outside WAWU. */
+  private readonly bankSink: NuvionAccount = {
+    entityId: ulid(),
+    accountId: ulid(),
+    nuvionBan: 'EXTERNALBANK',
+    accountNumber: null,
+    type: 'checking',
+    currency: 'NGN',
+    availableKobo: 0n,
+  };
 
   constructor(timings: Partial<WalletProviderTimings> = {}) {
     this.timings = {
@@ -337,6 +378,14 @@ export class NuvionSeamStandIn implements WalletProvider {
       availableKobo: 0n,
     };
     this.accounts.set(this.operational.accountId, this.operational);
+    this.accounts.set(this.bankSink.accountId, this.bankSink);
+  }
+
+  /** The bank sends Nuvion recorded, in order. */
+  bankSends(): NuvionTransfer[] {
+    return this.transfers.filter(
+      (t) => t.request.payment_type === 'bank-transfer',
+    );
   }
 
   /** A person's approved entity and NGN checking account holding `kobo`. */
@@ -631,11 +680,15 @@ export class NuvionSeamStandIn implements WalletProvider {
   }
 
   /** The seam's answer for a transfer Nuvion holds: a receipt only once it is `successful`. */
-  private answerFor(t: NuvionTransfer, op: string): ProviderTransferReceipt {
-    if (UNFINISHED.has(t.status)) {
+  private answerFor(
+    t: NuvionTransfer,
+    op: string,
+    accepted = false,
+  ): ProviderTransferReceipt {
+    if (UNFINISHED.has(t.status) && !accepted) {
       throw this.error('accepted_unfinished', op, t.request.unique_reference);
     }
-    if (t.status !== 'successful') {
+    if (t.status !== 'successful' && !UNFINISHED.has(t.status)) {
       throw new WalletProviderError({
         kind: 'refused',
         provider: 'nuvion',
@@ -673,6 +726,17 @@ export class NuvionSeamStandIn implements WalletProvider {
       method: 'reconcileSend',
       args: { reference, holder, since },
     });
+    const held = this.holdLook?.(reference);
+    if (held) {
+      return held.then(() => this.answerLook(reference, holder));
+    }
+    return this.answerLook(reference, holder);
+  }
+
+  private answerLook(
+    reference: string,
+    holder: ProviderHolder,
+  ): Promise<ProviderReconciliation> {
     if (this.unseen.has(reference)) {
       return Promise.resolve({ state: 'unknown', why: 'too_soon' });
     }
@@ -769,13 +833,131 @@ export class NuvionSeamStandIn implements WalletProvider {
     return Promise.reject(this.notSupported('customer list'));
   }
   listBanks(): Promise<ProviderBank[]> {
-    return Promise.reject(this.notSupported('bank list'));
+    this.calls.push({ method: 'listBanks', args: null });
+    return Promise.resolve(this.banks.map((b) => ({ ...b })));
   }
-  checkAccountName(): Promise<ProviderAccountName> {
-    return Promise.reject(this.notSupported('account name'));
+  checkAccountName(
+    input: ProviderAccountNameInput,
+  ): Promise<ProviderAccountName> {
+    this.calls.push({ method: 'checkAccountName', args: input });
+    const holder = this.bankDirectory.get(
+      `${input.bankCode}:${input.accountNumber}`,
+    );
+    return Promise.resolve({
+      matched: holder !== undefined,
+      accountName: holder ?? null,
+      accountNumber: input.accountNumber,
+      bankCode: input.bankCode,
+      outcome: holder !== undefined ? 'matched' : 'not_found',
+    });
   }
-  bankTransfer(): Promise<ProviderTransferReceipt> {
-    return Promise.reject(this.notSupported('bank transfer'));
+  /**
+   * A bank send from WAWU's account (or a person's). Like NUV-06's area, a
+   * transfer Nuvion accepted is answered with a receipt whatever its status
+   * (pending, processing or successful: the charge is stated), a repeated
+   * reference is answered with the original send, and one whose original
+   * failed is a `duplicate_reference` (the reference is used up).
+   */
+  async bankTransfer(
+    input: ProviderBankTransferInput,
+  ): Promise<ProviderTransferReceipt> {
+    this.calls.push({ method: 'bankTransfer', args: input });
+    await Promise.resolve();
+    const op = 'bank transfer';
+    const from =
+      input.from.kind === 'merchant'
+        ? this.operational
+        : ([...this.accounts.values()].find(
+            (a) =>
+              input.from.kind === 'customer' &&
+              a.entityId === input.from.customerId,
+          ) ?? null);
+    if (!from) {
+      throw new WalletProviderError({
+        kind: 'not_found',
+        provider: 'nuvion',
+        operation: op,
+        httpStatus: 404,
+        reference: input.reference,
+        recordMayExist: false,
+      });
+    }
+    const original = this.transfers.find(
+      (t) =>
+        t.fromAccountId === from.accountId &&
+        t.request.unique_reference === input.reference,
+    );
+    if (original) {
+      if (
+        original.status === 'failed' ||
+        original.request.amount !== Number(input.amountKobo)
+      ) {
+        throw this.error(
+          'error_idempotency_key_mismatch',
+          op,
+          input.reference,
+          409,
+        );
+      }
+      return this.answerFor(original, op, true);
+    }
+    if (this.bankMode === 'not_sent') {
+      throw new WalletProviderError({
+        kind: 'unavailable',
+        provider: 'nuvion',
+        operation: op,
+        reference: input.reference,
+        recordMayExist: false,
+        requestNotSent: true,
+        retryAfterSeconds: this.timings.retryAfterSeconds,
+      });
+    }
+    const fee = this.bankFeeKobo(input.amountKobo);
+    if (
+      this.bankMode === 'insufficient' ||
+      from.availableKobo < input.amountKobo + fee
+    ) {
+      throw this.error(
+        'error_transfer_insufficient_funds',
+        op,
+        input.reference,
+        this.insufficientStatus,
+      );
+    }
+    const status: NuvionTransferStatus =
+      this.bankMode === 'successful' ? 'successful' : 'pending';
+    const t: NuvionTransfer = {
+      id: ulid(),
+      request: {
+        entity_id: from.entityId,
+        account_id: from.accountId,
+        amount: Number(input.amountKobo),
+        currency: 'NGN',
+        payment_type: 'bank-transfer',
+        nuvion_ban: '',
+        unique_reference: input.reference,
+        narration: input.narration ?? '',
+        bank_code: input.bankCode,
+        account_number: input.accountNumber,
+      },
+      fromAccountId: from.accountId,
+      toAccountId: this.bankSink.accountId,
+      amountKobo: input.amountKobo,
+      feeKobo: fee,
+      status,
+      statusReason:
+        status === 'successful' ? 'processing_complete' : 'processing',
+      created: Date.now(),
+    };
+    this.transfers.push(t);
+    from.availableKobo -= input.amountKobo + fee;
+    if (status === 'successful')
+      this.bankSink.availableKobo += input.amountKobo;
+    if (this.bankMode === 'lost_answer') {
+      throw this.error('lost_answer', op, input.reference);
+    }
+    this.keptIds.set(input.reference, t.id);
+    return this.answerFor(t, op, true);
   }
   listTransactions(): Promise<ProviderPage<ProviderTransaction>> {
     return Promise.reject(this.notSupported('transactions'));

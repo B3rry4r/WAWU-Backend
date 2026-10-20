@@ -152,7 +152,7 @@ export class MePurchasesService {
   }
 
   /** Lessons in each course piece, and how many of them `me` finished. Two grouped reads. */
-  private async progressFor(
+  async progressFor(
     me: string,
     contentIds: string[],
   ): Promise<Map<string, LessonProgressView>> {

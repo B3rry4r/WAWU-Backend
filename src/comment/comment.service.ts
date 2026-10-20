@@ -8,6 +8,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import { deriveVerificationState } from '../common/verification/verification-state';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
+import { assertBuyerOnlyIfHidden } from '../content-piece/deletion-hid';
 import type { Paginated } from '../common/interceptors/response.interceptor';
 import type { Comment, CommentAuthor } from '../common/types';
 import type { CreateCommentDto } from './dto/create-comment.dto';
@@ -83,15 +84,25 @@ export class CommentService {
    */
   private async assertContentExists(
     contentId: string,
+    viewerWawuId: string,
   ): Promise<{ id: string; creatorWawuId: string }> {
     const content = await this.prisma.contentPiece.findUnique({
       where: { id: contentId },
-      select: { id: true, creatorWawuId: true },
+      select: { id: true, creatorWawuId: true, status: true },
     });
     if (!content) {
       throw new NotFoundException('Content not found');
     }
-    return content;
+    // A piece an account deletion hid keeps its thread for the people who
+    // bought it only (SETTINGS-06 round 8). Every other removed piece is
+    // exactly as before: this looks at no other piece.
+    await assertBuyerOnlyIfHidden(
+      this.prisma,
+      content,
+      viewerWawuId,
+      'Content not found',
+    );
+    return { id: content.id, creatorWawuId: content.creatorWawuId };
   }
 
   /**
@@ -119,7 +130,7 @@ export class CommentService {
     page: number,
     perPage: number,
   ): Promise<Paginated<Comment>> {
-    const content = await this.assertContentExists(contentId);
+    const content = await this.assertContentExists(contentId, requesterWawuId);
     // SETTINGS-04: the thread under a hidden creator's piece is gone with
     // the piece, and inside any thread the comments of people the caller
     // blocked (or who blocked the caller) are left out, and not counted.
@@ -185,7 +196,7 @@ export class CommentService {
     // SETTINGS-04: liking (or unliking) a comment by, or under a piece of, a
     // hidden account is the same 404 as a missing comment.
     const [content, target] = await Promise.all([
-      this.assertContentExists(contentId),
+      this.assertContentExists(contentId, userWawuId),
       this.prisma.comment.findUniqueOrThrow({
         where: { id: commentId },
         select: { authorWawuId: true },
@@ -242,7 +253,7 @@ export class CommentService {
     authorWawuId: string,
     dto: CreateCommentDto,
   ): Promise<Comment> {
-    const content = await this.assertContentExists(contentId);
+    const content = await this.assertContentExists(contentId, authorWawuId);
 
     // Blocking gate. Reading a public content page is still allowed (the
     // list endpoint above is untouched) — what a block stops is talking AT

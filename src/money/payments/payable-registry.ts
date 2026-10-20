@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '../../../generated/prisma/client';
 import type { PaymentKind } from '../dto/money-enums';
 import type { MoneyPartyView } from '../money-view.type';
+import type { PayableTerms } from './payable-terms';
 
 /**
  * What the buyer is paying for, as the feature that sells it knows it
@@ -22,6 +24,31 @@ export interface PayableTarget {
    * it (NUV-09), so cents are never charged as kobo.
    */
   currency?: string;
+  /**
+   * What the item promises beyond its price, when that can change while a
+   * person decides (a tier's goods, TIER-06 round 2). The quote is bound to it
+   * (changed since it was given: `409 quote_changed`), and the payment keeps it
+   * from the claim and hands it back in `CompletedPayment.terms`. Unset for a
+   * kind whose price says everything.
+   */
+  terms?: PayableTerms;
+  /**
+   * The part of `priceKobo` that is WAWU's own fee (R-10), when the price
+   * carries one (a bill: the amount, Fintava's bill charge and WAWU's fee all
+   * move into WAWU's account in one transfer). It is recorded as the
+   * payment's `wawuFeeKobo` so fee reports see it; it changes no figure the
+   * person pays. Unset: none.
+   */
+  wawuFeeKobo?: number;
+  /**
+   * True when the price has a payee who is not on WAWU (a school, paid by
+   * bank transfer out of WAWU's account: SCHOOLS-07, SCHOOLS-11). `payee`
+   * stays null, because there is no WAWU wallet to pay, but the 85/15 split
+   * (R-5, R-12) is recorded with the payment and its hold all the same, so
+   * the hold says how much of the price is owed to the payee. Unset: the
+   * split follows `payee` as it always has.
+   */
+  payeeOutsideWawu?: boolean;
 }
 
 /** What a feature is asked to price. */
@@ -48,6 +75,12 @@ export interface CompletedPayment {
    * kind.
    */
   holdId: string | null;
+  /**
+   * The terms the payment was quoted and claimed with (`PayableTarget.terms`);
+   * absent for a kind that sets none, and for a payment claimed before terms
+   * were kept.
+   */
+  terms?: PayableTerms;
 }
 
 /**
@@ -73,6 +106,20 @@ export interface CompletedPayment {
 export interface PayableKindHandler {
   readonly kind: PaymentKind;
   resolve(lookup: PayableLookup): Promise<PayableTarget>;
+  /**
+   * Optional (EVENTS-13). A rule that must hold across a person's payments for
+   * the kind (a cap on open ticket orders), which `resolve` cannot keep
+   * because two payments claim at once. It runs INSIDE the claim's
+   * transaction, after WAWU's limits and before the payment is written, on
+   * the claim's own `tx`: it takes whatever short lock it needs, counts, and
+   * throws a `MoneyError` to refuse. Nothing is recorded and nothing is sent
+   * when it throws. It touches the database only, never the network: the
+   * transaction is open while it runs.
+   */
+  beforeClaim?(
+    lookup: PayableLookup,
+    tx: Prisma.TransactionClient,
+  ): Promise<void>;
   onCompleted?(payment: CompletedPayment): Promise<void>;
 }
 

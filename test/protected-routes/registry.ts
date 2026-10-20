@@ -60,6 +60,14 @@ export interface Probe {
   as: Actor;
   /** Steps run right before this probe (and its auth checks, which never write). */
   before?: Step[];
+  /**
+   * Steps run right after this probe has passed its checks (or been
+   * recorded), for a probe whose own answer changes state the probes after
+   * it rely on. A step that fails fails this probe. First use: R-40, a tier
+   * change sends a published event back to review, so an admin approves it
+   * again, which also proves it went back.
+   */
+  after?: Step[];
   /** Values for `:name` path segments. `{{key}}` is replaced from the run's context. */
   params?: Record<string, string>;
   query?: Record<string, string>;

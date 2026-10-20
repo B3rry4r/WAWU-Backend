@@ -1,10 +1,16 @@
 import { Module } from '@nestjs/common';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { MoneyModule } from '../../money/money.module';
+import { PlanSettingsModule } from '../../plan-settings/plan-settings.module';
 import { PointsModule } from '../../points/points.module';
+import { ReferralsModule } from '../../referrals/referrals.module';
+import { WalletProviderModule } from '../../wallet-provider/wallet-provider.module';
 import { PlansModule } from '../plans.module';
 import { PlanPurchasesController } from './plan-purchases.controller';
 import { PlanPurchaseService } from './plan-purchase.service';
+import { PlanTransferService } from './plan-transfer.service';
+import { ExtraProductsService } from './extra-products.service';
+import { PointsPackService } from './points-pack.service';
 
 /**
  * Buying, renewing and upgrading a tier from the wallet (task TIER-03): the
@@ -16,10 +22,35 @@ import { PlanPurchaseService } from './plan-purchase.service';
  *
  * Mounting it in AppModule is SHARED-CHANGES TIER-03 #1 (one import and one
  * entry, after PlansModule).
+ *
+ * POINTS-02 adds the points pack (`kind: points_pack`, `PointsPackService`)
+ * on the same routes: a payment kind of its own, registered with the wallet
+ * payments, bought from the wallet or by transfer like a tier.
+ *
+ * TIER-04 adds the extra products (`kind: extra_products`,
+ * `ExtraProductsService`) the same way: a payment kind of its own on the same
+ * routes, bought from the wallet or by transfer.
+ *
+ * TIER-05 adds `method: transfer` (`PlanTransferService`): a purchase waits for
+ * a bank transfer into the person's own wallet account and is paid from the
+ * wallet when the money lands. Same module, so no new import in AppModule.
  */
 @Module({
-  imports: [WawuAuthModule, MoneyModule, PlansModule, PointsModule],
+  imports: [
+    WawuAuthModule,
+    MoneyModule,
+    PlansModule,
+    PlanSettingsModule,
+    PointsModule,
+    ReferralsModule,
+    WalletProviderModule,
+  ],
   controllers: [PlanPurchasesController],
-  providers: [PlanPurchaseService],
+  providers: [
+    PlanPurchaseService,
+    PlanTransferService,
+    PointsPackService,
+    ExtraProductsService,
+  ],
 })
 export class PlanPurchasesModule {}

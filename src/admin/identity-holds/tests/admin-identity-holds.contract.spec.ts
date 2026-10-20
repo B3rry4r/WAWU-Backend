@@ -70,6 +70,19 @@ class OpeningDoubleModule {}
 })
 class UnderTestModule {}
 
+/**
+ * The text with the ids WAWU generated itself cut out (the audit row's own
+ * uuid, the holder's, the admins', also inside an admin's email). A random
+ * uuid can hold 11 decimal digits in a row, which is what a BVN looks like,
+ * so scanning the raw row failed about 1 run in 100. What is left is only what
+ * could carry a BVN: detail, the other fields, the date. A number planted in
+ * any of those, or the word bvn, still trips the scan. The id is swapped for
+ * a marker, not removed, so the text on either side cannot join into a run.
+ */
+function withoutKnownIds(text: string, knownIds: string[]): string {
+  return knownIds.reduce((t, k) => t.split(k).join('<id>'), text);
+}
+
 describe('Admin: support lets go of a BVN hold (NUV-02 round 3)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
@@ -185,7 +198,9 @@ describe('Admin: support lets go of a BVN hold (NUV-02 round 3)', () => {
         outcome: 'released',
         state: 'expired',
       });
-      expect(res.text).not.toMatch(/bvn|hash|released:|\d{11}/i);
+      expect(withoutKnownIds(res.text, [id])).not.toMatch(
+        /bvn|hash|released:|\d{11}/i,
+      );
       const rows = await prisma.adminOpsAudit.findMany({
         where: { resourceId: id },
       });
@@ -197,9 +212,52 @@ describe('Admin: support lets go of a BVN hold (NUV-02 round 3)', () => {
         actedByAdminRole: role,
         detail: { stateBefore: 'review', stateAfter: 'expired' },
       });
-      expect(JSON.stringify(rows[0])).not.toMatch(/\d{11}|bvn/i);
+      expect(
+        withoutKnownIds(JSON.stringify(rows[0]), [rows[0].id, id, ...adminIds]),
+      ).not.toMatch(/\d{11}|bvn/i);
     },
   );
+
+  it('the BVN scan skips our own ids, and still trips on a planted number or the word', () => {
+    // An admin id whose last group holds 11 decimal digits in a row, as a
+    // random uuid sometimes does.
+    const adminId = '0b6e1c52-7a3d-4f10-9c2e-f43762817252';
+    const holderId = '5d2f9a01-3c4b-4e7a-8b11-aa90c1d2e3f4';
+    const rowId = '9c1e7b30-52d8-4a6f-b0e4-1f2a3b4c5d6e';
+    const known = [rowId, holderId, adminId];
+    const row = {
+      id: rowId,
+      resource: 'wallet_identity_hold',
+      resourceId: holderId,
+      subjectWawuId: holderId,
+      action: 'wallet_identity_hold_released',
+      detail: { stateBefore: 'review', stateAfter: 'expired' } as object,
+      actedByAdminId: adminId,
+      actedByAdminEmail: `nuv02r3-support-${adminId}@admin.test.wawu.dev`,
+      actedByAdminRole: 'support',
+      actedAt: '2026-10-16T12:34:56.789Z',
+    };
+    const scan = (r: object) =>
+      withoutKnownIds(JSON.stringify(r), known).match(/\d{11}|bvn/i);
+
+    // The old scan, on the raw row, trips on the id alone.
+    expect(JSON.stringify(row)).toMatch(/\d{11}|bvn/i);
+    // The new scan lets the clean row through.
+    expect(scan(row)).toBeNull();
+    // A real 11-digit number, or the word, in any field that is not an id.
+    expect(scan({ ...row, detail: { note: '22212345678' } })).not.toBeNull();
+    expect(scan({ ...row, detail: { bvn: 'masked' } })).not.toBeNull();
+    expect(scan({ ...row, action: 'released_22212345678' })).not.toBeNull();
+    // An id field that holds a number instead of the known id.
+    expect(scan({ ...row, subjectWawuId: '22212345678' })).not.toBeNull();
+    expect(
+      scan({ ...row, actedByAdminEmail: 'someone22212345678@admin.test' }),
+    ).not.toBeNull();
+    // A number stuck to an id is not hidden by the id being cut out.
+    expect(
+      scan({ ...row, subjectWawuId: `${holderId}22212345678` }),
+    ).not.toBeNull();
+  });
 
   it.each(['already_released', 'not_held'] as const)(
     '%s: 200, nothing changed, no audit row',

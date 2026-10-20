@@ -25,8 +25,14 @@ import {
  * behind an interface so contract tests can stub them" rule) since no live
  * WAWU ID internal deletion endpoint exists in this sandbox.
  */
+// INBOX-18 F7 (SWEEP-LATE): follow WAWU_ID_BASE_URL (a local stack points it at
+// its own mock) before falling back to :4001. The login used to go to :4001
+// whatever the Hub verified against, so on a stack the token came from another
+// mock and every call answered 401.
 const MOCK_WAWU_ID_BASE_URL =
-  process.env.WAWU_ID_BASE_URL_TEST ?? 'http://localhost:4001';
+  process.env.WAWU_ID_BASE_URL_TEST ??
+  process.env.WAWU_ID_BASE_URL ??
+  'http://localhost:4001';
 const PLAIN_USER_IDENTIFIER = 'user@test.wawu.dev';
 const PLAIN_USER_SUB = '00000000-0000-4000-8000-000000000001';
 
@@ -87,9 +93,20 @@ describe('Account (contract)', () => {
       (await prisma.pushStoppedAccount.count({
         where: { userWawuId: PLAIN_USER_SUB },
       })) > 0;
+    // SETTINGS-06: DELETE /account now records the wait in AccountDeletion,
+    // and a second call keeps its date. Start every run with none.
+    await prisma.accountDeletion.deleteMany({
+      where: { wawuUserId: PLAIN_USER_SUB },
+    });
   });
 
   afterAll(async () => {
+    await prisma.accountDeletionContent.deleteMany({
+      where: { wawuUserId: PLAIN_USER_SUB },
+    });
+    await prisma.accountDeletion.deleteMany({
+      where: { wawuUserId: PLAIN_USER_SUB },
+    });
     if (!hadPushStop) {
       await prisma.pushStoppedAccount.deleteMany({
         where: { userWawuId: PLAIN_USER_SUB },
@@ -103,7 +120,7 @@ describe('Account (contract)', () => {
   });
 
   describe('DELETE /account', () => {
-    it('valid request -> 200 with {deletionScheduledAt} ~48h out, and orchestrates WAWU ID deletion', async () => {
+    it('valid request -> 200 with {deletionScheduledAt} 30 days out (R-17), and orchestrates WAWU ID deletion', async () => {
       const before = Date.now();
 
       const res = await request(app.getHttpServer())
@@ -118,13 +135,17 @@ describe('Account (contract)', () => {
       });
 
       const scheduledAt = new Date(res.body.data.deletionScheduledAt).getTime();
-      const expectedMs = 48 * 60 * 60 * 1000;
-      // Allow generous test-runtime slack either side of the 48h mark.
+      // R-17 (SETTINGS-06): the wait is 30 days, no longer 48 hours.
+      const expectedMs = 30 * 24 * 60 * 60 * 1000;
+      // Allow generous test-runtime slack either side of the 30-day mark.
       expect(scheduledAt).toBeGreaterThan(before + expectedMs - 60_000);
       expect(scheduledAt).toBeLessThan(before + expectedMs + 60_000);
 
+      // SETTINGS-08 (ruling-driven, SHARED-CHANGES SETTINGS-08): the call also
+      // carries the Hub's own end of the 30 days, equal to the date answered.
       expect(mockGateway.scheduleAccountDeletion).toHaveBeenCalledWith(
         PLAIN_USER_SUB,
+        new Date(res.body.data.deletionScheduledAt),
       );
     });
 

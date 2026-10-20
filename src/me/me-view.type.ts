@@ -25,6 +25,11 @@ export interface MeCountsView {
   saved: number;
   /** Unread notifications. M7 "Notifications 3 new". */
   unreadNotifications: number;
+  /**
+   * School places the caller has paid for whose class has not finished (SC8's
+   * Current tab, paid rows). M7 "My courses 1 enrolled" (ME-03).
+   */
+  enrolledCourses: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -118,6 +123,67 @@ export interface PurchasePage {
   nextCursor: string | null;
 }
 
+/* ------------------------------------------------------------------ */
+/* GET /me/purchases/all (M29, every paid kind; task FIX-59)            */
+/* ------------------------------------------------------------------ */
+
+/** What was paid for. Named as the wallet payment kinds are (docs/contract/WALLET.md). */
+export type PaidPurchaseKind =
+  | 'content_unlock'
+  | 'event_ticket'
+  | 'credit_pack'
+  | 'school_fee'
+  | 'community_pass';
+
+/**
+ * `paid`: the person paid and has what they paid for (or is about to).
+ * `refunded`: the money came back, or the ticket order or the place already
+ * says it is going back. A payment whose goods never arrived is listed only
+ * once the provider has confirmed the refund (the provider's own record is
+ * the truth, never a guess).
+ */
+export type PaidPurchaseStatus = 'paid' | 'refunded';
+
+/** One row of My purchases across every paid kind. */
+export interface PaidPurchaseView {
+  /** The row's own id (stable for paging), not the thing's. */
+  id: string;
+  kind: PaidPurchaseKind;
+  /** A piece's title, an event's name, "120 WAWU Credits", a course, a community pass. */
+  title: string;
+  /**
+   * What the item cost, in kobo, as the payment recorded it (the wallet
+   * payment's own price; for a card payment the stored charge). Never
+   * recomputed from a list price.
+   */
+  amountKobo: number;
+  /**
+   * What left the wallet in all, in kobo (the price plus the fees quoted
+   * with it, R-10); null when the payment was not from the wallet.
+   */
+  totalKobo: number | null;
+  /** When it was paid, ISO 8601 UTC. A refunded row keeps the day it was paid. */
+  purchasedAt: string;
+  status: PaidPurchaseStatus;
+  /**
+   * The id the app opens, by kind: `content_unlock` the piece, `event_ticket`
+   * the ticket order (events/orders/{id}), `school_fee` the enrolment,
+   * `community_pass` the community. Null for `credit_pack` (nothing to open).
+   */
+  openId: string | null;
+  /** Set for `content_unlock` when the piece is still there; null otherwise. */
+  content: PurchasedPieceView | null;
+  /** Set for a course piece; null for every other row. */
+  lessons: LessonProgressView | null;
+  /** Credits in the pack, a count and never naira (R-5); set for `credit_pack`. */
+  credits: number | null;
+}
+
+export interface PaidPurchasePage {
+  items: PaidPurchaseView[];
+  nextCursor: string | null;
+}
+
 /** PUT and DELETE /me/lessons/:lessonId/done. */
 export interface LessonDoneState {
   lessonId: string;
@@ -135,10 +201,11 @@ export type NotificationCategory = 'money' | 'messages' | 'content' | 'other';
 
 /**
  * What opening the notification opens. `id` is the thing's id: a piece, a
- * paid question (DirectMessage), a room, or a person's wawuId.
+ * paid question (DirectMessage), a room, a person's wawuId, or (WALLET-39) a
+ * wallet transaction: the id `GET /money/transactions/{id}` answers.
  */
 export interface NotificationTargetView {
-  kind: 'content' | 'paid_question' | 'community' | 'profile';
+  kind: 'content' | 'paid_question' | 'community' | 'profile' | 'transaction';
   id: string;
   /** The piece's title or the room's name, as it is now; null for a question or a person. */
   title: string | null;

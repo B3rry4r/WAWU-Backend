@@ -25,6 +25,7 @@ import {
 } from '../money-check-types';
 import {
   failureOf,
+  findingLogLine,
   failureReport,
   failureText,
   RUN_DIED,
@@ -469,12 +470,16 @@ describe('the mailer', () => {
     }
   });
 
-  it('does not take a 200 that says nothing was sent', async () => {
+  it('takes only a 200 that says emailed is true', async () => {
     const real = global.fetch;
     try {
       for (const answer of [
         { data: { emailed: false } },
         { data: { sent: false } },
+        { data: { sent: true } },
+        { data: { emailed: 'true' } },
+        { data: {} },
+        {},
       ]) {
         global.fetch = jest
           .fn()
@@ -485,11 +490,7 @@ describe('the mailer', () => {
           ).send('owner', mail),
         ).rejects.toBeInstanceOf(MoneyCheckMailRefused);
       }
-      for (const answer of [
-        { data: { emailed: true } },
-        { data: { sent: true } },
-        {},
-      ]) {
+      for (const answer of [{ data: { emailed: true } }]) {
         global.fetch = jest
           .fn()
           .mockResolvedValue(new Response(JSON.stringify(answer))) as never;
@@ -515,6 +516,21 @@ describe('the mailer', () => {
       if (was === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = was;
     }
+  });
+});
+
+describe('a finding in the log', () => {
+  it('is one line, whatever the provider put in its reference (RF-5)', () => {
+    const line = findingLogLine('2026-10-12', {
+      severity: 'mismatch',
+      kind: 'debit_missing_in_ledger',
+      ref: 'tx-1\nmoney check 2026-10-12 (fintava): clean; 9 of 9 wallets\r\u2028x',
+      amountKobo: '500',
+    } as never);
+    expect(line).not.toMatch(/[\r\n\u2028\u2029]/);
+    expect(line.split('\n')).toHaveLength(1);
+    expect(line.startsWith('money check 2026-10-12: mismatch ')).toBe(true);
+    expect(line.endsWith(' 500 kobo')).toBe(true);
   });
 });
 

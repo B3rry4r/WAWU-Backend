@@ -1,4 +1,10 @@
 import type { DmOtherParty } from '../common/types';
+import type { PaidDmCreatorEarning } from './paid-dm-creator-earning.type';
+
+export type {
+  PaidDmCreatorEarning,
+  PaidDmEarningState,
+} from './paid-dm-creator-earning.type';
 
 /**
  * Every response shape the paid-question thread routes return (task
@@ -37,6 +43,12 @@ export interface PaidDmQuestion {
   respondedAt: string | null;
   /** Reply bubbles, oldest first. Empty while waiting. */
   replies: PaidDmReply[];
+  /**
+   * What the creator earns by this question, read by the creator only. Null
+   * for the person who asked, for a refunded question, and for a question
+   * that was not paid from a wallet (it holds no share).
+   */
+  creatorEarning: PaidDmCreatorEarning | null;
 }
 
 /** One person's thread of paid questions with another. */
@@ -89,6 +101,16 @@ export interface PaidDmQueuePage {
   waitingTotal: number;
 }
 
+/**
+ * GET /paid-dm/waiting: the figures above the creator's waiting list (I9):
+ * how many questions wait on a reply and what they were paid, in kobo, over
+ * every question waiting and not only a page of them.
+ */
+export interface PaidDmWaiting {
+  count: number;
+  amountKobo: number;
+}
+
 /** Where a creator stands on unanswered paid questions (R-13). */
 export type PaidDmStandingState = 'ok' | 'warning' | 'paused';
 
@@ -126,4 +148,58 @@ export interface PaidDmAvailability {
   paused: boolean;
   /** ISO time they come back. Null unless paused. */
   pausedUntil: string | null;
+}
+
+/** One quick price the screen offers. */
+export interface PaidDmPricePreset {
+  /** The price per message in kobo. */
+  priceKobo: number;
+}
+
+/** What a creator may choose on the paid messages settings (I21), from config. */
+export interface PaidDmSettingsOptions {
+  /** Lowest price a paid message may have, in kobo. */
+  minPriceKobo: number;
+  /** Highest price a paid message may have, in kobo. */
+  maxPriceKobo: number;
+  /** The quick prices to offer, ascending. */
+  pricePresets: PaidDmPricePreset[];
+  /** The reply windows to offer, in hours, ascending. */
+  responseWindowHours: number[];
+}
+
+/**
+ * GET and PUT /paid-dm/settings: the creator's paid message settings (I21 to
+ * I23), with everything the screen draws. Money is integer kobo.
+ */
+export interface PaidDmSettings {
+  /** The creator's own switch. It stays as set while paid messages are paused: the pause ends by the clock and they are back on. */
+  enabled: boolean;
+  /** Price per message in kobo. Null until one is set. */
+  priceKobo: number | null;
+  /** Hours the creator has to reply. */
+  responseHours: number;
+  /** The share of each message the creator keeps, in whole percent (R-5: 85). */
+  creatorSharePct: number;
+  /** What the creator keeps per message at the saved price, in kobo. Null with no price. */
+  earnPerMessageKobo: number | null;
+  /** The next preset price above the saved one, offered when warned. Null when none is higher. */
+  raiseToKobo: number | null;
+  options: PaidDmSettingsOptions;
+  /** Warned, paused and when paid messages come back (I22, I23). */
+  standing: PaidDmStanding;
+}
+
+/**
+ * GET /paid-dm/settings/earn: what a creator keeps of one message at a price
+ * they are typing, worked out by the Hub with the same share and rounding as
+ * the saved settings (R-21: the screen never multiplies or divides money).
+ */
+export interface PaidDmEarn {
+  /** The price asked about, in kobo, as sent. */
+  priceKobo: number;
+  /** The share of each message the creator keeps, in whole percent (R-5: 85). */
+  creatorSharePct: number;
+  /** What the creator keeps of one message at that price, in kobo, rounded down. */
+  earnPerMessageKobo: number;
 }

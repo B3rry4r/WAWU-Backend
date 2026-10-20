@@ -3,6 +3,7 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { ProfessionalController } from './professional.controller';
 import { ProfessionalService } from './professional.service';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
+import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
 
 /**
  * Professional profiles. WawuAuthModule supplies WawuIdClient (display names
@@ -13,7 +14,9 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
  * service rather than writing the table itself.
  */
 @Module({
-  imports: [WawuAuthModule, BlockedAccountModule],
+  // TierBadgeModule: the tier badge on the directory's rows (TIER-07); a leaf
+  // with no routes, so no route moves.
+  imports: [WawuAuthModule, BlockedAccountModule, TierBadgeModule],
   controllers: [ProfessionalController],
   providers: [ProfessionalService],
   exports: [ProfessionalService],

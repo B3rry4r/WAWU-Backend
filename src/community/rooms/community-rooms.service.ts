@@ -10,7 +10,15 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import { CommunityMessageService } from '../../community-message/community-message.service';
 import { CommunityService } from '../community.service';
-import type { CreateCommunityDto } from '../dto/create-community.dto';
+import type { CreateRoomDto } from '../dto/create-room.dto';
+import {
+  CommunityPassAccess,
+  PASS_ENDED_MESSAGE,
+} from '../pass/community-pass-access.service';
+import {
+  passPriceBounds,
+  passPriceProblem,
+} from '../pass/community-pass-rules';
 import { Prisma } from '../../../generated/prisma/client';
 import { normaliseSlug, shareLink, slugBase } from './community-slug';
 import {
@@ -65,6 +73,7 @@ export class CommunityRoomsService {
     private readonly communities: CommunityService,
     private readonly messages: CommunityMessageService,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly passAccess: CommunityPassAccess,
   ) {}
 
   /**
@@ -76,12 +85,33 @@ export class CommunityRoomsService {
    */
   async createRoom(
     hostWawuId: string,
-    dto: CreateCommunityDto,
+    dto: CreateRoomDto,
   ): Promise<CommunityRoom> {
     if (dto.kind === 'private' && !dto.imageUrl) {
       throw new BadRequestException('A private room needs a cover image.');
     }
-    const community = await this.communities.create(hostWawuId, dto);
+    // INBOX-24 (R-63). A private room sells a monthly pass: the host types
+    // the price here and it is stored with the room, in one write. R-63 has
+    // no host approval step, so a private room made here always has a price
+    // (SWEEP-INBOX, INBOX-24 L3). POST /communities, which the web calls,
+    // still makes one without a price and keeps the older join request flow.
+    if (dto.kind === 'private' && dto.passPriceKobo === undefined) {
+      throw new BadRequestException('A private room needs a monthly price.');
+    }
+    if (dto.passPriceKobo !== undefined) {
+      if (dto.kind !== 'private') {
+        throw new BadRequestException(
+          'Only a private room has a monthly price.',
+        );
+      }
+      const problem = passPriceProblem(dto.passPriceKobo, passPriceBounds());
+      if (problem) throw new BadRequestException(problem);
+    }
+    const community = await this.communities.create(
+      hostWawuId,
+      dto,
+      dto.passPriceKobo,
+    );
     const slug = await this.ensureLink(community.id, community.name);
     return { ...community, slug, link: shareLink(slug) };
   }
@@ -167,6 +197,10 @@ export class CommunityRoomsService {
           'Join this community to read or post in it.',
         );
       }
+      // INBOX-24 (R-63): a member whose pass has ended reads nothing.
+      if (!(await this.passAccess.mayEnter(communityId, userWawuId))) {
+        throw new ForbiddenException(PASS_ENDED_MESSAGE);
+      }
     }
 
     const lastReadAt = new Date();
@@ -232,9 +266,26 @@ export class CommunityRoomsService {
     // SETTINGS-04: a room's preview line and unread count leave out what
     // people the caller blocked (or who blocked the caller) wrote.
     const hidden = await this.blockedAccounts.hiddenFrom(userWawuId);
+    // INBOX-24 (R-63). A room whose pass has ended is still listed, so the
+    // person can renew it, but shows no message and no unread count: reading
+    // is part of what the pass pays for.
+    const lapsed = await this.passAccess.lapsedRooms(
+      userWawuId,
+      communities.filter((c) => c.hostWawuId !== userWawuId).map((c) => c.id),
+    );
     const ranked = await Promise.all(
       communities.map(async (community) => {
         const { role, joinedAt } = roles.get(community.id)!;
+        if (lapsed.has(community.id)) {
+          return {
+            community,
+            role,
+            joinedAt,
+            last: null,
+            unreadCount: 0,
+            lastActivityAt: joinedAt,
+          };
+        }
         const since = readUpTo.get(community.id) ?? joinedAt ?? null;
         const [last, unreadCount] = await this.prisma.$transaction([
           this.prisma.communityMessage.findFirst({
@@ -284,14 +335,20 @@ export class CommunityRoomsService {
           this.communities.withDerivedFields(row.community),
           this.ensureLink(row.community.id, row.community.name),
         ]);
-        const lastMessage: CommunityLastMessage | null = row.last
+        // The links are signed fresh, as the room's list signs them (FIX-71).
+        const last = row.last
+          ? await this.messages.withFreshMedia(row.last)
+          : null;
+        const lastMessage: CommunityLastMessage | null = last
           ? {
-              id: row.last.id,
-              text: row.last.text,
-              imageUrl: row.last.imageUrl,
-              sentAt: row.last.sentAt,
-              senderWawuId: row.last.senderWawuId,
-              sender: senders.get(row.last.senderWawuId) ?? null,
+              id: last.id,
+              text: last.text,
+              imageUrl: last.imageUrl,
+              videoUrl: last.videoUrl,
+              voiceUrl: last.voiceUrl,
+              sentAt: last.sentAt,
+              senderWawuId: last.senderWawuId,
+              sender: senders.get(last.senderWawuId) ?? null,
             }
           : null;
         return {
@@ -351,10 +408,16 @@ export class CommunityRoomsService {
         this.messages.messageCostFor(community, viewerWawuId),
       ]);
 
+    // INBOX-24 (R-63). In a room that sells a pass, a member whose pass has
+    // ended is not inside: they are shown the room as someone who has to pay.
+    const lapsed =
+      community.hostWawuId !== viewerWawuId &&
+      membership?.status === 'joined' &&
+      !(await this.passAccess.mayEnter(communityId, viewerWawuId));
     const role: CommunityViewerRole =
       community.hostWawuId === viewerWawuId
         ? CommunityViewerRole.Host
-        : membership?.status === 'joined'
+        : membership?.status === 'joined' && !lapsed
           ? CommunityViewerRole.Member
           : membership?.status === 'pending'
             ? CommunityViewerRole.Pending
@@ -371,7 +434,10 @@ export class CommunityRoomsService {
 
   /** INBOX-05, GET /communities/message-cost. The price line on I24's card. */
   messageCost(): CommunityMessageCost {
-    return { creditsPerMessage: this.messages.meteredMessageCost() };
+    return {
+      creditsPerMessage: this.messages.meteredMessageCost(),
+      creditsByKind: this.messages.costsByKind(),
+    };
   }
 
   /**

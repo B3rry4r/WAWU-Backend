@@ -1,9 +1,9 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { request as httpRequest, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { connect as netConnect, type AddressInfo } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { join, relative } from 'node:path';
-import { Controller, Get, type INestApplication } from '@nestjs/common';
+import { Controller, Get, type INestApplication, Logger } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import {
@@ -252,6 +252,41 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       // The address nginx wrote is the answer, never a further hop.
       for (const hop of ['127.0.0.1', '198.51.100.1'])
         expect(hubTrustProxy(hop, 1)).toBe(false);
+    });
+
+    it('an address that is not known is not loopback, never trusted and never throws (FIX-18)', () => {
+      expect(isLoopbackAddress(undefined)).toBe(false);
+      expect(hubTrustProxy(undefined, 0)).toBe(false);
+      expect(hubTrustProxy(undefined, 1)).toBe(false);
+    });
+
+    it('a request whose socket is gone before anything reads its address is not a fault (FIX-18)', async () => {
+      // A GET that names a proxy chain and is followed by bytes that are not
+      // a request: Node answers the extra bytes with 400 and destroys the
+      // socket while the first request is still in the guard, so Express asks
+      // about a peer whose address is already undefined.
+      const errors = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      try {
+        for (let i = 0; i < 3; i++) {
+          await new Promise<void>((resolve) => {
+            const socket = netConnect(port, '127.0.0.1');
+            socket.on('error', () => undefined);
+            socket.on('close', () => resolve());
+            socket.on('connect', () =>
+              socket.write(
+                `GET ${PATH} HTTP/1.1\r\nHost: x\r\nX-Forwarded-For: 198.51.100.77\r\n\r\n{"a":1}`,
+              ),
+            );
+            setTimeout(() => socket.destroy(), 1500);
+          });
+        }
+        await sleep(300);
+        expect(errors).not.toHaveBeenCalled();
+      } finally {
+        errors.mockRestore();
+      }
     });
   });
 
@@ -600,11 +635,19 @@ describe('Rate limits behind nginx (OPS-11)', () => {
   });
 
   it('src/main.ts applies the same settings to the live app', () => {
+    // FIX-17 moved main.ts's setup into src/hub-app-config.ts: main.ts creates
+    // the app with HUB_APP_OPTIONS and calls configureHubApp, which applies
+    // the settings this spec's apps apply.
     const main = readFileSync(join(__dirname, '../main.ts'), 'utf8');
+    const config = readFileSync(
+      join(__dirname, '../hub-app-config.ts'),
+      'utf8',
+    );
     expect(main).toMatch(
       /NestFactory\.create\(\s*AppModule,\s*HUB_APP_OPTIONS\s*\)/,
     );
-    expect(main).toMatch(/applyHubHttpSettings\(app\)/);
+    expect(main).toMatch(/configureHubApp\(app\)/);
+    expect(config).toMatch(/applyHubHttpSettings\(app\)/);
   });
 });
 

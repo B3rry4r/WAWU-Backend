@@ -11,6 +11,8 @@ import {
   unverified,
   type VerificationState,
 } from '../common/verification/verification-state';
+import type { PersonBadgeView } from '../plans/tier-badge/person-badge-view.type';
+import { TierBadgeService } from '../plans/tier-badge/tier-badge.service';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import {
@@ -32,8 +34,7 @@ import {
 } from './professional-fields';
 import {
   NO_REPLY_STATS,
-  REPLY_TIME_DEFAULTS,
-  toReplyStats,
+  replyTimesFor,
   type ReplyTimeStats,
 } from './professional-reply-time';
 import type { ListProfessionalDirectoryQueryDto } from './dto/professional-directory.dto';
@@ -106,6 +107,11 @@ export interface ProfessionalReviewView {
  * they are (they are on the protected route list).
  */
 interface ProfessionalDirectoryExtras {
+  /**
+   * Their tier badge while a tier runs, else null (TIER-07): the pill on the
+   * card and the profile, with the Founding Maker number.
+   */
+  badge: PersonBadgeView | null;
   /** The canvas field this listing shows under, or null when none covers its category. */
   field: ProfessionalFieldRef | null;
   /** Where they work, as they wrote it. Null when they have not said. */
@@ -176,6 +182,7 @@ export class ProfessionalService {
     private readonly prisma: PrismaService,
     private readonly wawuId: WawuIdClient,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly badges: TierBadgeService,
   ) {}
 
   // -------------------------------------------------------------------
@@ -267,7 +274,7 @@ export class ProfessionalService {
 
     if (dto.credentialKind !== 'licence') {
       throw new BadRequestException(
-        `${dto.category.replace(/_/g, ' ')} is a regulated field, so a practising licence is required — a portfolio or a general qualification cannot be accepted here.`,
+        `${dto.category.replace(/_/g, ' ')} is a regulated field, so a practising licence is required. A portfolio or a general qualification cannot be accepted here.`,
       );
     }
     if (!dto.licenceNumber?.trim()) {
@@ -719,66 +726,35 @@ export class ProfessionalService {
   private async directoryExtras(wawuUserIds: string[]): Promise<{
     cityBy: Map<string, string>;
     replyBy: Map<string, ReplyTimeStats>;
+    badgeBy: Map<string, PersonBadgeView>;
   }> {
     if (wawuUserIds.length === 0) {
-      return { cityBy: new Map(), replyBy: new Map() };
+      return { cityBy: new Map(), replyBy: new Map(), badgeBy: new Map() };
     }
     const unique = [...new Set(wawuUserIds)];
-    const [locations, replies] = await Promise.all([
+    const [locations, replies, badgeBy] = await Promise.all([
       this.prisma.professionalLocation.findMany({
         where: { wawuUserId: { in: unique } },
         select: { wawuUserId: true, city: true },
       }),
       this.replyTimes(unique),
+      this.badges.forMany(unique),
     ]);
     return {
       cityBy: new Map(locations.map((l) => [l.wawuUserId, l.city])),
       replyBy: replies,
+      badgeBy,
     };
   }
 
   /**
    * Median reply time over each professional's most recent answered paid
    * messages (professional-reply-time.ts), one query for the whole page.
-   * Per PERSON, not per listing: a paid message goes to the person, and the
-   * same person answers it whichever field they were found in.
    */
-  private async replyTimes(
+  private replyTimes(
     wawuUserIds: string[],
   ): Promise<Map<string, ReplyTimeStats>> {
-    const rows = await this.prisma.$queryRaw<
-      Array<{
-        creatorWawuId: string;
-        medianSeconds: number | null;
-        answered: number;
-      }>
-    >`
-      SELECT "creatorWawuId",
-             percentile_cont(0.5) WITHIN GROUP (ORDER BY "seconds") AS "medianSeconds",
-             COUNT(*)::int AS "answered"
-      FROM (
-        SELECT "creatorWawuId",
-               EXTRACT(EPOCH FROM ("respondedAt" - "sentAt"))::double precision AS "seconds",
-               ROW_NUMBER() OVER (
-                 PARTITION BY "creatorWawuId" ORDER BY "respondedAt" DESC, "id"
-               ) AS "rank"
-        FROM "DirectMessage"
-        WHERE "creatorWawuId" IN (${Prisma.join(wawuUserIds)})
-          AND "status" = ${DmStatus.responded}::"DmStatus"
-          AND "respondedAt" IS NOT NULL
-          AND "respondedAt" >= "sentAt"
-      ) AS "answered"
-      WHERE "rank" <= ${REPLY_TIME_DEFAULTS.sample}
-      GROUP BY "creatorWawuId"`;
-    return new Map(
-      rows.map((r) => [
-        r.creatorWawuId,
-        toReplyStats(
-          r.medianSeconds === null ? null : Number(r.medianSeconds),
-          Number(r.answered),
-        ),
-      ]),
-    );
+    return replyTimesFor(this.prisma, wawuUserIds);
   }
 
   // -------------------------------------------------------------------
@@ -891,6 +867,7 @@ function withExtras(
   extras: {
     cityBy: Map<string, string>;
     replyBy: Map<string, ReplyTimeStats>;
+    badgeBy: Map<string, PersonBadgeView>;
   },
 ): ProfessionalDirectoryEntry {
   const { dmPrice, ...rest } = item;
@@ -898,6 +875,7 @@ function withExtras(
   return {
     ...rest,
     field: fieldForCategory(item.category),
+    badge: extras.badgeBy.get(item.wawuId) ?? null,
     city: extras.cityBy.get(item.wawuId) ?? null,
     usualReplyMinutes: reply.usualReplyMinutes,
     answeredMessageCount: reply.answeredCount,

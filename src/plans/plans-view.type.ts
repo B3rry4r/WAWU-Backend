@@ -12,6 +12,17 @@ export type PlanCurrency = 'NGN' | 'USD';
 export interface PlanEventPassView {
   id: string;
   name: string;
+  /**
+   * The lines W44 prints under the pass, set in admin settings (TIER-06,
+   * G-804). Left out when none is set.
+   */
+  benefits?: string[] | null;
+  /**
+   * The day of the event, `YYYY-MM-DD`, set in admin settings (TIER-06,
+   * G-804). Left out until the owner sets it: W44 then reads "Date to be
+   * announced".
+   */
+  eventDate?: string | null;
 }
 
 export interface PlanBadgeView {
@@ -113,6 +124,13 @@ export interface MyTierView {
   activeUntil: string | null;
   /** The tier's products plus extra products bought (0 with no tier). */
   productsAllowed: number;
+  /**
+   * Products published now, across content (a draft does not count, a piece
+   * that was removed or turned down gives its place back). It is the count
+   * the publishing gate checks, so `productsUsed` of `productsAllowed` is the
+   * meter VF12 and VF14 draw (TIER-02).
+   */
+  productsUsed: number;
   extraProducts: number;
   /** The bonus points the tier came with. */
   pointsIncluded: number;

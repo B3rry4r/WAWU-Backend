@@ -15,8 +15,8 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { PaginationQueryDto } from '../../common/dto/pagination.dto';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
-import { CreatorAccountGuard } from '../guards/creator-account-guard';
-import { CreateCommunityDto } from '../dto/create-community.dto';
+import { CreatorAccountGuard } from '../../common/guards/creator-account.guard';
+import { CreateRoomDto } from '../dto/create-room.dto';
 import { CommunityRoomsService } from './community-rooms.service';
 import type {
   CommunityLinkView,
@@ -96,13 +96,15 @@ export class CommunityRoomsController {
    * Create a room, the way the app does. Creator accounts only, like
    * POST /communities. A private room needs a cover image (`imageUrl`):
    * without one the answer is 400 "A private room needs a cover image.".
+   * A private room also needs its monthly price (`passPriceKobo`, R-63):
+   * without one the answer is 400 "A private room needs a monthly price.".
    * The answer carries the room's share link.
    */
   @Post('rooms')
   @UseGuards(CreatorAccountGuard)
   createRoom(
     @CurrentUser() user: WawuJwtClaims,
-    @Body() dto: CreateCommunityDto,
+    @Body() dto: CreateRoomDto,
   ): Promise<CommunityRoom> {
     return this.rooms.createRoom(user.sub, dto);
   }

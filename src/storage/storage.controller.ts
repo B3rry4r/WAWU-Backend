@@ -6,12 +6,18 @@ import {
   HttpStatus,
   Post,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { StorageService, type UploadAllowanceView } from './storage.service';
 import { PresignUploadDto } from './dto/presign-upload.dto';
+import { ReleaseUploadDto } from './dto/release-upload.dto';
+import { uploadFormatsView, type UploadFormatsView } from './upload-formats';
+import { ConfirmUploadDto } from './dto/confirm-upload.dto';
+import { GatesPublishing } from '../plans/publishing-offers.interceptor';
+import { StorageBusyInterceptor } from './storage-busy.interceptor';
 
 /**
  * POST /uploads/presign — hands the authenticated caller a short-lived PUT
@@ -21,14 +27,21 @@ import { PresignUploadDto } from './dto/presign-upload.dto';
  *
  * Any signed-in account may request one; the object key is namespaced by the
  * caller's own wawuId so accounts cannot collide or overwrite each other.
+ *
+ * A file for a product (folder `content/preview` or `content/full`) needs a
+ * running tier, or a tick that has not ended, and a free place for one more
+ * product (TIER-02): otherwise 402 `tier_required` or `product_limit_reached`
+ * with the offers. Every other folder is open to any signed-in account.
  */
 @UseGuards(WawuAuthGuard)
+@UseInterceptors(StorageBusyInterceptor)
 @Controller('uploads')
 export class StorageController {
   constructor(private readonly storage: StorageService) {}
 
   @Post('presign')
   @HttpCode(HttpStatus.OK)
+  @GatesPublishing()
   presign(@CurrentUser() user: WawuJwtClaims, @Body() dto: PresignUploadDto) {
     return this.storage.presignUpload(
       user.sub,
@@ -36,7 +49,38 @@ export class StorageController {
       dto.contentType,
       dto.extension,
       dto.contentLength,
+      dto.format,
     );
+  }
+
+  /**
+   * GET /uploads/formats: what each content format may upload (M20 to M22):
+   * the file types and the most bytes for the full file, and the same for the
+   * separate public preview, with how that preview is shown and, for a clip,
+   * how long it is asked to be. Any signed-in account. The same table
+   * `POST /uploads/presign` applies when it is given a `format`.
+   */
+  @Get('formats')
+  formats(): UploadFormatsView {
+    return uploadFormatsView();
+  }
+
+  /**
+   * POST /uploads/confirm: the app has finished sending the file it got a URL
+   * for, taken or turned away by the storage host. The server asks the bucket
+   * and answers `confirmed` (the file is there and counts against the person's
+   * storage), `pending` (it is not there yet and the URL could still be used,
+   * so nothing changes and the sweep settles it) or `abandoned` (it is not
+   * there and the URL is spent, so the space it held goes back at once instead
+   * of when the sweep settles it). A file that lands after it was given up on
+   * and no longer fits the person's storage is removed and answers 413. The
+   * app's word decides nothing; only the person's own upload can be settled. A
+   * bucket that cannot be asked answers 503 and changes nothing.
+   */
+  @Post('confirm')
+  @HttpCode(HttpStatus.OK)
+  confirm(@CurrentUser() user: WawuJwtClaims, @Body() dto: ConfirmUploadDto) {
+    return this.storage.settleUpload(user.sub, dto.key);
   }
 
   /**
@@ -64,5 +108,23 @@ export class StorageController {
   @Get('allowance')
   allowance(@CurrentUser() user: WawuJwtClaims): Promise<UploadAllowanceView> {
     return this.storage.allowanceFor(user.sub);
+  }
+
+  /**
+   * POST /uploads/release: takes back an upload the caller reserved and no
+   * listing has claimed yet (a file removed or replaced in an unfinished
+   * draft). Deletes the object and frees its space in one step. Only the
+   * caller's own upload in content/preview or content/full; another person's
+   * key, an unknown key and a key in any other folder all get the same 404,
+   * and a key a listing already uses gets a 409. Calling it again for a key
+   * already released answers the same 200.
+   */
+  @Post('release')
+  @HttpCode(HttpStatus.OK)
+  release(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: ReleaseUploadDto,
+  ): Promise<{ released: true }> {
+    return this.storage.releaseUpload(user.sub, dto.key);
   }
 }

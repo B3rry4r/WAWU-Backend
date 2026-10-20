@@ -12,6 +12,7 @@ import type { ModuleRef } from '@nestjs/core';
 import { PassportModule } from '@nestjs/passport';
 import { Test, type TestingModule } from '@nestjs/testing';
 import * as jwt from 'jsonwebtoken';
+import { Client } from 'pg';
 import request, { type Response } from 'supertest';
 import type { App } from 'supertest/types';
 import {
@@ -135,6 +136,26 @@ function digits(n: number): string {
   return out;
 }
 
+/**
+ * Every client address this file draws differs from every other it has drawn
+ * in the run. The opening routes count tries per address per hour in the
+ * database, so two equal draws (any two of the five old draws met in about 1
+ * run in 25, and only some pairs failed a test) turned a test into a 429
+ * (FIX-29). A pick already used is dropped and drawn again; the ranges the
+ * callers pass in are unchanged.
+ */
+const drawnAddresses = new Set<string>();
+function freshAddress(draw: () => string): string {
+  for (let tries = 0; tries < 1000; tries += 1) {
+    const address = draw();
+    if (!drawnAddresses.has(address)) {
+      drawnAddresses.add(address);
+      return address;
+    }
+  }
+  throw new Error('no unused test address left in the range');
+}
+
 type Body = Record<string, unknown> & {
   bvn: string;
   nin: string;
@@ -185,6 +206,23 @@ type HeldAccount = {
   created: number;
 };
 
+/**
+ * The name of the database this run would write to, asked of the server itself. A run on anything but a test database
+ * stops here (SWEEP-APP-4 row 168, FIX-82): nothing is started and no row is read, written or deleted.
+ */
+async function databaseNameOfRun(): Promise<string> {
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  try {
+    const res = await client.query<{ name: string }>(
+      'SELECT current_database() AS name',
+    );
+    return res.rows[0].name;
+  } finally {
+    await client.end();
+  }
+}
+
 describe('NUV-02: opening a wallet on Nuvion', () => {
   const logger = new ConsoleLogger({
     logLevels: ['log', 'error', 'warn', 'debug', 'verbose', 'fatal'],
@@ -197,6 +235,10 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   let prisma: PrismaService;
   let handler: NuvionOpeningHandler;
   const users: string[] = [];
+  /** The webhook events this file stored itself: the only ones its clean-up may delete. */
+  const storedEvents: string[] = [];
+  /** True once the database was shown to be a test database. Every hook that touches data waits on it (FIX-82). */
+  let testDatabase = false;
   const previous: Record<string, string | undefined> = {};
 
   let entities: Held[] = [];
@@ -504,7 +546,11 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       opts.email === undefined ? `nuv02-${id}@example.com` : opts.email;
     const bvn = opts.bvn ?? digits(11);
     const nin = digits(11);
-    const idNumber = `A${digits(8)}`;
+    // FIX-58: `Q`, not `A`. The stand-in's ids are 5 prefix characters and 21
+    // uppercase hex digits, which hold `A` + 8 digits now and then, and the
+    // stored-column scan below would find such a run inside an id. `Q` is
+    // not a hex digit and starts no id prefix, so no stored id can hold it.
+    const idNumber = `Q${digits(8)}`;
     secrets.push(bvn, nin, idNumber);
     const b: Body = {
       bvn,
@@ -576,6 +622,15 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   });
 
   beforeAll(async () => {
+    // First, before anything starts: a database whose name does not say it is a test database is never touched. The
+    // other hooks do nothing until this has passed (SWEEP-APP-1 FIX-33 L3, SWEEP-APP-4 row 168, FIX-82).
+    const databaseName = await databaseNameOfRun();
+    if (!/test/i.test(databaseName)) {
+      throw new Error(
+        `nuvion-opening spec refuses to run on "${databaseName}": not a test database`,
+      );
+    }
+    testDatabase = true;
     capture(process.stdout, 'write');
     capture(process.stderr, 'write');
     for (const m of ['log', 'info', 'warn', 'error', 'debug', 'trace'])
@@ -631,10 +686,20 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     await app.init();
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
+    // Tries an earlier run left in an hour's window (it died before its afterAll)
+    // would count against a fresh draw; the keys are hashes, so every recent
+    // address-keyed try goes. A test database only: the check at the top of this hook has passed.
+    await prisma.bvnCheckAttempt.deleteMany({
+      where: {
+        addressKey: { not: null },
+        createdAt: { gt: new Date(Date.now() - 3_600_000) },
+      },
+    });
     handler = moduleRef.get(NuvionOpeningHandler);
   });
 
   beforeEach(() => {
+    if (!testDatabase) return;
     standin.reset();
     entities = [];
     accounts = [];
@@ -646,6 +711,8 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   });
 
   afterAll(async () => {
+    // The check at the top of beforeAll failed: nothing was started and no row is this file's to delete.
+    if (!testDatabase) return;
     if (prisma) {
       const where = { wawuUserId: { in: users } };
       await prisma.fintavaWalletOpening.deleteMany({ where });
@@ -654,8 +721,9 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       await prisma.notification.deleteMany({
         where: { userWawuId: { in: users } },
       });
+      // Only the events this file stored, never every 'entities.*' row in the database.
       await prisma.nuvionWebhookEvent.deleteMany({
-        where: { event: { startsWith: 'entities.' } },
+        where: { id: { in: storedEvents } },
       });
     }
     if (app) await app.close();
@@ -842,7 +910,8 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       expect(body(await open(who).expect(422)).reason?.code).toBe(
         'account_not_opened',
       );
-      expect(await row(who)).toMatchObject({
+      const failed = await row(who);
+      expect(failed).toMatchObject({
         state: 'failed',
         failure: 'refused_validation',
       });
@@ -850,7 +919,13 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       await open(who).expect(200);
       expect(creates()).toHaveLength(2);
       expect(entities).toHaveLength(1);
-      expect(await row(who)).toMatchObject({ state: 'review', attempts: 2 });
+      const retried = await row(who);
+      expect(retried).toMatchObject({ state: 'review', attempts: 2 });
+      // The retry takes a new claim on the number: its lifetime counts from
+      // this try, not the failed one (SWEEP-MONEY NUV-03 N2, mutant C1).
+      expect(retried!.bvnVerifiedAt.getTime()).toBeGreaterThan(
+        failed!.bvnVerifiedAt.getTime(),
+      );
     });
 
     it('Nuvion says the application is under compliance review: 409 identity_under_review with its reason code; nothing is sent again meanwhile', async () => {
@@ -1188,6 +1263,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
           payload,
         },
       });
+      storedEvents.push(stored.id);
       const outcome = await moduleRef
         .get(NuvionWebhookDispatcher)
         .dispatch(stored.id);
@@ -2751,7 +2827,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
   });
 
   describe('round 3: at most 10 opening tries an hour from one address (a setting)', () => {
-    const addr = () => `203.0.113.${randomInt(1, 250)}`;
+    const addr = () => freshAddress(() => `203.0.113.${randomInt(1, 250)}`);
     const trial = (a: string) => {
       const p = person();
       return { p, call: () => openFrom(p, a) };
@@ -2803,7 +2879,12 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
     });
 
     it('the addresses of one IPv6 /64 are one place', async () => {
-      const block = `2001:db8:${randomInt(1, 60000).toString(16)}:${randomInt(1, 60000).toString(16)}`;
+      const block64 = () =>
+        freshAddress(
+          () =>
+            `2001:db8:${randomInt(1, 60000).toString(16)}:${randomInt(1, 60000).toString(16)}`,
+        );
+      const block = block64();
       for (let i = 1; i <= 4; i += 1) {
         await openFrom(person(), `${block}::${i}`).expect(200);
       }
@@ -2813,10 +2894,7 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       ).expect(429);
       expect(body(over).reason?.code).toBe('open_address_limited');
       // The next block is another place.
-      await openFrom(
-        person(),
-        `2001:db8:${randomInt(1, 60000).toString(16)}:${randomInt(1, 60000).toString(16)}::1`,
-      ).expect(200);
+      await openFrom(person(), `${block64()}::1`).expect(200);
     });
 
     it('a request that names no client address (a call on the server itself) is not counted by address', async () => {
@@ -3297,7 +3375,8 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
 
   // -------------------------------------------------------------------------
   describe('round 4, N12: the address limit holds under any burst', () => {
-    const place = () => `198.18.${randomInt(1, 250)}.${randomInt(1, 250)}`;
+    const place = () =>
+      freshAddress(() => `198.18.${randomInt(1, 250)}.${randomInt(1, 250)}`);
     const reserved = (people: Person[]) =>
       prisma.bvnCheckAttempt.count({
         where: {
@@ -3810,7 +3889,8 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
 
   // -------------------------------------------------------------------------
   describe('NUV-03 round 4, R4-3: a place the same account holds on another address is no sign of a double tap', () => {
-    const addr = () => `198.19.${randomInt(1, 250)}.${randomInt(1, 250)}`;
+    const addr = () =>
+      freshAddress(() => `198.19.${randomInt(1, 250)}.${randomInt(1, 250)}`);
     const keyOf = (address: string) =>
       addressKeyOf(moduleRef.get(IdentityHasher), address);
 
@@ -4083,6 +4163,35 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
       }
     });
 
+    /**
+     * FIX-58: a table the scan found a secret in, named by column and by the
+     * SHAPE of the secret (digits shown as 9: `A99999999` is an ID number,
+     * `99999999999` a BVN or NIN), never the secret. Only runs when the scan
+     * has already failed, so a flake says where it matched. (A match that
+     * spans two columns of the row names the table alone.)
+     */
+    async function whichColumns(
+      table: string,
+      patterns: string[],
+    ): Promise<string[]> {
+      const columns = await prisma.$queryRaw<Array<{ column_name: string }>>`
+        SELECT column_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = ${table}`;
+      const found: string[] = [];
+      for (const { column_name } of columns) {
+        const matched = await prisma.$queryRawUnsafe<Array<{ p: string }>>(
+          `SELECT p FROM unnest($1::text[]) AS p WHERE EXISTS (SELECT 1 FROM "${table}" t WHERE t."${column_name}"::text LIKE p)`,
+          patterns,
+        );
+        for (const shape of new Set(
+          matched.map(({ p }) => p.replace(/%/g, '').replace(/\d/g, '9')),
+        )) {
+          found.push(`${table}.${column_name} (secret shaped ${shape})`);
+        }
+      }
+      return found.length > 0 ? found : [table];
+    }
+
     it('in no stored column of any table', async () => {
       const tables = await prisma.$queryRaw<Array<{ table_name: string }>>`
         SELECT table_name FROM information_schema.tables
@@ -4094,7 +4203,8 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
           `SELECT count(*) AS n FROM "${table_name}" t WHERE row_to_json(t)::text LIKE ANY($1::text[])`,
           patterns,
         );
-        if (Number(r.n) > 0) hits.push(table_name);
+        if (Number(r.n) > 0)
+          hits.push(...(await whichColumns(table_name, patterns)));
       }
       expect(hits).toEqual([]);
     });
