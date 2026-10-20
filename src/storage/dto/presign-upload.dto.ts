@@ -61,6 +61,11 @@ export const UPLOAD_FOLDERS = [
   // owner's profile. Its own prefix: only the owner may attach a key under
   // their own id, and the work routes check exactly that.
   'profile/work',
+  // VOICE-01. The 30 second recording a person makes so the Hub can read their
+  // Voice Intro in their own voice. Their own prefix: the file is a person's
+  // voice, read only by the Hub for that person's own runs (never served to
+  // anyone), and is removed when they replace it or delete the account.
+  'voice/sample',
 ] as const;
 
 /**
@@ -150,6 +155,8 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   // Photos, and a video for a showreel. No document types: this is drawn in
   // place on a public profile.
   'profile/work': [...IMAGE, 'video/mp4'],
+  // VOICE-01. What a phone records, or the usual audio files.
+  'voice/sample': ['audio/mp4', 'audio/aac', 'audio/mpeg', 'audio/wav'],
   ...CHAT_FOLDER_CONTENT_TYPES,
 };
 
@@ -165,6 +172,8 @@ export const FOLDER_MAX_BYTES: Partial<Record<UploadFolder, number>> = {
   // PROVISIONAL(COMMUNITY-MEDIA-MAX-BYTES, owner=YOU, why=R-62 prices a video and a voice note in a community but no ruling sizes the file; the allowance counts only content/preview and content/full, so without a cap one message could be 512MB): 100MB for a video, 25MB for a voice note.
   'community/message-video': 100 * 1024 * 1024,
   'community/message-voice': 25 * 1024 * 1024,
+  // PROVISIONAL(VOICE-SAMPLE-MAX-BYTES, owner=YOU, why=no ruling sizes the 30 second Voice Intro sample; the allowance does not count this folder): 10MB, more than 30 seconds of uncompressed phone audio.
+  'voice/sample': 10 * 1024 * 1024,
 };
 
 /**

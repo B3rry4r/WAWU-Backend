@@ -35045,6 +35045,327 @@
         "x-wawu-built-by": "AITOOLS-01"
       }
     },
+    "/api/hub/me/voice": {
+      "get": {
+        "operationId": "VoiceIntroController_mine",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyVoiceView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "How the caller's name is said, and whether voices are on.",
+        "tags": [
+          "VoiceIntro"
+        ],
+        "x-wawu-built-by": "VOICE-01"
+      }
+    },
+    "/api/hub/me/voice/name-preview": {
+      "post": {
+        "operationId": "VoiceIntroController_previewName",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NamePreviewDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NamePreviewView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "\"Hear your name\" (VF3): the name, said in the studio voice. Free; limited\nper hour by a setting (`429 voice_preview_limit`). `phonetic` is how it\nsounds when the plain spelling is not said right. `503 voice_unavailable`\nwhen voices are not set up on the Hub.",
+        "tags": [
+          "VoiceIntro"
+        ],
+        "x-wawu-built-by": "VOICE-01"
+      }
+    },
+    "/api/hub/me/voice/name": {
+      "put": {
+        "operationId": "VoiceIntroController_saveName",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveNameDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyVoiceView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Keeps how the caller's name is said (`null` puts it back to the plain name).",
+        "tags": [
+          "VoiceIntro"
+        ],
+        "x-wawu-built-by": "VOICE-01"
+      }
+    },
+    "/api/hub/me/voice-intro": {
+      "get": {
+        "operationId": "VoiceIntroController_intro",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceIntroView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The Voice Intro as it stands: the words, the consent line to show and\nwhether it is given, whether a sample is in, the audio (`aiVoice: true`),\nwhat the next try costs (free when the tier still includes the first one)\nand the latest try.",
+        "tags": [
+          "VoiceIntro"
+        ],
+        "x-wawu-built-by": "VOICE-01"
+      }
+    },
+    "/api/hub/me/voice-intro/text": {
+      "put": {
+        "operationId": "VoiceIntroController_saveText",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceIntroTextDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceIntroView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The words of the Voice Intro. Up to `textMaxChars` (a setting): `400 voice_text_too_long` over it.",
+        "tags": [
+          "VoiceIntro"
+        ],
+        "x-wawu-built-by": "VOICE-01"
+      }
+    },
+    "/api/hub/me/voice-intro/consent": {
+      "post": {
+        "operationId": "VoiceIntroController_consent",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceConsentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceIntroView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The caller agrees that this is their own voice. `line` must be the words\n`GET /me/voice-intro` served (`409 voice_consent_line_changed` otherwise);\nthey are stored with the time.",
+        "tags": [
+          "VoiceIntro"
+        ],
+        "x-wawu-built-by": "VOICE-01"
+      }
+    },
+    "/api/hub/me/voice-intro/sample": {
+      "post": {
+        "operationId": "VoiceIntroController_sample",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VoiceSampleDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceIntroView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Keeps the 30 second recording the caller uploaded: `POST /uploads/presign`\nwith the folder `voice/sample`, the file sent, `POST /uploads/confirm`,\nthen the `fileUrl` here. Only the caller's own landed upload is taken\n(`400 voice_sample_unusable`); the consent comes first (`409\nvoice_consent_required`).",
+        "tags": [
+          "VoiceIntro"
+        ],
+        "x-wawu-built-by": "VOICE-01"
+      }
+    },
+    "/api/hub/me/voice-intro/generate": {
+      "post": {
+        "operationId": "VoiceIntroController_generate",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per try.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceIntroView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Makes the Voice Intro in the caller's own voice. The first one a tier\nincludes takes no points; any other holds the plan's `voice_intro` points\n(200 by default). Answers `202` with the try `working`; `GET\n/me/voice-intro` is what the app polls. The points are kept only when the\naudio is made and given back when it is not (the try says \"No points were\ntaken\"). Needs an `Idempotency-Key`: the same key again answers the first\ntry (`200`, `Idempotent-Replayed: true`) and takes nothing more. Refused\nwith nothing taken: `409 voice_text_required`, `409 voice_consent_required`,\n`409 voice_sample_required`, `409 voice_intro_busy`, `402\ninsufficient_points`, `422 points_cap_reached`, `503 voice_unavailable`.",
+        "tags": [
+          "VoiceIntro"
+        ],
+        "x-wawu-built-by": "VOICE-01"
+      }
+    },
+    "/api/hub/users/{wawuId}/voice-intro": {
+      "get": {
+        "operationId": "VoiceIntroPublicController_voiceIntro",
+        "parameters": [
+          {
+            "name": "wawuId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicVoiceIntroView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "`{ voiceIntro: { url, aiVoice: true } }`, or `{ voiceIntro: null }` for a person with none. `404` for no such person, or one hidden by a block.",
+        "tags": [
+          "VoiceIntroPublic"
+        ],
+        "x-wawu-built-by": "VOICE-01"
+      }
+    },
     "/api/hub/waitlist/offers/current": {
       "get": {
         "operationId": "WaitlistPublicController_currentOffer",
@@ -36340,7 +36661,8 @@
               "community/message-voice",
               "event/speaker",
               "event/banner",
-              "profile/work"
+              "profile/work",
+              "voice/sample"
             ]
           },
           "contentType": {
@@ -41943,6 +42265,80 @@
           "text",
           "voiceId",
           "quoteToken"
+        ]
+      },
+      "NamePreviewDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name to say.",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "phonetic": {
+            "type": "string",
+            "description": "How it sounds (\"Ah-DEH-oh-lah\"), when the plain spelling is not said right.",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "SaveNameDto": {
+        "type": "object",
+        "properties": {
+          "phonetic": {
+            "type": "string",
+            "nullable": true,
+            "description": "The spelling to keep for how the name is said; null puts it back to the plain name.",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "required": [
+          "phonetic"
+        ]
+      },
+      "VoiceIntroTextDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 20000
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "VoiceConsentDto": {
+        "type": "object",
+        "properties": {
+          "line": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          }
+        },
+        "required": [
+          "line"
+        ]
+      },
+      "VoiceSampleDto": {
+        "type": "object",
+        "properties": {
+          "fileUrl": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          }
+        },
+        "required": [
+          "fileUrl"
         ]
       },
       "CreateWaitlistRegistrationDto": {
@@ -62740,6 +63136,186 @@
           "message",
           "createdAt",
           "finishedAt"
+        ]
+      },
+      "MyVoiceView": {
+        "type": "object",
+        "properties": {
+          "namePhonetic": {
+            "type": "string",
+            "nullable": true
+          },
+          "nameSavedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "available": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "namePhonetic",
+          "nameSavedAt",
+          "available"
+        ]
+      },
+      "NamePreviewView": {
+        "type": "object",
+        "properties": {
+          "audioUrl": {
+            "type": "string"
+          },
+          "aiVoice": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "audioUrl",
+          "aiVoice"
+        ]
+      },
+      "VoiceRunView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "done",
+              "working"
+            ]
+          },
+          "costPoints": {
+            "type": "number"
+          },
+          "included": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "finishedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "costPoints",
+          "included",
+          "message",
+          "createdAt",
+          "finishedAt"
+        ]
+      },
+      "VoiceIntroView": {
+        "type": "object",
+        "properties": {
+          "aiVoice": {
+            "type": "boolean"
+          },
+          "text": {
+            "type": "string",
+            "nullable": true
+          },
+          "textMaxChars": {
+            "type": "number"
+          },
+          "consent": {
+            "type": "object",
+            "properties": {
+              "line": {
+                "type": "string"
+              },
+              "given": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "line",
+              "given"
+            ]
+          },
+          "sample": {
+            "type": "object",
+            "properties": {
+              "recorded": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "recorded"
+            ]
+          },
+          "audioUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "next": {
+            "type": "object",
+            "properties": {
+              "free": {
+                "type": "boolean"
+              },
+              "costPoints": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "free",
+              "costPoints"
+            ]
+          },
+          "canGenerate": {
+            "type": "boolean"
+          },
+          "run": {
+            "$ref": "#/components/schemas/VoiceRunView",
+            "nullable": true
+          }
+        },
+        "required": [
+          "aiVoice",
+          "text",
+          "textMaxChars",
+          "consent",
+          "sample",
+          "audioUrl",
+          "next",
+          "canGenerate",
+          "run"
+        ]
+      },
+      "PublicVoiceIntroView": {
+        "type": "object",
+        "properties": {
+          "voiceIntro": {
+            "type": "object",
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "aiVoice": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "url",
+              "aiVoice"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "voiceIntro"
         ]
       },
       "AdminWaitlistRegistrationView": {

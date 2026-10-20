@@ -281,6 +281,45 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // VOICE-01: how the person's name is said, their Voice Intro script, the
+    // consent they gave and when they recorded the sample. The recording and
+    // the audio are files, not rows, and stay out like every other file.
+    key: 'voiceProfile',
+    models: ['VoiceProfile', 'VoiceNamePreview'],
+    load: (prisma, me) =>
+      prisma.voiceProfile.findUnique({
+        where: { wawuUserId: me },
+        select: {
+          namePhonetic: true,
+          nameSavedAt: true,
+          introText: true,
+          introTextAt: true,
+          consentAt: true,
+          consentLine: true,
+          sampleAt: true,
+          audioAt: true,
+        },
+      }),
+  },
+  {
+    key: 'voiceIntroRuns',
+    models: ['VoiceIntroRun'],
+    load: (prisma, me) =>
+      prisma.voiceIntroRun.findMany({
+        where: { wawuUserId: me },
+        orderBy: { createdAt: 'desc' },
+        take: 200,
+        select: {
+          state: true,
+          characters: true,
+          costPoints: true,
+          includedUsed: true,
+          createdAt: true,
+          finishedAt: true,
+        },
+      }),
+  },
+  {
     key: 'notificationSettings',
     models: ['NotificationSettings'],
     load: (prisma, me) =>

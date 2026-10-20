@@ -46,6 +46,19 @@ export class AiVoiceProviderError extends Error {
   }
 }
 
+/** Someone's own recording, kept by the Hub as theirs; the provider only reads it for one run. */
+export interface VoiceSample {
+  audio: Buffer;
+  /** The type the file was stored as (`audio/mp4`, `audio/mpeg`, `audio/wav`, `audio/aac`). */
+  contentType: string;
+}
+
+export interface OwnVoiceRequest {
+  /** The person's own 30 second recording (VOICE-01). */
+  sample: VoiceSample;
+  text: string;
+}
+
 export interface AiVoiceProvider {
   /** True when a key, a host and at least one voice are set. */
   readonly configured: boolean;
@@ -57,6 +70,28 @@ export interface AiVoiceProvider {
    */
   speak(
     req: SpeakRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<SpokenAudio>;
+
+  /**
+   * Says a name in the studio voice (VF3, VOICE-01): the first voice the Hub
+   * lists. Free to the person, so the caller limits how often it runs. A
+   * network call, with the same rules as `speak`.
+   */
+  previewName(
+    req: { text: string },
+    opts?: { signal?: AbortSignal },
+  ): Promise<SpokenAudio>;
+  /**
+   * Says the text in the voice of the person who made `sample` (VF8 to VF11,
+   * VOICE-01, R-66). The adapter makes the voice for this one run and takes it
+   * out again, so the provider keeps no standing copy of anyone's voice. The
+   * caller has checked the person's consent and that the sample is theirs. A
+   * network call: the caller holds no transaction, no connection and no lock
+   * while it runs. Throws `AiVoiceProviderError`.
+   */
+  speakInOwnVoice(
+    req: OwnVoiceRequest,
     opts?: { signal?: AbortSignal },
   ): Promise<SpokenAudio>;
 }

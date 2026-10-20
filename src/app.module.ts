@@ -98,6 +98,7 @@ import { PaidDmWalletModule } from './direct-message/wallet/paid-dm-wallet.modul
 import { PointsConvertModule } from './points/convert/points-convert.module';
 import { PointsSpendModule } from './points/spend/points-spend.module';
 import { AiToolsModule } from './ai-tools/ai-tools.module';
+import { VoiceIntroModule } from './voice-intro/voice-intro.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { NuvionWebhookModule } from './nuvion/webhook/nuvion-webhook.module';
@@ -478,6 +479,12 @@ import { PushModule } from './push/push.module';
     // AITOOLS-01 #1): `ai-tools`, `ai-tools/voiceover/jobs`, `ai-tools/jobs/:id`.
     // `ai-tools` is a segment no other controller declares.
     AiToolsModule,
+    // The caller's own voice (task VOICE-01, SHARED-CHANGES VOICE-01 #1):
+    // `me/voice`, `me/voice/name-preview`, `me/voice/name`, `me/voice-intro`
+    // and its `text`, `consent`, `sample` and `generate`. After AiToolsModule,
+    // whose voice provider it shares. `voice` and `voice-intro` are segments
+    // under `me` that no other controller declares.
+    VoiceIntroModule,
     // The event registration link (task JOIN-01): `waitlist/offers/current`,
     // `waitlist/registrations` (register, verify, status) and the team's
     // `admin/waitlist/registrations` (list, export). `waitlist` and

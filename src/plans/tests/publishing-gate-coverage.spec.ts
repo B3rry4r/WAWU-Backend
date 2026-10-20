@@ -153,6 +153,10 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     files: ['documents'],
     why: "the verification tick's documents sent again after a turn-down, for staff to review; the verification levels are not maker tiers, and nothing is published",
   },
+  'POST me/voice-intro/sample': {
+    files: ['fileUrl'],
+    why: 'a person records their own voice for their Voice Intro (VOICE-01); not a listing',
+  },
   // Not a person's own product.
   'POST communities/:id/messages': {
     files: ['imageUrl', 'videoUrl', 'voiceUrl'],

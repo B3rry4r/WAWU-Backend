@@ -4,6 +4,7 @@ import {
   AiVoiceProviderError,
   type AiVoice,
   type AiVoiceProvider,
+  type OwnVoiceRequest,
   type SpeakRequest,
   type SpokenAudio,
 } from './ai-voice-provider';
@@ -141,13 +142,116 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     const voice = this.catalogue.find((v) => v.id === req.voiceId);
     if (!this.configured || !voice || this.baseUrl === null)
       throw new AiVoiceProviderError('rejected', 'voice is not available');
-    const signal = opts.signal
-      ? AbortSignal.any([opts.signal, AbortSignal.timeout(this.timeoutMs)])
+    return this.synthesize(voice.providerVoiceId, req.text, opts.signal);
+  }
+
+  async previewName(
+    req: { text: string },
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<SpokenAudio> {
+    // The studio voice is the first one the Hub lists.
+    const studio = this.catalogue[0];
+    if (!this.configured || !studio || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'voice is not available');
+    return this.synthesize(studio.providerVoiceId, req.text, opts.signal);
+  }
+
+  /**
+   * One run in a person's own voice: `POST {base}/v1/voices/add` (the sample as
+   * a multipart file, answering the new voice's id), the same text-to-speech
+   * call as `speak` with that id, then `DELETE {base}/v1/voices/{id}` so the
+   * provider keeps no copy of the voice. The delete is tried even when the
+   * speech failed, and a failed delete is logged without the id.
+   */
+  async speakInOwnVoice(
+    req: OwnVoiceRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<SpokenAudio> {
+    if (!this.configured || this.baseUrl === null || this.apiKey === null)
+      throw new AiVoiceProviderError('rejected', 'voice is not available');
+    const voiceId = await this.addVoice(req.sample, opts.signal);
+    try {
+      return await this.synthesize(voiceId, req.text, opts.signal);
+    } finally {
+      await this.removeVoice(voiceId);
+    }
+  }
+
+  private signalFor(outer?: AbortSignal): AbortSignal {
+    return outer
+      ? AbortSignal.any([outer, AbortSignal.timeout(this.timeoutMs)])
       : AbortSignal.timeout(this.timeoutMs);
+  }
+
+  private async addVoice(
+    sample: OwnVoiceRequest['sample'],
+    outer?: AbortSignal,
+  ): Promise<string> {
+    const form = new FormData();
+    form.append('name', 'wawu-voice-intro');
+    form.append(
+      'files',
+      new Blob([new Uint8Array(sample.audio)], { type: sample.contentType }),
+      'sample',
+    );
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/v1/voices/add`, {
+        method: 'POST',
+        headers: { 'xi-api-key': this.apiKey ?? '' },
+        body: form,
+        signal: this.signalFor(outer),
+      });
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'no answer');
+    }
+    if (!res.ok) {
+      await res.arrayBuffer().catch(() => undefined);
+      const retryable = res.status === 429 || res.status >= 500;
+      throw new AiVoiceProviderError(
+        retryable ? 'unavailable' : 'rejected',
+        `status ${res.status}`,
+      );
+    }
+    let id: unknown;
+    try {
+      id = ((await res.json()) as { voice_id?: unknown }).voice_id;
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'not a voice');
+    }
+    if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(id))
+      throw new AiVoiceProviderError('unavailable', 'not a voice');
+    return id;
+  }
+
+  private async removeVoice(providerVoiceId: string): Promise<void> {
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/v1/voices/${encodeURIComponent(providerVoiceId)}`,
+        {
+          method: 'DELETE',
+          headers: { 'xi-api-key': this.apiKey ?? '' },
+          signal: AbortSignal.timeout(this.timeoutMs),
+        },
+      );
+      await res.arrayBuffer().catch(() => undefined);
+      if (!res.ok)
+        this.logger.warn(`a one-run voice was not removed (${res.status})`);
+    } catch {
+      this.logger.warn('a one-run voice was not removed (no answer)');
+    }
+  }
+
+  private async synthesize(
+    providerVoiceId: string,
+    text: string,
+    outer?: AbortSignal,
+  ): Promise<SpokenAudio> {
+    const signal = this.signalFor(outer);
     let res: Response;
     try {
       res = await fetch(
-        `${this.baseUrl}/v1/text-to-speech/${encodeURIComponent(voice.providerVoiceId)}?output_format=mp3_44100_128`,
+        `${this.baseUrl}/v1/text-to-speech/${encodeURIComponent(providerVoiceId)}?output_format=mp3_44100_128`,
         {
           method: 'POST',
           headers: {
@@ -156,7 +260,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
             'xi-api-key': this.apiKey ?? '',
           },
           body: JSON.stringify({
-            text: req.text,
+            text,
             ...(this.model ? { model_id: this.model } : {}),
           }),
           signal,

@@ -714,6 +714,31 @@ export class StorageService {
   }
 
   /**
+   * Reads a stored object's bytes (VOICE-01: the Hub reads a person's own
+   * voice sample for one run). The type is the one the key's extension was
+   * issued for. A network call: the caller holds no transaction and no lock.
+   * Throws when there is no bucket, no such object, or it is empty or over
+   * `maxBytes`.
+   */
+  async readStored(
+    key: string,
+    maxBytes: number,
+  ): Promise<{ audio: Buffer; contentType: string }> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const out = await this.client.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
+    const bytes = await out.Body?.transformToByteArray();
+    if (!bytes || bytes.length === 0 || bytes.length > maxBytes)
+      throw new Error('readStored: the file is empty or too large');
+    return { audio: Buffer.from(bytes), contentType: serveAs(key).contentType };
+  }
+
+  /**
    * Takes a file `putGenerated` stored out of the bucket and drops its row.
    * Never throws: a bucket that cannot be reached leaves the row (the file is
    * still the person's, and goes with their account).
