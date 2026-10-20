@@ -90,9 +90,14 @@ export class CommunityRoomsService {
     if (dto.kind === 'private' && !dto.imageUrl) {
       throw new BadRequestException('A private room needs a cover image.');
     }
-    // INBOX-24 (R-63). A private room can sell a monthly pass: the host types
-    // the price here and it is stored with the room, in one write. Without a
-    // price a private room keeps the older join request flow.
+    // INBOX-24 (R-63). A private room sells a monthly pass: the host types
+    // the price here and it is stored with the room, in one write. R-63 has
+    // no host approval step, so a private room made here always has a price
+    // (SWEEP-INBOX, INBOX-24 L3). POST /communities, which the web calls,
+    // still makes one without a price and keeps the older join request flow.
+    if (dto.kind === 'private' && dto.passPriceKobo === undefined) {
+      throw new BadRequestException('A private room needs a monthly price.');
+    }
     if (dto.passPriceKobo !== undefined) {
       if (dto.kind !== 'private') {
         throw new BadRequestException(

@@ -1108,12 +1108,15 @@ describe('A private community monthly pass (INBOX-24), Nuvion stood in', () => {
     await expect(
       rooms.createRoom(host.id, { ...base, kind: 'private', passPriceKobo: 5 }),
     ).rejects.toThrow(/at least/);
-    const plain = await rooms.createRoom(host.id, { ...base, kind: 'private' });
+    // SWEEP-INBOX (INBOX-24 L3): R-63 has no host approval step, so the app's
+    // create refuses a private room with no price, and makes nothing. (The
+    // web's POST /communities still makes one, with the older flow.)
+    await expect(
+      rooms.createRoom(host.id, { ...base, kind: 'private' }),
+    ).rejects.toThrow(/A private room needs a monthly price/);
     expect(
-      await prisma.communityPassPrice.count({
-        where: { communityId: plain.id },
-      }),
-    ).toBe(0);
+      await prisma.community.count({ where: { hostWawuId: host.id } }),
+    ).toBe(1);
   });
 
   it('came out clean: no Fintava call, and the ledger agrees with the stand-in for WAWU as well', async () => {

@@ -22,6 +22,7 @@ import type {
   LedgerReversalInput,
   LedgerReversalResult,
 } from './ledger.interface';
+import { chargeDifferenceNote } from './ledger-notes';
 
 type Db = PrismaService | Prisma.TransactionClient;
 
@@ -938,6 +939,103 @@ export class LedgerService {
       },
     });
     return count > 0;
+  }
+
+  /**
+   * FIX-74 (G-SWEEP-MONEY-1, SCHOOLS-11 L1): a payout from WAWU's own account
+   * whose row a webhook COMPLETED at the quoted total, before the settlement
+   * heard the provider's own charge. `restatePendingCharge` cannot reach it
+   * (the row is not pending), and the settlement's later completion at the
+   * provider's charge would put the row back to `pending` and leave the
+   * ledger below what the provider debited.
+   *
+   * The completed row takes the provider's own recorded charge, and only
+   * that: the record must name this very reference (`ourReference`) and state
+   * a charge (an unstated one is silence, never a figure we computed); the
+   * row is the running provider's merchant `out` row under that reference, at
+   * the record's amount, carrying no WAWU fee on top; and it holds no
+   * disagreement the record does not explain (none, or only the provider's
+   * "charged X, the quote was Y" note for this very difference). It happens
+   * once: the audit note (old and new charge and total, the reference, when)
+   * is written on the row, so a second record, even one that states another
+   * charge, finds a note it does not explain and changes nothing. Nothing
+   * moves money. Anything else is left to `record`, which flags it as before
+   * (discrepancy, ERROR log, the nightly check). Returns whether it restated.
+   */
+  async restateCompletedCharge(
+    customerReference: string,
+    amountKobo: bigint,
+    record: { ourReference: string | null; feeKobo: bigint | null },
+    now: Date = new Date(),
+  ): Promise<boolean> {
+    const stated = record.feeKobo;
+    if (stated === null || stated < 0n) return false;
+    if (record.ourReference !== customerReference) return false;
+    const label = this.provider.label;
+    return this.prisma.$transaction(async (tx) => {
+      const found = await tx.fintavaLedgerEntry.findMany({
+        where: {
+          customerReference,
+          walletKind: 'merchant',
+          direction: 'out',
+          status: 'completed',
+          amountKobo,
+          AND: [rowsOf(this.provider.name)],
+        },
+        select: { id: true },
+        take: 2,
+      });
+      if (found.length !== 1) return false;
+      const entryId = found[0].id;
+      await tx.$queryRaw`SELECT "id" FROM "FintavaLedgerEntry" WHERE "id" = ${entryId} FOR UPDATE`;
+      const row = await tx.fintavaLedgerEntry.findUnique({
+        where: { id: entryId },
+        select: {
+          status: true,
+          amountKobo: true,
+          feeKobo: true,
+          totalKobo: true,
+          wawuFeeKobo: true,
+          discrepancy: true,
+        },
+      });
+      if (!row || row.status !== 'completed' || row.amountKobo !== amountKobo) {
+        return false;
+      }
+      if (row.feeKobo === stated) return false;
+      // The row is the payout alone: its charge is the provider's, with no
+      // WAWU fee in it, and its total is the amount and that charge.
+      if ((row.wawuFeeKobo ?? 0n) !== 0n) return false;
+      if (row.totalKobo !== row.amountKobo + row.feeKobo) return false;
+      // No other disagreement: what is left of the notes, once the provider's
+      // own note for this difference is taken out, is nothing.
+      const explained = chargeDifferenceNote(label, stated, row.feeKobo);
+      const unexplained = (row.discrepancy ?? '')
+        .split(explained)
+        .join('')
+        .split(';')
+        .map((part) => part.trim())
+        .filter((part) => part !== '');
+      if (unexplained.length > 0) return false;
+      const total = row.amountKobo + stated;
+      const audit = `Restated to ${label}'s own record of ${customerReference}: charge ${row.feeKobo} to ${stated} kobo, total ${row.totalKobo} to ${total} kobo, at ${now.toISOString()}`;
+      await tx.fintavaLedgerEntry.update({
+        where: { id: entryId },
+        data: {
+          feeKobo: stated,
+          providerFeeKobo: stated,
+          totalKobo: total,
+          discrepancy: [row.discrepancy, audit]
+            .filter(Boolean)
+            .join('; ')
+            .slice(0, 1000),
+        },
+      });
+      this.logger.warn(
+        `ledger: completed row ${entryId} restated to ${label}'s own charge (${row.feeKobo} to ${stated} kobo)`,
+      );
+      return true;
+    });
   }
 
   private async recordIn(

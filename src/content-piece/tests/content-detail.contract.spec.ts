@@ -22,7 +22,9 @@ import { ContentPieceModule } from '../content-piece.module';
  * id; both are removed in afterAll (pieces cascade their ratings, details and
  * lessons; purchases are removed first because they restrict the delete).
  * The one seeded account used is creator-pro, for the edit that moves
- * "updated at".
+ * "updated at". That account comes from the seed: run `npm run db:seed` on a
+ * migrated database first, or one case fails on the seeded creator's foreign
+ * key (SWEEP-APP row HOME-03 S1b F4).
  */
 
 const MOCK_PORT = process.env.WAWU_ID_JWKS_URL

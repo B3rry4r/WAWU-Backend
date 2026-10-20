@@ -27759,7 +27759,7 @@
             }
           }
         },
-        "summary": "Create a room, the way the app does. Creator accounts only, like\nPOST /communities. A private room needs a cover image (`imageUrl`):\nwithout one the answer is 400 \"A private room needs a cover image.\".\nThe answer carries the room's share link.",
+        "summary": "Create a room, the way the app does. Creator accounts only, like\nPOST /communities. A private room needs a cover image (`imageUrl`):\nwithout one the answer is 400 \"A private room needs a cover image.\".\nA private room also needs its monthly price (`passPriceKobo`, R-63):\nwithout one the answer is 400 \"A private room needs a monthly price.\".\nThe answer carries the room's share link.",
         "tags": [
           "CommunityRooms"
         ]
@@ -40305,7 +40305,7 @@
         "properties": {
           "passPriceKobo": {
             "type": "integer",
-            "description": "What a member pays for 30 days, in kobo, set by the host (I32). Private\nrooms only. The bounds are checked by the service (a figure of the\nlaunch settings, COMMUNITY_PASS_MIN_KOBO and COMMUNITY_PASS_MAX_KOBO).\nOmitted, a private room has no pass and keeps the older join request flow.",
+            "description": "What a member pays for 30 days, in kobo, set by the host (I32). Private\nrooms only. The bounds are checked by the service (a figure of the\nlaunch settings, COMMUNITY_PASS_MIN_KOBO and COMMUNITY_PASS_MAX_KOBO).\nA private room must carry it (there is no host approval step, R-63):\nleft out, the answer is 400 \"A private room needs a monthly price.\".",
             "minimum": 1,
             "maximum": 9007199254740991
           },

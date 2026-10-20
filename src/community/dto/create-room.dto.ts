@@ -12,7 +12,8 @@ export class CreateRoomDto extends CreateCommunityDto {
    * What a member pays for 30 days, in kobo, set by the host (I32). Private
    * rooms only. The bounds are checked by the service (a figure of the
    * launch settings, COMMUNITY_PASS_MIN_KOBO and COMMUNITY_PASS_MAX_KOBO).
-   * Omitted, a private room has no pass and keeps the older join request flow.
+   * A private room must carry it (there is no host approval step, R-63):
+   * left out, the answer is 400 "A private room needs a monthly price.".
    */
   @ApiPropertyOptional({ type: 'integer', minimum: 1 })
   @IsOptional()

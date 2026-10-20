@@ -11,7 +11,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { ScheduleModule } from '@nestjs/schedule';
+import { ScheduleModule, SchedulerRegistry } from '@nestjs/schedule';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import type { App } from 'supertest/types';
@@ -325,6 +325,16 @@ describe('Removing a file never holds the lock or a connection across the bucket
     prisma = moduleRef.get(PrismaService);
     storage = moduleRef.get(StorageService);
     timer = moduleRef.get(StorageSweepService);
+    // The Hub's real 10-minute timer is not this spec's. ScheduleModule arms it
+    // on the wall clock (:00, :10, :20 ...), and a tick that lands inside a test
+    // window adds its own "skipped" line to the warn spy (or sweeps the shared
+    // bucket) at a moment no test chose (FIX-75). Every sweep here is driven by
+    // the spec through timer.sweep(), which is the body the timer calls; the job
+    // stays registered, only its wall-clock firing is stopped.
+    await moduleRef
+      .get(SchedulerRegistry)
+      .getCronJob('sweep-late-uploads')
+      .stop();
     await prisma.contentPiece.deleteMany({
       where: { creatorWawuId: { in: OWNED } },
     });
