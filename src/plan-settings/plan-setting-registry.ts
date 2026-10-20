@@ -46,6 +46,13 @@ const LIMIT = {
   maxMinutes: 10_080,
   /** Three years of days. */
   maxDays: 1095,
+  /**
+   * Days a deleted account's ID documents may be kept (SETTINGS-09, R-73): a
+   * year to ten years. The floor is there because the deletion cannot be undone:
+   * a "5" typed for years must not empty the archive.
+   */
+  minIdDocsDays: 365,
+  maxIdDocsDays: 3650,
   /** Ten years of months. */
   maxMonths: 120,
   /** One hundred percent. */
@@ -729,6 +736,13 @@ export function buildRegistry(
     'days',
     ['the daily TGIF notice clean-up (HOME-17)'],
     days,
+  );
+  other(
+    'id_docs_keep_days',
+    'Days the ID documents of a deleted account are kept, hidden, before they are deleted',
+    'days',
+    ['the daily ID document sweep (SETTINGS-09, R-73)'],
+    whole(LIMIT.minIdDocsDays, LIMIT.maxIdDocsDays),
   );
   other(
     'earnings.daily_move_floor_kobo',

@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -17,6 +18,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { CommunityService } from './community.service';
+import type { CommunityPassRemovalQuoteView } from './pass/community-pass-view.type';
 import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 import { CreateCommunityDto } from './dto/create-community.dto';
 import { UpdateCommunityDto } from './dto/update-community.dto';
@@ -172,9 +174,27 @@ export class CommunityController {
   }
 
   /**
+   * What removing this member would give them back, for the host's remove
+   * sheet (INBOX-25, R-71): the unused days of a paid monthly pass, pro rata
+   * in kobo. Figured by the Hub; nothing is written or moved.
+   */
+  @Get(':id/members/:userWawuId/removal-quote')
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(CreatorAccountGuard)
+  removalQuote(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('userWawuId', new ParseUUIDPipe({ version: '4' }))
+    userWawuId: string,
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<CommunityPassRemovalQuoteView> {
+    return this.communityService.removalQuote(id, user.sub, userWawuId);
+  }
+
+  /**
    * Remove a settled member. Separate from decline on purpose: ejecting
    * someone who is already in must never be something a stale queue can do
-   * by accident.
+   * by accident. In a room that sells a monthly pass the member is paid back
+   * the unused days (INBOX-25, R-71); the answer is the same `{ removed: true }`.
    */
   @Delete(':id/members/:userWawuId')
   @UseGuards(CreatorAccountGuard)

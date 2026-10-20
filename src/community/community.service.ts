@@ -16,7 +16,9 @@ import type {
   CommunityResponse,
 } from '../common/types';
 import { CommunityPassAccess } from './pass/community-pass-access.service';
+import { CommunityPassRemoval } from './pass/community-pass-removal.service';
 import { passIsActive } from './pass/community-pass-rules';
+import type { CommunityPassRemovalQuoteView } from './pass/community-pass-view.type';
 import type { CreateCommunityDto } from './dto/create-community.dto';
 import type { UpdateCommunityDto } from './dto/update-community.dto';
 
@@ -76,6 +78,7 @@ export class CommunityService {
     private readonly notifications: NotificationService,
     private readonly blockedAccounts: BlockedAccountService,
     private readonly passAccess: CommunityPassAccess,
+    private readonly passRemoval: CommunityPassRemoval,
   ) {}
 
   /** Start of "today" in UTC, per the task brief's derivation rule for `messagesToday`. */
@@ -722,22 +725,80 @@ export class CommunityService {
       );
     }
 
-    if (await this.sellsPass(id)) {
-      // INBOX-24 round 2 (R-63). In a room that sells a pass the person may
-      // hold days they paid for, and a deleted row would let them join again
-      // at once. They go back to a pending request instead: out of the room
-      // until the host approves them, the way a room already lets someone in.
-      // Money is untouched (a refund on removal is Q-43, the owner's).
-      await this.prisma.communityMembership.updateMany({
-        where: { communityId: id, userWawuId, status: 'joined' },
-        data: { status: 'pending', joinedAt: null },
-      });
-      return { removed: true };
-    }
-
-    await this.prisma.communityMembership.deleteMany({
-      where: { communityId: id, userWawuId },
-    });
+    // INBOX-25 (R-71). The member the host removes gets the unused days of
+    // their paid pass back. The move out of the room and the refund's decision
+    // are ONE transaction, and the refund is decided only by the call that
+    // really moved a joined member out: a double tap, a second server or a
+    // retry finds the member already out and decides nothing. The payout is
+    // the pass refund service's; it is told after the commit and the sweep
+    // pays it if that misses. Leaving gives nothing: it never reaches here.
+    const sells = await this.sellsPass(id);
+    const refundId = await this.prisma.$transaction(
+      async (tx) => {
+        let movedOut: boolean;
+        if (sells) {
+          // INBOX-24 round 2 (R-63). In a room that sells a pass the person
+          // may hold days they paid for, and a deleted row would let them
+          // join again at once. They go back to a pending request instead:
+          // out of the room until the host approves them.
+          const { count } = await tx.communityMembership.updateMany({
+            where: { communityId: id, userWawuId, status: 'joined' },
+            data: { status: 'pending', joinedAt: null },
+          });
+          movedOut = count === 1;
+        } else {
+          const { count } = await tx.communityMembership.deleteMany({
+            where: { communityId: id, userWawuId, status: 'joined' },
+          });
+          movedOut = count === 1;
+          await tx.communityMembership.deleteMany({
+            where: { communityId: id, userWawuId },
+          });
+        }
+        if (!movedOut) return null;
+        return this.passRemoval.decide(tx, {
+          communityId: id,
+          hostWawuId,
+          userWawuId,
+        });
+      },
+      { maxWait: 10_000, timeout: 30_000 },
+    );
+    if (refundId) this.passRemoval.announce(refundId);
     return { removed: true };
+  }
+
+  /**
+   * GET /communities/:id/members/:userWawuId/removal-quote: what removing
+   * this member would give them back (INBOX-25, R-71), for the host's remove
+   * sheet. The Hub figures it, never the app. Host only. A person who is not
+   * a joined member of the room gets back nothing: leaving, or being out
+   * already, pays nothing, so the figure is 0.
+   */
+  async removalQuote(
+    id: string,
+    hostWawuId: string,
+    userWawuId: string,
+  ): Promise<CommunityPassRemovalQuoteView> {
+    await this.assertHost(id, hostWawuId, 'remove members from');
+    if (userWawuId === hostWawuId) {
+      throw new BadRequestException(
+        'The host cannot be removed from their own community.',
+      );
+    }
+    const member = await this.prisma.communityMembership.findUnique({
+      where: { userWawuId_communityId: { userWawuId, communityId: id } },
+      select: { status: true },
+    });
+    if (member?.status !== 'joined') {
+      return {
+        communityId: id,
+        userWawuId,
+        refundKobo: 0,
+        unusedDays: 0,
+        asOf: new Date().toISOString(),
+      };
+    }
+    return this.passRemoval.quote(id, userWawuId);
   }
 }

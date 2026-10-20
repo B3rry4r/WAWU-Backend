@@ -1,3 +1,5 @@
+import { PAYEE_SHARE_BPS } from '../../money/payments/payment-config';
+
 /**
  * The rules of a private community's monthly pass that need no database
  * (task INBOX-24, R-63).
@@ -112,3 +114,55 @@ export function passDaysFromTerms(
     ? days
     : PASS_PERIOD_DAYS;
 }
+
+/**
+ * What one pass gives back when the host removes the member (INBOX-25, R-71).
+ * A day that has started counts as used, so a pass bought a moment ago has
+ * `periodDays - 1` unused days; a pass that has not started has all of them;
+ * a pass that has ended has none. The refund is the price paid, pro rata and
+ * floored in kobo: price x whole unused days / pass days, where the pass days
+ * are the pass's own period (its start to its end). Integer arithmetic only.
+ */
+export interface PassRefundFigures {
+  periodDays: number;
+  usedDays: number;
+  unusedDays: number;
+  refundKobo: bigint;
+}
+
+export function passRefundFigures(
+  pass: { startsAt: Date; endsAt: Date; priceKobo: bigint },
+  now: Date,
+): PassRefundFigures {
+  const periodDays = Math.max(
+    1,
+    Math.round((pass.endsAt.getTime() - pass.startsAt.getTime()) / DAY_MS),
+  );
+  const sinceStart = now.getTime() - pass.startsAt.getTime();
+  const usedDays =
+    now.getTime() >= pass.endsAt.getTime()
+      ? periodDays
+      : sinceStart <= 0
+        ? 0
+        : Math.min(periodDays, Math.ceil(sinceStart / DAY_MS));
+  const unusedDays = periodDays - usedDays;
+  const refundKobo =
+    unusedDays > 0
+      ? (pass.priceKobo * BigInt(unusedDays)) / BigInt(periodDays)
+      : 0n;
+  return { periodDays, usedDays, unusedDays, refundKobo };
+}
+
+/** The host's 85% of a refunded sum (R-5), rounded down as every share is. */
+export function hostShareOfRefund(refundKobo: bigint): bigint {
+  return (refundKobo * BigInt(PAYEE_SHARE_BPS)) / 10_000n;
+}
+
+/** The reference WAWU's refund of a removed member's pass goes out under. */
+export function passRefundReference(refundId: string, attempt: number): string {
+  const base = `wawu-pref-${refundId}`;
+  return attempt <= 1 ? base : `${base}-${attempt}`;
+}
+
+/** What the provider sees on the move. Names nobody and nothing personal. */
+export const PASS_REFUND_NARRATION = 'WAWU refund';

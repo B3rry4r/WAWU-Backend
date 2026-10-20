@@ -64,7 +64,10 @@ type CoreNotificationKind =
   | 'tgif_daily'
   // INBOX-24 (R-63): a private community's monthly pass is about to end.
   /** The pass ends in 3 days. Recipient: the member. The tap opens the renew sheet. */
-  | 'community_pass_ending';
+  | 'community_pass_ending'
+  // INBOX-25 (R-71): a removed member's unused pass days were paid back.
+  /** The unused days of a pass were paid back to the wallet. Recipient: the removed member. */
+  | 'community_pass_refunded';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -227,6 +230,19 @@ type NotificationEventCore =
       communityId: string;
       communityName: string;
       endsAt: Date;
+    }
+  /**
+   * INBOX-25 (R-71). The host removed the member from a room that sells a
+   * monthly pass, and the unused days were paid back to their wallet. Once per
+   * removal, when the provider has confirmed the move. Recipient: the removed
+   * member. `amount` is the refund in naira.
+   */
+  | {
+      kind: 'community_pass_refunded';
+      userWawuId: string;
+      communityId: string;
+      communityName: string;
+      amount: number;
     };
 
 /** A pass's last day as the reminder writes it: "12 Nov 2026", Lagos time. */
@@ -705,6 +721,23 @@ export function composeNotification(
         imageUrl: null,
         actionHref: `/communities/${event.communityId}/renew`,
         campaignId: null,
+      };
+
+    /**
+     * INBOX-25 (R-71). The wallet row says the same thing; this is the one
+     * notice. The member did nothing, so it says what came back and why, in
+     * plain words.
+     */
+    case 'community_pass_refunded':
+      return {
+        ...base,
+        title: 'Your pass was refunded',
+        body: `The host of “${event.communityName}” removed you from the room. ${formatNaira(event.amount)} for the days you had left is back in your wallet.`,
+        tone: 'info',
+        amount: Math.round(event.amount),
+        creditsCount: null,
+        actionLabel: null,
+        ...NO_RICH_MEDIA,
       };
 
     /**
@@ -1199,6 +1232,7 @@ export const NOTIFICATION_CATEGORY: Record<
   paid_dm_paused: 'messages',
   community_join_approved: 'messages',
   community_join_declined: 'messages',
+  community_pass_refunded: 'money',
   content_published: 'content',
   content_rejected: 'content',
   review_received: 'content',
