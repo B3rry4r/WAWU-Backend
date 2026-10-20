@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Client } from 'pg';
 import request from 'supertest';
 import { Prisma } from '../../../../generated/prisma/client';
 import {
@@ -47,12 +48,30 @@ describe('FIX-69 school places: one lock order, and a sweep log that tells a dea
   let h: SchoolNuvion;
   let svc: SchoolEnrolmentService;
 
+  // The release sweep reads every reservation in the database, so a second copy of this spec on the same database would release the
+  // first copy's places (FIX-81 L1). One copy at a time: a session lock of the database, taken before anything is seeded and given
+  // back when the connection ends. A second copy keeps asking until it is free, and the lock is the database's, so it holds across processes.
+  const ONE_COPY_AT_A_TIME = 8_100_169;
+  let turn: Client | undefined;
+
   beforeAll(async () => {
+    turn = new Client({ connectionString: process.env.DATABASE_URL });
+    await turn.connect();
+    // Tried again and again, never waited on: a connection waiting on a lock would show in `waitUntilBlocked` below as the call under test.
+    for (;;) {
+      const got = await turn.query<{ got: boolean }>(
+        'SELECT pg_try_advisory_lock($1) AS got',
+        [ONE_COPY_AT_A_TIME],
+      );
+      if (got.rows[0].got) break;
+      await sleep(250);
+    }
     h = await bootSchoolNuvion('fix69');
     svc = h.app.get(SchoolEnrolmentService);
-  });
+  }, 600_000);
   afterAll(async () => {
     if (h) await h.close();
+    await turn?.end();
   });
 
   const twoClasses = async (capacity: number): Promise<SeededClass> =>

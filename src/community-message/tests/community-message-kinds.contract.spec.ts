@@ -153,12 +153,9 @@ const CONTENT_TYPE: Record<Folder, string> = {
 };
 
 /**
- * Every read signs a message's media link again (FIX-71), so the link a list
- * returns is never the string the sender stored: its X-Amz-Date and its
- * signature are new. What a listed link must be is (1) a link to the same
- * object the sender stored, which is the sender's own file in the folder for
- * that kind, (2) on this bucket, and (3) a signed link that is valid now.
- * The signature and the date are never compared with the stored link's.
+ * A listed media link is the shared check (FIX-84's `expectLinkSignedAgain`: the same object, bucket, type and disposition,
+ * signed no later than now and not run out; never the signature or the date), and also the sender's own file in the folder
+ * for its kind, on this bucket at the key and nowhere else. One helper, not two (FIX-84 L1, SWEEP-APP-7).
  */
 function expectFreshLinkToSameObject(
   listed: string | null | undefined,
@@ -167,35 +164,13 @@ function expectFreshLinkToSameObject(
   sender: string,
   at: BucketLocation,
 ): void {
-  expect(typeof listed).toBe('string');
-  const link = listed as string;
-
-  // The sender's own file, in the kind's own folder, read from the stored link
-  // the way the Hub reads it; the listed link names exactly that object.
+  expectLinkSignedAgain(listed, stored);
   const key = objectKeyFrom(stored);
   expect(key.startsWith(`${folder}/${sender}/`)).toBe(true);
-  expect(objectKeyFrom(link)).toBe(key);
-
-  // On this bucket, at the key and nowhere else.
-  const url = new URL(link);
+  const url = new URL(listed as string);
   expect(`${url.origin}${url.pathname}`).toBe(
     `${at.origin}${at.pathPrefix}${key}`,
   );
-
-  // Signed (a signature is present), signed no later than now, and not run out.
-  expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[0-9a-f]{64}$/);
-  const expiresInMs = Number(url.searchParams.get('X-Amz-Expires')) * 1000;
-  expect(expiresInMs).toBeGreaterThan(0);
-  const stamp = url.searchParams.get('X-Amz-Date') ?? '';
-  expect(stamp).toMatch(/^\d{8}T\d{6}Z$/);
-  const signedAt = Date.parse(
-    stamp.replace(
-      /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/,
-      '$1-$2-$3T$4:$5:$6Z',
-    ),
-  );
-  expect(signedAt).toBeLessThanOrEqual(Date.now());
-  expect(signedAt + expiresInMs).toBeGreaterThan(Date.now());
 }
 
 /** Everything the fake clock leaves real: only `Date` is faked, so the signer's clock can be moved. */
