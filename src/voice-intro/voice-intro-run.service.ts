@@ -28,7 +28,7 @@ import {
   VoiceError,
 } from './voice-intro-error';
 import { introAudioKey, VOICE_FILES, type VoiceFiles } from './voice-files';
-import { CONSENT_LINE, VoiceProfileService } from './voice-profile.service';
+import { consentLineFor, VoiceProfileService } from './voice-profile.service';
 import type { VoiceIntroView, VoiceRunView } from './voice-intro-view.type';
 
 /** The plan's action a Voice Intro is priced by (200 points, from the settings). */
@@ -83,6 +83,7 @@ export class VoiceIntroRunService {
 
   async generate(
     wawuUserId: string,
+    name: string,
     idempotencyKey: string | undefined,
     now: Date = new Date(),
   ): Promise<StartedRun> {
@@ -94,7 +95,7 @@ export class VoiceIntroRunService {
     const earlier = await this.prisma.voiceIntroRun.findUnique({
       where: { id },
     });
-    if (earlier) return this.replay(wawuUserId, earlier);
+    if (earlier) return this.replay(wawuUserId, name, earlier);
 
     const profile = await this.prisma.voiceProfile.findUnique({
       where: { wawuUserId },
@@ -138,7 +139,7 @@ export class VoiceIntroRunService {
         const winner = await this.prisma.voiceIntroRun.findUnique({
           where: { id },
         });
-        if (winner) return this.replay(wawuUserId, winner);
+        if (winner) return this.replay(wawuUserId, name, winner);
         throw new VoiceError('voice_intro_busy', BUSY_MESSAGE);
       }
       throw e;
@@ -146,12 +147,13 @@ export class VoiceIntroRunService {
 
     // Nothing is held open from here: the answer goes out, the run goes on.
     this.start(run, text, profile.sampleKey);
-    return { view: await this.view(wawuUserId), replayed: false };
+    return { view: await this.view(wawuUserId, name), replayed: false };
   }
 
   /** The person's Voice Intro as it stands now: words, consent, sample, audio, the next cost and the latest run. */
   async view(
     wawuUserId: string,
+    name: string,
     now: Date = new Date(),
   ): Promise<VoiceIntroView> {
     const latest = await this.prisma.voiceIntroRun.findFirst({
@@ -177,18 +179,21 @@ export class VoiceIntroRunService {
       }
     }
     const text = profile?.introText ?? null;
+    const seconds = this.profiles.sampleSeconds();
     return {
       aiVoice: true,
       text,
       textMaxChars: this.profiles.maxChars(),
       consent: {
-        line: CONSENT_LINE,
+        line: consentLineFor(name),
         given: !!profile?.consentAt,
         at: profile?.consentAt?.toISOString() ?? null,
       },
       sample: {
         recorded: !!profile?.sampleKey,
         at: profile?.sampleAt?.toISOString() ?? null,
+        minSeconds: seconds.min,
+        maxSeconds: seconds.max,
       },
       audioUrl,
       next: { free, costPoints: free ? 0 : (action?.points ?? 0) },
@@ -211,10 +216,11 @@ export class VoiceIntroRunService {
 
   private async replay(
     wawuUserId: string,
+    name: string,
     row: VoiceIntroRun,
   ): Promise<StartedRun> {
     await this.reconcile(row);
-    return { view: await this.view(wawuUserId), replayed: true };
+    return { view: await this.view(wawuUserId, name), replayed: true };
   }
 
   /**

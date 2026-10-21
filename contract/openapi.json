@@ -63249,10 +63249,18 @@
             "properties": {
               "recorded": {
                 "type": "boolean"
+              },
+              "minSeconds": {
+                "type": "number"
+              },
+              "maxSeconds": {
+                "type": "number"
               }
             },
             "required": [
-              "recorded"
+              "recorded",
+              "minSeconds",
+              "maxSeconds"
             ]
           },
           "audioUrl": {
