@@ -1,12 +1,25 @@
 -- Rollback of 20261030140000_voice_intro (VOICE-01). Nothing else references
 -- these tables. Run it only after the Hub build that reads them is gone.
--- A run that is still "working" holds points (PointHold, purpose ai_job): the
--- stale-hold sweep gives them back; and a run that used the tier's included
--- first Voice Intro is put back first so no one loses it.
-UPDATE "MakerTier" SET "voiceIntroIncluded" = true
- WHERE "wawuUserId" IN (
-   SELECT "wawuUserId" FROM "VoiceIntroRun" WHERE "state" = 'working' AND "includedUsed"
- );
+-- Run with: psql -1 -f rollback.sql
+-- Refuses (and changes nothing) while any person's consent, words, recording or
+-- Voice Intro is stored: "VoiceProfile" holds the consent line and the time the
+-- person agreed to it, and "VoiceIntroRun" the tries that made their intros. A
+-- consent record is worth archiving, and the audio cannot be made again for
+-- free. Copy them out first only if you mean to lose them. Name spellings and
+-- preview counts alone do not stop it.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM "VoiceProfile"
+     WHERE "consentAt" IS NOT NULL OR "consentLine" IS NOT NULL
+        OR "introText" IS NOT NULL OR "sampleKey" IS NOT NULL
+        OR "audioKey" IS NOT NULL
+  ) OR EXISTS (SELECT 1 FROM "VoiceIntroRun") THEN
+    RAISE EXCEPTION 'VOICE-01 rollback: consent, recording or Voice Intro rows are stored and would be lost. Nothing was changed.';
+  END IF;
+END $$;
+-- Any run row stops it above, so the drop loses no included first Voice Intro
+-- and no held points.
 DROP TABLE "VoiceNamePreview";
 DROP TABLE "VoiceIntroRun";
 DROP TABLE "VoiceProfile";

@@ -19,7 +19,7 @@ export interface NamePreviewView {
 export interface VoiceRunView {
   id: string;
   state: 'working' | 'done' | 'failed';
-  /** Points this run took; 0 when the tier's included first Voice Intro paid for it. */
+  /** Points this run took; 0 when the tier's included first Voice Intro paid for it, and 0 when the run failed (the points were released). */
   costPoints: number;
   /** True when the tier's included first Voice Intro paid for it. */
   included: boolean;
