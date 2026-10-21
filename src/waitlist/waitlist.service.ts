@@ -45,6 +45,7 @@ import {
   SHORT_TEXT_MAX,
 } from './waitlist-config';
 import { readReferralCode } from './referral/referral-code';
+import { ReferralProbeGuard } from './referral/referral-probe';
 import { ReferralService } from './referral/referral.service';
 import type {
   AdminWaitlistSplitRowView,
@@ -164,6 +165,10 @@ export class WaitlistService {
     // Provided by WaitlistCoreModule; a service built by hand (a spec) gets
     // its own, which needs only the database.
     private readonly referrals: ReferralService = new ReferralService(prisma),
+    // Provided by WaitlistCoreModule, one for the whole app (it keeps the
+    // count of wrong codes per address in memory); a service built by hand
+    // gets its own.
+    private readonly probes: ReferralProbeGuard = new ReferralProbeGuard(),
   ) {}
 
   // ---- the offer ----------------------------------------------------------
@@ -217,6 +222,7 @@ export class WaitlistService {
   async register(
     dto: CreateWaitlistRegistrationDto,
     now: Date = new Date(),
+    address?: string,
   ): Promise<WaitlistRegistrationStartView> {
     const offer = this.plans.eventOffers.find((o) => o.id === dto.offerId);
     if (!offer)
@@ -289,13 +295,14 @@ export class WaitlistService {
     // A referral code (REF-01). With none, everything from here is exactly as
     // it was before codes existed; with one, the registration is decided in
     // registerWithReferral.
-    const referralCode = this.readReferral(dto.referralCode);
+    const referralCode = this.readReferral(dto.referralCode, address, now);
     if (referralCode !== null)
       return this.registerWithReferral(
         referralCode,
         offer,
         { fullName, phone, email, state, makes, dto },
         now,
+        address,
       );
 
     // The checkout needs the public key; without it the page could not pay.
@@ -386,14 +393,27 @@ export class WaitlistService {
    * none (left out, or only spaces). A code that is not even the shape of one
    * is refused like a code we do not have.
    */
-  private readReferral(raw: string | undefined): string | null {
+  private readReferral(
+    raw: string | undefined,
+    address: string | undefined,
+    now: Date,
+  ): string | null {
     if (raw === undefined || raw.trim() === '') return null;
+    this.probes.assertOpen(address, now);
     const code = readReferralCode(raw);
-    if (code === null) throw this.referralUnknown();
+    if (code === null) throw this.referralUnknown(address, now);
     return code;
   }
 
-  private referralUnknown(): WaitlistError {
+  /**
+   * The refusal for a code we do not have. It counts against the caller's
+   * address (D4), so a caller who keeps trying codes is slowed.
+   */
+  private referralUnknown(
+    address?: string,
+    now: Date = new Date(),
+  ): WaitlistError {
+    this.probes.recordMiss(address, now);
     return new WaitlistError('referral_unknown', REFERRAL_UNKNOWN_WORDS);
   }
 
@@ -421,16 +441,20 @@ export class WaitlistService {
       dto: CreateWaitlistRegistrationDto;
     },
     now: Date,
+    address?: string,
   ): Promise<WaitlistRegistrationStartView> {
     if ((await this.referrals.find(code)) === null)
-      throw this.referralUnknown();
+      throw this.referralUnknown(address, now);
     const { dto } = person;
     for (let attempt = 1; attempt <= REFERENCE_ATTEMPTS; attempt += 1) {
       try {
         const made = await this.prisma.$transaction(async (tx) => {
           const locked = await this.referrals.lock(tx, code);
-          if (locked === null) throw this.referralUnknown();
-          const decision = await this.referrals.decide(tx, locked, now);
+          if (locked === null) throw this.referralUnknown(address, now);
+          const decision = await this.referrals.decide(tx, locked, now, {
+            phone: person.phone,
+            email: person.email,
+          });
           const price = decision.applied
             ? Math.min(locked.priceKobo, offer.priceKobo)
             : offer.priceKobo;
@@ -550,10 +574,12 @@ export class WaitlistService {
   async referralCheck(
     raw: string,
     now: Date = new Date(),
+    address?: string,
   ): Promise<WaitlistReferralCheckView> {
+    this.probes.assertOpen(address, now);
     const code = readReferralCode(raw);
     const row = code === null ? null : await this.referrals.find(code);
-    if (code === null || row === null) throw this.referralUnknown();
+    if (code === null || row === null) throw this.referralUnknown(address, now);
     const offer = this.openOffers(now)[0];
     if (!offer)
       throw new WaitlistError(

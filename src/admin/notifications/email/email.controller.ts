@@ -173,7 +173,7 @@ export class AdminEmailController {
     return this.service.recipients(id, query);
   }
 
-  /** Start sending in the background. Superadmin only; answers 409 when RESEND_API_KEY is unset. */
+  /** Start sending in the background. Superadmin only; answers 409 when the server has no email sender set up (neither WAWU ID's mail relay nor its own RESEND_API_KEY), or, in production, no HUB_PUBLIC_URL. */
   @AdminRoles(AdminRole.superadmin)
   @Post('campaigns/:id/start')
   @HttpCode(HttpStatus.OK)

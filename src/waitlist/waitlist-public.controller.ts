@@ -5,6 +5,7 @@ import {
   Header,
   HttpCode,
   HttpStatus,
+  Ip,
   Param,
   Post,
 } from '@nestjs/common';
@@ -59,6 +60,8 @@ export class WaitlistPublicController {
    * Before paying: does this referral code apply, and what would the person
    * pay. Never the limit, the count or the community. A code we do not have
    * is a 404 `referral_unknown`. Advice only: the registration decides again.
+   * An address that has tried too many codes we do not have is asked to wait
+   * (429 `referral_attempts_limited`).
    */
   @Get('referral-codes/:code')
   @Throttle(WAITLIST_THROTTLE_READ)
@@ -68,10 +71,16 @@ export class WaitlistPublicController {
     description:
       '`reason.code` `referral_unknown` (no such code) or `no_open_offer`.',
   })
+  @ApiResponse({
+    status: 429,
+    description:
+      '`reason.code` `referral_attempts_limited`: this address tried too many codes we do not have; wait a few minutes. (The plain rate limit has no `reason`.)',
+  })
   referralCheck(
     @Param('code') code: string,
+    @Ip() address: string,
   ): Promise<WaitlistReferralCheckView> {
-    return this.waitlist.referralCheck(code);
+    return this.waitlist.referralCheck(code, new Date(), address);
   }
 
   /**
@@ -91,6 +100,11 @@ export class WaitlistPublicController {
   @HttpCode(HttpStatus.OK)
   @Header('Cache-Control', 'no-store')
   @ApiResponse({
+    status: 200,
+    description:
+      'Exactly one of `flutterwaveConfig` and `completed` is present. `flutterwaveConfig` (open the checkout with it) comes whenever `amountKobo` is above 0. `completed` comes instead when `amountKobo` is 0 (a free referral code): the registration is already paid and there is nothing to pay.',
+  })
+  @ApiResponse({
     status: 400,
     description:
       '`reason.code` `phone_invalid`, `email_invalid`, `name_invalid` or `consent_required`; a malformed body has no `reason`.',
@@ -99,6 +113,11 @@ export class WaitlistPublicController {
     status: 404,
     description:
       '`reason.code` `no_open_offer` (no offer has this id) or `referral_unknown` (no such referral code).',
+  })
+  @ApiResponse({
+    status: 429,
+    description:
+      '`reason.code` `referral_attempts_limited`: this address tried too many codes we do not have, and a registration that carries a code waits; one with no code is not refused by it. (The plain rate limit has no `reason`.)',
   })
   @ApiResponse({
     status: 409,
@@ -112,8 +131,9 @@ export class WaitlistPublicController {
   })
   register(
     @Body() dto: CreateWaitlistRegistrationDto,
+    @Ip() address: string,
   ): Promise<WaitlistRegistrationStartView> {
-    return this.waitlist.register(dto);
+    return this.waitlist.register(dto, new Date(), address);
   }
 
   /**

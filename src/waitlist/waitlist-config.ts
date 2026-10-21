@@ -114,3 +114,22 @@ export const REFERRAL_HOLD_MS = 30 * 60_000;
 /** The words a code we do not have is refused with, on the check and on register. */
 export const REFERRAL_UNKNOWN_WORDS =
   'We do not recognise that referral code. Check it, or leave it empty to pay the standard price.';
+
+/**
+ * PROVISIONAL(REFERRAL-PROBE-LIMITS, owner=YOU, why=no ruling says how many wrong referral codes one address may try before it is slowed; the lead chose a figure that a venue sharing one Wi-Fi address will not reach by mistyping, and 14 Oct's low finding D4 asked for the slowing)
+ *
+ * Code probing (SWEEP-JOIN D4). Every code that is not one of ours, on the
+ * page's check and on a registration, is counted against the caller's
+ * address. An address that has tried `REFERRAL_MISS_LIMIT` unknown codes in
+ * the last `REFERRAL_MISS_WINDOW_MS` is asked to wait: its code checks and
+ * registrations that carry a code are refused with a plain sentence until
+ * the oldest of those tries is that old. A registration with no code is never
+ * refused by this, and a person who types the right code never counts. The
+ * figures only bite on someone trying codes one after another; they sit below
+ * the per-route throttle (WAITLIST_THROTTLE_READ) on purpose.
+ */
+export const REFERRAL_MISS_LIMIT = 30;
+export const REFERRAL_MISS_WINDOW_MS = 10 * 60_000;
+/** The words an address that tried too many unknown codes is refused with. */
+export const REFERRAL_PROBING_WORDS =
+  'Too many codes were tried from this connection. Please wait a few minutes and try again, or leave the code empty to pay the standard price.';
