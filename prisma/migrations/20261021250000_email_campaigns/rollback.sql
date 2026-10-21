@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261021250000_email_campaigns (EMAIL-01). Run with: psql -1 -f rollback.sql
 DROP TABLE "EmailRecipient", "EmailCampaign", "EmailTemplate", "EmailSuppression";
 DROP TYPE "EmailCampaignStatus", "EmailRecipientStatus", "EmailSuppressionReason";

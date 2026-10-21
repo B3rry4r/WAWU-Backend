@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261002140000_notification_switches. Run by hand, never by
 -- `prisma migrate deploy` (it only reads migration.sql). Drops the three
 -- columns; every other column and row is untouched. Afterwards, delete the

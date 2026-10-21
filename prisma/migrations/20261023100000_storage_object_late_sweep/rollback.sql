@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261023100000_storage_object_late_sweep. Run by hand, never by
 -- `prisma migrate deploy` (it only reads migration.sql). Drops the six
 -- columns; every other column and row is untouched. Afterwards, delete the

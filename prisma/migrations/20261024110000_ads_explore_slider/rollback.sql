@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261024110000_ads_explore_slider (ADS-07).
 -- Run with: psql -1 -f rollback.sql
 -- Postgres cannot drop one value from an enum, so this recreates "AdPlacement"

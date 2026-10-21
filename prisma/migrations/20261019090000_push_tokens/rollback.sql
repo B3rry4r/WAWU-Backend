@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261019090000_push_tokens. Run by hand, never by
 -- `prisma migrate deploy` (it only reads migration.sql). Drops the three new
 -- tables and nothing else. Afterwards, delete the row for this migration from

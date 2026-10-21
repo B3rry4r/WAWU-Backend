@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261026090000_no_em_dash_stored_refund_notice (SWEEP-APP-1, FIX-64).
 -- Run with: psql -1 -f rollback.sql
 -- Puts back the exact body of every Notification the migration rewrote, from

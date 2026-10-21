@@ -977,13 +977,18 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
   // ---------------------------------------------------------------------------
 
   describe('rollback.sql refuses while a consent or an intro is stored', () => {
+    // The file's first line is psql's `\set ON_ERROR_STOP on` (FIX-96); this runner
+    // is not psql, so it leaves out lines that start with a backslash.
     const sql = readFileSync(
       join(
         __dirname,
         '../../../prisma/migrations/20261030140000_voice_intro/rollback.sql',
       ),
       'utf8',
-    );
+    )
+      .split('\n')
+      .filter((line) => !line.startsWith('\\'))
+      .join('\n');
     /** Runs the whole rollback inside a transaction that is always rolled back; returns the refusal, or null when it went through. */
     const roll = async (setup: string | null): Promise<string | null> => {
       class Done extends Error {}

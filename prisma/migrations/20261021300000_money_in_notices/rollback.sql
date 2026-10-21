@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261021300000_money_in_notices. Run by hand, never by
 -- `prisma migrate deploy` (it only reads migration.sql). Drops the new table,
 -- its enum and the index, and nothing else. Afterwards, delete the row for

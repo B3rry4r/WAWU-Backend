@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback of 20261029090000_community_pass_removal_refund (INBOX-25).
 -- Run with: psql -1 -f rollback.sql (plain psql -f or a pipe works the same).
 -- Refuses (and changes nothing) while any money record of this task exists: a
