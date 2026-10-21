@@ -25,13 +25,22 @@ import type {
   NamePreviewView,
   VoiceIntroView,
 } from '../voice-intro-view.type';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   bootVoice,
   BASIC,
   FILES_BASE,
   PLAIN,
+  PRO,
   type VoiceHarness,
 } from '../../../test/voice-intro/voice-intro-harness';
+import {
+  AI_VOICE_PROVIDER,
+  AiVoiceProviderError,
+  type AiVoiceProvider,
+} from '../../ai-tools/voice/ai-voice-provider';
+import { consentLineFor, VoiceProfileService } from '../voice-profile.service';
 
 jest.setTimeout(120_000);
 
@@ -221,6 +230,45 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
           .status,
       ).toBe(200);
     });
+
+    it('does not count a preview the provider failed on, nor one that could not be stored (SWEEP-VOICE V3)', async () => {
+      await set('voice.name_previews_per_hour', 2);
+      const provider = h.get<AiVoiceProvider>(AI_VOICE_PROVIDER);
+      // The provider is down for four tries: the seam is made to fail, as a provider that is down does.
+      const down = jest
+        .spyOn(provider, 'previewName')
+        .mockRejectedValue(new AiVoiceProviderError('unavailable', 'down'));
+      try {
+        for (let i = 0; i < 4; i++) {
+          const failed = await h.as(PLAIN, 'post', '/me/voice/name-preview', {
+            name: 'Ada',
+          });
+          expect(failed.status).toBe(503);
+          expect(reasonOf(failed).code).toBe('voice_unavailable');
+        }
+      } finally {
+        down.mockRestore();
+      }
+      h.files.failPut = true;
+      expect(
+        (await h.as(PLAIN, 'post', '/me/voice/name-preview', { name: 'Ada' }))
+          .status,
+      ).toBe(503);
+      h.files.failPut = false;
+      expect(
+        await h.prisma.voiceNamePreview.count({ where: { wawuUserId: PLAIN } }),
+      ).toBe(0);
+      // Five tries went wrong and none counted: the two the hour allows are still there, then the limit.
+      for (let i = 0; i < 2; i++)
+        expect(
+          (await h.as(PLAIN, 'post', '/me/voice/name-preview', { name: 'Ada' }))
+            .status,
+        ).toBe(200);
+      expect(
+        (await h.as(PLAIN, 'post', '/me/voice/name-preview', { name: 'Ada' }))
+          .status,
+      ).toBe(429);
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -312,6 +360,50 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
         where: { wawuUserId: BASIC },
       });
       expect(row.consentLine).toBe(BASIC_LINE);
+    });
+
+    it('serves no consent line for a person the Hub holds no name for, and takes none (SWEEP-VOICE V5)', async () => {
+      const ask = 'Add your name to your profile first.';
+      // The line is served only with a name; without one the plain sentence stands in its place.
+      expect(consentLineFor('')).toBe(ask);
+      expect(consentLineFor('   ')).toBe(ask);
+      expect(consentLineFor('Ada')).toMatch(/^I am Ada\. I agree that /);
+      const nameless = await h.runs.view(PLAIN, '');
+      expect(nameless.consent).toMatchObject({ line: ask, given: false });
+      expect(nameless.consent.line).not.toMatch(/I agree/);
+
+      // Nothing is taken: not the sentence, not the line with the name left out.
+      const profiles = h.get<VoiceProfileService>(VoiceProfileService);
+      for (const line of [
+        ask,
+        'I agree that Who Made This? may create an AI version of my voice for my intros.',
+      ]) {
+        await expect(
+          profiles.giveConsent(PLAIN, '', line),
+        ).rejects.toMatchObject({
+          code: 'voice_name_required',
+          status: 409,
+        });
+        await expect(
+          profiles.giveConsent(PLAIN, '  ', line),
+        ).rejects.toMatchObject({
+          code: 'voice_name_required',
+        });
+      }
+      expect(
+        await h.prisma.voiceProfile.findUnique({
+          where: { wawuUserId: PLAIN },
+        }),
+      ).toBeNull();
+      // With a name it still works.
+      await profiles.giveConsent(PLAIN, 'Adaeze Okonkwo', PLAIN_LINE);
+      expect(
+        (
+          await h.prisma.voiceProfile.findUniqueOrThrow({
+            where: { wawuUserId: PLAIN },
+          })
+        ).consentLine,
+      ).toBe(PLAIN_LINE);
     });
 
     it('serves the shortest and longest recording from two settings, and holds the shortest down to the longest', async () => {
@@ -628,6 +720,8 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
         "That didn't work. No points were taken. Try again.",
       );
       expect(done.audioUrl).toBeNull();
+      // SWEEP-VOICE V4: the points were released, so the failed try shows 0 taken (it showed 200).
+      expect(done.run!.costPoints).toBe(0);
       const [hold] = await holdsOf(PLAIN);
       expect(hold.state).toBe('released');
       expect(await h.balance(PLAIN)).toBe(COST);
@@ -635,6 +729,8 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
         state: 'failed',
         failureCode: 'provider_unavailable',
         audioKey: null,
+        // The row keeps what was held; only the view says 0.
+        costPoints: COST,
       });
       // The one-run voice was still taken out of the provider.
       expect(h.standin.openClones()).toBe(0);
@@ -786,25 +882,25 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
       h.as(viewer, 'get', `/users/${id}/voice-intro`);
 
     it('serves the intro with aiVoice true once it is made, and null before and for a person without one', async () => {
-      // Nothing yet: the person is real, the intro is not.
-      const none = await looks(BASIC, PLAIN);
+      // BASIC is a creator, so has a public profile (the harness makes the rows the spec needs). Nothing yet: the person is real, the intro is not.
+      const none = await looks(PLAIN, BASIC);
       expect(none.status).toBe(200);
       expect(data<{ voiceIntro: null }>(none).voiceIntro).toBeNull();
 
-      await h.giveTier(PLAIN, true);
-      await h.prepare(PLAIN, 'Hello, I am Ada.');
+      await h.giveTier(BASIC, true);
+      await h.prepare(BASIC, 'Hello, I am Ada.');
       // Words, consent and a recording are the person's own, not public.
       expect(
-        data<{ voiceIntro: null }>(await looks(BASIC, PLAIN)).voiceIntro,
+        data<{ voiceIntro: null }>(await looks(PLAIN, BASIC)).voiceIntro,
       ).toBeNull();
       const k = key();
-      expect((await generate(PLAIN, k)).status).toBe(202);
-      await h.finish(PLAIN);
+      expect((await generate(BASIC, k)).status).toBe(202);
+      await h.finish(BASIC);
 
-      const res = await looks(BASIC, PLAIN);
+      const res = await looks(PLAIN, BASIC);
       const body = data<{ voiceIntro: { url: string; aiVoice: boolean } }>(res);
       expect(body.voiceIntro).toEqual({
-        url: `${FILES_BASE}${introAudioKey(PLAIN, runIdFor(PLAIN, k))}`,
+        url: `${FILES_BASE}${introAudioKey(BASIC, runIdFor(BASIC, k))}`,
         aiVoice: true,
       });
       expect(JSON.stringify(res.body)).not.toMatch(
@@ -812,11 +908,48 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
       );
       // The person sees their own the same way; someone else's stays null.
       expect(
-        data<{ voiceIntro: object }>(await looks(PLAIN, PLAIN)).voiceIntro,
+        data<{ voiceIntro: object }>(await looks(BASIC, BASIC)).voiceIntro,
       ).not.toBeNull();
       expect(
-        data<{ voiceIntro: null }>(await looks(PLAIN, BASIC)).voiceIntro,
+        data<{ voiceIntro: null }>(await looks(PLAIN, PRO)).voiceIntro,
       ).toBeNull();
+    });
+
+    it('answers as for no intro for a person with no public profile, so it never says one exists (SWEEP-VOICE V1)', async () => {
+      // PLAIN is a plain account: a profile row, no creator state, so no public profile.
+      await h.giveTier(PLAIN, true);
+      await h.prepare(PLAIN, 'Hello, I am Ada.');
+      const k = key();
+      expect((await generate(PLAIN, k)).status).toBe(202);
+      const made = await h.finish(PLAIN);
+      expect(made.audioUrl).not.toBeNull();
+      const row = await h.prisma.voiceProfile.findUniqueOrThrow({
+        where: { wawuUserId: PLAIN },
+      });
+      expect(row.audioKey).not.toBeNull();
+
+      // The intro exists, yet the route answers exactly as it does for a person with none.
+      const hidden = await looks(BASIC, PLAIN);
+      expect(hidden.status).toBe(200);
+      expect(data<{ voiceIntro: null }>(hidden).voiceIntro).toBeNull();
+      expect(hidden.body).toEqual((await looks(BASIC, PRO)).body);
+      expect(JSON.stringify(hidden.body)).not.toContain(row.audioKey!);
+      expect(
+        data<{ voiceIntro: null }>(await looks(PLAIN, PLAIN)).voiceIntro,
+      ).toBeNull();
+
+      // Give the same person a public profile and the same intro is served.
+      await h.prisma.creatorState.create({ data: { wawuUserId: PLAIN } });
+      try {
+        expect(
+          data<{ voiceIntro: { aiVoice: boolean } }>(await looks(BASIC, PLAIN))
+            .voiceIntro,
+        ).toMatchObject({ aiVoice: true });
+      } finally {
+        await h.prisma.creatorState.deleteMany({
+          where: { wawuUserId: PLAIN },
+        });
+      }
     });
 
     it('answers 404 for someone who does not exist or has blocked the viewer, and 400 for a bad id', async () => {
@@ -836,6 +969,66 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
       expect((await h.http().get(`/users/${PLAIN}/voice-intro`)).status).toBe(
         401,
       );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // The rollback never loses a consent record (SWEEP-VOICE V2)
+  // ---------------------------------------------------------------------------
+
+  describe('rollback.sql refuses while a consent or an intro is stored', () => {
+    const sql = readFileSync(
+      join(
+        __dirname,
+        '../../../prisma/migrations/20261030140000_voice_intro/rollback.sql',
+      ),
+      'utf8',
+    );
+    /** Runs the whole rollback inside a transaction that is always rolled back; returns the refusal, or null when it went through. */
+    const roll = async (setup: string | null): Promise<string | null> => {
+      class Done extends Error {}
+      let refused: string | null = null;
+      try {
+        await h.prisma.$transaction(async (tx) => {
+          // The table looks empty to the guard unless the setup puts a row there.
+          await tx.$executeRawUnsafe('DELETE FROM "VoiceIntroRun"');
+          await tx.$executeRawUnsafe('DELETE FROM "VoiceProfile"');
+          if (setup) await tx.$executeRawUnsafe(setup);
+          // A failed statement aborts a Postgres transaction, so the rollback runs in a savepoint.
+          await tx.$executeRawUnsafe('SAVEPOINT roll');
+          try {
+            await tx.$executeRawUnsafe(sql);
+          } catch (e) {
+            refused = (e as Error).message;
+            await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT roll');
+          }
+          throw new Done();
+        });
+      } catch (e) {
+        if (!(e instanceof Done)) throw e;
+      }
+      return refused;
+    };
+    const profile = (cols: string, vals: string) =>
+      `INSERT INTO "VoiceProfile" ("wawuUserId", ${cols}, "updatedAt") VALUES ('vf-rollback-${randomUUID()}', ${vals}, now())`;
+
+    it('stops on a stored consent, words, recording, audio or try, and drops the tables when there are none', async () => {
+      for (const setup of [
+        profile(`"consentAt", "consentLine"`, `now(), 'I agree.'`),
+        profile(`"introText", "introTextAt"`, `'Hello.', now()`),
+        profile(`"sampleKey", "sampleAt"`, `'voice/sample/x/y.m4a', now()`),
+        profile(`"audioKey", "audioAt"`, `'ai/voiceover/x/y.mp3', now()`),
+        `INSERT INTO "VoiceIntroRun" ("id", "wawuUserId", "idempotencyKey", "characters", "costPoints", "includedUsed", "state", "failureCode")
+         VALUES ('${randomUUID()}', 'vf-rollback-x', 'k-${randomUUID()}', 10, 0, true, 'failed', 'provider_unavailable')`,
+      ])
+        expect(await roll(setup)).toMatch(
+          /VOICE-01 rollback.*Nothing was changed/,
+        );
+      // A saved name spelling alone is not a consent or an intro: the rollback goes through.
+      expect(
+        await roll(profile(`"namePhonetic", "nameSavedAt"`, `'Ah-dah', now()`)),
+      ).toBeNull();
+      expect(await roll(null)).toBeNull();
     });
   });
 

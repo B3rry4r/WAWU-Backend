@@ -492,7 +492,8 @@ function runView(run: VoiceIntroRun): VoiceRunView {
   return {
     id: run.id,
     state: run.state,
-    costPoints: run.costPoints,
+    // A failed run took nothing: its held points were released, so it shows 0 (the column keeps what was held).
+    costPoints: run.state === 'failed' ? 0 : run.costPoints,
     included: run.includedUsed,
     message: run.state === 'failed' ? RUN_FAILED_MESSAGE : null,
     createdAt: run.createdAt.toISOString(),

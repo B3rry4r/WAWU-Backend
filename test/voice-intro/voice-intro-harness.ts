@@ -63,6 +63,45 @@ export const SEEDED = [PLAIN, BASIC, PRO];
 
 export const FILES_BASE = 'https://voice-files.example.test/';
 
+/**
+ * The profile rows the public Voice Intro route reads (SWEEP-VOICE V7): a profile for each seeded person, and creator state (a public
+ * profile) for the two creators. The spec makes the ones the database does not have and removes only those, so it stands alone on a
+ * migrated database that was never seeded, and leaves a seeded one as it found it.
+ */
+async function ensureProfiles(
+  prisma: PrismaService,
+): Promise<() => Promise<void>> {
+  const madeProfiles: string[] = [];
+  const madeCreators: string[] = [];
+  for (const [id, type] of [
+    [PLAIN, 'user'],
+    [BASIC, 'creator'],
+    [PRO, 'creator'],
+  ] as const) {
+    if (!(await prisma.userProfile.findUnique({ where: { wawuUserId: id } }))) {
+      await prisma.userProfile.create({
+        data: { wawuUserId: id, accountType: type },
+      });
+      madeProfiles.push(id);
+    }
+    if (
+      type === 'creator' &&
+      !(await prisma.creatorState.findUnique({ where: { wawuUserId: id } }))
+    ) {
+      await prisma.creatorState.create({ data: { wawuUserId: id } });
+      madeCreators.push(id);
+    }
+  }
+  return async () => {
+    await prisma.creatorState.deleteMany({
+      where: { wawuUserId: { in: madeCreators } },
+    });
+    await prisma.userProfile.deleteMany({
+      where: { wawuUserId: { in: madeProfiles } },
+    });
+  };
+}
+
 const MOCK_PORT = process.env.WAWU_ID_JWKS_URL
   ? new URL(process.env.WAWU_ID_JWKS_URL).port
   : '4001';
@@ -227,6 +266,7 @@ export async function bootVoice(): Promise<VoiceHarness> {
   await app.init();
 
   const prisma = moduleRef.get(PrismaService);
+  const removeProfiles = await ensureProfiles(prisma);
   const points = moduleRef.get(PointsService);
   const http = () => request(app.getHttpServer() as Server);
   const h: VoiceHarness = {
@@ -331,6 +371,7 @@ export async function bootVoice(): Promise<VoiceHarness> {
       for (const who of SEEDED) await purgePersonPoints(prisma, who);
     },
     close: async () => {
+      await removeProfiles();
       await app.close();
       await new Promise<void>((r) => standin.server.close(() => r()));
       mock?.kill();

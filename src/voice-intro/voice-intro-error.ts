@@ -15,6 +15,7 @@ export type VoiceErrorCode =
   | 'voice_text_too_long'
   | 'voice_consent_required'
   | 'voice_consent_line_changed'
+  | 'voice_name_required'
   | 'voice_sample_required'
   | 'voice_sample_unusable'
   | 'voice_intro_busy'
@@ -28,6 +29,7 @@ export const VOICE_ERROR_STATUS: Record<VoiceErrorCode, HttpStatus> = {
   voice_text_too_long: HttpStatus.BAD_REQUEST,
   voice_consent_required: HttpStatus.CONFLICT,
   voice_consent_line_changed: HttpStatus.CONFLICT,
+  voice_name_required: HttpStatus.CONFLICT,
   voice_sample_required: HttpStatus.CONFLICT,
   voice_sample_unusable: HttpStatus.BAD_REQUEST,
   voice_intro_busy: HttpStatus.CONFLICT,
@@ -63,6 +65,8 @@ export const CONSENT_REQUIRED_MESSAGE =
   'Agree that this is your own voice before you go on.';
 export const CONSENT_CHANGED_MESSAGE =
   'The words you agree to have changed. Read them again and agree.';
+/** What a person reads, in place of the consent line, when the Hub holds no name for them (SWEEP-VOICE V5). */
+export const NAME_REQUIRED_MESSAGE = 'Add your name to your profile first.';
 export const RECORDING_REQUIRED_MESSAGE = 'Record your 30 second sample first.';
 export const RECORDING_UNUSABLE_MESSAGE =
   'That recording could not be used. Record it again.';

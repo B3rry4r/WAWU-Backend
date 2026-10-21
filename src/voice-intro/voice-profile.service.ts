@@ -11,6 +11,7 @@ import {
 import {
   CONSENT_CHANGED_MESSAGE,
   CONSENT_REQUIRED_MESSAGE,
+  NAME_REQUIRED_MESSAGE,
   PREVIEW_LIMIT_MESSAGE,
   PREVIEW_UNAVAILABLE_MESSAGE,
   RECORDING_UNUSABLE_MESSAGE,
@@ -41,10 +42,13 @@ export const NAME_PREVIEWS_SETTING = 'voice.name_previews_per_hour';
  * The words a person agrees to before they record (VF8, the lead's ruling of 21 Oct 2026): the board's line with the person's own name,
  * from the Hub's record of them (the name on their sign-in, as `GET /users/me` gives it). The Hub serves them as `consent.line`, stores
  * exactly them with the time the person agreed, and takes back only the words it served. They name no provider (R-68).
+ * A person the Hub holds no name for is served no consent line: the plain sentence asking them to add their name stands in its
+ * place, and `giveConsent` refuses it (SWEEP-VOICE V5), so no one agrees to a line that does not say who they are.
  */
 export function consentLineFor(name: string): string {
   const who = name.trim();
-  return `${who ? `I am ${who}. ` : ''}I agree that Who Made This? may create an AI version of my voice for my intros.`;
+  if (!who) return NAME_REQUIRED_MESSAGE;
+  return `I am ${who}. I agree that Who Made This? may create an AI version of my voice for my intros.`;
 }
 
 /** The person's name as the Hub holds it: first, middle (when there is one) and last, as `GET /users/me` shows it. */
@@ -126,7 +130,7 @@ export class VoiceProfileService {
     if (!this.voice.configured)
       throw new VoiceError('voice_unavailable', UNAVAILABLE_MESSAGE);
     const limit = this.settings.number(NAME_PREVIEWS_SETTING);
-    await this.prisma.$transaction(async (tx) => {
+    const tried = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`voice-preview:${wawuUserId}`}, 0))`;
       await tx.voiceNamePreview.deleteMany({
         where: {
@@ -142,7 +146,10 @@ export class VoiceProfileService {
       });
       if (recent >= limit)
         throw new VoiceError('voice_preview_limit', PREVIEW_LIMIT_MESSAGE);
-      await tx.voiceNamePreview.create({ data: { wawuUserId } });
+      return tx.voiceNamePreview.create({
+        data: { wawuUserId },
+        select: { id: true },
+      });
     });
 
     const say = (dto.phonetic ?? dto.name).trim();
@@ -154,6 +161,7 @@ export class VoiceProfileService {
         this.logger.error(
           `name preview: ${(e as Error).name ?? 'Error'} from the provider seam`,
         );
+      await this.giveBackTry(tried.id);
       throw new VoiceError('voice_unavailable', PREVIEW_UNAVAILABLE_MESSAGE);
     }
     try {
@@ -164,13 +172,23 @@ export class VoiceProfileService {
       );
       return { audioUrl: await this.files.urlFor(key), aiVoice: true };
     } catch {
+      await this.giveBackTry(tried.id);
       throw new VoiceError('voice_unavailable', PREVIEW_UNAVAILABLE_MESSAGE);
+    }
+  }
+
+  /** A preview nobody heard does not count toward the hour's limit (SWEEP-VOICE V3). */
+  private async giveBackTry(id: string): Promise<void> {
+    try {
+      await this.prisma.voiceNamePreview.deleteMany({ where: { id } });
+    } catch {
+      // The try stays counted; the hour passes.
     }
   }
 
   /**
    * Another person's Voice Intro, as anyone looking at their profile sees it
-   * (R-66): the audio link and `aiVoice: true`, or null when they have none.
+   * (R-66): the audio link and `aiVoice: true`, or null when they have none or have no public profile.
    * A person who does not exist, or who blocked the viewer or was blocked by
    * them, answers the same 404 as the profile does. Only the audio is public:
    * never the words, the consent or the recording.
@@ -186,6 +204,12 @@ export class VoiceProfileService {
     });
     if (!profile) throw new NotFoundException(notFound);
     await this.blocked.assertVisible(viewerWawuId, wawuUserId, notFound);
+    // A person with no public profile (a plain account, no creator state) answers as for no intro: the answer never says one exists.
+    const creator = await this.prisma.creatorState.findUnique({
+      where: { wawuUserId },
+      select: { wawuUserId: true },
+    });
+    if (!creator) return { voiceIntro: null };
     const row = await this.prisma.voiceProfile.findUnique({
       where: { wawuUserId },
       select: { audioKey: true },
@@ -248,6 +272,8 @@ export class VoiceProfileService {
     line: string,
     now: Date = new Date(),
   ): Promise<void> {
+    if (name.trim() === '')
+      throw new VoiceError('voice_name_required', NAME_REQUIRED_MESSAGE);
     const served = consentLineFor(name);
     if (line !== served)
       throw new VoiceError(
