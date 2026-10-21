@@ -38,12 +38,19 @@ export interface VoiceIntroView {
   /** The most characters the script can have, from the settings. */
   textMaxChars: number;
   consent: {
-    /** The words the person agrees to. */
+    /** The words the person agrees to: the board's line with their own name. Stored exactly, with the time; any other words are refused. */
     line: string;
     given: boolean;
     at: string | null;
   };
-  sample: { recorded: boolean; at: string | null };
+  sample: {
+    recorded: boolean;
+    at: string | null;
+    /** The shortest recording, in seconds, from the settings. The app times the take; the Hub does not read a file's length. */
+    minSeconds: number;
+    /** The longest recording, in seconds, from the settings. */
+    maxSeconds: number;
+  };
   /** The Voice Intro audio, once one is made; null before. */
   audioUrl: string | null;
   /** What the next try costs. */

@@ -95,6 +95,8 @@ const months = whole(1, LIMIT.maxMonths);
 const hours = whole(1, LIMIT.maxHours);
 const minutes = whole(1, LIMIT.maxMinutes);
 const people = whole(1, LIMIT.maxPeople);
+/** A recording length in seconds: whole, from 1 to an hour. */
+const seconds = whole(1, 3600);
 
 /** An en dash or an em dash, written by code so no source line carries one (R-5). */
 export const LONG_DASH = new RegExp(
@@ -730,6 +732,22 @@ export function buildRegistry(
     ['VF8 (the Voice Intro words), PUT /me/voice-intro/text'],
     count,
     'VOICE-INTRO-MAX-CHARS',
+  );
+  other(
+    'voice_intro.sample_min_seconds',
+    'Shortest Voice Intro recording the app takes, in seconds',
+    'count',
+    ['VF9, VF9b (the take is refused below it), GET /me/voice-intro'],
+    seconds,
+    'VOICE-SAMPLE-SECONDS',
+  );
+  other(
+    'voice_intro.sample_max_seconds',
+    'Longest Voice Intro recording the app takes, in seconds',
+    'count',
+    ['VF9 (the ring and the timer), GET /me/voice-intro'],
+    seconds,
+    'VOICE-SAMPLE-SECONDS',
   );
   other(
     'voice.name_previews_per_hour',

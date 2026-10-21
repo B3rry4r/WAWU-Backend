@@ -8,6 +8,7 @@
     "POINTS-JOB-MAX-RUN": "POINTS-03: no ruling says how long an AI job may run before the points held for it are given back. 30 minutes is longer than any one job the plan prices (the longest audio is 10 minutes) and short enough that a dead job does not keep a person's points for long.",
     "VOICE-INTRO-MAX-CHARS": "VOICE-01: no ruling or board sizes a Voice Intro script. The sample is 30 seconds and a minute of speech is 900 characters (AITOOLS-CHARS-PER-MINUTE), so 500 characters is about 33 seconds: a short bio, said once.",
     "VOICE-NAME-PREVIEWS": "VOICE-01: the free name preview calls the voice provider and no ruling limits it. 20 an hour is far more than anyone needs to get a spelling right, and stops a loop from running up the provider's bill.",
+    "VOICE-SAMPLE-SECONDS": "VERIFY-03 and FIX-95: no ruling names the shortest or longest Voice Intro recording. 30 seconds is the board's (VF9 'Record 30 seconds') and the Hub's own wording; 15 is half of it, since the boards show 8 seconds as too short. The owner may change both.",
     "AITOOLS-CHARS-PER-MINUTE": "AITOOLS-01: the PT2 board prices a script of 132 characters as one minute and no ruling says how long a minute of speech is in text. 900 characters is about 150 words at a steady pace (an average word with its space is about 6 characters), so the 5,000 character limit is about six minutes, inside the 10 minute cap."
   },
   "values": {
@@ -29,6 +30,8 @@
     "points.job_max_run_minutes": 30,
     "ai.voiceover_chars_per_minute": 900,
     "voice.intro_max_chars": 500,
+    "voice_intro.sample_min_seconds": 15,
+    "voice_intro.sample_max_seconds": 30,
     "voice.name_previews_per_hour": 20
   }
 }

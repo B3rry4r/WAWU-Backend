@@ -19,7 +19,6 @@ import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import { loadPlansConfig } from '../../plans/plans-config';
 import { PointsSpendService } from '../../points/spend/points-spend.service';
 import { introAudioKey } from '../voice-files';
-import { CONSENT_LINE } from '../voice-profile.service';
 import { runIdFor } from '../voice-intro-run.service';
 import type {
   MyVoiceView,
@@ -53,6 +52,11 @@ const reasonOf = (res: { body: unknown }) =>
     }
   ).reason;
 const key = () => randomUUID();
+/** The ruled line (the lead, 21 Oct 2026): the board's words with the person's own name from the Hub's record of them. */
+const PLAIN_LINE =
+  'I am Adaeze Okonkwo. I agree that Who Made This? may create an AI version of my voice for my intros.';
+const BASIC_LINE =
+  'I am Chidi Umeh. I agree that Who Made This? may create an AI version of my voice for my intros.';
 
 describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
   let h: VoiceHarness;
@@ -231,8 +235,8 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
       expect(before).toMatchObject({
         aiVoice: true,
         text: null,
-        consent: { line: CONSENT_LINE, given: false, at: null },
-        sample: { recorded: false, at: null },
+        consent: { line: PLAIN_LINE, given: false, at: null },
+        sample: { recorded: false, at: null, minSeconds: 15, maxSeconds: 30 },
         audioUrl: null,
         run: null,
       });
@@ -255,7 +259,7 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
 
       const consented = data<VoiceIntroView>(
         await h.as(PLAIN, 'post', '/me/voice-intro/consent', {
-          line: CONSENT_LINE,
+          line: PLAIN_LINE,
         }),
       );
       expect(consented.consent.given).toBe(true);
@@ -267,7 +271,7 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
       const row = await h.prisma.voiceProfile.findUniqueOrThrow({
         where: { wawuUserId: PLAIN },
       });
-      expect(row.consentLine).toBe(CONSENT_LINE);
+      expect(row.consentLine).toBe(PLAIN_LINE);
       expect(row.consentAt).not.toBeNull();
       expect(row.sampleKey).toBe(link.slice(FILES_BASE.length));
       expect(row.sampleAt).not.toBeNull();
@@ -281,9 +285,63 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
       expect(h.files.removed).toContain(link.slice(FILES_BASE.length));
     });
 
+    it("serves each person's own name in the line and takes back only that person's line", async () => {
+      const mine = data<VoiceIntroView>(
+        await h.as(PLAIN, 'get', '/me/voice-intro'),
+      );
+      const theirs = data<VoiceIntroView>(
+        await h.as(BASIC, 'get', '/me/voice-intro'),
+      );
+      expect(mine.consent.line).toBe(PLAIN_LINE);
+      expect(theirs.consent.line).toBe(BASIC_LINE);
+      // The line served to someone else is not the caller's own words: refused, and nothing is stored.
+      const swapped = await h.as(PLAIN, 'post', '/me/voice-intro/consent', {
+        line: BASIC_LINE,
+      });
+      expect(swapped.status).toBe(409);
+      expect(reasonOf(swapped).code).toBe('voice_consent_line_changed');
+      const stored = await h.prisma.voiceProfile.findUnique({
+        where: { wawuUserId: PLAIN },
+        select: { consentAt: true },
+      });
+      expect(stored?.consentAt ?? null).toBeNull();
+      await h
+        .as(BASIC, 'post', '/me/voice-intro/consent', { line: BASIC_LINE })
+        .expect(200);
+      const row = await h.prisma.voiceProfile.findUniqueOrThrow({
+        where: { wawuUserId: BASIC },
+      });
+      expect(row.consentLine).toBe(BASIC_LINE);
+    });
+
+    it('serves the shortest and longest recording from two settings, and holds the shortest down to the longest', async () => {
+      const seconds = (v: VoiceIntroView) => [
+        v.sample.minSeconds,
+        v.sample.maxSeconds,
+      ];
+      expect(
+        seconds(
+          data<VoiceIntroView>(await h.as(PLAIN, 'get', '/me/voice-intro')),
+        ),
+      ).toEqual([15, 30]);
+      await set('voice_intro.sample_min_seconds', 10);
+      await set('voice_intro.sample_max_seconds', 45);
+      expect(
+        seconds(
+          data<VoiceIntroView>(await h.as(PLAIN, 'get', '/me/voice-intro')),
+        ),
+      ).toEqual([10, 45]);
+      await set('voice_intro.sample_min_seconds', 50);
+      expect(
+        seconds(
+          data<VoiceIntroView>(await h.as(PLAIN, 'get', '/me/voice-intro')),
+        ),
+      ).toEqual([45, 45]);
+    });
+
     it("refuses another person's recording, one that never landed, one in another folder and a link from anywhere else", async () => {
       await h
-        .as(PLAIN, 'post', '/me/voice-intro/consent', { line: CONSENT_LINE })
+        .as(PLAIN, 'post', '/me/voice-intro/consent', { line: PLAIN_LINE })
         .expect(200);
       const others = await h.upload(BASIC);
       const pending = await h.upload(PLAIN, { status: 'pending' });
@@ -342,7 +400,7 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
         .expect(200);
       expect(reasonOf(await generate()).code).toBe('voice_consent_required');
       await h
-        .as(PLAIN, 'post', '/me/voice-intro/consent', { line: CONSENT_LINE })
+        .as(PLAIN, 'post', '/me/voice-intro/consent', { line: PLAIN_LINE })
         .expect(200);
       expect(reasonOf(await generate()).code).toBe('voice_sample_required');
       expect(await runsOf(PLAIN)).toHaveLength(0);
@@ -794,12 +852,7 @@ describe('VOICE-01: hear your name and the Voice Intro (contract)', () => {
       name: 'Ada',
     });
     const refused = await generate();
-    const text = JSON.stringify([
-      done,
-      preview.body,
-      refused.body,
-      CONSENT_LINE,
-    ]);
+    const text = JSON.stringify([done, preview.body, refused.body, PLAIN_LINE]);
     expect(text).not.toMatch(/eleven|stand-in|xi-api|clone/i);
     expect(text).not.toMatch(/[–—]/);
   });

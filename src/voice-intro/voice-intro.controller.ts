@@ -26,7 +26,7 @@ import {
   VoiceSampleDto,
 } from './voice-intro.dto';
 import { VoiceIntroRunService } from './voice-intro-run.service';
-import { VoiceProfileService } from './voice-profile.service';
+import { personName, VoiceProfileService } from './voice-profile.service';
 import type {
   MyVoiceView,
   NamePreviewView,
@@ -96,7 +96,7 @@ export class VoiceIntroController {
   @Header('Cache-Control', 'no-store')
   @BuiltBy('VOICE-01')
   intro(@CurrentUser() user: WawuJwtClaims): Promise<VoiceIntroView> {
-    return this.runs.view(user.sub);
+    return this.runs.view(user.sub, personName(user));
   }
 
   /** The words of the Voice Intro. Up to `textMaxChars` (a setting): `400 voice_text_too_long` over it. */
@@ -108,7 +108,7 @@ export class VoiceIntroController {
     @Body() dto: VoiceIntroTextDto,
   ): Promise<VoiceIntroView> {
     await this.profiles.saveText(user.sub, dto.text);
-    return this.runs.view(user.sub);
+    return this.runs.view(user.sub, personName(user));
   }
 
   /**
@@ -124,8 +124,8 @@ export class VoiceIntroController {
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: VoiceConsentDto,
   ): Promise<VoiceIntroView> {
-    await this.profiles.giveConsent(user.sub, dto.line);
-    return this.runs.view(user.sub);
+    await this.profiles.giveConsent(user.sub, personName(user), dto.line);
+    return this.runs.view(user.sub, personName(user));
   }
 
   /**
@@ -144,7 +144,7 @@ export class VoiceIntroController {
     @Body() dto: VoiceSampleDto,
   ): Promise<VoiceIntroView> {
     await this.profiles.setSample(user.sub, dto.fileUrl);
-    return this.runs.view(user.sub);
+    return this.runs.view(user.sub, personName(user));
   }
 
   /**
@@ -173,7 +173,11 @@ export class VoiceIntroController {
     @Headers('idempotency-key') key: string | undefined,
     @Res({ passthrough: true }) res: Response,
   ): Promise<VoiceIntroView> {
-    const { view, replayed } = await this.runs.generate(user.sub, key);
+    const { view, replayed } = await this.runs.generate(
+      user.sub,
+      personName(user),
+      key,
+    );
     if (replayed) {
       res.status(200);
       res.setHeader('Idempotent-Replayed', 'true');

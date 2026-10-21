@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
+import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PlanSettingsService } from '../plan-settings/plan-settings.service';
 import {
@@ -37,12 +38,29 @@ export const INTRO_MAX_CHARS_SETTING = 'voice.intro_max_chars';
 export const NAME_PREVIEWS_SETTING = 'voice.name_previews_per_hour';
 
 /**
- * The words a person agrees to before they record (VF8). The Hub serves them
- * and stores them with the time the person agreed, so the consent on file is
- * for exactly these words. They name no provider (R-68).
+ * The words a person agrees to before they record (VF8, the lead's ruling of 21 Oct 2026): the board's line with the person's own name,
+ * from the Hub's record of them (the name on their sign-in, as `GET /users/me` gives it). The Hub serves them as `consent.line`, stores
+ * exactly them with the time the person agreed, and takes back only the words it served. They name no provider (R-68).
  */
-export const CONSENT_LINE =
-  'This is my own voice. I agree that WAWU makes an AI copy of it to read my Voice Intro aloud, and that the audio is marked as an AI voice.';
+export function consentLineFor(name: string): string {
+  const who = name.trim();
+  return `${who ? `I am ${who}. ` : ''}I agree that Who Made This? may create an AI version of my voice for my intros.`;
+}
+
+/** The person's name as the Hub holds it: first, middle (when there is one) and last, as `GET /users/me` shows it. */
+export function personName(
+  claims: Pick<WawuJwtClaims, 'firstName' | 'middleName' | 'lastName'>,
+): string {
+  return [claims.firstName, claims.middleName, claims.lastName]
+    .map((part) => (part ?? '').trim())
+    .filter(Boolean)
+    .join(' ');
+}
+
+/** The setting: the shortest recording the app takes, in seconds. */
+export const RECORDING_MIN_SECONDS_SETTING = 'voice_intro.sample_min_seconds';
+/** The setting: the longest recording the app takes, in seconds. */
+export const RECORDING_MAX_SECONDS_SETTING = 'voice_intro.sample_max_seconds';
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 86_400_000;
@@ -71,6 +89,16 @@ export class VoiceProfileService {
   /** The most characters a Voice Intro script can have, from the settings. */
   maxChars(): number {
     return this.settings.number(INTRO_MAX_CHARS_SETTING);
+  }
+
+  /** The shortest and longest recording, in seconds, from the settings (the app times the take; the Hub does not read a file's length). */
+  sampleSeconds(): { min: number; max: number } {
+    const max = this.settings.number(RECORDING_MAX_SECONDS_SETTING);
+    // A shortest set above the longest could never be met: it is held down to the longest.
+    return {
+      min: Math.min(this.settings.number(RECORDING_MIN_SECONDS_SETTING), max),
+      max,
+    };
   }
 
   async mine(wawuUserId: string): Promise<MyVoiceView> {
@@ -210,21 +238,26 @@ export class VoiceProfileService {
     });
   }
 
-  /** Records that the person agreed to exactly the words the Hub served, and when. */
+  /**
+   * Records that the person agreed to exactly the words the Hub served for
+   * them (`consentLineFor` their name), and when. Any other words are refused.
+   */
   async giveConsent(
     wawuUserId: string,
+    name: string,
     line: string,
     now: Date = new Date(),
   ): Promise<void> {
-    if (line !== CONSENT_LINE)
+    const served = consentLineFor(name);
+    if (line !== served)
       throw new VoiceError(
         'voice_consent_line_changed',
         CONSENT_CHANGED_MESSAGE,
       );
     await this.prisma.voiceProfile.upsert({
       where: { wawuUserId },
-      create: { wawuUserId, consentAt: now, consentLine: CONSENT_LINE },
-      update: { consentAt: now, consentLine: CONSENT_LINE },
+      create: { wawuUserId, consentAt: now, consentLine: served },
+      update: { consentAt: now, consentLine: served },
     });
   }
 
