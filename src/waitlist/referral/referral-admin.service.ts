@@ -3,9 +3,9 @@ import type { Prisma, ReferralCode } from '../../../generated/prisma/client';
 import { WaitlistStatus } from '../../../generated/prisma/enums';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PLANS_CONFIG, type PlansConfig } from '../../plans/plans-config';
-import { REFERRAL_HOLD_MS } from '../waitlist-config';
 import { WaitlistError } from '../waitlist-error';
 import { readReferralCode } from './referral-code';
+import { ReferralService } from './referral.service';
 import type {
   CreateReferralCodeDto,
   UpdateReferralCodeDto,
@@ -98,22 +98,15 @@ export class ReferralAdminService {
     const rows = await this.prisma.referralCode.findMany({
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
-    const [paid, held] = await Promise.all([
+    const [paid, heldBy] = await Promise.all([
       this.prisma.waitlistRegistration.groupBy({
         by: ['referralCode'],
         where: { referralCode: { not: null }, status: WaitlistStatus.paid },
         _count: { _all: true },
         _sum: { paidKobo: true },
       }),
-      this.prisma.waitlistRegistration.groupBy({
-        by: ['referralCode'],
-        where: {
-          referralCode: { not: null },
-          status: WaitlistStatus.pending,
-          createdAt: { gt: new Date(now.getTime() - REFERRAL_HOLD_MS) },
-        },
-        _count: { _all: true },
-      }),
+      // Held places are people, as the registration counts them (D3).
+      new ReferralService(this.prisma).heldByCode(this.prisma, now),
     ]);
     const paidBy = new Map(
       paid.map((p) => [
@@ -121,7 +114,6 @@ export class ReferralAdminService {
         { count: p._count._all, kobo: p._sum.paidKobo ?? 0 },
       ]),
     );
-    const heldBy = new Map(held.map((h) => [h.referralCode, h._count._all]));
     return rows.map((r) =>
       this.view(
         r,

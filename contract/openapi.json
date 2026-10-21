@@ -20539,7 +20539,7 @@
             }
           }
         },
-        "summary": "Start sending in the background. Superadmin only; answers 409 when RESEND_API_KEY is unset.",
+        "summary": "Start sending in the background. Superadmin only; answers 409 when the server has no email sender set up (neither WAWU ID's mail relay nor its own RESEND_API_KEY), or, in production, no HUB_PUBLIC_URL.",
         "tags": [
           "AdminEmail"
         ]
@@ -35417,9 +35417,12 @@
           },
           "404": {
             "description": "`reason.code` `referral_unknown` (no such code) or `no_open_offer`."
+          },
+          "429": {
+            "description": "`reason.code` `referral_attempts_limited`: this address tried too many codes we do not have; wait a few minutes. (The plain rate limit has no `reason`.)"
           }
         },
-        "summary": "Before paying: does this referral code apply, and what would the person\npay. Never the limit, the count or the community. A code we do not have\nis a 404 `referral_unknown`. Advice only: the registration decides again.",
+        "summary": "Before paying: does this referral code apply, and what would the person\npay. Never the limit, the count or the community. A code we do not have\nis a 404 `referral_unknown`. Advice only: the registration decides again.\nAn address that has tried too many codes we do not have is asked to wait\n(429 `referral_attempts_limited`).",
         "tags": [
           "WaitlistPublic"
         ]
@@ -35441,7 +35444,7 @@
         },
         "responses": {
           "200": {
-            "description": "",
+            "description": "Exactly one of `flutterwaveConfig` and `completed` is present. `flutterwaveConfig` (open the checkout with it) comes whenever `amountKobo` is above 0. `completed` comes instead when `amountKobo` is 0 (a free referral code): the registration is already paid and there is nothing to pay.",
             "content": {
               "application/json": {
                 "schema": {
@@ -35458,6 +35461,9 @@
           },
           "409": {
             "description": "`reason.code` `offer_closed` (closed or not open yet) or `already_registered` (this phone or email already paid; nothing is charged)."
+          },
+          "429": {
+            "description": "`reason.code` `referral_attempts_limited`: this address tried too many codes we do not have, and a registration that carries a code waits; one with no code is not refused by it. (The plain rate limit has no `reason`.)"
           },
           "503": {
             "description": "`reason.code` `payments_unavailable`: payments are not set up."

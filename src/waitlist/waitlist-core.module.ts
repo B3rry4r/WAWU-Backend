@@ -6,6 +6,7 @@ import {
   WAITLIST_PAYMENT_LOOKUP,
 } from './waitlist-payment-lookup';
 import { systemRandom, WAITLIST_RANDOM } from './waitlist-random';
+import { ReferralProbeGuard } from './referral/referral-probe';
 import { ReferralService } from './referral/referral.service';
 import { WaitlistService } from './waitlist.service';
 
@@ -32,6 +33,7 @@ import { WaitlistService } from './waitlist.service';
   providers: [
     { provide: WAITLIST_RANDOM, useValue: systemRandom },
     ReferralService,
+    ReferralProbeGuard,
     WaitlistService,
     { provide: WAITLIST_PAYMENT_LOOKUP, useClass: FlutterwaveReferenceLookup },
   ],

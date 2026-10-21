@@ -618,7 +618,9 @@ describe('Referral codes on the registration page (REF-01) over HTTP', () => {
       const who = person({ referralCode: code.code });
       const one = data(await register(who).expect(200));
       const two = data(await register(who).expect(200));
-      expect(two.referral.applied).toBe(false);
+      // SWEEP-JOIN D3: this was `false`, the defect. The same person starting
+      // again keeps their one place; their first start is not a rival.
+      expect(two.referral.applied).toBe(true);
       await verify(
         one.reference,
         pay(one.reference, code.priceKobo / 100),

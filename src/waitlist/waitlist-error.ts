@@ -50,6 +50,12 @@ export const WAITLIST_ERROR_STATUS = {
   offer_unavailable: 409,
   /** The referral code is not one we have (REF-01). The same words on the page's check and on register. */
   referral_unknown: 404,
+  /**
+   * This address has tried too many referral codes we do not have, and is
+   * asked to wait (SWEEP-JOIN D4). On the page's check and on a registration
+   * that carries a code; a registration with no code is not refused by it.
+   */
+  referral_attempts_limited: 429,
   /** An admin tried to create a referral code that already exists (REF-01). */
   referral_code_taken: 409,
   /** An admin sent a referral code the rules refuse: its shape, its price or its limit (REF-01). */
