@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261024150000_account_deletion (SETTINGS-06). Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while a deletion is scheduled: dropping the
 -- table would forget which wallets are frozen and which content is hidden.

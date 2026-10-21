@@ -16,7 +16,12 @@ import { Client } from 'pg';
 const NAME = '20261026090000_no_em_dash_stored_refund_notice';
 const DIR = join(__dirname, '..', '..', '..', 'prisma', 'migrations', NAME);
 const migrationSql = readFileSync(join(DIR, 'migration.sql'), 'utf8');
-const rollbackSql = readFileSync(join(DIR, 'rollback.sql'), 'utf8');
+// The file's first line is psql's `\set ON_ERROR_STOP on` (FIX-96); this runner
+// is not psql, so it leaves out lines that start with a backslash.
+const rollbackSql = readFileSync(join(DIR, 'rollback.sql'), 'utf8')
+  .split('\n')
+  .filter((line) => !line.startsWith('\\'))
+  .join('\n');
 
 const DASH = '—';
 const OLD = (amount: string) =>

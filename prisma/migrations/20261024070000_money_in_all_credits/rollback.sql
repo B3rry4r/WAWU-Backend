@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261024070000_money_in_all_credits. Run by hand, never by
 -- `prisma migrate deploy` (it only reads migration.sql). Drops the two new
 -- columns and nothing else. The "before" marks the migration wrote stay: the

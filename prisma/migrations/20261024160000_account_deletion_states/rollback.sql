@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261024160000_account_deletion_states (SETTINGS-06 round 2).
 -- Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while a deletion is freezing or purging: the

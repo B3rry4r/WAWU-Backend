@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261029100000_account_deletion_id_docs_erased (SETTINGS-09).
 -- Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while any deletion row records that ID

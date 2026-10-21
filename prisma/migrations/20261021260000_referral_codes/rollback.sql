@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261021260000_referral_codes (REF-01). Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while a free registration exists: the old rules
 -- cannot hold a fee of 0 or a paid row with no transaction id. Settle those first.

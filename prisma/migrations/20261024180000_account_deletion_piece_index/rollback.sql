@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261024180000_account_deletion_piece_index (SETTINGS-06 round 9).
 -- Run with: psql -1 -f rollback.sql
 -- Drops the index; the lookup by piece then scans the table, which is slower

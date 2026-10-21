@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback of 20261030140000_voice_intro (VOICE-01). Nothing else references
 -- these tables. Run it only after the Hub build that reads them is gone.
 -- Run with: psql -1 -f rollback.sql
