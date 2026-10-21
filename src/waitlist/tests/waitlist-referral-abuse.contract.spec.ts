@@ -146,25 +146,47 @@ describe('Referral hold spam and code probing (SWEEP-JOIN D3, D4)', () => {
       expect(other.referral?.reason).toBe('full');
     });
 
-    it('does not make a new person of a changed phone alone or a changed email alone, but counts people who share only an email', async () => {
+    it('counts a person who corrects their phone, then their email, as one person, and two people who share nothing as two', async () => {
       const code = await makeCode({ usageLimit: 3 });
       const me = person();
       await waitlist.register({ ...me, referralCode: code.code });
-      // Same email, another phone: still the larger of (1 phone, 1 email) per
-      // person, so the count of distinct phones is what grows.
+      // Same email, a corrected phone: the same person.
       await waitlist.register({
         ...me,
         phone: '+2348199990001',
         referralCode: code.code,
       });
+      // Now the email changes and the corrected phone stays: still the same person.
       await waitlist.register({
         ...me,
+        phone: '+2348199990001',
         email: `${MARK}-alt-${n}@test.wawu.dev`,
         referralCode: code.code,
       });
-      const held = await admin.list();
-      // Two phones among the starts, two emails: two people, not three starts.
-      expect(held.find((c) => c.code === code.code)?.heldCount).toBe(2);
+      expect(
+        (await admin.list()).find((c) => c.code === code.code)?.heldCount,
+      ).toBe(1);
+      // A stranger shares neither, so is a second person.
+      await waitlist.register(person({ referralCode: code.code }));
+      expect(
+        (await admin.list()).find((c) => c.code === code.code)?.heldCount,
+      ).toBe(2);
+    });
+
+    it('does not let a person who corrects their phone take a second place from a stranger', async () => {
+      const code = await makeCode({ usageLimit: 2 });
+      const me = person();
+      await waitlist.register({ ...me, referralCode: code.code });
+      await waitlist.register({
+        ...me,
+        phone: '+2348199990002',
+        referralCode: code.code,
+      });
+      // One person holds one place, so a stranger still gets the second.
+      const stranger = await waitlist.register(
+        person({ referralCode: code.code }),
+      );
+      expect(stranger.referral).toEqual({ code: code.code, applied: true });
     });
 
     it('shows the team the places held as people, not starts', async () => {

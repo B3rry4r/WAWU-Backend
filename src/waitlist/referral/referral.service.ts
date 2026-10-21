@@ -4,6 +4,7 @@ import { WaitlistStatus } from '../../../generated/prisma/enums';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { REFERRAL_HOLD_MS } from '../waitlist-config';
 import type { ReferralNotApplied } from './referral-code';
+import { countPeople, type HeldStart } from './referral-people';
 
 type Db = PrismaService | Prisma.TransactionClient;
 
@@ -22,14 +23,15 @@ export type ReferralDecision =
  * payment settles by its own checks and never looks at the limit.
  *
  * ONE PERSON, ONE PLACE (SWEEP-JOIN D3). Held places are counted by person,
- * never by registration: the unpaid starts of one phone or one email are one
- * place, however many times they were started, so repeating the call cannot
- * use up a limited code's places. A person's own earlier unpaid starts are
- * left out when they start another, so someone who closed the checkout and
- * begins again keeps their place instead of finding the code full. People are
- * counted as the larger of the distinct phones and the distinct emails among
- * the unpaid starts: a family sharing an email count as several, and changing
- * only the phone or only the email does not make a new person.
+ * never by registration: unpaid starts that share a phone or an email (or are
+ * linked through a chain of such starts) are one person and one place,
+ * however many times they were started, so repeating the call, or correcting
+ * a phone or an email along the way, cannot use up a limited code's places
+ * (referral-people.ts). A person's own earlier unpaid starts are left out
+ * when they start another, so someone who closed the checkout and begins
+ * again keeps their place instead of finding the code full. Someone who
+ * changes both the phone and the email on every start is many people here;
+ * the per-address throttle bounds that.
  *
  * THE RACE. Two people asking for the last place must not both get it. The
  * registration locks the code's row (`SELECT ... FOR UPDATE`) inside the same
@@ -76,21 +78,17 @@ export class ReferralService {
       where: { referralCode: code, status: WaitlistStatus.paid },
     });
     const since = new Date(now.getTime() - REFERRAL_HOLD_MS);
-    const own = requester
-      ? Prisma.sql`AND "phone" <> ${requester.phone} AND "email" <> ${requester.email}`
-      : Prisma.empty;
-    const people = await db.$queryRaw<{ phones: number; emails: number }[]>(
-      Prisma.sql`
-        SELECT COUNT(DISTINCT "phone")::int AS "phones",
-               COUNT(DISTINCT "email")::int AS "emails"
-        FROM "WaitlistRegistration"
-        WHERE "referralCode" = ${code}
-          AND "status" = 'pending'::"WaitlistStatus"
-          AND "createdAt" > (${since}::timestamptz AT TIME ZONE 'UTC')
-          ${own}`,
-    );
-    const held = Math.max(people[0]?.phones ?? 0, people[0]?.emails ?? 0);
-    return { paid, held };
+    // `createdAt` holds a UTC wall time (timestamp without a zone), and the
+    // driver sends a Date as a UTC wall time with no zone, so the two are
+    // compared as they are: a cast to a zone here would shift the window by
+    // the database session's own zone.
+    const starts = await db.$queryRaw<HeldStart[]>(Prisma.sql`
+      SELECT DISTINCT "phone", "email"
+      FROM "WaitlistRegistration"
+      WHERE "referralCode" = ${code}
+        AND "status" = 'pending'::"WaitlistStatus"
+        AND "createdAt" > ${since}::timestamp`);
+    return { paid, held: countPeople(starts, requester) };
   }
 
   /**
@@ -100,17 +98,22 @@ export class ReferralService {
   async heldByCode(db: Db, now: Date): Promise<Map<string, number>> {
     const since = new Date(now.getTime() - REFERRAL_HOLD_MS);
     const rows = await db.$queryRaw<
-      { code: string; phones: number; emails: number }[]
+      (HeldStart & { code: string })[]
     >(Prisma.sql`
-      SELECT "referralCode" AS "code",
-             COUNT(DISTINCT "phone")::int AS "phones",
-             COUNT(DISTINCT "email")::int AS "emails"
+      SELECT DISTINCT "referralCode" AS "code", "phone", "email"
       FROM "WaitlistRegistration"
       WHERE "referralCode" IS NOT NULL
         AND "status" = 'pending'::"WaitlistStatus"
-        AND "createdAt" > (${since}::timestamptz AT TIME ZONE 'UTC')
-      GROUP BY "referralCode"`);
-    return new Map(rows.map((r) => [r.code, Math.max(r.phones, r.emails)]));
+        AND "createdAt" > ${since}::timestamp`);
+    const byCode = new Map<string, HeldStart[]>();
+    for (const r of rows) {
+      const list = byCode.get(r.code) ?? [];
+      list.push(r);
+      byCode.set(r.code, list);
+    }
+    return new Map(
+      [...byCode].map(([code, starts]) => [code, countPeople(starts)]),
+    );
   }
 
   /** Whether one more person may use the code: it is on, and under its limit. */
