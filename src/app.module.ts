@@ -98,6 +98,7 @@ import { PaidDmWalletModule } from './direct-message/wallet/paid-dm-wallet.modul
 import { PointsConvertModule } from './points/convert/points-convert.module';
 import { PointsSpendModule } from './points/spend/points-spend.module';
 import { AiToolsModule } from './ai-tools/ai-tools.module';
+import { MoviesModule } from './movies/movies.module';
 import { VoiceIntroModule } from './voice-intro/voice-intro.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
@@ -485,6 +486,10 @@ import { PushModule } from './push/push.module';
     // whose voice provider it shares. `voice` and `voice-intro` are segments
     // under `me` that no other controller declares.
     VoiceIntroModule,
+    // Flix movies (task FLIX-01, SHARED-CHANGES FLIX-01 #1): `movies`,
+    // `movies/browse`, `movies/filters`, `movies/search`, `movies/:movieId` and
+    // `movies/:movieId/watch`. `movies` is a segment no other controller declares.
+    MoviesModule,
     // The event registration link (task JOIN-01): `waitlist/offers/current`,
     // `waitlist/registrations` (register, verify, status) and the team's
     // `admin/waitlist/registrations` (list, export). `waitlist` and

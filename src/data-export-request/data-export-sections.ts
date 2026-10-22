@@ -302,6 +302,28 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // FLIX-01: that the person agreed to the terms that name the movie partner
+    // (and when and how), and when they first and last opened the partner's
+    // site from the app. Never a link: none is stored.
+    key: 'moviePartner',
+    models: ['MoviePartnerConsent', 'MoviePartnerLink'],
+    load: async (prisma, me) => ({
+      consents: await prisma.moviePartnerConsent.findMany({
+        where: { wawuUserId: me },
+        select: { provider: true, agreedAt: true, how: true },
+      }),
+      links: await prisma.moviePartnerLink.findMany({
+        where: { wawuUserId: me },
+        select: {
+          provider: true,
+          firstLinkAt: true,
+          lastLinkAt: true,
+          linkCount: true,
+        },
+      }),
+    }),
+  },
+  {
     key: 'voiceIntroRuns',
     models: ['VoiceIntroRun'],
     load: (prisma, me) =>
