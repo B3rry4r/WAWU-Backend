@@ -35366,6 +35366,310 @@
         "x-wawu-built-by": "VOICE-01"
       }
     },
+    "/api/hub/movies": {
+      "get": {
+        "operationId": "MoviesController_home",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoviesHomeView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The movies screen and the rails on Home and Explore: a hero and the rails (new, most watched, top rated, premiering soon). Empty rails are left out.",
+        "tags": [
+          "Movies"
+        ],
+        "x-wawu-built-by": "FLIX-01"
+      }
+    },
+    "/api/hub/movies/browse": {
+      "get": {
+        "operationId": "MoviesController_browse",
+        "parameters": [
+          {
+            "name": "sort",
+            "required": false,
+            "in": "query",
+            "description": "Default `newest`.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "newest",
+                "rating",
+                "views",
+                "title"
+              ]
+            }
+          },
+          {
+            "name": "genre",
+            "required": false,
+            "in": "query",
+            "description": "Exact genre, one of `GET /movies/filters`.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "language",
+            "required": false,
+            "in": "query",
+            "description": "Exact language, one of `GET /movies/filters`.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
+            "name": "premiering",
+            "required": false,
+            "in": "query",
+            "description": "True: only titles with a premiere still ahead.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MovieCardView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "\"See all\": the whole catalog copy, a page at a time, with a total. Sort `newest` (default), `rating`, `views` or `title`; filter by `genre`, `language` and `premiering`.",
+        "tags": [
+          "Movies"
+        ],
+        "x-wawu-built-by": "FLIX-01"
+      }
+    },
+    "/api/hub/movies/filters": {
+      "get": {
+        "operationId": "MoviesController_filters",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovieFiltersView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The genres and languages the catalog holds now, for the filter sheet.",
+        "tags": [
+          "Movies"
+        ],
+        "x-wawu-built-by": "FLIX-01"
+      }
+    },
+    "/api/hub/movies/search": {
+      "get": {
+        "operationId": "MoviesController_search",
+        "parameters": [
+          {
+            "name": "q",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 80,
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "perPage",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MovieCardView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Search the catalog copy by title, original title or tagline, newest first.",
+        "tags": [
+          "Movies"
+        ],
+        "x-wawu-built-by": "FLIX-01"
+      }
+    },
+    "/api/hub/movies/{movieId}": {
+      "get": {
+        "operationId": "MoviesController_detail",
+        "parameters": [
+          {
+            "name": "movieId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovieDetailView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One title with its trailer (kind `file` or `youtube`) and whether this person must agree to the terms first (`mustAgreeTerms`). `404 movie_not_found` for a title the catalog does not hold.",
+        "tags": [
+          "Movies"
+        ],
+        "x-wawu-built-by": "FLIX-01"
+      }
+    },
+    "/api/hub/movies/{movieId}/watch": {
+      "post": {
+        "operationId": "MoviesController_watch",
+        "parameters": [
+          {
+            "name": "movieId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatchMovieDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovieWatchView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "\"Watch on Flixora\": a fresh signed-in link for this tap, `{ url,\nexpiresAt }`. The first link opens the person's account on the partner's\nside (R-75). `409 terms_not_agreed` until the person has agreed (signed up\non or after `FLIXORA_TERMS_FROM`, or `agreeToTerms: true`, which is stored\nwith its time first). `503 movies_unavailable` when the partner cannot\nmake a link right now. The link is never stored and never logged.",
+        "tags": [
+          "Movies"
+        ],
+        "x-wawu-built-by": "FLIX-01"
+      }
+    },
     "/api/hub/waitlist/offers/current": {
       "get": {
         "operationId": "WaitlistPublicController_currentOffer",
@@ -42346,6 +42650,15 @@
         "required": [
           "fileUrl"
         ]
+      },
+      "WatchMovieDto": {
+        "type": "object",
+        "properties": {
+          "agreeToTerms": {
+            "type": "boolean",
+            "description": "True when the person ticked the agreement on MV4. Stored (once) with its\ntime before the link is made. Ignored for a person who already agreed."
+          }
+        }
       },
       "CreateWaitlistRegistrationDto": {
         "type": "object",
@@ -63142,6 +63455,317 @@
           "message",
           "createdAt",
           "finishedAt"
+        ]
+      },
+      "MovieCardView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "genre": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "language": {
+            "type": "string",
+            "nullable": true
+          },
+          "year": {
+            "type": "number",
+            "nullable": true
+          },
+          "runtimeMinutes": {
+            "type": "number",
+            "nullable": true
+          },
+          "ageRating": {
+            "type": "string",
+            "nullable": true
+          },
+          "posterImage": {
+            "type": "string",
+            "nullable": true
+          },
+          "backdropImage": {
+            "type": "string",
+            "nullable": true
+          },
+          "rating": {
+            "type": "number"
+          },
+          "ratingCount": {
+            "type": "number"
+          },
+          "views": {
+            "type": "number"
+          },
+          "premiering": {
+            "type": "boolean"
+          },
+          "premierDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "addedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "genre",
+          "language",
+          "year",
+          "runtimeMinutes",
+          "ageRating",
+          "posterImage",
+          "backdropImage",
+          "rating",
+          "ratingCount",
+          "views",
+          "premiering",
+          "premierDate",
+          "addedAt"
+        ]
+      },
+      "MovieRailView": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "enum": [
+              "new",
+              "most_watched",
+              "top_rated",
+              "premiering_soon"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "movies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MovieCardView"
+            }
+          }
+        },
+        "required": [
+          "key",
+          "title",
+          "movies"
+        ]
+      },
+      "MoviesHomeView": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "hero": {
+            "$ref": "#/components/schemas/MovieCardView",
+            "nullable": true
+          },
+          "rails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MovieRailView"
+            }
+          }
+        },
+        "required": [
+          "enabled",
+          "hero",
+          "rails"
+        ]
+      },
+      "MovieFiltersView": {
+        "type": "object",
+        "properties": {
+          "genres": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "genres",
+          "languages"
+        ]
+      },
+      "MovieCastView": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "character": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "name",
+          "character"
+        ]
+      },
+      "MovieTrailerView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "file",
+              "youtube"
+            ]
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "url"
+        ]
+      },
+      "MovieDetailView": {
+        "type": "object",
+        "properties": {
+          "originalTitle": {
+            "type": "string",
+            "nullable": true
+          },
+          "synopsis": {
+            "type": "string"
+          },
+          "tagline": {
+            "type": "string",
+            "nullable": true
+          },
+          "countryOfOrigin": {
+            "type": "string",
+            "nullable": true
+          },
+          "cast": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MovieCastView"
+            }
+          },
+          "trailer": {
+            "$ref": "#/components/schemas/MovieTrailerView",
+            "nullable": true
+          },
+          "mustAgreeTerms": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "genre": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "language": {
+            "type": "string",
+            "nullable": true
+          },
+          "year": {
+            "type": "number",
+            "nullable": true
+          },
+          "runtimeMinutes": {
+            "type": "number",
+            "nullable": true
+          },
+          "ageRating": {
+            "type": "string",
+            "nullable": true
+          },
+          "posterImage": {
+            "type": "string",
+            "nullable": true
+          },
+          "backdropImage": {
+            "type": "string",
+            "nullable": true
+          },
+          "rating": {
+            "type": "number"
+          },
+          "ratingCount": {
+            "type": "number"
+          },
+          "views": {
+            "type": "number"
+          },
+          "premiering": {
+            "type": "boolean"
+          },
+          "premierDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "addedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "originalTitle",
+          "synopsis",
+          "tagline",
+          "countryOfOrigin",
+          "cast",
+          "trailer",
+          "mustAgreeTerms",
+          "id",
+          "title",
+          "genre",
+          "language",
+          "year",
+          "runtimeMinutes",
+          "ageRating",
+          "posterImage",
+          "backdropImage",
+          "rating",
+          "ratingCount",
+          "views",
+          "premiering",
+          "premierDate",
+          "addedAt"
+        ]
+      },
+      "MovieWatchView": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "expiresAt"
         ]
       },
       "MyVoiceView": {
