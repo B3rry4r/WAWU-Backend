@@ -7759,3 +7759,113 @@ model VoiceNamePreview {
 
   @@index([wawuUserId, createdAt])
 }
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// FLIX MOVIES (task FLIX-01, R-74, R-75). Four additive tables.
+/// ─────────────────────────────────────────────────────────────────────────
+
+/// The Hub's copy of the movie partner's catalog (FLIX-01). The screens read
+/// only this table, so the partner is never called for a screen and its
+/// request limit (1,000 per 15 minutes) is never near. `provider` is the
+/// adapter that wrote the row (`standin`, later `flixora`): a server reads
+/// only the rows of the provider it runs. Kept up to date by the sync job
+/// (incremental with `updatedSince`, a full pass now and then that also drops
+/// titles the partner no longer lists). Holds no person's data.
+model MoviePartnerMovie {
+  id              String    @id @default(uuid())
+  provider        String
+  /// The partner's id for the title; also the `movieId` the Hub's routes take.
+  partnerMovieId  String
+  title           String
+  /// Lower case `title`, what "sort by title" orders on.
+  titleSort       String
+  originalTitle   String?
+  synopsis        String
+  tagline         String?
+  genre           String[]
+  language        String?
+  countryOfOrigin String?
+  year            Int?
+  runtimeMinutes  Int?
+  ageRating       String?
+  posterImage     String?
+  backdropImage   String?
+  trailerUrl      String?
+  /// `file` (plays in the app) or `youtube` (opens in YouTube or the browser); null with no trailer.
+  trailerKind     String?
+  /// `[{ name, character }]`
+  castMembers     Json
+  rating          Float
+  ratingCount     Int
+  views           Int
+  premiering      Boolean
+  premierDate     DateTime?
+  /// When the partner added the title.
+  partnerAddedAt  DateTime
+  /// The title's path on the partner's site (`redirect` in a signed-in link).
+  partnerPath     String
+  partnerUrl      String
+  /// The start of the last sync pass that saw this title. A full pass removes
+  /// the rows it did not see.
+  seenAt          DateTime
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([provider, partnerMovieId])
+  @@index([provider, partnerAddedAt])
+  @@index([provider, views])
+  @@index([provider, rating])
+  @@index([provider, titleSort])
+  @@index([provider, seenAt])
+}
+
+/// Where the sync job is for one provider (FLIX-01): when the last pass that
+/// finished began (the next incremental pass asks for what changed since),
+/// when the last full pass began, and the lease one server holds while it
+/// runs. `lastError` is a short code, never a response body.
+model MoviePartnerSync {
+  provider          String    @id
+  lastPassStartedAt DateTime?
+  lastFullPassAt    DateTime?
+  lastPassAt        DateTime?
+  claimedUntil      DateTime?
+  lastError         String?
+  lastCount         Int       @default(0)
+  updatedAt         DateTime  @updatedAt
+}
+
+/// A person's account on the movie partner's side (FLIX-01, R-75): it exists
+/// from the first signed-in link, so there is one row per person and provider
+/// from their first "Watch on Flixora". The link itself is never stored.
+/// `accountDeletedAt` is set when the person's WAWU account is purged: no more
+/// links are given, and the row is the note that their account on the
+/// partner's side is closed by hand (G-FLIX-2). AUDIT in the purge map.
+model MoviePartnerLink {
+  id               String    @id @default(uuid())
+  provider         String
+  wawuUserId       String
+  firstLinkAt      DateTime
+  lastLinkAt       DateTime
+  linkCount        Int       @default(1)
+  accountDeletedAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([provider, wawuUserId])
+  @@index([wawuUserId])
+}
+
+/// A person's agreement to the terms that name the movie partner (FLIX-01,
+/// R-75): `signup` (they signed up on or after FLIXORA_TERMS_FROM) or `mv4`
+/// (they ticked the box before "Open Flixora"). One row per person and
+/// provider. OWNED in the purge map.
+model MoviePartnerConsent {
+  id         String   @id @default(uuid())
+  provider   String
+  wawuUserId String
+  agreedAt   DateTime @default(now())
+  how        String
+
+  @@unique([provider, wawuUserId])
+  @@index([wawuUserId])
+}

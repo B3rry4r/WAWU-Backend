@@ -492,6 +492,12 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'VoiceProfile', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'VoiceIntroRun', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'VoiceNamePreview', column: 'wawuUserId', disposition: 'OWNED' },
+  // FLIX-01 (R-75): the person's agreement to the terms that name the movie
+  // partner is theirs and goes with them. Their link row is the AUDIT row
+  // below: it stays, marked, because the partner's own account for them is
+  // closed by hand (G-FLIX-2) and the permanent WAWU id is what the partner
+  // knows them by.
+  { model: 'MoviePartnerConsent', column: 'wawuUserId', disposition: 'OWNED' },
   // Points turned into cash (POINTS-04): each row is WAWU's own movement of
   // cash from its account to this person's wallet, and the provider's record
   // of it (our reference, the amount, whether it was confirmed) must outlive
@@ -765,6 +771,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // dates, the wallet's provider id and a status. It holds no personal detail,
   // and the purge sweep reads it to know the deletion is done, so it stays.
   { model: 'AccountDeletion', column: 'wawuUserId', disposition: 'AUDIT' },
+  // FLIX-01 (R-75): the record that a deleted person has an account on the movie
+  // partner's side, marked `accountDeletedAt` by a before-erase hook so no link
+  // is given any more. It holds the permanent WAWU id, two times and a count,
+  // nothing else; the partner's account is closed by hand (G-FLIX-2).
+  { model: 'MoviePartnerLink', column: 'wawuUserId', disposition: 'AUDIT' },
   { model: 'AdminKycAudit', column: 'subjectWawuUserId', disposition: 'AUDIT' },
   {
     model: 'AdminVerificationAudit',

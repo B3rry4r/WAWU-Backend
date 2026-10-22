@@ -261,6 +261,27 @@ S3_REGION=REGION
 S3_BUCKET=wawu-media
 S3_ACCESS_KEY_ID=
 S3_SECRET_ACCESS_KEY=
+
+# Flix movies (FLIX-01, R-74, R-75). MOVIE_PARTNER is `off` (also when empty),
+# `standin` (made-up titles, never for production) or, with FLIX-02, `flixora`;
+# any other value stops the server. `off` hides every movie rail and screen
+# (GET /movies answers enabled: false), stops every call and every link, and
+# changes nothing else: the stored rows stay. ROLLBACK = set it to `off` and
+# `sudo systemctl restart wawu-hub-api`.
+MOVIE_PARTNER=
+# When the updated terms that name the movie partner went live (ISO date). Empty:
+# nobody counts as having agreed at sign-up, so everyone ticks the agreement box
+# before their first "Watch on Flixora". The partner's key and sign-in secret
+# are not here: they arrive with FLIX-02, as secrets, never in this file.
+FLIXORA_TERMS_FROM=
+# The catalog copy's refresh, all optional (PROVISIONAL(MOVIE-SYNC-INTERVAL),
+# PROVISIONAL(MOVIE-SYNC-FULL-EVERY)): minutes between passes (15), hours
+# between full passes that also remove dropped titles (24), titles per request
+# (100) and most requests per pass (100).
+MOVIE_SYNC_INTERVAL_MINUTES=
+MOVIE_SYNC_FULL_EVERY_HOURS=
+MOVIE_SYNC_PAGE_SIZE=
+MOVIE_SYNC_MAX_PAGES=
 ```
 
 Then `chmod 640 /etc/wawu/*.env && chown root:wawu /etc/wawu/*.env`.
