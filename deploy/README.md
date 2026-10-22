@@ -274,8 +274,8 @@ MOVIE_PARTNER=
 # before their first "Watch on Flixora". The partner's key and sign-in secret
 # are not here: they arrive with FLIX-02, as secrets, never in this file.
 FLIXORA_TERMS_FROM=
-# The catalog copy's refresh, all optional (PROVISIONAL(MOVIE-SYNC-INTERVAL),
-# PROVISIONAL(MOVIE-SYNC-FULL-EVERY)): minutes between passes (15), hours
+# The catalog copy's refresh, all optional (see MOVIE-SYNC-INTERVAL,
+# MOVIE-SYNC-FULL-EVERY in src/movies/movies-settings.ts): minutes between passes (15), hours
 # between full passes that also remove dropped titles (24), titles per request
 # (100) and most requests per pass (100).
 MOVIE_SYNC_INTERVAL_MINUTES=

@@ -15,7 +15,7 @@ import {
   type PartnerMovie,
 } from '../movie-partner.interface';
 import { OffMoviePartner } from '../off-movie-partner';
-import { standinMovies } from '../standin/standin-fixtures';
+import { standinMovies } from '../standin/standin-titles';
 import { StandinMoviePartner } from '../standin/standin-movie-partner';
 import { personOf } from '../../movies/movies.service';
 import { trailerKindOf } from '../../movies/movies-mapping';

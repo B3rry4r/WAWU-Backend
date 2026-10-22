@@ -11,9 +11,9 @@ export const MOVIE_SYNC_FULL_EVERY_KEY = 'MOVIE_SYNC_FULL_EVERY_HOURS';
 export const MOVIE_SYNC_PAGE_SIZE_KEY = 'MOVIE_SYNC_PAGE_SIZE';
 export const MOVIE_SYNC_MAX_PAGES_KEY = 'MOVIE_SYNC_MAX_PAGES';
 
-/** PROVISIONAL(owner): how often the catalog copy is refreshed. One request per pass when nothing changed. */
+/** PROVISIONAL(MOVIE-SYNC-INTERVAL, owner=YOU, why=no ruling names how fresh the catalog copy must be; every 15 minutes is one request per pass when nothing changed, far under the partner's 1,000 requests per 15 minutes). */
 export const DEFAULT_SYNC_INTERVAL_MINUTES = 15;
-/** PROVISIONAL(owner): how often a full pass also removes titles the partner dropped. */
+/** PROVISIONAL(MOVIE-SYNC-FULL-EVERY, owner=YOU, why=no ruling names how soon a title the partner dropped must leave the app; a full pass once a day removes it within a day for about ten requests). */
 export const DEFAULT_SYNC_FULL_EVERY_HOURS = 24;
 export const DEFAULT_SYNC_PAGE_SIZE = 100;
 /** A pass stops after this many pages, so a runaway answer cannot spend the partner's request limit. */

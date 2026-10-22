@@ -31,7 +31,7 @@ import {
 } from '../../movie-partner/movie-partner.interface';
 import { OffMoviePartner } from '../../movie-partner/off-movie-partner';
 import { StandinMoviePartner } from '../../movie-partner/standin/standin-movie-partner';
-import { standinMovies } from '../../movie-partner/standin/standin-fixtures';
+import { standinMovies } from '../../movie-partner/standin/standin-titles';
 import { MovieSyncService } from '../movie-sync.service';
 import { MoviesController } from '../movies.controller';
 import { MoviesService } from '../movies.service';

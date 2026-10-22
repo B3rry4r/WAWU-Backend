@@ -9,7 +9,7 @@ import {
   type PartnerMoviePage,
   type PartnerPerson,
 } from '../movie-partner.interface';
-import { standinMovies } from './standin-fixtures';
+import { standinMovies } from './standin-titles';
 
 /** A link made by the stand-in lives this long, like the partner's own (a minute is plenty). */
 export const STANDIN_LINK_SECONDS = 60;
