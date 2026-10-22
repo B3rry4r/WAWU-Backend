@@ -19,6 +19,7 @@ import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { AccountPurgeHooks } from '../../account-purge/purge-hooks';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
+import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { EXPORT_SECTIONS } from '../../data-export-request/data-export-sections';
 import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
@@ -154,7 +155,9 @@ const standin = (h: Harness) => h.partner as StandinMoviePartner;
 describe('FLIX-01: Flix movies (contract)', () => {
   let mock: ChildProcess | undefined;
   let tokens: Record<string, string>;
-  const users = [PLAIN, BASIC, 'flix01-test-new-user'];
+  /** A person only this spec uses: no token, no profile; reached through the service. */
+  const OWN = 'flix01-test-own-person';
+  const users = [PLAIN, BASIC, OWN];
 
   beforeAll(async () => {
     if (!(await waitForHealth(`${MOCK_BASE}/health`, 1000))) {
@@ -182,9 +185,7 @@ describe('FLIX-01: Flix movies (contract)', () => {
     await h.prisma.moviePartnerConsent.deleteMany({
       where: { wawuUserId: { in: users } },
     });
-    await h.prisma.accountDeletion.deleteMany({
-      where: { wawuUserId: { in: users } },
-    });
+    await h.prisma.accountDeletion.deleteMany({ where: { wawuUserId: OWN } });
     await h.prisma.moviePartnerMovie.deleteMany({});
     await h.prisma.moviePartnerSync.deleteMany({});
   };
@@ -669,17 +670,48 @@ describe('FLIX-01: Flix movies (contract)', () => {
   // ---------------------------------------------------------------------------
   describe('Watch on Flixora (R-75)', () => {
     let h: Harness;
-    const FROM = '2026-10-20T00:00:00.000Z';
+    const DAY = 86_400_000;
     const watch = (who: string, body: object = {}) =>
       h.as(who, 'post', '/movies/standin-001/watch', body);
-    const profile = async (who: string, createdAt: Date) => {
-      await h.prisma.userProfile.upsert({
-        where: { wawuUserId: who },
-        create: { wawuUserId: who, accountType: 'user', createdAt },
-        update: { createdAt },
-      });
-    };
     const madeProfiles: string[] = [];
+    /**
+     * Sets FLIXORA_TERMS_FROM a day before the earliest ('agreed') or a day
+     * after the latest ('not-agreed') sign-up time the Hub holds for these
+     * people. It only reads their profile and never changes or deletes one;
+     * a person with no profile row gets one for the run, removed after.
+     */
+    const termsFrom = async (
+      when: 'agreed' | 'not-agreed',
+      ...who: string[]
+    ) => {
+      const times: number[] = [];
+      for (const id of who) {
+        let row = await h.prisma.userProfile.findUnique({
+          where: { wawuUserId: id },
+          select: { createdAt: true },
+        });
+        if (!row) {
+          row = await h.prisma.userProfile.create({
+            data: { wawuUserId: id, accountType: 'user' },
+            select: { createdAt: true },
+          });
+          madeProfiles.push(id);
+        }
+        times.push(row.createdAt.getTime());
+      }
+      process.env.FLIXORA_TERMS_FROM = new Date(
+        when === 'agreed' ? Math.min(...times) - DAY : Math.max(...times) + DAY,
+      ).toISOString();
+    };
+    /** The movie service, for the person only this spec uses. */
+    const ownClaims = () =>
+      ({
+        sub: OWN,
+        email: 'flix01.own@example.test',
+        firstName: 'Own',
+        lastName: 'Person',
+      }) as unknown as WawuJwtClaims;
+    const service = () => h.app.get(MoviesService);
 
     beforeAll(async () => {
       h = await boot('standin', tokens, mock);
@@ -694,24 +726,15 @@ describe('FLIX-01: Flix movies (contract)', () => {
     beforeEach(async () => {
       await clean(h);
       await h.sync.runPass({ full: true });
-      process.env.FLIXORA_TERMS_FROM = FROM;
+      delete process.env.FLIXORA_TERMS_FROM;
       standin(h).down = false;
-      if (madeProfiles.length === 0) {
-        for (const who of [PLAIN, BASIC])
-          if (
-            !(await h.prisma.userProfile.findUnique({
-              where: { wawuUserId: who },
-            }))
-          )
-            madeProfiles.push(who);
-      }
     });
     afterEach(() => {
       delete process.env.FLIXORA_TERMS_FROM;
     });
 
     it('gives a link straight away to someone who signed up on or after FLIXORA_TERMS_FROM, and stores that they agreed at sign-up', async () => {
-      await profile(PLAIN, new Date('2026-10-21T10:00:00.000Z'));
+      await termsFrom('agreed', PLAIN);
       const detail = data<{ mustAgreeTerms: boolean }>(
         await h.as(PLAIN, 'get', '/movies/standin-001').expect(200),
       );
@@ -734,7 +757,7 @@ describe('FLIX-01: Flix movies (contract)', () => {
     });
 
     it('answers 409 terms_not_agreed before the date, and while the setting is empty, until agreeToTerms: true, which stores the consent first', async () => {
-      await profile(BASIC, new Date('2026-09-01T10:00:00.000Z'));
+      await termsFrom('not-agreed', BASIC);
       const detail = data<{ mustAgreeTerms: boolean }>(
         await h.as(BASIC, 'get', '/movies/standin-001').expect(200),
       );
@@ -782,7 +805,6 @@ describe('FLIX-01: Flix movies (contract)', () => {
       spy.mockRestore();
 
       // With the setting empty nobody counts as agreed by sign-up.
-      await profile(PLAIN, new Date('2026-12-01T00:00:00.000Z'));
       process.env.FLIXORA_TERMS_FROM = '';
       expect(codeOf(await watch(PLAIN).expect(409))).toBe('terms_not_agreed');
       process.env.FLIXORA_TERMS_FROM = 'not a date';
@@ -790,13 +812,22 @@ describe('FLIX-01: Flix movies (contract)', () => {
     });
 
     it('gives a person with no profile row no sign-up time, so they must agree', async () => {
-      await h.prisma.userProfile.deleteMany({ where: { wawuUserId: PLAIN } });
-      expect(codeOf(await watch(PLAIN).expect(409))).toBe('terms_not_agreed');
-      await watch(PLAIN, { agreeToTerms: true }).expect(200);
+      // The date is long past, yet a person the Hub holds no sign-up time for is not counted as agreed.
+      process.env.FLIXORA_TERMS_FROM = '2000-01-01T00:00:00.000Z';
+      await expect(
+        service().watch(ownClaims(), 'standin-001', false),
+      ).rejects.toMatchObject({ code: 'terms_not_agreed' });
+      const out = await service().watch(ownClaims(), 'standin-001', true);
+      expect(out.url).toContain('login#token=');
+      expect(
+        await h.prisma.moviePartnerConsent.findMany({
+          where: { wawuUserId: OWN },
+        }),
+      ).toMatchObject([{ how: 'mv4' }]);
     });
 
     it('makes a fresh link for each tap, counts them, and never stores or logs a link', async () => {
-      await profile(PLAIN, new Date('2026-10-21T10:00:00.000Z'));
+      await termsFrom('agreed', PLAIN);
       const seen: string[] = [];
       const logs: string[] = [];
       const spies = (['log', 'warn', 'error', 'debug', 'verbose'] as const).map(
@@ -834,7 +865,7 @@ describe('FLIX-01: Flix movies (contract)', () => {
     });
 
     it('answers 503 movies_unavailable when the partner cannot make a link, and counts nothing', async () => {
-      await profile(PLAIN, new Date('2026-10-21T10:00:00.000Z'));
+      await termsFrom('agreed', PLAIN);
       standin(h).down = true;
       const res = await watch(PLAIN).expect(503);
       expect(codeOf(res)).toBe('movies_unavailable');
@@ -855,8 +886,7 @@ describe('FLIX-01: Flix movies (contract)', () => {
     });
 
     it('gives the seam only the allowed fields: id, email, first and last name, and whether the email is verified', async () => {
-      await profile(PLAIN, new Date('2026-10-21T10:00:00.000Z'));
-      await profile(BASIC, new Date('2026-10-21T10:00:00.000Z'));
+      await termsFrom('agreed', PLAIN, BASIC);
       const spy = jest.spyOn(h.partner, 'signedInLink');
       await watch(PLAIN).expect(200);
       await watch(BASIC).expect(200);
@@ -898,7 +928,7 @@ describe('FLIX-01: Flix movies (contract)', () => {
     });
 
     it('puts the person agreement and link times in their data export, and no link', async () => {
-      await profile(PLAIN, new Date('2026-10-21T10:00:00.000Z'));
+      await termsFrom('agreed', PLAIN);
       await watch(PLAIN).expect(200);
       const section = EXPORT_SECTIONS.find((s) => s.key === 'moviePartner')!;
       const out = (await section.load(h.prisma, PLAIN)) as {
@@ -916,39 +946,41 @@ describe('FLIX-01: Flix movies (contract)', () => {
     });
 
     it('gives no link once the person is deleting their account, and the purge hook marks their link row', async () => {
-      await profile(PLAIN, new Date('2026-10-21T10:00:00.000Z'));
-      await watch(PLAIN).expect(200);
+      // Only this spec's own person is used: nobody seeded is touched.
+      const svc = service();
+      await svc.watch(ownClaims(), 'standin-001', true);
       // Deletion asked for: no more links, from that moment.
       await h.prisma.accountDeletion.create({
         data: {
-          wawuUserId: PLAIN,
+          wawuUserId: OWN,
           status: 'scheduled',
           purgeAfter: new Date(Date.now() + 30 * 86_400_000),
         },
       });
       const spy = jest.spyOn(h.partner, 'signedInLink');
-      const closing = await watch(PLAIN).expect(409);
-      expect(codeOf(closing)).toBe('account_closing');
+      await expect(
+        svc.watch(ownClaims(), 'standin-001', false),
+      ).rejects.toMatchObject({ code: 'account_closing' });
       expect(spy).not.toHaveBeenCalled();
       // Cancelled: links work again.
       await h.prisma.accountDeletion.update({
-        where: { wawuUserId: PLAIN },
+        where: { wawuUserId: OWN },
         data: { status: 'cancelled' },
       });
-      await watch(PLAIN).expect(200);
+      await svc.watch(ownClaims(), 'standin-001', false);
       // The purge: the before-erase hook marks the row, and no link is given even with no deletion row left.
-      await h.hooks.beforeErase(PLAIN);
-      await h.hooks.beforeErase(PLAIN);
+      await h.hooks.beforeErase(OWN);
+      await h.hooks.beforeErase(OWN);
       const marked = await h.prisma.moviePartnerLink.findFirstOrThrow({
-        where: { wawuUserId: PLAIN },
+        where: { wawuUserId: OWN },
       });
       expect(marked.accountDeletedAt).not.toBeNull();
       expect(marked.linkCount).toBe(2);
-      await h.prisma.accountDeletion.deleteMany({
-        where: { wawuUserId: PLAIN },
-      });
+      await h.prisma.accountDeletion.deleteMany({ where: { wawuUserId: OWN } });
       spy.mockClear();
-      expect(codeOf(await watch(PLAIN).expect(409))).toBe('account_closing');
+      await expect(
+        svc.watch(ownClaims(), 'standin-001', false),
+      ).rejects.toMatchObject({ code: 'account_closing' });
       expect(spy).not.toHaveBeenCalled();
       spy.mockRestore();
     });
