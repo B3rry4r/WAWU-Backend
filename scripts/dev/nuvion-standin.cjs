@@ -217,7 +217,23 @@ function fullEntity(e) {
       created: d.created,
       updated: d.created,
     })),
+    // The address dev answers beside `addresses`, which the Hub reads for a counterparty (FIX-97).
+    address: personAddress(e),
+    addresses: [personAddress(e)],
     child_entities: [],
+  };
+}
+function personAddress(e) {
+  return {
+    id: `${e.id.slice(0, 20)}ADDR00`,
+    line_1: '12 Admiralty Way',
+    city: 'Lagos',
+    state: 'Lagos',
+    postal_code: '101241',
+    country_code: 'NG',
+    owner_id: e.personId,
+    owner_type: 'person',
+    label: 'registered_address',
   };
 }
 const transferView = (i) => {
@@ -557,6 +573,32 @@ on('PATCH', /^\/individual-entities\/[^/]+$/, (req) => {
 });
 on('GET', /^\/entities\/[^/]+$/, (req) => {
   const e = entities.get(m(req, 2));
+  if (!e && m(req, 2) === PARENT_ENTITY) {
+    // WAWU's own entity (the operational account's): a business with an email and an address, as dev answers it.
+    const address = {
+      id: 'STACKPARENTADDR000000001',
+      line_1: '1 Stand-in Street',
+      city: 'Lagos',
+      state: 'Lagos',
+      postal_code: '100001',
+      country_code: 'NG',
+      owner_id: PARENT_ENTITY,
+      owner_type: 'business',
+      label: 'registered_address',
+    };
+    return {
+      status: 200,
+      body: envelope(
+        {
+          entity: { id: PARENT_ENTITY, type: 'business', name: 'WAWU STAND-IN LTD', status: 'approved', is_root: true },
+          business: { id: 'STACKPARENTBUSINESS00001', email: 'finance@stand-in.example.test', legal_name: 'WAWU STAND-IN LTD' },
+          address,
+          addresses: [address],
+        },
+        'Entity retrieved successfully',
+      ),
+    };
+  }
   return e ? { status: 200, body: envelope(fullEntity(e), 'Entity retrieved successfully') } : notFound();
 });
 on('GET', '/entities', (req) => {
@@ -904,7 +946,25 @@ on('GET', /^\/bank-codes\/[A-Z]{2}$/, (req) => ({
 on('POST', '/counterparty-lookups', (req) => {
   const b = req.body || {};
   const number = String(b.account_number ?? '');
-  const code = String(b.bank_code ?? '');
+  const issuer = b.issuer && typeof b.issuer === 'object' ? b.issuer : null;
+  const code = issuer ? String(issuer.code ?? '') : '';
+  // As dev answers (FIX-97): the bank is `issuer.code`; a body without it is a 422 naming the field.
+  if (code === '') {
+    return {
+      status: 422,
+      body: {
+        ...errorBody('error_validation_error', 'Validation failed for one or more fields'),
+        validations: [
+          {
+            issuer: {
+              type: 'error_validation_required_field_missing',
+              message: "The 'issuer' field is required. Please include it and try again.",
+            },
+          },
+        ],
+      },
+    };
+  }
   if (b.country !== 'NG' || !/^\d{10}$/.test(number)) {
     return { status: 422, body: errorBody('error_resolution_format_invalid', 'Account number format is invalid') };
   }
@@ -919,14 +979,55 @@ on('POST', '/counterparty-lookups', (req) => {
     (wallet && wallet.beneficiary_name) ||
     (number.startsWith('000') ? null : `STANDIN HOLDER ${number.slice(-4)}`);
   if (!holder) {
-    return { status: 404, body: errorBody('error_resolution_account_not_found', 'No account found matching the provided details') };
+    // Dev's 404 for an account the bank does not hold.
+    return {
+      status: 404,
+      body: errorBody(
+        'error_resource_not_found',
+        "We couldn't find that accounts. It may have been deleted or the ID might be incorrect.",
+      ),
+    };
   }
-  return { status: 200, body: envelope({ account_name: holder, account_number: number, bank_code: code }, 'Account resolved successfully') };
+  return {
+    status: 200,
+    body: envelope(
+      {
+        _id: ulid('01LKP'),
+        lookup_id: `${number}_${code}`,
+        details: { issuer: { code, name: 'N/A', short_name: 'N/A' }, account_number: number, name: holder },
+        meta: { routability: 'routable' },
+        status: 'successful',
+        status_reason: 'successfully_resolved',
+      },
+      'Account retrieved successfully',
+    ),
+  };
 });
 on('POST', '/counterparties', (req) => {
   const b = req.body || {};
   const profile = b.profile || {};
   if (b.type !== 'individual' && b.type !== 'business') return { status: 422, body: errorBody('error_validation_error', 'type is required') };
+  // Dev refuses an individual without an email and an address (FIX-97).
+  if (b.type === 'individual') {
+    const address = profile.address && typeof profile.address === 'object' ? profile.address : null;
+    const required = (name) => ({
+      [name]: {
+        type: 'error_validation_required_field_missing',
+        message: `The '${name}' field is required. Please include it and try again.`,
+      },
+    });
+    const validations = [];
+    if (!address || !address.line1 || !address.city || !/^[A-Za-z]{2}$/.test(String(address.country ?? ''))) {
+      validations.push(required('address'));
+    }
+    if (!profile.email) validations.push(required('email'));
+    if (validations.length > 0) {
+      return {
+        status: 422,
+        body: { ...errorBody('error_validation_error', 'Validation failed for one or more fields'), validations },
+      };
+    }
+  }
   const c = {
     id: ulid('01CPY'),
     entity_id: String(b.entity_id || PARENT_ENTITY),

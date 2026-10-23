@@ -20,11 +20,12 @@
  * fields Nuvion's answer carries (never their values), and the account
  * number's last four digits. Exit 0 only on a confirmed name.
  *
- * What it settles: whether the lookup answers for an API key, the real field
- * names (the area reads `account_holder_name`, `account_name` or
- * `holder_name`) and whether a body that names `country`, `account_number`
- * and `bank_code` is the one Nuvion takes. The stand-in the specs run
- * against guesses all three.
+ * What it settles (answered on dev, 23 Oct 2026, FIX-97): the lookup answers
+ * for an API key; the body is `{ country, account_number, issuer: { code } }`
+ * (a body with `bank_code` is a 422 "The 'issuer' field is required"); the
+ * holder is at `data.details.name`, with `details.account_number` and
+ * `details.issuer.code`; an account the bank does not hold is 404
+ * `error_resource_not_found`. The area reads exactly those.
  */
 import 'reflect-metadata';
 import { NuvionPayoutsArea } from '../../src/nuvion/areas/payouts';
@@ -68,14 +69,25 @@ async function main(): Promise<number> {
     const raw = await client.post<unknown>(
       { name: 'counterparty lookup (raw)', call: 'check' },
       '/counterparty-lookups',
-      { country: 'NG', account_number: accountNumber, bank_code: bankCode },
+      {
+        country: 'NG',
+        account_number: accountNumber,
+        issuer: { code: bankCode },
+      },
     );
     const keys =
       typeof raw.data === 'object' && raw.data !== null
         ? Object.keys(raw.data).join(', ')
         : typeof raw.data;
+    const details =
+      typeof raw.data === 'object' &&
+      raw.data !== null &&
+      typeof (raw.data as Record<string, unknown>).details === 'object' &&
+      (raw.data as Record<string, unknown>).details !== null
+        ? Object.keys((raw.data as { details: object }).details).join(', ')
+        : 'none';
     console.log(
-      `HTTP ${raw.httpStatus}, request ${raw.requestId ?? '-'}: fields [${keys}] for account ending ${last4}`,
+      `HTTP ${raw.httpStatus}, request ${raw.requestId ?? '-'}: fields [${keys}], details [${details}] for account ending ${last4}`,
     );
     const area = new NuvionPayoutsArea(client);
     const answer = await area.checkAccountName({ accountNumber, bankCode });
