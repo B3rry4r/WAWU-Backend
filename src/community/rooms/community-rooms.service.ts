@@ -111,6 +111,7 @@ export class CommunityRoomsService {
       hostWawuId,
       dto,
       dto.passPriceKobo,
+      true,
     );
     const slug = await this.ensureLink(community.id, community.name);
     return { ...community, slug, link: shareLink(slug) };
@@ -162,7 +163,9 @@ export class CommunityRoomsService {
       link.community.id,
       'No community has this link.',
     );
-    const community = await this.communities.withDerivedFields(link.community);
+    const community = await this.communities.withDerivedFields(link.community, {
+      countHost: true,
+    });
     return { ...community, slug: link.slug, link: shareLink(link.slug) };
   }
 
@@ -332,7 +335,9 @@ export class CommunityRoomsService {
     const items = await Promise.all(
       pageRows.map(async (row): Promise<MyCommunity> => {
         const [withCounts, slug] = await Promise.all([
-          this.communities.withDerivedFields(row.community),
+          this.communities.withDerivedFields(row.community, {
+            countHost: true,
+          }),
           this.ensureLink(row.community.id, row.community.name),
         ]);
         // The links are signed fresh, as the room's list signs them (FIX-71).
@@ -392,7 +397,7 @@ export class CommunityRoomsService {
 
     const [withCounts, slug, membership, messageCostInCredits] =
       await Promise.all([
-        this.communities.withDerivedFields(community),
+        this.communities.withDerivedFields(community, { countHost: true }),
         this.ensureLink(community.id, community.name),
         community.hostWawuId === viewerWawuId
           ? Promise.resolve(null)
@@ -491,7 +496,9 @@ export class CommunityRoomsService {
     const items = await Promise.all(
       ids.flatMap((id) => {
         const community = byId.get(id);
-        return community ? [this.communities.withDerivedFields(community)] : [];
+        return community
+          ? [this.communities.withDerivedFields(community, { countHost: true })]
+          : [];
       }),
     );
     return { items, currentPage: page, perPage, total };

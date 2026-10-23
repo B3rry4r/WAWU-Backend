@@ -89,17 +89,34 @@ export class CommunityService {
     );
   }
 
-  /** Public so the rooms routes (INBOX-01) answer with the same counts. */
-  async withDerivedFields(community: Community): Promise<CommunityResponse> {
+  /**
+   * Public so the rooms routes (INBOX-01) answer with the same counts.
+   *
+   * `countHost` is for the app's room routes only (FIX-99, L5, owner ruling:
+   * the host is a member). The web's routes (GET /communities, GET
+   * /communities/:id, POST and PATCH /communities) are protected and keep
+   * their count: joined memberships, which never include the host. With it
+   * set the host is counted once, whether or not the host holds a row.
+   */
+  async withDerivedFields(
+    community: Community,
+    options: { countHost?: boolean } = {},
+  ): Promise<CommunityResponse> {
     const startOfToday = this.startOfTodayUtc();
-    const [memberCount, messagesToday] = await this.prisma.$transaction([
+    const countHost = options.countHost === true;
+    const [joined, messagesToday] = await this.prisma.$transaction([
       this.prisma.communityMembership.count({
-        where: { communityId: community.id, status: 'joined' },
+        where: {
+          communityId: community.id,
+          status: 'joined',
+          ...(countHost ? { userWawuId: { not: community.hostWawuId } } : {}),
+        },
       }),
       this.prisma.communityMessage.count({
         where: { communityId: community.id, sentAt: { gte: startOfToday } },
       }),
     ]);
+    const memberCount = countHost ? joined + 1 : joined;
 
     return { ...community, memberCount, messagesToday };
   }
@@ -187,13 +204,14 @@ export class CommunityService {
    * short-circuits on `userWawuId === hostWawuId`, and no seeded community
    * has a membership row for its own host. So `memberCount` (derived from
    * `joined` membership rows) counts members OTHER than the host, and a
-   * brand-new community reports 0 — consistent with every existing row
-   * rather than a second, contradictory convention.
+   * brand-new community reports 0 on the web's routes, which are protected.
+   * The app's room routes count the host as a member (`countHost`, FIX-99).
    */
   async create(
     hostWawuId: string,
     dto: CreateCommunityDto,
     passPriceKobo?: number,
+    countHost = false,
   ): Promise<CommunityResponse> {
     // Hosting used to need a live subscription, and a PRIVATE community used
     // to need a paid tier above Basic. Both were subscription entitlements and
@@ -219,7 +237,7 @@ export class CommunityService {
       },
     });
 
-    return this.withDerivedFields(community);
+    return this.withDerivedFields(community, { countHost });
   }
 
   /**

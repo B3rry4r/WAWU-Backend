@@ -1,9 +1,23 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import * as jwksRsa from 'jwks-rsa';
 import type { WawuJwtClaims } from './wawu-jwt-claims.interface';
+
+/**
+ * Whether verified claims are a WAWU ID ACCESS token (FIX-99, H3). WAWU ID
+ * signs its refresh tokens with the same key and the same JWKS, and marks them
+ * with `type: 'refresh'` (its tokens.service.ts: the refresh token's payload is
+ * `{ sub, jti, type }`); an access token carries no `type` at all. So a token
+ * with a `type` other than 'access' is not a session. 'access' is accepted in
+ * case WAWU ID ever names its access tokens. A leaked 30-day refresh token
+ * must not be a Hub session that WAWU ID's rotation cannot end.
+ */
+export function isAccessToken(claims: object): boolean {
+  const type = (claims as { type?: unknown }).type;
+  return type === undefined || type === 'access';
+}
 
 /**
  * Verifies WAWU-ID-issued RS256 access tokens against WAWU ID's JWKS
@@ -46,7 +60,11 @@ export class WawuJwtStrategy extends PassportStrategy(Strategy, 'wawu-jwt') {
 
   // Called after signature+expiry verification succeeds. Whatever this
   // returns becomes `req.user`.
-  validate(payload: WawuJwtClaims): WawuJwtClaims {
+  //
+  // Only an ACCESS token is a session here (FIX-99, H3): see isAccessToken.
+  // Anything else gets the same bare 401 as a bad signature.
+  validate(payload: WawuJwtClaims & { type?: unknown }): WawuJwtClaims {
+    if (!isAccessToken(payload)) throw new UnauthorizedException();
     return payload;
   }
 }

@@ -44,6 +44,25 @@ function castOf(v: unknown): PartnerCastMember[] {
   return out;
 }
 
+/**
+ * The genres of one title, one word each (FIX-99, FLIX-02 L1). Flixora serves
+ * some as a single string with pipes ("Drama | Music | Thriller"). They are
+ * split on the pipe, trimmed and de-duplicated in order, so the Hub's genre
+ * filter, which matches one whole entry, finds the title under each of them.
+ */
+export function genresOf(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const entry of value as unknown[]) {
+    if (typeof entry !== 'string') continue;
+    for (const part of entry.split('|')) {
+      const name = part.trim();
+      if (name !== '' && !out.includes(name)) out.push(name);
+    }
+  }
+  return out;
+}
+
 /** One title, or null when it has no id or no title. */
 export function movieOf(raw: unknown, siteUrl: string): PartnerMovie | null {
   if (!isObject(raw)) return null;
@@ -63,11 +82,7 @@ export function movieOf(raw: unknown, siteUrl: string): PartnerMovie | null {
     originalTitle: text(raw.originalTitle),
     synopsis: typeof raw.synopsis === 'string' ? raw.synopsis : '',
     tagline: text(raw.tagline),
-    genre: Array.isArray(raw.genre)
-      ? (raw.genre as unknown[]).filter(
-          (g): g is string => typeof g === 'string' && g.trim() !== '',
-        )
-      : [],
+    genre: genresOf(raw.genre),
     language: text(raw.language),
     countryOfOrigin: text(raw.countryOfOrigin),
     year: whole(raw.year),
