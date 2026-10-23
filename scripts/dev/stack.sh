@@ -32,6 +32,9 @@
 # (defaults for --id, --web, --mobile), STACK_NM_HUB, STACK_NM_ID, STACK_NM_WEB,
 # STACK_NM_MOBILE (a node_modules folder to hard-link when the lockfile is the same;
 # otherwise npm ci runs).
+# STACK_SIGNUP_VERIFY_CHANNEL (default email, R-72) is WAWU ID's SIGNUP_VERIFY_CHANNEL on this stack: the sign-up code is
+# mailed, as at launch. WAWU ID's own default stays phone (production sets it); a stack with no text transport could not
+# sign anyone up on it (SWEEP-FLOWS B1). Set it to phone only to test the texted path.
 # STACK_STORAGE_ENDPOINT / STACK_STORAGE_PATH_STYLE=true point the Hub's object storage at a stand-in on this
 # machine (for example http://127.0.0.1:7184), so a spec can see the Hub's own storage calls (deletes included).
 # Left unset, the endpoint is a name block-net.cjs refuses, which is what a spec that never reaches storage wants.
@@ -451,6 +454,7 @@ build_all() {
       RS256_PRIVATE_KEY="$(cat "$STATE/keys/private.pem")" RS256_PUBLIC_KEY="$(cat "$STATE/keys/public.pem")"
       JWT_EXPIRES_IN=15m REFRESH_EXPIRES_IN=30d INTERNAL_SERVICE_KEY="$SERVICE_KEY"
       RESEND_API_KEY="${STACK_RESEND_API_KEY:-}" APP_URL="http://localhost:$ID_PORT" ALLOWED_ORIGINS=
+      SIGNUP_VERIFY_CHANNEL="${STACK_SIGNUP_VERIFY_CHANNEL:-email}"
       WAWUAFRICA_API_URL="http://127.0.0.1:$HUB_PORT" NODE_OPTIONS="$BLOCK_NET --max-old-space-size=1024")
     service wawu-id "$ID_PORT" "$ID_DIR" "http://127.0.0.1:$ID_PORT/health" 60 node dist/main.js || return 1
   fi
