@@ -37,6 +37,14 @@ export const RAIL_SIZE = 12;
 
 const OFF_HOME: MoviesHomeView = { enabled: false, hero: null, rails: [] };
 
+/** `MOVIE_PARTNER=soon` (R-77): still shown in the app, as "not live yet". */
+const SOON_HOME: MoviesHomeView = {
+  enabled: false,
+  soon: true,
+  hero: null,
+  rails: [],
+};
+
 /** AccountDeletion statuses that mean the person is leaving (cancelled is the only one that does not). */
 const DELETING = new Set(['freezing', 'scheduled', 'purging', 'purged']);
 
@@ -64,7 +72,7 @@ export class MoviesService {
   }
 
   async home(): Promise<MoviesHomeView> {
-    if (!this.partner.enabled) return OFF_HOME;
+    if (!this.partner.enabled) return this.partner.soon ? SOON_HOME : OFF_HOME;
     const provider = this.partner.name;
     const now = new Date();
     const ahead: Prisma.MoviePartnerMovieWhereInput = {

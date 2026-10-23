@@ -37,7 +37,9 @@ import type {
  *
  * `MOVIE_PARTNER=off` (the default; empty is off): `GET /movies` answers
  * `{ enabled: false, hero: null, rails: [] }` and every other route answers
- * `404 movies_off`, with no call to anyone and no link.
+ * `404 movies_off`, with no call to anyone and no link. `MOVIE_PARTNER=soon`
+ * (FLIX-04, R-77) answers the same, with `soon: true` on `GET /movies` so the
+ * app shows "not live yet" instead of hiding movies.
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)

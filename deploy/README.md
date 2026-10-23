@@ -265,9 +265,11 @@ S3_SECRET_ACCESS_KEY=
 # Flix movies (FLIX-01, R-74, R-75). MOVIE_PARTNER is `off` (also when empty),
 # `standin` (made-up titles, never for production) or `flixora` (FLIX-02; needs
 # the FLIXORA_ settings below, and a missing one stops the server at boot,
-# naming it); any other value stops the server. `off` hides every movie rail and screen
-# (GET /movies answers enabled: false), stops every call and every link, and
-# changes nothing else: the stored rows stay. ROLLBACK = set it to `off` and
+# naming it) or `soon` (FLIX-04, R-77: movies stay visible in the app as "not
+# live yet" and do nothing; GET /movies answers enabled: false with soon: true,
+# no sync runs, no call is made); any other value stops the server. `off` hides
+# every movie rail and screen (GET /movies answers enabled: false), stops every
+# call and every link, and changes nothing else: the stored rows stay. ROLLBACK = set it to `off` and
 # `sudo systemctl restart wawu-hub-api`.
 MOVIE_PARTNER=
 # When the updated terms that name the movie partner went live (ISO date). Empty:
