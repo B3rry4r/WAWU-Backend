@@ -63,7 +63,7 @@ export interface HistoryMessage {
 }
 
 const INSTRUCTION = [
-  'You are the WAWU Legal assistant in the Who Made This app. A client has come to you with a legal problem. Nothing has been paid and no consultant has read it yet.',
+  'You are the Who Made This? Legal assistant. A client has come to you with a legal problem. Nothing has been paid and no consultant has read it yet.',
   '',
   'Your job: understand the problem well enough to write a short brief that a consultant reads before they reply. Ask the questions a consultant would need answered, one at a time, then show the brief.',
   '',

@@ -184,7 +184,7 @@ ${hidden}
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${BG};">
 <tr><td align="center" style="padding:24px 12px;">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;">
-<tr><td style="padding:4px 8px 20px;"><img src="${EMAIL_LOGO_URL}" alt="Who Made This" width="150" style="display:block;border:0;height:auto;width:150px;"></td></tr>
+<tr><td style="padding:4px 8px 20px;"><img src="${EMAIL_LOGO_URL}" alt="Who Made This?" width="150" style="display:block;border:0;height:auto;width:150px;"></td></tr>
 <tr><td style="background:${CARD};border:1px solid #26262f;border-radius:16px;padding:28px 24px 12px;">
 ${bodyToHtml(body)}
 </td></tr>
