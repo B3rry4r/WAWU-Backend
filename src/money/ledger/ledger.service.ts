@@ -147,6 +147,9 @@ export function koboNumber(n: bigint): number {
 
 type EntryRow = Prisma.FintavaLedgerEntryGetPayload<object>;
 
+/** A send's reference plus this is the transfer that moves WAWU's fee (FIX-52). */
+const FEE_LEG_ROW_SUFFIX = '-fee';
+
 /**
  * Why a reversal cannot be applied to this row, or null when it can
  * (LedgerService.applyReversal): its figures against the row's, to the
@@ -1459,7 +1462,19 @@ export class LedgerService {
       // recorded, as for an amount. A SUCCESS after Fintava's reversal is
       // the mirror of a reversal of a completed send (applyReversal): noted
       // either way round (MONEY-08 round 3).
-      differs.push(`status ${row.status} vs ${s.status}`);
+      //
+      // Except the sender's own row for WAWU's fee transfer (FIX-98): that row
+      // is turned `reversed` when the send it belongs to turned reversed and
+      // carries the fee (FIX-85), and the provider's record of the fee
+      // transfer itself stays `successful`, because the fee is given back by
+      // a transfer of its own. The two are a pair, not a disagreement.
+      const feeLegPair =
+        row.status === 'reversed' &&
+        s.status === 'completed' &&
+        row.walletKind === 'user' &&
+        row.direction === 'out' &&
+        (row.customerReference ?? '').endsWith(FEE_LEG_ROW_SUFFIX);
+      if (!feeLegPair) differs.push(`status ${row.status} vs ${s.status}`);
     }
     if (
       absentFailure &&

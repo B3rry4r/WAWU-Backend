@@ -431,14 +431,22 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
       // that the payment detail is this very account (a row whose account
       // changed, or ids that belong to another payee, never send money to
       // the wrong place); otherwise the payee is found or made afresh.
+      // A counterparty whose address has no state or postal code is not used
+      // either: Nuvion refuses a transfer to it (FIX-98).
       if (
         given !== null &&
-        !(await this.payeeIsThisAccount(
-          source.entityId,
-          given,
-          bank,
-          input.accountNumber,
-        ))
+        !(
+          (await this.payeeIsThisAccount(
+            source.entityId,
+            given,
+            bank,
+            input.accountNumber,
+          )) &&
+          (await this.counterpartyAddressIsComplete(
+            source.entityId,
+            given.counterpartyId,
+          ))
+        )
       ) {
         given = null;
       }
@@ -841,6 +849,40 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
     );
   }
 
+  /**
+   * Whether a kept counterparty's address carries a state and a postal code
+   * (FIX-98), read from Nuvion. A counterparty Nuvion no longer knows is not
+   * usable; one that states no address at all is as `findCounterparty` takes
+   * it. Any other failure is not an answer, and is thrown.
+   */
+  private async counterpartyAddressIsComplete(
+    entityId: string | null,
+    counterpartyId: string,
+  ): Promise<boolean> {
+    const op: NuvionOp = { name: 'check kept counterparty', call: 'read' };
+    let answer;
+    try {
+      answer = await this.client.get<unknown>(
+        op,
+        `/counterparties/${encodeURIComponent(counterpartyId)}`,
+        entityId === null ? undefined : { entity_id: entityId },
+      );
+    } catch (e) {
+      if (e instanceof NuvionError && e.kind === 'not_found') return false;
+      throw e;
+    }
+    const d = answer.data;
+    const address =
+      isRecord(d) && isRecord(d.profile) && isRecord(d.profile.address)
+        ? d.profile.address
+        : null;
+    return (
+      address === null ||
+      (text(address, 'state_or_province') !== null &&
+        text(address, 'postal_code') !== null)
+    );
+  }
+
   private async payeeFor(
     source: { entityId: string | null },
     bank: ProviderBank,
@@ -889,11 +931,24 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
       const meta = isRecord(row.meta) ? row.meta : {};
       const live = row.deleted === undefined || row.deleted === 0;
       const status = text(row, 'status');
+      // A counterparty made before FIX-98 has an address without a state or a
+      // postal code, and Nuvion refuses a transfer to it: it is not adopted,
+      // so a complete one is made. A row that states no address at all is
+      // adopted as before.
+      const address =
+        isRecord(row.profile) && isRecord(row.profile.address)
+          ? row.profile.address
+          : null;
+      const complete =
+        address === null ||
+        (text(address, 'state_or_province') !== null &&
+          text(address, 'postal_code') !== null);
       if (
         isNuvionId(id) &&
         live &&
         (status === null || status === 'active') &&
-        meta[PAYEE_META_KEY] === key
+        meta[PAYEE_META_KEY] === key &&
+        complete
       ) {
         return id;
       }
@@ -908,10 +963,12 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
   ): Promise<string> {
     const op: NuvionOp = { name: 'create counterparty', call: 'write' };
     const entityId = source.entityId;
-    // An individual's counterparty needs the sender's email and address
-    // (dev answered 422 without them, FIX-97). They are the SENDING side's
-    // own, as Nuvion holds them; none is ever made up. When either is
-    // missing the send stops here, before any counterparty or transfer.
+    // An individual's counterparty needs the sender's email and address,
+    // with the address's state and postal code (dev answered 422 without the
+    // first two at the counterparty, FIX-97, and without the last two at the
+    // transfer, FIX-98). They are the SENDING side's own, as Nuvion holds
+    // them; none is ever made up. When any is missing the send stops here,
+    // before any counterparty or transfer.
     const contact = await this.senderContact(source);
     const [first, ...rest] = holderName.split(' ');
     const body = {
@@ -1005,7 +1062,7 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
         kind: 'validation',
         operation: 'bank transfer',
         messages: [
-          `${AREA}: the sending side has no ${read.email === null ? 'email' : 'address'} on file; no counterparty was made`,
+          `${AREA}: the sending side has no ${read.missing.join(' and ')} on file; no counterparty was made`,
         ],
         recordMayExist: false,
       });
@@ -1409,27 +1466,49 @@ export function payoutFailureKind(
   return 'refused';
 }
 
-/** The sending side's email and address as a counterparty carries them. */
+/**
+ * The sending side's email and address as a counterparty carries them. The
+ * transfer needs the address's state and postal code as well as line 1, city
+ * and country (dev answered 422 without them, FIX-98).
+ */
 export interface NuvionSenderContact {
   email: string;
-  address: { line1: string; city: string; country: string };
+  address: {
+    line1: string;
+    city: string;
+    state_or_province: string;
+    postal_code: string;
+    country: string;
+  };
 }
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
- * An entity's email and address from `GET /entities/{id}` (dev, FIX-97): the
- * email is `person.email` (a person) or `business.email` (a business); the
- * address is the top-level `address` object, else the first of `addresses`
- * that is complete (`registered_address` first). Each is null when not given
- * in full: line 1, city and a two-letter country code are the address.
+ * An entity's email and address from `GET /entities/{id}` (dev, FIX-97 and
+ * FIX-98): the email is `person.email` (a person) or `business.email` (a
+ * business); the address is the top-level `address` object, else the first of
+ * `addresses` that is complete (`registered_address` first). A counterparty's
+ * address is line 1, city, state, postal code and a two-letter country code
+ * (`line_1`, `city`, `state`, `postal_code`, `country_code` on the entity).
+ * Each is null when not given in full, and `missing` names what is not there
+ * in plain words (`email`, `address`, `state`, `postal code`): nothing is
+ * ever made up, and a state or postal code is never filled in.
  */
 export function readSenderContact(data: unknown): {
   entityId: string | null;
   email: string | null;
   address: NuvionSenderContact['address'] | null;
+  missing: string[];
 } {
-  if (!isRecord(data)) return { entityId: null, email: null, address: null };
+  if (!isRecord(data)) {
+    return {
+      entityId: null,
+      email: null,
+      address: null,
+      missing: ['email', 'address'],
+    };
+  }
   const entity = isRecord(data.entity) ? data.entity : {};
   const holder = isRecord(data.person)
     ? data.person
@@ -1446,17 +1525,43 @@ export function readSenderContact(data: unknown): {
     ...listed.filter((a) => a.label === 'registered_address'),
     ...listed,
   ];
-  let address: NuvionSenderContact['address'] | null = null;
-  for (const a of candidates) {
-    const line1 = cleanAccountName(a.line_1);
-    const city = cleanAccountName(a.city);
+  const parts = (a: Record<string, unknown>) => {
     const country = text(a, 'country_code');
-    if (line1 && city && country && /^[A-Za-z]{2}$/.test(country)) {
-      address = { line1, city, country: country.toUpperCase() };
+    return {
+      line1: cleanAccountName(a.line_1),
+      city: cleanAccountName(a.city),
+      state: cleanAccountName(a.state),
+      postal: text(a, 'postal_code'),
+      country:
+        country !== null && /^[A-Za-z]{2}$/.test(country) ? country : null,
+    };
+  };
+  let address: NuvionSenderContact['address'] | null = null;
+  let partial: ReturnType<typeof parts> | null = null;
+  for (const a of candidates) {
+    const f = parts(a);
+    if (f.line1 && f.city && f.country && f.state && f.postal) {
+      address = {
+        line1: f.line1,
+        city: f.city,
+        state_or_province: f.state,
+        postal_code: f.postal,
+        country: f.country.toUpperCase(),
+      };
       break;
     }
+    if (partial === null && f.line1 && f.city && f.country) partial = f;
   }
-  return { entityId: text(entity, 'id'), email, address };
+  const missing: string[] = [];
+  if (email === null) missing.push('email');
+  if (address === null) {
+    if (partial === null) missing.push('address');
+    else {
+      if (!partial.state) missing.push('state');
+      if (!partial.postal) missing.push('postal code');
+    }
+  }
+  return { entityId: text(entity, 'id'), email, address, missing };
 }
 
 /**

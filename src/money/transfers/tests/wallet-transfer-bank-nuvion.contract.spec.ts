@@ -40,6 +40,7 @@ import { PrismaService } from '../../../common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../../hub-app-options';
 import { nuvionWalletId } from '../../../nuvion/areas/accounts';
 import { NuvionBookArea } from '../../../nuvion/areas/book';
+import { NuvionBookHandler } from '../../../nuvion/handlers/book.handler';
 import { PrismaNuvionBookStore } from '../../../nuvion/areas/book-store';
 import { NuvionPayoutsHandler } from '../../../nuvion/handlers/payouts.handler';
 import { NuvionClient } from '../../../nuvion/nuvion-client';
@@ -943,6 +944,115 @@ describe('A bank send on Nuvion shows its true outcome (FIX-54)', () => {
       expect((await rowOf(view.id)).status).toBe('reversed');
       await ledgerEqualsNuvion(me);
     });
+  }
+
+  // FIX-98 round 2: the same two FIX-85 sequences, with Nuvion's own deliveries
+  // of the fee transfer and of the give-back (both `successful` at Nuvion, as
+  // dev shows them) read through the book handler. The fee row is what Nuvion
+  // says it is (`completed`) and the give-back is its own row; when the send's
+  // reversal came first its row carries the fee and the fee row is paired with
+  // Nuvion's `successful` transfer. No row holds a discrepancy, whichever of
+  // the send's reversal, the fee-back and the two deliveries came first.
+  const bookDeliver = (transfer: Record<string, unknown>, p: Person) =>
+    new NuvionBookHandler(prisma, moduleRef.get(ModuleRef)).handle({
+      id: randomUUID(),
+      eventId: randomUUID(),
+      event: 'outflows.completed',
+      resourceId: transfer.id as string,
+      entityId: p.account.entity_id,
+      data: transfer,
+      receivedAt: new Date(),
+      attempts: 1,
+    });
+  const feeRowsOf = (reference: string) =>
+    prisma.fintavaLedgerEntry.findMany({
+      where: {
+        customerReference: {
+          in: [
+            `${reference}-fee`,
+            feeBackReference(reference, 1),
+            feeBackReference(reference, 2),
+          ],
+        },
+      },
+    });
+
+  for (const credited of credits) {
+    for (const order of [
+      'fee-back lands, then the send is reversed',
+      'the send is reversed, then the fee-back lands',
+    ] as const) {
+      it(`FIX-98: a send the Hub failed that Nuvion refunds (${credited.name}), ${order}: no row holds a discrepancy after Nuvion's deliveries of the fee transfer and the give-back`, async () => {
+        const { me, view, nuvion } = await send();
+        if (order.startsWith('the send is reversed')) {
+          // Every fee-back stays pending at Nuvion until the send is reversed.
+          book.mode = 'pending';
+        }
+        pay.settle(nuvion.id, 'failed');
+        expect(
+          (await deliver('outflows.failed', pay.delivery(nuvion.id), me))
+            .outcome,
+        ).toBe('done');
+        expect(
+          await waitFor(async () => (await rowOf(view.id)).status === 'failed'),
+        ).toBe(true);
+        if (order.startsWith('fee-back lands')) {
+          expect(
+            await waitFor(() => feeBacks(view.reference).length === 1),
+          ).toBe(true);
+          expect(await waitFor(async () => (await senderNet(me)) === 0)).toBe(
+            true,
+          );
+        }
+        const refund = reverseAfterFailure(me, nuvion.id, credited.kobo);
+        expect((await deliver('outflows.refunded', refund, me)).outcome).toBe(
+          'done',
+        );
+        expect(
+          await waitFor(
+            async () => (await rowOf(view.id)).status === 'reversed',
+          ),
+        ).toBe(true);
+        if (order.startsWith('the send is reversed')) {
+          // The fee-back lands only now.
+          book.mode = 'successful';
+          const waiting = feeBacks(view.reference)[0];
+          if (waiting) book.settle(waiting.unique_reference, 'successful');
+          await transfers.sweep(later());
+          await transfers.sweep(later());
+          await transfers.settle(view.id, later(), true);
+        }
+        expect(await waitFor(() => feeBacks(view.reference).length === 1)).toBe(
+          true,
+        );
+        await transfers.sweep(later());
+        // Nuvion's deliveries of the fee transfer and of the give-back.
+        const feeT = feeLegs(view.reference)[0];
+        const backT = feeBacks(view.reference)[0];
+        expect(feeT.status).toBe('successful');
+        expect(backT.status).toBe('successful');
+        expect((await bookDeliver(feeT, me)).outcome).toBe('done');
+        expect((await bookDeliver(backT, me)).outcome).toBe('done');
+        await transfers.sweep(later());
+        const rows = await feeRowsOf(view.reference);
+        // The fee row is what Nuvion says its transfer is.
+        const fee = rows.find(
+          (r) =>
+            r.customerReference === `${view.reference}-fee` &&
+            r.walletKind === 'user',
+        );
+        // Fee-back first: the fee row stays what Nuvion says (completed) and
+        // the give-back is its own row. Reversal first: the reversed send's
+        // row carries the fee (FIX-85), so the fee row is turned reversed and
+        // Nuvion's `successful` fee transfer is paired with it, not flagged.
+        expect(fee?.status).toBe(
+          order.startsWith('fee-back lands') ? 'completed' : 'reversed',
+        );
+        expect(rows.filter((r) => r.discrepancy !== null)).toEqual([]);
+        expect(available(me)).toBe(PERSON_START - credited.kept);
+        await ledgerEqualsNuvion(me);
+      });
+    }
   }
 
   it('duplicated and reordered deliveries: a refund before the completion reverses the pending send once, and the old completion cannot undo it', async () => {

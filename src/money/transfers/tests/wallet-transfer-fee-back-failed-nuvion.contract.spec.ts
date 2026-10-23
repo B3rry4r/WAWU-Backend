@@ -711,7 +711,7 @@ describe('A fee given back that Nuvion accepts and then fails is given back unde
     await bothEqualNuvion(me);
   });
 
-  it('the sender fee row shows the fee as gone until a fee-back has landed, and turns reversed only then (FIX-70 round 2)', async () => {
+  it('the sender fee row shows the fee as gone until a fee-back has landed, then stays what Nuvion shows (completed) and the give-back is a row of its own (FIX-98; FIX-70 round 2 turned it reversed)', async () => {
     const { me, view } = await sendNuvionFails();
     book.mode = 'processing';
     await giveFeeBack(view);
@@ -723,16 +723,82 @@ describe('A fee given back that Nuvion accepts and then fails is given back unde
           direction: 'out',
         },
       });
+    const backIn = () =>
+      prisma.fintavaLedgerEntry.findMany({
+        where: {
+          customerReference: backRef(view.reference),
+          walletKind: 'user',
+          direction: 'in',
+        },
+      });
     // The fee-back is made and not finished: the fee is still owed.
     expect((await feeRow()).status).toBe('completed');
+    expect(await backIn()).toHaveLength(0);
     await senderLedgerEqualsNuvion(me);
     book.settle(backRef(view.reference), 'successful');
     await transfers.sweep(later());
-    const turned = await feeRow();
-    expect(turned.status).toBe('reversed');
-    expect(turned.reversalReference).toBe(backRef(view.reference));
-    expect(Number(turned.reversalTotalKobo)).toBe(WAWU_FEE);
+    // The fee's transfer is `successful` at Nuvion and stays completed here;
+    // the give-back is money in under its own reference (FIX-98).
+    const kept = await feeRow();
+    expect(kept.status).toBe('completed');
+    expect(kept.discrepancy).toBeNull();
+    expect(Number(kept.totalKobo)).toBe(WAWU_FEE);
+    const given = await backIn();
+    expect(given).toHaveLength(1);
+    expect(given[0]).toMatchObject({
+      status: 'completed',
+      category: 'refund',
+      discrepancy: null,
+    });
+    expect(Number(given[0].totalKobo)).toBe(WAWU_FEE);
     expect(available(me)).toBe(PERSON_START);
+    await bothEqualNuvion(me);
+  });
+
+  it("FIX-98: after a refused send the fee row and the give-back agree with Nuvion's records: the fee transfer's own delivery, after the give-back, leaves no discrepancy on any row", async () => {
+    // Dev, 23 Oct 2026: a bank send Nuvion refused, WAWU's fee given back by
+    // a book transfer of its own. The statement shows the fee out and back,
+    // both `successful`; the Hub had turned the fee row `reversed`, and the
+    // fee transfer's delivery then wrote "webhook sighting: status reversed
+    // vs completed" (row dd9b8c36), which kept money:check at `differences`.
+    const { me, view } = await sendNuvionFails();
+    book.mode = 'successful';
+    await giveFeeBack(view);
+    await transfers.sweep(later());
+    const feeT = book.byReference(`${view.reference}-fee`)[0];
+    const backT = book.byReference(backRef(view.reference))[0];
+    expect(feeT.status).toBe('successful');
+    expect(backT.status).toBe('successful');
+    expect((await deliver('outflows.completed', feeT, me)).outcome).toBe(
+      'done',
+    );
+    expect((await deliver('outflows.completed', backT, me)).outcome).toBe(
+      'done',
+    );
+    await transfers.sweep(later());
+    const rows = await prisma.fintavaLedgerEntry.findMany({
+      where: {
+        customerReference: {
+          in: [`${view.reference}-fee`, backRef(view.reference)],
+        },
+      },
+    });
+    // Four rows, one per side of each of Nuvion's two transfers, each what
+    // Nuvion says its transfer is.
+    expect(
+      rows.map((r) => `${r.walletKind} ${r.direction} ${r.status}`).sort(),
+    ).toEqual([
+      'merchant in completed',
+      'merchant out completed',
+      'user in completed',
+      'user out completed',
+    ]);
+    expect(rows.filter((r) => r.discrepancy !== null)).toEqual([]);
+    // The sender's history names the two rows as what they are (round 2).
+    const mine = rows.filter((r) => r.walletKind === 'user');
+    expect(
+      mine.map((r) => `${r.direction} ${r.counterpartyName}`).sort(),
+    ).toEqual(["in WAWU's fee given back", "out WAWU's fee"]);
     await bothEqualNuvion(me);
   });
 
