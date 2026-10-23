@@ -484,7 +484,7 @@ describe('EMAIL-01 email campaigns', () => {
       expect(captured).toHaveLength(5);
       expect(new Set(captured.map((m) => m.body.to[0])).size).toBe(5);
       const first = captured.find((m) => m.body.to[0] === `p1${DOMAIN}`)!;
-      expect(first.body.from).toBe('WAWUAfrica <noreply@wawuafrica.com>');
+      expect(first.body.from).toBe('Who Made This? <noreply@wawuafrica.com>');
       expect(first.body.subject).toBe('Hi Person1, your WAWU invite');
       expect(first.body.headers['List-Unsubscribe']).toMatch(
         /^<http.*\/api\/hub\/email\/unsubscribe\?t=.+>$/,

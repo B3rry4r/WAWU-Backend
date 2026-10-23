@@ -9,7 +9,7 @@
 
 /** Used when EMAIL_CAMPAIGN_FROM is unset: the sender WAWU ID already uses. */
 export const DEFAULT_EMAIL_CAMPAIGN_FROM =
-  'WAWUAfrica <noreply@wawuafrica.com>';
+  'Who Made This? <noreply@wawuafrica.com>';
 
 /** The link every email carries and {{join_link}} fills in. */
 export const JOIN_LINK = 'https://wawuafrica.com/join';
