@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import * as jwt from 'jsonwebtoken';
 import * as jwksRsa from 'jwks-rsa';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
+import { isAccessToken } from '../common/auth/wawu-jwt.strategy';
 
 /**
  * Checks a WAWU ID access token for the live socket. The same rules as the
@@ -59,6 +60,12 @@ export class LiveTokenVerifier {
             return;
           }
           const claims = payload as unknown as WawuJwtClaims;
+          // Only an access token signs a socket in, as on every REST route
+          // (FIX-99, H3): a refresh token is signed by the same key.
+          if (!isAccessToken(claims)) {
+            reject(new Error('token is not an access token'));
+            return;
+          }
           if (typeof claims.sub !== 'string' || claims.sub.length === 0) {
             reject(new Error('token has no subject'));
             return;

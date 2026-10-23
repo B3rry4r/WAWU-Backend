@@ -477,7 +477,8 @@ describe('Communities for the app: room view, message cost, suggestions (contrac
         name: `Zz Big ${runTag}`,
         kind: 'open',
         hostWawuId: host.sub,
-        memberCount: 3,
+        // Three joined members and the host, who is a member (FIX-99, L5).
+        memberCount: 4,
         role: 'host',
         messageCostInCredits: 0,
       });
@@ -548,14 +549,15 @@ describe('Communities for the app: room view, message cost, suggestions (contrac
           .expect(200),
       );
       expect(stranger).toMatchObject({ kind: 'open', role: 'none' });
-      // A pending request is not a member: the private room counts 1.
+      // A pending request is not a member: the private room counts 2 (one
+      // joined member and the host, who is a member, FIX-99 L5).
       const priv = dataOf<WireRoomView>(
         await request(server())
           .get(`/communities/${rooms.private}/room`)
           .set(auth(viewer))
           .expect(200),
       );
-      expect(priv).toMatchObject({ memberCount: 1, role: 'none' });
+      expect(priv).toMatchObject({ memberCount: 2, role: 'none' });
     });
 
     it('answers 404 for a room whose host hid the caller, as GET /communities/:id does', async () => {
@@ -610,7 +612,8 @@ describe('Communities for the app: room view, message cost, suggestions (contrac
         rooms.private,
         rooms.empty,
       ]);
-      expect(mine.map((c) => c.memberCount)).toEqual([3, 2, 2, 1, 0]);
+      // Each count is the joined members and the host (FIX-99, L5).
+      expect(mine.map((c) => c.memberCount)).toEqual([4, 3, 3, 2, 1]);
       // Not the room they host, are in, asked to join, or whose host hid them.
       for (const key of ['mine', 'joined', 'asked', 'hidden', 'kept']) {
         expect(items.some((c) => c.id === rooms[key])).toBe(false);
@@ -651,7 +654,8 @@ describe('Communities for the app: room view, message cost, suggestions (contrac
           .set(auth(viewer))
           .expect(200),
       );
-      expect(room).toMatchObject({ role: 'member', memberCount: 1 });
+      // The one joined member and the host (FIX-99, L5).
+      expect(room).toMatchObject({ role: 'member', memberCount: 2 });
 
       // The host of big, tieA and private is offered neither of those, and is
       // offered the viewer's own room, which they are not in.
@@ -663,7 +667,7 @@ describe('Communities for the app: room view, message cost, suggestions (contrac
       expect(forHost).toContain(rooms.tieB);
     });
 
-    it('answers each room with the same counts as GET /communities/:id', async () => {
+    it('answers each room as GET /communities/:id does, with the host counted as a member', async () => {
       const [first] = ours((await allSuggestions(viewer)).items);
       const plain = dataOf<WireSuggested>(
         await request(server())
@@ -671,7 +675,9 @@ describe('Communities for the app: room view, message cost, suggestions (contrac
           .set(auth(viewer))
           .expect(200),
       );
-      expect(first).toEqual(plain);
+      // GET /communities/:id is the web's route and keeps counting the members
+      // other than the host; the app's rooms count the host too (FIX-99, L5).
+      expect(first).toEqual({ ...plain, memberCount: plain.memberCount + 1 });
     });
   });
 });

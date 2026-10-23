@@ -361,7 +361,8 @@ describe('Community rooms: mine, links, read, join decisions (contract)', () => 
         kind: 'private',
         hostWawuId: hostSub,
         imageUrl: COVER,
-        memberCount: 0,
+        // The host is a member (FIX-99, L5): a new room reads 1.
+        memberCount: 1,
         messagesToday: 0,
         slug: `priced-circle-${runTag}`,
         link: `wawu/c/priced-circle-${runTag}`,
@@ -684,7 +685,8 @@ describe('Community rooms: mine, links, read, join decisions (contract)', () => 
         role: 'member',
         slug: privateSlug,
         link: `wawu/c/${privateSlug}`,
-        memberCount: 1,
+        // One member and the host (FIX-99, L5).
+        memberCount: 2,
         unreadCount: 2,
         lastMessage: {
           text: 'Patterns go up on Friday.',
