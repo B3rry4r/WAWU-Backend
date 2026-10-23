@@ -153,6 +153,10 @@ scripts/dev/stack.sh down   --name <n>
   stand-in) points the Hub's object storage at a stand-in on this machine, for a
   spec that must see the Hub's own storage calls. Left unset, storage is a name
   the network guard refuses.
+- `SIGNUP_VERIFY_CHANNEL=email` is set on wawu-id by `stack.sh` (R-72, SWEEP-FLOWS B1), so the sign-up code is mailed and a
+  fresh stack can sign someone up. `STACK_SIGNUP_VERIFY_CHANNEL=phone` turns the texted path back on for a test. wawu-id's own
+  default is not changed here (production sets it). With no mail transport (next line) the code is not delivered anywhere a
+  person can read it, so pair it with the mail stand-in.
 - `STACK_RESEND_API_KEY` (any text, with `RESEND_BASE_URL` set in the same shell)
   gives wawu-id a mail transport; `node scripts/dev/mail-standin.cjs <port> <file>`
   is a stand-in for it that records each mail it is given. Left unset, wawu-id has
