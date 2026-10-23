@@ -22,12 +22,17 @@ import {
  * `api-reference__payment-details.md`, `api-reference__transfers.md`,
  * `webhooks__event-types.md`, `errors.md`).
  *
- * One thing is NOT from the docs and is flagged wherever it is used: the
- * name check (`POST /counterparty-lookups`) is not in Nuvion's public docs
- * (R-39 names it from Nuvion's dashboard code; the docs list only its
- * `error_resolution_*` errors). Its request body (`country`,
- * `account_number`, `bank_code`) is the task's own words and its answer
- * (`account_name`) is a guess, both to be settled by the sandbox.
+ * The name check (`POST /counterparty-lookups`) is not in Nuvion's public
+ * docs (R-39 names it from Nuvion's dashboard code; the docs list only its
+ * `error_resolution_*` errors). Its request and answer here are what Nuvion's
+ * DEV answered on 23 Oct 2026 (FIX-97, mobile docs/nuvion/DEV-RESULTS.md):
+ * the body is `{ country, account_number, issuer: { code } }` (a body without
+ * `issuer` is a 422), the answer carries the holder at `data.details.name`,
+ * and an account the bank does not hold is 404 `error_resource_not_found`.
+ * A counterparty for an individual needs `profile.email` and
+ * `profile.address` (a 422 without them), and the sending side's email and
+ * address are read from `GET /entities/{id}` (`person.email` or
+ * `business.email`, and `address`).
  *
  * What it models of Nuvion, each from the docs:
  * - a transfer accepted is `pending`; its funds leave `available` at once
@@ -91,6 +96,11 @@ function str(v: unknown, fallback = ''): string {
   return typeof v === 'string' || typeof v === 'number' ? String(v) : fallback;
 }
 
+const requiredField = (name: string) => ({
+  type: 'error_validation_required_field_missing',
+  message: `The '${name}' field is required. Please include it and try again.`,
+});
+
 const notFound = (): StandinAnswer => ({
   status: 404,
   body: errorBody('error_resource_not_found', 'Resource does not exist'),
@@ -127,6 +137,15 @@ export class NuvionPayoutsStandin {
   banks = PAYOUT_BANKS.map((b) => ({ ...b }));
   /** `bank_code:account_number` to the holder's name, for the name check. */
   readonly directory = new Map<string, string>();
+  /**
+   * The email and address an entity holds at Nuvion, by entity id. An entity
+   * with an account (and WAWU's own) that is not here has a complete default;
+   * set `{ email: null }` or `{ address: null }` to leave one out.
+   */
+  readonly contacts = new Map<
+    string,
+    { email?: string | null; address?: Record<string, unknown> | null }
+  >();
   readonly counterparties = new Map<string, StandinCounterparty>();
   readonly paymentDetails = new Map<string, StandinPaymentDetail>();
   /** The bodies of the requests that make things, in order. */
@@ -413,12 +432,33 @@ export class NuvionPayoutsStandin {
       ),
     }));
 
-    // The name check: NOT in Nuvion's public docs (see the file comment).
+    // The name check, as dev answers it (see the file comment).
     this.route('POST', '/counterparty-lookups', (req) => {
       this.lookups.push(req.body);
       const b = (req.body ?? {}) as Record<string, unknown>;
       const number = str(b.account_number);
-      const code = str(b.bank_code);
+      const issuer = (b.issuer ?? null) as Record<string, unknown> | null;
+      const code = issuer ? str(issuer.code) : '';
+      if (!issuer || code === '') {
+        return {
+          status: 422,
+          body: {
+            ...errorBody(
+              'error_validation_error',
+              'Validation failed for one or more fields',
+            ),
+            validations: [
+              {
+                issuer: {
+                  type: 'error_validation_required_field_missing',
+                  message:
+                    "The 'issuer' field is required. Please include it and try again.",
+                },
+              },
+            ],
+          },
+        };
+      }
       if (b.country !== 'NG' || !/^\d{10}$/.test(number)) {
         return {
           status: 422,
@@ -442,16 +482,27 @@ export class NuvionPayoutsStandin {
         return {
           status: 404,
           body: errorBody(
-            'error_resolution_account_not_found',
-            'No account found matching the provided details',
+            'error_resource_not_found',
+            "We couldn't find that accounts. It may have been deleted or the ID might be incorrect.",
           ),
         };
       }
       return {
         status: 200,
         body: envelope(
-          { account_name: holder, account_number: number, bank_code: code },
-          'Account resolved successfully',
+          {
+            _id: standinId('01LKP'),
+            lookup_id: `${number}_${code}`,
+            details: {
+              issuer: { code, name: 'N/A', short_name: 'N/A' },
+              account_number: number,
+              name: holder,
+            },
+            meta: { routability: 'routable' },
+            status: 'successful',
+            status_reason: 'successfully_resolved',
+          },
+          'Account retrieved successfully',
         ),
       };
     });
@@ -464,6 +515,33 @@ export class NuvionPayoutsStandin {
         return {
           status: 422,
           body: errorBody('error_validation_error', 'type is required'),
+        };
+      }
+      // Dev refuses an individual without an email and an address (FIX-97).
+      const address = (profile.address ?? null) as Record<
+        string,
+        unknown
+      > | null;
+      const missing: Array<Record<string, unknown>> = [];
+      if (
+        !address ||
+        !str(address.line1) ||
+        !str(address.city) ||
+        !/^[A-Za-z]{2}$/.test(str(address.country))
+      ) {
+        missing.push({ address: requiredField('address') });
+      }
+      if (!str(profile.email)) missing.push({ email: requiredField('email') });
+      if (b.type === 'individual' && missing.length > 0) {
+        return {
+          status: 422,
+          body: {
+            ...errorBody(
+              'error_validation_error',
+              'Validation failed for one or more fields',
+            ),
+            validations: missing,
+          },
         };
       }
       const entityId = str(b.entity_id, PARENT_ENTITY);
@@ -578,6 +656,56 @@ export class NuvionPayoutsStandin {
         };
       },
     );
+
+    // `GET /entities/{id}`: the sending side's email and address, in the
+    // shape dev answers (a person's `person`, WAWU's own `business`, and the
+    // address as `address` and in `addresses`).
+    this.route('GET', /^\/entities\/[A-Za-z0-9]+$/, (req) => {
+      const id = req.path.split('/')[2];
+      const parent = id === PARENT_ENTITY;
+      const known =
+        parent ||
+        this.contacts.has(id) ||
+        [...this.nuv.accounts.values()].some((a) => a.entity_id === id);
+      if (!known) return notFound();
+      const held = this.contacts.get(id) ?? {};
+      const email =
+        held.email === undefined
+          ? `${id.toLowerCase()}@standin.example.test`
+          : held.email;
+      const address =
+        held.address === undefined
+          ? {
+              id: standinId('01ADR'),
+              line_1: '12 Admiralty Way',
+              city: 'Lagos',
+              state: 'Lagos',
+              postal_code: '101241',
+              country_code: 'NG',
+              owner_id: id,
+              owner_type: parent ? 'business' : 'person',
+              label: 'registered_address',
+            }
+          : held.address;
+      const who = parent
+        ? { business: { id: standinId('01BUS'), ...(email ? { email } : {}) } }
+        : { person: { id: standinId('01PER'), ...(email ? { email } : {}) } };
+      return {
+        status: 200,
+        body: envelope(
+          {
+            entity: {
+              id,
+              type: parent ? 'business' : 'individual',
+              status: 'approved',
+            },
+            ...who,
+            ...(address ? { address, addresses: [address] } : {}),
+          },
+          'Entity retrieved successfully',
+        ),
+      };
+    });
 
     // An account read with no `entity_id` is the authenticating (parent)
     // entity's; NUV-04's route answers only a named child entity.

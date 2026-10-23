@@ -292,14 +292,19 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
         {
           country: NUVION_NIP_COUNTRY,
           account_number: input.accountNumber,
-          bank_code: input.bankCode,
+          // Dev answered 422 "The 'issuer' field is required" to a bare
+          // `bank_code` (FIX-97, DEV-RESULTS NUV-06): the bank is the issuer.
+          issuer: { code: input.bankCode },
         },
       );
       data = answer.data;
     } catch (e) {
       if (!(e instanceof NuvionError)) throw e;
       switch (e.nuvionType) {
+        // `error_resource_not_found` is what dev answers for an account the
+        // bank does not hold (404, FIX-97); the docs' own word stays.
         case 'error_resolution_account_not_found':
+        case 'error_resource_not_found':
           return answerOf('not_found');
         case 'error_resolution_format_invalid':
           return answerOf('bad_format');
@@ -845,7 +850,7 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
     const key = payeeKey(source.entityId, bank.code, accountNumber);
     const counterpartyId =
       (await this.findCounterparty(source.entityId, key)) ??
-      (await this.createCounterparty(source.entityId, key, holderName));
+      (await this.createCounterparty(source, key, holderName));
     const paymentDetailId =
       (await this.findPaymentDetail(
         source.entityId,
@@ -897,11 +902,17 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
   }
 
   private async createCounterparty(
-    entityId: string | null,
+    source: { entityId: string | null },
     key: string,
     holderName: string,
   ): Promise<string> {
     const op: NuvionOp = { name: 'create counterparty', call: 'write' };
+    const entityId = source.entityId;
+    // An individual's counterparty needs the sender's email and address
+    // (dev answered 422 without them, FIX-97). They are the SENDING side's
+    // own, as Nuvion holds them; none is ever made up. When either is
+    // missing the send stops here, before any counterparty or transfer.
+    const contact = await this.senderContact(source);
     const [first, ...rest] = holderName.split(' ');
     const body = {
       type: 'individual',
@@ -910,6 +921,8 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
         first_name: first,
         last_name: rest.length > 0 ? rest.join(' ') : first,
         relationship: 'vendor',
+        email: contact.email,
+        address: contact.address,
       },
       meta: { [PAYEE_META_KEY]: key },
     };
@@ -938,6 +951,66 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
       }
       throw e;
     }
+  }
+
+  /**
+   * The sending side's own email and address, read from its entity at Nuvion
+   * (`GET /entities/{id}`: a person's `person.email` and `address`, WAWU's
+   * own business entity's `business.email` and `address`). WAWU's own entity
+   * is the operational account's (`GET /accounts/{id}`). Thrown as a
+   * `validation` stop, with nothing sent that moves money, when either is
+   * missing or unreadable; a read that fails is the payee not being set up.
+   */
+  private async senderContact(source: {
+    entityId: string | null;
+  }): Promise<NuvionSenderContact> {
+    let entityId = source.entityId;
+    if (entityId === null) {
+      const accountOp: NuvionOp = {
+        name: 'read operational account',
+        call: 'read',
+      };
+      const accountId = this.client.settings.operationalAccountId;
+      const answer = await this.client.get<unknown>(
+        accountOp,
+        `/accounts/${encodeURIComponent(accountId)}`,
+      );
+      const account = readNuvionAccount(answer.data);
+      const named =
+        isRecord(answer.data) && isRecord(answer.data.entity)
+          ? text(answer.data.entity, 'id')
+          : null;
+      const own = account?.entityId ?? named;
+      if (!isNuvionId(own)) {
+        throw this.unreadable(
+          accountOp,
+          "the operational account's entity is not readable",
+          answer,
+        );
+      }
+      entityId = own;
+    }
+    const op: NuvionOp = { name: 'read sender entity', call: 'read' };
+    const answer = await this.client.get<unknown>(
+      op,
+      `/entities/${encodeURIComponent(entityId)}`,
+      source.entityId === null ? undefined : { entity_id: entityId },
+    );
+    const read = readSenderContact(answer.data);
+    if (read.entityId !== null && read.entityId !== entityId) {
+      throw this.unreadable(op, 'the answer is for another entity', answer);
+    }
+    if (read.email === null || read.address === null) {
+      throw new NuvionError({
+        kind: 'validation',
+        operation: 'bank transfer',
+        messages: [
+          `${AREA}: the sending side has no ${read.email === null ? 'email' : 'address'} on file; no counterparty was made`,
+        ],
+        recordMayExist: false,
+      });
+    }
+    return { email: read.email, address: read.address };
   }
 
   private async findPaymentDetail(
@@ -1336,22 +1409,79 @@ export function payoutFailureKind(
   return 'refused';
 }
 
-/** The holder, the number and the bank a lookup answered, field by field. */
+/** The sending side's email and address as a counterparty carries them. */
+export interface NuvionSenderContact {
+  email: string;
+  address: { line1: string; city: string; country: string };
+}
+
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * An entity's email and address from `GET /entities/{id}` (dev, FIX-97): the
+ * email is `person.email` (a person) or `business.email` (a business); the
+ * address is the top-level `address` object, else the first of `addresses`
+ * that is complete (`registered_address` first). Each is null when not given
+ * in full: line 1, city and a two-letter country code are the address.
+ */
+export function readSenderContact(data: unknown): {
+  entityId: string | null;
+  email: string | null;
+  address: NuvionSenderContact['address'] | null;
+} {
+  if (!isRecord(data)) return { entityId: null, email: null, address: null };
+  const entity = isRecord(data.entity) ? data.entity : {};
+  const holder = isRecord(data.person)
+    ? data.person
+    : isRecord(data.business)
+      ? data.business
+      : {};
+  const mail = text(holder, 'email');
+  const email = mail !== null && EMAIL.test(mail) ? mail : null;
+  const listed = Array.isArray(data.addresses)
+    ? data.addresses.filter(isRecord)
+    : [];
+  const candidates = [
+    ...(isRecord(data.address) ? [data.address] : []),
+    ...listed.filter((a) => a.label === 'registered_address'),
+    ...listed,
+  ];
+  let address: NuvionSenderContact['address'] | null = null;
+  for (const a of candidates) {
+    const line1 = cleanAccountName(a.line_1);
+    const city = cleanAccountName(a.city);
+    const country = text(a, 'country_code');
+    if (line1 && city && country && /^[A-Za-z]{2}$/.test(country)) {
+      address = { line1, city, country: country.toUpperCase() };
+      break;
+    }
+  }
+  return { entityId: text(entity, 'id'), email, address };
+}
+
+/**
+ * The holder, the number and the bank a lookup answered, field by field. The
+ * answer Nuvion gives (dev, FIX-97) is `{ status: "successful", details: {
+ * name, account_number, issuer: { code } }, meta: { routability } }`: the name
+ * is `details.name`. The public docs name no other field for a lookup (the
+ * holder-name fields they show belong to payment details), so none is read.
+ * A status other than `successful` is no name.
+ */
 function readLookup(data: unknown): {
   accountName: string;
   accountNumber: string | null;
   bankCode: string | null;
 } | null {
-  const o = isRecord(data) && isRecord(data.account) ? data.account : data;
-  if (!isRecord(o)) return null;
-  const name =
-    cleanAccountName(o.account_holder_name) ??
-    cleanAccountName(o.account_name) ??
-    cleanAccountName(o.holder_name);
+  if (!isRecord(data) || !isRecord(data.details)) return null;
+  const status = text(data, 'status');
+  if (status !== null && status.toLowerCase() !== 'successful') return null;
+  const details = data.details;
+  const name = cleanAccountName(details.name);
   if (name === null) return null;
+  const issuer = isRecord(details.issuer) ? details.issuer : {};
   return {
     accountName: name,
-    accountNumber: text(o, 'account_number'),
-    bankCode: text(o, 'bank_code'),
+    accountNumber: text(details, 'account_number'),
+    bankCode: text(issuer, 'code'),
   };
 }
