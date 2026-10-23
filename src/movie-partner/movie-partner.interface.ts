@@ -5,13 +5,20 @@
  * Everything outside the adapters reaches the partner only through
  * `MOVIE_PARTNER`; nothing else imports `src/flixora/` (FLIX-02, the real
  * adapter) or the stand-in. `MOVIE_PARTNER` picks the adapter at boot: `off`
- * (the default; empty is off), `standin` (made-up titles, no network) and,
- * with FLIX-02, `flixora`. Turning it `off` stops every call and every link;
- * the Hub's copy of the catalog stays.
+ * (the default; empty is off), `standin` (made-up titles, no network),
+ * `flixora` (FLIX-02) and `soon` (FLIX-04, R-77: movies stay visible as "not
+ * live yet" and do nothing; no adapter, no sync, no call). Turning it `off`
+ * or `soon` stops every call and every link; the Hub's copy of the catalog
+ * stays.
  */
 export const MOVIE_PARTNER = Symbol('MOVIE_PARTNER');
 
-export const MOVIE_PARTNER_NAMES = ['off', 'standin', 'flixora'] as const;
+export const MOVIE_PARTNER_NAMES = [
+  'off',
+  'standin',
+  'flixora',
+  'soon',
+] as const;
 export type MoviePartnerName = (typeof MOVIE_PARTNER_NAMES)[number];
 
 /** A person in the cast, as the partner lists them. */
@@ -118,8 +125,10 @@ export class MoviePartnerError extends Error {
 
 export interface MoviePartner {
   readonly name: MoviePartnerName;
-  /** False only for `off`: nothing is shown, called or linked. */
+  /** False for `off` and `soon`: no catalog is shown, nothing is called or linked. */
   readonly enabled: boolean;
+  /** True only for `soon` (R-77): the app still shows Flix movies, as "not live yet". */
+  readonly soon?: boolean;
   /**
    * A page of the partner's catalog, newest first. A network call: the caller
    * holds no transaction, connection or lock while it runs. Throws

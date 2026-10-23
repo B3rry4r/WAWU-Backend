@@ -8,6 +8,7 @@ import {
 } from './movie-partner-config';
 import { MOVIE_PARTNER, type MoviePartner } from './movie-partner.interface';
 import { OffMoviePartner } from './off-movie-partner';
+import { SoonMoviePartner } from './soon-movie-partner';
 import { StandinMoviePartner } from './standin/standin-movie-partner';
 
 /**
@@ -30,6 +31,7 @@ import { StandinMoviePartner } from './standin/standin-movie-partner';
           readMoviePartnerName(config.get<string>(MOVIE_PARTNER_CONFIG_KEY)),
           {
             off: () => new OffMoviePartner(),
+            soon: () => new SoonMoviePartner(),
             standin: () => new StandinMoviePartner(),
             flixora: () =>
               FlixoraMoviePartner.fromConfig((key) => config.get<string>(key)),

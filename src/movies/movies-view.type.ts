@@ -67,9 +67,15 @@ export interface MovieRailView {
   movies: MovieCardView[];
 }
 
-/** `GET /movies`. Off: `{ enabled: false, hero: null, rails: [] }`. */
+/**
+ * `GET /movies`. Off: `{ enabled: false, hero: null, rails: [] }`. Soon
+ * (`MOVIE_PARTNER=soon`, R-77): `{ enabled: false, soon: true, hero: null,
+ * rails: [] }`.
+ */
 export interface MoviesHomeView {
   enabled: boolean;
+  /** True only when movies are switched to "not live yet" (R-77); absent or false otherwise. */
+  soon?: boolean;
   /** The title shown large at the top of the movies screen; null when the catalog is empty. */
   hero: MovieCardView | null;
   rails: MovieRailView[];
