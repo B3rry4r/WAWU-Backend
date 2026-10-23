@@ -71,7 +71,7 @@ describe('EMAIL-01 rendering', () => {
 
   it('sends from the WAWUAfrica address unless EMAIL_CAMPAIGN_FROM is set', () => {
     expect(DEFAULT_EMAIL_CAMPAIGN_FROM).toBe(
-      'WAWUAfrica <noreply@wawuafrica.com>',
+      'Who Made This? <noreply@wawuafrica.com>',
     );
     expect(emailFrom({ get: () => undefined })).toBe(
       DEFAULT_EMAIL_CAMPAIGN_FROM,

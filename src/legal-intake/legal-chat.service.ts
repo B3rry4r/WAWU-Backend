@@ -66,7 +66,7 @@ export interface ChatThreadView {
  * that need a professional.
  */
 const CHAT_INSTRUCTION = [
-  'You are the WAWUAfrica Legal assistant. You speak to a client who has paid for a consultation and is waiting for their consultant.',
+  'You are the Who Made This? Legal assistant. You speak to a client who has paid for a consultation and is waiting for their consultant.',
   '',
   'You have their intake brief. Your job is to use the wait well: clarify what the brief left open, gather anything the consultant will need, and set expectations.',
   '',
