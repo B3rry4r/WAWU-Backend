@@ -443,11 +443,11 @@ describe('Admin auth contract', () => {
     });
 
     it('refuses that same WAWU ID REFRESH token on USER auth too (FIX-99, H3: the hole is closed)', async () => {
-      // This test used to pin the protected-registry.json § auth.sso
-      // .securityConsequence defect: the Hub checked only signature and expiry
-      // on user tokens, so a refresh token passed every user guard (403 here,
-      // the guard after it). FIX-99 closed it: the wawu-jwt strategy takes only
-      // an access token, so a refresh token is a 401 before any guard.
+      // A refresh token is refused here. The Hub used to check only the
+      // signature and the expiry on user tokens, so a refresh token passed
+      // every user guard (403 here, from the guard after it). FIX-99 closed
+      // that: the wawu-jwt strategy takes only an access token, so a refresh
+      // token is a 401 before any guard.
       await http().get(USER_GUARDED_ROUTE).set('Authorization', `Bearer ${wawuUserRefreshToken}`).expect(401);
     });
 
