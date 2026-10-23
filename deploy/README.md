@@ -263,16 +263,16 @@ S3_ACCESS_KEY_ID=
 S3_SECRET_ACCESS_KEY=
 
 # Flix movies (FLIX-01, R-74, R-75). MOVIE_PARTNER is `off` (also when empty),
-# `standin` (made-up titles, never for production) or, with FLIX-02, `flixora`;
-# any other value stops the server. `off` hides every movie rail and screen
+# `standin` (made-up titles, never for production) or `flixora` (FLIX-02; needs
+# the FLIXORA_ settings below, and a missing one stops the server at boot,
+# naming it); any other value stops the server. `off` hides every movie rail and screen
 # (GET /movies answers enabled: false), stops every call and every link, and
 # changes nothing else: the stored rows stay. ROLLBACK = set it to `off` and
 # `sudo systemctl restart wawu-hub-api`.
 MOVIE_PARTNER=
 # When the updated terms that name the movie partner went live (ISO date). Empty:
 # nobody counts as having agreed at sign-up, so everyone ticks the agreement box
-# before their first "Watch on Flixora". The partner's key and sign-in secret
-# are not here: they arrive with FLIX-02, as secrets, never in this file.
+# before their first "Watch on Flixora".
 FLIXORA_TERMS_FROM=
 # The catalog copy's refresh, all optional (see MOVIE-SYNC-INTERVAL,
 # MOVIE-SYNC-FULL-EVERY in src/movies/movies-settings.ts): minutes between passes (15), hours
@@ -282,6 +282,17 @@ MOVIE_SYNC_INTERVAL_MINUTES=
 MOVIE_SYNC_FULL_EVERY_HOURS=
 MOVIE_SYNC_PAGE_SIZE=
 MOVIE_SYNC_MAX_PAGES=
+# Flixora (FLIX-02), only with MOVIE_PARTNER=flixora. The key and the sign-in
+# secret are SECRETS: keep them in this root-only file, never in git or the app.
+# Test keys (flx_test_) reach Flixora's test environment only; the live key and
+# live sign-in secret are set at release, after Flixora approves the account.
+# Region is NG, UK or US (default NG).
+FLIXORA_API_BASE_URL=https://prime-pit-backend-production-3a1f.up.railway.app/api/partners
+FLIXORA_API_KEY=
+FLIXORA_SSO_SECRET=
+FLIXORA_PARTNER_SLUG=
+FLIXORA_SITE_URL=https://www.flixora.com
+FLIXORA_REGION=
 ```
 
 Then `chmod 640 /etc/wawu/*.env && chown root:wawu /etc/wawu/*.env`.

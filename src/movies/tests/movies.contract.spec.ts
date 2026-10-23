@@ -260,10 +260,21 @@ describe('FLIX-01: Flix movies (contract)', () => {
       }
     });
 
-    it('stops the server at boot for a MOVIE_PARTNER it cannot run (flixora is FLIX-02)', async () => {
-      await expect(boot('flixora', tokens, mock)).rejects.toThrow(
-        /not built yet/,
+    it('stops the server at boot for a MOVIE_PARTNER it cannot run (flixora without its settings, FLIX-02, or a name that does not exist)', async () => {
+      // FLIX-01 pinned "flixora is not built yet"; FLIX-02 builds it, so it now stops for want of its settings.
+      const held = Object.entries(process.env).filter(
+        ([k]) =>
+          k.startsWith('FLIXORA_API_') ||
+          /^FLIXORA_(SSO|PARTNER|SITE|REGION)/.test(k),
       );
+      held.forEach(([k]) => delete process.env[k]);
+      try {
+        await expect(boot('flixora', tokens, mock)).rejects.toThrow(
+          /MOVIE_PARTNER=flixora needs FLIXORA_API_BASE_URL, FLIXORA_API_KEY, FLIXORA_SSO_SECRET, FLIXORA_PARTNER_SLUG, FLIXORA_SITE_URL/,
+        );
+      } finally {
+        held.forEach(([k, v]) => (process.env[k] = v));
+      }
       await expect(boot('banana', tokens, mock)).rejects.toThrow(
         /must be one of/,
       );
@@ -882,6 +893,54 @@ describe('FLIX-01: Flix movies (contract)', () => {
         .expect(404);
       expect(codeOf(res)).toBe('movie_not_found');
       expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
+    it('answers 409 movie_not_premiered for a title whose premiere is still ahead: no link, no agreement stored, no call to the partner; once the date has passed it is watchable (FLIX-02)', async () => {
+      await termsFrom('not-agreed', BASIC);
+      const ahead = data<{ premiering: boolean; premierDate: string }>(
+        await h.as(BASIC, 'get', '/movies/standin-010').expect(200),
+      );
+      expect(ahead.premiering).toBe(true);
+      expect(new Date(ahead.premierDate).getTime()).toBeGreaterThan(Date.now());
+      const spy = jest.spyOn(h.partner, 'signedInLink');
+      // Even with the agreement ticked: the refusal comes first and stores nothing.
+      const res = await h
+        .as(BASIC, 'post', '/movies/standin-010/watch', { agreeToTerms: true })
+        .expect(409);
+      expect(codeOf(res)).toBe('movie_not_premiered');
+      const message = (res.body as { message: string }).message;
+      expect(message).toBe(
+        'This movie has not premiered yet. You can watch it once it does.',
+      );
+      expect(message).not.toMatch(/—/);
+      expect(spy).not.toHaveBeenCalled();
+      expect(
+        await h.prisma.moviePartnerConsent.count({
+          where: { wawuUserId: BASIC },
+        }),
+      ).toBe(0);
+      expect(
+        await h.prisma.moviePartnerLink.count({ where: { wawuUserId: BASIC } }),
+      ).toBe(0);
+
+      // A premiere date that has passed no longer holds the title back, though the partner still says premiering.
+      const passed = (await standin(h).getMovie('standin-010'))!;
+      standin(h).setMovie({
+        ...passed,
+        premiering: true,
+        premierDate: new Date(Date.now() - 86_400_000).toISOString(),
+      });
+      await h.sync.runPass({ full: true });
+      const out = data<{ url: string }>(
+        await h
+          .as(BASIC, 'post', '/movies/standin-010/watch', {
+            agreeToTerms: true,
+          })
+          .expect(200),
+      );
+      expect(out.url).toContain('#token=');
+      expect(spy).toHaveBeenCalledTimes(1);
       spy.mockRestore();
     });
 

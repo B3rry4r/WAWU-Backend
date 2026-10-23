@@ -15,12 +15,13 @@ import {
   ACCOUNT_CLOSING_MESSAGE,
   EMAIL_REQUIRED_MESSAGE,
   MOVIE_NOT_FOUND_MESSAGE,
+  MOVIE_NOT_PREMIERED_MESSAGE,
   MOVIES_OFF_MESSAGE,
   MOVIES_UNAVAILABLE_MESSAGE,
   MoviesError,
   TERMS_NOT_AGREED_MESSAGE,
 } from './movies-error';
-import { cardOf, detailOf } from './movies-mapping';
+import { cardOf, detailOf, isPremiering } from './movies-mapping';
 import { readTermsFrom } from './movies-settings';
 import type {
   MovieCardView,
@@ -200,6 +201,12 @@ export class MoviesService {
   ): Promise<MovieWatchView> {
     const provider = this.requireOn();
     const row = await this.find(provider, movieId);
+
+    // Until the premiere only the trailer is available (PARTNER-API.md, "premierDate"):
+    // no link, and no agreement stored, for a title that cannot be watched yet.
+    if (isPremiering(row, new Date())) {
+      throw new MoviesError('movie_not_premiered', MOVIE_NOT_PREMIERED_MESSAGE);
+    }
 
     // A person who is leaving gets no more links (R-75).
     const [deletion, link] = await Promise.all([

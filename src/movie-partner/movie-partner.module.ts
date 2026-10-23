@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { FlixoraMoviePartner } from '../flixora/flixora-movie-partner';
 import {
   MOVIE_PARTNER_CONFIG_KEY,
   readMoviePartnerName,
@@ -14,7 +15,9 @@ import { StandinMoviePartner } from './standin/standin-movie-partner';
  * adapters exist. Every movie module imports this one and injects
  * `MOVIE_PARTNER`; none imports an adapter. `MOVIE_PARTNER` picks the adapter
  * at boot (`off` by default); changing it is a setting and a restart. The
- * real adapter (`flixora`) is FLIX-02 and is added here, and only here.
+ * real adapter (`flixora`, FLIX-02) is added here, and only here: this is the
+ * one file outside `src/flixora/` that imports it. A `flixora` server with a
+ * setting missing stops at boot, naming the setting.
  */
 @Module({
   imports: [ConfigModule],
@@ -28,6 +31,8 @@ import { StandinMoviePartner } from './standin/standin-movie-partner';
           {
             off: () => new OffMoviePartner(),
             standin: () => new StandinMoviePartner(),
+            flixora: () =>
+              FlixoraMoviePartner.fromConfig((key) => config.get<string>(key)),
           },
         ),
     },
