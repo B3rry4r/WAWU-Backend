@@ -794,6 +794,11 @@ describe('A fee given back that Nuvion accepts and then fails is given back unde
       'user out completed',
     ]);
     expect(rows.filter((r) => r.discrepancy !== null)).toEqual([]);
+    // The sender's history names the two rows as what they are (round 2).
+    const mine = rows.filter((r) => r.walletKind === 'user');
+    expect(
+      mine.map((r) => `${r.direction} ${r.counterpartyName}`).sort(),
+    ).toEqual(["in WAWU's fee given back", "out WAWU's fee"]);
     await bothEqualNuvion(me);
   });
 

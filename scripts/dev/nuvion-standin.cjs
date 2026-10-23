@@ -1066,6 +1066,11 @@ on('POST', '/counterparties', (req) => {
   counterparties.set(c.id, c);
   return { status: 201, body: envelope(c, 'Counterparty created successfully') };
 });
+on('GET', /^\/counterparties\/[A-Za-z0-9]+$/, (req) => {
+  const c = counterparties.get(m(req, 2));
+  if (!c || c.entity_id !== (req.query.entity_id || PARENT_ENTITY)) return notFound();
+  return { status: 200, body: envelope(c, 'Counterparty retrieved successfully') };
+});
 on('GET', '/counterparties', (req) => {
   const owner = req.query.entity_id || PARENT_ENTITY;
   const rows = [...counterparties.values()].filter((c) => c.entity_id === owner && (!req.query.status || c.status === req.query.status));

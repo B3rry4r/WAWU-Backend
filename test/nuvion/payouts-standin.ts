@@ -564,6 +564,15 @@ export class NuvionPayoutsStandin {
       };
     });
 
+    this.route('GET', /^\/counterparties\/[A-Za-z0-9]+$/, (req) => {
+      const c = this.counterparties.get(req.path.split('/')[2]);
+      if (!c || c.entity_id !== entityOf(req)) return notFound();
+      return {
+        status: 200,
+        body: envelope(c, 'Counterparty retrieved successfully'),
+      };
+    });
+
     this.route('GET', '/counterparties', (req) => {
       const rows = [...this.counterparties.values()].filter(
         (c) =>

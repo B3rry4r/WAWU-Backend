@@ -154,10 +154,9 @@ describe('FIX-98: the counterparty carries the sender state and postal code', ()
     });
   });
 
-  it('the stand-in refuses a transfer to a counterparty without them, with dev 422', async () => {
-    // A counterparty as the build before FIX-98 made it, and its payment detail.
+  /** A counterparty as the build before FIX-98 made it, with its payment detail. */
+  const earlierBuildPayee = async (entityId: string) => {
     const op = { name: 'spec counterparty', call: 'write' } as const;
-    const entityId = person(entityAddress());
     const cp = await client.post<{ id: string }>(op, '/counterparties', {
       type: 'individual',
       entity_id: entityId,
@@ -185,20 +184,72 @@ describe('FIX-98: the counterparty carries the sender state and postal code', ()
       bank_name: 'Access Bank',
       account_number: NUMBER,
     });
+    return { counterpartyId: cp.data.id, paymentDetailId: pd.data.id };
+  };
+
+  it('the stand-in refuses a transfer to a counterparty without them, with dev 422', async () => {
+    const entityId = person(entityAddress());
+    const kept = await earlierBuildPayee(entityId);
+    const account = [...nuv.accounts.values()].find(
+      (a) => a.entity_id === entityId,
+    )!;
+    const op = { name: 'spec transfer', call: 'write' } as const;
     const e = await fails(
-      area.bankTransfer({
-        from: { kind: 'customer', customerId: entityId },
-        accountNumber: NUMBER,
-        accountName: HOLDER,
-        bankCode: '044',
-        amountKobo: 250_000n,
-        reference: ref(),
-        payee: { counterpartyId: cp.data.id, paymentDetailId: pd.data.id },
+      client.post(op, '/transfers', {
+        entity_id: entityId,
+        account_id: account.id,
+        counterparty_id: kept.counterpartyId,
+        payment_detail_id: kept.paymentDetailId,
+        amount: 250_000,
+        currency: 'NGN',
+        payment_type: 'bank-transfer',
+        unique_reference: ref(),
+        narration: 'spec',
       }),
     );
     expect(e.kind).toBe('validation');
     expect(e.messages.join(' ')).toContain('counterparty.address.state');
     expect(e.messages.join(' ')).toContain('counterparty.address.postal_code');
+  });
+
+  it('kept payee ids whose counterparty lacks them are not used: a complete counterparty is made and Nuvion takes the transfer (round 2)', async () => {
+    const entityId = person(entityAddress());
+    const kept = await earlierBuildPayee(entityId);
+    pay.counterpartyRequests.length = 0;
+    const r = await area.bankTransfer({
+      from: { kind: 'customer', customerId: entityId },
+      accountNumber: NUMBER,
+      accountName: HOLDER,
+      bankCode: '044',
+      amountKobo: 250_000n,
+      reference: ref(),
+      payee: kept,
+    });
+    expect(r.transactionId).toMatch(/^01TRF/);
+    expect(pay.counterpartyRequests).toHaveLength(1);
+    expect(r.payee?.counterpartyId).not.toBe(kept.counterpartyId);
+    expect(pay.counterpartyRequests[0]).toMatchObject({
+      profile: {
+        address: { state_or_province: 'Lagos', postal_code: '101241' },
+      },
+    });
+  });
+
+  it('kept payee ids whose counterparty has them are reused: no counterparty is made', async () => {
+    const entityId = person(entityAddress());
+    const first = await send(entityId);
+    pay.counterpartyRequests.length = 0;
+    const again = await area.bankTransfer({
+      from: { kind: 'customer', customerId: entityId },
+      accountNumber: NUMBER,
+      accountName: HOLDER,
+      bankCode: '044',
+      amountKobo: 100_000n,
+      reference: ref(),
+      payee: first.payee,
+    });
+    expect(again.payee).toEqual(first.payee);
+    expect(pay.counterpartyRequests).toHaveLength(0);
   });
 
   it('a counterparty from the earlier build (no state or postal code) is not adopted: a complete one is made', async () => {

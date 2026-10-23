@@ -74,6 +74,14 @@ export const BANK_TRANSFER_ROUTE = 'POST money/transfers/bank';
 /** What the provider sees on the transfer. Names nobody and nothing personal. */
 export const TRANSFER_NARRATION = 'WAWU transfer';
 
+/**
+ * What the sender's history calls the fee row and its give-back (FIX-98):
+ * WAWU's fee, as the receipt names it, and that fee given back. Copy for the
+ * person: no em-dash, no provider name.
+ */
+export const FEE_ROW_NAME = "WAWU's fee";
+export const FEE_GIVEN_BACK_NAME = "WAWU's fee given back";
+
 /** Added to a send's reference for the transfer that moves WAWU's fee (FIX-52). */
 export const FEE_LEG_SUFFIX = '-fee';
 /** Added to the same reference for the transfer that gives the fee back (FIX-52). */
@@ -1303,7 +1311,7 @@ export class WalletTransferService implements OnModuleInit {
         totalKobo: amount,
         narration: TRANSFER_NARRATION,
         references: { customerReference: reference },
-        counterparty: { kind: 'wawu', name: 'WAWU' },
+        counterparty: { kind: 'wawu', name: FEE_GIVEN_BACK_NAME },
         source: 'send',
       },
       undefined,
@@ -1367,7 +1375,7 @@ export class WalletTransferService implements OnModuleInit {
           references: {
             customerReference: `${t.customerReference}${FEE_LEG_SUFFIX}`,
           },
-          counterparty: { kind: 'wawu', name: 'WAWU' },
+          counterparty: { kind: 'wawu', name: FEE_ROW_NAME },
           source: 'send',
         },
         undefined,

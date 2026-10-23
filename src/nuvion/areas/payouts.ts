@@ -431,14 +431,22 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
       // that the payment detail is this very account (a row whose account
       // changed, or ids that belong to another payee, never send money to
       // the wrong place); otherwise the payee is found or made afresh.
+      // A counterparty whose address has no state or postal code is not used
+      // either: Nuvion refuses a transfer to it (FIX-98).
       if (
         given !== null &&
-        !(await this.payeeIsThisAccount(
-          source.entityId,
-          given,
-          bank,
-          input.accountNumber,
-        ))
+        !(
+          (await this.payeeIsThisAccount(
+            source.entityId,
+            given,
+            bank,
+            input.accountNumber,
+          )) &&
+          (await this.counterpartyAddressIsComplete(
+            source.entityId,
+            given.counterpartyId,
+          ))
+        )
       ) {
         given = null;
       }
@@ -838,6 +846,40 @@ export class NuvionPayoutsArea implements NuvionPayoutsMethods {
       (code === null || code === bank.code) &&
       (counterparty === null || counterparty === given.counterpartyId) &&
       (d.deleted === undefined || d.deleted === 0)
+    );
+  }
+
+  /**
+   * Whether a kept counterparty's address carries a state and a postal code
+   * (FIX-98), read from Nuvion. A counterparty Nuvion no longer knows is not
+   * usable; one that states no address at all is as `findCounterparty` takes
+   * it. Any other failure is not an answer, and is thrown.
+   */
+  private async counterpartyAddressIsComplete(
+    entityId: string | null,
+    counterpartyId: string,
+  ): Promise<boolean> {
+    const op: NuvionOp = { name: 'check kept counterparty', call: 'read' };
+    let answer;
+    try {
+      answer = await this.client.get<unknown>(
+        op,
+        `/counterparties/${encodeURIComponent(counterpartyId)}`,
+        entityId === null ? undefined : { entity_id: entityId },
+      );
+    } catch (e) {
+      if (e instanceof NuvionError && e.kind === 'not_found') return false;
+      throw e;
+    }
+    const d = answer.data;
+    const address =
+      isRecord(d) && isRecord(d.profile) && isRecord(d.profile.address)
+        ? d.profile.address
+        : null;
+    return (
+      address === null ||
+      (text(address, 'state_or_province') !== null &&
+        text(address, 'postal_code') !== null)
     );
   }
 
