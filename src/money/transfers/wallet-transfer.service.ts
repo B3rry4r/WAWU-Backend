@@ -1248,15 +1248,80 @@ export class WalletTransferService implements OnModuleInit {
   }
 
   /**
+   * The person's side of the fee given back (FIX-98): money IN on the
+   * sender's wallet, category `refund`, under the give-back's own reference
+   * (the try that landed), at the amount that moved. With the merchant's
+   * `out` row (`recordFeeBack`) it is the give-back as a pair of rows of its
+   * own, as a hold's refund is written (`WalletHoldService.writeLedger`). The
+   * sender's fee row (`<send>-fee`) stays `completed`, as Nuvion shows the
+   * fee's transfer (`successful`): the give-back is a transfer of its own, so
+   * that transfer never turned reversed at Nuvion, and a row turned `reversed`
+   * made the sweep write a discrepancy when its delivery came in. The two
+   * rows net to nothing, as the provider's balance does. Written once (the
+   * ledger finds the row by account, direction and reference). Not written
+   * when the fee is carried on a reversed send's own row (FIX-85), which nets
+   * what came back itself: that fee row turns `reversed` as before.
+   */
+  private async recordFeeBackToSender(
+    t: TransferRow,
+    receipt: ProviderTransferReceipt,
+    reference: string,
+  ): Promise<void> {
+    if (!t.payerWawuUserId || !t.payerAccountNumber) return;
+    // Written by an earlier look at this very give-back: nothing more (a
+    // later look must not turn the fee row reversed over it).
+    const written = await this.ledger.entriesFor(t.payerAccountNumber, 'in', [
+      reference,
+    ]);
+    if (written.length > 0) return;
+    const [legId] = await this.ledger.entriesFor(t.payerAccountNumber, 'out', [
+      `${t.customerReference}${FEE_LEG_SUFFIX}`,
+    ]);
+    const leg = legId
+      ? await this.prisma.fintavaLedgerEntry.findUnique({
+          where: { id: legId },
+          select: { status: true },
+        })
+      : null;
+    if (t.status === 'reversed' || leg?.status === 'reversed') {
+      await this.noteFeeLegReturned(t, reference);
+      return;
+    }
+    const amount = koboNumber(receipt.amountKobo);
+    await this.ledger.record(
+      {
+        wallet: {
+          kind: 'user',
+          wawuUserId: t.payerWawuUserId,
+          accountNumber: t.payerAccountNumber,
+        },
+        direction: 'in',
+        status: 'completed',
+        category: 'refund',
+        amountKobo: amount,
+        feeKobo: 0,
+        totalKobo: amount,
+        narration: TRANSFER_NARRATION,
+        references: { customerReference: reference },
+        counterparty: { kind: 'wawu', name: 'WAWU' },
+        source: 'send',
+      },
+      undefined,
+      { quiet: true },
+    );
+  }
+
+  /**
    * The sender's side of the fee while it is owed (FIX-70 round 2): a send
    * that failed counts nothing in the ledger, yet the fee's own transfer took
    * the fee out of the wallet and the provider's balance stays short of it
    * until a fee-back lands. So the fee is a row of its own on the sender's
    * wallet, `completed` money OUT under the fee transfer's reference, the
-   * amount that transfer moved and the charge on it. It turns `reversed` (a
-   * debit that came back, which moves nothing) only when a fee-back has
-   * landed (`noteFeeLegReturned`). Written once; a failure is logged and the
-   * next look writes it. Never for a send that stands, nor for a reversed one
+   * amount that transfer moved and the charge on it. It stays `completed`
+   * when a fee-back lands, as Nuvion's transfer does: the give-back is a row
+   * of its own (`recordFeeBackToSender`, FIX-98). It turns `reversed` only
+   * when the send itself turns reversed and carries the fee (below). Written
+   * once; a failure is logged and the next look writes it. Never for a send that stands, nor for a reversed one
    * (after or before it completed): its own row carries the fee in its total,
    * less what came back, so a row here would count the fee twice (round 3).
    * A failed send that then turns reversed (FIX-85) has the row already: it is
@@ -1269,7 +1334,16 @@ export class WalletTransferService implements OnModuleInit {
   ): Promise<void> {
     if (!t.payerWawuUserId || !t.payerAccountNumber) return;
     if (t.status === 'reversed') {
-      await this.noteFeeLegReturned(t, t.customerReference);
+      // A fee-back that landed before this is a row of its own (FIX-98): it
+      // and the fee row net to nothing, so the fee row stays as it is.
+      const back = await this.ledger.entriesFor(
+        t.payerAccountNumber,
+        'in',
+        [1, 2].map((n) => feeBackReference(t.customerReference, n as 1 | 2)),
+      );
+      if (back.length === 0) {
+        await this.noteFeeLegReturned(t, t.customerReference);
+      }
       return;
     }
     if (t.status !== 'failed') return;
@@ -1360,7 +1434,7 @@ export class WalletTransferService implements OnModuleInit {
           narration: TRANSFER_NARRATION,
         });
         await this.recordFeeBack(t, platformNumber, receipt, reference);
-        await this.noteFeeLegReturned(t, reference);
+        await this.recordFeeBackToSender(t, receipt, reference);
         return 'landed';
       } catch (e) {
         if (!(e instanceof WalletProviderError) || !e.providerFailed) throw e;

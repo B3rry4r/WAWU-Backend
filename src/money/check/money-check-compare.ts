@@ -247,11 +247,21 @@ export function compareMovements(input: DebitCompareInput): DebitCompareResult {
   const claimed = new Map<string, string>();
   const duplicate = new Set<string>();
   const matches = new Map<ProviderTransaction, LedgerOutRow | null>();
+  // The sender's own row for a fee transfer (FIX-98): written while the fee
+  // is owed after a send that did not stand, and left `completed` when the
+  // fee is given back, as the provider's transfer is. It is the leg's own
+  // row (found by the leg's own reference), not the send's.
+  const legRows = new Map<ProviderTransaction, LedgerOutRow>();
   for (const p of lines) {
     if (isLeg(p)) {
       const had = legs.get(p.feeLegOf as string);
       if (!had || (had.outcome !== 'completed' && p.outcome === 'completed')) {
         legs.set(p.feeLegOf as string, p);
+      }
+      const own = matchOf(p);
+      if (own) {
+        legRows.set(p, own);
+        if (!claimed.has(own.id)) claimed.set(own.id, p.id);
       }
       continue;
     }
@@ -289,6 +299,11 @@ export function compareMovements(input: DebitCompareInput): DebitCompareResult {
       continue;
     }
     if (isLeg(p)) {
+      const own = legRows.get(p) ?? null;
+      if (own !== null) {
+        judgePair(check, own, p, now, settleMs, findings, direction, false);
+        continue;
+      }
       const send = byRef.get(p.feeLegOf as string) ?? null;
       if (send === null) {
         judgeProviderOnly(check, p, findings, notices, direction);

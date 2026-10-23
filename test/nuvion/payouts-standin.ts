@@ -790,6 +790,40 @@ export class NuvionPayoutsStandin {
       ) {
         return notFound();
       }
+      // Dev refuses a transfer whose counterparty's address has no state or
+      // postal code, though the counterparty itself was accepted (FIX-98,
+      // request 01M5MJABG4WBBV51HMQC8YZ52C).
+      const cpAddress = (counterparty.profile.address ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const lacking: Array<Record<string, unknown>> = [];
+      if (!str(cpAddress.state_or_province)) {
+        lacking.push({
+          'counterparty.address.state': requiredField(
+            'counterparty.address.state',
+          ),
+        });
+      }
+      if (!str(cpAddress.postal_code)) {
+        lacking.push({
+          'counterparty.address.postal_code': requiredField(
+            'counterparty.address.postal_code',
+          ),
+        });
+      }
+      if (lacking.length > 0) {
+        return {
+          status: 422,
+          body: {
+            ...errorBody(
+              'error_validation_error',
+              'Validation failed for one or more fields',
+            ),
+            validations: lacking,
+          },
+        };
+      }
       // A repeated reference (per source account) returns the original.
       const original = [...this.nuv.transfers.values()].find(
         (t) =>

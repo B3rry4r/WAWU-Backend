@@ -449,6 +449,29 @@ function createTransfer(b) {
     const cp = counterparties.get(String(b.counterparty_id));
     const owner = entity || PARENT_ENTITY;
     if (!detail || !cp || detail.entity_id !== owner || detail.counterparty_id !== cp.id) return notFound();
+    // Dev refuses a transfer whose counterparty's address has no state or postal code, though the
+    // counterparty itself was accepted (FIX-98, request 01M5MJABG4WBBV51HMQC8YZ52C).
+    const cpAddress = cp.profile && typeof cp.profile.address === 'object' && cp.profile.address ? cp.profile.address : {};
+    const lacking = [];
+    for (const [shown, field] of [
+      ['counterparty.address.state', 'state_or_province'],
+      ['counterparty.address.postal_code', 'postal_code'],
+    ]) {
+      if (!cpAddress[field]) {
+        lacking.push({
+          [shown]: {
+            type: 'error_validation_required_field_missing',
+            message: `The '${shown}' field is required. Please include it and try again.`,
+          },
+        });
+      }
+    }
+    if (lacking.length > 0) {
+      return {
+        status: 422,
+        body: { ...errorBody('error_validation_error', 'Validation failed for one or more fields'), validations: lacking },
+      };
+    }
     counterpartyId = cp.id;
     paymentDetailId = detail.id;
   }
