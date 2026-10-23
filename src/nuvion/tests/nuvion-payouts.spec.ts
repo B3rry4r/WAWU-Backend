@@ -220,10 +220,12 @@ describe('NUV-06: the payouts area against the Nuvion stand-in', () => {
         (x) => x.path === '/counterparty-lookups',
       )!;
       expect(lookup.method).toBe('POST');
+      // FIX-97: dev answers 422 "The 'issuer' field is required" to a
+      // `bank_code` body; the bank goes in `issuer.code`.
       expect(lookup.body).toEqual({
         country: 'NG',
         account_number: NUMBER,
-        bank_code: '044',
+        issuer: { code: '044' },
       });
       expect(lookup.headers.authorization).toBe(`Bearer ${KEY}`);
     });
@@ -373,23 +375,30 @@ describe('NUV-06: the payouts area against the Nuvion stand-in', () => {
     });
 
     it('an answer with no name, with a blank one, or for another account is never a match', async () => {
-      const ok = { account_number: NUMBER, bank_code: '044' };
+      // The answer's shape is dev's (FIX-97): the holder is `details.name`.
+      const ok = {
+        status: 'successful',
+        details: {
+          account_number: NUMBER,
+          issuer: { code: '044' },
+          name: HOLDER,
+        },
+      };
+      const withDetails = (over: Record<string, unknown>) => ({
+        ...ok,
+        details: { ...ok.details, ...over },
+      });
       const bodies: unknown[] = [
         {},
-        { ...ok },
-        { ...ok, account_name: '   ' },
-        { ...ok, account_name: 42 },
-        { ...ok, account_name: 'X'.repeat(300) },
-        {
-          account_number: '2222222222',
-          bank_code: '044',
-          account_name: 'Someone Else',
-        },
-        {
-          account_number: NUMBER,
-          bank_code: '058',
-          account_name: 'Someone Else',
-        },
+        { status: 'successful' },
+        { status: 'successful', details: {} },
+        withDetails({ name: '   ' }),
+        withDetails({ name: 42 }),
+        withDetails({ name: 'X'.repeat(300) }),
+        withDetails({ name: 'Someone Else', account_number: '2222222222' }),
+        withDetails({ name: 'Someone Else', issuer: { code: '058' } }),
+        // Nuvion says it did not resolve the account, whatever else it carries.
+        { ...ok, status: 'failed' },
         null,
       ];
       for (const data of bodies) {
@@ -407,16 +416,21 @@ describe('NUV-06: the payouts area against the Nuvion stand-in', () => {
       }
     });
 
-    it("the holder's name is read from the shapes a lookup may use, one line", async () => {
-      for (const data of [
-        { account_holder_name: 'Chidinma   Okafor', account_number: NUMBER },
-        { account_name: 'Chidinma Okafor\n', account_number: NUMBER },
-        { holder_name: 'Chidinma Okafor' },
-        { account: { account_name: 'Chidinma Okafor' } },
-      ]) {
+    it("the holder's name is read from `details.name`, one line, and from no other field", async () => {
+      const detailsOf = (name: string) => ({
+        status: 'successful',
+        status_reason: 'successfully_resolved',
+        details: {
+          account_number: NUMBER,
+          issuer: { code: '044', name: 'N/A', short_name: 'N/A' },
+          name,
+        },
+        meta: { routability: 'routable' },
+      });
+      for (const name of ['Chidinma   Okafor', 'Chidinma Okafor\n']) {
         standin.next({
           status: 200,
-          body: { status: 'success', message: 'ok', data },
+          body: { status: 'success', message: 'ok', data: detailsOf(name) },
         });
         expect(
           (
@@ -426,6 +440,26 @@ describe('NUV-06: the payouts area against the Nuvion stand-in', () => {
             })
           ).accountName,
         ).toBe('Chidinma Okafor');
+      }
+      // The guessed shapes the area used to read (before dev answered) are
+      // not Nuvion's: the public docs name none of them for a lookup.
+      for (const data of [
+        { account_holder_name: 'Chidinma Okafor', account_number: NUMBER },
+        { account_name: 'Chidinma Okafor', account_number: NUMBER },
+        { holder_name: 'Chidinma Okafor' },
+        { account: { account_name: 'Chidinma Okafor' } },
+      ]) {
+        standin.next({
+          status: 200,
+          body: { status: 'success', message: 'ok', data },
+        });
+        expect(
+          (
+            await fails(
+              area.checkAccountName({ accountNumber: NUMBER, bankCode: '044' }),
+            )
+          ).kind,
+        ).toBe('bad_response');
       }
       expect(cleanAccountName('A\u0000B')).toBe('A B');
       expect(cleanAccountName('   ')).toBeNull();
@@ -480,6 +514,9 @@ describe('NUV-06: the payouts area against the Nuvion stand-in', () => {
           first_name: 'Chidinma',
           last_name: 'Okafor',
           relationship: 'vendor',
+          // The sending person's own, read from their entity (FIX-97).
+          email: `${entityId.toLowerCase()}@standin.example.test`,
+          address: { line1: '12 Admiralty Way', city: 'Lagos', country: 'NG' },
         },
       });
       expect(pay.paymentDetailRequests.at(-1)).toMatchObject({

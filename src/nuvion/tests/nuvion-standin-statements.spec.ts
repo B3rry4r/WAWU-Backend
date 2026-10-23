@@ -313,7 +313,14 @@ describe('FIX-67: the stand-in answers account statements', () => {
     const cp = await call<{ data: { id: string } }>('POST', '/counterparties', {
       entity_id: ada.entity,
       type: 'individual',
-      profile: { first_name: 'Cy', last_name: 'Spec' },
+      // Dev refuses an individual without an email and an address (FIX-97): the
+      // stand-in does too, so the spec gives both (the one input changed here).
+      profile: {
+        first_name: 'Cy',
+        last_name: 'Spec',
+        email: 'cy.spec@example.test',
+        address: { line1: '1 Spec Road', city: 'Lagos', country: 'NG' },
+      },
     });
     const detail = await call<{ data: { id: string } }>(
       'POST',
