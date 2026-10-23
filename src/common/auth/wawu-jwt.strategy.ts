@@ -32,9 +32,7 @@ export function isAccessToken(claims: object): boolean {
 @Injectable()
 export class WawuJwtStrategy extends PassportStrategy(Strategy, 'wawu-jwt') {
   constructor(config: ConfigService) {
-    const jwksUri =
-      config.get<string>('WAWU_ID_JWKS_URL') ??
-      'http://localhost:4001/.well-known/jwks.json';
+    const jwksUri = config.get<string>('WAWU_ID_JWKS_URL') ?? 'http://localhost:4001/.well-known/jwks.json';
 
     // WAWU ID signs for several products (Basket, Beauty, this hub). Without
     // an issuer/audience check ANY valid RS256 token from that JWKS is
