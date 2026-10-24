@@ -525,6 +525,26 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     clear: ['recipientAccountNumber', 'recipientName'],
   },
 
+  // Sending money abroad (NUV-11): this person's saved foreign recipients, the
+  // quotes they asked for and the sends they made. The recipient rows hold a
+  // third party's bank or mobile money details as the SENDER's own list, so
+  // they go with the sender. Sends and quotes are money records of the same
+  // kind as FintavaLedgerEntry above and are classified the same way: they go
+  // with the person, after the same rule of an empty wallet first (R-17), and
+  // a send still in flight blocks the deletion (account-deletion-money.service
+  // counts it under payment_in_progress), so no live send is deleted from under
+  // the sweep that finds it. Default (lead), owner may override: how long money
+  // records are kept after an account is deleted is the owner's call. Listed
+  // child first: a send points at its quote and its recipient (Restrict), a
+  // quote at its recipient.
+  { model: 'AbroadSend', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'AbroadQuote', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'AbroadRecipient', column: 'wawuUserId', disposition: 'OWNED' },
+  // The admin's freeze of this person's sends abroad (NUV-11): the state of
+  // the account, so it goes with the account. The history of freezing and
+  // unfreezing stays in AbroadAdminAudit (AUDIT, below).
+  { model: 'AbroadFreeze', column: 'wawuUserId', disposition: 'OWNED' },
+
   // ── points (POINTS-01) ──────────────────────────────────────────────────
   // This person's points: the ledger of every change, the holds that spent
   // them and the lots they were held in. All of it is theirs and goes with
@@ -868,6 +888,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'AUDIT',
   },
   { model: 'AdminEventReview', column: 'hostWawuId', disposition: 'AUDIT' },
+  // What an admin did to a person's sends abroad (NUV-11): freeze, unfreeze,
+  // cancel. Kept like every other admin action record.
+  { model: 'AbroadAdminAudit', column: 'subjectWawuId', disposition: 'AUDIT' },
 ];
 
 /**
@@ -896,6 +919,10 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'AddMoneySession', column: 'wawuFeeKobo' },
   // WAWU's fee in kobo on a send between two people (WALLET-07), not a person.
   { model: 'WalletTransfer', column: 'wawuFeeKobo' },
+  // WAWU's fee, in kobo, on a quote and on a send abroad (NUV-11), and whether it was taken: not a person.
+  { model: 'AbroadQuote', column: 'wawuFeeKobo' },
+  { model: 'AbroadSend', column: 'wawuFeeKobo' },
+  { model: 'AbroadSend', column: 'wawuFeeTaken' },
   // WAWU's fee in the currency's smallest unit on a quote and on an operation (WALLET-21), not a person.
   { model: 'FxQuote', column: 'wawuFeeMinor' },
   { model: 'FxOperation', column: 'wawuFeeMinor' },
