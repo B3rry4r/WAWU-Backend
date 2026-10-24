@@ -798,7 +798,9 @@ model ContentPiece {
   viewedBy  ContentView[]
   sharedBy  ContentShare[]
   ratings   ContentRating[]
-  detail    ContentDetail?
+  detail    ContentDetail? @relation("DetailOf")
+  /// FIX-111: the side rows of pieces that say they come from this course (H24's "From the course" row). Not a column: see ContentDetail.
+  childDetails ContentDetail[] @relation("ParentCourse")
 
   @@index([creatorWawuId])
   @@index([status])
@@ -1040,12 +1042,19 @@ model ContentRating {
 /// the free preview file holds; the server cannot open the file to check.
 model ContentDetail {
   contentId          String       @id
-  content            ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  content            ContentPiece @relation("DetailOf", fields: [contentId], references: [id], onDelete: Cascade)
   freePreviewPages   Int?
   freePreviewSeconds Int?
   freePreviewLessons Int?
   /// Set when the creator changes the piece or its preview.
   contentUpdatedAt   DateTime?
+  /// FIX-111 (H24, G-HOME-08-1): the course, one of the same creator's own, that this piece comes from ("From the course <title>").
+  /// It lives on this side row and not on ContentPiece because every live content response is the piece's row (`toResponse`
+  /// spreads it), so a column there would widen what the web reads. Cleared when the course row is deleted.
+  parentCourseId     String?
+  parentCourse       ContentPiece? @relation("ParentCourse", fields: [parentCourseId], references: [id], onDelete: SetNull)
+
+  @@index([parentCourseId])
 }
 
 /// One person looked at one profile, on one day.

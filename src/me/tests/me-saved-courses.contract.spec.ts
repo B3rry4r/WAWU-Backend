@@ -29,7 +29,6 @@ import { DirectMessageModule } from '../../direct-message/direct-message.module'
 import { FollowRelationshipModule } from '../../follow-relationship/follow-relationship.module';
 import { BlockedAccountModule } from '../../blocked-account/blocked-account.module';
 import { MeModule } from '../me.module';
-import { MeCoursesService } from '../me-courses.service';
 import type { MeCountsView } from '../me-view.type';
 
 const dataOf = <T>(res: { body: unknown }): T => (res.body as { data: T }).data;
@@ -53,16 +52,6 @@ async function waitForHealth(url: string, timeoutMs = 15000): Promise<boolean> {
     await new Promise((r) => setTimeout(r, 200));
   }
   return false;
-}
-
-async function login(identifier: string): Promise<string> {
-  const res = await fetch(`${MOCK_WAWU_ID_BASE}/auth/login`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identifier }),
-  });
-  if (!res.ok) throw new Error(`mock-wawu-id login failed for ${identifier}`);
-  return ((await res.json()) as { accessToken: string }).accessToken;
 }
 
 interface Who {

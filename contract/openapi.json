@@ -8165,6 +8165,18 @@
                 "rejected"
               ]
             }
+          },
+          {
+            "name": "contentType",
+            "required": false,
+            "in": "query",
+            "description": "Only the creator's own courses. Left out, every kind.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "course"
+              ]
+            }
           }
         ],
         "responses": {
@@ -38620,6 +38632,11 @@
           "fullAsset": {
             "type": "string",
             "format": "uri"
+          },
+          "parentCourseId": {
+            "type": "string",
+            "description": "FIX-111 (H24): the creator's own course this piece comes from (\"From the course VFX for Beginners\"). Optional, and only for a\npiece that is not itself a course; the course must be the creator's, live or in review. Stored on the piece's side row.",
+            "format": "uuid"
           }
         },
         "required": [
@@ -38805,7 +38822,8 @@
           },
           "assetKey": {
             "type": "string",
-            "description": "The lesson's file: the key (or link) of an upload this person made under `content/full`. Left out, the lesson has no file yet."
+            "nullable": true,
+            "description": "The lesson's file: the key (or link) of an upload this person made under `content/full`. A new lesson with none has no file yet.\nA lesson kept by `id` keeps the file it has when this is left out (FIX-111: the editor does not know the key of a file it did not\nupload), takes a new one when a key is sent, and loses its file only when this is `null`."
           }
         },
         "required": [
@@ -49610,6 +49628,34 @@
           "hasFile"
         ]
       },
+      "ParentCourse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "lessonCount": {
+            "type": "number"
+          },
+          "price": {
+            "type": "number"
+          },
+          "previewAssetUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "lessonCount",
+          "price",
+          "previewAssetUrl"
+        ]
+      },
       "RatingState": {
         "type": "object",
         "properties": {
@@ -49715,6 +49761,10 @@
               "$ref": "#/components/schemas/DetailLesson"
             }
           },
+          "parentCourse": {
+            "$ref": "#/components/schemas/ParentCourse",
+            "nullable": true
+          },
           "rating": {
             "$ref": "#/components/schemas/RatingState"
           },
@@ -49731,6 +49781,7 @@
           "studentCount",
           "freePreview",
           "lessons",
+          "parentCourse",
           "rating",
           "creator"
         ]
