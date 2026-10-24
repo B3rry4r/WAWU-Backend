@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AccountPurgeModule } from '../account-purge/account-purge.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { PointsSpendModule } from '../points/spend/points-spend.module';
@@ -7,6 +8,7 @@ import { StorageModule } from '../storage/storage.module';
 import { AI_AUDIO_STORE, StorageAiAudioStore } from './audio/ai-audio-store';
 import { AiJobService } from './ai-job.service';
 import { AiToolsController } from './ai-tools.controller';
+import { AiToolsPurgeService } from './ai-tools-purge.service';
 import { AiVoiceSamplesController } from './ai-voice-samples.controller';
 import {
   AI_INPUT_FILES,
@@ -37,6 +39,8 @@ import { ProviderCopyService } from './voice/provider-copy.service';
     PlanSettingsModule,
     PointsSpendModule,
     StorageModule,
+    // AITOOLS-07: the purge asks the provider to drop a person's voice copy first.
+    AccountPurgeModule,
   ],
   controllers: [AiToolsController, AiVoiceSamplesController],
   providers: [
@@ -57,6 +61,8 @@ import { ProviderCopyService } from './voice/provider-copy.service';
     // AITOOLS-04 round 2: deletes the provider's copy of a transcript or a
     // cleaned recording, trying again until the provider has stored it.
     ProviderCopyService,
+    // AITOOLS-07: account deletion removes any voice copy the provider still holds, before the job rows go.
+    AiToolsPurgeService,
   ],
   exports: [AiJobService, AiInputService, AI_VOICE_PROVIDER, AI_AUDIO_STORE],
 })

@@ -341,7 +341,13 @@ export class AiJobService {
     const rows = await this.prisma.aiToolJob.findMany({
       where: {
         wawuUserId,
-        ...(query.saved === true ? { savedAt: { not: null } } : {}),
+        // `saved=true`: only the saved results; `saved=false`: only the ones
+        // not saved; absent: every job.
+        ...(query.saved === true
+          ? { savedAt: { not: null } }
+          : query.saved === false
+            ? { savedAt: null }
+            : {}),
         ...(after
           ? {
               OR: [
@@ -511,8 +517,11 @@ export class AiJobService {
       }
       input = {
         file: sample,
+        // Answers true only when the note is really on the job's row. If the
+        // write failed (or the row is gone), nothing was noted, so the adapter
+        // keeps the voice's removal to itself and drops it at the end of the run.
         noteCopy: async (copy) => {
-          await this.copies.note(job.id, copy);
+          if (!(await this.copies.note(job.id, copy))) return false;
           noted = copy;
           return true;
         },

@@ -275,6 +275,8 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           characters: true,
           units: true,
           costPoints: true,
+          // AITOOLS-07: when the person saved the result to their library.
+          savedAt: true,
           createdAt: true,
           finishedAt: true,
         },
@@ -284,6 +286,8 @@ export const EXPORT_SECTIONS: ExportSection[] = [
     // VOICE-01: how the person's name is said, their Voice Intro script, the
     // consent they gave and when they recorded the sample. The recording and
     // the audio are files, not rows, and stay out like every other file.
+    // AITOOLS-07: the separate agreement for VoiceOver in their own voice
+    // (when, and the exact words they agreed to) goes in beside it.
     key: 'voiceProfile',
     models: ['VoiceProfile', 'VoiceNamePreview'],
     load: (prisma, me) =>
@@ -296,6 +300,8 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           introTextAt: true,
           consentAt: true,
           consentLine: true,
+          ownVoiceConsentAt: true,
+          ownVoiceConsentLine: true,
           sampleAt: true,
           audioAt: true,
         },
@@ -910,6 +916,8 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           tags: true,
           accessType: true,
           price: true,
+          // AITOOLS-07: the AI tool job whose audio the person attached.
+          mediaJobId: true,
           createdAt: true,
           updatedAt: true,
         },

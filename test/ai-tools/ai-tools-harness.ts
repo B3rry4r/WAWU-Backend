@@ -7,6 +7,9 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
+import { AccountPurgeService } from '../../src/account-purge/account-purge.service';
+import { AccountPurgeHooks } from '../../src/account-purge/purge-hooks';
+import { AiToolsPurgeService } from '../../src/ai-tools/ai-tools-purge.service';
 import { WawuAuthModule } from '../../src/common/auth/wawu-auth.module';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../src/common/interceptors/response.interceptor';
@@ -360,6 +363,11 @@ export async function bootAiTools(): Promise<AiHarness> {
       ProviderCopyService,
       OwnVoiceService,
       { provide: VOICE_FILES, useValue: voiceFiles },
+      // AITOOLS-07 round 3: the account purge, with the AI tools' step that
+      // removes a voice copy at the provider before the job rows go.
+      AccountPurgeHooks,
+      AccountPurgeService,
+      AiToolsPurgeService,
     ],
   }).compile();
   const app = moduleRef.createNestApplication();

@@ -35767,7 +35767,7 @@
             "name": "saved",
             "required": false,
             "in": "query",
-            "description": "AITOOLS-07: `true` lists only the results the person saved to their library. Absent: every job, as before.",
+            "description": "AITOOLS-07: `true` lists only the results the person saved to their library; `false` lists only the ones not saved. Absent: every job, as before.",
             "schema": {
               "type": "boolean"
             }

@@ -145,15 +145,26 @@ export class ProviderCopyService implements OnModuleDestroy {
     };
   }
 
-  /** Notes the provider's copy on the job's row. Never throws. */
-  async note(jobId: string, copy: ProviderCopy): Promise<void> {
+  /**
+   * Notes the provider's copy on the job's row. Never throws. Answers true only
+   * when the note is on the row (the write went through and found the job); a
+   * caller that hands a copy's removal over on the strength of the note (a
+   * person's own voice) must not do so on a false.
+   */
+  async note(jobId: string, copy: ProviderCopy): Promise<boolean> {
     try {
-      await this.prisma.aiToolJob.updateMany({
+      const written = await this.prisma.aiToolJob.updateMany({
         where: { id: jobId },
         data: { providerRef: markerOf(copy) },
       });
+      if (written.count > 0) return true;
+      this.logger.warn(
+        `ai job ${jobId}: no job to note the provider's copy on`,
+      );
+      return false;
     } catch {
       this.logger.warn(`ai job ${jobId}: the provider's copy was not noted`);
+      return false;
     }
   }
 

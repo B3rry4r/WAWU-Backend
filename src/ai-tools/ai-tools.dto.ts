@@ -202,7 +202,7 @@ export class AiJobListQueryDto {
   @Max(100)
   limit?: number = 20;
 
-  /** AITOOLS-07: `true` lists only the results the person saved to their library. Absent: every job, as before. */
+  /** AITOOLS-07: `true` lists only the results the person saved to their library; `false` lists only the ones not saved. Absent: every job, as before. */
   @ApiPropertyOptional({ type: 'boolean' })
   @IsOptional()
   @Transform(({ value }: { value: unknown }) =>
