@@ -24,11 +24,16 @@ import {
   type AiAudioStore,
 } from './audio/ai-audio-store';
 import { AiInputService } from './input/ai-input-files';
+import { OWN_VOICE_ID } from './own-voice/own-voice-id';
+import { OwnVoiceService } from './own-voice/own-voice.service';
 import { ProviderCopyService } from './voice/provider-copy.service';
 import {
   AiToolError,
   JOB_FAILED_MESSAGE,
   JOB_NOT_FOUND_MESSAGE,
+  JOB_NOT_READY_MESSAGE,
+  OWN_VOICE_CONSENT_REQUIRED_MESSAGE,
+  OWN_VOICE_RECORDING_REQUIRED_MESSAGE,
   KEY_REQUIRED_MESSAGE,
   KEY_REUSED_MESSAGE,
   PROMPT_EMPTY_MESSAGE,
@@ -66,6 +71,7 @@ import {
   AI_VOICE_PROVIDER,
   AiVoiceProviderError,
   type AiVoiceProvider,
+  type ProviderCopy,
 } from './voice/ai-voice-provider';
 
 export { CHARS_PER_MINUTE_SETTING, VOICEOVER_ACTION };
@@ -136,6 +142,7 @@ export class AiJobService {
     @Inject(AI_AUDIO_STORE) private readonly audio: AiAudioStore,
     private readonly input: AiInputService,
     private readonly copies: ProviderCopyService,
+    private readonly own: OwnVoiceService,
   ) {}
 
   /** Characters that make one minute of VoiceOver, from the settings. */
@@ -188,7 +195,10 @@ export class AiJobService {
       throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
     if (req.kind === 'text') {
       const wanted = req.voiceId;
-      if (!this.voice.voices().some((v) => v.id === wanted))
+      if (wanted === OWN_VOICE_ID && tool.id === 'voiceover') {
+        // AITOOLS-07: "Your voice" is only the person's own, after they agreed.
+        await this.assertOwnVoiceReady(wawuUserId);
+      } else if (!this.voice.voices().some((v) => v.id === wanted))
         throw new AiToolError('ai_voice_unknown', VOICE_UNKNOWN_MESSAGE);
       if (req.text === '')
         throw new AiToolError('ai_text_empty', TEXT_EMPTY_MESSAGE);
@@ -268,6 +278,50 @@ export class AiJobService {
     return { job: await this.view(row.job), replayed: false };
   }
 
+  /**
+   * Saves a finished result to the person's library, or takes it out again
+   * (AITOOLS-07, PT2b "Save"). Only the person's own finished job can be
+   * saved; saving twice keeps the first time. A job that is not done cannot be
+   * saved (`409 job_not_ready`); taking one out always works.
+   */
+  async setSaved(
+    wawuUserId: string,
+    id: string,
+    saved: boolean,
+    now: Date = new Date(),
+  ): Promise<AiJobView> {
+    const found = await this.prisma.aiToolJob.findUnique({ where: { id } });
+    if (!found || found.wawuUserId !== wawuUserId)
+      throw new AiToolError('not_found', JOB_NOT_FOUND_MESSAGE);
+    const row = await this.reconcile(found);
+    if (saved && row.state !== 'done')
+      throw new AiToolError('job_not_ready', JOB_NOT_READY_MESSAGE);
+    if (saved === (row.savedAt !== null)) return this.view(row);
+    const changed = await this.prisma.aiToolJob.update({
+      where: { id },
+      data: { savedAt: saved ? now : null },
+    });
+    return this.view(changed);
+  }
+
+  /** "Your voice" needs the person's agreement and their Voice Intro recording; says which is missing. */
+  private async assertOwnVoiceReady(wawuUserId: string): Promise<void> {
+    if (await this.own.ready(wawuUserId)) return;
+    const row = await this.prisma.voiceProfile.findUnique({
+      where: { wawuUserId },
+      select: { sampleKey: true },
+    });
+    if (!row?.sampleKey)
+      throw new AiToolError(
+        'own_voice_recording_required',
+        OWN_VOICE_RECORDING_REQUIRED_MESSAGE,
+      );
+    throw new AiToolError(
+      'own_voice_consent_required',
+      OWN_VOICE_CONSENT_REQUIRED_MESSAGE,
+    );
+  }
+
   /** One job as it stands now. Another person's job and one that is not there are the same `404 not_found`. */
   async read(wawuUserId: string, id: string): Promise<AiJobView> {
     const row = await this.prisma.aiToolJob.findUnique({ where: { id } });
@@ -287,6 +341,7 @@ export class AiJobService {
     const rows = await this.prisma.aiToolJob.findMany({
       where: {
         wawuUserId,
+        ...(query.saved === true ? { savedAt: { not: null } } : {}),
         ...(after
           ? {
               OR: [
@@ -437,6 +492,32 @@ export class AiJobService {
         return;
       }
     }
+    // AITOOLS-07: "Your voice". The person's own recording, read from their own
+    // row while their agreement stands, goes to the provider for this one run; the
+    // voice it makes is noted on the job the moment it exists, so a server that
+    // dies still knows to remove it, and is removed when the job ends.
+    let noted: ProviderCopy | null = null;
+    if (tool.id === 'voiceover' && job.voiceId === OWN_VOICE_ID) {
+      let sample: Awaited<ReturnType<OwnVoiceService['sampleFor']>>;
+      try {
+        sample = await this.own.sampleFor(job.wawuUserId);
+      } catch {
+        await this.fail(job, holdId, 'file_unreadable');
+        return;
+      }
+      if (!sample) {
+        await this.fail(job, holdId, 'own_voice_withdrawn');
+        return;
+      }
+      input = {
+        file: sample,
+        noteCopy: async (copy) => {
+          await this.copies.note(job.id, copy);
+          noted = copy;
+          return true;
+        },
+      };
+    }
     let result: AiToolRunResult;
     try {
       result = await tool.run(this.voice, job, req, input);
@@ -458,6 +539,10 @@ export class AiJobService {
         } (${code})`,
       );
       await this.fail(job, holdId, code);
+      // A voice made for the run and not yet removed is removed now (tried
+      // again over the next minute, then by the sweep).
+      if (noted)
+        await this.copies.discard(job.id, noted).catch(() => undefined);
       return;
     } finally {
       // The file's place at the read gate goes back however the call ended.
@@ -667,6 +752,7 @@ export class AiJobService {
       audioUrl,
       outputs,
       message: job.state === 'failed' ? JOB_FAILED_MESSAGE : null,
+      saved: job.savedAt !== null,
       createdAt: job.createdAt.toISOString(),
       finishedAt: job.finishedAt ? job.finishedAt.toISOString() : null,
     };

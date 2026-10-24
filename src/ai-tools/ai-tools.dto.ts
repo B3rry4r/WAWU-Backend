@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsInt,
@@ -201,4 +201,25 @@ export class AiJobListQueryDto {
   @Min(1)
   @Max(100)
   limit?: number = 20;
+
+  /** AITOOLS-07: `true` lists only the results the person saved to their library. Absent: every job, as before. */
+  @ApiPropertyOptional({ type: 'boolean' })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' || value === true
+      ? true
+      : value === 'false' || value === false
+        ? false
+        : value,
+  )
+  @IsBoolean()
+  saved?: boolean;
+}
+
+/** Body for `POST /ai-tools/own-voice/consent` (AITOOLS-07): the words the Hub served in `consent.line`, sent back unchanged. */
+export class OwnVoiceConsentDto {
+  @ApiProperty()
+  @IsString({ message: 'line must be text.' })
+  @Length(1, 500)
+  line!: string;
 }

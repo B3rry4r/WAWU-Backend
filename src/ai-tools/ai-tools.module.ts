@@ -7,12 +7,15 @@ import { StorageModule } from '../storage/storage.module';
 import { AI_AUDIO_STORE, StorageAiAudioStore } from './audio/ai-audio-store';
 import { AiJobService } from './ai-job.service';
 import { AiToolsController } from './ai-tools.controller';
+import { AiVoiceSamplesController } from './ai-voice-samples.controller';
 import {
   AI_INPUT_FILES,
   AiInputService,
   StorageAiInputFiles,
 } from './input/ai-input-files';
 import { AiToolsService } from './ai-tools.service';
+import { OwnVoiceService } from './own-voice/own-voice.service';
+import { StorageVoiceFiles, VOICE_FILES } from '../voice-intro/voice-files';
 import { AI_VOICE_PROVIDER } from './voice/ai-voice-provider';
 import { HttpVoiceProvider } from './voice/http-voice-provider';
 import { ProviderCopyService } from './voice/provider-copy.service';
@@ -35,10 +38,13 @@ import { ProviderCopyService } from './voice/provider-copy.service';
     PointsSpendModule,
     StorageModule,
   ],
-  controllers: [AiToolsController],
+  controllers: [AiToolsController, AiVoiceSamplesController],
   providers: [
     AiToolsService,
     AiJobService,
+    // AITOOLS-07: "Your voice" in VoiceOver, made from the person's Voice Intro recording.
+    OwnVoiceService,
+    { provide: VOICE_FILES, useClass: StorageVoiceFiles },
     {
       provide: AI_VOICE_PROVIDER,
       useFactory: (config: ConfigService) => new HttpVoiceProvider(config),

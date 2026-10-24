@@ -53,7 +53,7 @@ export type CopyTry = 'gone' | 'not_found' | 'absent' | 'keep';
 
 /**
  * What a job's `providerRef` holds while the provider's copy is not yet
- * confirmed deleted: `transcript:<id>` or `isolation:<id>`; for a transcript
+ * confirmed deleted: `transcript:<id>`, `isolation:<id>` or `voice:<id>` (AITOOLS-07); for a transcript
  * that has answered 404 once after the confirm window opened, `@<ms>` is added
  * (when that first 404 was read), and a later read of the copy removes it.
  */
@@ -78,7 +78,11 @@ export function copyOfMarker(marker: string | null): NotedCopy | null {
     absentSince = Number(mark[1]);
     id = id.slice(0, mark.index);
   }
-  if ((kind !== 'transcript' && kind !== 'isolation') || id === '') return null;
+  if (
+    (kind !== 'transcript' && kind !== 'isolation' && kind !== 'voice') ||
+    id === ''
+  )
+    return null;
   return { copy: { kind, id }, absentSince };
 }
 
@@ -206,6 +210,12 @@ export class ProviderCopyService implements OnModuleDestroy {
     copy: ProviderCopy,
     confirming: boolean,
   ): Promise<CopyTry> {
+    if (copy.kind === 'voice') {
+      // AITOOLS-07: the AI version of a person's own voice. The Hub knows the
+      // voice exists (the provider named it), so a 404 means it is already gone.
+      const removed = await this.voice.deleteOwnVoice(copy.id);
+      return removed === 'failed' ? 'keep' : 'gone';
+    }
     if (copy.kind === 'isolation') {
       const removed = await this.voice.deleteIsolation(copy.id);
       return removed === 'deleted'
@@ -242,7 +252,7 @@ export class ProviderCopyService implements OnModuleDestroy {
       copy,
       age >= afterMs || absentSince !== null,
     );
-    if (copy.kind === 'isolation') {
+    if (copy.kind === 'voice' || copy.kind === 'isolation') {
       if (
         outcome === 'gone' ||
         (outcome === 'not_found' && age >= NOT_STORED_YET_MS)
@@ -343,6 +353,7 @@ export class ProviderCopyService implements OnModuleDestroy {
               OR: [
                 { providerRef: { startsWith: 'transcript:' } },
                 { providerRef: { startsWith: 'isolation:' } },
+                { providerRef: { startsWith: 'voice:' } },
               ],
             },
             {

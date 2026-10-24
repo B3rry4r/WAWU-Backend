@@ -120,6 +120,12 @@ export interface AiToolRunResult {
 /** What the pipeline hands a file tool's run: the person's file, streamed to the provider for this one run. */
 export interface AiToolRunInput {
   file: VoiceSample | StreamedFile;
+  /**
+   * VoiceOver in the person's own voice (AITOOLS-07): notes the provider's copy
+   * of the voice on the job as soon as it exists (answers `true` when it did),
+   * so the pipeline removes it however the job ends. Absent for every other run.
+   */
+  noteCopy?: (copy: ProviderCopy) => Promise<boolean>;
 }
 
 /** What a unit of a tool's price is: a minute of speech, one use, or one track. */

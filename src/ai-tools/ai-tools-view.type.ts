@@ -7,6 +7,8 @@ export interface AiVoiceView {
   id: string;
   name: string;
   description: string;
+  /** A link to a short sample of the voice, for the play button on its row (AITOOLS-07); absent when the Hub has none for it. */
+  sampleUrl?: string;
 }
 
 /** `GET /ai-tools`: one tool the Hub can run. The app draws only the tools listed here. */
@@ -119,8 +121,33 @@ export interface AiJobView {
   outputs: AiJobOutputView[];
   /** A failed job's words ("No points were taken"); null otherwise. */
   message: string | null;
+  /** True once the person has saved the result to their library (AITOOLS-07). */
+  saved: boolean;
   createdAt: string;
   finishedAt: string | null;
+}
+
+/** `GET /ai-tools/own-voice` and what each own-voice write answers (AITOOLS-07, "Your voice" on PT2). */
+export interface OwnVoiceView {
+  /** False until the Hub's voice tools are set up. */
+  available: boolean;
+  /** True once the person has recorded their Voice Intro: their own recording is what their voice is made from. */
+  hasRecording: boolean;
+  consent: {
+    /** The words the person agrees to, with their own name. Stored exactly, with the time; any other words are refused. */
+    line: string;
+    given: boolean;
+    at: string | null;
+  };
+  /** True when "Your voice" can be picked now: the tools are on, the recording is there and the person agreed. */
+  ready: boolean;
+}
+
+/** `DELETE /ai-tools/own-voice`: the agreement is taken back and the Hub asks the provider to drop every copy of the person's voice it still holds. */
+export interface OwnVoiceRemovedView {
+  own: OwnVoiceView;
+  /** `gone`: the provider holds no copy of the person's voice. `pending`: a copy is still being removed (the Hub keeps trying). */
+  atProvider: 'gone' | 'pending';
 }
 
 /** `GET /ai-tools/jobs`: the caller's own jobs, newest first, in cursor pages (CONVENTIONS section 6). */

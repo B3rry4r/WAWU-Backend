@@ -21,6 +21,12 @@ export interface ProductDraftView {
    * from it.
    */
   missing: string[];
+  /**
+   * The AI tool job whose audio the person chose to use in this product
+   * ("Use in a product" on PT2b, AITOOLS-07); null when none. Read the job
+   * with `GET /ai-tools/jobs/{id}`. Publishing does not read it yet.
+   */
+  mediaJobId: string | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -37,6 +37,16 @@
 //     The own-voice calls (VOICE-01); it then speaks with the voice it made.
 //     What the SAMPLE file can ask of it (found in the file's bytes):
 //     [[sample-fail]] answers 500, [[sample-reject]] answers 422.
+//     AITOOLS-07: a sample that holds [[remove-fail]] makes the voice it
+//     becomes undeletable (DELETE answers 500, counted in state.removeRefused)
+//     until the handle's releaseStubborn() is called, as a provider that is down
+//     when the Hub tries to drop a person's voice.
+//   GET /v1/voices?page_size=100   (AITOOLS-07, the provider's own list)
+//     header xi-api-key  ->  200 { voices: [{ voice_id, name, category,
+//     preview_url }] } for stand-in-ada and stand-in-tunde. The real answer
+//     (24 Oct 2026, 24 voices) has those four fields and more; preview_url is an
+//     https link there and an http link on this machine.
+//   GET /__standin/sample/<voice>.mp3   a sample's audio (silent frames), no key.
 //   POST /v1/speech-to-text   (AITOOLS-04)
 //     header xi-api-key, multipart (model_id, file, language_code?,
 //     timestamps_granularity?)  ->  200 JSON { language_code, text, words[],
@@ -109,6 +119,10 @@ function startVoiceStandin({
     cloned: 0,
     deleted: 0,
     clones: [],
+    /** Deletes of a voice refused on purpose (a sample with [[remove-fail]]). */
+    removeRefused: 0,
+    /** Reads of the provider's voice list. */
+    voiceListReads: 0,
     /** Each Sound effect call: the duration_seconds asked (null when none). */
     sfx: [],
     /** Each Music call: music_length_ms asked (null when none) and force_instrumental. */
@@ -130,6 +144,8 @@ function startVoiceStandin({
   let transcriptSeq = 0;
   let isolationSeq = 0;
   const clones = new Map();
+  /** Voices that refuse to be deleted (a sample with [[remove-fail]]), until released. */
+  const stubborn = new Set();
   // MPEG-1 Layer III, 128 kbps, 44.1 kHz, no padding: 417 bytes of silence per frame.
   const frame = Buffer.alloc(417);
   frame.writeUInt32BE(0xfffb9004, 0);
@@ -512,6 +528,7 @@ function startVoiceStandin({
       return json(res, 422, { detail: 'refused' });
     const id = `clone-${state.cloned}`;
     clones.set(id, raw.length);
+    if (text.includes('[[remove-fail]]')) stubborn.add(id);
     state.clones.push(id);
     return json(res, 200, { voice_id: id });
   }
@@ -520,6 +537,10 @@ function startVoiceStandin({
     if (req.headers['xi-api-key'] !== key)
       return json(res, 401, { detail: 'bad key' });
     const id = decodeURIComponent(m[1]);
+    if (stubborn.has(id)) {
+      state.removeRefused += 1;
+      return json(res, 500, { detail: 'down' });
+    }
     if (!clones.delete(id)) return json(res, 404, { detail: 'no such voice' });
     state.deleted += 1;
     return json(res, 200, { status: 'ok' });
@@ -527,6 +548,28 @@ function startVoiceStandin({
 
   function stateRoute(_req, res) {
     return json(res, 200, state);
+  }
+
+  /** The provider's voice list (AITOOLS-07): the voices this stand-in knows, each with a sample link. */
+  function listVoices(req, res) {
+    if (req.headers['xi-api-key'] !== key)
+      return json(res, 401, { detail: 'bad key' });
+    state.voiceListReads += 1;
+    const base = `http://${req.headers.host}`;
+    return json(res, 200, {
+      voices: [...VOICES].map((id) => ({
+        voice_id: id,
+        name: id,
+        category: 'premade',
+        preview_url: `${base}/__standin/sample/${encodeURIComponent(id)}.mp3`,
+      })),
+    });
+  }
+
+  function sampleAudio(_req, res) {
+    res.statusCode = 200;
+    res.setHeader('content-type', 'audio/mpeg');
+    res.end(Buffer.concat(Array.from({ length: 8 }, () => frame)));
   }
 
   // One entry per provider route the Hub calls: method, path pattern, handler
@@ -570,6 +613,12 @@ function startVoiceStandin({
       path: /^\/v1\/audio-isolation\/history\/([^/]+)$/,
       handle: removeFrom(isolations, state.deletedIsolations, 'isolation', 204),
     },
+    { method: 'GET', path: /^\/v1\/voices$/, handle: listVoices },
+    {
+      method: 'GET',
+      path: /^\/__standin\/sample\/([^/]+)\.mp3$/,
+      handle: sampleAudio,
+    },
     { method: 'POST', path: /^\/v1\/voices\/add$/, handle: addVoice },
     { method: 'DELETE', path: /^\/v1\/voices\/([^/]+)$/, handle: removeVoice },
   ];
@@ -605,6 +654,8 @@ function startVoiceStandin({
         state,
         /** Voices made and not yet removed. */
         openClones: () => clones.size,
+        /** Lets the voices a [[remove-fail]] sample made be deleted from now on. */
+        releaseStubborn: () => stubborn.clear(),
         /** Transcripts and cleaned recordings the provider still holds (AITOOLS-04). */
         openTranscripts: () => transcripts.size,
         openIsolations: () => isolations.size,
