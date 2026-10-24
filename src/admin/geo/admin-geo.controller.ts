@@ -8,10 +8,10 @@ import { AdminGeoCountsQueryDto } from './dto/admin-geo-counts-query.dto';
 import type { AdminGeoCountsView } from '../../geo/geo.types';
 
 /**
- * Where the accounts are (GEO-02, R-85) — `/api/hub/admin/geo/*`.
+ * Where the accounts are (GEO-02, R-85) : `/api/hub/admin/geo/*`.
  *
  * ── ROLE MATRIX ───────────────────────────────────────────────────────────
- *   counts — superadmin, support, finance (the same three that read
+ *   counts : superadmin, support, finance (the same three that read
  *   `/admin/creators`); reviewer is refused, as there.
  *
  * Counts only: no name, handle, phone or id appears. The people behind a
