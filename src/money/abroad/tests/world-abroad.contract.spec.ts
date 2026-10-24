@@ -15,6 +15,7 @@ import {
   WORLD_WALLET_OK,
   type OpenWallet,
 } from '../../gate/wallet-gate';
+import { ConflictException } from '@nestjs/common';
 import { MoneyError } from '../../money-error';
 import type {
   IdempotencyScope,
@@ -376,7 +377,6 @@ describe('the gate lets a world wallet through the abroad routes, and nothing na
       customerId: ENTITY,
       walletId: '',
     });
-    expect(AbroadService.isWorld(world)).toBe(true);
   });
 });
 
@@ -716,5 +716,134 @@ describe('WAWU fee follows the account the money leaves, for a person with a nai
       `${row.reference}-fee`,
       `${row.reference}-fee-back`,
     ]);
+  });
+});
+
+describe('a foreign account give-back and finance paying it outside can never both pay (SWEEP-MONEY-6, R2-2, on the foreign leg)', () => {
+  const finance = { id: 'admin-1', email: 'fin@wawu.africa', role: 'finance' };
+  const backLegs = (reference: string) =>
+    legCalls.filter(
+      (c) => c.direction === 'give_back' && c.reference.startsWith(reference),
+    );
+
+  /** A reversed send whose GBP fee was taken and whose give-back the provider has not made yet (the first ask went unanswered). */
+  async function owedBack() {
+    const made = await makeSend();
+    legHook = (i) => {
+      if (i.direction === 'give_back') throw new Error('the provider is down');
+    };
+    await sends.apply(
+      made.view.id,
+      transfer({
+        id: made.transferId,
+        state: 'reversed',
+        providerStatus: 'reversed',
+      }),
+    );
+    legHook = null;
+    const owed = await prisma.abroadSend.findUniqueOrThrow({
+      where: { id: made.view.id },
+    });
+    expect(owed.feeGivenBackAt).toBeNull();
+    expect(owed.feeBackAttempts).toBeGreaterThan(0);
+    expect(legRecords.has(`${made.row.reference}-fee-back`)).toBe(false);
+    legCalls.length = 0;
+    return made;
+  }
+  const quiet = (id: string) =>
+    prisma.abroadSend.update({
+      where: { id },
+      data: { updatedAt: new Date(Date.now() - 10 * 60_000) },
+    });
+  const audit = (id: string, action: string) =>
+    prisma.abroadAdminAudit.findMany({ where: { sendId: id, action } });
+
+  it('makes no foreign leg once finance has closed the fee, even when the sweep had already read the row', async () => {
+    const { view, row } = await owedBack();
+    await quiet(view.id);
+    let settled: unknown = 'not run';
+    // The sweep reads the fee leg it took, then finance closes the fee before the sweep claims and asks for the give-back.
+    const original = abroadSide.findFeeLeg!.bind(abroadSide);
+    abroadSide.findFeeLeg = async (ref, reference) => {
+      const answer = await original(ref, reference);
+      if (reference === `${row.reference}-fee`) {
+        abroadSide.findFeeLeg = original;
+        settled = await admin
+          .settleFee(finance, view.id, 'paid_back', 'paid by finance')
+          .then(
+            (v) => v,
+            (e: unknown) => e,
+          );
+      }
+      return answer;
+    };
+    try {
+      await sends.giveBack(view.id);
+    } finally {
+      abroadSide.findFeeLeg = original;
+    }
+    expect(settled).toMatchObject({ how: 'paid_back_outside' });
+    expect(backLegs(row.reference)).toEqual([]);
+    expect(
+      (await prisma.abroadSend.findUniqueOrThrow({ where: { id: view.id } }))
+        .feeSettledHow,
+    ).toBe('paid_back_outside');
+    expect(await audit(view.id, 'fee_paid_back')).toHaveLength(1);
+  });
+
+  it('refuses "paid back outside" while the foreign leg is being made, and the person is paid back once, by the leg', async () => {
+    const { view, row } = await owedBack();
+    await quiet(view.id);
+    let settled: unknown = 'not run';
+    // Inside the provider call the leg has no record yet, so "outside" looks safe; the sweep has claimed the fee state, so it is not.
+    legHook = (i) => {
+      if (i.direction !== 'give_back') return;
+      legHook = null;
+      void admin
+        .settleFee(finance, view.id, 'paid_back', 'paid by finance')
+        .then(
+          (v) => (settled = v),
+          (e: unknown) => (settled = e),
+        );
+    };
+    await sends.giveBack(view.id);
+    // Let the finance call (started inside the provider call) finish.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(settled).toBeInstanceOf(ConflictException);
+    expect(backLegs(row.reference)).toHaveLength(1);
+    const after = await prisma.abroadSend.findUniqueOrThrow({
+      where: { id: view.id },
+    });
+    expect(after.feeGivenBackAt).not.toBeNull();
+    expect(after.feeSettledAt).toBeNull();
+    expect(await audit(view.id, 'fee_paid_back')).toHaveLength(0);
+  });
+
+  it('does not close a foreign fee the sweep touched after finance read it', async () => {
+    const { view, row } = await owedBack();
+    await quiet(view.id);
+    const original = abroadSide.findFeeLeg!.bind(abroadSide);
+    abroadSide.findFeeLeg = async (ref, reference) => {
+      if (reference === `${row.reference}-fee-back`) {
+        abroadSide.findFeeLeg = original;
+        await prisma.abroadSend.update({
+          where: { id: view.id },
+          data: { feeBackAttempts: { increment: 1 } },
+        });
+      }
+      return original(ref, reference);
+    };
+    try {
+      await expect(
+        admin.settleFee(finance, view.id, 'paid_back', 'paid by finance'),
+      ).rejects.toBeInstanceOf(ConflictException);
+    } finally {
+      abroadSide.findFeeLeg = original;
+    }
+    const after = await prisma.abroadSend.findUniqueOrThrow({
+      where: { id: view.id },
+    });
+    expect([after.feeSettledAt, after.feeGivenBackAt]).toEqual([null, null]);
+    expect(await audit(view.id, 'fee_paid_back')).toHaveLength(0);
   });
 });

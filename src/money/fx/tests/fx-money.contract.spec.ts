@@ -197,10 +197,27 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
     });
   }
 
+  /**
+   * `ops.sweep()` takes every pending operation and every owed fee of the provider in the database, whoever's they are: a row left
+   * by another suite (or an earlier test of this one) would be settled inside this suite's sweeps and move its counts (WALLET-21 L3).
+   */
+  async function removeStraySweepRows() {
+    await prisma.fxOperation.deleteMany({
+      where: {
+        provider: 'nuvion',
+        OR: [
+          { status: 'pending' },
+          { status: 'completed', feeLeg: 'owed' },
+          { status: 'completed', feeLeg: { startsWith: 'owed:' } },
+        ],
+      },
+    });
+  }
+
   beforeAll(async () => {
     Logger.overrideLogger(false);
     guard = guardOutbound();
-    await standin.start(8311);
+    await standin.start();
     fx.install();
     area = new NuvionFxArea(
       new NuvionClient(
@@ -209,6 +226,7 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
       ),
     );
     await clean();
+    await removeStraySweepRows();
   });
   afterAll(async () => {
     await clean();
@@ -629,6 +647,27 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
     expect(new Set(nairaLegs.map((l) => l.reference))).toEqual(
       new Set([`${after.reference}-fee`]),
     );
+  });
+
+  it('L2: a caller holding an older copy of the operation cannot write an older fee state over a newer one', async () => {
+    nairaMode = 'refused';
+    const { row } = await nairaSwapWithFee();
+    const stale = await row();
+    expect(stale.feeLeg).toBe('owed:2');
+    nairaMode = 'ok';
+    await ops.sweep(new Date(Date.now() + 60_000));
+    const settled = await row();
+    expect(settled.feeLeg).toBe('done');
+    // A look that began before the sweep above and ends after it: the provider refuses what it is asked now.
+    nairaMode = 'refused';
+    await (
+      ops as unknown as {
+        feeLeg: (w: OpenWallet, o: typeof stale) => Promise<void>;
+      }
+    ).feeLeg(WALLET, stale);
+    const after = await row();
+    expect(after.feeLeg).toBe('done');
+    expect(after.wawuFeeMinor).toBe(500n);
   });
 
   it('a fee in a foreign currency is paid to the collector account in that currency, and refused at start without one', async () => {

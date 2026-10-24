@@ -70,6 +70,11 @@ export const PENDING_CHECK_CAP_MS = 30 * 60_000;
 export const FEE_ATTEMPTS = 5;
 /** A fee given back that is still not done a day after the send ended waits for a person. */
 export const FEE_BACK_HOLD_MS = 24 * 3_600_000;
+/**
+ * A give-back the sweep is working on (it asked the provider for the leg under this long ago or less) is not settled over by
+ * finance as "paid outside": the leg may be on its way (SWEEP-MONEY-6, NUV-11 R2-2). Longer than the provider's longest answer.
+ */
+export const FEE_BACK_QUIET_MS = 5 * 60_000;
 /** The name on an audit row the sweep itself writes. */
 export const SYSTEM_ACTOR = 'system';
 const SWEEP_BATCH = 50;
@@ -366,6 +371,13 @@ export class AbroadSendService {
       return true;
     }
     if (row.status === 'completed' && next === 'pending') return true;
+    if (
+      (row.status === 'failed' || row.status === 'reversed') &&
+      (next === 'completed' || next === 'pending')
+    ) {
+      // A send that did not stand never goes back without a person (SWEEP-MONEY-6, NUV-11 R2-1): its fee may be given back already.
+      return this.holdContradiction(row, t);
+    }
     const now = new Date();
     const terminal = TERMINAL.includes(next);
     const data: Prisma.AbroadSendUpdateManyMutationInput = {
@@ -412,6 +424,59 @@ export class AbroadSendService {
     return true;
   }
 
+  /**
+   * The provider says a send that failed or was reversed is now going or gone through (it contradicts itself; no real case is
+   * known). The row keeps its status, so the fee given back stays given back and the sender's history does not turn; the word is
+   * kept beside it (`providerStatus`) and ONE `send_contradicted` row in the admin audit puts it in front of finance, once however
+   * often the provider repeats it. False when the row moved under the write and must be read again.
+   */
+  private async holdContradiction(
+    row: SendRow,
+    t: AbroadTransfer,
+  ): Promise<boolean> {
+    const held = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.abroadSend.updateMany({
+        where: { id: row.id, status: row.status },
+        data: { providerStatus: t.providerStatus, checkedAt: new Date() },
+      });
+      if (count !== 1) return 'moved' as const;
+      // The write above holds the row until this transaction ends, so a second look waits here and then finds the first one's row.
+      const earlier = await tx.abroadAdminAudit.findFirst({
+        where: { sendId: row.id, action: 'send_contradicted' },
+        select: { id: true },
+      });
+      if (earlier) return 'known' as const;
+      await tx.abroadAdminAudit.create({
+        data: {
+          action: 'send_contradicted',
+          subjectWawuId: row.wawuUserId,
+          sendId: row.id,
+          reason: `The payment partner now says this send is ${t.state}, after it was marked ${row.status}; the send stays ${row.status} until a person decides`,
+          detail: {
+            statusBefore: row.status,
+            providerState: t.state,
+            providerStatus: t.providerStatus,
+            providerTransferId: t.id,
+            feeGivenBack: row.feeGivenBackAt !== null,
+            feeKobo: row.wawuFeeKobo.toString(),
+            feeMinor: row.wawuFeeMinor.toString(),
+          },
+          adminId: SYSTEM_ACTOR,
+          adminEmail: SYSTEM_ACTOR,
+          adminRole: SYSTEM_ACTOR,
+        },
+      });
+      return 'held' as const;
+    });
+    if (held === 'moved') return false;
+    if (held === 'held') {
+      this.logger.error(
+        `abroad send ${row.id}: ${row.status}, yet the provider's transfer ${t.id} says ${t.state}; the row stays ${row.status} and waits for a person`,
+      );
+    }
+    return true;
+  }
+
   async byReference(reference: string): Promise<SendRow | null> {
     return this.prisma.abroadSend.findUnique({
       where: { reference },
@@ -453,8 +518,9 @@ export class AbroadSendService {
     try {
       const warn = (m: string) =>
         this.logger.warn(`abroad send ${sendId}: WAWU's fee ${m}`);
-      const moved = await this.settleFeeLeg(row, 'take', fee.amount, warn);
-      if (moved === null) return;
+      const make = await this.prepareFeeLeg(row, 'take', fee.amount, warn);
+      if (make === null) return;
+      const moved = await make();
       if (moved.result === 'spent') {
         this.logger.error(
           `abroad send ${sendId}: the provider failed WAWU's fee under three references; it waits for a person`,
@@ -479,16 +545,18 @@ export class AbroadSendService {
   }
 
   /**
-   * Makes the fee leg of a send once, through the one set of legs: out of the naira wallet to WAWU's account, or (a person with no
-   * naira wallet, WALLET-42) out of the foreign account to WAWU's collecting account in the same currency, or back. Null when the
-   * leg cannot be made yet (no wallet, no collecting account, no foreign fee support at the provider): it waits for a later pass.
+   * Gets ready to make the fee leg of a send, through the one set of legs: out of the naira wallet to WAWU's account, or (a foreign
+   * account) out of that account to WAWU's collecting account in the same currency, or back. Everything the leg needs from the
+   * provider and our records is resolved here, and the returned function makes the leg once. Null when the leg cannot be made yet (no
+   * wallet, no collecting account, no foreign fee support at the provider): it waits for a later pass. The two steps are apart so
+   * that a give-back claims the fee state between them (SWEEP-MONEY-6), the same for both legs.
    */
-  private async settleFeeLeg(
+  private async prepareFeeLeg(
     row: Prisma.AbroadSendGetPayload<object>,
     direction: 'take' | 'give_back',
     amount: bigint,
     warn: (message: string) => void,
-  ): Promise<LegResult | null> {
+  ): Promise<(() => Promise<LegResult>) | null> {
     const base =
       direction === 'take'
         ? `${row.reference}-fee`
@@ -497,16 +565,13 @@ export class AbroadSendService {
       const ref = await this.foreignRef(row, direction);
       const abroad = this.abroad.provider();
       if (!ref || !abroad.feeLeg) return null;
-      return settleLegWith(
-        foreignPort(
-          abroad,
-          ref,
-          amount,
-          direction === 'take' ? 'WAWU fee' : 'WAWU fee given back',
-        ),
-        base,
-        warn,
+      const port = foreignPort(
+        abroad,
+        ref,
+        amount,
+        direction === 'take' ? 'WAWU fee' : 'WAWU fee given back',
       );
+      return () => settleLegWith(port, base, warn);
     }
     const wallet = await this.prisma.fintavaWallet.findFirst({
       where: {
@@ -517,9 +582,7 @@ export class AbroadSendService {
     });
     if (!wallet?.accountNumber) return null;
     const platform = await this.walletProvider.getPlatformAccount();
-    return settleLeg(
-      this.walletProvider,
-      base,
+    const input =
       direction === 'take'
         ? {
             fromAccountNumber: wallet.accountNumber,
@@ -532,9 +595,8 @@ export class AbroadSendService {
             toAccountNumber: wallet.accountNumber,
             amountKobo: amount,
             narration: 'WAWU fee given back',
-          },
-      warn,
-    );
+          };
+    return () => settleLeg(this.walletProvider, base, input, warn);
   }
 
   /** The foreign account and WAWU's collecting account a fee leg runs between; null while either is missing. */
@@ -603,29 +665,49 @@ export class AbroadSendService {
         return;
       }
       if (taken.result === 'wait') {
-        await this.waitOrHold(sendId, now, since, hold);
+        await this.waitOrHold(now, since, hold);
         return;
       }
-      const moved = await this.settleFeeLeg(
+      const make = await this.prepareFeeLeg(
         row,
         'give_back',
         taken.moved.amountKobo + taken.moved.feeKobo,
         (m) =>
           this.logger.warn(`abroad send ${sendId}: the fee given back ${m}`),
       );
-      if (moved === null) return;
+      if (make === null) return;
+      // The claim on the fee state, made before the leg can be created (SWEEP-MONEY-6, NUV-11 R2-2): it counts the pass, which
+      // moves `updatedAt` (what finance's settle-fee reads as "the sweep is working on this"), and it finds nothing once finance
+      // has settled or held the fee, so a leg is never made after a person has closed the question. It is made for both legs, the
+      // naira wallet's and a foreign account's.
+      const claimed = await this.prisma.abroadSend.updateMany({
+        where: {
+          id: sendId,
+          feeSettledAt: null,
+          feeGivenBackAt: null,
+          feeBackHeldAt: null,
+        },
+        data: { feeBackAttempts: { increment: 1 } },
+      });
+      if (claimed.count !== 1) return;
+      const moved = await make();
       if (moved.result === 'done') {
-        await this.prisma.abroadSend.updateMany({
+        const { count } = await this.prisma.abroadSend.updateMany({
           where: { id: sendId, feeGivenBackAt: null },
           data: { feeGivenBackAt: now },
         });
+        if (count !== 1) {
+          this.logger.warn(
+            `abroad send ${sendId}: the fee given back was recorded already (by another pass, or settled by finance)`,
+          );
+        }
         return;
       }
       if (moved.result === 'spent') {
         await hold('the provider failed it under three references');
         return;
       }
-      await this.waitOrHold(sendId, now, since, hold);
+      await this.waitOrHold(now, since, hold);
     } catch (e) {
       this.logger.warn(
         `abroad send ${sendId}: giving WAWU's fee back failed (${e instanceof WalletProviderError ? e.kind : 'error'}); asked again`,
@@ -633,16 +715,12 @@ export class AbroadSendService {
     }
   }
 
+  /** A give-back that is not done is asked again by the next pass, and held for a person once a day has gone. */
   private async waitOrHold(
-    sendId: string,
     now: Date,
     since: number,
     hold: (why: string) => Promise<void>,
   ): Promise<void> {
-    await this.prisma.abroadSend.update({
-      where: { id: sendId },
-      data: { feeBackAttempts: { increment: 1 } },
-    });
     if (now.getTime() - since >= FEE_BACK_HOLD_MS) {
       await hold('a day of trying');
     }

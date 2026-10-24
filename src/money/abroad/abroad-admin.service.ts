@@ -12,6 +12,7 @@ import {
   AbroadSendService,
   decodeCursor,
   encodeCursor,
+  FEE_BACK_QUIET_MS,
   feeOf,
   HAS_FEE,
   LOOK_AFTER_MS,
@@ -314,6 +315,18 @@ export class AbroadAdminService {
         'A give-back for this send is still on its way at the payment partner. Look again later.',
       );
     }
+    // No leg at the provider, yet the sweep asked for one a moment ago (it holds nothing while it asks): "paid outside" now could pay
+    // the person twice, so finance looks again once the sweep has finished or held the fee (SWEEP-MONEY-6, NUV-11 R2-2).
+    if (
+      back.result === 'none' &&
+      row.feeBackHeldAt === null &&
+      row.feeBackAttempts > 0 &&
+      now.getTime() - row.updatedAt.getTime() < FEE_BACK_QUIET_MS
+    ) {
+      throw new ConflictException(
+        'The sweep is giving this fee back right now. Look again in a few minutes.',
+      );
+    }
     const how = back.result === 'done' ? 'given_back' : 'paid_back_outside';
     await this.close(admin, row, how, 'fee_paid_back', reason, now, {
       giveBackLeg: back.result,
@@ -336,6 +349,8 @@ export class AbroadAdminService {
         where: {
           id: row.id,
           feeSettledAt: null,
+          // The row as it was read: a pass of the sweep that touched it since (a give-back claim, a hold) makes this look again.
+          updatedAt: row.updatedAt,
           wawuFeeTaken: how === 'not_taken' ? false : true,
           ...(how === 'not_taken' ? {} : { feeGivenBackAt: null }),
         },

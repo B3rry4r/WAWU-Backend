@@ -262,14 +262,6 @@ export class AbroadService {
     return { customerId: wallet.customerId, walletId: wallet.walletId };
   }
 
-  /**
-   * True for a world wallet (WALLET-42, R-87): the person has no naira wallet, so the gate hands the seam an empty `walletId` and the
-   * only money they can send from is a foreign account. (The fee does not depend on it: it follows the account the money leaves.)
-   */
-  static isWorld(wallet: Pick<OpenWallet, 'walletId'>): boolean {
-    return wallet.walletId === '';
-  }
-
   /** The holder of a person who is not making this request (the sweep, the admin): a naira wallet's, else a world wallet's. */
   async holderOf(wawuUserId: string): Promise<AbroadHolder | null> {
     const w = await this.prisma.fintavaWallet.findFirst({
