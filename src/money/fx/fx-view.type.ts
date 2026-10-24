@@ -296,9 +296,9 @@ export interface AdminFxFreezeView {
  * config (R-10). Read only: nothing here changes a figure.
  */
 export interface AdminFxCurrencyView extends FxCurrencyView {
-  /** WAWU's fee on a swap out of this currency, in its smallest unit; 0 until the owner names it. */
+  /** WAWU's fee on a swap out of this currency, in its smallest unit; 0 when none is set. */
   swapFeeMinor: number;
-  /** WAWU's fee on a crypto send, in its smallest unit; 0 for a fiat currency and until named. */
+  /** WAWU's fee on a crypto send, in its smallest unit; 0 for a fiat currency and when none is set. */
   sendFeeMinor: number;
   /** The most one person may move out of this currency in a Lagos day; null is no limit of WAWU's own. */
   dailyLimitMinor: number | null;

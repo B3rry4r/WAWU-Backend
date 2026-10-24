@@ -49,7 +49,7 @@ export interface AdminCapitalSettingsView {
   minKobo: number | null;
   maxKobo: number | null;
   dailyMaxKobo: number | null;
-  /** WAWU's fee on an order: a flat amount in kobo plus a share in basis points of the amount; 0 and 0 until the owner names it. */
+  /** WAWU's fee on an order: a flat amount in kobo plus a share in basis points of the amount; 0 and 0 when none is set. */
   feeFlatKobo: number;
   feeBasisPoints: number;
 }

@@ -118,7 +118,7 @@ export interface AdminCardSettingsView {
   enabled: boolean;
   /** Nuvion's fee for making a card, in kobo; null while it is not set (making a card is then refused). */
   providerFeeKobo: number | null;
-  /** WAWU's own fee on top, in kobo; 0 until the owner names it. */
+  /** WAWU's own fee on top, in kobo; 0 when none is set. */
   wawuFeeKobo: number;
   /** Cards a person may hold at once. */
   maxActive: number;
