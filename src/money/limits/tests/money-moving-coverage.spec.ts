@@ -186,6 +186,9 @@ const NON_MONEY_WRITES: Readonly<Record<string, string>> = {
     "asks the bank for an account's name before a send; a read",
   'POST money/transactions/:id/receipt':
     'renders a receipt of one finished transaction; a read',
+  // WALLET-25: the attempt is unpaid, so nothing moves.
+  'POST money/add-money/:id/cancel':
+    'cancels an unpaid attempt; moves no money',
   'POST money/statements/email':
     "emails a statement of finished transactions to the person's own confirmed address; a read sent as a POST",
 };
@@ -843,6 +846,8 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
       'POST dm/send/wallet/pay',
       'POST events/orders/wallet/pay',
       'POST legal/requests/:id/pay/wallet',
+      // WALLET-25, WALLET-26: add money takes fees and a PIN (a card or a bank checkout pays into the wallet).
+      'POST money/add-money',
       'POST money/payments',
       'POST money/transfers/bank',
       'POST money/transfers/wawu',

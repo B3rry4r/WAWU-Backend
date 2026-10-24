@@ -3,7 +3,7 @@
 
 CREATE TABLE "AddMoneySession" (
     "id" TEXT NOT NULL,
-    "wawuUserId" TEXT NOT NULL,
+    "wawuUserId" TEXT,
     "provider" TEXT NOT NULL DEFAULT 'nuvion',
     "rail" TEXT NOT NULL,
     "currency" TEXT NOT NULL DEFAULT 'NGN',

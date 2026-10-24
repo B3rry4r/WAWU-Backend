@@ -521,6 +521,20 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     clear: ['destinationAccountNumber'],
   },
 
+  // An attempt to add money by card, Apple Pay, USSD or a bank checkout
+  // (WALLET-25, WALLET-26): the link between a ledger row on this person's
+  // wallet and the provider's inflow (the reference, the amounts, the credit),
+  // which the nightly check and the provider's own record still need after the
+  // account is gone, and an inflow still on its way is credited by it. A
+  // financial record: kept, with the person set to null; it holds no card (only
+  // the provider's ids, the last four digits and the network) and no name. Its
+  // admin audit rows hang from it and name no person.
+  {
+    model: 'AddMoneySession',
+    column: 'wawuUserId',
+    disposition: 'ANONYMISED',
+  },
+
   // ── referral points (REF-02) ────────────────────────────────────────────
   // This person's own code, the code they used, and the rewards and milestones
   // that rest on those. A reward and a claim name two people, and either one's
@@ -826,6 +840,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'SchoolEnrolment', column: 'wawuShareKobo' },
   // WAWU's 15% share in kobo on a school fee settlement (SCHOOLS-11), not a person.
   { model: 'SchoolSettlement', column: 'wawuShareKobo' },
+  // WAWU's fee in kobo on an attempt to add money (WALLET-25, R-10), not a person.
+  { model: 'AddMoneySession', column: 'wawuFeeKobo' },
   // WAWU's fee in kobo on a send between two people (WALLET-07), not a person.
   { model: 'WalletTransfer', column: 'wawuFeeKobo' },
 ];

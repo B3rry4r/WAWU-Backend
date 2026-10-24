@@ -47978,7 +47978,8 @@
         "type": "object",
         "properties": {
           "wawuUserId": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "provider": {
             "type": "string"

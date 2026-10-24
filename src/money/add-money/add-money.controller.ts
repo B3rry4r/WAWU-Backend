@@ -17,6 +17,7 @@ import type { Request, Response } from 'express';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
+import { RequireFeesSet } from '../fees/fees-set.guard';
 import { RequireOpenWallet } from '../gate/wallet-gate';
 import {
   BuiltBy,
@@ -82,6 +83,7 @@ export class MoneyAddMoneyController {
   @BuiltBy('WALLET-25')
   @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS, 'add_money_unavailable', 'fees_not_set')
+  @RequireFeesSet()
   quote(@Query() q: AddMoneyQuoteQueryDto): AddMoneyQuoteView {
     return this.addMoney.quote(q.rail, q.amountKobo);
   }
@@ -114,6 +116,7 @@ export class MoneyAddMoneyController {
     'quote_changed',
     'email_not_verified',
   )
+  @RequireFeesSet()
   start(
     @CurrentUser() user: WawuJwtClaims,
     @CurrentIdempotencyScope() scope: IdempotencyScope,

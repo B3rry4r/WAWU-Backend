@@ -593,7 +593,8 @@ export class AddMoneyService implements OnModuleInit {
   async refresh(s: Session): Promise<Session> {
     const p = this.addMoney;
     if (!p || !OPEN.includes(s.status as AddMoneyStatus)) return s;
-    const w = await this.walletOf(s.wawuUserId);
+    // An attempt whose account was deleted (anonymised, ACCOUNT_DATA_MAP) has no wallet to ask about.
+    const w = s.wawuUserId ? await this.walletOf(s.wawuUserId) : null;
     if (!w) return s;
     try {
       let attempt: ProviderAddMoneyAttempt | null = null;
@@ -782,7 +783,12 @@ export class AddMoneyService implements OnModuleInit {
   /** WAWU's fee, from the wallet to WAWU's account, once the credit is in. Idempotent by its reference. */
   async collectWawuFee(id: string): Promise<void> {
     const s = await this.load(id);
-    if (s.status !== 'settled' || s.wawuFeeKobo <= 0n || s.feeCollectedAt)
+    if (
+      s.status !== 'settled' ||
+      s.wawuFeeKobo <= 0n ||
+      s.feeCollectedAt ||
+      !s.wawuUserId
+    )
       return;
     const wallet = await this.prisma.fintavaWallet.findUnique({
       where: { wawuUserId: s.wawuUserId },
@@ -1031,7 +1037,7 @@ export class AddMoneyService implements OnModuleInit {
     const fresh = await this.refresh(s);
     if (!OPEN.includes(fresh.status as AddMoneyStatus)) return fresh;
     const p = this.addMoney;
-    const w = await this.walletOf(fresh.wawuUserId);
+    const w = fresh.wawuUserId ? await this.walletOf(fresh.wawuUserId) : null;
     if (
       fresh.providerRef &&
       fresh.status === 'processing' &&

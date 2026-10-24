@@ -23,6 +23,7 @@ import {
   QuietLogger,
 } from '../../../../test/transfers/harness';
 import { AdminRole } from '../../../../generated/prisma/enums';
+import { AccountPurgeService } from '../../../account-purge/account-purge.service';
 import { AdminTokenService } from '../../../admin/auth/admin-token.service';
 import { WawuIdClient } from '../../../common/auth/wawu-id.client';
 import { WawuJwtStrategy } from '../../../common/auth/wawu-jwt.strategy';
@@ -395,6 +396,16 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
         s.reference,
         `${s.reference}-wawufee`,
       ]);
+      const kept = await prisma.addMoneySession.findMany({
+        where: { reference: { startsWith: 'wawu-add-purge-' } },
+        select: { id: true },
+      });
+      await prisma.addMoneyAudit.deleteMany({
+        where: { sessionId: { in: kept.map((k) => k.id) } },
+      });
+      await prisma.addMoneySession.deleteMany({
+        where: { id: { in: kept.map((k) => k.id) } },
+      });
       await prisma.addMoneyAudit.deleteMany({
         where: { sessionId: { in: sessions.map((s) => s.id) } },
       });
@@ -925,6 +936,56 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
       'ussd:on',
       'open_banking:off',
     ]);
+  });
+
+  it('deleting the account keeps the attempt as a financial record without the person (anonymised), with its amounts, reference, ledger link and audit rows', async () => {
+    const me = await person();
+    const id = randomUUID();
+    await prisma.addMoneySession.create({
+      data: {
+        id,
+        wawuUserId: me.id,
+        rail: 'card',
+        amountKobo: 1_000_000n,
+        chargeKobo: 1_000_125n,
+        providerFeeKobo: 75n,
+        wawuFeeKobo: 50n,
+        status: 'settled',
+        reference: `wawu-add-purge-${id}`,
+        providerRef: 'PIPURGE1',
+        cardLast4: '1111',
+        ledgerEntryId: 'ledger-row-1',
+        creditedAt: new Date(),
+      },
+    });
+    await prisma.addMoneyAudit.create({
+      data: {
+        sessionId: id,
+        action: 'freeze',
+        fromStatus: 'processing',
+        toStatus: 'processing',
+        actedByAdminId: 'admin-1',
+        actedByAdminEmail: 'finance@admin.test.wawu.dev',
+        actedByAdminRole: AdminRole.finance,
+      },
+    });
+    const report = await new AccountPurgeService(prisma).purge(me.id);
+    expect(report.failed).not.toContain('AddMoneySession.wawuUserId');
+    expect(report.deleted['AddMoneySession.wawuUserId (anonymised)']).toBe(1);
+    const kept = await prisma.addMoneySession.findUniqueOrThrow({
+      where: { id },
+    });
+    expect(kept.wawuUserId).toBeNull();
+    expect(kept).toMatchObject({
+      status: 'settled',
+      amountKobo: 1_000_000n,
+      wawuFeeKobo: 50n,
+      reference: `wawu-add-purge-${id}`,
+      ledgerEntryId: 'ledger-row-1',
+    });
+    expect(await prisma.addMoneyAudit.count({ where: { sessionId: id } })).toBe(
+      1,
+    );
   });
 
   it('the plan setting switches a product off without a deploy (card and Apple Pay, not USSD); the return page holds no payment data', async () => {

@@ -5114,7 +5114,8 @@ model FintavaLedgerReference {
 /// ─────────────────────────────────────────────────────────────────────────
 model AddMoneySession {
   id              String    @id @default(uuid())
-  wawuUserId      String
+  /// Null once the account is deleted: the attempt is a financial record, kept and anonymised (ACCOUNT_DATA_MAP).
+  wawuUserId      String?
   /// `nuvion`: the provider that holds the wallet (a server acts only on rows of its own provider).
   provider        String    @default("nuvion")
   rail            String

@@ -87,7 +87,8 @@ export interface AddMoneyPage {
 
 /** One attempt as an admin sees it. */
 export interface AdminAddMoneyView extends AddMoneyView {
-  wawuUserId: string;
+  /** Null once the account is deleted: the attempt is kept as a financial record without the person. */
+  wawuUserId: string | null;
   provider: string;
   reference: string;
   providerRef: string | null;
