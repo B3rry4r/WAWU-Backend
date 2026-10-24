@@ -676,12 +676,20 @@ on('POST', '/accounts', (req) => {
   const b = req.body || {};
   const e = entities.get(String(b.entity_id));
   if (!e) return notFound();
-  if (b.type !== 'checking' || b.currency !== 'NGN') return invalid('type checking and currency NGN are the only ones this stand-in makes');
-  if ([...accounts.values()].some((a) => a.entity_id === e.id && a.type === 'checking' && a.currency === 'NGN')) {
+  // WALLET-41: a person outside Nigeria opens a foreign account (USD, EUR, GBP, CAD, AED, GHS) as their first; the
+  // naira account stays the only one that is announced as `accounts.created` (the Hub's naira recorder reads that).
+  const FOREIGN = ['USD', 'EUR', 'GBP', 'CAD', 'AED', 'GHS'];
+  if (b.type !== 'checking' || (b.currency !== 'NGN' && !FOREIGN.includes(b.currency))) {
+    return invalid('type checking and currency NGN, USD, EUR, GBP, CAD, AED or GHS are the only ones this stand-in makes');
+  }
+  if ([...accounts.values()].some((a) => a.entity_id === e.id && a.type === 'checking' && a.currency === b.currency)) {
     return { status: 409, body: errorBody('error_account_already_exists', 'This entity already has that account.') };
   }
-  const a = addAccount(e.id, { display_name: String(b.display_name || 'Naira wallet') });
-  deliver('accounts.created', { account: a });
+  const a = addAccount(e.id, {
+    currency: b.currency,
+    display_name: String(b.display_name || (b.currency === 'NGN' ? 'Naira wallet' : `${b.currency} account`)),
+  });
+  if (b.currency === 'NGN') deliver('accounts.created', { account: a });
   return { status: 201, body: envelope({ account: a, entity_impact: { entity_id: e.id, total_accounts: 1 } }, 'Account created successfully') };
 });
 on('GET', '/accounts', (req) => {

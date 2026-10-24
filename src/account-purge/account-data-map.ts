@@ -356,6 +356,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // not the account at Nuvion, which stays there; deletion needs an empty
   // wallet first (R-17).
   { model: 'NuvionEntity', column: 'wawuUserId', disposition: 'OWNED' },
+  // WALLET-21: the foreign accounts, quotes, swaps, sends and movements. WAWU's
+  // pointers and records of what Nuvion holds for the person (the accounts stay
+  // at Nuvion, and deletion needs them empty first, R-17), owned like the naira
+  // ledger. Deleted before the profile, like every owned table.
+  { model: 'FxAccount', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'FxQuote', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'FxOperation', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'FxMovement', column: 'wawuUserId', disposition: 'OWNED' },
   // FIX-20. FintavaWebhookEvent and NuvionWebhookEvent, the stored provider
   // deliveries, have no person column: each keeps the delivery's raw body and
   // a parsed copy, which hold names, account numbers and narrations, and the
@@ -796,6 +804,13 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'AUDIT',
   },
   { model: 'AdminOpsAudit', column: 'subjectWawuId', disposition: 'AUDIT' },
+  // WALLET-41: the record of an admin freezing, unfreezing or cancelling a
+  // person's world wallet. Like the other admin audit rows, it is WAWU's
+  // record of an act and outlives the person; it holds a stage word and a
+  // reason, never a name, a document or a number.
+  { model: 'WorldAdminAudit', column: 'subjectWawuId', disposition: 'AUDIT' },
+  // WALLET-21: the freeze audit is an admin's act, kept like the others.
+  { model: 'FxAdminAudit', column: 'subjectWawuId', disposition: 'AUDIT' },
   {
     model: 'AdminContentReview',
     column: 'creatorWawuId',
@@ -817,6 +832,9 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'Product', column: 'wawuVerified' },
   // WAWU's fee in kobo on a ledger row (MONEY-10), not a person.
   { model: 'FintavaLedgerEntry', column: 'wawuFeeKobo' },
+  // WAWU's fee in a currency's smallest unit on a foreign quote and swap (WALLET-21), not a person.
+  { model: 'FxQuote', column: 'wawuFeeMinor' },
+  { model: 'FxOperation', column: 'wawuFeeMinor' },
   // WAWU's fee and WAWU's 15% share in kobo on a payment (MONEY-17), not a person.
   { model: 'WalletPayment', column: 'wawuFeeKobo' },
   { model: 'WalletPayment', column: 'wawuShareKobo' },

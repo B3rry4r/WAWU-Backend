@@ -1336,6 +1336,25 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'FintavaWallet',
       reason: 'A pointer to the account at Fintava, which holds the balance.',
     },
+    // WALLET-21: the foreign accounts, rates, swaps, sends and movements. The
+    // balance and the details are Nuvion's, read on request; statements are
+    // their own after-launch task, as for the naira wallet.
+    {
+      model: 'FxAccount',
+      reason: 'A pointer to an account at Nuvion, which holds the balance.',
+    },
+    {
+      model: 'FxQuote',
+      reason: 'A rate held for one use; statements are their own task.',
+    },
+    {
+      model: 'FxOperation',
+      reason: 'Money records: statements are their own after-launch task.',
+    },
+    {
+      model: 'FxMovement',
+      reason: 'Money records: statements are their own after-launch task.',
+    },
     // NUV-01. NuvionWebhookEvent, the other table NUV-01 adds, has no
     // person column (like FintavaWebhookEvent): it is Nuvion's record of
     // events, not the person's, so neither the purge map nor this list
