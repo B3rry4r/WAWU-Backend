@@ -4,6 +4,7 @@ import type {
   ReviewStatus,
   VerificationTier,
 } from '../../../generated/prisma/enums';
+import type { AdminPlaceView } from '../../geo/geo.types';
 
 /**
  * The wire shapes for the admin creator-lookup surface — the screen an
@@ -147,6 +148,8 @@ export interface AdminCreatorListItemView {
   handle: string | null;
   accountType: AccountType;
   gates: AdminCreatorGatesView;
+  /** Where the person is (GEO-02, R-85); every key null while unknown. */
+  place: AdminPlaceView;
   createdAt: Date;
 }
 

@@ -136,6 +136,25 @@ export class AdminCreatorSearchQueryDto extends PaginationQueryDto {
   @IsIn([...Object.values(ReviewStatus), 'not_started'])
   kycStatus?: ReviewStatus | 'not_started';
 
+  /**
+   * Country the person lives in, ISO 3166-1 alpha-2 ("NG", any case) from
+   * GET /geo/countries (GEO-02, R-85). An unknown code is a 400. People whose
+   * country is not known yet match no country.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  countryCode?: string;
+
+  /**
+   * Region, the full ISO 3166-2 code ("NG-LA") from
+   * GET /geo/countries/{code}/regions. Alone it also narrows the country.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  regionCode?: string;
+
   @IsOptional()
   @IsIn(['newest', 'oldest', 'handle'])
   sort: 'newest' | 'oldest' | 'handle' = 'newest';

@@ -18,6 +18,9 @@ import {
   THREADS_HANDLE_MAX_LENGTH,
 } from '../profile-fields';
 
+/** A sanity bound on the structured location's text keys; the exact rules are GeoService.checkLocation's. */
+const PLACE_TEXT_MAX = 100;
+
 /**
  * PATCH /users/me/profile-fields (ME-05). Every key is optional and a key left
  * out is left as it is. Their limits are PROVISIONAL and live in
@@ -32,6 +35,42 @@ export class UpdateProfileFieldsDto {
   @IsString()
   @MaxLength(LOCATION_MAX_LENGTH)
   location?: string | null;
+
+  /**
+   * Country of residence, ISO 3166-1 alpha-2 from GET /geo/countries ("NG",
+   * any case). null or "" clears it (and the region, which belonged to it).
+   * Changing it clears a region that is not sent again.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(PLACE_TEXT_MAX)
+  countryCode?: string | null;
+
+  /**
+   * Region, the full ISO 3166-2 code from GET /geo/countries/{code}/regions
+   * ("NG-LA"; its tail "LA" is accepted too). It must belong to the country
+   * saved or sent with it. null or "" clears it.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(PLACE_TEXT_MAX)
+  regionCode?: string | null;
+
+  /**
+   * The region's name ("Lagos"). Beside a regionCode it must be that code's
+   * name; alone it is looked up in the country's list; for a country with
+   * no list it is saved as typed. null or "" clears it.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(PLACE_TEXT_MAX)
+  regionName?: string | null;
+
+  /** City, free text up to 80 characters ("Ikeja"). null or "" clears it. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(PLACE_TEXT_MAX)
+  city?: string | null;
 
   /** Skills and expertise chips. [] clears them. */
   @IsOptional()

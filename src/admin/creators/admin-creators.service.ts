@@ -6,6 +6,8 @@ import {
 } from '../../common/verification/verification-state';
 import { CreatorEarningsService } from '../../creator-earnings/creator-earnings.service';
 import { PublishingAllowanceService } from '../../plans/publishing-allowance.service';
+import { ProfileLocationService } from '../../geo/profile-location.service';
+import type { AdminPlaceView } from '../../geo/geo.types';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { CreatorStateModel, UserProfileModel } from '../../../generated/prisma/models';
 import type { ReviewStatus } from '../../../generated/prisma/enums';
@@ -73,12 +75,24 @@ type KycSafeRow = {
  * operator tool — and it is written here rather than hidden so the next person
  * knows what would need a relation to fix.
  */
+/** A person whose place is not known yet. */
+const NO_PLACE: AdminPlaceView = {
+  countryCode: null,
+  regionCode: null,
+  regionName: null,
+  city: null,
+  countrySource: null,
+};
+
+const inSet = (set: Set<string>) => (id: string) => set.has(id);
+
 @Injectable()
 export class AdminCreatorsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly earnings: CreatorEarningsService,
     private readonly publishing: PublishingAllowanceService,
+    private readonly places: ProfileLocationService,
   ) {}
 
   /**
@@ -92,7 +106,17 @@ export class AdminCreatorsService {
   async listCreators(
     query: AdminCreatorSearchQueryDto,
   ): Promise<Paginated<AdminCreatorListItemView>> {
-    const stateScopedIds = await this.idsMatchingStateFilters(query);
+    const byState = await this.idsMatchingStateFilters(query);
+    const byPlace = await this.places.idsInPlace(
+      query.countryCode,
+      query.regionCode,
+    );
+    const stateScopedIds =
+      byState === null
+        ? byPlace
+        : byPlace === null
+          ? byState
+          : byState.filter(inSet(new Set(byPlace)));
     if (stateScopedIds !== null && stateScopedIds.length === 0) {
       return { items: [], currentPage: query.page, perPage: query.perPage, total: 0 };
     }
@@ -245,13 +269,14 @@ export class AdminCreatorsService {
     const ids = profiles.map((p) => p.wawuUserId);
     if (ids.length === 0) return [];
 
-    const [states, kycRows] = await Promise.all([
+    const [states, kycRows, placeById] = await Promise.all([
       this.prisma.creatorState.findMany({ where: { wawuUserId: { in: ids } } }),
       this.prisma.kycSubmission.findMany({
         where: { wawuUserId: { in: ids } },
         orderBy: { submittedAt: 'desc' },
         select: KYC_SAFE_SELECT,
       }),
+      this.places.placesOf(ids),
     ]);
 
     const stateById = new Map(states.map((s) => [s.wawuUserId, s]));
@@ -269,6 +294,7 @@ export class AdminCreatorsService {
         handle: profile.handle,
         accountType: profile.accountType,
         gates: toGatesView(state, latestKycById.get(profile.wawuUserId) ?? null),
+        place: placeById.get(profile.wawuUserId) ?? NO_PLACE,
         createdAt: profile.createdAt,
       };
     });

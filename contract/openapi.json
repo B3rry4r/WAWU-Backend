@@ -6584,6 +6584,26 @@
                 "newest"
               ]
             }
+          },
+          {
+            "name": "countryCode",
+            "required": false,
+            "in": "query",
+            "description": "Only pieces whose creator lives in this country, ISO 3166-1 alpha-2\n(\"NG\", any case) from GET /geo/countries (GEO-02, R-85). An unknown code\nis a 400.",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "regionCode",
+            "required": false,
+            "in": "query",
+            "description": "Only pieces whose creator lives in this region, the full ISO 3166-2 code (\"NG-LA\"). Alone it also narrows the country.",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -6748,6 +6768,59 @@
         "summary": "Any non-removed status → removed, reason required. The takedown lever\nfor content stranded live with no pending review to reject it from and,\noften, no creator account left behind it — see AdminContentReviewService\n.takeDown for why that gap exists.",
         "tags": [
           "AdminContentReview"
+        ]
+      }
+    },
+    "/api/hub/geo/countries": {
+      "get": {
+        "operationId": "GeoController_countries",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeoCountryList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every country, A to Z by name.",
+        "tags": [
+          "Geo"
+        ]
+      }
+    },
+    "/api/hub/geo/countries/{code}/regions": {
+      "get": {
+        "operationId": "GeoController_regions",
+        "parameters": [
+          {
+            "name": "code",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeoRegionList"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One country's ISO 3166-2 regions, A to Z by name. `code` is the country's\nISO alpha-2 code in any case. 404 `country_not_found` for a code that is\nnot on the list; 200 with no items for a country ISO divides into nothing.",
+        "tags": [
+          "Geo"
         ]
       }
     },
@@ -14470,6 +14543,26 @@
             }
           },
           {
+            "name": "countryCode",
+            "required": false,
+            "in": "query",
+            "description": "Country the person lives in, ISO 3166-1 alpha-2 (\"NG\", any case) from\nGET /geo/countries (GEO-02, R-85). An unknown code is a 400. People whose\ncountry is not known yet match no country.",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "regionCode",
+            "required": false,
+            "in": "query",
+            "description": "Region, the full ISO 3166-2 code (\"NG-LA\") from\nGET /geo/countries/{code}/regions. Alone it also narrows the country.",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
             "name": "sort",
             "required": true,
             "in": "query",
@@ -14554,6 +14647,39 @@
         },
         "tags": [
           "CreatorEarnings"
+        ]
+      }
+    },
+    "/api/hub/admin/geo/counts": {
+      "get": {
+        "operationId": "AdminGeoController_counts",
+        "parameters": [
+          {
+            "name": "countryCode",
+            "required": false,
+            "in": "query",
+            "description": "Count only this country, ISO 3166-1 alpha-2 (\"NG\", any case) from\nGET /geo/countries. An unknown code is a 400. The totals and `unknown`\nstay those of every account.",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminGeoCountsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Accounts by country and, inside each, by region, with how many are creators.",
+        "tags": [
+          "AdminGeo"
         ]
       }
     },
@@ -31528,6 +31654,28 @@
         ]
       }
     },
+    "/api/hub/me/location": {
+      "get": {
+        "operationId": "MeController_location",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeLocationView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Where the signed-in person is (GEO-02, R-85): their country of residence\n(what they chose, else the country WAWU ID holds, else their phone's),\nwith their region and city when they have set them. The app calls it\nafter sign-in; where the person has not chosen a country it records the\none WAWU ID gives, so the dashboard counts them.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
     "/api/hub/me/saved": {
       "get": {
         "operationId": "MeController_savedList",
@@ -42058,6 +42206,30 @@
             "description": "Where the person is, free text (\"Lagos, Nigeria\"). null or \"\" clears it.",
             "maxLength": 120
           },
+          "countryCode": {
+            "type": "string",
+            "nullable": true,
+            "description": "Country of residence, ISO 3166-1 alpha-2 from GET /geo/countries (\"NG\",\nany case). null or \"\" clears it (and the region, which belonged to it).\nChanging it clears a region that is not sent again.",
+            "maxLength": 100
+          },
+          "regionCode": {
+            "type": "string",
+            "nullable": true,
+            "description": "Region, the full ISO 3166-2 code from GET /geo/countries/{code}/regions\n(\"NG-LA\"; its tail \"LA\" is accepted too). It must belong to the country\nsaved or sent with it. null or \"\" clears it.",
+            "maxLength": 100
+          },
+          "regionName": {
+            "type": "string",
+            "nullable": true,
+            "description": "The region's name (\"Lagos\"). Beside a regionCode it must be that code's\nname; alone it is looked up in the country's list; for a country with\nno list it is saved as typed. null or \"\" clears it.",
+            "maxLength": 100
+          },
+          "city": {
+            "type": "string",
+            "nullable": true,
+            "description": "City, free text up to 80 characters (\"Ikeja\"). null or \"\" clears it.",
+            "maxLength": 100
+          },
           "skills": {
             "description": "Skills and expertise chips. [] clears them.",
             "type": "array",
@@ -47753,6 +47925,43 @@
           "withTick"
         ]
       },
+      "AdminPlaceView": {
+        "type": "object",
+        "properties": {
+          "countryCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "regionCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "regionName": {
+            "type": "string",
+            "nullable": true
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "countrySource": {
+            "type": "string",
+            "enum": [
+              "profile",
+              "wawu_id",
+              "phone"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "countryCode",
+          "regionCode",
+          "regionName",
+          "city",
+          "countrySource"
+        ]
+      },
       "AdminContentCreatorView": {
         "type": "object",
         "properties": {
@@ -47775,6 +47984,10 @@
             "type": "string",
             "nullable": true
           },
+          "place": {
+            "$ref": "#/components/schemas/AdminPlaceView",
+            "nullable": true
+          },
           "slotsUsed": {
             "type": "number",
             "nullable": true
@@ -47789,6 +48002,7 @@
           "handle",
           "accountType",
           "kycStatus",
+          "place",
           "slotsUsed",
           "slotsTotal"
         ]
@@ -48156,6 +48370,95 @@
         "required": [
           "content",
           "review"
+        ]
+      },
+      "GeoCountryView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "dialCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "flag": {
+            "type": "string"
+          },
+          "exampleNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "exampleNational": {
+            "type": "string",
+            "nullable": true
+          },
+          "hasRegions": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "dialCode",
+          "flag",
+          "exampleNumber",
+          "exampleNational",
+          "hasRegions"
+        ]
+      },
+      "GeoCountryList": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GeoCountryView"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "GeoRegionView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "type"
+        ]
+      },
+      "GeoRegionList": {
+        "type": "object",
+        "properties": {
+          "countryCode": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GeoRegionView"
+            }
+          }
+        },
+        "required": [
+          "countryCode",
+          "items"
         ]
       },
       "AdminKycMaskedIdentifiersView": {
@@ -53335,9 +53638,9 @@
           "medium": {
             "type": "string",
             "enum": [
+              "phone",
               "zoom",
-              "physical",
-              "phone"
+              "physical"
             ]
           },
           "label": {
@@ -53420,9 +53723,9 @@
           "medium": {
             "type": "string",
             "enum": [
+              "phone",
               "zoom",
-              "physical",
-              "phone"
+              "physical"
             ]
           },
           "label": {
@@ -53465,10 +53768,10 @@
           "medium": {
             "type": "string",
             "enum": [
+              "phone",
               "chat",
               "zoom",
-              "physical",
-              "phone"
+              "physical"
             ],
             "nullable": true
           },
@@ -53575,10 +53878,10 @@
           "medium": {
             "type": "string",
             "enum": [
+              "phone",
               "chat",
               "zoom",
-              "physical",
-              "phone"
+              "physical"
             ]
           },
           "label": {
@@ -54311,6 +54614,9 @@
           "gates": {
             "$ref": "#/components/schemas/AdminCreatorGatesView"
           },
+          "place": {
+            "$ref": "#/components/schemas/AdminPlaceView"
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time"
@@ -54321,6 +54627,7 @@
           "handle",
           "accountType",
           "gates",
+          "place",
           "createdAt"
         ]
       },
@@ -54479,6 +54786,99 @@
           "uploads",
           "earnings",
           "directMessages"
+        ]
+      },
+      "AdminGeoRegionCount": {
+        "type": "object",
+        "properties": {
+          "regionCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "regionName": {
+            "type": "string",
+            "nullable": true
+          },
+          "people": {
+            "type": "number"
+          },
+          "creators": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "regionCode",
+          "regionName",
+          "people",
+          "creators"
+        ]
+      },
+      "AdminGeoCountryCount": {
+        "type": "object",
+        "properties": {
+          "countryCode": {
+            "type": "string"
+          },
+          "countryName": {
+            "type": "string"
+          },
+          "people": {
+            "type": "number"
+          },
+          "creators": {
+            "type": "number"
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminGeoRegionCount"
+            }
+          }
+        },
+        "required": [
+          "countryCode",
+          "countryName",
+          "people",
+          "creators",
+          "regions"
+        ]
+      },
+      "AdminGeoCountsView": {
+        "type": "object",
+        "properties": {
+          "people": {
+            "type": "number"
+          },
+          "creators": {
+            "type": "number"
+          },
+          "unknown": {
+            "type": "object",
+            "properties": {
+              "people": {
+                "type": "number"
+              },
+              "creators": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "people",
+              "creators"
+            ]
+          },
+          "countries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminGeoCountryCount"
+            }
+          }
+        },
+        "required": [
+          "people",
+          "creators",
+          "unknown",
+          "countries"
         ]
       },
       "AdminFinancePeriodView": {
@@ -59284,6 +59684,26 @@
             "type": "string",
             "nullable": true
           },
+          "countryCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "countryName": {
+            "type": "string",
+            "nullable": true
+          },
+          "regionCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "regionName": {
+            "type": "string",
+            "nullable": true
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
           "skills": {
             "type": "array",
             "items": {
@@ -59322,6 +59742,11 @@
         "required": [
           "wawuUserId",
           "location",
+          "countryCode",
+          "countryName",
+          "regionCode",
+          "regionName",
+          "city",
           "skills",
           "openTo",
           "threadsHandle",
@@ -62590,6 +63015,58 @@
           "enrolledCourses"
         ]
       },
+      "MeLocationView": {
+        "type": "object",
+        "properties": {
+          "countryCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "countryName": {
+            "type": "string",
+            "nullable": true
+          },
+          "countrySource": {
+            "type": "string",
+            "enum": [
+              "profile",
+              "wawu_id",
+              "phone"
+            ],
+            "nullable": true
+          },
+          "regionCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "regionName": {
+            "type": "string",
+            "nullable": true
+          },
+          "city": {
+            "type": "string",
+            "nullable": true
+          },
+          "wawuIdCountryCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "phoneCountryCode": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "countryCode",
+          "countryName",
+          "countrySource",
+          "regionCode",
+          "regionName",
+          "city",
+          "wawuIdCountryCode",
+          "phoneCountryCode"
+        ]
+      },
       "SavedContentView": {
         "type": "object",
         "properties": {
@@ -63047,11 +63524,11 @@
           "kind": {
             "type": "string",
             "enum": [
+              "profile",
               "community",
               "content",
               "transaction",
-              "paid_question",
-              "profile"
+              "paid_question"
             ]
           },
           "id": {
