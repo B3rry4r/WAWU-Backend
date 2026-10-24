@@ -32,6 +32,7 @@ import { PrismaService } from '../../../common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../../hub-app-options';
 import { nuvionWalletId } from '../../../nuvion/areas/accounts';
 import { NuvionCardsHandler } from '../../../nuvion/handlers/cards.handler';
+import { MoneyError } from '../../money-error';
 import { NuvionClient } from '../../../nuvion/nuvion-client';
 import { NuvionBookArea } from '../../../nuvion/areas/book';
 import { PrismaNuvionBookStore } from '../../../nuvion/areas/book-store';
@@ -1133,6 +1134,36 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
       await http().get(`${BASE}/quote`).set('Authorization', p.auth),
     ).data!;
     expect(quote.limits.activeNow).toBe(0);
+  });
+
+  it('support blocking a used single-use card is refused 409 card_blocked in the Hub error shape, and writes no audit row (WALLET-31 L6)', async () => {
+    const p = await person();
+    const card = asEnvelope<CardView>(await makeCard(p, 'single_use')).data!;
+    await prisma.walletCard.update({
+      where: { id: card.id },
+      data: { state: 'used' },
+    });
+    const actor = {
+      id: randomUUID(),
+      email: 'finance@test.wawu.dev',
+      role: AdminRole.finance,
+    };
+    const refused = await admin.cancel(actor, card.id).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(refused).toBeInstanceOf(MoneyError);
+    expect(refused).toMatchObject({ code: 'card_blocked' });
+    expect((refused as MoneyError).getStatus()).toBe(409);
+    expect(
+      await prisma.adminOpsAudit.count({
+        where: { resource: 'wallet_card', resourceId: card.id },
+      }),
+    ).toBe(0);
+    expect(
+      (await prisma.walletCard.findUniqueOrThrow({ where: { id: card.id } }))
+        .state,
+    ).toBe('used');
   });
 
   it('erasing the account blocks every card the person still holds at Nuvion first', async () => {
