@@ -279,6 +279,17 @@ export const MONEY_ERROR_CODES = [
   'recipient_details_invalid',
   'rate_unavailable',
   'send_not_cancellable',
+  // A wallet for a person outside Nigeria (WALLET-41, R-87): the admin switch
+  // is off; the day's cap on new openings is reached; no opening is taken
+  // from the person's country.
+  'world_switched_off',
+  'world_limit_reached',
+  'country_not_supported',
+  // WALLET-41 round 1: the account's stored country of residence decides which opening is allowed.
+  'residence_not_set',
+  'residence_mismatch',
+  // WALLET-41 round 3: a passport names the country that issued it.
+  'passport_country_required',
   // Capital (NUV-12, R-84): switched off or not offered by the wallet
   // provider, or an order an admin has put on hold; a reservation that ran
   // out of time; a holding the provider will not pay out now.

@@ -197,6 +197,10 @@ const NON_MONEY_WRITES: Readonly<Record<string, string>> = {
   'POST money/statements/email':
     "emails a statement of finished transactions to the person's own confirmed address; a read sent as a POST",
   // Foreign accounts (WALLET-21): opening one and asking for a rate move nothing
+  // WALLET-41 (R-87): opens the first foreign account of a person outside
+  // Nigeria once Nuvion approved them; an account is made, nothing is debited.
+  'POST money/world/first-account':
+    'opens the first foreign account of an approved person outside Nigeria; no money is moved',
   'POST money/fx/accounts':
     'opens an account at the provider for the person; no money is in it yet',
   'POST money/fx/quotes':

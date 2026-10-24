@@ -521,7 +521,9 @@ export class NuvionOpeningArea implements NuvionOpeningMethods {
       phonenumber: phone,
     };
     if (r.middleName) person.middle_name = r.middleName;
-    if (numbers) {
+    // WALLET-41 (R-87): a person outside Nigeria has no BVN or NIN; their
+    // own country's ID document and the liveness check are what Nuvion reviews.
+    if (numbers && r.world !== true) {
       person.bvn = input.bvn;
       person.nin = input.nin;
     }
@@ -540,7 +542,10 @@ export class NuvionOpeningArea implements NuvionOpeningMethods {
     };
     if (r.idDocument.issueDate) document.issue_date = r.idDocument.issueDate;
     if (r.idDocument.expiryDate) document.expiry_date = r.idDocument.expiryDate;
-    if (r.idDocument.type === 'national_id') {
+    if (
+      r.idDocument.type === 'national_id' &&
+      r.idDocument.issuingCountry === 'NG'
+    ) {
       document.type_specific = { id_subtype: 'NIN' };
     }
     return {

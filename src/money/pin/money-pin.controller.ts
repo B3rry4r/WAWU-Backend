@@ -14,7 +14,7 @@ import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface'
 import { ChangePinDto, SetPinDto } from '../dto/money-request.dto';
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import type { PinStateView } from '../money-view.type';
-import { RequireOpenWallet } from '../gate/wallet-gate';
+import { AllowWorldWallet, RequireOpenWallet } from '../gate/wallet-gate';
 import {
   CurrentPinRequestKey,
   RequireTransactionPinWithKey,
@@ -40,6 +40,9 @@ import { TransactionPinService } from './transaction-pin.service';
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)
+// WALLET-41 round 1: the PIN, the phone's approval and the PIN reset never read the naira wallet, and a person outside
+// Nigeria needs them to swap and send: they take an open wallet of any kind.
+@AllowWorldWallet()
 @Controller('money')
 export class MoneyPinController {
   constructor(

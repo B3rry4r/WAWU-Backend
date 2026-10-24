@@ -159,6 +159,22 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   recipient_details_invalid: 422,
   rate_unavailable: 409,
   send_not_cancellable: 409,
+  // WALLET-41 (R-87). Default (lead), owner may override: 409 for the switch
+  // that is off (as fx_switched_off); 429 for the day's cap on new openings
+  // (as open_address_limited: try again later); 422 for a country no opening
+  // is taken from (the request is understood, the country is the problem).
+  world_switched_off: 409,
+  world_limit_reached: 429,
+  country_not_supported: 422,
+  // WALLET-41 round 1. Default (lead), owner may override: 409, as wallet_already_open. The request is
+  // understood; the account's own country of residence says it cannot be done this way (none stored, Nigeria,
+  // or not the one the request names).
+  residence_not_set: 409,
+  residence_mismatch: 409,
+  // WALLET-41 round 3. Default (lead), owner may override: 400, as pin_mismatch. The
+  // request itself is missing a field it needs (the passport's issuing country); nothing is
+  // claimed, sent or counted.
+  passport_country_required: 400,
   // NUV-12. Default (agent), owner may override: 409, as target_not_payable.
   // The request is understood; the product, the reservation or the holding is
   // not in a state that allows it now.

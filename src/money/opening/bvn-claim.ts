@@ -126,6 +126,13 @@ export function holdsBvn(f: HoldFacts): boolean {
  */
 export const CLAIM_LOST = 'bvn_held_by_another_account';
 
+/**
+ * `FintavaWalletOpening.failure` of a world opening an admin cancelled
+ * (WALLET-41): stopped for good, its identity claim let go, and never moved
+ * again by a later delivery from the provider.
+ */
+export const CANCELLED_BY_ADMIN = 'cancelled_by_admin';
+
 /** What aligning the claim with a stage did. */
 export type ClaimAlignment =
   /** Not a Nuvion opening (none, or Fintava's): nothing to align. */
@@ -215,6 +222,10 @@ export async function alignClaim(
   });
   if (!row || row.provider !== 'nuvion') return 'none';
   if (row.state === 'stopped' && row.failure === CLAIM_LOST) return 'stopped';
+  // A cancelled world opening holds nothing, whatever the provider says later.
+  if (row.state === 'stopped' && row.failure === CANCELLED_BY_ADMIN) {
+    return 'released';
+  }
   const [entity, wallet] = await Promise.all([
     prisma.nuvionEntity.findUnique({
       where: { wawuUserId },
