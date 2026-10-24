@@ -45,6 +45,10 @@ export class AddMoneyPrecheckGuard implements CanActivate {
     ) {
       throw new BadRequestException([SHAPE]);
     }
+    if (body.rail === 'card') {
+      const card = (body as { card?: { encrypted?: unknown } }).card;
+      this.addMoney.assertCardCiphertext(card?.encrypted);
+    }
     await this.addMoney.precheck(req.user.sub, {
       rail: body.rail as (typeof ADD_MONEY_RAILS)[number],
       amountKobo: body.amountKobo,

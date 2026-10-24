@@ -18814,7 +18814,8 @@
         },
         "tags": [
           "AddMoneyReturn"
-        ]
+        ],
+        "x-wawu-built-by": "WALLET-25"
       }
     },
     "/api/hub/money/add-money/options": {

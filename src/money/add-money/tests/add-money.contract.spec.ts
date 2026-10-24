@@ -38,6 +38,9 @@ import { PrismaNuvionBookStore } from '../../../nuvion/areas/book-store';
 import { NuvionAccountsHandler } from '../../../nuvion/handlers/accounts.handler';
 import { NuvionAddMoneyHandler } from '../../../nuvion/handlers/add-money.handler';
 import { NuvionClient } from '../../../nuvion/nuvion-client';
+import { signNuvionDelivery } from '../../../nuvion/webhook/nuvion-signature';
+import { NuvionWebhookDispatcher } from '../../../nuvion/webhook/nuvion-webhook-dispatcher.service';
+import { NuvionWebhookModule } from '../../../nuvion/webhook/nuvion-webhook.module';
 import {
   NuvionWalletProvider,
   nuvionAreas,
@@ -78,7 +81,10 @@ let numberSeq = 0;
 const nuban = () =>
   `7${String(Date.now()).slice(-6)}${String((numberSeq += 1)).padStart(3, '0')}`;
 
-const ENCRYPTED = 'A'.repeat(344);
+// What a 2048-bit key makes of a card: 256 bytes (the Hub checks the length against the key it gave the phone).
+const ENCRYPTED = Buffer.alloc(256, 7).toString('base64');
+const HOOK = '/api/hub/webhooks/nuvion';
+const SECRET = 'whsec_wallet25_fix1_0123456789abcdef';
 const cardBody = (over: Record<string, unknown> = {}) => ({
   rail: 'card',
   amountKobo: AMOUNT,
@@ -102,6 +108,7 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
   let prisma: PrismaService;
   let moduleRef: TestingModule;
   let service: AddMoneyService;
+  let dispatcher: NuvionWebhookDispatcher;
   let fintavaCounter: Server;
   const users: string[] = [];
   const adminIds: string[] = [];
@@ -163,6 +170,33 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
       accountNumber,
     };
   }
+
+  let evt = 0;
+  /** Posts a signed delivery to the real receiver, as Nuvion's server would; answers its row. */
+  async function post(event: string, payload: unknown) {
+    evt += 1;
+    const id = `w25-fix1-${Date.now().toString(36)}-${evt}`;
+    const ts = new Date().toISOString();
+    const raw = JSON.stringify({ event, data: payload });
+    await request(app.getHttpServer())
+      .post(HOOK)
+      .set('Content-Type', 'application/json')
+      .set('x-nuvion-event-id', id)
+      .set('x-nuvion-event-timestamp', ts)
+      .set(
+        'x-nuvion-event-signature',
+        signNuvionDelivery(SECRET, ts, Buffer.from(raw)),
+      )
+      .send(raw)
+      .expect(200);
+    return prisma.nuvionWebhookEvent.findUniqueOrThrow({
+      where: { eventId: id },
+    });
+  }
+  const stored = (id: string) =>
+    prisma.nuvionWebhookEvent.findUniqueOrThrow({ where: { id } });
+  /** The dispatcher's own sweep (every 30 seconds in the app): it takes every delivery that is due. */
+  const sweepNow = () => dispatcher.sweep();
 
   const start = (p: Person, payload: object, key: string = randomUUID()) =>
     request(app.getHttpServer())
@@ -258,6 +292,8 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
       ADD_MONEY_WAWU_FEE: String(WAWU_FEE),
       ADD_MONEY_MIN_KOBO: '10000',
       ADD_MONEY_MAX_KOBO: '20000000',
+      ADD_MONEY_DAILY_MAX_KOBO: '1500000',
+      NUVION_WEBHOOK_SECRET: SECRET,
       NUVION_ENCRYPTION_PUBLIC_KEY: publicKey.replace(/\n/g, '\\n'),
       ADD_MONEY_RETURN_URL:
         'https://hub.test.example/api/hub/money/add-money/return',
@@ -289,6 +325,7 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
         PassportModule.register({ defaultStrategy: 'wawu-jwt' }),
         PrismaModule,
         MoneyModule,
+        NuvionWebhookModule,
       ],
       providers: [WawuJwtStrategy, WawuIdClient],
     })
@@ -326,6 +363,7 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
     service = moduleRef.get(AddMoneyService);
+    dispatcher = moduleRef.get(NuvionWebhookDispatcher);
     const issuer = moduleRef.get(AdminTokenService);
     for (const role of [
       AdminRole.superadmin,
@@ -438,7 +476,7 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
     expect(o.limits).toEqual({
       minKobo: 10000,
       maxKobo: 20000000,
-      dailyMaxKobo: null,
+      dailyMaxKobo: 1_500_000,
     });
     expect(JSON.stringify(o)).not.toMatch(/—/);
   });
@@ -760,17 +798,30 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
       .post(`/${v.id}/freeze`, { reason: 'checking the card owner' })
       .expect(200);
     expect(data<AdminAddMoneyView>(frozen).frozen).toBe(true);
-    const settled = nuv.inflowFor(s.reference, 'successful');
-    const held = await deliver(me, settled);
-    expect(held.outcome).toBe('failed');
+    // The settled inflow arrives while it is frozen, through the real receiver and dispatcher: held, not failed.
+    const delivery = await post(
+      'inflows.completed',
+      nuv.inflowFor(s.reference, 'successful'),
+    );
+    await sweepNow();
+    const waiting = await stored(delivery.id);
+    expect(waiting.processingStatus).toBe('pending');
+    expect(waiting.note).toMatch(/held/);
     expect(await ledgerRows(s.reference)).toHaveLength(0);
-    expect((await row(v.id)).reviewNote).toBe('paid while frozen');
+    expect((await row(v.id)).reviewNote).toMatch(/held until it is unfrozen/);
+    // Unfreezing makes the held delivery due at once; the dispatcher credits it once.
     await adminReq(AdminRole.superadmin)
       .post(`/${v.id}/unfreeze`, {})
       .expect(200);
-    const credited = await deliver(me, settled);
-    expect(credited.outcome).toBe('done');
-    expect(await ledgerRows(s.reference)).toHaveLength(1);
+    expect((await stored(delivery.id)).nextAttemptAt).toBeNull();
+    await sweepNow();
+    await sweepNow();
+    expect((await stored(delivery.id)).processingStatus).toBe('processed');
+    const credited = await ledgerRows(s.reference);
+    expect(credited).toHaveLength(1);
+    const after = await row(v.id);
+    expect(after.status).toBe('settled');
+    expect(after.reviewNote).toBeNull();
     const detail = await adminReq(AdminRole.finance)
       .get(`/${v.id}`)
       .expect(200);
@@ -818,6 +869,62 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
       .set('Authorization', me.auth);
     expect(res.status).toBe(409);
     expect(refusal(res).code).toBe('add_money_unavailable');
+  });
+
+  it("a card that is not the key's own length is a plain 400 before the PIN: a short text, plain base64 and a card in the clear never pass", async () => {
+    const me = await person();
+    const wrongPin = (card: object) =>
+      request(app.getHttpServer())
+        .post(BASE)
+        .set('Authorization', me.auth)
+        .set('Idempotency-Key', randomUUID())
+        .set('X-Transaction-Pin', '0000')
+        .send(cardBody({ card }));
+    const billing = { line1: '1 Test Street', city: 'Lagos', state: 'Lagos' };
+    for (const encrypted of [
+      Buffer.from('4111111111111111').toString('base64').padEnd(60, 'A'),
+      Buffer.alloc(255, 7).toString('base64'),
+      Buffer.alloc(257, 7).toString('base64'),
+      'A'.repeat(344),
+    ]) {
+      const res = await wrongPin({ encrypted, billing });
+      expect(res.status).toBe(400);
+    }
+    expect(
+      await prisma.addMoneySession.count({ where: { wawuUserId: me.id } }),
+    ).toBe(0);
+    // The right length with the right PIN goes through: none of those used a PIN try.
+    await start(me, cardBody()).expect(201);
+  });
+
+  it("two taps at once cannot both pass the day's limit: one attempt is written, the other is refused", async () => {
+    const me = await person();
+    const results = await Promise.all([
+      start(me, cardBody()),
+      start(me, cardBody()),
+    ]);
+    expect(results.map((r) => r.status).sort()).toEqual([201, 403]);
+    expect(refusal(results.find((r) => r.status === 403)!).code).toBe(
+      'limit_reached',
+    );
+    expect(
+      await prisma.addMoneySession.count({ where: { wawuUserId: me.id } }),
+    ).toBe(1);
+  });
+
+  it('the hosted ways come first when they can be used, then the card, then USSD, then every way that cannot be used', async () => {
+    const me = await person();
+    const order = (res: request.Response) =>
+      data<Options>(res).rails.map(
+        (r) => `${r.rail}:${r.available ? 'on' : 'off'}`,
+      );
+    // open banking is off here (its charge is not set): hosted Apple Pay leads, the card follows, USSD after, the unusable last.
+    expect(order(await get(me, '/options').expect(200))).toEqual([
+      'apple_pay:on',
+      'card:on',
+      'ussd:on',
+      'open_banking:off',
+    ]);
   });
 
   it('the plan setting switches a product off without a deploy (card and Apple Pay, not USSD); the return page holds no payment data', async () => {

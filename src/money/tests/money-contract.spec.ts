@@ -25,6 +25,14 @@ import { MoneyPinController } from '../pin/money-pin.controller';
 
 /** Money routes a mounted module serves, and the task that serves each. */
 const SERVED_MONEY_ROUTES: Record<string, string> = {
+  // WALLET-25, WALLET-26: add money by card, Apple Pay, USSD and the bank checkout.
+  'GET /api/hub/money/add-money/options': 'WALLET-25',
+  'GET /api/hub/money/add-money/quote': 'WALLET-25',
+  'GET /api/hub/money/add-money/return': 'WALLET-25',
+  'POST /api/hub/money/add-money': 'WALLET-25',
+  'GET /api/hub/money/add-money': 'WALLET-25',
+  'GET /api/hub/money/add-money/{id}': 'WALLET-25',
+  'POST /api/hub/money/add-money/{id}/cancel': 'WALLET-25',
   'GET /api/hub/money/pin': 'MONEY-09',
   'POST /api/hub/money/pin': 'MONEY-09',
   'PUT /api/hub/money/pin': 'MONEY-09',

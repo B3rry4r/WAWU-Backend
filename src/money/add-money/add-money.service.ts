@@ -264,7 +264,7 @@ export class AddMoneyService implements OnModuleInit {
   }
 
   options(now = Date.now()): AddMoneyOptionsView {
-    const rails: AddMoneyRailView[] = (
+    const all: AddMoneyRailView[] = (
       ['card', 'apple_pay', 'ussd', 'open_banking'] as const
     ).map((rail) => {
       const reason = this.railProblem(rail, now);
@@ -275,6 +275,12 @@ export class AddMoneyService implements OnModuleInit {
         hosted: rail !== 'card' && rail !== 'ussd',
       };
     });
+    // R-84 (3) prefers the provider's hosted pages: a card number is the one thing that must be scrambled on the phone. So the
+    // hosted ways that can be used come first, then the card, then USSD, then every way that cannot be used now (lead ruling,
+    // fix round 1: the provider has no hosted page for a card, so the card stays and is listed after the hosted ways).
+    const rank = (r: AddMoneyRailView) =>
+      !r.available ? 3 : r.hosted ? 0 : r.rail === 'card' ? 1 : 2;
+    const rails = [...all].sort((a, b) => rank(a) - rank(b));
     const cardOn = rails.some(
       (r) => (r.rail === 'card' || r.rail === 'apple_pay') && r.available,
     );
@@ -289,6 +295,25 @@ export class AddMoneyService implements OnModuleInit {
         dailyMaxKobo: lim(this.settings.dailyMaxKobo),
       },
     };
+  }
+
+  /**
+   * The card is the phone's ciphertext under the provider's key, so it is exactly as long as the key makes it (RSA: the modulus).
+   * Any other base64 text, a card in the clear included, is a plain 400 before the PIN is looked at.
+   */
+  assertCardCiphertext(raw: unknown): void {
+    const bytes = this.settings.cardCipherBytes;
+    const ok =
+      typeof raw === 'string' &&
+      bytes !== null &&
+      /^[A-Za-z0-9+/]+={0,2}$/.test(raw) &&
+      raw.length % 4 === 0 &&
+      Buffer.from(raw, 'base64').length === bytes;
+    if (!ok) {
+      throw new BadRequestException([
+        'card.encrypted must be the card as this phone scrambled it with the key from the options.',
+      ]);
+    }
   }
 
   /** The fees and the total for one amount, or the refusal a person gets. */
@@ -339,27 +364,7 @@ export class AddMoneyService implements OnModuleInit {
         { limitKobo: s.maxKobo },
       );
     }
-    if (s.dailyMaxKobo > 0) {
-      const today = await this.prisma.addMoneySession.aggregate({
-        where: {
-          wawuUserId,
-          createdAt: { gte: lagosDayStart(now) },
-          status: { in: [...OPEN, 'settled'] },
-        },
-        _sum: { amountKobo: true },
-      });
-      const used = Number(today._sum.amountKobo ?? 0n);
-      if (used + input.amountKobo > s.dailyMaxKobo) {
-        throw new MoneyError(
-          'limit_reached',
-          `You can add up to ${naira(s.dailyMaxKobo)} a day. Try again tomorrow.`,
-          {
-            limitKobo: s.dailyMaxKobo,
-            remainingTodayKobo: Math.max(0, s.dailyMaxKobo - used),
-          },
-        );
-      }
-    }
+    await this.checkDaily(this.prisma, wawuUserId, input.amountKobo, now);
     if (input.chargeKobo !== quote.chargeKobo) {
       throw new MoneyError(
         'quote_changed',
@@ -367,6 +372,43 @@ export class AddMoneyService implements OnModuleInit {
       );
     }
     return quote;
+  }
+
+  /** The day's total against the limit, read through `db` (the connection, or the transaction that holds the person's lock). */
+  private async checkDaily(
+    db: Pick<PrismaService, 'addMoneySession'>,
+    wawuUserId: string,
+    amountKobo: number,
+    now = new Date(),
+  ): Promise<void> {
+    const max = this.settings.dailyMaxKobo;
+    if (max <= 0) return;
+    const today = await db.addMoneySession.aggregate({
+      where: {
+        wawuUserId,
+        createdAt: { gte: lagosDayStart(now) },
+        status: { in: [...OPEN, 'settled'] },
+      },
+      _sum: { amountKobo: true },
+    });
+    const used = Number(today._sum.amountKobo ?? 0n);
+    if (used + amountKobo > max) {
+      throw new MoneyError(
+        'limit_reached',
+        `You can add up to ${naira(max)} a day. Try again tomorrow.`,
+        { limitKobo: max, remainingTodayKobo: Math.max(0, max - used) },
+      );
+    }
+  }
+
+  private async holdDailyLimit(
+    tx: Prisma.TransactionClient,
+    wawuUserId: string,
+    amountKobo: number,
+  ): Promise<void> {
+    if (this.settings.dailyMaxKobo <= 0) return;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`add-money-daily:${wawuUserId}`}))`;
+    await this.checkDaily(tx, wawuUserId, amountKobo);
   }
 
   /** Starts one attempt: the row, then the provider, then what it answered. */
@@ -416,6 +458,8 @@ export class AddMoneyService implements OnModuleInit {
     const id = randomUUID();
     const reference = `wawu-add-${id}`;
     await this.prisma.$transaction(async (tx) => {
+      // The day's limit is read and the attempt written under one lock per person, so two taps at once cannot both pass it.
+      await this.holdDailyLimit(tx, caller.sub, quote.amountKobo);
       await this.keys.attach(tx, scope, id);
       await tx.addMoneySession.create({
         data: {
@@ -641,11 +685,19 @@ export class AddMoneyService implements OnModuleInit {
     if (s.status === 'settled') {
       return { outcome: 'done', note: 'already credited' };
     }
-    if (s.frozen || s.status === 'cancelled') {
+    if (s.status === 'cancelled') {
       return failed(
-        `the attempt is ${s.frozen ? 'frozen' : 'cancelled'} but Nuvion took the payment`,
-        s.frozen ? 'paid while frozen' : 'paid after it was cancelled',
+        'the attempt is cancelled but Nuvion took the payment',
+        'paid after it was cancelled',
       );
+    }
+    if (s.frozen) {
+      // Held, not stopped: the delivery stays pending and is offered again, and unfreezing makes it due at once (adminFreeze).
+      await this.note(s.id, 'paid while frozen, held until it is unfrozen');
+      return {
+        outcome: 'wait',
+        note: 'the attempt is frozen by an admin; the payment is held and credits when it is unfrozen',
+      };
     }
     const st = t.status.toLowerCase();
     if (st === 'pending' || st === 'processing') {
@@ -711,11 +763,9 @@ export class AddMoneyService implements OnModuleInit {
         providerFeeKobo: BigInt(t.feeKobo),
         failureMessage: null,
         checkoutUrl: null,
-        ...(differs
-          ? {
-              reviewNote: `Nuvion's fee was ${t.feeKobo} kobo, the quote said ${s.providerFeeKobo}`,
-            }
-          : {}),
+        reviewNote: differs
+          ? `Nuvion's fee was ${t.feeKobo} kobo, the quote said ${s.providerFeeKobo}`
+          : null,
       },
     });
     await this.collectWawuFee(s.id).catch((e: unknown) => {
@@ -928,7 +978,24 @@ export class AddMoneyService implements OnModuleInit {
         },
       });
     });
+    if (!freeze) await this.offerHeldAgain(id);
     return this.adminGet(id);
+  }
+
+  /**
+   * After an unfreeze: the attempt's inflow delivery, held while it was frozen, is made due now, so the dispatcher credits it on
+   * its next turn instead of after its backoff (up to an hour). The dispatcher credits it once, as for any delivery.
+   */
+  private async offerHeldAgain(id: string): Promise<void> {
+    const s = await this.load(id);
+    await this.prisma.nuvionWebhookEvent.updateMany({
+      where: {
+        processingStatus: 'pending',
+        event: { in: ['inflows.completed', 'inflows.failed'] },
+        payload: { path: ['data', 'unique_reference'], equals: s.reference },
+      },
+      data: { nextAttemptAt: null, claimedUntil: null },
+    });
   }
 
   async adminCancel(

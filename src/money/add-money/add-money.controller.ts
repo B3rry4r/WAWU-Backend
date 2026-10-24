@@ -193,6 +193,7 @@ export class MoneyAddMoneyController {
 @Controller('money/add-money/return')
 export class AddMoneyReturnController {
   @Get()
+  @BuiltBy('WALLET-25')
   @ApiOkResponse({
     description: 'A page that opens the app.',
     content: { 'text/html': { schema: { type: 'string' } } },

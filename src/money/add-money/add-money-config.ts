@@ -1,3 +1,4 @@
+import { createPublicKey } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { FeeConfigError, koboSetting } from '../fees/fee-config';
@@ -69,6 +70,21 @@ export function readPublicKey(raw: string | undefined): string | null {
   return pem;
 }
 
+/** The bytes an RSA ciphertext under this key has (its modulus length), or null with no key; an unusable key stops the server. */
+export function cipherBytesOf(pem: string | null): number | null {
+  if (pem === null) return null;
+  try {
+    const bits = createPublicKey(pem).asymmetricKeyDetails?.modulusLength;
+    if (typeof bits === 'number' && bits >= 1024 && bits % 8 === 0)
+      return bits / 8;
+  } catch {
+    /* falls through to the refusal below */
+  }
+  throw new FeeConfigError(
+    `${ADD_MONEY_CONFIG_KEYS.encryptionKey} must be an RSA public key of 1024 bits or more.`,
+  );
+}
+
 /** An https address with no query or fragment, or null when unset. */
 export function readReturnUrl(raw: string | undefined): string | null {
   if (raw === undefined || raw.trim() === '') return null;
@@ -101,6 +117,8 @@ export class AddMoneySettings {
   readonly maxKobo: number;
   readonly dailyMaxKobo: number;
   readonly cardPublicKey: string | null;
+  /** What the key gives a ciphertext, in bytes (256 for RSA-2048); null with no key. A card sent to the Hub must be exactly this long. */
+  readonly cardCipherBytes: number | null;
   readonly returnUrl: string | null;
   readonly ussdChannel: string | null;
 
@@ -133,6 +151,7 @@ export class AddMoneySettings {
       );
     }
     this.cardPublicKey = readPublicKey(get(K.encryptionKey));
+    this.cardCipherBytes = cipherBytesOf(this.cardPublicKey);
     this.returnUrl = readReturnUrl(get(K.returnUrl));
     const channel = get(K.ussdChannel)?.trim() ?? '';
     if (channel !== '' && !/^[A-Z]{2}-[A-Z0-9-]{3,30}$/.test(channel)) {
