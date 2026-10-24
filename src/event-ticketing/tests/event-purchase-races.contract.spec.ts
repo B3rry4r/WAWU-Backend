@@ -535,7 +535,7 @@ describe('PUT /events/:id/tickets and ticket purchases (EVENTS-11 D2, D3, O5)', 
     const res = await put([{ ...PAID, priceNaira: 6000, quantity: 1000 }]);
     expect(res.status).toBe(409);
     expect((res.body as { message: string }).message).toBe(
-      'Tickets have already sold for "Regular". Add a new tier instead of editing one people have bought.',
+      'Tickets have already sold for "Regular". The price and places of a ticket type cannot change once a ticket is sold.',
     );
     expect(await endState()).toEqual(before);
   });

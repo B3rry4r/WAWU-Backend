@@ -423,7 +423,7 @@ describe('Ticket price edits: the EVENTS-11 follow-ups (FIX-12, R-40)', () => {
       const res = await put(EV_NAME, [REPRICED]).expect(409);
       const body = res.body as ErrorBody;
       expect(body.message).toBe(
-        'Tickets have already sold for "Regular". Add a new tier instead of editing one people have bought.',
+        'Tickets have already sold for "Regular". The price and places of a ticket type cannot change once a ticket is sold.',
       );
       expect(body.message).not.toContain('—');
     });

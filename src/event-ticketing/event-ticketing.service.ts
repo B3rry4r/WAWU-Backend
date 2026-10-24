@@ -1036,6 +1036,10 @@ function planTiers<C extends TierKey & { id: string }, N extends TierKey>(
   return { drop: [...onSale.values()].flat(), create };
 }
 
+/** What the 409 for a sold tier says is the rule (R-79 (c), owner, 23 Oct 2026). */
+export const SOLD_TIER_RULE =
+  'The price and places of a ticket type cannot change once a ticket is sold.';
+
 /** The refusal for buying a tier the host has changed since it was chosen. */
 export const TIER_CHANGED = 'This ticket has changed. Please choose again.';
 
@@ -1192,8 +1196,11 @@ async function assertNoneSold(db: Db, eventId: string): Promise<void> {
     // can sell on both, so the same name can come back twice from the query
     // while the host sees only one tier by that name.
     const names = [...new Set(sold.map((s) => s.name))];
+    // EVENTS-14 (R-79 (c)): the sentence is the rule the owner ruled. The
+    // refusal itself is unchanged; the old second sentence offered adding a
+    // tier, which this route has never allowed.
     throw new ConflictException(
-      `Tickets have already sold for ${names.map((n) => `"${n}"`).join(', ')}. Add a new tier instead of editing one people have bought.`,
+      `Tickets have already sold for ${names.map((n) => `"${n}"`).join(', ')}. ${SOLD_TIER_RULE}`,
     );
   }
 }
