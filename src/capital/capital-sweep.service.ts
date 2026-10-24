@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { NOT_PAID_OUT } from './capital-mapping';
 import { CapitalService } from './capital.service';
 
 /** How many orders one tick looks at, per kind of work. */
@@ -88,7 +89,7 @@ export class CapitalSweepService {
     const rows = await this.prisma.capitalOrder.findMany({
       where: {
         state: 'confirmed',
-        NOT: { lifecycle: { in: ['WITHDRAWN', 'CLOSED', 'REFUNDED'] } },
+        AND: [NOT_PAID_OUT],
         OR: [
           { lastCheckedAt: null },
           { lastCheckedAt: { lt: new Date(now.getTime() - 6 * 3_600_000) } },

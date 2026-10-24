@@ -35,6 +35,7 @@ import { CapitalLedger } from './capital-ledger';
 import {
   CAPITAL_ENDED_STATES,
   isTerminalLifecycle,
+  NOT_PAID_OUT,
   orderView,
   productView,
   readSnapshot,
@@ -155,7 +156,7 @@ export class CapitalService {
       where: {
         wawuUserId,
         state: { in: ['confirming', 'confirmed', 'review'] },
-        NOT: { lifecycle: { in: ['WITHDRAWN', 'CLOSED', 'REFUNDED'] } },
+        ...NOT_PAID_OUT,
       },
     });
     return n > 0;
@@ -255,7 +256,7 @@ export class CapitalService {
         where: {
           wawuUserId: wallet.wawuUserId,
           state: 'confirmed',
-          NOT: { lifecycle: { in: ['WITHDRAWN', 'CLOSED', 'REFUNDED'] } },
+          ...NOT_PAID_OUT,
         },
       });
       return {
@@ -284,10 +285,7 @@ export class CapitalService {
     };
     if (q.show === 'holding') {
       where.state = { in: ['reserved', 'confirming', 'confirmed', 'review'] };
-      where.NOT = [
-        { nuvionOrderId: null },
-        { lifecycle: { in: ['WITHDRAWN', 'CLOSED', 'REFUNDED'] } },
-      ];
+      where.AND = [NOT_PAID_OUT];
     } else if (q.show === 'ended') {
       where.OR = [
         { state: { in: [...CAPITAL_ENDED_STATES] } },

@@ -750,6 +750,49 @@ describe('NUV-12: Capital from the wallet', () => {
     expect(plan.number('capital.enabled')).toBe(1);
   });
 
+  it('N1: an order the provider has given no lifecycle yet is still held: it keeps the Wallet row, the portfolio count, the holding list and the sweep', async () => {
+    const holder = await person();
+    const held = await invested(holder);
+    const spy = jest.spyOn(plan, 'number').mockImplementation((key: string) => {
+      if (key === 'capital.enabled') return 0;
+      throw new Error('unexpected setting');
+    });
+    try {
+      // In review with no lifecycle yet: with Capital off, the person keeps the way in and sees it as held.
+      await prisma.capitalOrder.update({
+        where: { id: held.id },
+        data: { state: 'review', lifecycle: null },
+      });
+      expect(
+        body<{ available: boolean; holding: boolean }>(
+          await get(holder, '/availability').expect(200),
+        ).data,
+      ).toEqual({ available: false, holding: true });
+      expect(
+        body<{ items: Order[] }>(
+          await get(holder, '/orders?show=holding').expect(200),
+        ).data!.items.map((o) => o.id),
+      ).toEqual([held.id]);
+      // Confirmed with no lifecycle yet: counted, and read by the sweep.
+      await prisma.capitalOrder.update({
+        where: { id: held.id },
+        data: { state: 'confirmed', lifecycle: null, lastCheckedAt: null },
+      });
+      expect(
+        body<{ holdings: number }>(await get(holder, '/portfolio').expect(200))
+          .data!.holdings,
+      ).toBe(1);
+      await sweep.tick();
+      const read = await prisma.capitalOrder.findUniqueOrThrow({
+        where: { id: held.id },
+      });
+      expect(read.lastCheckedAt).not.toBeNull();
+      expect(read.lifecycle).not.toBeNull();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('a provider with no Capital leaves it unavailable', async () => {
     const p = await person();
     provider.capital = undefined;
