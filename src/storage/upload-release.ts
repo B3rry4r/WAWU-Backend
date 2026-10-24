@@ -7,6 +7,7 @@ import {
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { Prisma } from '../../generated/prisma/client';
 import type { PrismaService } from '../common/prisma/prisma.service';
+import { CHAT_UPLOAD_FOLDERS } from '../chat/chat-limits';
 import { deleteFromBucket } from './bucket-delete';
 import {
   LOCKED_TX,
@@ -22,7 +23,8 @@ import {
  * burned storage for good.
  *
  * `POST /uploads/release` is for an upload that is the caller's own and that no
- * listing has claimed yet. It deletes the object from the bucket and marks the
+ * listing has claimed yet (or, for a chat file, no message carries: FIX-104
+ * round 2, a failed or deleted bubble gives its upload back). It deletes the object from the bucket and marks the
  * row `abandoned`, which is the state the usage sum already leaves out. The row
  * is kept (not deleted) so a repeated call finds it and answers the same way.
  *
@@ -49,9 +51,21 @@ export interface ReleaseDeps {
  * its status: a removed piece still holds its row.
  */
 export async function isClaimed(
-  prisma: Pick<Prisma.TransactionClient, 'contentPiece' | 'contentFrame'>,
+  prisma: Pick<
+    Prisma.TransactionClient,
+    'contentPiece' | 'contentFrame' | 'chatMessage'
+  >,
   key: string,
 ): Promise<boolean> {
+  // A chat file (FIX-104 round 2) is claimed by the message that carries it,
+  // and by nothing else: a listing cannot name a chat key.
+  if (isChatKey(key)) {
+    const message = await prisma.chatMessage.findFirst({
+      where: { attachmentKey: key },
+      select: { id: true },
+    });
+    return Boolean(message);
+  }
   const [piece, frame] = await Promise.all([
     prisma.contentPiece.findFirst({
       where: {
@@ -68,6 +82,11 @@ export async function isClaimed(
     }),
   ]);
   return Boolean(piece ?? frame);
+}
+
+/** Whether `key` is in a folder only a chat writes to (`<folder>/<wawuId>/<uuid>.<ext>`). */
+export function isChatKey(key: string): boolean {
+  return CHAT_UPLOAD_FOLDERS.some((folder) => key.startsWith(`${folder}/`));
 }
 
 const TRY_AGAIN =
@@ -115,7 +134,9 @@ export async function releaseOwnUpload(
       }
       if (await isClaimed(tx, key)) {
         throw new ConflictException({
-          message: 'That file is already part of a listing.',
+          message: isChatKey(key)
+            ? 'That file is already part of a message.'
+            : 'That file is already part of a listing.',
           reason: { code: 'upload_claimed' },
         });
       }
