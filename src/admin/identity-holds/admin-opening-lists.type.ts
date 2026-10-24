@@ -13,12 +13,7 @@
  * compiler stops the two drifting apart.
  */
 export type OpeningReviewStage =
-  | 'needs_documents'
-  | 'checking'
-  | 'approved'
-  | 'rejected'
-  | 'stopped'
-  | null;
+  'needs_documents' | 'checking' | 'approved' | 'rejected' | 'stopped' | null;
 
 /** The openings that can be stuck: the states in which WAWU waits. */
 export type StuckOpeningState = 'opening' | 'unknown' | 'open' | 'conflict';
