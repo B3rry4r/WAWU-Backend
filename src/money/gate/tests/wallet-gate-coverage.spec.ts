@@ -68,6 +68,8 @@ const NOT_GATED: Record<string, string> = {
   // WALLET-41 (R-87): a person outside Nigeria opens a wallet without a BVN.
   // Both routes are where such a person is led before and after the opening,
   // so they run with no naira wallet and read none.
+  'GET money/world/countries':
+    'Open your wallet from outside Nigeria: the countries to pick from (WALLET-41)',
   'GET money/world/options':
     'Open your wallet from outside Nigeria: what is offered before opening (WALLET-41)',
   'POST money/world/first-account':

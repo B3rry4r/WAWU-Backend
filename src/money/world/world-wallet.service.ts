@@ -9,9 +9,13 @@ import {
 } from '../fx/fx-currencies';
 import { FxSettings } from '../fx/fx-settings';
 import { MoneyError } from '../money-error';
-import { isFiatCode } from './world-countries';
+import { isFiatCode, listCountries } from './world-countries';
 import { WorldSettings } from './world-settings';
-import type { WorldOptionsView, WorldWalletView } from './world-view.type';
+import type {
+  WorldCountriesView,
+  WorldOptionsView,
+  WorldWalletView,
+} from './world-view.type';
 
 /** A first-account request older than this lost its answer and may be tried again. */
 const FIRST_ACCOUNT_STALE_MS = 2 * 60_000;
@@ -89,6 +93,11 @@ export class WorldWalletService {
     private readonly fx: FxSettings,
     private readonly accounts: FxAccountsService,
   ) {}
+
+  /** Every country a person may say they live in (region data, not a list of ours). */
+  countries(): WorldCountriesView {
+    return { countries: listCountries() };
+  }
 
   async options(country: string): Promise<WorldOptionsView> {
     const suggested = this.settings.suggestedFor(country);

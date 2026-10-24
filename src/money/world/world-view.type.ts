@@ -95,3 +95,21 @@ export interface AdminWorldActView {
   /** Foreign accounts frozen or let go by this act. */
   accountsChanged: number;
 }
+
+/** One country a person may live in. */
+export interface WorldCountryView {
+  /** ISO 3166-1 alpha-2. */
+  code: string;
+  /** The English name. */
+  name: string;
+}
+
+/**
+ * GET /money/world/countries: the countries a person can say they live in,
+ * from the platform's own region data (not a list the app carries). Nigeria
+ * is among them: its BVN wallet is theirs. Replaced by GEO-02's list
+ * (GET /geo/countries) when that lands (BACKEND_GAPS G-WALLET-41-5).
+ */
+export interface WorldCountriesView {
+  countries: WorldCountryView[];
+}

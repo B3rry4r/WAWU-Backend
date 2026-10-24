@@ -3290,6 +3290,7 @@ this.
 
 | Route | What it does |
 | --- | --- |
+| `GET /money/world/countries` | the countries a person can say they live in (`code`, English `name`), from the platform's region data, Nigeria among them; cached a day. GEO-02's `GET /geo/countries` replaces it when it lands (G-WALLET-41-5) |
 | `GET /money/world/options?country=XX` | what a person living in that country is offered: `available` (and `unavailableReason`), `suggested` (the currency the country is first offered, from config), `choices` (every fiat currency, each `enabled` or not), `openFee` (WAWU's fee to open, `amountMinor` beside `currency`, default 0). Needs no wallet. No provider call |
 | `POST /money/wallet/open` | the same route, with `countryCode` (not `NG`) and optionally `firstCurrency` and `nationality`. No `bvn`, `nin` or `checkHandle`. `idType`, `idNumber`, the address and the proof of address are that country's. The phone on the account must carry its country code |
 | `GET /money/wallet` | adds `world` (`country`, `firstCurrency`, `state`, `accountOpenedAt`) for such a person. `state` is `open` once the first foreign account is, `account` stays null, `accountNumberStatus` `none`. `review` is the same review as for a Nigerian opening |

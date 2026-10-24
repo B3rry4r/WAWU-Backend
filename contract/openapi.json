@@ -20001,6 +20001,34 @@
         "x-wawu-built-by": "WALLET-21"
       }
     },
+    "/api/hub/money/world/countries": {
+      "get": {
+        "operationId": "WorldController_countries",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldCountriesView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The countries a person can say they live in, with English names. Nigeria\nis among them. Until GEO-02's list lands this is the app's picker.",
+        "tags": [
+          "World"
+        ],
+        "x-wawu-built-by": "WALLET-41"
+      }
+    },
     "/api/hub/money/world/options": {
       "get": {
         "operationId": "WorldController_options",
@@ -50108,6 +50136,35 @@
           "stageBefore",
           "stageAfter",
           "accountsChanged"
+        ]
+      },
+      "WorldCountryView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name"
+        ]
+      },
+      "WorldCountriesView": {
+        "type": "object",
+        "properties": {
+          "countries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorldCountryView"
+            }
+          }
+        },
+        "required": [
+          "countries"
         ]
       },
       "WorldCurrencyChoiceView": {

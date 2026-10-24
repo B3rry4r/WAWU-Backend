@@ -22,7 +22,7 @@ import {
   WorldOptionsQueryDto,
 } from './dto/world-request.dto';
 import { WorldWalletService } from './world-wallet.service';
-import type { WorldOptionsView } from './world-view.type';
+import type { WorldCountriesView, WorldOptionsView } from './world-view.type';
 
 /**
  * A wallet for a person outside Nigeria (task WALLET-41, R-87). Opening is
@@ -38,6 +38,18 @@ export class WorldController {
     private readonly world: WorldWalletService,
     private readonly opening: WalletOpeningService,
   ) {}
+
+  /**
+   * The countries a person can say they live in, with English names. Nigeria
+   * is among them. Until GEO-02's list lands this is the app's picker.
+   */
+  @Get('countries')
+  @Header('Cache-Control', 'public, max-age=86400')
+  @BuiltBy('WALLET-41')
+  @MoneyErrors()
+  countries(): WorldCountriesView {
+    return this.world.countries();
+  }
 
   /**
    * What a person living in a country is offered before they open: whether a

@@ -77,3 +77,48 @@ export function parseFirstCurrencyMap(
   }
   return out;
 }
+
+/** Region codes ICU names that are not countries (a union, a pseudo-locale, an unknown region). */
+const NOT_COUNTRIES: ReadonlySet<string> = new Set([
+  'AC',
+  'CP',
+  'DG',
+  'EA',
+  'EU',
+  'EZ',
+  'IC',
+  'QO',
+  'TA',
+  'UN',
+  'XA',
+  'XB',
+  'ZZ',
+]);
+
+let countriesCache: Array<{ code: string; name: string }> | null = null;
+
+/**
+ * Every country the runtime's region data names, English names, sorted by
+ * name. Read once. No fixed list is kept in our code (R-85).
+ */
+export function listCountries(): Array<{ code: string; name: string }> {
+  if (countriesCache) return countriesCache;
+  const names = new Intl.DisplayNames(['en'], { type: 'region' });
+  const out: Array<{ code: string; name: string }> = [];
+  for (let a = 65; a <= 90; a += 1) {
+    for (let b = 65; b <= 90; b += 1) {
+      const code = String.fromCharCode(a, b);
+      if (NOT_COUNTRIES.has(code)) continue;
+      let name: string | undefined;
+      try {
+        name = names.of(code);
+      } catch {
+        continue;
+      }
+      if (!name || name === code || /unknown|pseudo/i.test(name)) continue;
+      out.push({ code, name });
+    }
+  }
+  countriesCache = out.sort((x, y) => x.name.localeCompare(y.name, 'en'));
+  return countriesCache;
+}

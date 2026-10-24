@@ -9,6 +9,7 @@ import { worldIdentityKey } from '../../opening/reviewed-opening';
 import {
   DEFAULT_FIRST_CURRENCY,
   EURO_COUNTRIES,
+  listCountries,
   parseFirstCurrencyMap,
 } from '../world-countries';
 import { WorldSettings } from '../world-settings';
@@ -236,5 +237,35 @@ describe('the claim a world opening takes in place of a BVN', () => {
     );
     expect(key).not.toMatch(/^\d{11}$/);
     expect(key.startsWith('world:')).toBe(true);
+  });
+});
+
+describe('the countries to pick from', () => {
+  const all = listCountries();
+  it('names every country from the region data, with Nigeria, and no union or pseudo-region', () => {
+    expect(all.length).toBeGreaterThan(200);
+    const codes = new Set(all.map((c) => c.code));
+    for (const code of [
+      'NG',
+      'US',
+      'GB',
+      'DE',
+      'GH',
+      'AE',
+      'CA',
+      'KE',
+      'IN',
+      'BR',
+    ]) {
+      expect(codes.has(code)).toBe(true);
+    }
+    for (const code of ['EU', 'UN', 'ZZ', 'XA', 'EZ'])
+      expect(codes.has(code)).toBe(false);
+    expect(all.find((c) => c.code === 'NG')?.name).toBe('Nigeria');
+  });
+  it('is sorted by name and every row has a name that is not its code', () => {
+    const names = all.map((c) => c.name);
+    expect([...names].sort((a, b) => a.localeCompare(b, 'en'))).toEqual(names);
+    for (const c of all) expect(c.name).not.toBe(c.code);
   });
 });
