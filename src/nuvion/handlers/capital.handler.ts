@@ -74,11 +74,21 @@ export class NuvionCapitalHandler implements NuvionEventHandler {
         note: `the server runs ${provider.label}; left for a Nuvion server`,
       };
     }
-    const capital = this.find<CapitalService>(CapitalService);
-    if (!capital) return { outcome: 'wait', note: 'Capital is not mounted' };
+    // Capital's service is needed only for what is Capital's. A transfer of a
+    // naira wallet, a foreign account or a bill is not, and is answered `done`
+    // before the service is looked for: a handler that waits for a service it
+    // does not need holds back every other handler's work on the same delivery
+    // (the dispatcher leaves a delivery pending while any handler waits).
+    if (d.event.startsWith('capital_')) {
+      const capital = this.capitalService();
+      if (!capital) return { outcome: 'wait', note: 'Capital is not mounted' };
+      return this.onCapitalEvent(d, capital);
+    }
+    return this.onTransfer(d);
+  }
 
-    if (d.event.startsWith('capital_')) return this.onCapitalEvent(d, capital);
-    return this.onTransfer(d, capital);
+  private capitalService(): CapitalService | null {
+    return this.find<CapitalService>(CapitalService);
   }
 
   private async onCapitalEvent(
@@ -103,10 +113,7 @@ export class NuvionCapitalHandler implements NuvionEventHandler {
     return done('the order was read again from Nuvion');
   }
 
-  private async onTransfer(
-    d: NuvionDelivery,
-    capital: CapitalService,
-  ): Promise<NuvionHandlerResult> {
+  private async onTransfer(d: NuvionDelivery): Promise<NuvionHandlerResult> {
     const read = readNuvionTransfer(d.data);
     if (!read.ok) return done('not a transfer this handler can read');
     const t = read.transfer;
@@ -121,6 +128,8 @@ export class NuvionCapitalHandler implements NuvionEventHandler {
       select: { wawuUserId: true },
     });
     if (!entity) return done("not a person's entity: left alone");
+    const capital = this.capitalService();
+    if (!capital) return { outcome: 'wait', note: 'Capital is not mounted' };
     const wallet = await capital.walletOf(entity.wawuUserId);
     if (!wallet)
       return { outcome: 'wait', note: 'the wallet is not recorded yet' };
