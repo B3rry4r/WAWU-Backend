@@ -36,17 +36,19 @@ export const CLEAN_AUDIO_TOOL: AiTool = {
     asFile(req);
     if (!input) throw new Error('a file tool was run without its file');
     const cleaned = await provider.isolateVoice({ file: input.file });
-    const historyId = cleaned.historyId;
-    const discard =
-      historyId === null
+    const providerCopy =
+      cleaned.historyId === null
         ? undefined
-        : () => provider.deleteIsolation(historyId);
+        : ({ kind: 'isolation', id: cleaned.historyId } as const);
     const type = (AI_AUDIO_CONTENT_TYPES as readonly string[]).includes(
       cleaned.contentType,
     )
       ? (cleaned.contentType as AiAudioContentType)
       : null;
-    if (type === null) return { failure: 'output_type', discard };
-    return { audio: { audio: cleaned.audio, contentType: type }, discard };
+    if (type === null) return { failure: 'output_type', providerCopy };
+    return {
+      audio: { audio: cleaned.audio, contentType: type },
+      providerCopy,
+    };
   },
 };

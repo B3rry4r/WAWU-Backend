@@ -1,3 +1,5 @@
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { ConfigService } from '@nestjs/config';
 import { AiVoiceProviderError } from '../voice/ai-voice-provider';
 import {
@@ -111,19 +113,53 @@ describe('AITOOLS-04: the AI provider seam, Captions and Clean audio', () => {
     const open = standin.openTranscripts();
     const t = await p.transcribe({ file: file(2), languageCode: null });
     expect(standin.openTranscripts()).toBe(open + 1);
-    await p.deleteTranscript(t.id!);
+    await expect(p.deleteTranscript(t.id!)).resolves.toBe('deleted');
     expect(standin.state.deletedTranscripts).toEqual([t.id]);
     expect(standin.openTranscripts()).toBe(open);
     const c = await p.isolateVoice({ file: file(2) });
     expect(c.contentType).toBe('audio/mpeg');
     expect(c.historyId).toMatch(/^iso-\d+$/);
-    await p.deleteIsolation(c.historyId!);
+    await expect(p.deleteIsolation(c.historyId!)).resolves.toBe('deleted');
     expect(standin.state.deletedIsolations).toEqual([c.historyId]);
-    await expect(p.deleteTranscript('tr-none')).resolves.toBeUndefined();
-    await expect(p.deleteIsolation('iso-none')).resolves.toBeUndefined();
+    // Round 2: a delete says how the try went (it used to say nothing, which
+    // hid the provider's 404 for a copy not stored yet). A copy that is not
+    // there is `not_found`; a refused key is `failed`; neither throws.
+    await expect(p.deleteTranscript('tr-none')).resolves.toBe('not_found');
+    await expect(p.deleteIsolation('iso-none')).resolves.toBe('not_found');
     await expect(
       provider({ AI_VOICE_API_KEY: 'wrong' }).deleteTranscript('x'),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe('failed');
+  });
+
+  it("HIGH 3 (round 2): the cleaned item's id is the audio-isolation-id header, as the real provider sends it; history-item-id is not read", async () => {
+    const answer = (headers: Record<string, string>) =>
+      new Promise<{ server: Server; port: number }>((resolve) => {
+        const server = createServer((req, res) => {
+          req.resume();
+          req.on('end', () => {
+            res.writeHead(200, { 'content-type': 'audio/mpeg', ...headers });
+            res.end(Buffer.alloc(64, 1));
+          });
+        });
+        server.listen(0, '127.0.0.1', () =>
+          resolve({ server, port: (server.address() as AddressInfo).port }),
+        );
+      });
+    const real = await answer({ 'audio-isolation-id': 'abc_123-XYZ' });
+    const old = await answer({ 'history-item-id': 'old-name-1' });
+    try {
+      const cleanedReal = await provider({
+        AI_VOICE_BASE_URL: `http://127.0.0.1:${real.port}`,
+      }).isolateVoice({ file: file(2) });
+      expect(cleanedReal.historyId).toBe('abc_123-XYZ');
+      const cleanedOld = await provider({
+        AI_VOICE_BASE_URL: `http://127.0.0.1:${old.port}`,
+      }).isolateVoice({ file: file(2) });
+      expect(cleanedOld.historyId).toBeNull();
+    } finally {
+      await new Promise((r) => real.server.close(r));
+      await new Promise((r) => old.server.close(r));
+    }
   });
 
   it('answers a provider fault as the other calls do: 429 and 5xx can be tried again, any other refusal cannot, a web page is not an answer', async () => {
@@ -260,16 +296,17 @@ describe('AITOOLS-04: the AI provider seam, Captions and Clean audio', () => {
   });
 
   it('reads a length from the file itself and rounds the minutes up, at least 1', async () => {
-    expect(await readSeconds(wav(90), 'audio/wav')).toBeCloseTo(90, 2);
-    // A wrong declared type is read from the bytes.
-    expect(await readSeconds(wav(10), 'video/mp4')).toBeCloseTo(10, 2);
+    expect(await readSeconds(wav(90))).toBeCloseTo(90, 2);
+    // The declared type plays no part: the bytes name the container.
+    expect(await readSeconds(wav(10))).toBeCloseTo(10, 2);
+    expect(await readSeconds(Buffer.from('not a recording'))).toBeNull();
+    expect(await readSeconds(Buffer.alloc(0))).toBeNull();
+    expect(await readSeconds(Buffer.alloc(5000))).toBeNull();
+    // Round 2 (LOW 6): 0.5 s of container padding is forgiven, so a "1:00"
+    // clip that reads 60.06 s is one minute (this list used to expect 2 for
+    // 60.01, which pinned the defect). Anything over the tolerance rounds up.
     expect(
-      await readSeconds(Buffer.from('not a recording'), 'audio/wav'),
-    ).toBeNull();
-    expect(await readSeconds(Buffer.alloc(0), 'audio/mpeg')).toBeNull();
-    expect(await readSeconds(Buffer.alloc(5000), 'audio/mp4')).toBeNull();
-    expect([0.2, 1, 60, 60.01, 90, 120, 121].map(minutesOf)).toEqual([
-      1, 1, 1, 2, 2, 2, 3,
-    ]);
+      [0.2, 1, 60, 60.01, 60.06, 60.5, 60.6, 90, 120, 121].map(minutesOf),
+    ).toEqual([1, 1, 1, 1, 1, 1, 2, 2, 2, 3]);
   });
 });

@@ -137,8 +137,10 @@ export class AiInputService {
       );
     let seconds: number | null = null;
     try {
-      const { audio, contentType } = await this.files.read(row.key, cap);
-      seconds = await readSeconds(audio, contentType);
+      const { audio } = await this.files.read(row.key, cap);
+      // The bytes are handed to the reader's worker thread without a copy and
+      // are not used again here; the provider run reads the file afresh.
+      seconds = await readSeconds(audio, { transfer: true });
     } catch {
       seconds = null;
     }

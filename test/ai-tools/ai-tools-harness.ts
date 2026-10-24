@@ -35,7 +35,9 @@ import {
 } from '../../src/ai-tools/input/ai-input-files';
 import { AI_VOICE_PROVIDER } from '../../src/ai-tools/voice/ai-voice-provider';
 import { startStandin, type StandinHandle } from './voice-standin-for-specs';
+import { AppController } from '../../src/app.controller';
 import { HttpVoiceProvider } from '../../src/ai-tools/voice/http-voice-provider';
+import { ProviderCopyService } from '../../src/ai-tools/voice/provider-copy.service';
 
 /**
  * The shared set-up of the AI tools specs: the real controller, services,
@@ -178,7 +180,12 @@ export class MemoryInputFiles implements AiInputFiles {
     const f = this.files.get(key);
     if (this.failRead || !f || f.data.length > maxBytes)
       return Promise.reject(new Error('file gone'));
-    return Promise.resolve({ audio: f.data, contentType: f.contentType });
+    // A fresh copy each time, as the storage read gives (the length reader
+    // may take the bytes' memory over).
+    return Promise.resolve({
+      audio: Buffer.from(new Uint8Array(f.data)),
+      contentType: f.contentType,
+    });
   }
   remove(key: string): Promise<void> {
     this.files.delete(key);
@@ -256,7 +263,8 @@ export async function bootAiTools(): Promise<AiHarness> {
       PlanSettingsModule,
       PointsModule,
     ],
-    controllers: [AiToolsController],
+    // AppController: GET /health, so a spec can show the Hub answers while a hostile file is being read.
+    controllers: [AiToolsController, AppController],
     providers: [
       FeeSettings,
       PointsSpendService,
@@ -280,6 +288,7 @@ export async function bootAiTools(): Promise<AiHarness> {
       { provide: AI_AUDIO_STORE, useValue: store },
       { provide: AI_INPUT_FILES, useValue: inputs },
       AiInputService,
+      ProviderCopyService,
     ],
   }).compile();
   const app = moduleRef.createNestApplication();

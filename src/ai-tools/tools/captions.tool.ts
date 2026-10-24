@@ -36,16 +36,15 @@ export const CAPTIONS_TOOL: AiTool = {
       file: input.file,
       languageCode,
     });
-    const transcriptId = transcript.id;
-    const discard =
-      transcriptId === null
+    const providerCopy =
+      transcript.id === null
         ? undefined
-        : () => provider.deleteTranscript(transcriptId);
+        : ({ kind: 'transcript', id: transcript.id } as const);
     if (
       transcript.durationSeconds !== null &&
       transcript.durationSeconds > minutes * 60 + LENGTH_SLACK_SECONDS
     )
-      return { failure: 'length_differs', discard };
+      return { failure: 'length_differs', providerCopy };
     return {
       texts: [
         { kind: 'text', text: transcript.text },
@@ -57,7 +56,7 @@ export const CAPTIONS_TOOL: AiTool = {
           }),
         },
       ],
-      discard,
+      providerCopy,
     };
   },
 };

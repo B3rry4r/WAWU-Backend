@@ -891,8 +891,17 @@ them (R-47). The costs are `points.action.captions_per_min` (15) and
   the key. No log line holds a file's name, bytes or text.
 - **The provider keeps nothing.** After a Captions result is kept the Hub deletes
   the provider's transcript; after Clean audio it deletes the provider's history
-  item (when the provider answered its id in the `history-item-id` header: NOT
-  RUN, the header is assumed). Both deletes are tried however the job ends.
+  item, whose id comes in the `audio-isolation-id` response header (seen on the
+  real provider, 24 Oct 2026: it sends no `history-item-id`; the delete route is
+  `DELETE /v1/audio-isolation/history/{id}`, 204). Both deletes are tried however
+  the job ends. The real provider answers 404 for a copy it has not stored yet
+  (transcript: 404 at 89 ms, 200 about 40 s later), so the Hub notes the copy on
+  the job row (`providerRef`: `transcript:<id>` or `isolation:<id>`), tries once,
+  then four more times over about a minute (2, 6, 15 and 40 seconds, outside the
+  job), and leaves the rest to a sweep every minute: a 2xx clears the note; a 404
+  clears it only 10 minutes after the answer (before that it may not be stored
+  yet); any other answer keeps trying for 24 hours, then logs that the copy was
+  never removed.
 - **The length the provider reports** (Captions answers `audio_duration_secs`):
   more than 1 minute above the priced minutes fails the job (`failureCode`
   `length_differs`) and every point goes back.
@@ -903,9 +912,17 @@ them (R-47). The costs are `points.action.captions_per_min` (15) and
   server that dies between the two still shows the words (a transcript lives
   nowhere else).
 - **Length reader.** `music-metadata` 7.14.0 (pure JavaScript, no ffmpeg on the
-  Hub) reads MP3, WAV, MP4/M4A, AAC and QuickTime/WebM containers from the stored
-  bytes. Tested here on WAV and MP3 only. The whole file is read into memory for
-  the length and again for the run (up to `ai.input_max_bytes`).
+  Hub), run in a worker thread so a person's file cannot stop the Hub. First the
+  file's own first bytes must name a container the tools take (WAV, MP3 by frame
+  or ID3, ADTS AAC, MP4/M4A/MOV by an `ftyp` box, WebM/Matroska); anything else,
+  ASF and DSF included, is refused as `ai_file_unreadable` before any parser sees
+  it, and the declared type is never used. The one parser for that container
+  runs in a worker with a 15 second hard limit and a memory watchdog, terminated
+  on overrun (also refused as unreadable); two workers at most run at once.
+  QuickTime is read as MP4. A length that reads 0 (a fragmented MP4) is refused,
+  never priced as 0 minutes. Minutes round up after 0.5 s of container padding is
+  forgiven (a "1:00" clip is 1 minute). The whole file is read into memory for the
+  length and again for the run (up to `ai.input_max_bytes`).
 - **Settings.** `ai.input_max_bytes` (default 500 MB, the smaller of the provider's
   documented limits; an admin may only lower it; PROVISIONAL `AITOOLS-LIMITS`).
   `AI_VOICE_FILE_TIMEOUT_MS` (default 600000) is the wait of both file calls;

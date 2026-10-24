@@ -49,13 +49,20 @@
 //       empty transcript, [[reported:SECS]] report that length instead,
 //       [[noid]] no transcription_id.
 //   DELETE /v1/speech-to-text/transcripts/<id>      ->  200, 404 when none
+//     or not stored yet (the real provider answered 404 `transcript_not_found`
+//     89 ms after the transcript, and 200 about 40 s later). The file can ask
+//     for [[store-delay:MS]]: the copy is not deletable until MS after the
+//     answer (the transcript, and the cleaned recording's item, alike).
 //   POST /v1/audio-isolation   (AITOOLS-04)
 //     header xi-api-key, multipart (audio)  ->  200 audio/mpeg (silent MP3
-//     frames of the file's length) with a `history-item-id` header. The file
+//     frames of the file's length) with an `audio-isolation-id` header (the
+//     real provider's name; it sends no `history-item-id`). The file
 //     takes the same [[fail]], [[reject]], [[status:n]], [[html]], [[slow:n]]
 //     markers, plus [[iso-type:audio/ogg]] (answer that type) and
-//     [[iso-nohistory]] (no history-item-id header).
-//   DELETE /v1/audio-isolation/history/<id>         ->  200, 404 when none
+//     [[iso-nohistory]] (no audio-isolation-id header).
+//   DELETE /v1/audio-isolation/history/<id>         ->  204, 404 when none
+//     or not stored yet (as above)
+//     state.deleteTries lists every delete try ({ kind, id, status }).
 //     state.transcribe and state.isolate list each call (byte count, model,
 //     language; never the file); state.deletedTranscripts and
 //     state.deletedIsolations list the ids deleted.
@@ -101,9 +108,12 @@ function startVoiceStandin({
     isolate: [],
     deletedTranscripts: [],
     deletedIsolations: [],
+    /** Every delete try on a transcript or cleaned item, with the status it was answered. */
+    deleteTries: [],
   };
-  const transcripts = new Set();
-  const isolations = new Set();
+  // id -> the time (ms) from which the provider has the copy stored and a delete finds it.
+  const transcripts = new Map();
+  const isolations = new Map();
   let transcriptSeq = 0;
   let isolationSeq = 0;
   const clones = new Map();
@@ -357,7 +367,7 @@ function startVoiceStandin({
           const id = marks.includes('[[noid]]')
             ? undefined
             : `tr-${++transcriptSeq}`;
-          if (id) transcripts.add(id);
+          if (id) transcripts.set(id, Date.now() + storeDelayOf(marks));
           return done(
             200,
             'application/json',
@@ -377,8 +387,8 @@ function startVoiceStandin({
         const id = `iso-${++isolationSeq}`;
         const headers = {};
         if (!marks.includes('[[iso-nohistory]]')) {
-          isolations.add(id);
-          headers['history-item-id'] = id;
+          isolations.set(id, Date.now() + storeDelayOf(marks));
+          headers['audio-isolation-id'] = id;
         }
         return done(
           200,
@@ -392,14 +402,35 @@ function startVoiceStandin({
     };
   }
 
-  function removeFrom(set, list) {
+  /** How long after the answer the file asks the provider to take to store its copy ([[store-delay:MS]]). */
+  function storeDelayOf(marks) {
+    const m = /\[\[store-delay:(\d{1,7})\]\]/.exec(marks);
+    return m ? Number(m[1]) : 0;
+  }
+
+  /**
+   * DELETE of a transcript (200) or a cleaned item (204). A copy the provider
+   * has not stored yet answers 404 like one that does not exist, and the try
+   * can be made again.
+   */
+  function removeFrom(items, list, kind, okStatus) {
     return (req, res, m) => {
       if (req.headers['xi-api-key'] !== key)
         return json(res, 401, { detail: 'bad key' });
       const id = decodeURIComponent(m[1]);
-      if (!set.delete(id)) return json(res, 404, { detail: 'no such item' });
+      const storedAt = items.get(id);
+      if (storedAt === undefined || Date.now() < storedAt) {
+        state.deleteTries.push({ kind, id, status: 404 });
+        return json(res, 404, { detail: 'no such item' });
+      }
+      items.delete(id);
       list.push(id);
-      return json(res, 200, { status: 'ok' });
+      state.deleteTries.push({ kind, id, status: okStatus });
+      if (okStatus === 204) {
+        res.statusCode = 204;
+        return res.end();
+      }
+      return json(res, okStatus, { status: 'ok' });
     };
   }
 
@@ -456,7 +487,12 @@ function startVoiceStandin({
     {
       method: 'DELETE',
       path: /^\/v1\/speech-to-text\/transcripts\/([^/]+)$/,
-      handle: removeFrom(transcripts, state.deletedTranscripts),
+      handle: removeFrom(
+        transcripts,
+        state.deletedTranscripts,
+        'transcript',
+        200,
+      ),
     },
     {
       method: 'POST',
@@ -466,7 +502,12 @@ function startVoiceStandin({
     {
       method: 'DELETE',
       path: /^\/v1\/audio-isolation\/history\/([^/]+)$/,
-      handle: removeFrom(isolations, state.deletedIsolations),
+      handle: removeFrom(
+        isolations,
+        state.deletedIsolations,
+        'isolation',
+        204,
+      ),
     },
     { method: 'POST', path: /^\/v1\/voices\/add$/, handle: addVoice },
     { method: 'DELETE', path: /^\/v1\/voices\/([^/]+)$/, handle: removeVoice },

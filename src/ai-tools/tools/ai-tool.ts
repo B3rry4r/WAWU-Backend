@@ -2,6 +2,7 @@ import type { AiToolJob } from '../../../generated/prisma/client';
 import type { PlansConfig } from '../../plans/plans-config';
 import type {
   AiVoiceProvider,
+  ProviderCopy,
   SpokenAudio,
   VoiceSample,
 } from '../voice/ai-voice-provider';
@@ -106,12 +107,13 @@ export interface AiToolRunResult {
    */
   failure?: string;
   /**
-   * Deletes the provider's copy of what it made (a transcript, a cleaned
-   * recording's history item), so it keeps no copy of a person's words or
-   * voice. The pipeline calls it once the result is stored or refused, however
-   * the job ends. Never throws.
+   * The provider's copy of what it made (a transcript, a cleaned recording's
+   * history item). The pipeline deletes it once the result is stored or
+   * refused, however the job ends, so the provider keeps no copy of a person's
+   * words or voice (`ProviderCopyService`: tries again and then keeps trying
+   * until the provider has it stored and it is gone).
    */
-  discard?: () => Promise<void>;
+  providerCopy?: ProviderCopy;
 }
 
 /** What the pipeline hands a file tool's run: the person's file, read for this one run. */

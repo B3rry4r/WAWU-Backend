@@ -23,6 +23,7 @@ import {
   type AiAudioStore,
 } from './audio/ai-audio-store';
 import { AiInputService } from './input/ai-input-files';
+import { ProviderCopyService } from './voice/provider-copy.service';
 import {
   AiToolError,
   JOB_FAILED_MESSAGE,
@@ -133,6 +134,7 @@ export class AiJobService {
     @Inject(AI_VOICE_PROVIDER) private readonly voice: AiVoiceProvider,
     @Inject(AI_AUDIO_STORE) private readonly audio: AiAudioStore,
     private readonly input: AiInputService,
+    private readonly copies: ProviderCopyService,
   ) {}
 
   /** Characters that make one minute of VoiceOver, from the settings. */
@@ -443,12 +445,20 @@ export class AiJobService {
       await this.fail(job, holdId, code);
       return;
     }
+    // The provider's copy of what it made is noted on the row at once, so a
+    // server that dies before it is deleted still has it to delete.
+    if (result.providerCopy)
+      await this.copies.note(job.id, result.providerCopy);
     try {
       await this.finish(tool, job, holdId, result);
     } finally {
       // The provider keeps no copy of a person's words or voice: its copy is
-      // deleted once the result is stored or refused, however the job ends.
-      await result.discard?.().catch(() => undefined);
+      // deleted once the result is stored or refused, however the job ends
+      // (tried again over the next minute, then by the sweep, until it is gone).
+      if (result.providerCopy)
+        await this.copies
+          .discard(job.id, result.providerCopy)
+          .catch(() => undefined);
     }
   }
 
@@ -487,7 +497,9 @@ export class AiJobService {
     // (a transcript lives only in the row). A failed job clears it again.
     const made = {
       outputs: outputs as unknown as Prisma.InputJsonValue,
-      providerRef: result.providerRef ?? null,
+      // Left alone when the tool gives none: the row may hold the marker of
+      // the provider's copy still to delete.
+      ...(result.providerRef ? { providerRef: result.providerRef } : {}),
     };
     try {
       await this.prisma.aiToolJob.updateMany({
@@ -500,9 +512,16 @@ export class AiJobService {
     } catch (e) {
       if (e instanceof PointsError && e.code === 'points_hold_settled') {
         if (key) await this.audio.remove(key);
+        // The sweep (or a read that reconciled the job) may have ended it
+        // already, after the words were written above: they are cleared from
+        // a failed row whoever ended it.
         await this.mark(job.id, 'failed', {
           failureCode: 'timed_out',
           outputs: Prisma.JsonNull,
+        });
+        await this.prisma.aiToolJob.updateMany({
+          where: { id: job.id, state: 'failed' },
+          data: { outputs: Prisma.JsonNull },
         });
         await this.dropInput(job);
         return;
@@ -588,7 +607,13 @@ export class AiJobService {
             ? null
             : audioKeyFor(job.wawuUserId, job.id, folder)),
       });
-    } else await this.mark(job.id, 'failed', { failureCode: 'timed_out' });
+    } else
+      await this.mark(job.id, 'failed', {
+        failureCode: 'timed_out',
+        // A run may have written its words just before the sweep gave the
+        // points back: a failed job keeps none.
+        outputs: Prisma.JsonNull,
+      });
     await this.dropInput(job);
     return (
       (await this.prisma.aiToolJob.findUnique({ where: { id: job.id } })) ?? job

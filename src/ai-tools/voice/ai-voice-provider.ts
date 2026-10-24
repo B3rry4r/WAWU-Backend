@@ -68,6 +68,19 @@ export interface Transcript {
   id: string | null;
 }
 
+/**
+ * How one try at deleting the provider's copy went: `deleted` (a 2xx), `not_found`
+ * (404: the copy may not be stored yet, or is already gone) or `failed` (any other
+ * answer, or none).
+ */
+export type CopyRemoval = 'deleted' | 'not_found' | 'failed';
+
+/** A copy the provider keeps of what it made, to delete once the Hub has the result. */
+export interface ProviderCopy {
+  kind: 'transcript' | 'isolation';
+  id: string;
+}
+
 /** A recording or video to take the noise out of (Clean audio, AITOOLS-04). */
 export interface IsolateRequest {
   file: VoiceSample;
@@ -78,7 +91,7 @@ export interface IsolatedAudio {
   audio: Buffer;
   /** The type the provider answered, lower case, without parameters. The pipeline stores it only if the Hub serves it. */
   contentType: string;
-  /** The provider's own id for its history item, to delete its copy; null when it gave none. */
+  /** The provider's own id for the item it keeps (the `audio-isolation-id` header), to delete its copy; null when it gave none. */
   historyId: string | null;
 }
 
@@ -182,10 +195,12 @@ export interface AiVoiceProvider {
   ): Promise<Transcript>;
 
   /**
-   * Deletes the provider's copy of a transcript, so it keeps no copy of a
-   * person's words. Never throws: a failed delete is logged without the id.
+   * One try at deleting the provider's copy of a transcript, so it keeps no
+   * copy of a person's words. Never throws; says how the try went (the caller
+   * decides whether to try again). The provider answers 404 for a transcript
+   * it has not stored yet, which is `not_found` here too.
    */
-  deleteTranscript(id: string): Promise<void>;
+  deleteTranscript(id: string): Promise<CopyRemoval>;
 
   /**
    * Takes the noise out of a recording or video (Clean audio, AITOOLS-04):
@@ -197,8 +212,8 @@ export interface AiVoiceProvider {
     opts?: { signal?: AbortSignal },
   ): Promise<IsolatedAudio>;
 
-  /** Deletes the provider's history item of a cleaned recording. Never throws. */
-  deleteIsolation(id: string): Promise<void>;
+  /** One try at deleting the provider's history item of a cleaned recording. Never throws; same answers as `deleteTranscript`. */
+  deleteIsolation(id: string): Promise<CopyRemoval>;
 
   /**
    * Says a name in the studio voice (VF3, VOICE-01): the first voice the Hub

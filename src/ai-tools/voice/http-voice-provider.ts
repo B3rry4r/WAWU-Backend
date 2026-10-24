@@ -11,6 +11,7 @@ import {
   AiVoiceProviderError,
   type AiVoice,
   type AiVoiceProvider,
+  type CopyRemoval,
   type MusicRequest,
   type IsolatedAudio,
   type IsolateRequest,
@@ -725,10 +726,9 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     return parseTranscript(done.body);
   }
 
-  async deleteTranscript(id: string): Promise<void> {
-    await this.removeItem(
+  deleteTranscript(id: string): Promise<CopyRemoval> {
+    return this.removeItem(
       `/v1/speech-to-text/transcripts/${encodeURIComponent(id)}`,
-      'a transcript',
     );
   }
 
@@ -754,7 +754,9 @@ export class HttpVoiceProvider implements AiVoiceProvider {
       timeoutMs: this.fileTimeoutMs,
       outer: opts.signal,
     });
-    const historyId = done.headers['history-item-id'];
+    // The id of the item the provider keeps comes in the `audio-isolation-id`
+    // header (seen on the real provider, 24 Oct 2026; it sends no `history-item-id`).
+    const historyId = done.headers['audio-isolation-id'];
     return {
       audio: done.body,
       contentType: done.type.split(';')[0].trim(),
@@ -766,15 +768,18 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     };
   }
 
-  async deleteIsolation(id: string): Promise<void> {
-    await this.removeItem(
+  deleteIsolation(id: string): Promise<CopyRemoval> {
+    return this.removeItem(
       `/v1/audio-isolation/history/${encodeURIComponent(id)}`,
-      'a cleaned recording',
     );
   }
 
-  /** Deletes one item the provider keeps. Never throws; the log line holds no id and no words. */
-  private async removeItem(path: string, what: string): Promise<void> {
+  /**
+   * One try at deleting one item the provider keeps. Never throws and never
+   * logs (the caller decides what a failed try means: the provider answers
+   * 404 for a copy it has not stored yet, so a 404 is not yet "gone").
+   */
+  private async removeItem(path: string): Promise<CopyRemoval> {
     try {
       const res = await fetch(`${this.baseUrl}${path}`, {
         method: 'DELETE',
@@ -782,14 +787,10 @@ export class HttpVoiceProvider implements AiVoiceProvider {
         signal: AbortSignal.timeout(this.timeoutMs),
       });
       await res.arrayBuffer().catch(() => undefined);
-      if (!res.ok)
-        this.logger.warn(
-          `the provider's copy of ${what} was not removed (${res.status})`,
-        );
+      if (res.ok) return 'deleted';
+      return res.status === 404 ? 'not_found' : 'failed';
     } catch {
-      this.logger.warn(
-        `the provider's copy of ${what} was not removed (no answer)`,
-      );
+      return 'failed';
     }
   }
 }

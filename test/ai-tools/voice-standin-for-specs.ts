@@ -31,6 +31,12 @@ export interface StandinHandle {
     isolate: { bytes: number; fileType: string | null }[];
     deletedTranscripts: string[];
     deletedIsolations: string[];
+    /** Every delete try on a provider copy and the status it got (404 while the copy is not stored yet). */
+    deleteTries: {
+      kind: 'transcript' | 'isolation';
+      id: string;
+      status: number;
+    }[];
   };
   /** Transcripts and cleaned recordings the provider still holds. */
   openTranscripts: () => number;
