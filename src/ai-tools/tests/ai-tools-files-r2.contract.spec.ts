@@ -233,7 +233,12 @@ describe('AITOOLS-04 r2: Captions and Clean audio (contract)', () => {
     );
     expect(tries.length).toBeGreaterThan(1);
     expect(tries[tries.length - 1].status).toBe(200);
-    await until(async () => (await jobRow(id)).providerRef === null);
+    // Round 4 changed this assertion (it was: the note is null once the copy is
+    // deleted). A read that says 404 soon after a delete proves nothing (the real
+    // provider hides the copy for a second and it then shows again), so the note
+    // stays until two reads 5 minutes apart say 404, the first 10 minutes after
+    // the job ended (ai-tools-files-r4.contract.spec.ts).
+    expect((await jobRow(id)).providerRef).toMatch(/^transcript:tr-\d+$/);
     // The words are on the job and the points were kept.
     expect((await jobRow(id)).state).toBe('done');
     expect(await h.balance(PLAIN)).toBe(0);
@@ -258,21 +263,22 @@ describe('AITOOLS-04 r2: Captions and Clean audio (contract)', () => {
     expect((await jobRow(id)).providerRef).toBe(marker);
     expect(h.standin.state.deletedTranscripts).toHaveLength(0);
 
-    // Stored now: the sweep deletes it and clears the note.
+    // Stored now: the sweep deletes it. Round 4 changed this assertion (it was
+    // cleared: 1 on the first read of 404, 61 s after the answer): a 404 that
+    // soon after a delete does not clear the note.
     await new Promise((r) => setTimeout(r, 1000));
     const later = await copies.sweep(new Date(finishedAt.getTime() + 61_000));
-    expect(later).toEqual({ cleared: 1, pending: 0 });
+    expect(later).toEqual({ cleared: 0, pending: 1 });
     expect(h.standin.state.deletedTranscripts).toHaveLength(1);
     expect(h.standin.openTranscripts()).toBe(0);
-    expect((await jobRow(id)).providerRef).toBeNull();
+    expect((await jobRow(id)).providerRef).toBe(marker);
 
-    // A cleaned item the provider never had (no read exists for it): 404 inside
-    // the window is kept, 404 after it is cleared. (Round 3 changed this line from
-    // a transcript to an isolation marker: a transcript is cleared by a read that
-    // says 404, with no window; see ai-tools-files-r3.contract.spec.ts.)
+    // A transcript the provider never had: a 404 inside the window is kept (this
+    // is the round 2 assertion, restored as it was). After the window the first
+    // 404 is written into the note; a second one 5 minutes later clears it.
     await h.prisma.aiToolJob.update({
       where: { id },
-      data: { providerRef: 'isolation:iso-never-existed' },
+      data: { providerRef: 'transcript:tr-never-existed' },
     });
     expect(await copies.sweep(new Date(finishedAt.getTime() + 60_000))).toEqual(
       {
@@ -280,8 +286,12 @@ describe('AITOOLS-04 r2: Captions and Clean audio (contract)', () => {
         pending: 1,
       },
     );
+    expect((await jobRow(id)).providerRef).toBe('transcript:tr-never-existed');
     expect(
       await copies.sweep(new Date(finishedAt.getTime() + 11 * 60_000)),
+    ).toEqual({ cleared: 0, pending: 1 });
+    expect(
+      await copies.sweep(new Date(finishedAt.getTime() + 17 * 60_000)),
     ).toEqual({ cleared: 1, pending: 0 });
     expect((await jobRow(id)).providerRef).toBeNull();
     // A pass that finds nothing noted does nothing.

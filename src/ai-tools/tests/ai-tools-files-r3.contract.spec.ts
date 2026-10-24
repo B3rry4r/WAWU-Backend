@@ -114,31 +114,31 @@ describe('AITOOLS-04 r3: the provider copy is kept until a read says 404 (contra
     expect(h.standin.state.deletedTranscripts).toHaveLength(0);
     expect((await jobRow(id)).providerRef).toMatch(/^transcript:tr-\d+$/);
 
-    // Later tries delete it for real; a read says 404; only then is the note cleared.
-    await until(async () => (await jobRow(id)).providerRef === null);
+    // Later tries delete it for real and a read says 404. Round 4 changed the
+    // end of this test (it was: the note is cleared by that read, and nothing is
+    // tried after): a 404 soon after a delete proves nothing, so the note stays
+    // and the tries go on (ai-tools-files-r4.contract.spec.ts has the clearing).
+    await until(() => h.standin.state.deletedTranscripts.length === 1);
     expect(h.standin.openTranscripts()).toBe(0);
-    expect(h.standin.state.deletedTranscripts).toHaveLength(1);
     const kept = transcriptTries().filter((t) => t.kept);
     expect(kept.length).toBeGreaterThanOrEqual(1);
+    await until(() => h.standin.state.reads.some((r) => r.status === 404));
     const reads = h.standin.state.reads.map((r) => r.status);
     expect(reads[0]).toBe(200);
     expect(reads[reads.length - 1]).toBe(404);
-    expect(reads.filter((s) => s === 404)).toHaveLength(1);
-    // Nothing is tried after the clear.
-    const tries = transcriptTries().length;
-    await sleep(900);
-    expect(transcriptTries()).toHaveLength(tries);
+    expect((await jobRow(id)).providerRef).toMatch(/^transcript:tr-\d+$/);
     expect((await jobRow(id)).state).toBe('done');
     expect(await h.balance(PLAIN)).toBe(0);
   });
 
-  it('HIGH 1: a copy that is really gone is cleared once: one delete, one read that says 404, then nothing more', async () => {
+  it('HIGH 1: a copy that is really gone: one delete, one read that says 404, and the note stays (round 4: it was cleared here)', async () => {
     await h.grant(PLAIN, CAPTIONS);
+    copies.delaysMs = []; // no background tries after the first
     const key = h.inputs.add(PLAIN, wavFile(30), 'audio/wav');
     const res = await captions(key);
     const id = data<AiJobView>(res).id;
     expect((await h.finish(PLAIN, id)).state).toBe('done');
-    await until(async () => (await jobRow(id)).providerRef === null);
+    await until(() => h.standin.state.reads.length === 1);
     expect(transcriptTries()).toEqual([
       {
         kind: 'transcript',
@@ -153,11 +153,9 @@ describe('AITOOLS-04 r3: the provider copy is kept until a read says 404 (contra
         status: 404,
       },
     ]);
-    // The retry timers would fire inside this time; the cleared note stops them.
-    await sleep(500);
-    expect(transcriptTries()).toHaveLength(1);
-    expect(h.standin.state.reads).toHaveLength(1);
     expect(h.standin.openTranscripts()).toBe(0);
+    // Round 4 changed this assertion (it was: the note is null after that read).
+    expect((await jobRow(id)).providerRef).toMatch(/^transcript:tr-\d+$/);
   });
 
   it('HIGH 1: the sweep does the same: a 200 that leaves the copy readable keeps the note; after the provider has taken it in, a delete and a read of 404 clear it', async () => {
@@ -186,35 +184,41 @@ describe('AITOOLS-04 r3: the provider copy is kept until a read says 404 (contra
     expect(h.standin.openTranscripts()).toBe(1);
 
     await sleep(1000);
+    // Round 4 changed these assertions (it was cleared: 1 at 61 s on the first
+    // read of 404): the delete now works and the read says 404, but that soon
+    // after a delete it proves nothing.
     const later = await copies.sweep(new Date(finishedAt.getTime() + 61_000));
-    expect(later).toEqual({ cleared: 1, pending: 0 });
+    expect(later).toEqual({ cleared: 0, pending: 1 });
     expect(h.standin.openTranscripts()).toBe(0);
-    expect((await jobRow(id)).providerRef).toBeNull();
+    expect((await jobRow(id)).providerRef).toBe(marker);
     expect(h.standin.state.reads.map((r) => r.status)).toEqual([200, 200, 404]);
   });
 
-  it('LOW (b): a copy the provider no longer has is cleared the moment a read says 404, with no 10 minute wait; a cleaned recording (no read exists) still waits for its window', async () => {
+  it('LOW (b): a transcript the provider no longer has waits for two reads of 404 (round 4; it was cleared by the first); a cleaned recording (no read exists) waits for its window', async () => {
     await h.grant(PLAIN, CAPTIONS);
     copies.delaysMs = [];
     const key = h.inputs.add(PLAIN, wavFile(30), 'audio/wav');
     const id = data<AiJobView>(await captions(key)).id;
     await h.finish(PLAIN, id);
-    await until(async () => (await jobRow(id)).providerRef === null);
+    await until(async () => (await jobRow(id)).state === 'done');
     const finishedAt = (await jobRow(id)).finishedAt!;
 
-    // Changed assertion (round 2 pinned the defect): a transcript note whose copy
-    // is not at the provider used to be kept for 10 minutes after the answer, and
-    // blocked the AITOOLS-02 rollback that long. A read of 404 is the proof now.
+    // Round 4 changed this assertion (round 3 had it cleared on the first read of
+    // 404). The first read after the window opens writes its time into the note;
+    // the second, 5 minutes later, clears it.
     await h.prisma.aiToolJob.update({
       where: { id },
       data: { providerRef: 'transcript:tr-never-existed' },
     });
     expect(await copies.sweep(new Date(finishedAt.getTime() + 60_000))).toEqual(
-      {
-        cleared: 1,
-        pending: 0,
-      },
+      { cleared: 0, pending: 1 },
     );
+    expect(
+      await copies.sweep(new Date(finishedAt.getTime() + 11 * 60_000)),
+    ).toEqual({ cleared: 0, pending: 1 });
+    expect(
+      await copies.sweep(new Date(finishedAt.getTime() + 17 * 60_000)),
+    ).toEqual({ cleared: 1, pending: 0 });
     expect((await jobRow(id)).providerRef).toBeNull();
 
     // A cleaned recording's item: no read, so a 404 inside the window is kept.

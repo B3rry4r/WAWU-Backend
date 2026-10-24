@@ -31,7 +31,7 @@ import {
 } from './unsent-chat-sweep';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
-import type { Readable } from 'node:stream';
+import { Transform, pipeline, type Readable } from 'node:stream';
 import {
   S3Client,
   PutObjectCommand,
@@ -845,6 +845,72 @@ export class StorageService {
       throw new Error('readStored: the file is empty or ended early');
     const audio = whole ?? Buffer.concat(parts, at);
     return { audio, contentType: serveAs(key).contentType };
+  }
+
+  /**
+   * The object's real length in bytes, from the store (not the row's
+   * declared `bytes`). Throws when there is no bucket or no such object.
+   */
+  async storedLength(key: string): Promise<number> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const out = await this.client.send(
+      new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
+    const length = out.ContentLength;
+    if (length === undefined || length <= 0)
+      throw new Error('storedLength: the file is empty');
+    return length;
+  }
+
+  /**
+   * Opens a stored object to be streamed, reading nothing yet (AITOOLS-04
+   * round 4: the provider run sends the file on as it arrives and never holds
+   * it whole). Gives the object's real length, from the store, and a stream
+   * that carries at most that many bytes: it fails the moment it passes the
+   * length or `maxBytes`, or ends early. Throws when there is no bucket, no
+   * such object, or it is empty or over `maxBytes`. The caller must read the
+   * stream to its end or destroy it.
+   */
+  async openStored(
+    key: string,
+    maxBytes: number,
+  ): Promise<{ body: Readable; length: number; contentType: string }> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const out = await this.client.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
+    const source = out.Body as Readable | undefined;
+    const length = out.ContentLength;
+    if (!source || length === undefined || length <= 0 || length > maxBytes) {
+      source?.destroy?.();
+      throw new Error('openStored: the file is empty or too large');
+    }
+    let seen = 0;
+    const body = new Transform({
+      transform(chunk: Buffer, _enc, done) {
+        seen += chunk.length;
+        if (seen > length)
+          return done(new Error('openStored: the file is longer than it said'));
+        done(null, chunk);
+      },
+      flush(done) {
+        done(
+          seen === length
+            ? null
+            : new Error('openStored: the file ended early'),
+        );
+      },
+    });
+    pipeline(source, body, () => undefined);
+    return { body, length, contentType: serveAs(key).contentType };
   }
 
   /**

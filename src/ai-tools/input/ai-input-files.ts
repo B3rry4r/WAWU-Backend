@@ -1,3 +1,4 @@
+import type { Readable } from 'node:stream';
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
@@ -10,6 +11,7 @@ import { AiToolError } from '../ai-tools-error';
 import { minutesOf, readSeconds } from './media-length';
 import { SNIFF_HEAD_BYTES, sniffContainer } from './media-sniff';
 import { type ReadGate, readGate } from './read-gate';
+import type { StreamedFile } from '../voice/ai-voice-provider';
 
 /**
  * A person's own file for an AI tool (AITOOLS-04): the Hub's way to take a
@@ -45,6 +47,18 @@ export interface AiInputFiles {
     key: string,
     maxBytes: number,
   ): Promise<{ audio: Buffer; contentType: string }>;
+  /** The file's real length in bytes, from the store (not the row's declared number). Throws when it cannot be read. A network call. */
+  length(key: string): Promise<number>;
+  /**
+   * Opens the file to be streamed, reading nothing yet: its real length and a
+   * stream of exactly that many bytes (it fails when it passes the length or
+   * `maxBytes`, or ends early). Throws when it cannot be opened, is empty or
+   * is over `maxBytes`. The caller reads it to its end or destroys it.
+   */
+  open(
+    key: string,
+    maxBytes: number,
+  ): Promise<{ stream: Readable; bytes: number; contentType: string }>;
   /** Drops the file. Never throws. */
   remove(key: string): Promise<void>;
 }
@@ -93,6 +107,18 @@ export class StorageAiInputFiles implements AiInputFiles {
     maxBytes: number,
   ): Promise<{ audio: Buffer; contentType: string }> {
     return this.storage.readStored(key, maxBytes);
+  }
+
+  length(key: string): Promise<number> {
+    return this.storage.storedLength(key);
+  }
+
+  async open(
+    key: string,
+    maxBytes: number,
+  ): Promise<{ stream: Readable; bytes: number; contentType: string }> {
+    const o = await this.storage.openStored(key, maxBytes);
+    return { stream: o.body, bytes: o.length, contentType: o.contentType };
   }
 
   remove(key: string): Promise<void> {
@@ -165,31 +191,38 @@ export class AiInputService {
   }
 
   /**
-   * The file's length in seconds, or null when it cannot be read. Round 3: the
-   * Hub reads one file per account at a time (a second read from the account
+   * The file's length in seconds, or null when it cannot be read. The Hub
+   * reads one file per account at a time (a second read from the account
    * waits for the first, a third is refused busy); a file that is not one of the
    * containers the tools take is refused from its first 16 KB, without the
    * rest; the rest is read only after the file has its parser turn (a file
-   * that waits is not in memory); too many waiting, or a wait too long, is the
-   * Hub's busy answer (a `ServiceUnavailableException`, nothing held).
+   * that waits is not in memory); too many waiting, or a wait past ONE deadline
+   * of `waitMs` shared by the account's place and the turn (round 4; it was a
+   * wait of `waitMs` for each, 30.5 s in the race), is the Hub's busy answer
+   * (a `ServiceUnavailableException`, nothing held). The turn is charged the
+   * file's REAL length from the store, and the read is stopped at it.
    */
   private async measure(
     wawuUserId: string,
     row: InputFileRow,
   ): Promise<number | null> {
-    const releaseAccount = await this.gate.claimAccount(wawuUserId);
+    const until = this.gate.deadline();
+    const releaseAccount = await this.gate.claimAccount(wawuUserId, until);
     try {
+      let real: number;
       try {
         const head = await this.files.readHead(row.key, SNIFF_HEAD_BYTES);
         if (sniffContainer(head) === null) return null;
+        real = await this.files.length(row.key);
       } catch {
         return null;
       }
-      const releaseTurn = await this.gate.takeTurn(row.bytes);
+      if (real <= 0 || real > this.maxBytes()) return null;
+      const releaseTurn = await this.gate.takeTurn(real, until);
       try {
-        const { audio } = await this.files.read(row.key, this.maxBytes());
+        const { audio } = await this.files.read(row.key, real);
         // The bytes are handed to the reader's worker thread without a copy and
-        // are not used again here; the provider run reads the file afresh.
+        // are not used again here; the provider run streams the file afresh.
         return await readSeconds(audio, { transfer: true });
       } catch {
         return null;
@@ -201,9 +234,48 @@ export class AiInputService {
     }
   }
 
-  /** The bytes of an opened file, for the one provider run. */
-  read(key: string): Promise<{ audio: Buffer; contentType: string }> {
-    return this.files.read(key, this.maxBytes());
+  /**
+   * The person's file opened for the provider run (round 4: it used to be read
+   * whole, per running job, with no limit, then copied again into the request
+   * body: 8 jobs from one account took the Hub up 1.6 GB). The run takes the
+   * SAME place as a quote: the account's one place, a global turn charged the
+   * file's real length (so a quote and a job share both), under one deadline.
+   * Past it, or with too many waiting, the busy answer (a
+   * `ServiceUnavailableException`; the pipeline gives the job's points back).
+   * Nothing of the file is read here; the returned file streams to the
+   * provider, and `sent()` (called by the provider seam when the last byte is
+   * written, and again when the run ends) hands the place and the turn back.
+   * Peak memory of a job: the stream's own buffers, about 64 KB, at any size.
+   */
+  async openForRun(wawuUserId: string, key: string): Promise<StreamedFile> {
+    const until = this.gate.deadline();
+    const releaseAccount = await this.gate.claimAccount(wawuUserId, until);
+    let releaseTurn: (() => void) | null = null;
+    try {
+      const real = await this.files.length(key);
+      if (real <= 0 || real > this.maxBytes())
+        throw new Error('the file is empty or too large');
+      releaseTurn = await this.gate.takeTurn(real, until);
+      const opened = await this.files.open(key, real);
+      const turn = releaseTurn;
+      let given = false;
+      return {
+        bytes: opened.bytes,
+        contentType: opened.contentType,
+        stream: opened.stream,
+        sent: () => {
+          if (given) return;
+          given = true;
+          opened.stream.destroy();
+          turn();
+          releaseAccount();
+        },
+      };
+    } catch (e) {
+      releaseTurn?.();
+      releaseAccount();
+      throw e;
+    }
   }
 
   remove(key: string): Promise<void> {

@@ -4,6 +4,7 @@ import type {
   AiVoiceProvider,
   ProviderCopy,
   SpokenAudio,
+  StreamedFile,
   VoiceSample,
 } from '../voice/ai-voice-provider';
 import type { AiAudioFolder } from '../audio/ai-audio-store';
@@ -116,9 +117,9 @@ export interface AiToolRunResult {
   providerCopy?: ProviderCopy;
 }
 
-/** What the pipeline hands a file tool's run: the person's file, read for this one run. */
+/** What the pipeline hands a file tool's run: the person's file, streamed to the provider for this one run. */
 export interface AiToolRunInput {
-  file: VoiceSample;
+  file: VoiceSample | StreamedFile;
 }
 
 /** What a unit of a tool's price is: a minute of speech, one use, or one track. */

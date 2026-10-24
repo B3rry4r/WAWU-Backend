@@ -5,6 +5,7 @@ import {
 } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { randomBytes } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -20,6 +21,7 @@ import {
   type SoundEffectRequest,
   type SpeakRequest,
   type SpokenAudio,
+  type StreamedFile,
   type Transcript,
   type TranscribeRequest,
   type TranscriptWord,
@@ -155,6 +157,20 @@ export function parseVoiceCatalogue(raw: string | undefined): {
     });
   }
   return { voices: out, problem: null };
+}
+
+/**
+ * A request body that is read from a stream as it is sent (a person's file on
+ * its way to the provider): it can be opened once. `sent` is called when the
+ * last byte is written or the call has an answer; `abort` when the call is
+ * given up. Both hand back the file's place at the read gate and destroy the
+ * stream; either may be called again.
+ */
+interface StreamedBody {
+  length: number;
+  open(): Readable | null;
+  sent(): void;
+  abort(): void;
 }
 
 /**
@@ -538,7 +554,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     path: string;
     query: string;
     contentType: string;
-    payload: Buffer;
+    payload: Buffer | StreamedBody;
     accept: string;
     typeOk: (type: string) => boolean;
     notOkMessage: string;
@@ -569,8 +585,10 @@ export class HttpVoiceProvider implements AiVoiceProvider {
         if (outcome instanceof AiVoiceProviderError) {
           reject(outcome);
           req?.destroy();
+          if (!Buffer.isBuffer(payload)) payload.abort();
         } else {
           resolve(outcome);
+          if (!Buffer.isBuffer(payload)) payload.sent();
         }
       };
       /** One hop: a POST with the body, or (after 301, 302, 303) a GET without. */
@@ -605,11 +623,12 @@ export class HttpVoiceProvider implements AiVoiceProvider {
                 const next = redirectTarget(url, res.headers.location);
                 if (next === null || redirects >= MAX_REDIRECTS)
                   return end(failureForStatus(status));
-                return attempt(
-                  next,
-                  withBody && (status === 307 || status === 308),
-                  redirects + 1,
-                );
+                const again = withBody && (status === 307 || status === 308);
+                // A streamed file has been read once and is gone: a redirect
+                // that asks for the body again cannot be followed.
+                if (again && !Buffer.isBuffer(payload))
+                  return end(failureForStatus(status));
+                return attempt(next, again, redirects + 1);
               }
               if (status < 200 || status > 299)
                 return end(failureForStatus(status));
@@ -657,8 +676,20 @@ export class HttpVoiceProvider implements AiVoiceProvider {
           if (mine === req)
             end(new AiVoiceProviderError('unavailable', 'no answer'));
         });
-        if (withBody) mine.end(payload);
-        else mine.end();
+        if (!withBody) mine.end();
+        else if (Buffer.isBuffer(payload)) mine.end(payload);
+        else {
+          const body = payload.open();
+          if (body === null)
+            return end(new AiVoiceProviderError('unavailable', 'no answer'));
+          body.on('error', () => {
+            if (mine === req)
+              end(new AiVoiceProviderError('unavailable', 'no answer'));
+          });
+          // The last byte is written: the file no longer holds the Hub's place.
+          mine.on('finish', () => payload.sent());
+          body.pipe(mine);
+        }
       };
       if (outer?.aborted) return onAbort();
       outer?.addEventListener('abort', onAbort, { once: true });
@@ -669,13 +700,16 @@ export class HttpVoiceProvider implements AiVoiceProvider {
   /**
    * A multipart body with the person's file and plain fields, built by hand
    * (the long call sends bytes). `fileField` is the field that holds the file.
-   * The file's name is a fixed word, never the person's own.
+   * The file's name is a fixed word, never the person's own. A file in memory
+   * is joined into one buffer; a streamed file (AITOOLS-04 round 4) is sent on
+   * as it arrives, framed by a head and a tail of a few hundred bytes, so the
+   * Hub holds only the stream's own buffers (about 64 KB) however big it is.
    */
   private multipart(
     fields: Record<string, string>,
     fileField: string,
-    file: { audio: Buffer; contentType: string },
-  ): { contentType: string; payload: Buffer } {
+    file: { audio: Buffer; contentType: string } | StreamedFile,
+  ): { contentType: string; payload: Buffer | StreamedBody } {
     const boundary = `----wawu${randomBytes(16).toString('hex')}`;
     const parts: Buffer[] = [];
     for (const [name, value] of Object.entries(fields))
@@ -688,12 +722,43 @@ export class HttpVoiceProvider implements AiVoiceProvider {
       Buffer.from(
         `--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; filename="recording"\r\nContent-Type: ${file.contentType}\r\n\r\n`,
       ),
-      file.audio,
-      Buffer.from(`\r\n--${boundary}--\r\n`),
     );
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const contentType = `multipart/form-data; boundary=${boundary}`;
+    if (!('stream' in file))
+      return {
+        contentType,
+        payload: Buffer.concat([...parts, file.audio, tail]),
+      };
+    const head = Buffer.concat(parts);
+    const streamed = file;
+    let opened = false;
     return {
-      contentType: `multipart/form-data; boundary=${boundary}`,
-      payload: Buffer.concat(parts),
+      contentType,
+      payload: {
+        length: head.length + streamed.bytes + tail.length,
+        open: () => {
+          if (opened) return null;
+          opened = true;
+          return Readable.from(
+            (async function* () {
+              yield head;
+              let n = 0;
+              for await (const chunk of streamed.stream as AsyncIterable<Buffer>) {
+                n += chunk.length;
+                if (n > streamed.bytes)
+                  throw new Error('the file is longer than it said');
+                yield chunk;
+              }
+              if (n !== streamed.bytes) throw new Error('the file ended early');
+              yield tail;
+            })(),
+            { objectMode: false },
+          );
+        },
+        sent: () => streamed.sent(),
+        abort: () => streamed.sent(),
+      },
     };
   }
 
@@ -710,7 +775,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
         ...(req.languageCode ? { language_code: req.languageCode } : {}),
       },
       'file',
-      { audio: req.file.audio, contentType: req.file.contentType },
+      req.file,
     );
     const done = await this.longCall({
       path: '/v1/speech-to-text',
@@ -758,10 +823,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
   ): Promise<IsolatedAudio> {
     if (!this.fileToolsConfigured || this.baseUrl === null)
       throw new AiVoiceProviderError('rejected', 'cleaning is not available');
-    const form = this.multipart({}, 'audio', {
-      audio: req.file.audio,
-      contentType: req.file.contentType,
-    });
+    const form = this.multipart({}, 'audio', req.file);
     const done = await this.longCall({
       path: '/v1/audio-isolation',
       query: '',

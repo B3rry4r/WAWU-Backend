@@ -4,6 +4,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma, type AiToolJob } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -412,13 +413,27 @@ export class AiJobService {
     holdId: string,
     req: AiToolRequest,
   ): Promise<void> {
-    // A file tool reads the person's file for this one run, before the call.
+    // A file tool streams the person's file to the provider for this one run.
+    // Round 4: the run takes its place behind the same read gate as a quote
+    // (one place per account, the global turns and bytes), is charged the
+    // file's real length, and never holds the file whole. A Hub too busy to
+    // take it now ends the job at once and gives every point back.
     let input: AiToolRunInput | undefined;
     if (req.kind === 'file') {
       try {
-        input = { file: await this.input.read(req.fileKey) };
-      } catch {
-        await this.fail(job, holdId, 'file_unreadable');
+        input = {
+          file: await this.input.openForRun(job.wawuUserId, req.fileKey),
+        };
+      } catch (e) {
+        if (e instanceof ServiceUnavailableException)
+          this.logger.warn(
+            `ai job ${job.id} (${job.tool}): the Hub was busy reading other recordings`,
+          );
+        await this.fail(
+          job,
+          holdId,
+          e instanceof ServiceUnavailableException ? 'busy' : 'file_unreadable',
+        );
         return;
       }
     }
@@ -444,6 +459,9 @@ export class AiJobService {
       );
       await this.fail(job, holdId, code);
       return;
+    } finally {
+      // The file's place at the read gate goes back however the call ended.
+      if (input && 'stream' in input.file) input.file.sent();
     }
     // The provider's copy of what it made is noted on the row at once, so a
     // server that dies before it is deleted still has it to delete.

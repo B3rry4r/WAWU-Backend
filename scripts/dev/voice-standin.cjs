@@ -57,6 +57,9 @@
 //     the answer answers 200 and does nothing, and the copy is still there
 //     afterwards (what 4 of 6 real runs showed, 24 Oct 2026): only a DELETE
 //     after MS removes it.
+//     [[get404-after-delete:MS]] (with ack-then-appear): after such a DELETE
+//     that removed nothing, a GET answers 404 for MS and the copy then shows
+//     again (200). What the real provider did for 8 of 9 transcripts.
 //   GET /v1/speech-to-text/transcripts/<id>         ->  200 { transcription_id,
 //     text } while the provider holds the copy (from the answer on, even while
 //     a DELETE still answers 404: the real provider returned 200 with the full
@@ -381,6 +384,8 @@ function startVoiceStandin({
             transcripts.set(id, {
               storedAt: Date.now() + storeDelayOf(marks),
               ackUntil: Date.now() + ackDelayOf(marks),
+              hideMs: hideDelayOf(marks),
+              hiddenUntil: 0,
             });
           return done(
             200,
@@ -431,6 +436,12 @@ function startVoiceStandin({
     return m ? Number(m[1]) : 0;
   }
 
+  /** How long a read answers 404 after a DELETE that removed nothing, before the copy shows again ([[get404-after-delete:MS]]). */
+  function hideDelayOf(marks) {
+    const m = /\[\[get404-after-delete:(\d{1,7})\]\]/.exec(marks);
+    return m ? Number(m[1]) : 0;
+  }
+
   /**
    * DELETE of a transcript (200) or a cleaned item (204). A copy the provider
    * has not stored yet answers 404 like one that does not exist, and the try
@@ -447,7 +458,9 @@ function startVoiceStandin({
         return json(res, 404, { detail: 'no such item' });
       }
       if (Date.now() < item.ackUntil) {
-        // Acknowledged, nothing removed: the copy is still there afterwards.
+        // Acknowledged, nothing removed: the copy is still there afterwards
+        // (hidden from a read for the first hideMs, if the file asked).
+        item.hiddenUntil = Date.now() + (item.hideMs || 0);
         state.deleteTries.push({ kind, id, status: okStatus, kept: true });
         if (okStatus === 204) {
           res.statusCode = 204;
@@ -471,8 +484,13 @@ function startVoiceStandin({
     if (req.headers['xi-api-key'] !== key)
       return json(res, 401, { detail: 'bad key' });
     const id = decodeURIComponent(m[1]);
-    const status = transcripts.has(id) ? 200 : 404;
-    state.reads.push({ kind: 'transcript', id, status });
+    const item = transcripts.get(id);
+    // Held but hidden: a read answers 404 for hideMs after a delete that
+    // removed nothing, and the copy then shows again (the real provider,
+    // 24 Oct 2026: 8 of 9 transcripts).
+    const hidden = item !== undefined && Date.now() < item.hiddenUntil;
+    const status = item !== undefined && !hidden ? 200 : 404;
+    state.reads.push({ kind: 'transcript', id, status, ...(hidden ? { hidden: true } : {}) });
     if (status === 404) return json(res, 404, { detail: 'no such item' });
     return json(res, 200, { transcription_id: id, text: 'stand-in words' });
   }

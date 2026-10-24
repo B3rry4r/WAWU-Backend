@@ -1,3 +1,4 @@
+import type { Readable } from 'node:stream';
 import type { AiAudioContentType } from '../audio/ai-audio-store';
 
 /**
@@ -52,8 +53,8 @@ export interface TranscriptWord {
 
 /** A recording or video to turn into words (Captions, AITOOLS-04). */
 export interface TranscribeRequest {
-  /** The person's own file, read by the provider for this one run. */
-  file: VoiceSample;
+  /** The person's own file, read by the provider for this one run (streamed from the store, or in memory). */
+  file: VoiceSample | StreamedFile;
   /** ISO 639 code of the language spoken; null lets the provider detect it. */
   languageCode: string | null;
 }
@@ -89,7 +90,7 @@ export interface ProviderCopy {
 
 /** A recording or video to take the noise out of (Clean audio, AITOOLS-04). */
 export interface IsolateRequest {
-  file: VoiceSample;
+  file: VoiceSample | StreamedFile;
 }
 
 /** The cleaned recording, as the provider answered it. */
@@ -123,6 +124,25 @@ export class AiVoiceProviderError extends Error {
     super(message);
     this.name = 'AiVoiceProviderError';
   }
+}
+
+/**
+ * A person's file on its way to the provider for one run (AITOOLS-04 round
+ * 4): the bytes are sent on as the store gives them and the Hub never holds the
+ * file whole (a few hundred KB at a time, however big the file is). The stream
+ * carries exactly `bytes` bytes, the object's real length from the store.
+ */
+export interface StreamedFile {
+  bytes: number;
+  contentType: string;
+  stream: Readable;
+  /**
+   * Called by the provider seam when the last byte has been written to the
+   * provider, or the call was given up: it hands the Hub's place at the read
+   * gate back (the provider thinking afterwards holds none of the file).
+   * Safe to call more than once; also destroys the stream.
+   */
+  sent: () => void;
 }
 
 /** Someone's own recording, kept by the Hub as theirs; the provider only reads it for one run. */

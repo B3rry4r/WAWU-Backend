@@ -922,7 +922,20 @@ them (R-47). The costs are `points.action.captions_per_min` (15) and
   QuickTime is read as MP4. A length that reads 0 (a fragmented MP4) is refused,
   never priced as 0 minutes. Minutes round up after 0.5 s of container padding is
   forgiven (a "1:00" clip is 1 minute). The whole file is read into memory for the
-  length and again for the run (up to `ai.input_max_bytes`).
+  length (up to `ai.input_max_bytes`); the run does not read it whole: it takes
+  the same place behind the read gate as a quote (one place per account, the
+  global turns and bytes, charged the file's real length from the store) and
+  streams the file to the provider, so a job holds about 64 KB of it, whatever
+  its size. A Hub too busy to take the run ends the job `busy` and gives every
+  point back. The place and the turn are one deadline of 20 seconds.
+- **The provider's copy of a transcript** is deleted on a schedule (a try when
+  the job ends, four more over a minute, then every minute) and the note is
+  cleared only by two reads of 404, each made with no delete just before it: the
+  first at least `ai.copy_confirm_after_minutes` (10) after the job ended, the
+  second at least `ai.copy_confirm_gap_minutes` (5) after the first (both
+  PROVISIONAL `AITOOLS-COPY-CONFIRM`; an admin may change them). The real
+  provider answers a read 404 for about a second after a delete and then shows
+  the transcript again, so a 404 seen sooner proves nothing.
 - **Settings.** `ai.input_max_bytes` (default 500 MB, the smaller of the provider's
   documented limits; an admin may only lower it; PROVISIONAL `AITOOLS-LIMITS`).
   `AI_VOICE_FILE_TIMEOUT_MS` (default 600000) is the wait of both file calls;

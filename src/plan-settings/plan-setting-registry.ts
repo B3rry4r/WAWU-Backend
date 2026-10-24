@@ -822,6 +822,32 @@ export function buildRegistry(
     default: extra('ai.input_max_bytes', 500 * 1024 * 1024),
     parse: whole(1_048_576, 512 * 1024 * 1024),
   });
+  // AITOOLS-04 round 4: when the Hub believes the provider no longer keeps a
+  // person's transcript. The provider answers a read 404 for about a second
+  // after a delete and then shows the transcript again, so a transcript is
+  // gone only after two reads that say 404, this far apart.
+  add({
+    key: 'ai.copy_confirm_after_minutes',
+    group: 'Other rulings',
+    label:
+      'Minutes after a Captions job ends before a "not found" from the provider counts as the transcript being deleted',
+    unit: 'count',
+    usedBy: ['The provider copy sweep (Captions transcripts)'],
+    provisional: 'AITOOLS-COPY-CONFIRM',
+    default: extra('ai.copy_confirm_after_minutes', 10),
+    parse: whole(1, 1440),
+  });
+  add({
+    key: 'ai.copy_confirm_gap_minutes',
+    group: 'Other rulings',
+    label:
+      'Minutes between the two "not found" reads that confirm a transcript is deleted at the provider',
+    unit: 'count',
+    usedBy: ['The provider copy sweep (Captions transcripts)'],
+    provisional: 'AITOOLS-COPY-CONFIRM',
+    default: extra('ai.copy_confirm_gap_minutes', 5),
+    parse: whole(1, 1440),
+  });
   other(
     'voice.intro_max_chars',
     'Characters a Voice Intro script can have',

@@ -45,8 +45,11 @@ interface AccountWaiter {
  *     that waits is not in memory;
  *   - at most `parallel` files at once, and no more than `budgetBytes` of
  *     them together;
- *   - at most `waiting` reads waiting, each for at most `waitMs`; past either
- *     the read is refused with the Hub's busy answer and nothing is held.
+ *   - at most `waiting` reads waiting, each for at most `waitMs` IN ALL (one
+ *     deadline across the account's place and the turn, round 4); past either
+ *     the read is refused with the Hub's busy answer and nothing is held;
+ *   - round 4: the provider run of a file job takes its place here too, the
+ *     same account place and the same turns, charged the file's real length.
  *
  * Memory is therefore bounded by the budget (or one file at the input cap)
  * plus what the parser may add (`WORKER_EXTRA_MEMORY_BYTES` for each turn).
@@ -68,20 +71,34 @@ export class ReadGate {
     };
   }
 
+  /** The moment a read that starts waiting now must be answered by (ms since the epoch): one deadline for every stage of the wait. */
+  deadline(now: number = Date.now()): number {
+    return now + this.limits.waitMs;
+  }
+
+  /** How much of a deadline is left (0 when it has passed). */
+  private left(until: number | undefined): number {
+    return until === undefined
+      ? this.limits.waitMs
+      : Math.max(0, until - Date.now());
+  }
+
   /**
    * The account's one read in flight, from before the file is touched until
    * the returned function is called. A second read from the same account
    * waits for the first (a person tapping twice is served in turn, as before);
-   * a third while one already waits, or a wait longer than `waitMs`, is the
-   * busy answer. A waiting read holds nothing.
+   * a third while one already waits, or a wait past the deadline (`until`, or
+   * `waitMs` from now), is the busy answer. A waiting read holds nothing.
+   * A quote and a provider run of the same account share this one place.
    */
-  claimAccount(accountId: string): Promise<() => void> {
+  claimAccount(accountId: string, until?: number): Promise<() => void> {
     const line = this.accounts.get(accountId);
     if (line === undefined) {
       this.accounts.set(accountId, { next: [] });
       return Promise.resolve(this.accountRelease(accountId));
     }
-    if (line.next.length >= 1)
+    const wait = this.left(until);
+    if (line.next.length >= 1 || wait <= 0)
       return Promise.reject(new ServiceUnavailableException(READ_BUSY_MESSAGE));
     return new Promise<() => void>((resolve, reject) => {
       const waiter: AccountWaiter = {
@@ -90,7 +107,7 @@ export class ReadGate {
           const at = line.next.indexOf(waiter);
           if (at >= 0) line.next.splice(at, 1);
           reject(new ServiceUnavailableException(READ_BUSY_MESSAGE));
-        }, this.limits.waitMs),
+        }, wait),
       };
       waiter.timer.unref();
       line.next.push(waiter);
@@ -114,12 +131,15 @@ export class ReadGate {
   /**
    * A turn to read and parse a file of `bytes`. Resolves with the function
    * that gives the turn back; call it when the bytes are gone. Throws the
-   * busy answer when too many reads already wait, or this one waited too long.
+   * busy answer when too many reads already wait, or this one waited past the
+   * deadline (`until`, or `waitMs` from now). `bytes` is the file's REAL length
+   * (from the store), never a number the row or the phone declared.
    */
-  takeTurn(bytes: number): Promise<() => void> {
+  takeTurn(bytes: number, until?: number): Promise<() => void> {
     if (this.queue.length === 0 && this.fits(bytes))
       return Promise.resolve(this.start(bytes));
-    if (this.queue.length >= this.limits.waiting)
+    const wait = this.left(until);
+    if (this.queue.length >= this.limits.waiting || wait <= 0)
       return Promise.reject(new ServiceUnavailableException(READ_BUSY_MESSAGE));
     return new Promise<() => void>((resolve, reject) => {
       const waiter: Waiter = {
@@ -129,7 +149,7 @@ export class ReadGate {
           const at = this.queue.indexOf(waiter);
           if (at >= 0) this.queue.splice(at, 1);
           reject(new ServiceUnavailableException(READ_BUSY_MESSAGE));
-        }, this.limits.waitMs),
+        }, wait),
       };
       waiter.timer.unref();
       this.queue.push(waiter);

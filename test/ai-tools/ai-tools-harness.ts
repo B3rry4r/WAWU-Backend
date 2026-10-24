@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import type { Server } from 'http';
 import * as path from 'path';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
@@ -193,6 +194,35 @@ export class MemoryInputFiles implements AiInputFiles {
     // may take the bytes' memory over).
     return Promise.resolve({
       audio: Buffer.from(new Uint8Array(f.data)),
+      contentType: f.contentType,
+    });
+  }
+  length(key: string): Promise<number> {
+    const f = this.files.get(key);
+    if (this.failRead || !f) return Promise.reject(new Error('file gone'));
+    return Promise.resolve(f.data.length);
+  }
+  /** Every provider-run open, in order (the specs count them). */
+  readonly opens: string[] = [];
+  open(
+    key: string,
+    maxBytes: number,
+  ): Promise<{ stream: Readable; bytes: number; contentType: string }> {
+    const f = this.files.get(key);
+    this.opens.push(key);
+    if (this.failRead || !f || f.data.length > maxBytes)
+      return Promise.reject(new Error('file gone'));
+    const data = f.data;
+    // 64 KB pieces, as a store's body arrives; nothing is copied.
+    return Promise.resolve({
+      stream: Readable.from(
+        (function* () {
+          for (let at = 0; at < data.length; at += 65536)
+            yield data.subarray(at, Math.min(data.length, at + 65536));
+        })(),
+        { objectMode: false },
+      ),
+      bytes: data.length,
       contentType: f.contentType,
     });
   }
