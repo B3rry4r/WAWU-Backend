@@ -3294,8 +3294,8 @@ this.
 | `GET /money/world/options?country=XX` | what a person living in that country is offered: `available` (and `unavailableReason`), `suggested` (the currency the country is first offered, from config), `choices` (every fiat currency, each `enabled` or not), `openFee` (WAWU's fee to open, `amountMinor` beside `currency`, default 0). Needs no wallet. No provider call |
 | `POST /money/wallet/open` | the same route, with `countryCode` (not `NG`) and optionally `firstCurrency` and `nationality`. No `bvn`, `nin` or `checkHandle`. `idType`, `idNumber`, the address and the proof of address are that country's. The phone on the account must carry its country code |
 | `GET /money/wallet` | adds `world` (`country`, `firstCurrency`, `state`, `accountOpenedAt`) for such a person. `state` is `open` once the first foreign account is, `account` stays null, `accountNumberStatus` `none`. `review` is the same review as for a Nigerian opening |
-| `POST /money/world/first-account` | opens the first account of an approved person when Nuvion's notice has not. Body `{ currency? }` changes the first currency while none is open. Answers the wallet, as `GET /money/wallet`. Safe to repeat |
-| `GET /money/fx/currencies`, `GET`/`POST /money/fx/accounts`, `GET /money/fx/accounts/{id}` and `/transactions` | open to an open world wallet as well as a naira one; the other foreign routes (quote, swap, send) still need the naira wallet (BACKEND_GAPS G-WALLET-41-3) |
+| `POST /money/world/first-account` | opens the first account of an approved person when Nuvion's notice has not: it asks Nuvion where the review stands (not our own record), records an approval as the notice would, and opens the account. Body `{ currency? }` changes the first currency while none is open. Answers the wallet, as `GET /money/wallet`. Safe to repeat |
+| every `/money/fx/*` route | open to an open wallet of any kind, naira or world: a person outside Nigeria swaps between their foreign accounts and coins and sends coins out with no naira wallet. A swap with a naira side is `409 fx_account_not_open` ("You have no naira account"). Sends abroad from a foreign account follow with NUV-11 |
 
 Admin (`/api/hub/admin/money/world`, superadmin and finance only):
 `GET openings` (filters `country` and `stage`, a cursor page; no name,
@@ -3306,10 +3306,21 @@ unfreeze lets go only of the accounts that freeze froze. A cancel stops an
 opening that is not open yet and lets go of its claim on the ID document; an
 open wallet is frozen, not cancelled.
 
+**Residence decides** (round 1; R-87, R-85). The Hub reads the country of
+residence the account carries (WAWU ID's `countryCode` claim now, GEO-02's
+`/me/location` once it lands), not the request and not the phone. A world
+opening needs a stored residence that is not Nigeria, and the `countryCode`
+sent must be it: no stored country is `409 residence_not_set`, a person who
+lives in Nigeria or names another country is `409 residence_mismatch`, each
+with a plain sentence. A person who lives in Nigeria opens with their BVN. A
++234 number abroad is allowed (Nigerians abroad).
+
 **One document, one wallet.** A world opening has no BVN to claim, so it
-claims the ID document: the keyed hash of its issuing country, type and
-number, held like a BVN's (unique; let go when the opening ends or expires).
-The number itself is never stored or logged.
+claims the ID document: the keyed hash of the country the person lives in and
+the number with letters and digits only, in upper case, whatever kind of
+document or nationality is said (held like a BVN's: unique; let go when the
+opening ends or expires). The number itself is never stored or logged. The
+refusal for a document someone else holds says "ID", never "BVN".
 
 **What Nuvion asks for is Nuvion's to say.** The app asks for the ID document,
 the proof of address and the selfie, and for whatever else Nuvion's own refusal
@@ -3318,7 +3329,7 @@ names of the fields Nuvion pointed at (for example `person.ssn`), never a
 value. Dev asks for nothing beyond the document (docs/nuvion/DEV-RESULTS.md,
 WALLET-41); production may ask for a US person's SSN (Nuvion's docs say so).
 
-**Errors.** The usual money errors (section 3) plus `world_switched_off` (409:
+**Errors.** The usual money errors (section 3) plus `residence_not_set` and `residence_mismatch` (409, above), `world_switched_off` (409:
 the admin switch of the whole product is off), `world_limit_reached` (429: the
 day's cap on new openings is reached), `country_not_supported` (422: no
 opening is taken from that country), `fx_switched_off` (a currency is off) and

@@ -357,9 +357,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // wallet first (R-17).
   { model: 'NuvionEntity', column: 'wawuUserId', disposition: 'OWNED' },
   // WALLET-21: the foreign accounts, quotes, swaps, sends and movements. WAWU's
-  // pointers and records of what Nuvion holds for the person (the accounts stay
-  // at Nuvion, and deletion needs them empty first, R-17), owned like the naira
-  // ledger. Deleted before the profile, like every owned table.
+  // pointers and records of what Nuvion holds for the person; the accounts stay
+  // at Nuvion. Deletion is refused while one holds money (BATCH FX-A's
+  // DELETION_BLOCKERS: `fx_balance`), so a purge only reaches pointers to
+  // empty accounts. Deleted before the profile, like every owned table.
   { model: 'FxAccount', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'FxQuote', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'FxOperation', column: 'wawuUserId', disposition: 'OWNED' },

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FxAccountsService } from '../fx/fx-accounts.service';
 import {
@@ -8,7 +8,13 @@ import {
   fxCurrency,
 } from '../fx/fx-currencies';
 import { FxSettings } from '../fx/fx-settings';
+import {
+  WALLET_PROVIDER,
+  type WalletProvider,
+} from '../../wallet-provider/wallet-provider.interface';
 import { MoneyError } from '../money-error';
+import { alignClaim } from '../opening/bvn-claim';
+import { openingStateForStage } from '../opening/review-stage';
 import { isFiatCode, listCountries } from './world-countries';
 import { WorldSettings } from './world-settings';
 import type {
@@ -92,6 +98,10 @@ export class WorldWalletService {
     private readonly settings: WorldSettings,
     private readonly fx: FxSettings,
     private readonly accounts: FxAccountsService,
+    // Asked where Nuvion's review stands when no delivery said it is approved (the backstop). Absent: not asked.
+    @Optional()
+    @Inject(WALLET_PROVIDER)
+    private readonly provider?: WalletProvider,
   ) {}
 
   /** Every country a person may say they live in (region data, not a list of ours). */
@@ -221,7 +231,13 @@ export class WorldWalletService {
       });
       row.worldFirstCurrency = pick;
     }
-    if (!entity?.entityId || entity.status !== 'approved') return 'waiting';
+    if (!entity?.entityId) return 'waiting';
+    if (entity.status !== 'approved') {
+      // The backstop for a delivery that never came: ask the provider, not our own record.
+      if (!(await this.approvedAtProvider(wawuUserId, entity.entityId))) {
+        return 'waiting';
+      }
+    }
     const currency = row.worldFirstCurrency;
     if (!currency || !isFiatCode(currency)) return 'waiting';
 
@@ -282,6 +298,69 @@ export class WorldWalletService {
       );
     }
     return 'opened';
+  }
+
+  /**
+   * Reads the provider's review of the person (`readReview`, the seam). True, with the approval recorded on our
+   * side exactly as a delivery would (the review's words, the opening's state and its claim), when it is approved;
+   * false when it is not, when the provider cannot be asked, or when the opening was cancelled meanwhile. Only
+   * an approval is recorded here: a refusal, a stop and a wait are left to the delivery and to the person.
+   */
+  private async approvedAtProvider(
+    wawuUserId: string,
+    entityId: string,
+  ): Promise<boolean> {
+    if (!this.provider?.readReview) return false;
+    let review;
+    try {
+      review = await this.provider.readReview(entityId);
+    } catch {
+      return false;
+    }
+    if (review.status.trim().toLowerCase() !== 'approved') return false;
+    const now = new Date();
+    const moved = await this.prisma.$transaction(async (tx) => {
+      const opening = await tx.fintavaWalletOpening.findUnique({
+        where: { wawuUserId },
+        select: { worldCancelledAt: true, worldFrozenAt: true },
+      });
+      if (!opening || opening.worldCancelledAt || opening.worldFrozenAt) {
+        return false;
+      }
+      await tx.nuvionEntity.updateMany({
+        where: { wawuUserId, entityId, status: { not: 'approved' } },
+        data: {
+          status: 'approved',
+          decidedAt: now,
+          reviewReadAt: now,
+          bvnStatus: review.bvnStatus,
+          ninStatus: review.ninStatus,
+          documentStatus: review.documentStatus,
+          addressProofStatus: review.addressProofStatus,
+          identificationStatus: review.identificationStatus,
+          rejectionReasons: [],
+          ...(review.updated !== null
+            ? { entityUpdatedAt: new Date(review.updated) }
+            : {}),
+        },
+      });
+      await tx.fintavaWalletOpening.updateMany({
+        where: {
+          wawuUserId,
+          provider: 'nuvion',
+          state: { in: ['review', 'open', 'unknown'] },
+          worldCancelledAt: null,
+        },
+        data: { state: openingStateForStage('approved'), failure: null },
+      });
+      return true;
+    });
+    if (!moved) return false;
+    await alignClaim(this.prisma, wawuUserId);
+    this.logger.log(
+      'world wallet: approval read from the provider and recorded',
+    );
+    return true;
   }
 
   /** The currencies an admin has left on, for tests and the options. */

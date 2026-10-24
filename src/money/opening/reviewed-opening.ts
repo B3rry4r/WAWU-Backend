@@ -110,6 +110,9 @@ export const OPENING_STARTED_OTHER_WAY =
  */
 export const OPENING_HELD_MESSAGE =
   "We can't use this BVN or phone number for a new wallet. If it's yours, contact support.";
+/** The same answer for a person with no BVN: it says neither "wallet" nor "check in progress" (WALLET-41 round 1). */
+export const WORLD_HELD_MESSAGE =
+  "We can't use this ID or phone number for a new wallet. If it's yours, contact support.";
 export const CHECK_HANDLE_UNDER_REVIEW =
   'Send bvn and nin with your details: this wallet is opened without a separate BVN check.';
 
@@ -331,7 +334,7 @@ export class ReviewedOpening {
       phone = `+234${local.slice(1)}`;
     }
     const send: Send = {
-      bvn: abroad ? worldIdentityKey(input, details) : input.bvn!,
+      bvn: abroad ? worldIdentityKey(input) : input.bvn!,
       nin: abroad ? '' : input.nin!,
       email: mail,
       phone,
@@ -786,7 +789,10 @@ export class ReviewedOpening {
       await this.attempts.give(place);
       throw e;
     }
-    throw new MoneyError('identity_has_wallet', OPENING_HELD_MESSAGE);
+    throw new MoneyError(
+      'identity_has_wallet',
+      send.world === null ? OPENING_HELD_MESSAGE : WORLD_HELD_MESSAGE,
+    );
   }
 
   /**
@@ -810,7 +816,10 @@ export class ReviewedOpening {
       if (!isUniqueViolation(e)) throw e;
       // This request's try is already spent (it won the claim); the number
       // is another account's, so nothing goes out.
-      throw new MoneyError('identity_has_wallet', OPENING_HELD_MESSAGE);
+      throw new MoneyError(
+        'identity_has_wallet',
+        bvn.startsWith('world:') ? WORLD_HELD_MESSAGE : OPENING_HELD_MESSAGE,
+      );
     }
     if (moved.count !== 1) throw new ClaimMoved();
   }
@@ -1185,8 +1194,7 @@ export class ReviewedOpening {
 class HeldEntity extends Error {}
 
 /** WALLET-41: the provider asked for something the details did not carry. */
-export const WORLD_FIELDS_MESSAGE =
-  'We need a little more to open your wallet. Check the details we point to and try again.';
+export const WORLD_FIELDS_MESSAGE = 'Check this and try again.';
 
 /** The world columns of an opening row for this request (none for a Nigerian one). */
 function worldColumns(send: Send): {
@@ -1203,15 +1211,17 @@ function worldColumns(send: Send): {
 
 /**
  * The claim a world opening takes in place of a BVN: the keyed identity of
- * the ID document (issuing country, type and number, upper case, letters and
- * digits only), hashed like a BVN under `FintavaWalletOpening.bvnHash`. It
- * can never equal an 11-digit BVN's, so the two kinds of claim never meet,
- * and one document is one wallet.
+ * the ID document, hashed like a BVN under `FintavaWalletOpening.bvnHash`. It
+ * is the country the person lives in (the Hub's own, `world-residence.ts`:
+ * the request must equal it) and the number with letters and digits only, in
+ * upper case, WHATEVER kind of document the person says it is and whatever
+ * nationality they give (round 1: a changed type or nationality is not a
+ * second wallet). It can never equal an 11-digit BVN's, so the two kinds of
+ * claim never meet.
  */
 export function worldIdentityKey(
-  input: OpenNairaWalletDto,
-  details: { idDocument: { issuingCountry: string } },
+  input: Pick<OpenNairaWalletDto, 'countryCode' | 'idNumber'>,
 ): string {
   const number = (input.idNumber ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  return `world:${details.idDocument.issuingCountry}:${input.idType ?? ''}:${number}`;
+  return `world:${input.countryCode ?? ''}:${number}`;
 }

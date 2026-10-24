@@ -19,7 +19,6 @@ import { OpenNairaWalletDto } from '../../opening/dto/open-wallet.dto';
 import {
   ReviewedOpening,
   type ReviewedOpeningHost,
-  type ReviewedOpeningRow,
 } from '../../opening/reviewed-opening';
 
 /**
@@ -158,7 +157,7 @@ describe('WALLET-41: opening a wallet from outside Nigeria', () => {
       opening: (id) =>
         prisma.fintavaWalletOpening.findUnique({
           where: { wawuUserId: id },
-        }) as Promise<ReviewedOpeningRow | null>,
+        }),
       unstick: (row) => Promise.resolve(row),
       hasWallet: async (id) =>
         (await prisma.fintavaWallet.findUnique({
@@ -224,9 +223,7 @@ describe('WALLET-41: opening a wallet from outside Nigeria', () => {
     });
     // The claim is the keyed identity of the document, never a BVN, and the
     // document number itself is nowhere.
-    expect(row.bvnHash).toBe(
-      hasher.hash('bvn', 'world:US:international_passport:P123456789'),
-    );
+    expect(row.bvnHash).toBe(hasher.hash('bvn', 'world:US:P123456789'));
     expect(JSON.stringify(row)).not.toContain('P123456789');
     const entity = await prisma.nuvionEntity.findUniqueOrThrow({
       where: { wawuUserId: p.id },
@@ -272,6 +269,53 @@ describe('WALLET-41: opening a wallet from outside Nigeria', () => {
       opening.open(b.id, claims(b), dto({ idNumber: 'same doc 1' }), null),
     ).rejects.toMatchObject({ code: 'identity_has_wallet' });
     expect(sent).toHaveLength(1);
+  });
+
+  it('the same number sent as another kind of document, or with another nationality, is the same wallet', async () => {
+    const a = who();
+    const b = who();
+    const c = who();
+    await opening.open(
+      a.id,
+      claims(a),
+      dto({ idNumber: 'ONE-NUMBER-77' }),
+      null,
+    );
+    await expect(
+      opening.open(
+        b.id,
+        claims(b),
+        dto({ idNumber: 'one number 77', idType: 'national_id' }),
+        null,
+      ),
+    ).rejects.toMatchObject({ code: 'identity_has_wallet' });
+    await expect(
+      opening.open(
+        c.id,
+        claims(c),
+        dto({
+          idNumber: 'ONE-NUMBER-77',
+          idType: 'drivers_license',
+          nationality: 'GH',
+        }),
+        null,
+      ),
+    ).rejects.toMatchObject({ code: 'identity_has_wallet' });
+    expect(sent).toHaveLength(1);
+  });
+
+  it('the refusal for a document someone else holds does not talk of a BVN', async () => {
+    const a = who();
+    const b = who();
+    await opening.open(a.id, claims(a), dto({ idNumber: 'HELD-DOC-9' }), null);
+    const refused = await opening
+      .open(b.id, claims(b), dto({ idNumber: 'HELD-DOC-9' }), null)
+      .then(
+        () => null,
+        (e: { response: { message: string } }) => e.response.message,
+      );
+    expect(refused).toMatch(/ID or phone number/);
+    expect(refused).not.toMatch(/BVN/);
   });
 
   it('a phone without its country code cannot open', async () => {

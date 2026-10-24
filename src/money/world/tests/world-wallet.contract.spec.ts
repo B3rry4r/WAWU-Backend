@@ -6,6 +6,7 @@ import { AdminRole } from '../../../../generated/prisma/enums';
 import type { AdminUserView } from '../../../admin/auth/admin-user-view.type';
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import type { WalletProvider } from '../../../wallet-provider/wallet-provider.interface';
 import type { FxAccountsService } from '../../fx/fx-accounts.service';
 import type { FxAccountView } from '../../fx/fx-view.type';
 import type { FxSettings } from '../../fx/fx-settings';
@@ -34,7 +35,7 @@ const ADMIN: AdminUserView = {
   status: 'active',
   lastLoginAt: null,
   createdAt: new Date(),
-} as AdminUserView;
+};
 
 describe('WALLET-41: the world wallet', () => {
   let moduleRef: TestingModule;
@@ -47,6 +48,25 @@ describe('WALLET-41: the world wallet', () => {
   let openMode: 'ok' | 'refused' | 'slow' = 'ok';
   let testDatabase = false;
 
+  /** What the provider's own review says now, for the backstop. */
+  let review: { status: string } | 'unreachable' = { status: 'pending' };
+  const provider = {
+    readReview: () =>
+      review === 'unreachable'
+        ? Promise.reject(new Error('unreachable'))
+        : Promise.resolve({
+            personId: null,
+            status: review.status,
+            bvnStatus: null,
+            ninStatus: null,
+            documentStatus: 'pending',
+            addressProofStatus: 'pending',
+            identificationStatus: 'pending',
+            reasons: [],
+            found: true,
+            updated: Date.now(),
+          }),
+  } as unknown as WalletProvider;
   const fxSettings = {
     currencyOn: (c: string) => c !== 'GHS',
     productOn: () => true,
@@ -141,12 +161,19 @@ describe('WALLET-41: the world wallet', () => {
     prisma = moduleRef.get(PrismaService);
     admin = new WorldAdminService(prisma);
     gate = new WalletGate(prisma);
-    world = new WorldWalletService(prisma, worldSettings, fxSettings, accounts);
+    world = new WorldWalletService(
+      prisma,
+      worldSettings,
+      fxSettings,
+      accounts,
+      provider,
+    );
   });
 
   beforeEach(() => {
     openCalls = [];
     openMode = 'ok';
+    review = { status: 'pending' };
   });
 
   afterAll(async () => {
@@ -195,6 +222,45 @@ describe('WALLET-41: the world wallet', () => {
       ]);
       expect([a, b].sort()).toEqual(['opened', 'waiting']);
       expect(openCalls).toHaveLength(1);
+    });
+
+    it('the backstop asks the provider when no delivery came: an approval is recorded and the account opens', async () => {
+      const id = await person('GB', { status: 'pending', currency: 'GBP' });
+      review = { status: 'approved' };
+      expect(await world.ensureFirstAccount(id)).toBe('opened');
+      expect(openCalls).toHaveLength(1);
+      const entity = await prisma.nuvionEntity.findUniqueOrThrow({
+        where: { wawuUserId: id },
+      });
+      expect(entity.status).toBe('approved');
+      expect(entity.decidedAt).not.toBeNull();
+      const row = await prisma.fintavaWalletOpening.findUniqueOrThrow({
+        where: { wawuUserId: id },
+      });
+      expect(row.state).toBe('open');
+    });
+
+    it('the backstop leaves a review that is not approved, or a provider that cannot be asked, waiting and records nothing', async () => {
+      const id = await person('GB', { status: 'pending', currency: 'GBP' });
+      review = { status: 'pending' };
+      expect(await world.ensureFirstAccount(id)).toBe('waiting');
+      review = { status: 'rejected' };
+      expect(await world.ensureFirstAccount(id)).toBe('waiting');
+      review = 'unreachable';
+      expect(await world.ensureFirstAccount(id)).toBe('waiting');
+      const entity = await prisma.nuvionEntity.findUniqueOrThrow({
+        where: { wawuUserId: id },
+      });
+      expect(entity.status).toBe('pending');
+      expect(openCalls).toEqual([]);
+    });
+
+    it('the backstop never approves a cancelled opening', async () => {
+      const id = await person('GB', { status: 'pending', currency: 'GBP' });
+      await admin.act(ADMIN, id, 'cancel', 'not who they say');
+      review = { status: 'approved' };
+      expect(await world.ensureFirstAccount(id)).toBe('blocked');
+      expect(openCalls).toEqual([]);
     });
 
     it('a Nigerian opening, or none, is not a world one', async () => {
@@ -389,6 +455,21 @@ describe('WALLET-41: the world wallet', () => {
       expect(
         await prisma.worldAdminAudit.count({ where: { subjectWawuId: id } }),
       ).toBe(2);
+    });
+
+    it('parallel acts on one person write one audit row each act that changed something', async () => {
+      const id = await person('CA');
+      const six = await Promise.all(
+        Array.from({ length: 6 }, () =>
+          admin.act(ADMIN, id, 'freeze', 'parallel'),
+        ),
+      );
+      expect(six.filter((r) => r.changed)).toHaveLength(1);
+      expect(
+        await prisma.worldAdminAudit.count({
+          where: { subjectWawuId: id, action: 'freeze' },
+        }),
+      ).toBe(1);
     });
 
     it('an unfreeze lets go only of accounts the world freeze froze', async () => {

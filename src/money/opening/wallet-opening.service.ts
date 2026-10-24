@@ -35,6 +35,7 @@ import { FeeQuoteService } from '../fees/fee-quote.service';
 import { TransactionPinService } from '../pin/transaction-pin.service';
 import { isAbroad, OpenNairaWalletDto } from './dto/open-wallet.dto';
 import { visibleBeneficiaries } from '../saved-accounts/beneficiary.service';
+import { assertWorldResidence } from '../world/world-residence';
 import { worldViewOf, WorldWalletService } from '../world/world-wallet.service';
 import { type IdentityStop, stoppedOnIdentity } from './opening-stops';
 import { ReviewedOpening } from './reviewed-opening';
@@ -392,6 +393,9 @@ export class WalletOpeningService {
     // The caller's address as the proxy gives it, null when there is none:
     // under a reviewing provider the tries are limited per address too.
     address: string | null = null,
+    // The country of residence the account carries (WAWU ID's `countryCode` claim), null when it has none:
+    // it decides which opening may start (world-residence.ts).
+    residence: string | null = null,
   ): Promise<WalletView> {
     if (isAbroad(input)) {
       // WALLET-41 (R-87): only a provider that holds foreign accounts and
@@ -402,6 +406,7 @@ export class WalletOpeningService {
           'A wallet for a person outside Nigeria is not available on this wallet yet.',
         );
       }
+      assertWorldResidence(residence, input.countryCode!);
       const firstCurrency = await this.world.guardOpen(
         wawuUserId,
         input.countryCode!,

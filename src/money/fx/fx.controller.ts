@@ -14,6 +14,7 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import { RequireFeesSet } from '../fees/fees-set.guard';
 import {
+  AllowWorldWallet,
   CurrentWallet,
   type OpenWallet,
   RequireOpenWallet,
@@ -54,7 +55,8 @@ import type {
 /**
  * Dollar, other-currency and stablecoin accounts, swaps and crypto sends on
  * Nuvion (task WALLET-21, R-83, R-84), served. Every route needs an open
- * naira wallet (R-6: the identity checks happen once, when it is opened) and
+ * wallet of any kind, naira or world (R-6: the identity checks happen once,
+ * when it is opened; WALLET-41: a person outside Nigeria has no naira wallet) and
  * reaches the provider only through `WALLET_PROVIDER`; a provider without
  * foreign accounts (Fintava) answers `409 currency_not_supported`.
  * docs/contract/CONVENTIONS.md section 27.
@@ -180,7 +182,7 @@ export class FxController {
   @HttpCode(201)
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-21')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'currency_not_supported',
@@ -212,6 +214,7 @@ export class FxController {
   @HttpCode(201)
   @BuiltBy('WALLET-21')
   @RequireIdempotentApproval(FX_SWAP_ROUTE)
+  @AllowWorldWallet()
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',
@@ -237,7 +240,7 @@ export class FxController {
   @Get('swaps/:id')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-21')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(...WALLET_GATE_ERRORS, 'currency_not_supported', 'not_found')
   swapById(
     @CurrentWallet() wallet: OpenWallet,
@@ -255,7 +258,7 @@ export class FxController {
   @Get('sends/quote')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-21')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'currency_not_supported',
@@ -287,6 +290,7 @@ export class FxController {
   @HttpCode(201)
   @BuiltBy('WALLET-21')
   @RequireIdempotentApproval(FX_SEND_ROUTE)
+  @AllowWorldWallet()
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',
@@ -313,7 +317,7 @@ export class FxController {
   @Get('sends/:id')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-21')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(...WALLET_GATE_ERRORS, 'currency_not_supported', 'not_found')
   sendById(
     @CurrentWallet() wallet: OpenWallet,

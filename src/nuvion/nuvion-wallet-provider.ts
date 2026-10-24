@@ -8,6 +8,7 @@ import type {
   ProviderOpenWalletInput,
   ProviderPageQuery,
   ProviderReconciliation,
+  ProviderReviewState,
   ProviderSelfieInput,
   ProviderSendKind,
   ProviderTransaction,
@@ -27,7 +28,11 @@ import {
   NuvionDocumentsArea,
   type NuvionDocumentsMethods,
 } from './areas/documents';
-import { NuvionOpeningArea, type NuvionOpeningMethods } from './areas/opening';
+import {
+  NuvionOpeningArea,
+  type NuvionOpeningMethods,
+  reviewStateOf,
+} from './areas/opening';
 import { NuvionPayoutsArea, type NuvionPayoutsMethods } from './areas/payouts';
 import {
   NuvionReconcileArea,
@@ -152,6 +157,15 @@ export class NuvionWalletProvider implements WalletProvider {
 
   get deliveries() {
     return this.areas.reconcile.deliveries;
+  }
+
+  /** Where Nuvion's review of one entity stands now (`GET /entities/{id}`): WALLET-41's first-account backstop. */
+  async readReview(customerId: string): Promise<ProviderReviewState> {
+    const opening = this.areas.opening;
+    if (!(opening instanceof NuvionOpeningArea)) {
+      throw new Error("The opening area of this adapter is not Nuvion's.");
+    }
+    return reviewStateOf(await opening.readEntity(customerId), true);
   }
 
   /** Foreign-currency accounts, swaps and crypto sends (WALLET-21, R-83, R-84). */

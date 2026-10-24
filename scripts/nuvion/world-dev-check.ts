@@ -246,7 +246,7 @@ async function main(): Promise<number> {
     const account = await step(`open ${currency}`, () =>
       fx.openAccount({
         person,
-        currency: currency as 'USD',
+        currency,
         chain: null,
         displayName: `WAWU ${currency} world check ${stamp}`,
         holderName: 'WAWU check',

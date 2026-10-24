@@ -4,6 +4,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { MoneyError } from '../money-error';
 import { CANCELLED_BY_ADMIN, releasedBvnHash } from '../opening/bvn-claim';
 import { reviewStageOf } from '../opening/review-stage';
+import { type Cursor, decode, encode } from '../fx/fx-admin.service';
 import type { AdminWorldOpeningsQueryDto } from './dto/world-request.dto';
 import { isFiatCode } from './world-countries';
 import type {
@@ -15,29 +16,11 @@ import type {
 /** The prefix of a foreign account's frozen reason when the world freeze made it. */
 export const WORLD_FREEZE_PREFIX = 'world wallet frozen: ';
 
-interface Cursor {
-  t: string;
-  id: string;
-}
-function encode(c: Cursor): string {
-  return Buffer.from(JSON.stringify(c)).toString('base64url');
-}
-function decode(raw: string): Cursor {
-  try {
-    const c = JSON.parse(
-      Buffer.from(raw, 'base64url').toString('utf8'),
-    ) as Partial<Cursor>;
-    if (
-      typeof c.t === 'string' &&
-      typeof c.id === 'string' &&
-      !Number.isNaN(Date.parse(c.t))
-    ) {
-      return c as Cursor;
-    }
-  } catch {
-    // falls through
-  }
-  throw new BadRequestException('cursor is not one this list gave');
+/** The page cursor is the foreign accounts' own (`{ t, id }`, fx-admin.service.ts): one shape for both lists. */
+function decodeCursor(raw: string): Cursor {
+  const c = decode(raw);
+  if (!c) throw new BadRequestException('cursor is not one this list gave');
+  return c;
 }
 
 type Row = {
@@ -129,7 +112,7 @@ export class WorldAdminService {
     query: AdminWorldOpeningsQueryDto,
   ): Promise<AdminWorldOpeningPage> {
     const limit = query.limit ?? 25;
-    const cursor = query.cursor ? decode(query.cursor) : null;
+    const cursor = query.cursor ? decodeCursor(query.cursor) : null;
     const rows = await this.prisma.fintavaWalletOpening.findMany({
       where: {
         worldCountry: query.country ?? { not: null },
@@ -195,6 +178,9 @@ export class WorldAdminService {
     reason: string,
   ): Promise<AdminWorldActView> {
     const out = await this.prisma.$transaction(async (tx) => {
+      // One act at a time per person: parallel acts wait here, then read the state the first left, so each act that
+      // changes something writes exactly one audit row and a repeat changes nothing.
+      await tx.$queryRaw`SELECT 1 FROM "FintavaWalletOpening" WHERE "wawuUserId" = ${wawuUserId} FOR UPDATE`;
       const row = await tx.fintavaWalletOpening.findUnique({
         where: { wawuUserId },
         select: ROW_SELECT,

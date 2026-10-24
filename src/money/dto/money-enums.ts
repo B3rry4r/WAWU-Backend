@@ -274,5 +274,8 @@ export const MONEY_ERROR_CODES = [
   'world_switched_off',
   'world_limit_reached',
   'country_not_supported',
+  // WALLET-41 round 1: the account's stored country of residence decides which opening is allowed.
+  'residence_not_set',
+  'residence_mismatch',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

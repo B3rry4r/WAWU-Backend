@@ -6,6 +6,7 @@ import { toInternationalPhone } from '../../../wallet-provider/international-pho
 import type { PlanSettingsService } from '../../../plan-settings/plan-settings.service';
 import { OpenNairaWalletDto } from '../../opening/dto/open-wallet.dto';
 import { worldIdentityKey } from '../../opening/reviewed-opening';
+import { assertWorldResidence, residenceOf } from '../world-residence';
 import {
   DEFAULT_FIRST_CURRENCY,
   EURO_COUNTRIES,
@@ -133,7 +134,7 @@ describe('the number a person outside Nigeria signs up with', () => {
   it.each(['08012345678', '2125550198', '+0123456789', '+1', '', null])(
     '%p is not a number with a country code',
     (typed) => {
-      expect(toInternationalPhone(typed as string | null)).toBeNull();
+      expect(toInternationalPhone(typed)).toBeNull();
     },
   );
 });
@@ -192,51 +193,85 @@ describe('POST /money/wallet/open: the body for a person outside Nigeria', () =>
 });
 
 describe('the claim a world opening takes in place of a BVN', () => {
-  const input = (idType: string, idNumber: string) =>
-    ({ idType, idNumber }) as OpenNairaWalletDto;
-  const details = (c: string) => ({ idDocument: { issuingCountry: c } });
+  const claim = (country: string, number: string) =>
+    worldIdentityKey({ countryCode: country, idNumber: number });
 
   it('one document is one claim, however it is typed', () => {
-    expect(
-      worldIdentityKey(
-        input('international_passport', 'p-123 456 789'),
-        details('US'),
-      ),
-    ).toBe(
-      worldIdentityKey(
-        input('international_passport', 'P123456789'),
-        details('US'),
-      ),
-    );
+    expect(claim('US', 'p-123 456 789')).toBe(claim('US', 'P123456789'));
   });
-  it('another country, another kind of document or another number is another claim', () => {
-    const a = worldIdentityKey(
-      input('international_passport', 'P123456789'),
-      details('US'),
-    );
-    expect(
-      worldIdentityKey(
-        input('international_passport', 'P123456789'),
-        details('GB'),
-      ),
-    ).not.toBe(a);
-    expect(
-      worldIdentityKey(input('drivers_license', 'P123456789'), details('US')),
-    ).not.toBe(a);
-    expect(
-      worldIdentityKey(
-        input('international_passport', 'P123456780'),
-        details('US'),
-      ),
-    ).not.toBe(a);
+  it('whatever kind of document or nationality the person says, the same number in the same country is the same claim', () => {
+    // The key is the country they live in (the Hub's, not the person's word) and the number; the type and the
+    // nationality are not in it, so changing either to get a second wallet changes nothing.
+    const a = worldIdentityKey({
+      countryCode: 'US',
+      idNumber: 'P123456789',
+      idType: 'international_passport',
+      nationality: 'US',
+    } as OpenNairaWalletDto);
+    const b = worldIdentityKey({
+      countryCode: 'US',
+      idNumber: 'P123456789',
+      idType: 'national_id',
+      nationality: 'GH',
+    } as OpenNairaWalletDto);
+    const c = worldIdentityKey({
+      countryCode: 'US',
+      idNumber: 'P123456789',
+      idType: 'drivers_license',
+    } as OpenNairaWalletDto);
+    expect(b).toBe(a);
+    expect(c).toBe(a);
+  });
+  it('another country or another number is another claim', () => {
+    const a = claim('US', 'P123456789');
+    expect(claim('GB', 'P123456789')).not.toBe(a);
+    expect(claim('US', 'P123456780')).not.toBe(a);
   });
   it('can never equal a BVN, which is 11 digits', () => {
-    const key = worldIdentityKey(
-      input('national_id', '12345678901'),
-      details('GH'),
-    );
+    const key = claim('GH', '12345678901');
     expect(key).not.toMatch(/^\d{11}$/);
     expect(key.startsWith('world:')).toBe(true);
+  });
+});
+
+describe('residence decides which opening a person may start (R-87, R-85)', () => {
+  it('reads the country code the account carries, and nothing else', () => {
+    expect(residenceOf({ countryCode: 'gb' })).toBe('GB');
+    expect(residenceOf({ countryCode: ' NG ' })).toBe('NG');
+    expect(residenceOf({ countryCode: null })).toBeNull();
+    expect(residenceOf({ countryCode: 'United Kingdom' })).toBeNull();
+    expect(residenceOf({ country: 'GB' } as never)).toBeNull();
+    expect(residenceOf(undefined)).toBeNull();
+  });
+  const refusal = (residence: string | null, requested: string) => {
+    try {
+      assertWorldResidence(residence, requested);
+      return 'allowed';
+    } catch (e) {
+      return (e as { code?: string }).code;
+    }
+  };
+  it('a world opening needs a stored residence that is not Nigeria, and the request must name it', () => {
+    expect(refusal('GB', 'GB')).toBe('allowed');
+    expect(refusal(null, 'GB')).toBe('residence_not_set');
+    expect(refusal('NG', 'GB')).toBe('residence_mismatch');
+    expect(refusal('GB', 'US')).toBe('residence_mismatch');
+  });
+  it('a plain reason each, in words a person can act on, with no long dash', () => {
+    for (const [r, q] of [
+      [null, 'GB'],
+      ['NG', 'GB'],
+      ['GB', 'US'],
+    ] as const) {
+      try {
+        assertWorldResidence(r, q);
+      } catch (e) {
+        const message = (e as { response: { message: string } }).response
+          .message;
+        expect(message.length).toBeGreaterThan(20);
+        expect(message).not.toMatch(/[\u2013\u2014]/);
+      }
+    }
   });
 });
 

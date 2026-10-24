@@ -153,6 +153,11 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   world_switched_off: 409,
   world_limit_reached: 429,
   country_not_supported: 422,
+  // WALLET-41 round 1. Default (lead), owner may override: 409, as wallet_already_open. The request is
+  // understood; the account's own country of residence says it cannot be done this way (none stored, Nigeria,
+  // or not the one the request names).
+  residence_not_set: 409,
+  residence_mismatch: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */
