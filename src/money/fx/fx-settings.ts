@@ -29,7 +29,8 @@ const CONFIGURABLE: readonly string[] = [
  *   charged on top (R-10). Default 0 until the owner names it.
  * - `FX_SEND_FEE_<CODE>_MINOR`: WAWU's fee on a crypto send. Default 0.
  * - `FX_FEE_COLLECTOR_<CODE>_BAN`: where the fee is paid (a Nuvion account in
- *   that currency). Required for a nonzero fee in that currency.
+ *   that currency). Required for a nonzero fee outside naira; a naira fee goes
+ *   to WAWU's operational account, as a naira send's does.
  * - `FX_DAILY_LIMIT_<CODE>_MINOR`: the most one person may move out of that
  *   currency in a Lagos day, swaps and sends together. Unset is no limit of
  *   WAWU's own (the provider's limits stand).
@@ -85,7 +86,9 @@ export class FxSettings {
       }
       if (lim !== null) this.dailyLimit.set(code, BigInt(lim));
       if (dec !== null) this.decimals.set(code, dec);
-      if ((sw || sd) && !ban) {
+      // The naira fee is paid to WAWU's operational account, as a naira send's
+      // is (the provider says which); every other currency needs a collector.
+      if ((sw || sd) && !ban && code !== 'NGN') {
         throw new Error(
           `A WAWU fee is set for ${code} but FX_FEE_COLLECTOR_${code}_BAN is not: there is nowhere to pay it`,
         );

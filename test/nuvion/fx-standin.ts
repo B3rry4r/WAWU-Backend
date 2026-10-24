@@ -405,6 +405,38 @@ export class FxStandin {
       };
     }
     if (b.payment_type === 'book-transfer') {
+      // Dev (24 Oct, the verifier's H1): a transfer to the sender's own
+      // account is refused 400 and leaves a `failed` record under the
+      // reference, which a repeat of the reference then finds (409).
+      const target = [...this.accounts.values()].find(
+        (a) => a.nuvion_ban === b.nuvion_ban,
+      );
+      if (target && target.id === from.id) {
+        this.transfers.push({
+          id: this.id('01FXTR'),
+          amount,
+          currency: b.currency,
+          unique_reference: b.unique_reference,
+          account_id: from.id,
+          entity_id: from.entity_id,
+          status: 'failed',
+          status_reason: 'cannot_transfer_to_same_account',
+          narration: b.narration,
+          type: 'outflow',
+          payment_type: b.payment_type,
+          applicable_fee: 0,
+          meta: {},
+          created: Date.now(),
+          updated: Date.now(),
+        });
+        return {
+          status: 400,
+          body: errorBody(
+            'error_validation_error',
+            'cannot_transfer_to_same_account',
+          ),
+        };
+      }
       if (b.fx_quote_id) {
         const q = this.quotes.get(String(b.fx_quote_id));
         if (!q || (q.quote as { status: string }).status !== 'active') {
@@ -485,6 +517,23 @@ export class FxStandin {
     const a = this.accounts.get(accountId)!;
     a.balance.available += amount;
     a.balance.current += amount;
+  }
+
+  /** An account of another holder (WAWU's collector) that a book transfer can name by its nuvion_ban. */
+  addCollector(ban: string, currency: string): Acct {
+    const id = this.id('01FXCOL');
+    const a: Acct = {
+      id,
+      entity_id: '01FXWAWUENTITY00000000001',
+      type: 'operational',
+      currency,
+      display_name: 'WAWU collector',
+      nuvion_ban: ban,
+      balance: { available: 0, current: 0, overdraft_used: 0 },
+      deleted: 0,
+    };
+    this.accounts.set(id, a);
+    return a;
   }
 
   balanceOf(accountId: string): number {

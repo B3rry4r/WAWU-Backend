@@ -28,7 +28,7 @@ import type { WorldCountriesView, WorldOptionsView } from './world-view.type';
  * A wallet for a person outside Nigeria (task WALLET-41, R-87). Opening is
  * `POST /money/wallet/open` with a `countryCode` other than NG; these two
  * routes are what sits around it. Neither needs a wallet: they are where a
- * person without one is led (docs/contract/CONVENTIONS.md section 28).
+ * person without one is led (docs/contract/CONVENTIONS.md section 29).
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)

@@ -26,6 +26,10 @@ const MAX_MONTHS_BACK = 12;
 const MONTH_LINES = 500;
 const PAGE_LINES = 100;
 
+/** What an account's details say when the provider could not be asked at all. */
+export const DETAILS_UNREAD_MESSAGE =
+  'The provider could not be reached just now.';
+
 export const OPENING_MESSAGE =
   'This account is still being opened. Check again in a moment.';
 
@@ -234,7 +238,13 @@ export class FxAccountsService {
         status: 'open',
       },
     });
-    return accountView(saved, this.settings, opened.account, opened.details);
+    return accountView(
+      saved,
+      this.settings,
+      opened.account,
+      opened.details,
+      opened.detailsRefusal,
+    );
   }
 
   /** One account's view: the provider's balance and details, each null if it cannot be read. */
@@ -247,7 +257,12 @@ export class FxAccountsService {
       return accountView(row, this.settings, null, null);
     const fx = this.port.get();
     const person = this.port.person(wallet);
-    const [balance, details] = await Promise.all([
+    // Details never seen for this account are asked for (made, if the
+    // provider holds none) so the app can say exactly where they stand: an
+    // account whose details the provider refused is told so, in its words,
+    // and is tried again on the next read (dev: CAD and AED, 503).
+    const ensure = ensureDetails || row.detailsId === null;
+    const [balance, read] = await Promise.all([
       fx
         .readAccount(person, row.providerAccountId)
         .catch((e: unknown) => this.unread(row, 'balance', e)),
@@ -259,10 +274,14 @@ export class FxAccountsService {
             currency: row.currency,
             chain: (row.chain || null) as ProviderFxChain | null,
           },
-          ensureDetails,
+          ensure,
         )
-        .catch((e: unknown) => this.unread(row, 'details', e)),
+        .catch((e: unknown) => {
+          this.unread(row, 'details', e);
+          return { details: null, refusal: DETAILS_UNREAD_MESSAGE };
+        }),
     ]);
+    const details = read.details;
     if (details && details.detailsId !== row.detailsId) {
       await this.prisma.fxAccount
         .update({
@@ -271,7 +290,7 @@ export class FxAccountsService {
         })
         .catch(() => undefined);
     }
-    return accountView(row, this.settings, balance, details);
+    return accountView(row, this.settings, balance, details, read.refusal);
   }
 
   private unread(row: FxAccount, what: string, e: unknown): null {

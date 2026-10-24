@@ -37,6 +37,7 @@
 //   POST release                   { transfer_id?, status? }: settle the held transfer (every held one without an id) as
 //                                  successful (default), failed or reversed, through the normal path: the signed webhook
 //                                  (outflows.completed, outflows.failed or outflows.refunded) goes to the Hub
+//   POST capital/expire | capital/mature   { order_id }: lapse a Capital reservation, or mature a holding (NUV-12)
 //   GET  liveness                  the hosted selfie sessions (FIX-47 L2)
 //   POST liveness/<id>/finish      { capture_status?, verification_status? }: decide a session by hand
 //
@@ -1312,6 +1313,190 @@ on('POST', '/__standin/directory', (req) => {
   const b = req.body || {};
   if (!b.bank_code || !/^\d{10}$/.test(String(b.account_number)) || !b.name) return invalid('bank_code, a ten-digit account_number and name');
   directory.set(`${b.bank_code}:${b.account_number}`, String(b.name));
+  return { status: 200, body: { ok: true } };
+});
+
+// ---- Capital (NUV-12): products, reservations, orders, the portfolio, withdrawals. The answers are the shapes
+// Nuvion's dev gave on 24 Oct 2026 (mobile docs/nuvion/DEV-RESULTS.md, "Capital"): a reservation lasts 15 minutes
+// and moves nothing; confirm debits once and a second confirm is 400 invalid for state; the early action date is
+// the confirmation moment; a payout settles after STANDIN_SETTLE_MS as a `capital-early-liquidation-withdrawal`
+// inflow whose counterparty is the holding's user_capital_account_id.
+const CAP_DOC = { name: 'Terms & Conditions.pdf', url: 'https://docs.example.invalid/capital/terms.pdf' };
+const capProducts = [
+  { id: '01CAPFR90TREASURYBILLS0001', capital_product_type: 'FIXED_RETURN', is_external: false, name: '90 Days Treasury Bills', description: '<p>A government issued investment instrument for 90 days</p>', currency: 'NGN', start_date: null, end_date: null,
+    config: { principal: { min: 100000, max: 100000000, bands: [] }, tenor: { tenor_days: 90 }, rates: { interest: { primary: 0.3, bands: [] }, deductibles: [{ name: 'Withholding Tax', value: 0.1, value_type: 'percentage', applicable_to: 'interest' }] }, orders: { liquidation: { allow_early_withdrawal: true } } } },
+  { id: '01CAPFR180FIXEDINCOME00002', capital_product_type: 'FIXED_RETURN', is_external: false, name: '180 Days Fixed Income', description: '<p>Lock in a predetermined return for six months.</p>', currency: 'NGN', start_date: null, end_date: null,
+    config: { principal: { min: 1000000, bands: [] }, tenor: { tenor_days: 180 }, rates: { interest: { primary: 0.23, bands: [] }, deductibles: [{ name: 'Withholding Tax', value: 0.1, value_type: 'percentage', applicable_to: 'interest' }] }, orders: { liquidation: { allow_early_withdrawal: false } } } },
+  { id: '01CAPSOIPOSPV00000000003A', capital_product_type: 'SHARE_OFFERING', is_external: false, name: 'Dangote IPO SPV', description: '<p>Exposure to the Dangote IPO through a special purpose vehicle.</p>', currency: 'NGN', start_date: now() - 86400000, end_date: now() + 30 * 86400000,
+    config: { principal: { min: 20000, max: 10000000, bands: [] }, share_offering: { issuer_name: 'Dangote Refinery', offer_price: 10000, lock_period_days: 0, prospectus_url: 'https://docs.example.invalid/capital/prospectus.pdf', offer_stage: 'ipo' }, rates: { deductibles: [{ name: 'Cross-Deal Fee', value: 0.01, value_type: 'percentage', applicable_to: 'principal' }] } },
+    availability: { status: 'available', quantity: null } },
+  { id: '01CAPSOMTNPUBLICOFFER0004', capital_product_type: 'SHARE_OFFERING', is_external: false, name: 'MTN Public Offering', description: '<p>Shares in MTN.</p>', currency: 'NGN', start_date: now() - 20 * 86400000, end_date: now() - 5 * 86400000,
+    config: { principal: { min: 1000, max: 100000000, bands: [] }, share_offering: { issuer_name: 'MTN', offer_price: 1000, lock_period_days: 180, prospectus_url: 'https://docs.example.invalid/capital/mtn.pdf', offer_stage: 'ipo' }, rates: { deductibles: [] } },
+    availability: { status: 'available', quantity: null, orderable: false, reason: 'sale_window_closed' } },
+  { id: '01CAPFRDOLLARS000000000005', capital_product_type: 'FIXED_RETURN', is_external: false, name: 'Fixed Return in dollars', description: '<p>Dollars.</p>', currency: 'USD', start_date: null, end_date: null,
+    config: { principal: { min: 10000, bands: [] }, tenor: { tenor_days: 90 }, rates: { interest: { primary: 0.15, bands: [] }, deductibles: [] }, orders: { liquidation: { allow_early_withdrawal: true } } } },
+  { id: '01CAPPRIVATEEQUITY0000006', capital_product_type: 'PRIVATE_EQUITY', is_external: false, name: 'Private placement', description: '<p>Not served.</p>', currency: 'USD', start_date: null, end_date: null, config: {} },
+];
+const capOrders = new Map(); // id -> { o, quote, userCap, account }
+const capEntity = (req, body) => (body && body.entity_id) || req.query.entity_id || PARENT_ENTITY;
+const capView = (r) => ({ ...r.o, capital_account: r.account, agreements: [{ document: { ...CAP_DOC, content: null }, affirmations: [{ action_type: 'affirmation', actioned_at: r.o.created }] }] });
+const capExpire = (r) => {
+  if (r.o.status === 'RESERVED' && r.o.expires_at <= now()) {
+    r.o.status = 'EXPIRED';
+    r.o.expired_at = r.o.expires_at;
+    r.o.status_reason = 'The reservation expired before it was confirmed.';
+  }
+};
+on('GET', '/products', (req) => {
+  const rows = capProducts
+    .filter((p) => (!req.query.currency || p.currency === req.query.currency) && (!req.query.capital_product_type || p.capital_product_type === req.query.capital_product_type))
+    .map((p) => ({ ...p, config: { ...p.config } }));
+  return { status: 200, body: envelope(paged(rows, req, 'asc'), 'Capital products retrieved successfully') };
+});
+on('GET', /^\/products\/[A-Za-z0-9]+$/, (req) => {
+  const p = capProducts.find((x) => x.id === m(req, 2));
+  if (!p) return notFound();
+  return { status: 200, body: envelope({ ...p, config: { ...p.config, documents: [CAP_DOC] } }, 'Capital product retrieved successfully') };
+});
+on('POST', '/product-orders', (req) => {
+  const b = req.body || {};
+  const p = capProducts.find((x) => x.id === b.product_id);
+  const a = accounts.get(b.account_id);
+  if (!p || !a || a.entity_id !== capEntity(req, b)) return notFound();
+  if (a.currency !== p.currency) return invalid('account_id must match the product currency');
+  const share = p.capital_product_type === 'SHARE_OFFERING';
+  const amount = share ? b.amount : b.principal;
+  if (!Number.isInteger(amount) || amount < (p.config.principal.min || 1) || (p.config.principal.max && amount > p.config.principal.max)) return invalid('the amount is outside what the product takes');
+  if (!Array.isArray(b.agreement_acceptances) || b.agreement_acceptances.length !== 1 || b.agreement_acceptances[0].document_name !== CAP_DOC.name) return invalid('every document must be affirmed by its name');
+  if (p.availability && p.availability.orderable === false) return { status: 400, body: errorBody('error_operation_invalid_for_state', 'Not orderable.') };
+  const id = ulid('01ORD');
+  const created = now();
+  let quote;
+  let total;
+  if (share) {
+    const shares = Math.floor(amount / p.config.share_offering.offer_price);
+    const base = shares * p.config.share_offering.offer_price;
+    const cross = Math.floor(base * 0.01);
+    total = base + cross;
+    quote = { product_id: p.id, product_owner_id: ulid('01OWN'), product_type: 'SHARE_OFFERING', currency: p.currency, requested_amount: amount, requested_shares: shares, allocated_shares: shares, unallocated_amount: amount - base, offer_price: p.config.share_offering.offer_price, base_cost: base, brokerage_fee: 0, cross_deal_fee: cross, total_debit: total, deductibles: p.config.rates.deductibles, lock_period_days: p.config.share_offering.lock_period_days };
+  } else {
+    total = amount;
+    quote = { product_id: p.id, product_owner_id: ulid('01OWN'), product_type: 'FIXED_RETURN', currency: p.currency, principal: amount, total_debit: amount, tenor_days: p.config.tenor.tenor_days, locked_rate: p.config.rates.interest.primary, rate_source: 'primary', day_count: 365, is_locked: b.lock_investment === true, allow_early_withdrawal: p.config.orders.liquidation.allow_early_withdrawal, earliest_withdrawal_days: null, penalty: { primary: 0.15 }, deductibles: p.config.rates.deductibles };
+  }
+  const o = { id, entity_id: a.entity_id, reference: ulid('01REF'), product_id: p.id, funding_account_id: a.id, product_type: p.capital_product_type, currency: p.currency, amount: total, reserved_quantity: share ? quote.allocated_shares : null, status: 'RESERVED', status_reason: null, expires_at: created + 15 * 60000, confirmed_at: null, rejected_at: null, expired_at: null, created, updated: created };
+  capOrders.set(id, { o, quote, total, account: null, userCap: ulid('01UCA'), lock: b.lock_investment === true });
+  return { status: 201, body: envelope({ id, entity_id: a.entity_id, status: 'RESERVED', expires_at: o.expires_at, currency: p.currency, quote }, 'Capital order reserved successfully') };
+});
+on('POST', /^\/product-orders\/[A-Za-z0-9]+\/confirm$/, (req) => {
+  const r = capOrders.get(m(req, 2));
+  if (!r || r.o.entity_id !== capEntity(req, req.body)) return notFound();
+  capExpire(r);
+  if (r.o.status === 'EXPIRED') return { status: 410, body: errorBody('error_resource_expired', 'This reservation has expired. Please create a new order.') };
+  if (r.o.status !== 'RESERVED') return { status: 400, body: errorBody('error_operation_invalid_for_state', "You can't perform this action right now due to the current status.") };
+  const a = accounts.get(r.o.funding_account_id);
+  if (a.balance.available < r.total) return { status: 400, body: errorBody('error_transfer_insufficient_funds', 'The funding account does not have enough funds to complete this transfer.') };
+  bump(a, -r.total);
+  const at = now();
+  r.o.status = 'APPROVED';
+  r.o.confirmed_at = at;
+  r.o.updated = at;
+  const share = r.o.product_type === 'SHARE_OFFERING';
+  const principal = share ? null : r.quote.principal;
+  const gross = share ? null : Math.floor((principal * r.quote.locked_rate * r.quote.tenor_days) / 365);
+  const ded = share ? null : Math.floor(gross * 0.1);
+  r.account = { id: ulid('01CAP'), product_order_id: r.o.id, product_id: r.o.product_id, product_type: r.o.product_type, currency: r.o.currency, account_number: `00${digits(8)}`, created: at, updated: at, lifecycle: { status: share ? 'LOCKED' : 'ACTIVE', payout_status: null },
+    ...(share ? { shares_purchased: r.quote.allocated_shares, units_held: r.quote.allocated_shares, base_cost: r.quote.base_cost, total_amount_debited: r.total, current_market_value: null }
+      : { principal, locked_rate: r.quote.locked_rate, day_count: 365, tenor_days: r.quote.tenor_days, start_date: at, maturity_date: at + r.quote.tenor_days * 86400000, early_action_date: r.lock || !r.quote.allow_early_withdrawal ? null : at, accrued_interest: 0, due_interest: gross - ded, expected_net_payout: principal + gross - ded, total_deductions: ded, gross_interest: gross, expected_gross_payout: principal + gross, net_payout: null, settlement_date: null }) };
+  const id = ulid('01TRF');
+  const t = { id, amount: r.total, currency: r.o.currency, unique_reference: ulid('01UNQ'), counterparty_id: ulid('01CPY'), account_id: a.id, entity_id: a.entity_id, status: 'successful', status_reason: 'capital_fixed_return_purchase_settled', narration: `${capProducts.find((x) => x.id === r.o.product_id).name} FR order`, type: 'outflow', payment_type: share ? 'capital-share-offering-purchase' : 'capital-fixed-return-purchase', applicable_fee: 0, meta: {}, created: at, updated: at };
+  const i = { t, toAccountId: null };
+  transfers.set(id, i);
+  r.tx = [{ id: ulid('01CTX'), entity_id: a.entity_id, event_type: 'PURCHASE', amount: r.total, accrual_date: null, created: at, funded_amount: null, placement_fee_charged: null, vehicle_expense_charged: null }];
+  deliver('outflows.completed', transferView(i), 100);
+  deliver('capital_orders.completed', { id: r.o.id, entity_id: r.o.entity_id, status: 'APPROVED', funding_account_id: a.id }, 200);
+  deliver('capital_accounts.created', { id: r.account.id, entity_id: r.o.entity_id, capital_order_id: r.o.id, status: r.account.lifecycle.status }, 300);
+  return { status: 200, body: envelope({ id: r.o.id, entity_id: r.o.entity_id, status: 'APPROVED', capital_account_id: r.account.id, user_capital_account_id: r.userCap, transfer_reference: `capital-fixed-return:${r.o.id}` }, 'Capital order confirmed successfully') };
+});
+on('GET', '/product-orders', (req) => {
+  const owner = capEntity(req, null);
+  const rows = [...capOrders.values()].filter((r) => r.o.entity_id === owner && (!req.query.status || r.o.status === req.query.status)).map((r) => (capExpire(r), capView(r))).reverse();
+  return { status: 200, body: envelope(paged(rows, req), 'Capital orders retrieved successfully') };
+});
+on('GET', /^\/product-orders\/[A-Za-z0-9]+$/, (req) => {
+  const r = capOrders.get(m(req, 2));
+  if (!r || r.o.entity_id !== capEntity(req, null)) return notFound();
+  capExpire(r);
+  return { status: 200, body: envelope(capView(r), 'Capital order retrieved successfully') };
+});
+on('GET', /^\/product-orders\/[A-Za-z0-9]+\/withdrawal\/preview$/, (req) => {
+  const r = capOrders.get(m(req, 2));
+  if (!r || r.o.entity_id !== capEntity(req, null)) return notFound();
+  if (!r.account) return { status: 404, body: errorBody('error_resource_not_found', 'We could not find that capital_account.') };
+  const days = Math.floor((now() - r.account.start_date) / 86400000);
+  const gross = Math.floor((r.account.principal * r.account.locked_rate * days) / 365);
+  const penalty = Math.floor(gross * 0.15);
+  const ded = Math.floor((gross - penalty) * 0.1);
+  return { status: 200, body: envelope({ id: r.account.id, entity_id: r.o.entity_id, gross_interest: gross, penalty_rate: 0.15, penalty_amount: penalty, total_deductions: ded, net_payout: r.account.principal + gross - penalty - ded, days_elapsed: days }, 'Capital withdrawal preview generated successfully') };
+});
+on('POST', /^\/product-orders\/[A-Za-z0-9]+\/withdrawal$/, (req) => {
+  const r = capOrders.get(m(req, 2));
+  if (!r || r.o.entity_id !== capEntity(req, req.body)) return notFound();
+  const a = r.account;
+  if (!a || r.o.product_type !== 'FIXED_RETURN' || a.lifecycle.status !== 'ACTIVE' || a.early_action_date === null || a.early_action_date > now()) {
+    return { status: 400, body: errorBody('error_operation_invalid_for_state', "You can't perform this action right now due to the current status.") };
+  }
+  const days = Math.floor((now() - a.start_date) / 86400000);
+  const gross = Math.floor((a.principal * a.locked_rate * days) / 365);
+  const penalty = Math.floor(gross * 0.15);
+  const ded = Math.floor((gross - penalty) * 0.1);
+  a.net_payout = a.principal + gross - penalty - ded;
+  a.lifecycle = { status: 'EARLY_LIQUIDATING', payout_status: 'pending' };
+  a.updated = now();
+  r.tx.push({ id: ulid('01CTX'), entity_id: r.o.entity_id, event_type: 'WITHDRAWAL', amount: a.net_payout, accrual_date: null, created: now(), funded_amount: null, placement_fee_charged: null, vehicle_expense_charged: null });
+  deliver('capital_accounts.updated', { id: a.id, entity_id: r.o.entity_id, capital_order_id: r.o.id, status: 'EARLY_LIQUIDATING', payout_status: 'pending' }, 100);
+  setTimeout(() => {
+    const acct = accounts.get(r.o.funding_account_id);
+    bump(acct, a.net_payout);
+    a.lifecycle = { status: 'WITHDRAWN', payout_status: 'completed' };
+    a.updated = now();
+    const id = ulid('01TRF');
+    const t = { id, amount: a.net_payout, currency: r.o.currency, unique_reference: ulid('01UNQ'), counterparty_id: r.userCap, account_id: acct.id, entity_id: acct.entity_id, status: 'successful', status_reason: 'capital_account_withdrawal_settled', narration: 'Capital liquidation payout', type: 'inflow', payment_type: 'capital-early-liquidation-withdrawal', applicable_fee: 0, meta: { withdrawal_type: 'early_liquidation', product_type: 'fixed_return', provider_reference: null }, created: now(), updated: now() };
+    const i = { t, toAccountId: null };
+    transfers.set(id, i);
+    r.tx.push({ id: ulid('01CTX'), entity_id: r.o.entity_id, event_type: 'EARLY_LIQUIDATION_PAYOUT', amount: a.net_payout, accrual_date: null, created: now(), funded_amount: null, placement_fee_charged: null, vehicle_expense_charged: null });
+    deliver('inflows.completed', transferView(i), 100);
+    deliver('capital_accounts.completed', { id: a.id, entity_id: r.o.entity_id, capital_order_id: r.o.id, status: 'WITHDRAWN', payout_status: 'completed' }, 200);
+  }, SETTLE_MS);
+  return { status: 200, body: envelope(capView(r), 'Capital withdrawal initiated successfully') };
+});
+on('GET', '/capital-portfolio', (req) => {
+  const owner = capEntity(req, null);
+  let invested = 0;
+  let ret = 0;
+  for (const r of capOrders.values()) {
+    if (r.o.entity_id !== owner || !r.account || ['WITHDRAWN', 'CLOSED', 'REFUNDED'].includes(r.account.lifecycle.status) || r.o.currency !== 'NGN') continue;
+    invested += r.total;
+    ret += r.account.product_type === 'SHARE_OFFERING' ? 0 : Math.floor((r.account.principal * r.account.locked_rate * Math.floor((now() - r.account.start_date) / 86400000)) / 365);
+  }
+  const currencies = invested === 0 ? [] : [{ currency: 'NGN', totals: { investment: { amount_invested: invested, total_return: ret, current_value: invested + ret } } }];
+  return { status: 200, body: envelope({ currencies }, 'Capital portfolio retrieved successfully') };
+});
+on('GET', '/capital-transactions', (req) => {
+  const r = [...capOrders.values()].find((x) => x.account && x.account.id === req.query.capital_id);
+  const rows = r && r.o.entity_id === capEntity(req, null) ? [...r.tx].reverse() : [];
+  return { status: 200, body: envelope(paged(rows, req), 'Capital transactions retrieved successfully') };
+});
+// Control: a verifier moves the clock of a reservation or a holding (local only).
+on('POST', '/__standin/capital/expire', (req) => {
+  const r = capOrders.get((req.body || {}).order_id);
+  if (!r) return notFound();
+  r.o.expires_at = now() - 1000;
+  return { status: 200, body: { ok: true } };
+});
+on('POST', '/__standin/capital/mature', (req) => {
+  const r = capOrders.get((req.body || {}).order_id);
+  if (!r || !r.account) return notFound();
+  r.account.lifecycle = { status: 'MATURED', payout_status: null };
   return { status: 200, body: { ok: true } };
 });
 

@@ -10,6 +10,7 @@ import type {
   ProviderFxAccount,
   ProviderFxChain,
   ProviderFxDetails,
+  ProviderFxDetailsRead,
   ProviderFxOpened,
   ProviderFxPerson,
   ProviderFxQuote,
@@ -116,9 +117,9 @@ export class NuvionFxArea implements ProviderForeignAccounts {
       display_name: input.displayName.slice(0, 100),
     });
     const account = this.accountOf(op, answer, entityId, def.nuvion);
-    let details: ProviderFxDetails | null = null;
+    let read: ProviderFxDetailsRead = { details: null, refusal: null };
     try {
-      details = await this.readDetails(
+      read = await this.readDetails(
         input.person,
         {
           accountId: account.accountId,
@@ -134,8 +135,9 @@ export class NuvionFxArea implements ProviderForeignAccounts {
       if (!(e instanceof WalletProviderError) || e.kind === 'refused') {
         throw e;
       }
+      read = { details: null, refusal: this.words(e) };
     }
-    return { account, details };
+    return { account, details: read.details, detailsRefusal: read.refusal };
   }
 
   async readAccount(
@@ -171,12 +173,13 @@ export class NuvionFxArea implements ProviderForeignAccounts {
       chain: ProviderFxChain | null;
     },
     ensure: boolean,
-  ): Promise<ProviderFxDetails | null> {
+  ): Promise<ProviderFxDetailsRead> {
     const op: NuvionOp = { name: 'read foreign account details', call: 'read' };
     const def = this.def(op, account.currency);
     const entityId = this.entity(op, person);
     this.id(op, account.accountId);
     let found = await this.findDetails(op, entityId, account.accountId);
+    let refusal: string | null = null;
     if (!found && ensure) {
       const wop: NuvionOp = {
         name: 'create foreign account details',
@@ -202,10 +205,22 @@ export class NuvionFxArea implements ProviderForeignAccounts {
         // Not issued now (dev: 503) or already there (409): read what exists.
         if (!(e instanceof WalletProviderError)) throw e;
         if (e.kind === 'refused' || e.kind === 'validation') throw e;
+        if (e.kind !== 'duplicate_reference') refusal = this.words(e);
       }
       found = await this.findDetails(op, entityId, account.accountId);
     }
-    return found ? this.detailsFrom(found) : null;
+    return found
+      ? { details: this.detailsFrom(found), refusal: null }
+      : { details: null, refusal };
+  }
+
+  /** The provider's own plain words for a refusal, or a plain sentence of ours when it gave none. */
+  private words(e: WalletProviderError): string {
+    const said = e.messages[0];
+    const own = said === undefined || /WALLET-21|\(NUV-/.test(said);
+    return own || said.length > 300
+      ? 'The provider could not issue the account details just now.'
+      : said.replace(/[\u2013\u2014]/g, ',');
   }
 
   private async findDetails(
@@ -827,14 +842,17 @@ export class NuvionFxArea implements ProviderForeignAccounts {
     person: ProviderFxPerson,
     side: ProviderFxSide,
   ): Promise<string> {
+    // A routing number the caller names is the receiver, whatever the
+    // currency: WAWU's fee leg out of the naira wallet names the collector,
+    // and must never resolve to the payer's own naira account (verifier H1;
+    // dev answers a transfer to the same account 400 and keeps a failed record).
+    if (side.ban) return side.ban;
     if (side.currency !== 'NGN') {
-      if (!side.ban)
-        throw this.fail(
-          op,
-          'validation',
-          'the receiving account has no routing number',
-        );
-      return side.ban;
+      throw this.fail(
+        op,
+        'validation',
+        'the receiving account has no routing number',
+      );
     }
     const to = this.side(op, person, side);
     const answer = await this.client.get<unknown>(

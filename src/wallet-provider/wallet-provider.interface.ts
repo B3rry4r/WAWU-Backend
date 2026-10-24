@@ -37,6 +37,7 @@ import type {
   TransferStatus,
 } from '../money/money-view.type';
 import type { ProviderForeignAccounts } from './wallet-provider-fx';
+import type { WalletProviderCapital } from './wallet-provider-capital';
 
 /** Nest injection token for the selected `WalletProvider`. */
 export const WALLET_PROVIDER = Symbol('WALLET_PROVIDER');
@@ -781,6 +782,12 @@ export interface WalletProvider {
    * merchant charges), and nothing else is moved.
    */
   readonly wawuFeeLeg?: boolean;
+  /**
+   * The provider's investment products (Capital, NUV-12, R-84). Absent when
+   * the provider has none (the Fintava adapter): the money layer then answers
+   * that Capital is not available, and nothing is sent.
+   */
+  readonly capital?: WalletProviderCapital;
 
   /**
    * The bank code of every wallet at this provider: a party named at a bank
