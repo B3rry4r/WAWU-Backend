@@ -17,6 +17,7 @@ import type {
   EarningInReviewView,
   EarningsInReviewPage,
 } from '../earning-review.type';
+import { EARNING_REVIEW_REASONS } from '../earning-review-reasons';
 import { HOST_SHARE_KIND, hostShareReference } from '../earning-rules';
 import { EarningsInReviewService } from '../earnings-in-review.service';
 
@@ -45,6 +46,102 @@ const URL = '/api/hub/admin/money/earnings/in-review';
 const T0 = new Date('2001-03-01T10:00:00.000Z');
 const at = (minutes: number) => new Date(T0.getTime() + minutes * 60_000);
 
+const R = EARNING_REVIEW_REASONS;
+/**
+ * Each sentence the sweep writes on `discrepancy`: its name, what the writer
+ * builds from the shared list, and the text the writers used before the list
+ * existed (word for word), which must still be what is written and sent.
+ */
+const KNOWN: Array<[string, string, string]> = [
+  [
+    'a sale no longer finished',
+    R.saleNotFinished.make(),
+    'the sale is no longer a finished one (not completed, or under review); the earning waits for a person',
+  ],
+  [
+    'a single earning above the cap',
+    R.earningAboveCap.make(170_000n, 100_000),
+    "the earning of 170000 kobo is above the cap of 100000 kobo on one move through WAWU's account",
+  ],
+  [
+    'a move above the cap',
+    R.moveAboveCap.make(2_550_000n, 2_000_000),
+    "the move of 2550000 kobo is above the cap of 2000000 kobo on one move through WAWU's account",
+  ],
+  [
+    'a refusal past the bound',
+    R.refusedTooLong.make(72),
+    'the wallet first refused this move 72 hours ago and it has not landed',
+  ],
+  [
+    'a wallet that is WAWU account',
+    R.sameAccount.make(),
+    "the move would take money from WAWU's account to WAWU's account",
+  ],
+  [
+    'another amount moved (Fintava)',
+    R.movedOtherAmount.make('Fintava', 1_000n, 2_000n),
+    'Fintava moved 1000 kobo for a move of 2000 kobo',
+  ],
+  [
+    'another amount moved (Nuvion)',
+    R.movedOtherAmount.make('Nuvion', 1_000n, 2_000n),
+    'Nuvion moved 1000 kobo for a move of 2000 kobo',
+  ],
+  [
+    'a reversal',
+    R.reversed.make('Nuvion'),
+    "Nuvion moved the earnings and then reversed it; WAWU's account holds the money again",
+  ],
+  [
+    'no answer past the bound',
+    R.noAnswer.make('Fintava', 24),
+    'no answer from Fintava about the move after 24 hours; it may have moved',
+  ],
+  [
+    'a charge we cannot use',
+    R.chargeOnLandedMove.make('Fintava', -5n),
+    'Fintava reported a charge of -5 kobo on the move',
+  ],
+];
+const A_SENTENCE = KNOWN[3][2];
+/** Texts that are not entirely ours: none of them may reach the wire. */
+const CRAFTED: Array<[string, string]> = [
+  [
+    'a BVN-like number, a phone and a name',
+    'BVN 22412345678 for Adaeze Okonkwo, phone +2348012345678',
+  ],
+  ['a bare BVN-like number', '22412345678'],
+  ['a phone', '+2348012345678'],
+  ['a hash', 'a3f5c9e17b2d4486a0f1e5d3c7b92a64'],
+  ['a name', 'Adaeze Okonkwo'],
+  [
+    'our sentence with a name where the provider goes',
+    'Adaeze Okonkwo moved 1000 kobo for a move of 2000 kobo',
+  ],
+  [
+    'our sentence with a provider that is not ours',
+    'Paystack moved 1000 kobo for a move of 2000 kobo',
+  ],
+  [
+    'our sentence with words where an amount goes',
+    "the move of 22412345678 Adaeze kobo is above the cap of 2000000 kobo on one move through WAWU's account",
+  ],
+  [
+    'our sentence followed by a BVN-like number',
+    `${A_SENTENCE}; BVN 22412345678`,
+  ],
+  ['a BVN-like number in front of our sentence', `22412345678; ${A_SENTENCE}`],
+  ['our sentence with a name after it', `${A_SENTENCE} for Adaeze Okonkwo`],
+  ['our sentence with a second line', `${A_SENTENCE}\n22412345678`],
+  ['our sentence with a dangling separator', `${A_SENTENCE}; `],
+  ['our sentence in capitals', A_SENTENCE.toUpperCase()],
+  [
+    'our sentences over a thousand characters',
+    Array.from({ length: 15 }, () => A_SENTENCE).join('; '),
+  ],
+];
+
 describe('Admin: earnings in review (OPS-26)', () => {
   let app: INestApplication<App>;
   let prisma: PrismaService;
@@ -55,6 +152,13 @@ describe('Admin: earnings in review (OPS-26)', () => {
   const payee = randomUUID();
   const other = randomUUID();
   const rooms: string[] = [];
+  const reasonPayee = randomUUID();
+  let plantEarning: (
+    n: string,
+    extra: Record<string, unknown>,
+    who?: string,
+    share?: number,
+  ) => Promise<{ id: string }>;
   let ids: {
     moveA: string;
     moveB: string;
@@ -212,6 +316,7 @@ describe('Admin: earnings in review (OPS-26)', () => {
       });
     };
 
+    plantEarning = earning;
     // Two daily moves in review (one the wallet first refused), the older
     // first; one daily move that is not; two single earnings in review, one
     // at the same instant as a move; one landed; one clean; one in a move.
@@ -261,10 +366,10 @@ describe('Admin: earnings in review (OPS-26)', () => {
   afterAll(async () => {
     if (prisma) {
       await prisma.earningSettlement.deleteMany({
-        where: { payeeWawuUserId: { in: [payee, other] } },
+        where: { payeeWawuUserId: { in: [payee, other, reasonPayee] } },
       });
       await prisma.earningMove.deleteMany({
-        where: { payeeWawuUserId: { in: [payee, other] } },
+        where: { payeeWawuUserId: { in: [payee, other, reasonPayee] } },
       });
       await prisma.community.deleteMany({ where: { id: { in: rooms } } });
       await prisma.adminUser.deleteMany({ where: { id: { in: adminIds } } });
@@ -404,5 +509,113 @@ describe('Admin: earnings in review (OPS-26)', () => {
       typeof v === 'bigint' ? v.toString() : v,
     );
     expect(after).toBe(before);
+  });
+
+  describe('the reason is sent only when it is our own sentence (F1)', () => {
+    const planted = new Map<string, string>();
+    const reasons = new Map<string, string | null>();
+
+    beforeAll(async () => {
+      let n = 0;
+      const move = async (label: string, discrepancy: string) => {
+        n += 1;
+        const row = await prisma.earningMove.create({
+          data: {
+            payeeWawuUserId: reasonPayee,
+            dayKey: `2001-01-${String(n).padStart(2, '0')}`,
+            merchantAccountNumber: '0000000001',
+            amountKobo: 1_700_000n,
+            earnings: 1,
+            customerReference: `ops26-${tag}-reason-${n}`,
+            reviewSince: at(100 + n),
+            discrepancy,
+          },
+          select: { id: true },
+        });
+        planted.set(label, row.id);
+      };
+      const earn = async (label: string, discrepancy: string) => {
+        n += 1;
+        const row = await plantEarning(
+          `reason-${n}`,
+          { reviewSince: at(100 + n), discrepancy },
+          reasonPayee,
+          1_000 + n,
+        );
+        planted.set(label, row.id);
+      };
+      for (const [name, , written] of KNOWN)
+        await move(`move: ${name}`, written);
+      await move(
+        'move: two of our sentences',
+        `${KNOWN[7][2]}; ${KNOWN[8][2]}`,
+      );
+      await move('move: nothing written', '');
+      for (const [name, text] of CRAFTED) await move(`move: ${name}`, text);
+      await earn('earning: a sale no longer finished', KNOWN[0][2]);
+      await earn('earning: crafted', CRAFTED[0][1]);
+      await earn('earning: our sentence with a name after it', CRAFTED[10][1]);
+
+      const byId = new Map(
+        (await everything(100))
+          .filter((i) => i.payeeWawuUserId === reasonPayee)
+          .map((i) => [i.id, i.reason] as const),
+      );
+      expect(byId.size).toBe(planted.size);
+      for (const [label, id] of planted)
+        reasons.set(label, byId.get(id) ?? null);
+    });
+
+    it.each(KNOWN)(
+      'sends %s as the writers wrote it, word for word',
+      (name, built, written) => {
+        expect(built).toBe(written);
+        expect(reasons.get(`move: ${name}`)).toBe(written);
+      },
+    );
+
+    it('sends a note made of two of our sentences, whole', () => {
+      expect(reasons.get('move: two of our sentences')).toBe(
+        `${KNOWN[7][2]}; ${KNOWN[8][2]}`,
+      );
+    });
+
+    it('sends a single earning in review with our sentence the same way', () => {
+      expect(reasons.get('earning: a sale no longer finished')).toBe(
+        KNOWN[0][2],
+      );
+    });
+
+    it('sends null for a note that is not written', () => {
+      expect(reasons.get('move: nothing written')).toBeNull();
+    });
+
+    it('sends null, not a part of the text, for a BVN-like number, a phone and a name', () => {
+      const [, crafted] = CRAFTED[0];
+      expect(
+        reasons.get('move: a BVN-like number, a phone and a name'),
+      ).toBeNull();
+      expect(reasons.get('earning: crafted')).toBeNull();
+      const wire = JSON.stringify([...reasons.values()]);
+      for (const leak of [
+        '22412345678',
+        '+2348012345678',
+        'Adaeze',
+        'a3f5c9e1',
+      ]) {
+        expect(wire).not.toContain(leak);
+      }
+      expect(crafted).toContain('22412345678');
+    });
+
+    it.each(CRAFTED)('sends null for %s', (name) => {
+      expect(reasons.get(`move: ${name}`)).toBeNull();
+    });
+
+    it('sends null for a single earning whose note is our sentence with more after it', () => {
+      expect(
+        reasons.get('earning: our sentence with a name after it'),
+      ).toBeNull();
+    });
   });
 });

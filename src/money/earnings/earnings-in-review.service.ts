@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { koboNumber } from '../ledger/ledger.service';
+import { knownReviewReason } from './earning-review-reasons';
 import type {
   EarningInReviewKind,
   EarningInReviewView,
@@ -25,7 +26,7 @@ import type {
 export const BAD_REVIEW_CURSOR_MESSAGE = 'cursor is not one this list gave.';
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
-/** A reason is one of our own sentences; this only guards the page's size. */
+/** A reason is made of our own sentences (earning-review-reasons.ts); this only guards the page's size. */
 const REASON_MAX = 400;
 const PREFIX = 'r1.';
 const RANK: Record<EarningInReviewKind, number> = {
@@ -161,7 +162,7 @@ export class EarningsInReviewService {
           provider: m.provider,
           firstRefusedAt: m.firstRefusedAt?.toISOString() ?? null,
           reviewSince: m.reviewSince!.toISOString(),
-          reason: clip(m.discrepancy),
+          reason: clip(knownReviewReason(m.discrepancy)),
         },
       })),
       ...earnings.map((s) => ({
@@ -177,7 +178,7 @@ export class EarningsInReviewService {
           provider: s.provider,
           firstRefusedAt: null,
           reviewSince: s.reviewSince!.toISOString(),
-          reason: clip(s.discrepancy),
+          reason: clip(knownReviewReason(s.discrepancy)),
         },
       })),
     ].sort(
