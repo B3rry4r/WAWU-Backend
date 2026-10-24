@@ -268,6 +268,12 @@ export class AccountService {
           }
         }
       }
+      // Foreign accounts are not frozen: they are read again, now that the request holds the claim, so money that landed since the
+      // first look blocks the deletion instead of passing it (SWEEP-MONEY-6, FX-A deletion).
+      const foreign = await this.money.foreignCheck(wawuUserId, wallet);
+      if (foreign.length > 0) {
+        throw new AccountDeletionBlockedError({ ...check, blockers: foreign });
+      }
       promoted = await this.promote(wawuUserId, {
         frozen,
         scheduledAt,

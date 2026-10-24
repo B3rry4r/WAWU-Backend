@@ -292,12 +292,16 @@ describe('Deleting an account with money in foreign accounts or Capital (R-17)',
       ]);
     });
 
-    it('an account of another provider is not asked about, and is not called empty', async () => {
+    it("an account of another provider is not asked about and does not block: a server acts only on its own provider's rows (SWEEP-MONEY-6)", async () => {
       const p = await person();
       await usd(p, { available: 0n }, { provider: 'fintava' });
       const check = await money.check(p);
-      expect(check.blockers).toEqual(['fx_balance_unreadable']);
+      expect(check.blockers).toEqual([]);
       expect(asked).toEqual([]);
+      // Beside an account of this server's provider, only that one is read.
+      const own = await usd(p, { available: 5n });
+      expect((await money.check(p)).blockers).toEqual(['fx_balance']);
+      expect(asked).toEqual([own]);
     });
 
     it('an account the provider has not made yet is not read and blocks nobody', async () => {
@@ -444,6 +448,31 @@ describe('Deleting an account with money in foreign accounts or Capital (R-17)',
       expect(home).toMatch(/swap it to naira/i);
       // The unreadable and waiting sentences do not mention naira for either person.
       expect(message(['fx_balance_unreadable'], false)).not.toMatch(/naira/i);
+    });
+
+    it('a set that holds an account which could not be read says try again beside the rest, never only "on its way"', () => {
+      const tryAgain = message(['fx_balance_unreadable']);
+      const wait = message(['open_hold']);
+      expect(wait).toMatch(/on its way/i);
+      const mixed = message(['fx_balance_unreadable', 'open_hold']);
+      expect(mixed).toContain(wait);
+      expect(mixed).toContain(tryAgain);
+      expect(mixed).toMatch(/try again/i);
+      // The order the blockers come in does not change the words.
+      expect(message(['open_hold', 'fx_balance_unreadable'])).toBe(mixed);
+      // An in-flight swap and an unreadable account: both said.
+      const flight = message(['fx_operation_pending', 'fx_balance_unreadable']);
+      expect(flight).toContain(message(['fx_operation_pending']));
+      expect(flight).toContain(tryAgain);
+      // Money that can be moved still leads, with the unreadable account said after it.
+      const money2 = message(['fx_balance', 'fx_balance_unreadable']);
+      expect(money2.startsWith(message(['fx_balance']))).toBe(true);
+      expect(money2).toContain(tryAgain);
+      expect(
+        message(['wallet_balance', 'fx_balance_unreadable']).startsWith(
+          message(['wallet_balance']),
+        ),
+      ).toBe(true);
     });
 
     it('the wallet balance still leads, then the foreign accounts, then Capital', () => {
