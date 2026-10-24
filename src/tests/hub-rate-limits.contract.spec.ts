@@ -308,7 +308,7 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       );
     });
 
-    it('only the three payment webhooks (Flutterwave, Fintava, Nuvion: NUV-01) skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), the recipient search (WALLET-08), the four public event registration routes (JOIN-01), once each, and the two public email unsubscribe routes (EMAIL-01), once each', () => {
+    it('only the three payment webhooks (Flutterwave, Fintava, Nuvion: NUV-01) skip the limits; the only other overrides are admin login and refresh, the BVN check (KYC-01), the selfie match (KYC-02), the public receipt check and the receipt image and PDF (WALLET-18), the recipient search (WALLET-08), the username check (SIGNUP-NAMES), the four public event registration routes (JOIN-01), once each, and the two public email unsubscribe routes (EMAIL-01), once each', () => {
       const root = join(__dirname, '..');
       const files: string[] = [];
       const walk = (dir: string) => {
@@ -349,6 +349,8 @@ describe('Rate limits behind nginx (OPS-11)', () => {
         'money/receipts/money-receipt.controller.ts': 2,
         'money/receipts/public-receipt.controller.ts': 1,
         'money/recipients/money-recipient.controller.ts': 1,
+        // SIGNUP-NAMES: GET /users/handle-available, 60 a minute per address.
+        'user-profile/signup-identity.controller.ts': 1,
         // REF-01: the referral code check is the fifth, on the same limit as
         // the other two reads (600 calls per address in 10 minutes): a
         // venue's shared address checks one code per person, and the answer
