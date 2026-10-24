@@ -150,6 +150,8 @@ const TABLE: ReadonlyArray<[string, number, string]> = [
   ['error_fx_quote_unsupported_currency_pair', 422, 'refused'],
   ['error_fx_quote_rate_provider_unavailable', 503, 'outcome_unknown'],
   ['error_transfer_insufficient_funds', 400, 'insufficient_funds'],
+  // WALLET-31: not on errors.md; Nuvion's dev answered it on 24 Oct 2026.
+  ['error_card_creation_fee_required', 400, 'insufficient_funds'],
   ['error_transfer_daily_limit_exceeded', 400, 'refused'],
   ['error_transfer_transaction_limit_exceeded', 400, 'refused'],
   ['error_transfer_monthly_volume_exceeded', 400, 'refused'],
@@ -426,8 +428,8 @@ describe('NUV-01: the Nuvion client against the stand-in', () => {
   });
 
   describe('each documented error type is one kind, with Nuvion request id kept', () => {
-    it('the table covers exactly the types the client maps (153, every group on errors.md)', () => {
-      expect(TABLE).toHaveLength(153);
+    it('the table covers exactly the types the client maps (154: every group on errors.md, and the card fee one dev answered)', () => {
+      expect(TABLE).toHaveLength(154);
       expect(TABLE.map(([t]) => t).sort()).toEqual(
         NUVION_DOCUMENTED_ERRORS.map(([t]) => t).sort(),
       );

@@ -136,6 +136,7 @@
     "fx.product.open_account.on": 1,
     "fx.product.swap.on": 1,
     "fx.product.crypto_send.on": 1,
+    "cards.enabled": 1,
     "popular_community_min_members": 10,
     "community_credit_cost_photo": 1,
     "community_credit_cost_video": 3,

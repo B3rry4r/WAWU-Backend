@@ -131,6 +131,8 @@ export const NUVION_ERROR_TYPE_KINDS: Readonly<
   error_fx_quote_rate_provider_unavailable: 'by_call',
   // Transfers
   error_transfer_insufficient_funds: 'insufficient_funds',
+  // WALLET-31 (dev, 24 Oct): the funding account cannot cover the card fee.
+  error_card_creation_fee_required: 'insufficient_funds',
   error_transfer_daily_limit_exceeded: 'refused',
   error_transfer_transaction_limit_exceeded: 'refused',
   error_transfer_monthly_volume_exceeded: 'refused',
