@@ -9,10 +9,19 @@ import type { MoneyRequestStatus } from '../money-request/money-request-view.typ
 
 /**
  * What a row of the inbox is. A `money_request` row is one request the
- * caller made or was asked for (INBOX-15), in any status; the Money chip
- * (I20) is `kind=money_request`.
+ * caller made or was asked for (INBOX-15), in any status. A `money_move` row
+ * (FIX-114) is one send between the caller and another WAWU person; it is
+ * served only under `kind=money`, never in the unfiltered list. The Money
+ * chip (I20) is `kind=money`: requests and sends together.
  */
-export type InboxKind = 'chat' | 'paid_dm' | 'community' | 'money_request';
+export type InboxKind =
+  'chat' | 'paid_dm' | 'community' | 'money_request' | 'money_move';
+
+/**
+ * What `GET /inbox?kind=` takes: one kind of row, or `money` for the Money
+ * chip (`money_request` and `money_move` rows together).
+ */
+export type InboxFilter = InboxKind | 'money';
 
 /** The other person on a chat or a paid thread, or the sender of a room's last message. */
 export interface InboxPerson {
@@ -98,12 +107,42 @@ export interface InboxMoneyRequest {
   canMessage: boolean;
 }
 
+/** The state of a send as the Hub holds it. A failed send is never a row. */
+export type InboxMoneyMoveStatus = 'pending' | 'completed' | 'reversed';
+
+/**
+ * The part of a row that is a send between two WAWU people (FIX-114). It is
+ * what the send's own row says: the amount is never added to anything.
+ */
+export interface InboxMoneyMove {
+  transferId: string;
+  /** The chat of the two people: the row opens it. */
+  chatId: string;
+  /** `outgoing` when the caller sent it, `incoming` when the caller received it. */
+  direction: 'outgoing' | 'incoming';
+  /** The other person in the send. */
+  other: InboxPerson;
+  /** What the receiver got, in kobo (fees are not in it). */
+  amountKobo: number;
+  /** The sender's own note, if they wrote one. */
+  note: string | null;
+  /**
+   * `pending` (the provider has not confirmed; only the sender sees it),
+   * `completed`, or `reversed` (the money went back to the sender).
+   */
+  status: InboxMoneyMoveStatus;
+  /** False when either person blocked the other. */
+  canMessage: boolean;
+}
+
 /**
  * One row of the inbox. `id` is the row's stable key (`chat:<id>`,
- * `paid_dm:<side>:<wawuId>`, `community:<id>`, `money_request:<id>`): it is
- * the same on every fetch, so the app can patch one row in place when a live
- * event names it. Exactly one of `chat`, `paidDm`, `community` and
- * `moneyRequest` is set, the one `kind` names.
+ * `paid_dm:<side>:<wawuId>`, `community:<id>`, `money_request:<id>`,
+ * `money_move:<id>`): it is the same on every fetch, so the app can patch one
+ * row in place when a live event names it. Exactly one of `chat`, `paidDm`,
+ * `community`, `moneyRequest` and `moneyMove` is set, the one `kind` names.
+ * `moneyMove` is left out of every other kind's row, so a row that existed
+ * before FIX-114 reads exactly as it did.
  */
 export interface InboxItem {
   id: string;
@@ -118,7 +157,8 @@ export interface InboxItem {
    * unread messages, and for a paid thread the caller received (creator side)
    * the questions still waiting for an answer. Always 0 on a thread the
    * caller asked (fan side). Always 0 on a money request: it is a message in
-   * its chat, which counts it, so the badge never counts it twice.
+   * its chat, which counts it, so the badge never counts it twice. Always 0
+   * on a money move: the badge never counts it.
    */
   unreadCount: number;
   preview: InboxPreview | null;
@@ -126,6 +166,8 @@ export interface InboxItem {
   paidDm: InboxPaidDm | null;
   community: InboxCommunity | null;
   moneyRequest: InboxMoneyRequest | null;
+  /** Set only on a `money_move` row (FIX-114); absent on every other row. */
+  moneyMove?: InboxMoneyMove;
 }
 
 export interface InboxPage {
