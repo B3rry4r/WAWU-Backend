@@ -1,5 +1,5 @@
 -- IAP-01 fix round 1. Additive only: two new tables and two nullable columns, all on the store tables
--- 20261121090000_store_purchases made. Nothing the web or the dashboard calls reads or writes any of them.
+-- 20261127100000_store_purchases made. Nothing the web or the dashboard calls reads or writes any of them.
 --   StoreSubscription: who holds a store subscription, unique per (platform, subscription key), so a later order
 --     of someone else's subscription can never be granted to another person.
 --   StoreAccountToken: the stable id a person's store purchases are bound to (never their user id).

@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- Rollback of 20261122090000_add_money (WALLET-25, WALLET-26). Drops the two tables and nothing else.
+-- Rollback of 20261127090000_add_money (WALLET-25, WALLET-26). Drops the two tables and nothing else.
 -- Refuses (and changes nothing) while EITHER table holds ANY row: an open attempt may still settle at Nuvion, a credited one is
 -- the Hub's link between a ledger row and Nuvion's inflow, and a closed one or an admin's audit row is the record of what was
 -- asked and who acted. Nothing is dropped silently. Copy the rows out first only if you mean to lose them.

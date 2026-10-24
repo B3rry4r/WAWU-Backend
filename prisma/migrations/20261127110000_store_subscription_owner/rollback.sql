@@ -1,10 +1,10 @@
 \set ON_ERROR_STOP on
--- Rollback of 20261126090000_store_subscription_owner (IAP-01 fix round 1). Run it only after the Hub build that reads
+-- Rollback of 20261127110000_store_subscription_owner (IAP-01 fix round 1). Run it only after the Hub build that reads
 -- these is gone. Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while any subscription holder, account token or flagged purchase is stored: dropping
 -- them loses who holds a store subscription (the next order of it could then be taken by someone else), the binding of
 -- people's store purchases to them, and the purchases an admin has to look at. Clear them on purpose first (after a
--- person has decided), and roll back 20261121090000_store_purchases only after this one.
+-- person has decided), and roll back 20261127100000_store_purchases only after this one.
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM "StoreSubscription") THEN
