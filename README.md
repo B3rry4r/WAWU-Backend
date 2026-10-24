@@ -187,9 +187,13 @@ not `fetch`, because Node's `fetch` ends a call that has sent no answer in 300
 seconds whatever the setting says; here the setting is the real wait, headers
 and body. Sound effect and Music track need only `AI_VOICE_BASE_URL` and
 `AI_VOICE_API_KEY` to be listed (they use no voice); VoiceOver and Quick voice
-also need `AI_VOICE_VOICES`. A job the provider refuses keeps the provider's
-HTTP status as `http_<status>` in the job's `providerRef` and in the server
-log (`ai job <id> ... answered 402`), never shown to the person.
+also need `AI_VOICE_VOICES`. The track call sends the same
+`user-agent` as `fetch` and follows up to 3 redirects as `fetch` does (307 and
+308 repeat the POST; 301, 302 and 303 become a GET); a fourth fails like any
+other 3xx answer. A job the provider refuses keeps the provider's HTTP status
+in the server log only (`ai job <id> ... answered 402`), never on the job (its
+`providerRef` holds a provider job id and is never written by a failure) and
+never shown to the person.
 
 Since AITOOLS-02 the stand-in answers from one route table (a later tool adds its
 route and its markers there) and keeps the `model_id` of each speech call in

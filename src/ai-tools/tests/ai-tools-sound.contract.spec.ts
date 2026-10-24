@@ -13,6 +13,8 @@ process.env.DATABASE_URL =
   'postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public';
 
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Logger } from '@nestjs/common';
 import { AdminRole } from '../../../generated/prisma/enums';
 import type { AdminActor } from '../../common/audit/admin-ops-audit.service';
@@ -106,6 +108,64 @@ describe('AITOOLS-03: Sound effect and Music track (contract)', () => {
     h.prisma.pointHold.findMany({ where: { wawuUserId: who } });
   const jobsOf = (who: string) =>
     h.prisma.aiToolJob.findMany({ where: { wawuUserId: who } });
+  /**
+   * The AITOOLS-02 rollback's own check (the `DO` block of its rollback.sql,
+   * run as written): it refuses while a row holds a provider id, an upload or
+   * an output that is not the job's audio. Run here on the given failed jobs
+   * only (every other row of the table is removed inside a transaction that
+   * is always rolled back), it must pass for them; with a provider id on one
+   * of them it must refuse, so the check is live.
+   */
+  const expectRollbackNotBlockedBy = async (ids: string[]) => {
+    const sql = readFileSync(
+      join(
+        __dirname,
+        '../../../prisma/migrations/20261101100000_ai_tool_job_outputs/rollback.sql',
+      ),
+      'utf8',
+    );
+    const guard = sql.slice(
+      sql.indexOf('DO $$'),
+      sql.indexOf('END $$;') + 'END $$;'.length,
+    );
+    expect(guard.startsWith('DO $$')).toBe(true);
+    class Done extends Error {}
+    let outcome: { passed: boolean; refusedWithProviderId: boolean } | null =
+      null;
+    try {
+      await h.prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(
+          `DELETE FROM "AiToolJob" WHERE NOT ("id" = ANY($1::text[]))`,
+          ids,
+        );
+        let passed = true;
+        await tx.$executeRawUnsafe('SAVEPOINT guard');
+        try {
+          await tx.$executeRawUnsafe(guard);
+        } catch {
+          passed = false;
+          await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT guard');
+        }
+        await tx.$executeRawUnsafe(
+          `UPDATE "AiToolJob" SET "providerRef" = 'p-1' WHERE "id" = $1`,
+          ids[0],
+        );
+        let refusedWithProviderId = false;
+        try {
+          await tx.$executeRawUnsafe(guard);
+        } catch (e) {
+          refusedWithProviderId = /AITOOLS-02 rollback/.test(
+            (e as Error).message,
+          );
+        }
+        outcome = { passed, refusedWithProviderId };
+        throw new Done();
+      });
+    } catch (e) {
+      if (!(e instanceof Done)) throw e;
+    }
+    expect(outcome).toEqual({ passed: true, refusedWithProviderId: true });
+  };
   const nothingHeld = async (balance: number) => {
     expect(await holdsOf(PLAIN)).toHaveLength(0);
     expect(await jobsOf(PLAIN)).toHaveLength(0);
@@ -947,7 +1007,7 @@ describe('AITOOLS-03: Sound effect and Music track (contract)', () => {
   // Round 2: the provider's HTTP status stays on the failed job (never shown)
   // ---------------------------------------------------------------------------
 
-  it("round 2: a provider refusal's HTTP status (a key or plan refusal reads 401 or 402) stays on the failed job and in the log, and the person still reads that no points were taken", async () => {
+  it("round 3: a provider refusal's HTTP status (a key or plan refusal reads 401 or 402) is in the log only: the failed job keeps its providerRef as it was, the rollback is not blocked, and the person still reads that no points were taken", async () => {
     await h.grant(PLAIN, (SFX + MUSIC) * 2);
     const warn = jest.spyOn(Logger.prototype, 'warn');
     try {
@@ -975,12 +1035,12 @@ describe('AITOOLS-03: Sound effect and Music track (contract)', () => {
         expect(JSON.stringify(end)).not.toContain('http_');
       }
       const jobs = await jobsOf(PLAIN);
-      expect(jobs.map((j) => j.providerRef).sort()).toEqual([
-        'http_401',
-        'http_401',
-        'http_402',
-        'http_402',
-      ]);
+      // Round 3: the status is not written to the job. Nothing set providerRef
+      // before these jobs failed, so it is still null on every one.
+      expect(jobs).toHaveLength(4);
+      expect(jobs.map((j) => j.providerRef)).toEqual([null, null, null, null]);
+      expect(JSON.stringify(jobs)).not.toContain('http_');
+      await expectRollbackNotBlockedBy(jobs.map((j) => j.id));
       // 402 and 401 are refusals this key or plan will make again: not retryable.
       expect(jobs.every((j) => j.failureCode === 'provider_failed')).toBe(true);
       const lines = warn.mock.calls.map((c) => String(c[0]));
@@ -998,6 +1058,47 @@ describe('AITOOLS-03: Sound effect and Music track (contract)', () => {
       true,
     );
     expect(await h.balance(PLAIN)).toBe((SFX + MUSIC) * 2);
+  });
+
+  it('round 3: a provider id set on a working job before it fails is still there afterwards (a failure never writes providerRef), whichever answer ends it', async () => {
+    await h.grant(PLAIN, (SFX + MUSIC) * 2);
+    const made: { id: string; mark: string }[] = [];
+    for (const mark of ['[[status:402]]', '[[fail]]']) {
+      const sfx = await createSfx(
+        PLAIN,
+        sfxBody(`${SOUND} [[slow:600]] ${mark}`),
+      );
+      const music = await createMusic(
+        PLAIN,
+        musicBody(`${TRACK} [[slow:600]] ${mark}`),
+      );
+      for (const r of [sfx, music]) {
+        expect(r.status).toBe(202);
+        const id = data<AiJobView>(r).id;
+        // Set while the provider call is still waiting: what AITOOLS-05 keeps there.
+        await h.prisma.aiToolJob.update({
+          where: { id },
+          data: { providerRef: `prov-${id}` },
+        });
+        made.push({ id, mark });
+      }
+    }
+    await h.jobs.drain();
+    for (const m of made) {
+      const end = (await h.finish(PLAIN, m.id)) as unknown as AiJobView;
+      expect(end.state).toBe('failed');
+      const row = await h.prisma.aiToolJob.findUniqueOrThrow({
+        where: { id: m.id },
+      });
+      expect(row.state).toBe('failed');
+      expect(row.failureCode).toBe(
+        m.mark === '[[fail]]' ? 'provider_unavailable' : 'provider_failed',
+      );
+      expect(row.providerRef).toBe(`prov-${m.id}`);
+    }
+    expect((await holdsOf(PLAIN)).every((x) => x.state === 'released')).toBe(
+      true,
+    );
   });
 
   it('round 2: a failure with no answer from the provider (it is down) leaves no status on the job', async () => {

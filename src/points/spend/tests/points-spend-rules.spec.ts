@@ -149,6 +149,34 @@ describe('capStop (POINTS-03, PT7)', () => {
       unit: 'minutes',
       resetsAt: null,
     });
+    // The second number carries its unit too, singular for exactly 1 (AITOOLS-03 round 3).
+    expect(minutes.message).toBe(
+      `One job can run up to ${caps.maxAudioMinPerJob} ${caps.maxAudioMinPerJob === 1 ? 'minute' : 'minutes'}. This one is ${caps.maxAudioMinPerJob + 1} minutes.`,
+    );
+    expect(
+      capStop(
+        { ...caps, maxAudioMinPerJob: 1 },
+        { ...job, units: 2 },
+        0,
+        resetsAt,
+      )!.message,
+    ).toBe('One job can run up to 1 minute. This one is 2 minutes.');
+    expect(
+      capStop(
+        { ...caps, maxAudioMinPerJob: 0 },
+        { ...job, units: 1 },
+        0,
+        resetsAt,
+      )!.message,
+    ).toBe('One job can run up to 0 minutes. This one is 1 minute.');
+    expect(
+      capStop(
+        { ...caps, maxAudioMinPerJob: 2 },
+        { ...job, units: 3 },
+        0,
+        resetsAt,
+      )!.message,
+    ).toBe('One job can run up to 2 minutes. This one is 3 minutes.');
     // Exactly at the cap is allowed; a job that is not counted in minutes has no minutes cap.
     expect(
       capStop(

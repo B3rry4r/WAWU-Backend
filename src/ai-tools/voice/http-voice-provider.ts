@@ -45,6 +45,25 @@ export const DEFAULT_QUICK_MODEL = 'eleven_flash_v2_5';
 /** The most audio one job may bring back: a request bound, not a product figure. */
 const MAX_AUDIO_BYTES = 64 * 1024 * 1024;
 
+/** The redirects the Music call follows, like `fetch`: up to three. */
+const MAX_REDIRECTS = 3;
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+/** What Node's `fetch` sends as `user-agent`; the Music call sends the same. */
+const FETCH_USER_AGENT = 'node';
+
+/** The place a redirect points to, or null when there is none to follow (no `location`, not http or https). */
+function redirectTarget(from: URL, location: string | undefined): URL | null {
+  if (!location) return null;
+  try {
+    const next = new URL(location, from);
+    return next.protocol === 'http:' || next.protocol === 'https:'
+      ? next
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** What a non-2xx answer means: a 429 or 5xx can be tried again (`unavailable`), any other refusal cannot (`rejected`). The status rides on the error for the job's record. */
 function failureForStatus(status: number): AiVoiceProviderError {
   const retryable = status === 429 || status >= 500;
@@ -429,6 +448,14 @@ export class HttpVoiceProvider implements AiVoiceProvider {
    * connection is destroyed. A new connection per call (`agent: false`): a
    * track call is rare and long. The provider's reply and the person's words
    * never go into an error message.
+   *
+   * Like `fetch` (round 3): it sends the `user-agent` fetch sends, and it
+   * follows up to `MAX_REDIRECTS` redirects (301, 302, 303, 307, 308) inside
+   * the one deadline. A 307 or 308 repeats the same POST with the same body;
+   * a 301, 302 or 303 becomes a GET with no body, as `fetch` does it. The key
+   * header goes on every hop, as `fetch` sends it. A fourth redirect, one
+   * with no usable `location`, or one to a scheme other than http(s) is
+   * answered like any other status (`failureForStatus`).
    */
   private postForAudioLong(
     path: string,
@@ -436,11 +463,11 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     timeoutMs: number,
     outer?: AbortSignal,
   ): Promise<SpokenAudio> {
-    const url = new URL(`${this.baseUrl}${path}?output_format=mp3_44100_128`);
-    const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+    const first = new URL(`${this.baseUrl}${path}?output_format=mp3_44100_128`);
     const payload = Buffer.from(JSON.stringify(body));
     return new Promise<SpokenAudio>((resolve, reject) => {
       let settled = false;
+      /** The request of the hop now running; an earlier hop's events are ignored. */
       let req: ClientRequest | null = null;
       const onAbort = () =>
         end(new AiVoiceProviderError('unavailable', 'no answer'));
@@ -458,62 +485,95 @@ export class HttpVoiceProvider implements AiVoiceProvider {
           resolve(outcome);
         }
       };
+      /** One hop: a POST with the body, or (after 301, 302, 303) a GET without. */
+      const attempt = (url: URL, withBody: boolean, redirects: number) => {
+        const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+        let mine: ClientRequest;
+        try {
+          mine = send(
+            url,
+            {
+              method: withBody ? 'POST' : 'GET',
+              agent: false,
+              headers: {
+                ...(withBody
+                  ? {
+                      'content-type': 'application/json',
+                      'content-length': payload.length,
+                    }
+                  : {}),
+                accept: 'audio/mpeg',
+                'user-agent': FETCH_USER_AGENT,
+                'xi-api-key': this.apiKey ?? '',
+              },
+            },
+            (res) => {
+              if (mine !== req || settled) return void res.destroy();
+              const status = res.statusCode ?? 0;
+              if (REDIRECT_STATUSES.has(status)) {
+                // Leave this hop's answer unread: nothing in it is wanted.
+                res.on('error', () => undefined);
+                res.destroy();
+                const next = redirectTarget(url, res.headers.location);
+                if (next === null || redirects >= MAX_REDIRECTS)
+                  return end(failureForStatus(status));
+                return attempt(
+                  next,
+                  withBody && (status === 307 || status === 308),
+                  redirects + 1,
+                );
+              }
+              if (status < 200 || status > 299)
+                return end(failureForStatus(status));
+              const type = String(
+                res.headers['content-type'] ?? '',
+              ).toLowerCase();
+              if (!type.startsWith('audio/'))
+                return end(
+                  new AiVoiceProviderError('unavailable', 'not audio'),
+                );
+              const chunks: Buffer[] = [];
+              let size = 0;
+              res.on('data', (chunk: Buffer) => {
+                size += chunk.length;
+                if (size > MAX_AUDIO_BYTES)
+                  return end(
+                    new AiVoiceProviderError('unavailable', 'audio size'),
+                  );
+                chunks.push(chunk);
+              });
+              res.on('end', () => {
+                if (size === 0)
+                  return end(
+                    new AiVoiceProviderError('unavailable', 'audio size'),
+                  );
+                end({
+                  audio: Buffer.concat(chunks),
+                  contentType: 'audio/mpeg',
+                });
+              });
+              const cutOff = () =>
+                end(new AiVoiceProviderError('unavailable', 'answer cut off'));
+              res.on('error', cutOff);
+              res.on('close', () => {
+                if (!res.complete) cutOff();
+              });
+            },
+          );
+        } catch {
+          return end(new AiVoiceProviderError('unavailable', 'no answer'));
+        }
+        req = mine;
+        mine.on('error', () => {
+          if (mine === req)
+            end(new AiVoiceProviderError('unavailable', 'no answer'));
+        });
+        if (withBody) mine.end(payload);
+        else mine.end();
+      };
       if (outer?.aborted) return onAbort();
       outer?.addEventListener('abort', onAbort, { once: true });
-      try {
-        req = send(
-          url,
-          {
-            method: 'POST',
-            agent: false,
-            headers: {
-              'content-type': 'application/json',
-              'content-length': payload.length,
-              accept: 'audio/mpeg',
-              'xi-api-key': this.apiKey ?? '',
-            },
-          },
-          (res) => {
-            const status = res.statusCode ?? 0;
-            if (status < 200 || status > 299)
-              return end(failureForStatus(status));
-            const type = String(
-              res.headers['content-type'] ?? '',
-            ).toLowerCase();
-            if (!type.startsWith('audio/'))
-              return end(new AiVoiceProviderError('unavailable', 'not audio'));
-            const chunks: Buffer[] = [];
-            let size = 0;
-            res.on('data', (chunk: Buffer) => {
-              size += chunk.length;
-              if (size > MAX_AUDIO_BYTES)
-                return end(
-                  new AiVoiceProviderError('unavailable', 'audio size'),
-                );
-              chunks.push(chunk);
-            });
-            res.on('end', () => {
-              if (size === 0)
-                return end(
-                  new AiVoiceProviderError('unavailable', 'audio size'),
-                );
-              end({ audio: Buffer.concat(chunks), contentType: 'audio/mpeg' });
-            });
-            const cutOff = () =>
-              end(new AiVoiceProviderError('unavailable', 'answer cut off'));
-            res.on('error', cutOff);
-            res.on('close', () => {
-              if (!res.complete) cutOff();
-            });
-          },
-        );
-      } catch {
-        return end(new AiVoiceProviderError('unavailable', 'no answer'));
-      }
-      req.on('error', () =>
-        end(new AiVoiceProviderError('unavailable', 'no answer')),
-      );
-      req.end(payload);
+      attempt(first, true, 0);
     });
   }
 }

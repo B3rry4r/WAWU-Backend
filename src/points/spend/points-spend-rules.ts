@@ -112,6 +112,11 @@ export function priceJob(
   };
 }
 
+/** A number of minutes with its unit, singular for exactly 1: "1 minute", "2 minutes". */
+function minutesText(n: number): string {
+  return `${n} ${n === 1 ? 'minute' : 'minutes'}`;
+}
+
 /** The cap that stops a job, in words a person can act on (PT7). */
 export function capStop(
   caps: PlansConfig['caps'],
@@ -142,7 +147,7 @@ export function capStop(
       usedPoints: null,
       remainingPoints: null,
       resetsAt: null,
-      message: `One job can run up to ${caps.maxAudioMinPerJob} ${caps.maxAudioMinPerJob === 1 ? 'minute' : 'minutes'}. This one is ${minutes}.`,
+      message: `One job can run up to ${minutesText(caps.maxAudioMinPerJob)}. This one is ${minutesText(minutes)}.`,
     };
   }
   const remaining = Math.max(0, caps.dailyPointsPerUser - spentTodayPoints);

@@ -1,3 +1,5 @@
+import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { runInThisContext } from 'node:vm';
 import { ConfigService } from '@nestjs/config';
 import { AiVoiceProviderError } from '../voice/ai-voice-provider';
@@ -263,5 +265,206 @@ describe('AITOOLS-03: the AI provider seam, Sound effect and Music track', () =>
       .catch((e: Error) => e);
     expect(err).toBeInstanceOf(AiVoiceProviderError);
     expect((err as Error).message).not.toContain('secret');
+  });
+});
+
+/**
+ * AITOOLS-03 round 3: the Music call (node:http) sends what the fetch calls
+ * send and follows the redirects they follow. Run on a capture server of this
+ * spec (a local port, nothing else), which records every request it gets and
+ * answers as the test scripts it. Each case also makes the same request
+ * through a fetch call (Sound effect) and compares.
+ */
+interface Seen {
+  method: string;
+  url: string;
+  headers: IncomingHttpHeaders;
+  body: string;
+}
+interface Reply {
+  status: number;
+  location?: string;
+  contentType?: string;
+  delayMs?: number;
+}
+
+describe('AITOOLS-03 round 3: the Music call on a capture server (user-agent and redirects)', () => {
+  let server: Server;
+  let port = 0;
+  const seen: Seen[] = [];
+  /** What the server answers to the n-th request of a call (1 is the first). */
+  let script: (n: number, req: Seen) => Reply = () => ({ status: 200 });
+  const AUDIO = Buffer.alloc(600, 1);
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        const one: Seen = {
+          method: req.method ?? '',
+          url: req.url ?? '',
+          headers: req.headers,
+          body: Buffer.concat(chunks).toString('utf8'),
+        };
+        seen.push(one);
+        const r = script(seen.length, one);
+        setTimeout(() => {
+          const headers: Record<string, string> = {};
+          if (r.location !== undefined) headers.location = r.location;
+          if (r.status >= 200 && r.status < 300) {
+            headers['content-type'] = r.contentType ?? 'audio/mpeg';
+            res.writeHead(r.status, headers);
+            res.end(AUDIO);
+          } else {
+            res.writeHead(r.status, headers);
+            res.end();
+          }
+        }, r.delayMs ?? 0);
+      });
+    });
+    await new Promise<void>((ok) => server.listen(0, '127.0.0.1', ok));
+    port = (server.address() as AddressInfo).port;
+  });
+  afterAll(async () => {
+    await new Promise<void>((r) => server.close(() => r()));
+  });
+  beforeEach(() => {
+    seen.length = 0;
+    script = () => ({ status: 200 });
+  });
+
+  const provider = (env: Record<string, string> = {}) =>
+    new HttpVoiceProvider(
+      new ConfigService({
+        AI_VOICE_BASE_URL: `http://127.0.0.1:${port}`,
+        AI_VOICE_API_KEY: 'capture-key',
+        AI_VOICE_VOICES: VOICES,
+        ...env,
+      }),
+    );
+  const music = (p = provider()) =>
+    p.makeMusic({ prompt: 'Rain', lengthSeconds: 5, instrumental: true });
+  const sound = (p = provider()) =>
+    p.makeSoundEffect({ prompt: 'Rain', durationSeconds: 1 });
+  const errorOf = (call: Promise<unknown>) =>
+    call.then(
+      () => null,
+      (e: AiVoiceProviderError) => e,
+    );
+
+  it('F2: the Music call sends a user-agent, the same one a fetch call sends', async () => {
+    await sound();
+    const viaFetch = seen[0].headers['user-agent'];
+    seen.length = 0;
+    await music();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].url).toMatch(/^\/v1\/music\?output_format=mp3_44100_128$/);
+    expect(typeof viaFetch).toBe('string');
+    expect(viaFetch).not.toBe('');
+    expect(seen[0].headers['user-agent']).toBe(viaFetch);
+  });
+
+  it.each([307, 308])(
+    'F3: a %i is followed with the same method, the same body and the same headers, as a fetch call follows it',
+    async (status) => {
+      script = (n) =>
+        n === 1 ? { status, location: '/moved/here' } : { status: 200 };
+      const out = await music();
+      expect(out.audio.length).toBe(AUDIO.length);
+      expect(seen).toHaveLength(2);
+      const [first, second] = seen;
+      expect(second.url).toBe('/moved/here');
+      expect(second.method).toBe('POST');
+      expect(first.body).toContain('"prompt":"Rain"');
+      expect(second.body).toBe(first.body);
+      for (const h of [
+        'content-type',
+        'content-length',
+        'accept',
+        'xi-api-key',
+        'user-agent',
+      ])
+        expect(second.headers[h]).toBe(first.headers[h]);
+      // The fetch call does the same.
+      seen.length = 0;
+      await sound();
+      expect(seen).toHaveLength(2);
+      expect(seen[1].method).toBe('POST');
+      expect(seen[1].body).toBe(seen[0].body);
+    },
+  );
+
+  it.each([301, 302, 303])(
+    'F3: a %i is followed as a GET with no body, as a fetch call follows it',
+    async (status) => {
+      script = (n) =>
+        n === 1
+          ? { status, location: `http://127.0.0.1:${port}/other` }
+          : { status: 200 };
+      const out = await music();
+      expect(out.audio.length).toBe(AUDIO.length);
+      expect(seen).toHaveLength(2);
+      expect(seen[1]).toMatchObject({ method: 'GET', url: '/other', body: '' });
+      expect(seen[1].headers['content-type']).toBeUndefined();
+      expect(seen[1].headers['user-agent']).toBe(seen[0].headers['user-agent']);
+      seen.length = 0;
+      await sound();
+      expect(seen).toHaveLength(2);
+      expect(seen[1]).toMatchObject({ method: 'GET', body: '' });
+      expect(seen[1].headers['content-type']).toBeUndefined();
+    },
+  );
+
+  it('F3: three redirects in a row are followed; a fourth fails as a 3xx answer did before (rejected, with its status)', async () => {
+    script = (n) =>
+      n <= 3 ? { status: 302, location: `/hop/${n}` } : { status: 200 };
+    const ok = await music();
+    expect(ok.audio.length).toBe(AUDIO.length);
+    expect(seen.map((x) => x.url.split('?')[0])).toEqual([
+      '/v1/music',
+      '/hop/1',
+      '/hop/2',
+      '/hop/3',
+    ]);
+    seen.length = 0;
+    script = (n) => ({ status: 307, location: `/hop/${n}` });
+    const err = await errorOf(music());
+    expect(err).toBeInstanceOf(AiVoiceProviderError);
+    expect(err).toMatchObject({ kind: 'rejected', status: 307 });
+    // The first request and three followed: the fourth redirect is not followed.
+    expect(seen).toHaveLength(4);
+  });
+
+  it('F3: a redirect with no usable place to go, or to another scheme, fails as a 3xx answer; a redirect cannot outlast the one deadline', async () => {
+    script = () => ({ status: 302 });
+    expect(await errorOf(music())).toMatchObject({
+      kind: 'rejected',
+      status: 302,
+    });
+    expect(seen).toHaveLength(1);
+    seen.length = 0;
+    script = () => ({ status: 302, location: 'ftp://127.0.0.1/x' });
+    expect(await errorOf(music())).toMatchObject({
+      kind: 'rejected',
+      status: 302,
+    });
+    expect(seen).toHaveLength(1);
+    seen.length = 0;
+    // Two hops of 700 ms each against a 1 second deadline for the whole call.
+    script = (n) =>
+      n === 1
+        ? { status: 302, location: '/slow', delayMs: 700 }
+        : { status: 200, delayMs: 700 };
+    const started = Date.now();
+    const err = await errorOf(
+      music(provider({ AI_VOICE_MUSIC_TIMEOUT_MS: '1000' })),
+    );
+    expect(err).toMatchObject({ kind: 'unavailable' });
+    expect(Date.now() - started).toBeLessThan(1800);
+    // The same two hops finish inside a longer deadline.
+    seen.length = 0;
+    const ok = await music(provider({ AI_VOICE_MUSIC_TIMEOUT_MS: '5000' }));
+    expect(ok.audio.length).toBe(AUDIO.length);
   });
 });
