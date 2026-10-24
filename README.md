@@ -178,6 +178,12 @@ set `STACK_STORAGE_ENDPOINT=http://127.0.0.1:<port>` with
 `STACK_STORAGE_PATH_STYLE=true`. Keep both ports outside the stack's range.
 Without these the tool is listed `enabled: false` and a job is refused.
 
+Since AITOOLS-03 it also answers `POST /v1/sound-generation` (Sound effect) and
+`POST /v1/music` (Music track) with silent MP3 frames of the asked length
+(`GET /__standin/state` lists each call's `sfx` and `music` options), with the
+same four markers in the prompt. A track call has its own timeout,
+`AI_VOICE_MUSIC_TIMEOUT_MS` (default 600000).
+
 Since AITOOLS-02 the stand-in answers from one route table (a later tool adds its
 route and its markers there) and keeps the `model_id` of each speech call in
 `GET /__standin/state` (`models`, `lastModel`), so a spec can see that Quick voice

@@ -137,7 +137,13 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
   // ---------------------------------------------------------------------------
 
   it('the registry lists VoiceOver first and Quick voice second, each priced by a plan action, and every tool answers for its action', () => {
-    expect(AI_TOOLS.map((t) => t.id)).toEqual(['voiceover', 'quick-voice']);
+    // AITOOLS-03 adds Sound effect and Music track after them.
+    expect(AI_TOOLS.map((t) => t.id)).toEqual([
+      'voiceover',
+      'quick-voice',
+      'sound-effect',
+      'music',
+    ]);
     for (const t of AI_TOOLS) {
       expect(plan.actions.some((a) => a.id === t.action)).toBe(true);
       expect(toolForAction(t.action)).toBe(t);
@@ -149,7 +155,12 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
 
   it('check 2: GET /ai-tools lists Quick voice with 125 points a minute before anyone runs it, with its input kind, limits and the same voices; a tool whose code is not built is not listed', async () => {
     const view = await catalogue();
-    expect(view.tools.map((t) => t.id)).toEqual(['voiceover', 'quick-voice']);
+    expect(view.tools.map((t) => t.id)).toEqual([
+      'voiceover',
+      'quick-voice',
+      'sound-effect',
+      'music',
+    ]);
     const tool = view.tools[1];
     expect(tool).toMatchObject({
       id: 'quick-voice',
@@ -173,9 +184,7 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
       input: { kind: 'text', charactersPerUnit: 900 },
     });
     // Nothing a person could not act on: no unbuilt tool (Captions and the rest).
-    expect(view.tools.some((t) => /caption|dub|music|sound/i.test(t.id))).toBe(
-      false,
-    );
+    expect(view.tools.some((t) => /caption|dub|clean/i.test(t.id))).toBe(false);
     // No provider name, no provider id, no model name and no em-dash (R-68, R-5).
     const text = JSON.stringify(view);
     expect(text).not.toMatch(/eleven|stand-in|xi-api|flash/i);

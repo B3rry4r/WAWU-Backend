@@ -1,4 +1,5 @@
-import type { AiTool, AiToolRequest } from './ai-tool';
+import { AI_AUDIO_FOLDER } from '../audio/ai-audio-store';
+import { asText, type AiTool, type AiToolRequest } from './ai-tool';
 import { minutesOfText } from './voiceover.tool';
 import type { AiVoiceProvider } from '../voice/ai-voice-provider';
 
@@ -26,11 +27,19 @@ export const QUICK_VOICE_TOOL: AiTool = {
     kind: 'text',
     charactersPerUnitSetting: QUICK_VOICE_CHARS_PER_MINUTE_SETTING,
   },
+  audioFolder: AI_AUDIO_FOLDER,
   listedWhenOff: false,
   enabled: (provider) => provider.configured,
   price: (req: AiToolRequest, settings) =>
-    minutesOfText(req.text, settings, QUICK_VOICE_CHARS_PER_MINUTE_SETTING),
+    minutesOfText(
+      asText(req).text,
+      settings,
+      QUICK_VOICE_CHARS_PER_MINUTE_SETTING,
+    ),
   run: async (provider: AiVoiceProvider, job, req) => ({
-    audio: await provider.speakQuick({ voiceId: job.voiceId, text: req.text }),
+    audio: await provider.speakQuick({
+      voiceId: job.voiceId,
+      text: asText(req).text,
+    }),
   }),
 };

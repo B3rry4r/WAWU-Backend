@@ -4,7 +4,9 @@ import {
   AiVoiceProviderError,
   type AiVoice,
   type AiVoiceProvider,
+  type MusicRequest,
   type OwnVoiceRequest,
+  type SoundEffectRequest,
   type SpeakRequest,
   type SpokenAudio,
 } from './ai-voice-provider';
@@ -17,9 +19,18 @@ export const AI_VOICE_ENV = {
   model: 'AI_VOICE_MODEL',
   quickModel: 'AI_VOICE_QUICK_MODEL',
   timeoutMs: 'AI_VOICE_TIMEOUT_MS',
+  musicTimeoutMs: 'AI_VOICE_MUSIC_TIMEOUT_MS',
 } as const;
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+/**
+ * How long a Music track call may run (AITOOLS-03). NO real run has happened,
+ * so this is set from the longest track the Hub allows, not from a measured
+ * time: a track of up to 5 minutes (`ai.music_max_seconds`, 300) in at most 10
+ * minutes, which stays inside the 30 minutes after which the sweep gives a
+ * job's points back (`points.job_max_run_minutes`). A real run sets it.
+ */
+export const DEFAULT_MUSIC_TIMEOUT_MS = 600_000;
 /**
  * The provider's faster text-to-speech model, for Quick voice (AITOOLS-02):
  * `eleven_flash_v2_5` in the account's model list (docs/elevenlabs/API-FACTS.md,
@@ -84,6 +95,10 @@ export function parseVoiceCatalogue(raw: string | undefined): {
  * `POST {base}/v1/text-to-speech/{voice}` with the key in `xi-api-key`, the
  * text in a JSON body and the audio (`audio/mpeg`) in the answer.
  *
+ * Sound effect and Music track (AITOOLS-03) are the same kind of call:
+ * `POST {base}/v1/sound-generation` and `POST {base}/v1/music`, a JSON body, the
+ * audio in the answer; Music has its own longer timeout.
+ *
  * NOT RUN against the real provider: its key is the owner's and is not on any
  * build machine. It is run against a local stand-in with the same wire shape
  * (`scripts/dev/voice-standin.cjs`). The check that unblocks it: a provider
@@ -101,6 +116,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
   private readonly model: string | null;
   private readonly quickModel: string;
   private readonly timeoutMs: number;
+  private readonly musicTimeoutMs: number;
   private readonly catalogue: readonly CatalogueEntry[];
 
   constructor(config: ConfigService) {
@@ -116,6 +132,9 @@ export class HttpVoiceProvider implements AiVoiceProvider {
       DEFAULT_QUICK_MODEL;
     const t = Number(config.get<string>(AI_VOICE_ENV.timeoutMs));
     this.timeoutMs = Number.isFinite(t) && t >= 1000 ? t : DEFAULT_TIMEOUT_MS;
+    const mt = Number(config.get<string>(AI_VOICE_ENV.musicTimeoutMs));
+    this.musicTimeoutMs =
+      Number.isFinite(mt) && mt >= 1000 ? mt : DEFAULT_MUSIC_TIMEOUT_MS;
     const { voices, problem } = parseVoiceCatalogue(
       config.get<string>(AI_VOICE_ENV.voices),
     );
@@ -171,6 +190,45 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     );
   }
 
+  async makeSoundEffect(
+    req: SoundEffectRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<SpokenAudio> {
+    if (!this.configured || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'sound is not available');
+    return this.postForAudio(
+      '/v1/sound-generation',
+      {
+        text: req.prompt,
+        ...(req.durationSeconds === null
+          ? {}
+          : { duration_seconds: req.durationSeconds }),
+      },
+      this.timeoutMs,
+      opts.signal,
+    );
+  }
+
+  async makeMusic(
+    req: MusicRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<SpokenAudio> {
+    if (!this.configured || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'music is not available');
+    return this.postForAudio(
+      '/v1/music',
+      {
+        prompt: req.prompt,
+        ...(req.lengthSeconds === null
+          ? {}
+          : { music_length_ms: Math.round(req.lengthSeconds * 1000) }),
+        ...(req.instrumental ? { force_instrumental: true } : {}),
+      },
+      this.musicTimeoutMs,
+      opts.signal,
+    );
+  }
+
   async previewName(
     req: { text: string },
     opts: { signal?: AbortSignal } = {},
@@ -203,10 +261,13 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     }
   }
 
-  private signalFor(outer?: AbortSignal): AbortSignal {
+  private signalFor(
+    outer?: AbortSignal,
+    timeoutMs: number = this.timeoutMs,
+  ): AbortSignal {
     return outer
-      ? AbortSignal.any([outer, AbortSignal.timeout(this.timeoutMs)])
-      : AbortSignal.timeout(this.timeoutMs);
+      ? AbortSignal.any([outer, AbortSignal.timeout(timeoutMs)])
+      : AbortSignal.timeout(timeoutMs);
   }
 
   private async addVoice(
@@ -269,31 +330,46 @@ export class HttpVoiceProvider implements AiVoiceProvider {
   }
 
   /** One text-to-speech call; `model` is the quick model for Quick voice, else `AI_VOICE_MODEL` when set. */
-  private async synthesize(
+  private synthesize(
     providerVoiceId: string,
     text: string,
     outer?: AbortSignal,
     model: string | null = this.model,
   ): Promise<SpokenAudio> {
-    const signal = this.signalFor(outer);
+    return this.postForAudio(
+      `/v1/text-to-speech/${encodeURIComponent(providerVoiceId)}`,
+      { text, ...(model ? { model_id: model } : {}) },
+      this.timeoutMs,
+      outer,
+    );
+  }
+
+  /**
+   * One call that answers audio: `POST {base}{path}?output_format=mp3_44100_128`
+   * with the key in `xi-api-key` and a JSON body. A 429 or 5xx, no answer, a
+   * cut-off or a reply that is not audio is `unavailable`; any other 4xx is
+   * `rejected`. The provider's reply and the person's words never go into an
+   * error message.
+   */
+  private async postForAudio(
+    path: string,
+    body: Record<string, unknown>,
+    timeoutMs: number,
+    outer?: AbortSignal,
+  ): Promise<SpokenAudio> {
+    const signal = this.signalFor(outer, timeoutMs);
     let res: Response;
     try {
-      res = await fetch(
-        `${this.baseUrl}/v1/text-to-speech/${encodeURIComponent(providerVoiceId)}?output_format=mp3_44100_128`,
-        {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            accept: 'audio/mpeg',
-            'xi-api-key': this.apiKey ?? '',
-          },
-          body: JSON.stringify({
-            text,
-            ...(model ? { model_id: model } : {}),
-          }),
-          signal,
+      res = await fetch(`${this.baseUrl}${path}?output_format=mp3_44100_128`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'audio/mpeg',
+          'xi-api-key': this.apiKey ?? '',
         },
-      );
+        body: JSON.stringify(body),
+        signal,
+      });
     } catch {
       // A timeout, a refused connection or a broken one: the text is not in
       // this message, and neither is the provider's reply.
