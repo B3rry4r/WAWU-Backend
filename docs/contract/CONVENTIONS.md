@@ -158,26 +158,82 @@ stablecoins USDT, USDC and RLUSD) is the same idea with its own unit:
 - A balance of such an account is the provider's, read on every request; no
   route adds our rows up and calls the result a balance.
 
-## 2. Phone numbers: `+234`, normalised by the server
+## 2. Phone numbers: any country in E.164, and `+234` only where a Nigerian rail is paid
 
-- **Out:** every phone a money route returns is E.164, `+2348031234567`. A
-  masked phone keeps the prefix: `+234 803 *** 4412`.
-- **In:** the server accepts any common Nigerian mobile form and normalises
-  it before it compares, stores or forwards it: `08031234567`,
-  `8031234567`, `2348031234567`, `+2348031234567`, with spaces, dashes and
-  brackets ignored. The pattern the backend already validates Nigerian mobiles
-  with is `^(\+?234|0)[789][01]\d{8}$` (`src/health-plan/dto/health-plan.dto.ts`);
-  the bare 10-digit form is added because people type it.
-- **Why the server does it:** nothing normalises a phone today. WAWU ID stores
-  it as typed (`register.dto.ts` only checks 7 to 20 characters) and the
-  token's `phone` claim carries it as typed (WAWU ID's own tests hold both
-  `+2348012345678` and `2348000000001`). So the Hub never trusts the stored
-  form: it normalises every phone it reads before comparing.
-- A phone matches only in full (recipient search never matches part of a
-  number). A value that is not a Nigerian mobile after normalising does not
-  match anything; in a field that must be a phone it is a 400.
-- Fintava wants its own forms: the phone check takes local `0...`, SMS takes
-  `234...`. The Fintava client converts from E.164.
+Widened by GEO-02 (R-85, owner, 24 Oct 2026: "This is not a Nigeria only
+platform"). Two rules, and the second is the old one, unchanged.
+
+**Where the Hub only stores or shows a phone: any valid number, E.164.**
+
+- **Out:** every phone the Hub returns is E.164 with its country code,
+  `+2348031234567`, `+447911123456`, `+233241234567`. A masked phone keeps the
+  prefix: `+234 803 *** 4412`.
+- **In:** a number written with its country code (`+` or `00`, spaces, dashes
+  and brackets ignored) is read as it is. A number written the way people write
+  it at home (`0803 123 4567`) is read against the country the person chose,
+  so a Nigerian number typed with its leading 0 works when Nigeria is chosen
+  and means nothing without a country.
+- **Valid** is libphonenumber's word (`libphonenumber-js` 1.13.15, pinned,
+  `src/geo/phone.ts`: `parseInternationalPhone`), not a length rule. The
+  trunk 0 in brackets goes: `+44 (0)7911 123456` is `+447911123456`. A number
+  that is not valid is a 400 in a field that must be a phone.
+- **The lists the app shows** (the country dropdown, its dial code and an
+  example number for the field's hint) are `GET /geo/countries`, public. The
+  app never carries a list of its own.
+- **Where a country code is shared** (`+1`, `+44`, `+7`) the number's digits
+  decide when they can (`+1 876` is Jamaica); when they cannot, the country the
+  person chose wins and the Hub's guess from the number alone is only a guess.
+
+**Where a route pays a Nigerian rail: the Nigerian rule, unchanged.** The
+server accepts any common Nigerian mobile form and normalises it before it
+compares, stores or forwards it: `08031234567`, `8031234567`,
+`2348031234567`, `+2348031234567`, with spaces, dashes and brackets ignored.
+The pattern is `^(?:\+?234|0)?([789][01]\d{8})$`
+(`src/wallet-provider/nigerian-phone.ts`, `toLocalNigerianPhone`). A value that
+is not a Nigerian mobile after normalising matches nothing; in a field that
+must be a phone it is a 400. The naira wallet stays Nigeria-only (BVN, R-6,
+R-85), and Fintava and Nuvion wait on a Nigerian number, so these keep it:
+
+| Where | What it is for | Rule |
+|---|---|---|
+| `src/wallet-provider/nigerian-phone.ts` | the Nigerian mobile rule itself | Nigerian |
+| `src/money/identity/wallet-identity.service.ts` | the BVN check matches the account's phone to the BVN's (`phone_not_nigerian`) | Nigerian |
+| `src/money/opening/reviewed-opening.ts`, `wallet-opening.service.ts`, `src/nuvion/areas/opening.ts` | opening the naira wallet at the provider | Nigerian |
+| `src/money/recipients/recipient-query.ts`, `recipient.service.ts` | finding a wallet holder by the phone they proved | Nigerian |
+| `src/wallet-bills/wallet-bill.service.ts` | airtime and data to a Nigerian network | Nigerian |
+| `src/health-plan/dto/health-plan.dto.ts` | enrolling with WellaHealth, a Nigerian provider | Nigerian |
+| `src/money/pin/pin-reset.service.ts` (`maskPhone`) | the PIN reset text goes to the wallet's proved phone | Nigerian |
+| `src/fintava/fintava-client.ts` | the provider client (not touched) | Nigerian |
+| `src/waitlist/waitlist-contact.ts` (`normalisePhone`) | the launch registration stores a phone | any valid number; Nigerian forms as before; a `+234` number that is not a Nigerian mobile is refused |
+| `src/plans/billing-currency.service.ts` (`phoneCountry`) | `+234` is naira, any other code is dollars | unchanged: it only reads the code |
+| `src/account-purge/scrub-contact-details.ts` | takes phones out of text when an account is deleted | unchanged: it already reads any `+` number |
+
+A route that stores or shows a phone and is not in the table takes the first
+rule. Where a person's country is wanted, it is `ProfileDetails.countryCode`
+(`GET /me/location`, section 2a), never the phone's.
+
+### 2a. The place a person is (GEO-02)
+
+- `GET /geo/countries` and `GET /geo/countries/{code}/regions` are public and
+  cached (`Cache-Control: public, max-age=86400`, with an `ETag`). Countries
+  are ISO 3166-1 with `code`, `name`, `dialCode`, `flag`, `exampleNumber`,
+  `exampleNational` and `hasRegions`; regions are ISO 3166-2 with the full
+  `code` (`NG-LA`), `name` and `type`. Region codes are stored on profiles, so
+  they are ISO's for every country: `src/geo/data/regions.json` is written by
+  `scripts/geo/build-regions.mjs` from `iso-3166` 4.4.0 (pinned; ESM-only, so
+  it is read at build time and the Hub reads the JSON), with four places left
+  out and two names spelled as ISO does (listed in the file). Country names are
+  `i18n-iso-countries` 7.14.0 with a reviewed override table. No request
+  reaches the network.
+- A person's place is four nullable fields on `PATCH /users/me/profile-fields`
+  (`countryCode`, `regionCode`, `regionName`, `city`), checked against those
+  lists. A refusal is a 400 with `reason.code` `country_invalid`,
+  `region_invalid`, `region_needs_country` or `city_too_long`. The old free
+  text `location` is a separate key and works as before.
+- `GET /me/location` answers the person's own country (what they chose, else
+  WAWU ID's `countryCode` claim, else its older `country` text, else the
+  phone's) and records it when they have not chosen one. Another person's
+  country is shown only when they chose it.
 
 ## 3. One error shape
 

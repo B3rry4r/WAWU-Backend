@@ -4,11 +4,13 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { NotificationService } from '../../notification/notification.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { objectKeyFrom, StorageService } from '../../storage/storage.service';
 import { PublishingAllowanceService } from '../../plans/publishing-allowance.service';
+import { ProfileLocationService } from '../../geo/profile-location.service';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { ContentPieceModel } from '../../../generated/prisma/models';
 import type { AdminUserView } from '../auth/admin-user-view.type';
@@ -67,6 +69,10 @@ export class AdminContentReviewService {
     private readonly notifications: NotificationService,
     private readonly storage: StorageService,
     private readonly publishing: PublishingAllowanceService,
+    // GEO-02. Optional only so the take-down spec, which builds this service by
+    // hand with four arguments, still compiles; the app always provides it
+    // (AdminContentReviewModule imports GeoModule).
+    @Optional() private readonly places?: ProfileLocationService,
   ) {}
 
   /**
@@ -80,7 +86,15 @@ export class AdminContentReviewService {
   async queue(
     query: AdminContentQueueQueryDto,
   ): Promise<Paginated<AdminContentQueueItemView>> {
-    const where = { status: 'pending' as const };
+    const creatorsInPlace =
+      (await this.places?.idsInPlace(query.countryCode, query.regionCode)) ??
+      null;
+    const where = {
+      status: 'pending' as const,
+      ...(creatorsInPlace !== null
+        ? { creatorWawuId: { in: creatorsInPlace } }
+        : {}),
+    };
     const [rows, total] = await this.prisma.$transaction([
       this.prisma.contentPiece.findMany({
         where,

@@ -309,8 +309,30 @@ model ProfileDetails {
   /// The order the person wants their social links shown above the follower
   /// count: platform keys, first to last. Empty means the default order.
   socialOrder   String[] @default([])
+  /// ── WHERE THE PERSON IS, AS DATA (GEO-02, R-85) ──────────────────────────
+  /// `location` above stays the free line the web shows. These four are the
+  /// structured answer the app asks for and the dashboard counts by. All are
+  /// nullable; an account that never says has none.
+  ///
+  /// ISO 3166-1 alpha-2, upper case ("NG"). Checked against the Hub's own
+  /// country list (GET /geo/countries) on every write.
+  countryCode   String?
+  /// The full ISO 3166-2 code, upper case ("NG-LA"). It must belong to
+  /// `countryCode`. Null when the country has no list or none was chosen.
+  regionCode    String?
+  /// The region's name as the list had it when it was saved ("Lagos").
+  regionName    String?
+  /// Free text, trimmed ("Ikeja"). No list: the Hub keeps no list of cities.
+  city          String?
+  /// How `countryCode` got here: `profile` (the person chose it), `wawu_id`
+  /// (the country WAWU ID holds for the account) or `phone` (the phone's
+  /// country code). Only `profile` is shown to other people; the other two
+  /// exist so the dashboard can count everyone. A choice always replaces them.
+  countrySource String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  @@index([countryCode, regionCode])
 }
 
 // -----------------------------------------------------------------------------

@@ -33,6 +33,44 @@ export class UpdateProfileFieldsDto {
   @MaxLength(LOCATION_MAX_LENGTH)
   location?: string | null;
 
+  /**
+   * Country of residence, ISO 3166-1 alpha-2 from GET /geo/countries ("NG",
+   * any case). null or "" clears it (and the region, which belonged to it).
+   * Changing it clears a region that is not sent again.
+   */
+  @IsOptional()
+  @IsString()
+  countryCode?: string | null;
+
+  /**
+   * Region, the full ISO 3166-2 code from GET /geo/countries/{code}/regions
+   * ("NG-LA"; its tail "LA" is accepted too). It must belong to the country
+   * saved or sent with it. null or "" clears it.
+   */
+  @IsOptional()
+  @IsString()
+  regionCode?: string | null;
+
+  /**
+   * The region's name ("Lagos"). Beside a regionCode it must be that code's
+   * name; alone it is looked up in the country's list; for a country with
+   * no list it is saved as typed. null or "" clears it.
+   */
+  @IsOptional()
+  @IsString()
+  regionName?: string | null;
+
+  /**
+   * City, free text ("Ikeja"). null or "" clears it. The one limit, 80
+   * characters (CITY_MAX_LENGTH in geo.service.ts), is checked there: any longer
+   * city is a 400 with `reason.code` `city_too_long`, not a validation message
+   * that depends on how long it is. The four place keys carry no length rule of
+   * their own for the same reason: GeoService.checkLocation answers them all.
+   */
+  @IsOptional()
+  @IsString()
+  city?: string | null;
+
   /** Skills and expertise chips. [] clears them. */
   @IsOptional()
   @IsArray()

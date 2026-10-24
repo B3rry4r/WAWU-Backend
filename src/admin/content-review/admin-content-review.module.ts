@@ -5,6 +5,7 @@ import { StorageModule } from '../../storage/storage.module';
 import { AdminContentReviewController } from './admin-content-review.controller';
 import { AdminContentReviewService } from './admin-content-review.service';
 import { PlansModule } from '../../plans/plans.module';
+import { GeoModule } from '../../geo/geo.module';
 
 /**
  * Admin content review — the moderation queue that turns a paid upload into
@@ -23,7 +24,13 @@ import { PlansModule } from '../../plans/plans.module';
  * none is modified.
  */
 @Module({
-  imports: [AdminAuthModule, StorageModule, NotificationModule, PlansModule],
+  imports: [
+    AdminAuthModule,
+    StorageModule,
+    NotificationModule,
+    PlansModule,
+    GeoModule,
+  ],
   controllers: [AdminContentReviewController],
   providers: [AdminContentReviewService],
 })

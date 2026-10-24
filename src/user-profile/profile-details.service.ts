@@ -6,6 +6,11 @@ import { normaliseHandle } from './social-handles';
 import { memberSinceOf, normaliseChips, normaliseText } from './profile-fields';
 import type { ProfileFieldsView } from './profile-fields.type';
 import { TierBadgeService } from '../plans/tier-badge/tier-badge.service';
+import { GeoService } from '../geo/geo.service';
+import {
+  ProfileLocationService,
+  type StoredPlace,
+} from '../geo/profile-location.service';
 
 /**
  * The ME-05 profile fields: location, skills, "open to", Threads and the
@@ -21,11 +26,13 @@ export class ProfileDetailsService {
     private readonly prisma: PrismaService,
     private readonly blockedAccounts: BlockedAccountService,
     private readonly badges: TierBadgeService,
+    private readonly geo: GeoService,
+    private readonly places: ProfileLocationService,
   ) {}
 
   /** The caller's own fields. Never 404s: no row means nothing set yet. */
   async getMine(wawuUserId: string): Promise<ProfileFieldsView> {
-    return this.view(wawuUserId);
+    return this.view(wawuUserId, true);
   }
 
   /**
@@ -64,7 +71,7 @@ export class ProfileDetailsService {
     if (!creatorState) {
       throw new NotFoundException('This account has no public creator profile');
     }
-    return this.view(profile.wawuUserId);
+    return this.view(profile.wawuUserId, false);
   }
 
   /**
@@ -75,7 +82,19 @@ export class ProfileDetailsService {
     wawuUserId: string,
     dto: UpdateProfileFieldsDto,
   ): Promise<ProfileFieldsView> {
+    // GEO-02: the structured place is checked against the lists first, so a
+    // refused country or region saves nothing of this request.
+    const place = this.places.prepare(
+      {
+        countryCode: dto.countryCode,
+        regionCode: dto.regionCode,
+        regionName: dto.regionName,
+        city: dto.city,
+      },
+      await this.places.stored(wawuUserId),
+    );
     const data = {
+      ...place,
       ...(dto.location !== undefined && {
         location: normaliseText(dto.location),
       }),
@@ -91,10 +110,14 @@ export class ProfileDetailsService {
       update: data,
       create: { wawuUserId, ...data },
     });
-    return this.view(wawuUserId);
+    return this.view(wawuUserId, true);
   }
 
-  private async view(wawuUserId: string): Promise<ProfileFieldsView> {
+  /** `own` is the person reading themselves: they see the country WAWU ID or their phone gave them. Anyone else sees a country only when it was chosen. */
+  private async view(
+    wawuUserId: string,
+    own: boolean,
+  ): Promise<ProfileFieldsView> {
     const [details, profile, badge] = await Promise.all([
       this.prisma.profileDetails.findUnique({ where: { wawuUserId } }),
       this.prisma.userProfile.findUnique({
@@ -103,9 +126,18 @@ export class ProfileDetailsService {
       }),
       this.badges.forOne(wawuUserId),
     ]);
+    const place: StoredPlace | null = details;
+    const shownCountry =
+      own || place?.countrySource === 'profile' ? place?.countryCode : null;
+    const country = this.geo.country(shownCountry);
     return {
       wawuUserId,
       location: details?.location ?? null,
+      countryCode: country?.code ?? null,
+      countryName: country?.name ?? null,
+      regionCode: place?.regionCode ?? null,
+      regionName: place?.regionName ?? null,
+      city: place?.city ?? null,
       skills: details?.skills ?? [],
       openTo: details?.openTo ?? [],
       threadsHandle: details?.threadsHandle ?? null,
