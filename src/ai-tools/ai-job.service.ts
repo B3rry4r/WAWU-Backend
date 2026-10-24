@@ -28,6 +28,7 @@ import {
   JOB_NOT_FOUND_MESSAGE,
   KEY_REQUIRED_MESSAGE,
   KEY_REUSED_MESSAGE,
+  PROMPT_EMPTY_MESSAGE,
   QUOTE_CHANGED_MESSAGE,
   TEXT_EMPTY_MESSAGE,
   UNAVAILABLE_MESSAGE,
@@ -38,20 +39,26 @@ import type {
   AiJobPage,
   AiJobView,
 } from './ai-tools-view.type';
-import type { AiJobListQueryDto, CreateVoiceoverJobDto } from './ai-tools.dto';
+import type {
+  AiJobListQueryDto,
+  CreateMusicJobDto,
+  CreateSoundEffectJobDto,
+  CreateVoiceoverJobDto,
+} from './ai-tools.dto';
 import type { AiTool, AiToolRequest, AiToolRunResult } from './tools/ai-tool';
 import { toolForAction } from './tools';
-import { VOICEOVER_TOOL } from './tools/voiceover.tool';
+import {
+  CHARS_PER_MINUTE_SETTING,
+  VOICEOVER_ACTION,
+  VOICEOVER_TOOL,
+} from './tools/voiceover.tool';
 import {
   AI_VOICE_PROVIDER,
   AiVoiceProviderError,
   type AiVoiceProvider,
 } from './voice/ai-voice-provider';
 
-export {
-  CHARS_PER_MINUTE_SETTING,
-  VOICEOVER_ACTION,
-} from './tools/voiceover.tool';
+export { CHARS_PER_MINUTE_SETTING, VOICEOVER_ACTION };
 
 const KEY_FORMAT = /^[A-Za-z0-9_-]{8,128}$/;
 /** The only try a job's hold has: a failed job is never retried, a new job (and key) is. */
@@ -113,7 +120,7 @@ export class AiJobService {
 
   /** Characters that make one minute of VoiceOver, from the settings. */
   charsPerMinute(): number {
-    return this.settings.number(VOICEOVER_TOOL.input.charactersPerUnitSetting);
+    return this.settings.number(CHARS_PER_MINUTE_SETTING);
   }
 
   /** `POST /ai-tools/voiceover/jobs` (AITOOLS-01): the first tool of the pipeline, unchanged. */
@@ -126,24 +133,28 @@ export class AiJobService {
     return this.createJob(VOICEOVER_TOOL, wawuUserId, idempotencyKey, dto, now);
   }
 
-  /** Starts a job of `tool` for the person: the pipeline above. */
+  /**
+   * Starts a job of `tool` for the person: the pipeline above. `dto` is the
+   * request of the tool's input kind: words and a voice for a text tool, a
+   * description and its options for a prompt tool (AITOOLS-03).
+   */
   async createJob(
     tool: AiTool,
     wawuUserId: string,
     idempotencyKey: string | undefined,
-    dto: CreateVoiceoverJobDto,
+    dto: CreateVoiceoverJobDto | CreateSoundEffectJobDto | CreateMusicJobDto,
     now: Date = new Date(),
   ): Promise<CreatedJob> {
     if (!idempotencyKey || !KEY_FORMAT.test(idempotencyKey))
       throw new AiToolError('idempotency_key_required', KEY_REQUIRED_MESSAGE);
-    const text = dto.text.trim();
-    const req: AiToolRequest = { kind: 'text', text, voiceId: dto.voiceId };
+    const { req, voiceId, same } = requestOf(tool, dto);
     const requestHash = hashRequest(
       wawuUserId,
       idempotencyKey,
       tool.action,
-      dto.voiceId,
-      text,
+      voiceId,
+      req.kind === 'text' ? req.text : req.prompt,
+      same,
     );
     const id = jobIdFor(wawuUserId, idempotencyKey);
 
@@ -153,9 +164,17 @@ export class AiJobService {
 
     if (!tool.enabled(this.voice))
       throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
-    if (!this.voice.voices().some((v) => v.id === dto.voiceId))
-      throw new AiToolError('ai_voice_unknown', VOICE_UNKNOWN_MESSAGE);
-    if (text === '') throw new AiToolError('ai_text_empty', TEXT_EMPTY_MESSAGE);
+    if (req.kind === 'text') {
+      if (!this.voice.voices().some((v) => v.id === req.voiceId))
+        throw new AiToolError('ai_voice_unknown', VOICE_UNKNOWN_MESSAGE);
+      if (req.text === '')
+        throw new AiToolError('ai_text_empty', TEXT_EMPTY_MESSAGE);
+    } else if (req.prompt === '') {
+      throw new AiToolError('ai_prompt_empty', PROMPT_EMPTY_MESSAGE);
+    }
+    // The tool's own limits (a description or a length over its setting):
+    // refused before anything is priced or held.
+    tool.check?.(req, this.settings, this.plan);
 
     const { units, characters } = tool.price(req, this.settings, this.plan);
     const action = this.plan.actions.find((a) => a.id === tool.action);
@@ -196,7 +215,7 @@ export class AiJobService {
         tool: tool.action,
         idempotencyKey,
         requestHash,
-        voiceId: dto.voiceId,
+        voiceId,
         characters,
         units,
         costPoints: held.costPoints,
@@ -363,6 +382,18 @@ export class AiJobService {
         e instanceof AiVoiceProviderError && e.kind === 'rejected'
           ? 'provider_failed'
           : 'provider_unavailable';
+      // The provider's HTTP status (401 for a key, 402 for a plan, 422 for a
+      // refused prompt) goes in the log line only, so a lead can tell a key or
+      // plan refusal from a bad prompt. It is never written to the job (the
+      // `providerRef` column holds a provider job id, and a failure must not
+      // overwrite it or block the AITOOLS-02 rollback) and never shown to the
+      // person, who still reads "No points were taken". No body, no key.
+      const status = e instanceof AiVoiceProviderError ? e.status : undefined;
+      this.logger.warn(
+        `ai job ${job.id} (${job.tool}): the provider ${
+          status !== undefined ? `answered ${status}` : 'did not make the audio'
+        } (${code})`,
+      );
       await this.fail(job, holdId, code);
       return;
     }
@@ -375,6 +406,7 @@ export class AiJobService {
           job.id,
           result.audio.audio,
           result.audio.contentType,
+          tool.audioFolder,
         );
         outputs.push({ kind: 'audio', key });
       }
@@ -455,7 +487,11 @@ export class AiJobService {
     if (!hold || hold.state === 'held') return job;
     if (hold.state === 'committed')
       await this.mark(job.id, 'done', {
-        audioKey: audioKeyFor(job.wawuUserId, job.id),
+        audioKey: audioKeyFor(
+          job.wawuUserId,
+          job.id,
+          toolForAction(job.tool)?.audioFolder,
+        ),
       });
     else await this.mark(job.id, 'failed', { failureCode: 'timed_out' });
     return (
@@ -534,7 +570,10 @@ function hashRequest(
   action: string,
   voiceId: string,
   text: string,
+  options: readonly unknown[] = [],
 ): string {
+  // A text job's list is exactly as AITOOLS-01 wrote it (a job started before
+  // a prompt tool existed still replays); a prompt job adds its options.
   return createHash('sha256')
     .update(
       JSON.stringify([
@@ -544,9 +583,46 @@ function hashRequest(
         action,
         voiceId,
         text,
+        ...options,
       ]),
     )
     .digest('hex');
+}
+
+/**
+ * Reads a request of the tool's input kind: the checked request, the voice id
+ * the job row keeps (none for a prompt tool) and the options the Idempotency-Key
+ * hash covers beyond the words (a prompt job's length and switch).
+ */
+function requestOf(
+  tool: AiTool,
+  dto: CreateVoiceoverJobDto | CreateSoundEffectJobDto | CreateMusicJobDto,
+): { req: AiToolRequest; voiceId: string; same: readonly unknown[] } {
+  const spec = tool.input;
+  if (spec.kind === 'text') {
+    const d = dto as CreateVoiceoverJobDto;
+    return {
+      req: { kind: 'text', text: d.text.trim(), voiceId: d.voiceId },
+      voiceId: d.voiceId,
+      same: [],
+    };
+  }
+  const d = dto as CreateSoundEffectJobDto & CreateMusicJobDto;
+  const seconds =
+    (spec.length.field === 'durationSeconds'
+      ? d.durationSeconds
+      : d.lengthSeconds) ?? null;
+  const instrumental = spec.instrumental ? d.instrumental === true : null;
+  return {
+    req: {
+      kind: 'prompt',
+      prompt: d.prompt.trim(),
+      seconds,
+      instrumental,
+    },
+    voiceId: '',
+    same: [seconds, instrumental],
+  };
 }
 
 /** The cursor: the last row's time and id, base64url, so the next page starts after it. */

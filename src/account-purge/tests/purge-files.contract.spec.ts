@@ -205,6 +205,9 @@ describe('FIX-65: a purged account leaves no file of its own in the bucket', () 
       chatPdf: await upload(p, 'chat/file', 'pdf', 'application/pdf'),
       legal: await upload(p, 'legal/document', 'pdf', 'application/pdf'),
       voice: await upload(p, 'ai/voiceover', 'mp3', 'audio/mpeg'),
+      // AITOOLS-03: the audio of a Sound effect and of a Music track job
+      sfx: await upload(p, 'ai/sound-effect', 'mp3', 'audio/mpeg'),
+      music: await upload(p, 'ai/music', 'mp3', 'audio/mpeg'),
       // kept for buyers
       soldPreview: await upload(p, 'content/preview'),
       soldFull: await upload(p, 'content/full', 'pdf', 'application/pdf'),
@@ -357,9 +360,12 @@ describe('FIX-65: a purged account leaves no file of its own in the bucket', () 
         w.t.chatPdf,
         w.t.legal,
         w.t.voice,
+        w.t.sfx,
+        w.t.music,
       ),
     ).toBe(true);
-    expect(out.files.objectsRemoved).toBe(14);
+    // 14 before AITOOLS-03; its two folders add two files to the world above.
+    expect(out.files.objectsRemoved).toBe(16);
 
     // KEEP for buyers: the sold piece's preview and full file
     expect(holds(w.t.soldPreview, w.t.soldFull)).toBe(true);

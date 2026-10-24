@@ -822,6 +822,41 @@ route, request, answer and behaviour are AITOOLS-01's. Additive fields only:
   `scripts/dev/voice-standin.cjs`, whose route table answers `model_id` on the
   speech route so a spec can see which model ran.
 
+### Sound effect and Music track (AITOOLS-03)
+
+Task AITOOLS-03, R-78. Two more tools on the one pipeline, one file each under
+`src/ai-tools/tools/`, input kind `prompt` (a description in words), one
+provider call, one audio file out, a flat price (the board's figures, PROVISIONAL
+`DV2-BOARD-FIGURE`). Both are listed only when the provider can run them (R-47).
+
+| Route | Does |
+|---|---|
+| `POST /ai-tools/sound-effect/jobs` | Sound effect. Body `{ prompt, durationSeconds?, quoteToken }` (a quote for the action `sfx`, units 1) and a required `Idempotency-Key`. `durationSeconds` is 0.5 up to `ai.sfx_max_seconds` (30). Priced by `points.action.sfx` (75 a `use`), flat whatever the length. |
+| `POST /ai-tools/music/jobs` | Music track. Body `{ prompt, lengthSeconds?, instrumental?, quoteToken }` (a quote for the action `music_per_track`, units 1) and a required `Idempotency-Key`. `lengthSeconds` is a whole number from 3 up to `ai.music_max_seconds` (300). Priced by `points.action.music_per_track` (500 a `track`), flat whatever the length. One long provider call with its own timeout `AI_VOICE_MUSIC_TIMEOUT_MS` (optional; default 600000, set from the longest track the Hub allows because NO long real run has happened). That setting is the real wait (the call does not use Node's `fetch`, which ends a call with no answer after 300 seconds). |
+
+- **The catalogue.** An entry's `unit` is `use` or `track`; `input.kind` is
+  `prompt`, `input.maxCharacters` the description limit (the tool's setting,
+  never above `points.max_chars_per_job`), `input.charactersPerUnit` equals it
+  (one use or track covers any allowed description), `input.length` is
+  `{ field, min, max, whole }` in seconds, `input.instrumental` is true for
+  Music track, and `voices` is empty. A job's `voiceId` is empty, `units` is 1.
+- **The limits** (admin settings, PROVISIONAL `AITOOLS-LIMITS`):
+  `ai.sfx_max_prompt_chars` and `ai.music_max_prompt_chars` (default
+  `points.max_chars_per_job`, 5,000), `ai.sfx_max_seconds` 30,
+  `ai.music_max_seconds` 300. A description over the setting is `422
+  ai_prompt_too_long`, a length over it `422 ai_length_too_long`, each with
+  `reason.cap`, `capLimit`, `capUnit` and "No points were taken"; an empty
+  description is `400 ai_prompt_empty`. A length over `points.max_audio_min_per_job`
+  is `422 points_cap_reached` (`minutes_per_job`). Nothing is held in any of these.
+  The daily and characters caps are POINTS-03's, as for VoiceOver.
+- **Output.** MP3 in the person's own folders `ai/sound-effect` and `ai/music`
+  (confirmed `StorageObject`s of the person, removed with their account; the
+  purge table decides both). The description is never stored.
+- The stand-in answers `/v1/sound-generation` and `/v1/music` with silent MP3
+  frames of the asked length and the same markers. **NOT RUN against the real
+  provider.** The provider's Music API is for paid plans and its terms say what
+  each plan may be used for (G-AITOOLS-03-1, the owner's to read).
+
 ## 13. Hosting an event needs a tier (EVENTS-12)
 
 R-43, E21 "Needs a tier". `POST /events`, `PATCH /events/{id}` and

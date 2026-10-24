@@ -19,6 +19,19 @@
 //       [[reject]]    answer 422, as a provider that refuses the text
 //       [[html]]      answer 200 with a web page, which is not audio
 //       [[slow:1500]] wait that many milliseconds before answering
+//   POST /v1/sound-generation?output_format=mp3_44100_128   (AITOOLS-03)
+//     header xi-api-key, JSON body { text, duration_seconds? }  ->  200 audio/mpeg
+//     duration_seconds outside 0.5 to 30 answers 422, as the provider does.
+//     Silent MP3 frames of the asked length (2 seconds when none is asked).
+//   POST /v1/music?output_format=mp3_44100_128   (AITOOLS-03)
+//     header xi-api-key, JSON body { prompt, music_length_ms?, force_instrumental? }
+//     ->  200 audio/mpeg. music_length_ms outside 3000 to 600000 answers 422.
+//     Silent MP3 frames of the asked length (10 seconds when none is asked).
+//     Both take the same markers in the text or prompt as the speech route
+//     ([[fail]], [[reject]], [[html]], [[slow:n]]), and [[status:402]] (any
+//     400 to 599) to answer that status, as a key or plan refusal does.
+//     state.sfx and state.music list each call's asked length and switch
+//     (never the words).
 //   POST /v1/voices/add   multipart (name, files)  ->  200 { voice_id }
 //   DELETE /v1/voices/<id>                         ->  200
 //     The own-voice calls (VOICE-01); it then speaks with the voice it made.
@@ -56,6 +69,10 @@ function startVoiceStandin({
     cloned: 0,
     deleted: 0,
     clones: [],
+    /** Each Sound effect call: the duration_seconds asked (null when none). */
+    sfx: [],
+    /** Each Music call: music_length_ms asked (null when none) and force_instrumental. */
+    music: [],
   };
   const clones = new Map();
   // MPEG-1 Layer III, 128 kbps, 44.1 kHz, no padding: 417 bytes of silence per frame.
@@ -119,6 +136,85 @@ function startVoiceStandin({
     }
   }
 
+  // One MP3 frame at 44.1 kHz is 1152 samples: 26.122 ms.
+  const FRAME_SECONDS = 1152 / 44100;
+  const silence = (seconds) =>
+    Buffer.concat(
+      Array.from(
+        { length: Math.max(1, Math.round(seconds / FRAME_SECONDS)) },
+        () => frame,
+      ),
+    );
+
+  /**
+   * The Sound effect and Music routes (AITOOLS-03): counted as calls like the
+   * speech route, with the same markers; `kind` says which of the two it is.
+   */
+  function generation(kind) {
+    return async (req, res, _m, raw) => {
+      state.calls += 1;
+      state.active += 1;
+      state.maxActive = Math.max(state.maxActive, state.active);
+      const done = (status, type, body) => {
+        state.active -= 1;
+        if (status === 200) state.ok += 1;
+        else state.failed += 1;
+        res.statusCode = status;
+        res.setHeader('content-type', type);
+        res.end(body);
+      };
+      try {
+        if (req.headers['xi-api-key'] !== key)
+          return done(401, 'application/json', '{"detail":"bad key"}');
+        let body;
+        try {
+          body = JSON.parse(raw.toString('utf8'));
+        } catch {
+          return done(400, 'application/json', '{"detail":"bad body"}');
+        }
+        const sfx = kind === 'sfx';
+        const text = String((sfx ? body.text : body.prompt) ?? '');
+        if (text === '')
+          return done(422, 'application/json', '{"detail":"no text"}');
+        let seconds;
+        if (sfx) {
+          const d = body.duration_seconds;
+          if (d !== undefined && (typeof d !== 'number' || d < 0.5 || d > 30))
+            return done(422, 'application/json', '{"detail":"bad duration"}');
+          state.sfx.push(d ?? null);
+          seconds = d ?? 2;
+        } else {
+          const ms = body.music_length_ms;
+          if (
+            ms !== undefined &&
+            (typeof ms !== 'number' || ms < 3000 || ms > 600000)
+          )
+            return done(422, 'application/json', '{"detail":"bad length"}');
+          state.music.push({
+            lengthMs: ms ?? null,
+            instrumental: body.force_instrumental === true,
+          });
+          seconds = (ms ?? 10000) / 1000;
+        }
+        const slow = /\[\[slow:(\d{1,6})\]\]/.exec(text);
+        const wait = slow ? Number(slow[1]) : delayMs;
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        if (text.includes('[[fail]]'))
+          return done(500, 'application/json', '{"detail":"down"}');
+        if (text.includes('[[reject]]'))
+          return done(422, 'application/json', '{"detail":"refused"}');
+        const status = /\[\[status:(4\d\d|5\d\d)\]\]/.exec(text);
+        if (status)
+          return done(Number(status[1]), 'application/json', '{"detail":"no"}');
+        if (text.includes('[[html]]'))
+          return done(200, 'text/html', '<html>not audio</html>');
+        return done(200, 'audio/mpeg', silence(seconds));
+      } catch {
+        return done(500, 'application/json', '{"detail":"stand-in fault"}');
+      }
+    };
+  }
+
   /** The own-voice routes (VOICE-01). */
   function addVoice(req, res, _m, raw) {
     if (req.headers['xi-api-key'] !== key)
@@ -158,6 +254,12 @@ function startVoiceStandin({
   const ROUTES = [
     { method: 'GET', path: /^\/__standin\/state$/, handle: stateRoute },
     { method: 'POST', path: /^\/v1\/text-to-speech\/([^/]+)$/, handle: speech },
+    {
+      method: 'POST',
+      path: /^\/v1\/sound-generation$/,
+      handle: generation('sfx'),
+    },
+    { method: 'POST', path: /^\/v1\/music$/, handle: generation('music') },
     { method: 'POST', path: /^\/v1\/voices\/add$/, handle: addVoice },
     { method: 'DELETE', path: /^\/v1\/voices\/([^/]+)$/, handle: removeVoice },
   ];

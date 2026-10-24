@@ -13,6 +13,12 @@ export type AiToolErrorCode =
   | 'quote_changed'
   | 'ai_voice_unknown'
   | 'ai_text_empty'
+  /** A description (Sound effect, Music track) with nothing in it. */
+  | 'ai_prompt_empty'
+  /** A description longer than the tool's setting allows (AITOOLS-03). Nothing is held. */
+  | 'ai_prompt_too_long'
+  /** A length longer than the tool's setting allows (AITOOLS-03). Nothing is held. */
+  | 'ai_length_too_long'
   | 'ai_tool_unavailable'
   | 'not_found';
 
@@ -22,6 +28,9 @@ export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
   quote_changed: HttpStatus.CONFLICT,
   ai_voice_unknown: HttpStatus.BAD_REQUEST,
   ai_text_empty: HttpStatus.BAD_REQUEST,
+  ai_prompt_empty: HttpStatus.BAD_REQUEST,
+  ai_prompt_too_long: HttpStatus.UNPROCESSABLE_ENTITY,
+  ai_length_too_long: HttpStatus.UNPROCESSABLE_ENTITY,
   ai_tool_unavailable: HttpStatus.SERVICE_UNAVAILABLE,
   not_found: HttpStatus.NOT_FOUND,
 };
@@ -29,6 +38,12 @@ export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
 export interface AiToolErrorDetail {
   /** `quote_changed`: what the job costs now, in points. */
   costPoints?: number;
+  /** `ai_prompt_too_long`, `ai_length_too_long`: which limit stopped the job (`prompt_characters` or `length_seconds`). */
+  cap?: string;
+  /** The limit's size, in the unit it counts. */
+  capLimit?: number;
+  /** What the limit counts (`characters` or `seconds`). */
+  capUnit?: string;
 }
 
 export class AiToolError extends HttpException {
@@ -55,6 +70,7 @@ export const QUOTE_CHANGED_MESSAGE =
   'The cost changed or the quote ended. Check the points and run it again. No points were taken.';
 export const VOICE_UNKNOWN_MESSAGE = 'Pick one of the voices on the list.';
 export const TEXT_EMPTY_MESSAGE = 'Type or paste the words to speak.';
+export const PROMPT_EMPTY_MESSAGE = 'Describe what you want to hear.';
 export const UNAVAILABLE_MESSAGE =
   'AI voice tools are not available right now. No points were taken.';
 export const JOB_NOT_FOUND_MESSAGE = "We couldn't find that job.";

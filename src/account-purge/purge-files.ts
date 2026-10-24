@@ -120,6 +120,14 @@ export const FILE_KINDS: Readonly<Record<string, FileKind>> = {
     decision: 'DELETE',
     what: 'The audio the Hub made for the person: an AI voice-over job (AiToolJob.audioKey), their Voice Intro (VoiceProfile.audioKey, VoiceIntroRun.audioKey) and the last name preview (VOICE-01).',
   },
+  'ai/sound-effect': {
+    decision: 'DELETE',
+    what: 'The audio the Hub made for the person: a Sound effect job (AiToolJob.audioKey, AiToolJob.outputs).',
+  },
+  'ai/music': {
+    decision: 'DELETE',
+    what: 'The audio the Hub made for the person: a Music track job (AiToolJob.audioKey, AiToolJob.outputs).',
+  },
   'voice/sample': {
     decision: 'DELETE',
     what: 'The 30 second recording of the person’s own voice (VoiceProfile.sampleKey, VOICE-01).',

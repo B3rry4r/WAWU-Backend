@@ -49,6 +49,28 @@ fixture UUIDs — and that pattern is what any newly isolated spec should copy.
 Until the rest follow, `--runInBand` is the only way to get a comparable
 number, and a parallel run's failures should not be read as regressions.
 
+### Branch checks, and the deploy's tests (DEPLOY-FAST)
+
+GitHub runs the whole suite on every `wmt/**` push, in 3 shards of
+`npx jest --runInBand --forceExit --shard=N/3` (about 20 minutes), plus the
+`netns` job. The deploy (`.github/workflows/deploy.yml`) runs those same two
+jobs, `suite` and `netns`, after a merge to main, and only then deploys.
+`scripts/ci/check_deploy_in_sync.py` (job `deploy-test-in-sync`) fails when a
+test step differs between the two files, and proves on every run that it would
+catch a dropped or changed step, a missing shard or a removed guard.
+
+The deploy skips its tests only for a tree a branch has already passed. Its
+first job, `decide` (`scripts/ci/decide_skip_tests.py`), looks at the commit
+being deployed and at its second parent when it is a merge with the same tree
+(the branch already contained main). If, on that exact commit, the newest push
+run of Branch checks (every job), Gates and Protected routes all succeeded, the
+tests are skipped; if anything else is true or cannot be read, they run. The
+migrate, build, restart and smoke test steps always run. The job log and
+summary name the decision and the run ids. To prove it without deploying, run
+the workflow by hand from a branch with `dry_run` on (`force_tests` runs the
+tests even when the decision is to skip them): the deploy job never runs for a
+dry run, or for any ref but main.
+
 ### Test hygiene rules
 
 A spec must leave `wawu_hub_test` exactly as it found it. Two ways to comply,
@@ -177,6 +199,23 @@ audio, so also run `node scripts/dev/storage-standin.cjs <port> stack-bucket` an
 set `STACK_STORAGE_ENDPOINT=http://127.0.0.1:<port>` with
 `STACK_STORAGE_PATH_STYLE=true`. Keep both ports outside the stack's range.
 Without these the tool is listed `enabled: false` and a job is refused.
+
+Since AITOOLS-03 it also answers `POST /v1/sound-generation` (Sound effect) and
+`POST /v1/music` (Music track) with silent MP3 frames of the asked length
+(`GET /__standin/state` lists each call's `sfx` and `music` options), with the
+same four markers in the prompt. A track call has its own timeout,
+`AI_VOICE_MUSIC_TIMEOUT_MS` (default 600000). It is made with `node:http(s)`,
+not `fetch`, because Node's `fetch` ends a call that has sent no answer in 300
+seconds whatever the setting says; here the setting is the real wait, headers
+and body. Sound effect and Music track need only `AI_VOICE_BASE_URL` and
+`AI_VOICE_API_KEY` to be listed (they use no voice); VoiceOver and Quick voice
+also need `AI_VOICE_VOICES`. The track call sends the same
+`user-agent` as `fetch` and follows up to 3 redirects as `fetch` does (307 and
+308 repeat the POST; 301, 302 and 303 become a GET); a fourth fails like any
+other 3xx answer. A job the provider refuses keeps the provider's HTTP status
+in the server log only (`ai job <id> ... answered 402`), never on the job (its
+`providerRef` holds a provider job id and is never written by a failure) and
+never shown to the person.
 
 Since AITOOLS-02 the stand-in answers from one route table (a later tool adds its
 route and its markers there) and keeps the `model_id` of each speech call in

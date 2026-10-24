@@ -94,9 +94,15 @@ export class MemoryAudioStore implements AiAudioStore {
   readonly files = new Map<string, Buffer>();
   readonly removed: string[] = [];
   failPut = false;
-  put(wawuUserId: string, jobId: string, audio: Buffer): Promise<string> {
+  put(
+    wawuUserId: string,
+    jobId: string,
+    audio: Buffer,
+    _contentType?: 'audio/mpeg',
+    folder: string = 'ai/voiceover',
+  ): Promise<string> {
     if (this.failPut) return Promise.reject(new Error('store down'));
-    const key = `ai/voiceover/${wawuUserId}/${jobId}.mp3`;
+    const key = `${folder}/${wawuUserId}/${jobId}.mp3`;
     this.files.set(key, audio);
     return Promise.resolve(key);
   }
