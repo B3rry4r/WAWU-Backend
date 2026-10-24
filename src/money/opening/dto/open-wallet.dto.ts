@@ -132,8 +132,17 @@ export function isUnexpiredDate(value: unknown): boolean {
   return y < 2100 && date.getTime() >= startOfToday;
 }
 
+/**
+ * WALLET-41 (R-87): a body that names a country other than Nigeria opens a
+ * world wallet. It takes no BVN or NIN: Nuvion checks the person with their
+ * own country's ID document and a liveness check.
+ */
+export const isAbroad = (o: { countryCode?: string }) =>
+  o.countryCode !== undefined && o.countryCode !== 'NG';
+
 const sendsNumbers = (o: OpenNairaWalletDto) =>
-  o.checkHandle === undefined || o.bvn !== undefined || o.nin !== undefined;
+  !isAbroad(o) &&
+  (o.checkHandle === undefined || o.bvn !== undefined || o.nin !== undefined);
 
 export class OpenNairaWalletDto {
   /**
@@ -337,6 +346,62 @@ export class OpenNairaWalletDto {
     },
   })
   idExpiryDate?: string;
+
+  // -------------------------------------------------------------------------
+  // WALLET-41 (R-87), additive: a person whose country of residence is not
+  // Nigeria. Leave both out (or send NG) and nothing here applies.
+  // -------------------------------------------------------------------------
+
+  /**
+   * The country the person lives in, ISO 3166-1 alpha-2 (the profile's, once
+   * GEO-02 serves it). Anything but NG opens a world wallet: no `bvn`, `nin`
+   * or `checkHandle`, and the ID document is the person's own country's.
+   * `idType`, `idNumber` and the address are then that country's.
+   */
+  @ApiPropertyOptional({ pattern: '^[A-Z]{2}$' })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === null
+      ? undefined
+      : typeof value === 'string'
+        ? value.trim().toUpperCase()
+        : value,
+  )
+  @Matches(/^[A-Z]{2}$/, {
+    message: 'countryCode must be a 2-letter country code',
+  })
+  countryCode?: string;
+
+  /**
+   * Nationality, ISO 3166-1 alpha-2, for a world opening when it is not the
+   * country they live in. Omitted: the country of residence.
+   */
+  @ApiPropertyOptional({ pattern: '^[A-Z]{2}$' })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === null
+      ? undefined
+      : typeof value === 'string'
+        ? value.trim().toUpperCase()
+        : value,
+  )
+  @Matches(/^[A-Z]{2}$/, {
+    message: 'nationality must be a 2-letter country code',
+  })
+  nationality?: string;
+
+  /**
+   * The currency of the first account, when the person picks one (GET
+   * /money/world/options names the country's own and what else is on).
+   * Omitted: the country's own by the table in config.
+   */
+  @ApiPropertyOptional({ enum: ['USD', 'EUR', 'GBP', 'CAD', 'AED', 'GHS'] })
+  @IsOptional()
+  @Transform(orMissing)
+  @IsIn(['USD', 'EUR', 'GBP', 'CAD', 'AED', 'GHS'], {
+    message: 'firstCurrency must be USD, EUR, GBP, CAD, AED or GHS',
+  })
+  firstCurrency?: 'USD' | 'EUR' | 'GBP' | 'CAD' | 'AED' | 'GHS';
 
   /** The proof of address the person will upload (NUV-03). */
   @ApiPropertyOptional({ enum: PROOF_OF_ADDRESS_TYPES })

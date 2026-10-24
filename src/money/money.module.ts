@@ -96,6 +96,11 @@ import { FxController } from './fx/fx.controller';
 import { FxOperationsService } from './fx/fx-operations.service';
 import { FxPort } from './fx/fx-provider';
 import { FxSettings } from './fx/fx-settings';
+import { WorldAdminController } from './world/world-admin.controller';
+import { WorldAdminService } from './world/world-admin.service';
+import { WorldController } from './world/world.controller';
+import { WorldSettings } from './world/world-settings';
+import { WorldWalletService } from './world/world-wallet.service';
 
 /**
  * The served half of the Naira wallet contract. Routes move here from
@@ -289,8 +294,14 @@ import { FxSettings } from './fx/fx-settings';
     // admin reads and the freeze.
     FxController,
     FxAdminController,
+    // WALLET-41 (R-87): a wallet for a person outside Nigeria, and the admin list and acts.
+    WorldController,
+    WorldAdminController,
   ],
   providers: [
+    WorldSettings,
+    WorldWalletService,
+    WorldAdminService,
     FxPort,
     FxSettings,
     FxAccountsService,

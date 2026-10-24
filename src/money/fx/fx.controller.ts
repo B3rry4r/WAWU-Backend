@@ -76,7 +76,7 @@ export class FxController {
   @Get('currencies')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-21')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(...WALLET_GATE_ERRORS, 'currency_not_supported')
   currencies(): FxCurrenciesView {
     return this.accounts.currencies();
@@ -92,7 +92,7 @@ export class FxController {
   @Get('accounts')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-21')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'currency_not_supported',
@@ -112,12 +112,13 @@ export class FxController {
   @Post('accounts')
   @HttpCode(201)
   @BuiltBy('WALLET-21')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'currency_not_supported',
     'fx_switched_off',
     'chain_mismatch',
+    'account_frozen',
     'provider_declined',
     'provider_unreachable',
   )
@@ -132,7 +133,7 @@ export class FxController {
   @Get('accounts/:id')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-21')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'currency_not_supported',
@@ -153,7 +154,7 @@ export class FxController {
   @Get('accounts/:id/transactions')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-21')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'currency_not_supported',

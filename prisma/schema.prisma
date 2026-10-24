@@ -4496,10 +4496,53 @@ model FintavaWalletOpening {
   /// `nuvion`; null is Fintava. The opening sweep reconciles only openings
   /// of the provider the server runs.
   provider         String?   @default("fintava")
+  /// WALLET-41 (R-87, migration 20261118090000): a person whose country of
+  /// residence is not Nigeria opens without a BVN. Their ISO 3166-1 country;
+  /// null for a Nigerian opening (the BVN naira wallet). For such an opening
+  /// `bvnHash` holds the keyed hash of their ID document, never a BVN.
+  worldCountry         String?
+  /// The currency of their first account (their choice, or the country's by
+  /// the table in config); null for a Nigerian opening.
+  worldFirstCurrency   String?
+  /// When the first account was asked for, and when the provider made it.
+  worldAccountRequestedAt DateTime?
+  worldAccountOpenedAt DateTime?
+  /// An admin froze this person's world wallet: the first account is not
+  /// opened while it stands, and their accounts are frozen too.
+  worldFrozenAt        DateTime?
+  worldFrozenReason    String?
+  /// An admin cancelled this opening before the provider approved it.
+  worldCancelledAt     DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
   @@index([state, attemptStartedAt])
+  @@index([worldCountry])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// WORLD WALLET ADMIN AUDIT (task WALLET-41, R-87)
+///
+/// One row for each time an admin froze, unfroze or cancelled a world
+/// (non-Nigerian) opening or wallet: who, what, why, when, and the stage
+/// before and after. Never a name, a document or a number.
+/// ─────────────────────────────────────────────────────────────────────────
+model WorldAdminAudit {
+  id                String    @id @default(uuid())
+  subjectWawuId     String
+  /// freeze | unfreeze | cancel
+  action            String
+  reason            String
+  stageBefore       String
+  stageAfter        String
+  actedByAdminId    String
+  actedByAdminEmail String
+  actedByAdminRole  AdminRole
+  actedAt           DateTime  @default(now())
+
+  @@index([subjectWawuId])
+  @@index([actedByAdminId])
+  @@index([actedAt])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────

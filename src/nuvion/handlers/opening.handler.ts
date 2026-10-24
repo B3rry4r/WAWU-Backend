@@ -3,11 +3,13 @@ import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   alignClaim,
+  CANCELLED_BY_ADMIN,
   CLAIM_LOST,
   type ClaimAlignment,
   EXPIRED_STATE,
 } from '../../money/opening/bvn-claim';
 import { noteDocumentRefusals } from '../../money/opening/document-refusals';
+import { WorldWalletService } from '../../money/world/world-wallet.service';
 import {
   type DecisionNotice,
   isDecision,
@@ -162,7 +164,40 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
       };
     }
     if (owner.accountId !== null) return done('approved; account already open');
+    // WALLET-41 (R-87): a person outside Nigeria has no naira account; their
+    // first account is in the currency they chose.
+    const world = await this.prisma.fintavaWalletOpening.findUnique({
+      where: { wawuUserId: owner.wawuUserId },
+      select: { worldCountry: true },
+    });
+    if (world?.worldCountry) return this.openWorldAccount(owner.wawuUserId);
     return this.ensureAccount(area, read.entityId, nuvion);
+  }
+
+  /** The first account of an approved person outside Nigeria (see WorldWalletService). */
+  private async openWorldAccount(
+    wawuUserId: string,
+  ): Promise<NuvionHandlerResult> {
+    let service: WorldWalletService;
+    try {
+      service = this.moduleRef.get(WorldWalletService, { strict: false });
+    } catch {
+      return wait(
+        'this server cannot open a world account; kept for one that can',
+      );
+    }
+    try {
+      const how = await service.ensureFirstAccount(wawuUserId);
+      return how === 'waiting'
+        ? wait('approved; the first account is being opened')
+        : done(`approved; world first account ${how}`);
+    } catch (e) {
+      const why =
+        e instanceof WalletProviderError
+          ? e.kind
+          : ((e as { code?: string }).code ?? (e as Error).name ?? 'Error');
+      return wait(`the first account could not be opened (${why})`);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -276,7 +311,10 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
           wawuUserId,
           provider: 'nuvion',
           state: { in: [...REVIEW_OPENING_STATES, 'unknown'] },
-          OR: [{ failure: null }, { failure: { not: CLAIM_LOST } }],
+          OR: [
+            { failure: null },
+            { failure: { notIn: [CLAIM_LOST, CANCELLED_BY_ADMIN] } },
+          ],
         },
         data: { state: openingStateForStage(stage), failure: null },
       });

@@ -268,5 +268,11 @@ export const MONEY_ERROR_CODES = [
   'chain_mismatch',
   'provider_declined',
   'fx_account_not_open',
+  // A wallet for a person outside Nigeria (WALLET-41, R-87): the admin switch
+  // is off; the day's cap on new openings is reached; no opening is taken
+  // from the person's country.
+  'world_switched_off',
+  'world_limit_reached',
+  'country_not_supported',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

@@ -4,8 +4,11 @@ import {
   createParamDecorator,
   ExecutionContext,
   Injectable,
+  Optional,
+  SetMetadata,
   UseGuards,
 } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -113,6 +116,50 @@ export class WalletGate {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
+   * `requireOpen`, or, for a person who opened from outside Nigeria
+   * (WALLET-41, R-87), their world wallet: the first foreign account is
+   * open and an admin has not cancelled it. They have no naira account, so
+   * `walletId` and `accountNumber` are empty and only the foreign-account
+   * routes that never touch the naira wallet use this gate.
+   */
+  async requireOpenOrWorld(wawuUserId: string): Promise<OpenWallet> {
+    const naira = await this.prisma.fintavaWallet.findUnique({
+      where: { wawuUserId },
+      select: { customerId: true, walletId: true, accountNumber: true },
+    });
+    if (naira) return { wawuUserId, ...naira };
+    const world = await this.prisma.fintavaWalletOpening.findUnique({
+      where: { wawuUserId },
+      select: {
+        state: true,
+        failure: true,
+        worldCountry: true,
+        worldAccountOpenedAt: true,
+        worldCancelledAt: true,
+      },
+    });
+    if (
+      world?.worldCountry &&
+      world.worldAccountOpenedAt &&
+      !world.worldCancelledAt
+    ) {
+      const entity = await this.prisma.nuvionEntity.findUnique({
+        where: { wawuUserId },
+        select: { entityId: true },
+      });
+      if (entity?.entityId) {
+        return {
+          wawuUserId,
+          customerId: entity.entityId,
+          walletId: '',
+          accountNumber: '',
+        };
+      }
+    }
+    throw walletGateRefusal(withoutWallet(world));
+  }
+
+  /**
    * The caller's open wallet, or the refusal every wallet route answers:
    * `409 wallet_not_open` or `409 wallet_opening`.
    */
@@ -124,8 +171,18 @@ export class WalletGate {
     if (wallet) return { wawuUserId, ...wallet };
     const opening = await this.prisma.fintavaWalletOpening.findUnique({
       where: { wawuUserId },
-      select: { state: true, failure: true },
+      select: {
+        state: true,
+        failure: true,
+        worldCountry: true,
+        worldAccountOpenedAt: true,
+      },
     });
+    // WALLET-41: a person who opened from outside Nigeria has a wallet, but
+    // no naira one: a naira route is not waiting on anything for them.
+    if (opening?.worldCountry && opening.worldAccountOpenedAt) {
+      throw walletGateRefusal('not_open');
+    }
     throw walletGateRefusal(withoutWallet(opening));
   }
 }
@@ -155,7 +212,10 @@ export function walletGateRefusal(
  */
 @Injectable()
 export class WalletGateGuard implements CanActivate {
-  constructor(private readonly gate: WalletGate) {}
+  constructor(
+    private readonly gate: WalletGate,
+    @Optional() private readonly reflector?: Reflector,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<GatedRequest>();
@@ -167,7 +227,12 @@ export class WalletGateGuard implements CanActivate {
       );
     }
     try {
-      req[OPEN_WALLET_KEY] = await this.gate.requireOpen(wawuUserId);
+      const world =
+        this.reflector?.get<boolean>(WORLD_WALLET_OK, context.getHandler()) ===
+        true;
+      req[OPEN_WALLET_KEY] = world
+        ? await this.gate.requireOpenOrWorld(wawuUserId)
+        : await this.gate.requireOpen(wawuUserId);
       return true;
     } catch (e) {
       dropTransactionPin(req);
@@ -197,9 +262,21 @@ export function dropTransactionPin(req: Request): void {
  * together across every mounted controller. The module that owns the route
  * imports MoneyModule (it exports the gate).
  */
-export function RequireOpenWallet(): MethodDecorator {
-  return applyDecorators(UseGuards(WalletGateGuard));
+export function RequireOpenWallet(
+  options: { world?: boolean } = {},
+): MethodDecorator {
+  return applyDecorators(
+    UseGuards(WalletGateGuard),
+    ...(options.world ? [SetMetadata(WORLD_WALLET_OK, true)] : []),
+  );
 }
+
+/**
+ * Set by `@RequireOpenWallet({ world: true })` (WALLET-41): the route also
+ * serves a person whose wallet is a world wallet. Only a route that never
+ * reads or moves the naira wallet may say so.
+ */
+const WORLD_WALLET_OK = 'wawu:world-wallet-ok';
 
 /** The wallet `@RequireOpenWallet()` found for this request. */
 export const CurrentWallet = createParamDecorator(

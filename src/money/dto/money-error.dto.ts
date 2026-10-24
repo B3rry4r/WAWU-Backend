@@ -136,6 +136,15 @@ export class MoneyErrorReason {
   /** provider_unreachable, idempotency_in_progress, identity_checks_exhausted, open_address_limited, selfie_checks_exhausted, reset_codes_exhausted, recipient_search_rate_limited, name_check_rate_limited: seconds to wait before trying again. */
   retryAfterSeconds?: number;
 
+  /**
+   * account_not_opened on a world opening (WALLET-41): the names of the
+   * fields the provider's own refusal pointed at (for example `person.ssn`),
+   * never a value. The app asks for them; the list is the provider's, not a
+   * fixed one of ours.
+   */
+  @ApiPropertyOptional({ type: [String] })
+  fields?: string[];
+
   /** bvn_not_confirmed, bvn_phone_mismatch: BVN checks left in the current 24 hours. selfie_not_matched: selfie matches left in the current 24 hours. */
   checksLeft?: number;
 

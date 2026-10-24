@@ -65,6 +65,13 @@ const NOT_GATED: Record<string, string> = {
     'Earnings: what a creator earned and what waits for their wallet (W39, R-11, WALLET-16)',
   'GET money/earnings/content':
     'Earnings: one month piece by piece, for a creator with no wallet yet (W39, R-11, WALLET-16)',
+  // WALLET-41 (R-87): a person outside Nigeria opens a wallet without a BVN.
+  // Both routes are where such a person is led before and after the opening,
+  // so they run with no naira wallet and read none.
+  'GET money/world/options':
+    'Open your wallet from outside Nigeria: what is offered before opening (WALLET-41)',
+  'POST money/world/first-account':
+    'Open your wallet from outside Nigeria: opens the first account once approved (WALLET-41)',
   // Declared, not served: Nigeria's bank list and a name check need no wallet.
   'GET money/banks': 'the bank list (WALLET-09) reads no wallet',
   'POST money/banks/name-check':

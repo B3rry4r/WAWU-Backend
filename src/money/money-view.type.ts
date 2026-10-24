@@ -22,6 +22,7 @@ import type {
   FeeQuoteKind,
   PaymentKind,
 } from './dto/money-enums';
+import type { WorldWalletView } from './world/world-view.type';
 
 /* ------------------------------------------------------------------ */
 /* Shared pieces                                                       */
@@ -177,6 +178,13 @@ export interface WalletView {
    * the screen draws a line only for what the Hub says. `feeKobo` 0 is free.
    */
   transferIn?: TransferInView;
+  /**
+   * WALLET-41 (R-87), additive: sent only for a person who opened from outside
+   * Nigeria, without a BVN. They have no naira account: `account` stays null
+   * and `accountNumberStatus` `none`, and `state` is `open` once the first
+   * foreign account is (GET /money/fx/accounts has it).
+   */
+  world?: WorldWalletView;
 }
 
 /** `WalletView.transferIn`: what a transfer into the wallet account costs and how long it takes. */

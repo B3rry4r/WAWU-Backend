@@ -33,8 +33,9 @@ import { MoneyError } from '../money-error';
 import type { WalletState, WalletView } from '../money-view.type';
 import { FeeQuoteService } from '../fees/fee-quote.service';
 import { TransactionPinService } from '../pin/transaction-pin.service';
-import type { OpenNairaWalletDto } from './dto/open-wallet.dto';
+import { isAbroad, OpenNairaWalletDto } from './dto/open-wallet.dto';
 import { visibleBeneficiaries } from '../saved-accounts/beneficiary.service';
+import { worldViewOf, WorldWalletService } from '../world/world-wallet.service';
 import { type IdentityStop, stoppedOnIdentity } from './opening-stops';
 import { ReviewedOpening } from './reviewed-opening';
 import { tellWalletReady } from './wallet-ready-notice';
@@ -77,6 +78,8 @@ type OpeningRow = {
   failure: string | null;
   /** Which provider the opening is with (NUV-01); null is Fintava. */
   provider?: string | null;
+  /** WALLET-41: the country of a world opening; null for a Nigerian one. */
+  worldCountry?: string | null;
 };
 
 const OPENING_SELECT = {
@@ -90,6 +93,7 @@ const OPENING_SELECT = {
   checkedAt: true,
   failure: true,
   provider: true,
+  worldCountry: true,
 } as const;
 
 /** A refusal whose words say the record exists: never read as "nothing was made". */
@@ -213,6 +217,8 @@ export class WalletOpeningService {
     @Optional() private readonly accountLimits?: AccountLimits,
     // FIX-109: W15's "Free" and its arrival line. Absent: no `transferIn`.
     @Optional() private readonly fees?: FeeQuoteService,
+    // WALLET-41: a person outside Nigeria. Absent: no world wallet.
+    @Optional() private readonly world?: WorldWalletService,
   ) {
     this.reviewed = new ReviewedOpening({
       prisma,
@@ -267,7 +273,15 @@ export class WalletOpeningService {
       }),
       this.prisma.fintavaWalletOpening.findUnique({
         where: { wawuUserId },
-        select: { state: true, failure: true },
+        select: {
+          state: true,
+          failure: true,
+          worldCountry: true,
+          worldFirstCurrency: true,
+          worldAccountOpenedAt: true,
+          worldFrozenAt: true,
+          worldCancelledAt: true,
+        },
       }),
       this.pins.state(wawuUserId),
       this.prisma.nuvionEntity.findUnique({
@@ -284,7 +298,17 @@ export class WalletOpeningService {
     ]);
     // The wallet gate's own rule (MONEY-13), so this state and the code
     // every other wallet route refuses with always agree.
-    const state: WalletState = walletStateOf(wallet !== null, opening);
+    // WALLET-41: a person outside Nigeria has no naira account; their wallet
+    // is open once the first foreign account is (and an admin has not
+    // cancelled the opening).
+    const world = worldViewOf(opening);
+    const worldOpen =
+      world !== undefined &&
+      (world.state === 'open' || world.state === 'frozen');
+    const state: WalletState = walletStateOf(
+      wallet !== null || worldOpen,
+      opening,
+    );
     // The issuer Nuvion named for this wallet's own number (NUV-04).
     const issuer =
       wallet &&
@@ -332,13 +356,19 @@ export class WalletOpeningService {
       beneficiaryCount: wallet
         ? (await visibleBeneficiaries(this.prisma, wawuUserId)).length
         : 0,
-      accountNumberStatus: wallet ? 'active' : onItsWay ? 'on_its_way' : 'none',
+      accountNumberStatus: wallet
+        ? 'active'
+        : onItsWay && world === undefined
+          ? 'on_its_way'
+          : 'none',
       // NUV-02, additive and only under a provider that reviews the person
       // itself: the answer under Fintava is exactly MONEY-12's (an absent
       // `openingFlow` is `check`).
       ...(review !== undefined
         ? { openingFlow: 'review' as const, review }
         : {}),
+      // WALLET-41, additive: only for a person who opened from outside Nigeria.
+      ...(world !== undefined ? { world } : {}),
       // FIX-109, additive: the Hub's own word on a transfer in (what it costs,
       // how long it takes), only for what is set. Never from the app.
       ...(this.fees?.transferIn ? { transferIn: this.fees.transferIn } : {}),
@@ -363,6 +393,28 @@ export class WalletOpeningService {
     // under a reviewing provider the tries are limited per address too.
     address: string | null = null,
   ): Promise<WalletView> {
+    if (isAbroad(input)) {
+      // WALLET-41 (R-87): only a provider that holds foreign accounts and
+      // reviews the person itself (Nuvion) opens a wallet without a BVN.
+      if (!this.reviewing || !this.provider.fx || !this.world) {
+        throw new MoneyError(
+          'currency_not_supported',
+          'A wallet for a person outside Nigeria is not available on this wallet yet.',
+        );
+      }
+      const firstCurrency = await this.world.guardOpen(
+        wawuUserId,
+        input.countryCode!,
+        input.firstCurrency,
+      );
+      await this.reviewed.open(
+        wawuUserId,
+        { email, phone },
+        Object.assign(new OpenNairaWalletDto(), input, { firstCurrency }),
+        address,
+      );
+      return this.view(wawuUserId, address);
+    }
     if (this.reviewing) {
       // NUV-02: the details, the BVN and the NIN go to the provider's own
       // review; no BVN check or selfie match comes before (reviewed-opening.ts).

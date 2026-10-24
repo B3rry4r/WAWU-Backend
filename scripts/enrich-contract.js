@@ -389,6 +389,9 @@ const WHOLE_NUMBER_DIRS = [
   // is an integer in a currency's smallest unit (`...Minor`), a count of
   // places, or seconds.
   path.join(ROOT, 'src', 'money', 'fx') + path.sep,
+  // A wallet for a person outside Nigeria (task WALLET-41): the fee to open
+  // is an integer in the currency's smallest unit, `decimals` a count.
+  path.join(ROOT, 'src', 'money', 'world') + path.sep,
 ];
 
 function numberAsInteger(schema) {

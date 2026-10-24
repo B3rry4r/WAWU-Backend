@@ -146,6 +146,13 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   chain_mismatch: 422,
   provider_declined: 409,
   fx_account_not_open: 409,
+  // WALLET-41 (R-87). Default (lead), owner may override: 409 for the switch
+  // that is off (as fx_switched_off); 429 for the day's cap on new openings
+  // (as open_address_limited: try again later); 422 for a country no opening
+  // is taken from (the request is understood, the country is the problem).
+  world_switched_off: 409,
+  world_limit_reached: 429,
+  country_not_supported: 422,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */
