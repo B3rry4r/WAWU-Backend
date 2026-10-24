@@ -572,7 +572,15 @@ describe('WAWU fee on a send to a WAWU user, collected on Nuvion (FIX-52)', () =
     const result = await deliver('outflows.refunded', sent, me);
     expect(result.outcome).toBe('done');
     // The ledger's own event settles the send; settling again is harmless.
-    await waitFor(async () => (await rowOf(view.id)).status === 'reversed');
+    await waitFor(async () => {
+      const r = await rowOf(view.id);
+      return (
+        r.status === 'reversed' &&
+        feeBacks(view.reference).length === 1 &&
+        (await merchantRow(`${view.reference}-fee-back`, 'out')).length === 1 &&
+        r.nextCheckAt === null
+      );
+    });
     await transfers.settle(view.id, later(), false);
     await transfers.sweep(later());
     expect((await rowOf(view.id)).status).toBe('reversed');
@@ -764,7 +772,15 @@ describe('WAWU fee on a send to a WAWU user, collected on Nuvion (FIX-52)', () =
     expect(view.status).toBe('completed');
     const sent = book.settle(view.reference, 'reversed');
     await deliver('outflows.refunded', sent, me);
-    await waitFor(async () => (await rowOf(view.id)).status === 'reversed');
+    await waitFor(async () => {
+      const r = await rowOf(view.id);
+      return (
+        r.status === 'reversed' &&
+        feeBacks(view.reference).length === 1 &&
+        (await merchantRow(`${view.reference}-fee-back`, 'out')).length === 1 &&
+        r.nextCheckAt === null
+      );
+    });
     await transfers.sweep(later());
     await transfers.sweep(later());
     expect(feeBacks(view.reference)).toHaveLength(1);
