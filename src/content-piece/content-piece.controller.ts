@@ -79,6 +79,7 @@ export class ContentPieceController {
       query.status,
       query.page,
       query.perPage,
+      query.contentType,
     );
   }
 

@@ -38,10 +38,14 @@ export class LessonInputDto {
   })
   durationLabel?: string;
 
-  /** The lesson's file: the key (or link) of an upload this person made under `content/full`. Left out, the lesson has no file yet. */
+  /**
+   * The lesson's file: the key (or link) of an upload this person made under `content/full`. A new lesson with none has no file yet.
+   * A lesson kept by `id` keeps the file it has when this is left out (FIX-111: the editor does not know the key of a file it did not
+   * upload), takes a new one when a key is sent, and loses its file only when this is `null`.
+   */
   @IsOptional()
   @IsString()
-  assetKey?: string;
+  assetKey?: string | null;
 }
 
 /** Body for PUT /content/:id/lessons: the whole list, in the order the lessons are taken. */

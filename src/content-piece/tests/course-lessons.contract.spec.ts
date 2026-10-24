@@ -423,6 +423,52 @@ describe('Course lessons: one file each, the first free (contract)', () => {
       ).toBe(1);
     });
 
+    it('FIX-111: a lesson kept by id keeps its file when none is sent, takes a new file when one is, and loses it only for null', async () => {
+      const c = await course([true, true, true]);
+      const before = await prisma.courseLesson.findMany({
+        where: { contentId: c.id },
+        orderBy: { order: 'asc' },
+      });
+      const fresh = ownKey(creator);
+      await upload(creator, fresh);
+      // Reordered and renamed with no key sent: every file stays with its lesson.
+      await setLessons(creator, c.id, [
+        { id: c.lessons[2], title: 'Third, now first' },
+        { id: c.lessons[0], title: 'First, now second', assetKey: fresh },
+        { id: c.lessons[1], title: 'Second, now last', assetKey: null },
+        { title: 'A new lesson, no file yet' },
+      ]).expect(200);
+      const rows = await prisma.courseLesson.findMany({
+        where: { contentId: c.id },
+        orderBy: { order: 'asc' },
+      });
+      expect(rows.map((r) => r.title)).toEqual([
+        'Third, now first',
+        'First, now second',
+        'Second, now last',
+        'A new lesson, no file yet',
+      ]);
+      expect(rows.map((r) => r.assetKey)).toEqual([
+        before[2].assetKey,
+        fresh,
+        null,
+        null,
+      ]);
+      const kept = await detailLessons(creator, c.id);
+      expect(kept.map((l) => l.hasFile)).toEqual([true, true, false, false]);
+      // Sent once more with no key at all: the files of the kept lessons stay.
+      await setLessons(
+        creator,
+        c.id,
+        rows.map((r) => ({ id: r.id, title: r.title })),
+      ).expect(200);
+      const again = await prisma.courseLesson.findMany({
+        where: { contentId: c.id },
+        orderBy: { order: 'asc' },
+      });
+      expect(again.map((r) => r.assetKey)).toEqual(rows.map((r) => r.assetKey));
+    });
+
     it('a course people have bought never loses a lesson', async () => {
       const c = await course([true, true]);
       await buy(buyer, c.id);

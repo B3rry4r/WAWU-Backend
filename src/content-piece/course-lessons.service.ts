@@ -152,15 +152,18 @@ export class CourseLessonsService {
     if (new Set(ids).size !== ids.length) {
       throw new BadRequestException('A lesson is listed twice.');
     }
+    // `undefined`: the file stays as it is (a kept lesson) or there is none (a new one); `null`: the file is taken off; a string: that file.
     const keys = given.map((l) =>
-      l.assetKey === undefined ? null : objectKeyFrom(l.assetKey),
+      l.assetKey === undefined || l.assetKey === null
+        ? l.assetKey
+        : objectKeyFrom(l.assetKey),
     );
     for (const k of keys) {
-      if (k !== null && !isOwnFullKey(k, ownerWawuId)) {
+      if (typeof k === 'string' && !isOwnFullKey(k, ownerWawuId)) {
         throw new BadRequestException(BAD_FILE);
       }
     }
-    const filed = keys.filter((k): k is string => k !== null);
+    const filed = keys.filter((k): k is string => typeof k === 'string');
 
     await inPersonsTurn(ownerWawuId, () =>
       this.prisma.$transaction(async (tx) => {
@@ -198,12 +201,18 @@ export class CourseLessonsService {
             title: l.title.trim(),
             order: i + 1,
             durationLabel: l.durationLabel ?? null,
-            assetKey: keys[i],
           };
+          const key = keys[i];
           if (l.id) {
-            await tx.courseLesson.update({ where: { id: l.id }, data });
+            // A kept lesson keeps its file unless a key (a new file) or null (none) was sent.
+            await tx.courseLesson.update({
+              where: { id: l.id },
+              data: key === undefined ? data : { ...data, assetKey: key },
+            });
           } else {
-            await tx.courseLesson.create({ data: { contentId, ...data } });
+            await tx.courseLesson.create({
+              data: { contentId, ...data, assetKey: key ?? null },
+            });
           }
         }
         // "Updated <month>" on the piece's page moves when its lessons change.

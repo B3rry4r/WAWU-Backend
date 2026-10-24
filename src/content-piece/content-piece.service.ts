@@ -742,6 +742,35 @@ export class ContentPieceService {
   }
 
   /**
+   * FIX-111 (H24): a piece may say it comes from a course only when that course is the creator's own, is live or in review,
+   * and the piece is not a course itself. One refusal for every other case, so a stranger's course id says nothing about it.
+   */
+  private async assertOwnCourse(
+    creatorWawuId: string,
+    dto: Pick<CreateContentDto, 'contentType' | 'parentCourseId'>,
+  ): Promise<void> {
+    if (dto.contentType === 'course') {
+      throw new BadRequestException(
+        'A course cannot come from another course.',
+      );
+    }
+    const parent = await this.prisma.contentPiece.findUnique({
+      where: { id: dto.parentCourseId },
+      select: { creatorWawuId: true, contentType: true, status: true },
+    });
+    if (
+      !parent ||
+      parent.creatorWawuId !== creatorWawuId ||
+      parent.contentType !== 'course' ||
+      (parent.status !== 'live' && parent.status !== 'pending')
+    ) {
+      throw new BadRequestException(
+        'Choose one of your own courses that is live or in review.',
+      );
+    }
+  }
+
+  /**
    * `inTransaction`, when given, runs inside the publish transaction before
    * the place is claimed: a draft being published deletes itself there, so a
    * second tap finds it gone and publishes nothing twice.
@@ -777,6 +806,10 @@ export class ContentPieceService {
       throw new BadRequestException(
         'Paid content must have a price greater than ₦0.',
       );
+    }
+
+    if (dto.parentCourseId !== undefined) {
+      await this.assertOwnCourse(creatorWawuId, dto);
     }
 
     const slug = `${this.slugify(dto.title)}-${randomUUID().slice(0, 8)}`;
@@ -845,7 +878,7 @@ export class ContentPieceService {
             throw new PlaceNotClaimed();
           }
 
-          return tx.contentPiece.create({
+          const row = await tx.contentPiece.create({
             data: {
               slug,
               creatorWawuId,
@@ -863,6 +896,13 @@ export class ContentPieceService {
               status: 'pending',
             },
           });
+          // FIX-111: the course this piece comes from lives on its side row (a column on the piece would widen every response).
+          if (dto.parentCourseId) {
+            await tx.contentDetail.create({
+              data: { contentId: row.id, parentCourseId: dto.parentCourseId },
+            });
+          }
+          return row;
           // May wait for the person's storage lock while a release or the sweep
           // finishes a call to the bucket: longer than Prisma's 5 s default.
         }, LOCKED_TX),
@@ -941,10 +981,12 @@ export class ContentPieceService {
     status: MyContentFilter | undefined,
     page: number,
     perPage: number,
+    contentType?: 'course',
   ): Promise<Paginated<MyContentItem>> {
     const where = {
       creatorWawuId,
       status: status ? status : { not: 'removed' as const },
+      ...(contentType ? { contentType } : {}),
     };
     const [rows, total] = await this.prisma.$transaction([
       this.prisma.contentPiece.findMany({
