@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- Rollback of 20261125090000_world_wallet (WALLET-41). Drops the audit table
+-- Rollback of 20261129090000_world_wallet (WALLET-41). Drops the audit table
 -- and the seven columns the migration added to "FintavaWalletOpening", and nothing
 -- else. Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while the audit table holds a row (it is the

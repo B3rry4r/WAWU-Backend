@@ -4528,7 +4528,7 @@ model FintavaWalletOpening {
   /// `nuvion`; null is Fintava. The opening sweep reconciles only openings
   /// of the provider the server runs.
   provider         String?   @default("fintava")
-  /// WALLET-41 (R-87, migration 20261125090000): a person whose country of
+  /// WALLET-41 (R-87, migration 20261129090000): a person whose country of
   /// residence is not Nigeria opens without a BVN. Their ISO 3166-1 country;
   /// null for a Nigerian opening (the BVN naira wallet). For such an opening
   /// `bvnHash` holds the keyed hash of their ID document, never a BVN.
