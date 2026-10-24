@@ -199,6 +199,24 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
     await set('ai.quick_voice_chars_per_minute', null);
   });
 
+  it('AITOOLS-02 M1 (R-65): the catalogue text carries no price claim, because the price is an admin setting: with Quick voice set to 240 the words still say nothing about points, halves or cheaper', async () => {
+    await set('points.action.quick_voice_per_min', 240);
+    try {
+      const view = await catalogue();
+      const quickTool = view.tools.find((t) => t.id === 'quick-voice')!;
+      expect(quickTool.costPointsPerUnit).toBe(240);
+      for (const t of view.tools) {
+        for (const words of [t.name, t.description]) {
+          expect(words).not.toMatch(
+            /half|double|twice|cheap|discount|save|less|more|percent|%|\bpoints?\b|\bcost|\bprice|\d/i,
+          );
+        }
+      }
+    } finally {
+      await set('points.action.quick_voice_per_min', null);
+    }
+  });
+
   it('check 2: with no voice provider set up Quick voice is not listed at all, VoiceOver stays listed off, and a Quick voice job is refused with nothing held', async () => {
     await h.grant(PLAIN, QUICK_1);
     const provider = h.get<{ configured: boolean }>(AI_VOICE_PROVIDER);

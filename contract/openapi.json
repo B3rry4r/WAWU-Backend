@@ -35049,7 +35049,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Starts a Quick voice job (PT1 \"Quick voice\", AITOOLS-02): a fast,\ncheaper read of the words in one of the same voices as VoiceOver, priced\nby `quick_voice_per_min`. The request, the answer, the `Idempotency-Key`\nrule and every refusal are exactly those of `POST /ai-tools/voiceover/jobs`;\nthe `quoteToken` is one for the action `quick_voice_per_min`.",
+        "summary": "Starts a Quick voice job (PT1 \"Quick voice\", AITOOLS-02): a fast read of\nthe words in one of the same voices as VoiceOver, priced by\n`quick_voice_per_min`. The request, the answer, the `Idempotency-Key`\nrule and every refusal are exactly those of `POST /ai-tools/voiceover/jobs`;\nthe `quoteToken` is one for the action `quick_voice_per_min`.",
         "tags": [
           "AiTools"
         ],

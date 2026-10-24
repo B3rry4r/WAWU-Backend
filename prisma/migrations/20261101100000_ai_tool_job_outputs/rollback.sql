@@ -5,19 +5,21 @@
 -- by "audioKey"). Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while any row keeps something only these
 -- columns hold: an output that is not the job's own audio (words or subtitles
--- a person paid points for), a provider's job id, or a person's uploaded
--- input. Copy them out first only if you mean to lose them.
+-- a person paid points for), an "outputs" value that is not a list at all, a
+-- provider's job id, or a person's uploaded input. Copy them out first only if
+-- you mean to lose them.
 DO $$
 BEGIN
   IF EXISTS (
     SELECT 1 FROM "AiToolJob"
      WHERE "providerRef" IS NOT NULL
         OR "inputRef" IS NOT NULL
+        OR ("outputs" IS NOT NULL AND jsonb_typeof("outputs") <> 'array')
         OR EXISTS (
           SELECT 1 FROM jsonb_array_elements(
             CASE WHEN jsonb_typeof("outputs") = 'array' THEN "outputs" ELSE '[]'::jsonb END
           ) AS o
-          WHERE o->>'kind' <> 'audio' OR o->>'key' IS DISTINCT FROM "audioKey"
+          WHERE o->>'kind' IS DISTINCT FROM 'audio' OR o->>'key' IS DISTINCT FROM "audioKey"
         )
   ) THEN
     RAISE EXCEPTION 'AITOOLS-02 rollback: a job keeps an output, a provider id or an uploaded input only these columns hold. Nothing was changed.';

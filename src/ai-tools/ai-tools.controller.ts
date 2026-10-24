@@ -99,9 +99,9 @@ export class AiToolsController {
   }
 
   /**
-   * Starts a Quick voice job (PT1 "Quick voice", AITOOLS-02): a fast,
-   * cheaper read of the words in one of the same voices as VoiceOver, priced
-   * by `quick_voice_per_min`. The request, the answer, the `Idempotency-Key`
+   * Starts a Quick voice job (PT1 "Quick voice", AITOOLS-02): a fast read of
+   * the words in one of the same voices as VoiceOver, priced by
+   * `quick_voice_per_min`. The request, the answer, the `Idempotency-Key`
    * rule and every refusal are exactly those of `POST /ai-tools/voiceover/jobs`;
    * the `quoteToken` is one for the action `quick_voice_per_min`.
    */

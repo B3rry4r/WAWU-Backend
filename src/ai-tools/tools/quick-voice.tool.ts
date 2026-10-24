@@ -10,8 +10,9 @@ export const QUICK_VOICE_CHARS_PER_MINUTE_SETTING =
 
 /**
  * Quick voice (AITOOLS-02, PT1 "Quick voice, 125 a minute"; owner, 23 Oct
- * 2026): a fast, cheaper read-aloud. The same voices as VoiceOver on the
- * provider's faster model (`speakQuick`), priced at half. The other reading
+ * 2026): a fast read-aloud. The same voices as VoiceOver on the provider's
+ * faster model (`speakQuick`), priced by its own setting (R-65), so no text a
+ * person reads may state or imply a price. The other reading
  * of the tile, a person's own voice from a short recording, is "Your voice"
  * on PT2 (VOICE-01), and the owner's answer is G-AITOOLS-02-1.
  */
@@ -19,7 +20,7 @@ export const QUICK_VOICE_TOOL: AiTool = {
   id: 'quick-voice',
   action: QUICK_VOICE_ACTION,
   name: 'Quick voice',
-  description: 'A fast read of your words, at half the points.',
+  description: 'A fast read of your words.',
   unit: 'minute',
   input: {
     kind: 'text',

@@ -74,7 +74,7 @@ export interface AiVoiceProvider {
   ): Promise<SpokenAudio>;
 
   /**
-   * Makes the audio on the provider's faster, cheaper model (Quick voice,
+   * Makes the audio on the provider's faster model (Quick voice,
    * AITOOLS-02): the same voices as `speak`, the model set by
    * `AI_VOICE_QUICK_MODEL`. A network call, with the same rules as `speak`.
    * Throws `AiVoiceProviderError`.

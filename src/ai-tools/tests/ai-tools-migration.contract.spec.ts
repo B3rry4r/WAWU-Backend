@@ -178,6 +178,15 @@ describe('AITOOLS-02: the AiToolJob migration applies on existing rows and rolls
       'an audio output that is not the job audio',
       `"outputs" = '[{"kind":"audio","key":"ai/other/x.mp3"}]'::jsonb`,
     ],
+    [
+      'an output that is a single object, not a list',
+      `"outputs" = '{"kind":"text","text":"x"}'::jsonb`,
+    ],
+    ['an output that is a text value, not a list', `"outputs" = '"x"'::jsonb`],
+    [
+      'a list that holds something other than an output (on a job with no audio key)',
+      `"audioKey" = NULL, "outputs" = '["x"]'::jsonb`,
+    ],
     ['the provider job id', `"providerRef" = 'p-1'`],
     ['the person upload', `"inputRef" = 'ai/input/x.m4a'`],
   ])(
