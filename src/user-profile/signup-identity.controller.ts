@@ -3,6 +3,7 @@ import { Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
+import { ChangeHandleDto } from './dto/change-handle.dto';
 import { CompleteIdentityDto } from './dto/complete-identity.dto';
 import { HandleAvailabilityQueryDto } from './dto/handle-availability.dto';
 import { SignupIdentityService } from './signup-identity.service';
@@ -40,5 +41,17 @@ export class SignupIdentityController {
     @Body() dto: CompleteIdentityDto,
   ) {
     return this.identity.complete(user, dto);
+  }
+
+  /**
+   * The app's Edit profile changing a username it already has (round 3, M2). The same rules and lock as the route
+   * above; `PATCH /users/me` is untouched because the web calls it (BACKEND_GAPS G-SIGNUP-NAMES-1).
+   */
+  @Put('me/handle')
+  changeHandle(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: ChangeHandleDto,
+  ) {
+    return this.identity.changeHandle(user, dto);
   }
 }

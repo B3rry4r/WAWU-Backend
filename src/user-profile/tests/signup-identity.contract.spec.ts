@@ -351,4 +351,298 @@ describe('Username and name at sign-up (SIGNUP-NAMES, contract)', () => {
       .send({ handle: free('x'), accountType: 'creator' })
       .expect(400);
   });
+
+  // ---- Round 3 (verifier M1): an underscore in a typed name is a character, not a wildcard ----
+
+  it('M1: an underscore is only an underscore, so a name that differs from a held one by a character is free and claimable', async () => {
+    const holder = await person('under-a');
+    const base = `sgu${stamp}`;
+    const held = `${base}_wXild`;
+    const lookalike = `${base}_wXil_`;
+    await http()
+      .put('/api/hub/users/me/identity')
+      .set(bearer(holder.token))
+      .send({ handle: held })
+      .expect(200);
+    // The held name is taken, in any case ...
+    for (const typed of [held, held.toUpperCase(), held.toLowerCase()]) {
+      expect(dataOf(await available(typed).expect(200))).toMatchObject({
+        available: false,
+      });
+    }
+    // ... and the name that only an underscore-as-wildcard would match is free.
+    expect(dataOf(await available(lookalike).expect(200))).toEqual({
+      handle: lookalike,
+      available: true,
+      message: null,
+    });
+    const other = await person('under-b');
+    const claimed = await http()
+      .put('/api/hub/users/me/identity')
+      .set(bearer(other.token))
+      .send({ handle: lookalike })
+      .expect(200);
+    expect(dataOf(claimed)).toMatchObject({ handle: lookalike });
+    // Both are held now, and each is still taken for a third person, in any case.
+    for (const typed of [held, lookalike, lookalike.toUpperCase()]) {
+      expect(dataOf(await available(typed).expect(200))).toMatchObject({
+        available: false,
+        message: 'That username is taken. Try another.',
+      });
+    }
+    // The other direction: the name with the underscore is not "held" by a name with a letter there.
+    const holds = `${base}_pQrs`;
+    const probe = `${base}_pQr_`;
+    const third = await person('under-c');
+    await http()
+      .put('/api/hub/users/me/identity')
+      .set(bearer(third.token))
+      .send({ handle: probe })
+      .expect(200);
+    expect(dataOf(await available(holds).expect(200))).toMatchObject({
+      available: true,
+    });
+  });
+
+  it('M1: Ada and ada still collide, on the check and on the claim', async () => {
+    const a = await person('case-a');
+    const b = await person('case-b');
+    const name = `Ada${stamp}`;
+    await http()
+      .put('/api/hub/users/me/identity')
+      .set(bearer(a.token))
+      .send({ handle: name })
+      .expect(200);
+    expect(
+      dataOf(await available(name.toLowerCase()).expect(200)),
+    ).toMatchObject({ available: false });
+    const refused = await http()
+      .put('/api/hub/users/me/identity')
+      .set(bearer(b.token))
+      .send({ handle: name.toLowerCase() })
+      .expect(409);
+    expect(messageOf(refused)).toBe('That username is taken. Try another.');
+  });
+
+  // ---- Round 3 (verifier M2, lead ruling): Edit profile changes the username on the new rules ----
+
+  const changeTo = (token: string, handle: unknown) =>
+    http().put('/api/hub/users/me/handle').set(bearer(token)).send({ handle });
+  const hold = async (tag: string, name: string) => {
+    const p = await person(tag);
+    await http()
+      .put('/api/hub/users/me/identity')
+      .set(bearer(p.token))
+      .send({ handle: name })
+      .expect(200);
+    return p;
+  };
+
+  it('M2: the app path refuses pat1 while Pat1 is held, in the server words, and keeps what the person had', async () => {
+    const holder = await hold('chg-holder', `Pat${stamp}`);
+    const mine = await hold('chg-mine', free('chgmine'));
+    expect(holder.sub).not.toBe(mine.sub);
+    const out = await changeTo(mine.token, `pat${stamp}`).expect(409);
+    expect(messageOf(out)).toBe('That username is taken. Try another.');
+    const me = await http()
+      .get('/api/hub/users/me')
+      .set(bearer(mine.token))
+      .expect(200);
+    expect(dataOf(me).handle).toBe(free('chgmine'));
+  });
+
+  it('M2: the app path refuses a reserved word, a name with nothing to read, and a bad shape', async () => {
+    const mine = await hold('chg-bad', free('chgbad'));
+    for (const word of ['wawu', 'Admin', 'ME', '@Support', 'www']) {
+      const out = await changeTo(mine.token, word).expect(400);
+      expect(messageOf(out)).toBe(
+        'That username is not available. Try another.',
+      );
+    }
+    for (const typed of ['.', '..', '_', '@.']) {
+      const out = await changeTo(mine.token, typed).expect(400);
+      expect(messageOf(out)).toBe(
+        'A username needs at least one letter or number.',
+      );
+    }
+    expect(messageOf(await changeTo(mine.token, 'a b').expect(400))).toBe(
+      'Use letters, numbers, dots and underscores.',
+    );
+    expect(messageOf(await changeTo(mine.token, '').expect(400))).toBe(
+      'Choose a username.',
+    );
+    expect(
+      messageOf(await changeTo(mine.token, 'a'.repeat(31)).expect(400)),
+    ).toBe('A username can be at most 30 characters.');
+    const me = await http()
+      .get('/api/hub/users/me')
+      .set(bearer(mine.token))
+      .expect(200);
+    expect(dataOf(me).handle).toBe(free('chgbad'));
+  });
+
+  it('M2: the app path changes the username, frees the old one, and takes the same name in another case', async () => {
+    const first = free('chgold');
+    const mine = await hold('chg-ok', first);
+    const next = free('chgnew');
+    const out = await changeTo(mine.token, `@${next}`).expect(200);
+    expect(dataOf(out)).toEqual({ handle: next });
+    const me = await http()
+      .get('/api/hub/users/me')
+      .set(bearer(mine.token))
+      .expect(200);
+    expect(dataOf(me).handle).toBe(next);
+    expect(dataOf(await available(first).expect(200))).toMatchObject({
+      available: true,
+    });
+    expect(dataOf(await available(next).expect(200))).toMatchObject({
+      available: false,
+    });
+    // Again with the same name is fine, and so is a change of case on the person's own name.
+    await changeTo(mine.token, next).expect(200);
+    expect(
+      dataOf(await changeTo(mine.token, next.toUpperCase()).expect(200)),
+    ).toEqual({ handle: next.toUpperCase() });
+  });
+
+  it('M2: two people changing to one name at once: one gets it, the other is told it is taken', async () => {
+    const a = await hold('chg-twin-a', free('twina'));
+    const b = await hold('chg-twin-b', free('twinb'));
+    const name = free('Twinchg');
+    const [x, y] = await Promise.all([
+      changeTo(a.token, name),
+      changeTo(b.token, name.toUpperCase()),
+    ]);
+    expect([x.status, y.status].sort()).toEqual([200, 409]);
+    const held = await prisma.$queryRaw<
+      { wawuUserId: string }[]
+    >`SELECT "wawuUserId" FROM "UserProfile" WHERE lower("handle") = lower(${name})`;
+    expect(held).toHaveLength(1);
+  });
+
+  it('M2: the route needs a signed-in person and takes a username only', async () => {
+    await http()
+      .put('/api/hub/users/me/handle')
+      .send({ handle: free('anon2') })
+      .expect(401);
+    const p = await person('chg-extra');
+    await http()
+      .put('/api/hub/users/me/handle')
+      .set(bearer(p.token))
+      .send({ handle: free('x2'), accountType: 'creator' })
+      .expect(400);
+    await http()
+      .put('/api/hub/users/me/handle')
+      .set(bearer(p.token))
+      .send({})
+      .expect(400);
+  });
+
+  // ---- Round 3 (verifier lows) ----
+
+  it('lows: the words kept back include the company names and the plain site pages, in any case', async () => {
+    const words = [
+      'me',
+      'root',
+      'login',
+      'logout',
+      'signup',
+      'settings',
+      'admin',
+      'support',
+      'help',
+      'wawu',
+      'wawuafrica',
+      'whomadethis',
+      'api',
+      'www',
+    ];
+    for (const word of words) {
+      for (const typed of [word, word.toUpperCase(), `@${word}`]) {
+        expect(dataOf(await available(typed).expect(200))).toMatchObject({
+          available: false,
+          message: 'That username is not available. Try another.',
+        });
+      }
+    }
+    // A word that only contains one of them is fine.
+    expect(dataOf(await available(`me${stamp}`).expect(200))).toMatchObject({
+      available: true,
+    });
+    const p = await person('reserved');
+    const out = await http()
+      .put('/api/hub/users/me/identity')
+      .set(bearer(p.token))
+      .send({ handle: 'WhoMadeThis' })
+      .expect(400);
+    expect(messageOf(out)).toBe('That username is not available. Try another.');
+  });
+
+  it('lows: a username needs a letter or a number, so ".", ".." and "_" are refused and "a." and "_1" are fine', async () => {
+    for (const typed of ['.', '..', '_', '___', '._.']) {
+      expect(dataOf(await available(typed).expect(200))).toMatchObject({
+        available: false,
+        message: 'A username needs at least one letter or number.',
+      });
+    }
+    const p = await person('dots');
+    const out = await http()
+      .put('/api/hub/users/me/identity')
+      .set(bearer(p.token))
+      .send({ handle: '..' })
+      .expect(400);
+    expect(messageOf(out)).toBe(
+      'A username needs at least one letter or number.',
+    );
+    for (const ok of [`${stamp}.`, `_${stamp}`, `.a${stamp}`]) {
+      expect(dataOf(await available(ok).expect(200))).toMatchObject({
+        available: true,
+      });
+    }
+  });
+
+  it('lows: a name with a control character is a 400 in plain words, never a 502, and nothing is saved', async () => {
+    const p = await person('control');
+    renamed.mockClear();
+    for (const bad of [
+      'Ada\u0000',
+      'A\u0000da',
+      'Ada\u0007',
+      'Ada\nObi',
+      'Ada\tObi',
+      'Ada\u007f',
+    ]) {
+      const first = await http()
+        .put('/api/hub/users/me/identity')
+        .set(bearer(p.token))
+        .send({ firstName: bad, lastName: 'Obi', handle: free('ctl') })
+        .expect(400);
+      expect(messageOf(first)).toBe(
+        'Your name has a character that cannot be saved. Remove it and try again.',
+      );
+      const last = await http()
+        .put('/api/hub/users/me/identity')
+        .set(bearer(p.token))
+        .send({ firstName: 'Ada', lastName: bad })
+        .expect(400);
+      expect(messageOf(last)).toBe(
+        'Your name has a character that cannot be saved. Remove it and try again.',
+      );
+    }
+    expect(renamed).not.toHaveBeenCalled();
+    // The username in the refused calls was not claimed either.
+    expect(
+      await prisma.userProfile.findUnique({ where: { wawuUserId: p.sub } }),
+    ).toBeNull();
+    // A name with an accent, an apostrophe or a hyphen is still a name.
+    await http()
+      .put('/api/hub/users/me/identity')
+      .set(bearer(p.token))
+      .send({ firstName: 'Chidi-Nkem', lastName: "O'Brien Okafor" })
+      .expect(200);
+    expect(renamed).toHaveBeenCalledWith(p.sub, {
+      firstName: 'Chidi-Nkem',
+      lastName: "O'Brien Okafor",
+    });
+  });
 });

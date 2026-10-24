@@ -27395,6 +27395,46 @@
         ]
       }
     },
+    "/api/hub/users/me/handle": {
+      "put": {
+        "operationId": "SignupIdentityController_changeHandle",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeHandleDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "handle": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "handle"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "The app's Edit profile changing a username it already has (round 3, M2). The same rules and lock as the route\nabove; `PATCH /users/me` is untouched because the web calls it (BACKEND_GAPS G-SIGNUP-NAMES-1).",
+        "tags": [
+          "SignupIdentity"
+        ]
+      }
+    },
     "/api/hub/learn/courses/{id}/enrol": {
       "post": {
         "operationId": "CourseEnrollmentController_enrol",
@@ -41344,6 +41384,19 @@
             "maxLength": 60
           }
         }
+      },
+      "ChangeHandleDto": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string",
+            "description": "The username, with or without a leading \"@\". Checked by `checkHandleShape`; its words are the server's.",
+            "maxLength": 60
+          }
+        },
+        "required": [
+          "handle"
+        ]
       },
       "RecordRecentSearchDto": {
         "type": "object",

@@ -8,6 +8,7 @@ import { AccountType } from '../../generated/prisma/enums';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { PrismaService } from '../common/prisma/prisma.service';
+import type { ChangeHandleDto } from './dto/change-handle.dto';
 import type { CompleteIdentityDto } from './dto/complete-identity.dto';
 import type { HandleAvailabilityView } from './dto/handle-availability.dto';
 import { checkHandleShape, HANDLE_MESSAGES } from './handle-rules';
@@ -19,6 +20,10 @@ export interface IdentityView {
 }
 
 export const NAMES_TOGETHER = 'Enter your first name and your last name.';
+export const NAME_CHARACTERS =
+  'Your name has a character that cannot be saved. Remove it and try again.';
+/** Control characters (a NUL byte, a tab, a line break, DEL and the C1 range: Unicode's Cc) have no place in a name. */
+const CONTROL_CHARACTERS = /\p{Cc}/u;
 export const NOTHING_TO_SAVE = 'Send a name or a username to save.';
 
 /**
@@ -32,7 +37,14 @@ export const NOTHING_TO_SAVE = 'Send a name or a username to save.';
  * already differ only by case, so an index on `lower(handle)` could not be added without choosing a loser.
  * The rule is kept here instead: a claim takes a lock on the lowercase name for the length of one short
  * transaction, looks for anyone else holding the name in any case, and writes. Nothing waits on a network call
- * while the lock is held.
+ * while the lock is held. The look compares `lower(handle) = lower($1)` and never `ILIKE` (Prisma's
+ * `mode: 'insensitive'`): `_` is allowed in a username and is a one-character wildcard in a pattern, so `sg_wXild`
+ * would have held `sg_wXil_` too (verifier M1).
+ *
+ * TWO DOORS, ONE RULE SET. `PUT /users/me/identity` completes a profile (sign-up, and the step an old account is
+ * shown once); `PUT /users/me/handle` is the app's Edit profile changing a username it already has. Both go
+ * through `checkHandleShape` and `claim`, so the characters, the length, the reserved words, the case-blind
+ * uniqueness and the lock are the same. `PATCH /users/me` is a route the web calls and stays as it was.
  */
 @Injectable()
 export class SignupIdentityService {
@@ -53,11 +65,10 @@ export class SignupIdentityService {
         message: shape.message,
       };
     }
-    const holder = await this.prisma.userProfile.findFirst({
-      where: { handle: { equals: shape.handle, mode: 'insensitive' } },
-      select: { wawuUserId: true },
-    });
-    return holder
+    const holders = await this.prisma.$queryRaw<
+      { wawuUserId: string }[]
+    >`SELECT "wawuUserId" FROM "UserProfile" WHERE lower("handle") = lower(${shape.handle}) LIMIT 1`;
+    return holders.length > 0
       ? {
           handle: shape.handle,
           available: false,
@@ -77,6 +88,12 @@ export class SignupIdentityService {
     if (sendsName && (!first || !last)) {
       throw new BadRequestException(NAMES_TOGETHER);
     }
+    if (
+      (first && CONTROL_CHARACTERS.test(first)) ||
+      (last && CONTROL_CHARACTERS.test(last))
+    ) {
+      throw new BadRequestException(NAME_CHARACTERS);
+    }
     if (!sendsName && dto.handle === undefined) {
       throw new BadRequestException(NOTHING_TO_SAVE);
     }
@@ -89,7 +106,7 @@ export class SignupIdentityService {
 
     // The username first: it is the part another person can take, and it is one short transaction.
     const handle = wanted
-      ? await this.claim(claims.sub, wanted)
+      ? await this.claim(claims.sub, wanted, false)
       : await this.heldBy(claims.sub);
 
     // The name second, outside any lock. A failure here leaves the username claimed, and the same call again completes.
@@ -106,6 +123,20 @@ export class SignupIdentityService {
     };
   }
 
+  /**
+   * The app's Edit profile changing a username (SIGNUP-NAMES round 3, M2). The same checks and the same lock as
+   * a claim at sign-up; the only difference is that a person who already has a username may take another.
+   * Idempotent: asking for the name already held answers the same. Its old name is free the moment this commits.
+   */
+  async changeHandle(
+    claims: WawuJwtClaims,
+    dto: ChangeHandleDto,
+  ): Promise<{ handle: string }> {
+    const shape = checkHandleShape(dto.handle);
+    if (!shape.ok) throw new BadRequestException(shape.message);
+    return { handle: await this.claim(claims.sub, shape.handle, true) };
+  }
+
   private async heldBy(wawuUserId: string): Promise<string | null> {
     const row = await this.prisma.userProfile.findUnique({
       where: { wawuUserId },
@@ -114,23 +145,25 @@ export class SignupIdentityService {
     return row?.handle ?? null;
   }
 
-  private async claim(wawuUserId: string, handle: string): Promise<string> {
+  private async claim(
+    wawuUserId: string,
+    handle: string,
+    mayChange: boolean,
+  ): Promise<string> {
     try {
       return await this.prisma.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`handle:${handle.toLowerCase()}`}, 0))`;
-        const other = await tx.userProfile.findFirst({
-          where: {
-            handle: { equals: handle, mode: 'insensitive' },
-            NOT: { wawuUserId },
-          },
-          select: { wawuUserId: true },
-        });
-        if (other) throw new ConflictException(HANDLE_MESSAGES.taken);
+        const others = await tx.$queryRaw<
+          { wawuUserId: string }[]
+        >`SELECT "wawuUserId" FROM "UserProfile" WHERE lower("handle") = lower(${handle}) AND "wawuUserId" <> ${wawuUserId} LIMIT 1`;
+        if (others.length > 0)
+          throw new ConflictException(HANDLE_MESSAGES.taken);
         const mine = await tx.userProfile.findUnique({
           where: { wawuUserId },
           select: { handle: true },
         });
         if (
+          !mayChange &&
           mine?.handle &&
           mine.handle.toLowerCase() !== handle.toLowerCase()
         ) {
