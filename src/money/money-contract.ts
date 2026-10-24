@@ -146,6 +146,16 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   chain_mismatch: 422,
   provider_declined: 409,
   fx_account_not_open: 409,
+  // NUV-11 (R-84). Default (lead), owner may override: 422 for a country or
+  // way the provider does not pay and for details it refused (as
+  // name_check_failed: the request is understood, the values are not usable);
+  // 409 for a rate the provider cannot give now (nothing moved, try later or
+  // another account, as provider_declined); 409 for a send that cannot be
+  // cancelled (as quote_expired: the state is not one the action fits).
+  corridor_not_supported: 422,
+  recipient_details_invalid: 422,
+  rate_unavailable: 409,
+  send_not_cancellable: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

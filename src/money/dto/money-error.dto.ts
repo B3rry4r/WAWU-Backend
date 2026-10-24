@@ -86,6 +86,16 @@ export class MoneyErrorReason {
   @ApiPropertyOptional()
   currency?: string;
 
+  @ApiPropertyOptional({ type: 'integer' })
+  minimumMinor?: number;
+
+  @ApiPropertyOptional({ type: 'integer' })
+  maximumMinor?: number;
+
+  /** The fields a provider refused, by key (`recipient_details_invalid`). */
+  @ApiPropertyOptional({ type: [String] })
+  fields?: string[];
+
   /** amount_out_of_range: the smallest amount accepted. */
   @ApiPropertyOptional({ type: 'integer' })
   minimumKobo?: number;
