@@ -72,7 +72,13 @@ export class PlansService {
       pointsIncluded: held.pointsIncluded,
       firstVoiceIntroIncluded: held.voiceIntroIncluded,
       eventPass: held.eventPass
-        ? passView(held.eventPass, this.config.eventDate)
+        ? {
+            ...passView(held.eventPass, this.config.eventDate),
+            ...(this.config.eventName
+              ? { eventName: this.config.eventName }
+              : {}),
+            ...(held.eventPassId ? { passCode: held.eventPassId } : {}),
+          }
         : null,
     };
   }

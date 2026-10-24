@@ -18,6 +18,9 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { PaginationQueryDto } from '../common/dto/pagination.dto';
 import { ContentPieceService } from './content-piece.service';
+import { ContentSaleTermsService } from './content-sale-terms.service';
+import { ContentSaleTermsQueryDto } from './dto/content-sale-terms-query.dto';
+import type { ContentSaleTerms } from './content-sale-terms.type';
 import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 import { ListContentQueryDto } from './dto/list-content-query.dto';
 import { CreateContentDto } from './dto/create-content.dto';
@@ -40,7 +43,21 @@ import { StorageBusyInterceptor } from '../storage/storage-busy.interceptor';
 @UseInterceptors(StorageBusyInterceptor)
 @Controller('content')
 export class ContentPieceController {
-  constructor(private readonly contentPieceService: ContentPieceService) {}
+  constructor(
+    private readonly contentPieceService: ContentPieceService,
+    private readonly saleTerms: ContentSaleTermsService,
+  ) {}
+
+  /**
+   * What a creator keeps of a sale, the listing fee, the quick prices and how
+   * long a review usually takes (M24, M25, FIX-110). Read only. Before `:id`
+   * so the literal is never taken for an id.
+   */
+  @Get('sale-terms')
+  @UseGuards(CreatorAccountGuard)
+  saleTermsAt(@Query() query: ContentSaleTermsQueryDto): ContentSaleTerms {
+    return this.saleTerms.terms(query.priceKobo);
+  }
 
   @Get()
   list(

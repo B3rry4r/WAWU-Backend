@@ -31,6 +31,8 @@ export interface HeldTier {
   voiceIntroIncluded: boolean;
   /** The highest event pass the person holds, by the config's order. */
   eventPass: PlanEventPass | null;
+  /** The id of that pass's own row: what its QR carries (FIX-110, G-814). Absent with no pass. */
+  eventPassId?: string | null;
 }
 
 /** A stored tier row as the publishing gate reads it. */
@@ -76,10 +78,12 @@ export class MakerTierService {
       this.prisma.makerTier.findUnique({ where: { wawuUserId } }),
       this.prisma.eventPass.findMany({
         where: { wawuUserId },
-        select: { type: true, createdAt: true },
+        select: { id: true, type: true, createdAt: true },
       }),
     ]);
-    const eventPass = this.bestPass(passes);
+    const best = this.bestPass(passes);
+    const eventPass = best?.pass ?? null;
+    const eventPassId = best?.id ?? null;
     if (!row) {
       return {
         state: 'none',
@@ -93,6 +97,7 @@ export class MakerTierService {
         pointsIncluded: 0,
         voiceIntroIncluded: false,
         eventPass,
+        eventPassId,
       };
     }
     return {
@@ -107,6 +112,7 @@ export class MakerTierService {
       pointsIncluded: row.pointsIncluded,
       voiceIntroIncluded: row.voiceIntroIncluded,
       eventPass,
+      eventPassId,
     };
   }
 
@@ -166,17 +172,22 @@ export class MakerTierService {
 
   /** The pass the config ranks highest; the newest of equals. A type the config no longer names is not shown. */
   private bestPass(
-    passes: { type: string; createdAt: Date }[],
-  ): PlanEventPass | null {
+    passes: { id: string; type: string; createdAt: Date }[],
+  ): { pass: PlanEventPass; id: string } | null {
     const ranked = this.config.eventPasses;
-    let best: { pass: PlanEventPass; rank: number; at: number } | null = null;
+    let best: {
+      pass: PlanEventPass;
+      id: string;
+      rank: number;
+      at: number;
+    } | null = null;
     for (const p of passes) {
       const rank = ranked.findIndex((e) => e.id === p.type);
       if (rank < 0) continue;
       const at = p.createdAt.getTime();
       if (!best || rank > best.rank || (rank === best.rank && at > best.at))
-        best = { pass: ranked[rank], rank, at };
+        best = { pass: ranked[rank], id: p.id, rank, at };
     }
-    return best?.pass ?? null;
+    return best ? { pass: best.pass, id: best.id } : null;
   }
 }

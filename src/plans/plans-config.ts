@@ -195,6 +195,12 @@ export interface PlansConfig {
    * (TIER-06, `plan.event_date`), not in the file.
    */
   eventDate?: string | null;
+  /**
+   * The name of the event the passes are for ("Christmas event", W44), or
+   * null when none is set. An admin setting (`plan.event_name`), not in the
+   * file.
+   */
+  eventName?: string | null;
   /** The tier VF5 shows selected. */
   preselectedTier: string;
   /** A tier is `ending` this many days or fewer before it ends (VF14). */

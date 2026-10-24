@@ -71,6 +71,16 @@ export class EventController {
   }
 
   /**
+   * The day an admin last sent back or took down each of the host's events
+   * (FIX-110, E17's "Taken down 20 Sep"). A route of its own, so the shape the
+   * web reads from `mine` does not change.
+   */
+  @Get('mine/decisions')
+  mineDecisions(@CurrentUser() user: WawuJwtClaims) {
+    return this.eventService.decisionsMine(user.sub);
+  }
+
+  /**
    * The label to show for each category, format and kind, beside the value to
    * send (EVENTS-02): "Business & Finance" is `business`. Declared before
    * `:id` for the same reason `mine` is.

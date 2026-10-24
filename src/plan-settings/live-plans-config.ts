@@ -40,6 +40,9 @@ export class LivePlansConfig implements PlansConfig {
   get eventDate(): string | null | undefined {
     return this.source.current().eventDate;
   }
+  get eventName(): string | null | undefined {
+    return this.source.current().eventName;
+  }
   get preselectedTier(): string {
     return this.source.current().preselectedTier;
   }

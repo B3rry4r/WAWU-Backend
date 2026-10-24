@@ -7948,6 +7948,39 @@
         ]
       }
     },
+    "/api/hub/content/sale-terms": {
+      "get": {
+        "operationId": "ContentPieceController_saleTermsAt",
+        "parameters": [
+          {
+            "name": "priceKobo",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "maximum": 1000000000,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentSaleTerms"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What a creator keeps of a sale, the listing fee, the quick prices and how\nlong a review usually takes (M24, M25, FIX-110). Read only. Before `:id`\nso the literal is never taken for an id.",
+        "tags": [
+          "ContentPiece"
+        ]
+      }
+    },
     "/api/hub/content": {
       "get": {
         "operationId": "ContentPieceController_list",
@@ -29370,6 +29403,28 @@
         ]
       }
     },
+    "/api/hub/events/mine/decisions": {
+      "get": {
+        "operationId": "EventController_mineDecisions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDecisionsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The day an admin last sent back or took down each of the host's events\n(FIX-110, E17's \"Taken down 20 Sep\"). A route of its own, so the shape the\nweb reads from `mine` does not change.",
+        "tags": [
+          "Event"
+        ]
+      }
+    },
     "/api/hub/events/options": {
       "get": {
         "operationId": "EventController_options",
@@ -46592,6 +46647,14 @@
           "eventDate": {
             "type": "string",
             "nullable": true
+          },
+          "eventName": {
+            "type": "string",
+            "nullable": true
+          },
+          "passCode": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -48652,6 +48715,53 @@
         },
         "required": [
           "flutterwaveConfig"
+        ]
+      },
+      "ContentSalePreset": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceKobo"
+        ]
+      },
+      "ContentSaleTerms": {
+        "type": "object",
+        "properties": {
+          "creatorSharePct": {
+            "type": "number"
+          },
+          "listingFeeKobo": {
+            "type": "integer"
+          },
+          "presets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContentSalePreset"
+            }
+          },
+          "reviewHours": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "earnPerSaleKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "creatorSharePct",
+          "listingFeeKobo",
+          "presets",
+          "reviewHours",
+          "priceKobo",
+          "earnPerSaleKobo"
         ]
       },
       "ContentPieceResponse": {
@@ -60384,6 +60494,36 @@
           "speakers",
           "createdAt",
           "lastDecisionReason"
+        ]
+      },
+      "EventDecisionView": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "decidedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "eventId",
+          "decidedAt"
+        ]
+      },
+      "EventDecisionsView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventDecisionView"
+            }
+          }
+        },
+        "required": [
+          "items"
         ]
       },
       "EventTicketRulesView": {
