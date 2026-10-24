@@ -11,12 +11,18 @@ import { StorageService } from './storage.service';
  * lock and every write is guarded (see late-file-sweep.ts). With no storage configured it does
  * nothing. Registered through the ScheduleModule AppModule already loads.
  */
+/** The unsent-chat-file sweep runs at most this often (the timer itself ticks every 10 minutes). */
+const UNSENT_CHAT_SWEEP_EVERY_MS = 60 * 60 * 1000;
+
 @Injectable()
 export class StorageSweepService {
   private readonly logger = new Logger(StorageSweepService.name);
 
   /** A run is under way: the next tick skips (ME-04 round 5). */
   private running = false;
+
+  /** When the chat sweep last ran: it looks at every unsent chat file, so once an hour is plenty. */
+  private lastUnsentChatSweep = 0;
 
   constructor(private readonly storage: StorageService) {}
 
@@ -41,6 +47,16 @@ export class StorageSweepService {
         this.logger.log(
           `Late-file sweep: ${removed} removed, ${counted} counted, ${left} left for the next pass.`,
         );
+      }
+      // FIX-104 round 2: chat files that landed and no message carries, a day on.
+      if (Date.now() - this.lastUnsentChatSweep >= UNSENT_CHAT_SWEEP_EVERY_MS) {
+        this.lastUnsentChatSweep = Date.now();
+        const gone = await this.storage.sweepUnsentChatUploads();
+        if (gone.released > 0 || gone.left > 0) {
+          this.logger.log(
+            `Unsent chat files: ${gone.released} given back, ${gone.left} left for the next run.`,
+          );
+        }
       }
     } catch (err) {
       this.logger.warn(`Late-file sweep failed: ${String(err)}`);

@@ -119,3 +119,28 @@ export interface ChatUpload {
   /** Sent back as `attachment.key` on POST /chats/:chatId/messages. */
   key: string;
 }
+
+/** GET /chats/:chatId/messages/:messageId/attachment: a fresh link to one file. */
+export interface ChatAttachmentLink {
+  /** A signed link, good until `expiresAt`. */
+  url: string;
+  /** ISO time the link stops working. */
+  expiresAt: string;
+  contentType: string;
+  /** The file's own name (PDFs). Null for a photo or video. */
+  name: string | null;
+}
+
+/** What one kind of attachment may be. */
+export interface ChatAttachmentRule {
+  contentTypes: string[];
+  maxBytes: number;
+}
+
+/** GET /chats/attachment-rules: what a chat takes, from the Hub's own limits. */
+export interface ChatAttachmentRules {
+  /** A photo or a video. */
+  media: ChatAttachmentRule;
+  /** A PDF. */
+  file: ChatAttachmentRule;
+}

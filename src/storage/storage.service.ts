@@ -21,6 +21,10 @@ import { createStorageClient } from './storage-client';
 import { releaseOwnUpload } from './upload-release';
 import { LOCKED_TX, inPersonsTurn, lockStorageQuota } from './storage-lock';
 import { sweepLateFiles, type LateSweepResult } from './late-file-sweep';
+import {
+  sweepUnsentChatUploads,
+  type UnsentChatSweepResult,
+} from './unsent-chat-sweep';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
 import {
@@ -68,6 +72,9 @@ const RECONCILE_GRACE_MS = 15 * 60 * 1000;
 /** How long a presigned PUT URL can still start an upload. */
 const UPLOAD_URL_SECONDS = 300;
 
+/** How long the long-lived read link lives (`readUrlFor`): seven days. A caller that wants a shorter one passes its own. */
+const READ_URL_SECONDS = 604800;
+
 /**
  * Extra time after a given-up upload's link has expired before the sweep looks
  * at its file (ME-04 round 3), unless UPLOAD_SWEEP_MARGIN_SECONDS says
@@ -96,8 +103,10 @@ const RECONCILE_MAX_BATCHES = 10;
 
 /**
  * The folders that hold creator content, the only ones R-7's storage
- * allowance counts and limits. Every other folder (KYC and other documents,
- * avatars, covers, community and chat images, speaker photos) is exempt.
+ * allowance counts on the routes the web calls (`GET /uploads/usage`, the 413
+ * of `POST /uploads/presign`, `GET /uploads/allowance`). Every other folder
+ * (KYC and other documents, avatars, covers, community and chat images,
+ * speaker photos) is exempt there.
  */
 export const CONTENT_FOLDERS: readonly string[] = [
   'content/preview',
@@ -105,9 +114,42 @@ export const CONTENT_FOLDERS: readonly string[] = [
 ];
 
 /**
- * Creator-content storage only: `usedBytes` sums `content/preview` and
- * `content/full` files (CONTENT_FOLDERS), so identity documents, avatars and
- * the other folders are not in it and not limited by it.
+ * The folders whose bytes count toward a person's storage on the CHAT path
+ * (R-7's 1 GB, or 10 GB with a tick): creator content, and what a person sends
+ * in a chat (FIX-104). A chat upload is refused when content plus chat plus the
+ * new file would pass the limit. This total is read only for a chat upload:
+ * `GET /uploads/usage`, the 413 of a content presign and the allowance keep
+ * summing content only, exactly as before chats carried files (the web calls
+ * them; lead ruling on FIX-104, 24 Oct 2026). A chat message is not a listing,
+ * so a chat file is never one of the 5 or 25 uploads.
+ */
+export const QUOTA_FOLDERS: readonly string[] = [
+  ...CONTENT_FOLDERS,
+  ...CHAT_UPLOAD_FOLDERS,
+];
+
+/**
+ * The folders a person's own upload can be given back from (POST
+ * /uploads/release) and the late-file sweep looks in: creator content, and the
+ * chat folders, where a file can land and never be sent (FIX-104 round 2).
+ * Avatars, identity documents and the rest are not released this way.
+ */
+export const RELEASABLE_FOLDERS: readonly string[] = QUOTA_FOLDERS;
+
+/** Whether `folder` is one only a chat writes to. */
+export function isChatFolder(folder: string): boolean {
+  return (CHAT_UPLOAD_FOLDERS as readonly string[]).includes(folder);
+}
+
+/** The folders a file in `folder` is counted against: content and chat for a chat file, content only otherwise. */
+function countedAgainst(folder: string): readonly string[] {
+  return isChatFolder(folder) ? QUOTA_FOLDERS : CONTENT_FOLDERS;
+}
+
+/**
+ * `usedBytes` sums `content/preview` and `content/full` files, so identity
+ * documents, avatars, chat files and the other folders are not in it and not
+ * limited by it.
  */
 export interface StorageUsage {
   usedBytes: number;
@@ -520,11 +562,14 @@ export class StorageService {
     // account is above its allowance (R-7 lowered free accounts from 2 GB to
     // 1 GB, and a tick can lapse).
     //
-    // The allowance is for creator content (CONTENT_FOLDERS). Identity
-    // documents, avatars, covers, chat media and the other folders are
-    // neither counted against it nor refused by it: R-7 sets the limit on
-    // uploads, and a person over it must still be able to prove who they are.
-    // Those folders keep their own per-file limit and type allowlist.
+    // The allowance is for creator content (CONTENT_FOLDERS), and a chat
+    // upload (FIX-104) is also refused when content plus chat plus the new
+    // file would pass it (QUOTA_FOLDERS). A content upload is checked against
+    // content alone, exactly as it was before chats carried files. Identity
+    // documents, avatars, covers and the other folders are neither counted
+    // against it nor refused by it: a person over it must still be able to
+    // prove who they are. Those folders keep their own per-file limit and
+    // type allowlist.
     //
     // TIER-02 (R-43): a file for a product needs a tier that is running (or a
     // tick that has not ended), and a place free for one more product. Nothing
@@ -534,9 +579,12 @@ export class StorageService {
     // open a wallet to buy one.
     if (CONTENT_FOLDERS.includes(folder))
       await this.gate.assertRoomForProduct(wawuId);
-    const { usage, tickHeld } = await this.usageAndTick(wawuId);
+    const { usage, tickHeld } = await this.usageAndTick(
+      wawuId,
+      countedAgainst(folder),
+    );
     if (
-      CONTENT_FOLDERS.includes(folder) &&
+      QUOTA_FOLDERS.includes(folder) &&
       usage.usedBytes + contentLength > usage.limitBytes
     ) {
       throw this.storageFullRefusal(contentLength, usage, tickHeld);
@@ -610,7 +658,10 @@ export class StorageService {
    * object URL would not resolve — this is what gets stored as
    * `previewAsset` / `idDocumentUrl` and rendered by the client.
    */
-  async readUrlFor(key: string): Promise<string> {
+  async readUrlFor(
+    key: string,
+    expiresInSeconds = READ_URL_SECONDS,
+  ): Promise<string> {
     if (key.startsWith('http://') || key.startsWith('https://')) return key;
     if (!this.client) {
       throw new ServiceUnavailableException(
@@ -629,7 +680,7 @@ export class StorageService {
         ResponseContentType: contentType,
         ResponseContentDisposition: inline ? 'inline' : 'attachment',
       }),
-      { expiresIn: 604800 },
+      { expiresIn: expiresInSeconds },
     );
   }
 
@@ -889,11 +940,13 @@ export class StorageService {
         // Released while this confirm was under way, or being removed: it
         // stays released.
         if (row.releasedAt || row.removingAt) return 'released' as const;
-        if (
-          row.status === 'abandoned' &&
-          CONTENT_FOLDERS.includes(row.folder)
-        ) {
-          const { usage, tickHeld } = await this.readUsage(wawuId, tx, tx);
+        if (row.status === 'abandoned' && QUOTA_FOLDERS.includes(row.folder)) {
+          const { usage, tickHeld } = await this.readUsage(
+            wawuId,
+            tx,
+            tx,
+            countedAgainst(row.folder),
+          );
           if (usage.usedBytes + row.bytes > usage.limitBytes) {
             return this.storageFullRefusal(row.bytes, usage, tickHeld);
           }
@@ -995,9 +1048,10 @@ export class StorageService {
 
   private async usageAndTick(
     wawuId: string,
+    folders: readonly string[] = CONTENT_FOLDERS,
   ): Promise<{ usage: StorageUsage; tickHeld: boolean }> {
     await this.reconcileStale(wawuId);
-    return this.readUsage(wawuId, this.prisma);
+    return this.readUsage(wawuId, this.prisma, undefined, folders);
   }
 
   private async readUsage(
@@ -1006,6 +1060,8 @@ export class StorageService {
     // Given by a caller inside a transaction, so the allowance is read on the
     // transaction's own connection and not on a second one from the pool.
     allowanceDb?: AllowanceDb,
+    // The folders summed: content only unless a chat upload is being decided.
+    folders: readonly string[] = CONTENT_FOLDERS,
   ): Promise<{ usage: StorageUsage; tickHeld: boolean }> {
     const [agg, allowance] = await Promise.all([
       db.storageObject.aggregate({
@@ -1013,7 +1069,7 @@ export class StorageService {
         where: {
           wawuUserId: wawuId,
           status: { in: ['pending', 'confirmed'] },
-          folder: { in: [...CONTENT_FOLDERS] },
+          folder: { in: [...folders] },
         },
       }),
       this.allowance.of(wawuId, new Date(), allowanceDb),
@@ -1137,7 +1193,7 @@ export class StorageService {
       {
         client: this.client,
         bucket: this.bucket,
-        folders: CONTENT_FOLDERS,
+        folders: RELEASABLE_FOLDERS,
         prisma: this.prisma,
         logger: this.logger,
       },
@@ -1158,12 +1214,30 @@ export class StorageService {
       {
         client: this.client,
         bucket: this.bucket,
-        folders: CONTENT_FOLDERS,
+        folders: RELEASABLE_FOLDERS,
         prisma: this.prisma,
         logger: this.logger,
       },
       wawuId,
       key,
+    );
+  }
+
+  /**
+   * FIX-104 round 2: gives back the uploads of a chat that landed and that no
+   * message carries, once they are UNSENT_CHAT_UPLOAD_HOURS old. Run on a timer
+   * by StorageSweepService. See unsent-chat-sweep.ts.
+   */
+  sweepUnsentChatUploads(wawuId?: string): Promise<UnsentChatSweepResult> {
+    return sweepUnsentChatUploads(
+      {
+        client: this.client,
+        bucket: this.bucket,
+        folders: RELEASABLE_FOLDERS,
+        prisma: this.prisma,
+        logger: this.logger,
+      },
+      { wawuId },
     );
   }
 }
