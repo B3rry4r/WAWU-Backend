@@ -142,7 +142,7 @@ export function capStop(
       usedPoints: null,
       remainingPoints: null,
       resetsAt: null,
-      message: `One job can run up to ${caps.maxAudioMinPerJob} minutes. This one is ${minutes}.`,
+      message: `One job can run up to ${caps.maxAudioMinPerJob} ${caps.maxAudioMinPerJob === 1 ? 'minute' : 'minutes'}. This one is ${minutes}.`,
     };
   }
   const remaining = Math.max(0, caps.dailyPointsPerUser - spentTodayPoints);

@@ -1,3 +1,4 @@
+import { runInThisContext } from 'node:vm';
 import { ConfigService } from '@nestjs/config';
 import { AiVoiceProviderError } from '../voice/ai-voice-provider';
 import {
@@ -5,6 +6,10 @@ import {
   HttpVoiceProvider,
 } from '../voice/http-voice-provider';
 import { startStandin } from '../../../test/ai-tools/voice-standin-for-specs';
+import { MUSIC_TOOL } from '../tools/music.tool';
+import { QUICK_VOICE_TOOL } from '../tools/quick-voice.tool';
+import { SOUND_EFFECT_TOOL } from '../tools/sound-effect.tool';
+import { VOICEOVER_TOOL } from '../tools/voiceover.tool';
 
 /**
  * The adapter's two prompt calls (AITOOLS-03), run against the local stand-in
@@ -136,6 +141,118 @@ describe('AITOOLS-03: the AI provider seam, Sound effect and Music track', () =>
         instrumental: false,
       }),
     ).rejects.toMatchObject({ kind: 'unavailable' });
+  });
+
+  it("a track call's own timeout is the real wait: Node's fetch would end a call the scaled limit allows, and the track call still finishes", async () => {
+    // Node's fetch ends a call with no answer in 300 s (undici's header wait).
+    // That limit is scaled to 2 s here, through the global dispatcher fetch
+    // uses, so the proof takes seconds: the sound effect call (a fetch call)
+    // is cut at the scaled limit; the track call, with a longer configured
+    // timeout, is not; with a shorter one it fails.
+    const sym = Symbol.for('undici.globalDispatcher.1');
+    // Jest runs a spec in its own context; fetch's dispatcher lives on the
+    // process's real global, which runInThisContext reaches.
+    const g = runInThisContext('globalThis') as Record<symbol, unknown>;
+    await (
+      await fetch(`http://127.0.0.1:${standin.port}/__standin/state`)
+    ).arrayBuffer();
+    const original = g[sym] as { constructor: new (o: object) => unknown };
+    expect(original).toBeDefined();
+    g[sym] = new original.constructor({
+      headersTimeout: 2000,
+      bodyTimeout: 2000,
+    });
+    try {
+      const p = provider({
+        AI_VOICE_TIMEOUT_MS: '6000',
+        AI_VOICE_MUSIC_TIMEOUT_MS: '6000',
+      });
+      await expect(
+        p.makeSoundEffect({
+          prompt: 'Rain [[slow:3500]]',
+          durationSeconds: null,
+        }),
+      ).rejects.toMatchObject({ kind: 'unavailable' });
+      const out = await p.makeMusic({
+        prompt: 'Rain [[slow:3500]]',
+        lengthSeconds: null,
+        instrumental: false,
+      });
+      expect(out.audio.length).toBeGreaterThan(400);
+      await expect(
+        provider({ AI_VOICE_MUSIC_TIMEOUT_MS: '2000' }).makeMusic({
+          prompt: 'Rain [[slow:3500]]',
+          lengthSeconds: null,
+          instrumental: false,
+        }),
+      ).rejects.toMatchObject({ kind: 'unavailable' });
+    } finally {
+      g[sym] = original;
+    }
+  });
+
+  it('a track call answers what fetch calls answer: a refusal carries its status, a caller who gives up is not waited for', async () => {
+    const err = await provider()
+      .makeMusic({
+        prompt: 'Rain [[status:402]]',
+        lengthSeconds: null,
+        instrumental: false,
+      })
+      .catch((e: AiVoiceProviderError) => e);
+    expect(err).toMatchObject({ kind: 'rejected', status: 402 });
+    const down = await provider()
+      .makeSoundEffect({ prompt: 'Rain [[status:503]]', durationSeconds: null })
+      .catch((e: AiVoiceProviderError) => e);
+    expect(down).toMatchObject({ kind: 'unavailable', status: 503 });
+    const ctl = new AbortController();
+    const started = Date.now();
+    const pending = provider().makeMusic(
+      {
+        prompt: 'Rain [[slow:5000]]',
+        lengthSeconds: null,
+        instrumental: false,
+      },
+      { signal: ctl.signal },
+    );
+    setTimeout(() => ctl.abort(), 300);
+    await expect(pending).rejects.toMatchObject({ kind: 'unavailable' });
+    expect(Date.now() - started).toBeLessThan(2500);
+    const already = new AbortController();
+    already.abort();
+    await expect(
+      provider().makeMusic(
+        { prompt: 'Rain', lengthSeconds: null, instrumental: false },
+        { signal: already.signal },
+      ),
+    ).rejects.toMatchObject({ kind: 'unavailable' });
+  });
+
+  it('Sound effect and Music need a host and a key, not a voice; VoiceOver and Quick voice still need voices', async () => {
+    const noVoices = provider({ AI_VOICE_VOICES: '' });
+    expect(noVoices.configured).toBe(false);
+    expect(noVoices.promptToolsConfigured).toBe(true);
+    expect(SOUND_EFFECT_TOOL.enabled(noVoices)).toBe(true);
+    expect(MUSIC_TOOL.enabled(noVoices)).toBe(true);
+    expect(VOICEOVER_TOOL.enabled(noVoices)).toBe(false);
+    expect(QUICK_VOICE_TOOL.enabled(noVoices)).toBe(false);
+    const out = await noVoices.makeSoundEffect({
+      prompt: 'Rain',
+      durationSeconds: 1,
+    });
+    expect(out.audio.length).toBeGreaterThan(400);
+    const noKey = provider({ AI_VOICE_API_KEY: '' });
+    expect(noKey.promptToolsConfigured).toBe(false);
+    expect(SOUND_EFFECT_TOOL.enabled(noKey)).toBe(false);
+    expect(MUSIC_TOOL.enabled(noKey)).toBe(false);
+    const full = provider();
+    expect(full.configured && full.promptToolsConfigured).toBe(true);
+    for (const t of [
+      SOUND_EFFECT_TOOL,
+      MUSIC_TOOL,
+      VOICEOVER_TOOL,
+      QUICK_VOICE_TOOL,
+    ])
+      expect(t.enabled(full)).toBe(true);
   });
 
   it('is refused when the provider is not set up, and the error carries neither the words nor a provider answer', async () => {

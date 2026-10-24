@@ -40,7 +40,7 @@ export const MUSIC_TOOL: AiTool = {
   input: INPUT,
   audioFolder: AI_MUSIC_FOLDER,
   listedWhenOff: false,
-  enabled: (provider) => provider.configured,
+  enabled: (provider) => provider.promptToolsConfigured,
   check: (req, settings, plan) => checkPromptLimits(INPUT, req, settings, plan),
   price: (req) => ({
     units: 1,

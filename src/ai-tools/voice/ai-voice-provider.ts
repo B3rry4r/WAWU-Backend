@@ -55,6 +55,8 @@ export class AiVoiceProviderError extends Error {
   constructor(
     readonly kind: 'rejected' | 'unavailable',
     message: string,
+    /** The provider's HTTP status, when it answered one (a key or plan refusal reads 401 or 402). Never shown to a person. */
+    readonly status?: number,
   ) {
     super(message);
     this.name = 'AiVoiceProviderError';
@@ -77,6 +79,8 @@ export interface OwnVoiceRequest {
 export interface AiVoiceProvider {
   /** True when a key, a host and at least one voice are set. */
   readonly configured: boolean;
+  /** True when a key and a host are set: Sound effect and Music track use no voice, so they do not need one. */
+  readonly promptToolsConfigured: boolean;
   /** The voices on offer, in the order a person sees them. */
   voices(): readonly AiVoice[];
   /**

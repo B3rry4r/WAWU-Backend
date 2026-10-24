@@ -52,7 +52,7 @@ export function checkPromptLimits(
   if (seconds > maxMinutes * 60)
     throw new PointsError(
       'points_cap_reached',
-      `One job can run up to ${maxMinutes} minutes. This one is ${seconds} seconds.`,
+      `One job can run up to ${maxMinutes} ${maxMinutes === 1 ? 'minute' : 'minutes'}. This one is ${seconds} seconds.`,
       {
         cap: 'minutes_per_job',
         capLimit: maxMinutes,

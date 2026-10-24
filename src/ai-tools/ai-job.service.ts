@@ -382,7 +382,22 @@ export class AiJobService {
         e instanceof AiVoiceProviderError && e.kind === 'rejected'
           ? 'provider_failed'
           : 'provider_unavailable';
-      await this.fail(job, holdId, code);
+      // The provider's HTTP status (401 for a key, 402 for a plan, 422 for a
+      // refused prompt) stays on the job and in the log, so a lead can tell a
+      // key or plan refusal from a bad prompt. Never shown to the person, who
+      // still reads "No points were taken". No body, no words, no key.
+      const status = e instanceof AiVoiceProviderError ? e.status : undefined;
+      this.logger.warn(
+        `ai job ${job.id} (${job.tool}): the provider ${
+          status !== undefined ? `answered ${status}` : 'did not make the audio'
+        } (${code})`,
+      );
+      await this.fail(
+        job,
+        holdId,
+        code,
+        status !== undefined ? `http_${status}` : null,
+      );
       return;
     }
     const outputs: StoredOutput[] = [];
@@ -428,6 +443,8 @@ export class AiJobService {
     job: AiToolJob,
     holdId: string,
     failureCode: string,
+    /** On a provider failure: `http_<status>`, kept in `providerRef` (a failed job has no provider job to look up). */
+    providerRef: string | null = null,
   ): Promise<void> {
     try {
       await this.spend.release(holdId);
@@ -441,7 +458,7 @@ export class AiJobService {
         return;
       }
     }
-    await this.mark(job.id, 'failed', { failureCode });
+    await this.mark(job.id, 'failed', { failureCode, providerRef });
   }
 
   /** Moves a `working` job to its end, once; a job already ended is left as it is. */

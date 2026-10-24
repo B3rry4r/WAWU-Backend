@@ -832,7 +832,7 @@ provider call, one audio file out, a flat price (the board's figures, PROVISIONA
 | Route | Does |
 |---|---|
 | `POST /ai-tools/sound-effect/jobs` | Sound effect. Body `{ prompt, durationSeconds?, quoteToken }` (a quote for the action `sfx`, units 1) and a required `Idempotency-Key`. `durationSeconds` is 0.5 up to `ai.sfx_max_seconds` (30). Priced by `points.action.sfx` (75 a `use`), flat whatever the length. |
-| `POST /ai-tools/music/jobs` | Music track. Body `{ prompt, lengthSeconds?, instrumental?, quoteToken }` (a quote for the action `music_per_track`, units 1) and a required `Idempotency-Key`. `lengthSeconds` is a whole number from 3 up to `ai.music_max_seconds` (300). Priced by `points.action.music_per_track` (500 a `track`), flat whatever the length. One long provider call with its own timeout `AI_VOICE_MUSIC_TIMEOUT_MS` (optional; default 600000, set from the longest track the Hub allows because NO real run has happened). |
+| `POST /ai-tools/music/jobs` | Music track. Body `{ prompt, lengthSeconds?, instrumental?, quoteToken }` (a quote for the action `music_per_track`, units 1) and a required `Idempotency-Key`. `lengthSeconds` is a whole number from 3 up to `ai.music_max_seconds` (300). Priced by `points.action.music_per_track` (500 a `track`), flat whatever the length. One long provider call with its own timeout `AI_VOICE_MUSIC_TIMEOUT_MS` (optional; default 600000, set from the longest track the Hub allows because NO long real run has happened). That setting is the real wait (the call does not use Node's `fetch`, which ends a call with no answer after 300 seconds). |
 
 - **The catalogue.** An entry's `unit` is `use` or `track`; `input.kind` is
   `prompt`, `input.maxCharacters` the description limit (the tool's setting,

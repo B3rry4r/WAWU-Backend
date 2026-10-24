@@ -1,3 +1,5 @@
+import { request as httpRequest, type ClientRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -24,11 +26,14 @@ export const AI_VOICE_ENV = {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 /**
- * How long a Music track call may run (AITOOLS-03). NO real run has happened,
- * so this is set from the longest track the Hub allows, not from a measured
- * time: a track of up to 5 minutes (`ai.music_max_seconds`, 300) in at most 10
- * minutes, which stays inside the 30 minutes after which the sweep gives a
- * job's points back (`points.job_max_run_minutes`). A real run sets it.
+ * How long a Music track call may run (AITOOLS-03). NO long real run has
+ * happened (only a 3 second track), so this is set from the longest track the
+ * Hub allows, not from a measured time: a track of up to 5 minutes
+ * (`ai.music_max_seconds`, 300) in at most 10 minutes, which stays inside the
+ * 30 minutes after which the sweep gives a job's points back
+ * (`points.job_max_run_minutes`). A real run sets it. The call is made with
+ * `node:http(s)`, not `fetch`, because Node's `fetch` ends a call that has sent
+ * no answer in 300 seconds whatever this says (undici's own header wait).
  */
 export const DEFAULT_MUSIC_TIMEOUT_MS = 600_000;
 /**
@@ -39,6 +44,16 @@ export const DEFAULT_MUSIC_TIMEOUT_MS = 600_000;
 export const DEFAULT_QUICK_MODEL = 'eleven_flash_v2_5';
 /** The most audio one job may bring back: a request bound, not a product figure. */
 const MAX_AUDIO_BYTES = 64 * 1024 * 1024;
+
+/** What a non-2xx answer means: a 429 or 5xx can be tried again (`unavailable`), any other refusal cannot (`rejected`). The status rides on the error for the job's record. */
+function failureForStatus(status: number): AiVoiceProviderError {
+  const retryable = status === 429 || status >= 500;
+  return new AiVoiceProviderError(
+    retryable ? 'unavailable' : 'rejected',
+    `status ${status}`,
+    status,
+  );
+}
 
 interface CatalogueEntry extends AiVoice {
   providerVoiceId: string;
@@ -97,7 +112,8 @@ export function parseVoiceCatalogue(raw: string | undefined): {
  *
  * Sound effect and Music track (AITOOLS-03) are the same kind of call:
  * `POST {base}/v1/sound-generation` and `POST {base}/v1/music`, a JSON body, the
- * audio in the answer; Music has its own longer timeout.
+ * audio in the answer; Music has its own longer timeout, and is the one call
+ * made without `fetch` (see `postForAudioLong`).
  *
  * NOT RUN against the real provider: its key is the owner's and is not on any
  * build machine. It is run against a local stand-in with the same wire shape
@@ -146,7 +162,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     this.catalogue = voices;
     if (!this.configured) {
       this.logger.warn(
-        `AI voice tools are off (${AI_VOICE_ENV.baseUrl}, ${AI_VOICE_ENV.apiKey} and ${AI_VOICE_ENV.voices} are all needed).`,
+        `AI voice tools (VoiceOver, Quick voice) are off (${AI_VOICE_ENV.baseUrl}, ${AI_VOICE_ENV.apiKey} and ${AI_VOICE_ENV.voices} are all needed; Sound effect and Music track need only the first two).`,
       );
     }
   }
@@ -155,6 +171,14 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     return (
       this.baseUrl !== null && this.apiKey !== null && this.catalogue.length > 0
     );
+  }
+
+  /**
+   * Sound effect and Music track use no voice, so a host and a key are enough
+   * for them, even when `AI_VOICE_VOICES` is empty (AITOOLS-03 round 2).
+   */
+  get promptToolsConfigured(): boolean {
+    return this.baseUrl !== null && this.apiKey !== null;
   }
 
   voices(): readonly AiVoice[] {
@@ -194,7 +218,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     req: SoundEffectRequest,
     opts: { signal?: AbortSignal } = {},
   ): Promise<SpokenAudio> {
-    if (!this.configured || this.baseUrl === null)
+    if (!this.promptToolsConfigured || this.baseUrl === null)
       throw new AiVoiceProviderError('rejected', 'sound is not available');
     return this.postForAudio(
       '/v1/sound-generation',
@@ -213,9 +237,9 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     req: MusicRequest,
     opts: { signal?: AbortSignal } = {},
   ): Promise<SpokenAudio> {
-    if (!this.configured || this.baseUrl === null)
+    if (!this.promptToolsConfigured || this.baseUrl === null)
       throw new AiVoiceProviderError('rejected', 'music is not available');
-    return this.postForAudio(
+    return this.postForAudioLong(
       '/v1/music',
       {
         prompt: req.prompt,
@@ -378,11 +402,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     if (!res.ok) {
       // Drain the reply without keeping it, so the connection is freed.
       await res.arrayBuffer().catch(() => undefined);
-      const retryable = res.status === 429 || res.status >= 500;
-      throw new AiVoiceProviderError(
-        retryable ? 'unavailable' : 'rejected',
-        `status ${res.status}`,
-      );
+      throw failureForStatus(res.status);
     }
     const type = (res.headers.get('content-type') ?? '').toLowerCase();
     if (!type.startsWith('audio/'))
@@ -396,5 +416,104 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     if (audio.length === 0 || audio.length > MAX_AUDIO_BYTES)
       throw new AiVoiceProviderError('unavailable', 'audio size');
     return { audio, contentType: 'audio/mpeg' };
+  }
+
+  /**
+   * The Music call (AITOOLS-03 round 2): the same request and the same
+   * answers as `postForAudio`, but over `node:http(s)`, because Node's `fetch`
+   * gives up on a call that has sent no answer in 300 seconds (undici's own
+   * header wait, and a body wait of the same length), whatever
+   * `AI_VOICE_MUSIC_TIMEOUT_MS` says. Here the one deadline is `timeoutMs`,
+   * from the moment the request is sent until the whole audio is read; a
+   * plain `setTimeout` holds it (nothing collects it), and at the deadline the
+   * connection is destroyed. A new connection per call (`agent: false`): a
+   * track call is rare and long. The provider's reply and the person's words
+   * never go into an error message.
+   */
+  private postForAudioLong(
+    path: string,
+    body: Record<string, unknown>,
+    timeoutMs: number,
+    outer?: AbortSignal,
+  ): Promise<SpokenAudio> {
+    const url = new URL(`${this.baseUrl}${path}?output_format=mp3_44100_128`);
+    const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+    const payload = Buffer.from(JSON.stringify(body));
+    return new Promise<SpokenAudio>((resolve, reject) => {
+      let settled = false;
+      let req: ClientRequest | null = null;
+      const onAbort = () =>
+        end(new AiVoiceProviderError('unavailable', 'no answer'));
+      const timer = setTimeout(onAbort, timeoutMs);
+      /** Ends the call once: the audio, or the error; either way nothing stays open. */
+      const end = (outcome: SpokenAudio | AiVoiceProviderError) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        outer?.removeEventListener('abort', onAbort);
+        if (outcome instanceof AiVoiceProviderError) {
+          reject(outcome);
+          req?.destroy();
+        } else {
+          resolve(outcome);
+        }
+      };
+      if (outer?.aborted) return onAbort();
+      outer?.addEventListener('abort', onAbort, { once: true });
+      try {
+        req = send(
+          url,
+          {
+            method: 'POST',
+            agent: false,
+            headers: {
+              'content-type': 'application/json',
+              'content-length': payload.length,
+              accept: 'audio/mpeg',
+              'xi-api-key': this.apiKey ?? '',
+            },
+          },
+          (res) => {
+            const status = res.statusCode ?? 0;
+            if (status < 200 || status > 299)
+              return end(failureForStatus(status));
+            const type = String(
+              res.headers['content-type'] ?? '',
+            ).toLowerCase();
+            if (!type.startsWith('audio/'))
+              return end(new AiVoiceProviderError('unavailable', 'not audio'));
+            const chunks: Buffer[] = [];
+            let size = 0;
+            res.on('data', (chunk: Buffer) => {
+              size += chunk.length;
+              if (size > MAX_AUDIO_BYTES)
+                return end(
+                  new AiVoiceProviderError('unavailable', 'audio size'),
+                );
+              chunks.push(chunk);
+            });
+            res.on('end', () => {
+              if (size === 0)
+                return end(
+                  new AiVoiceProviderError('unavailable', 'audio size'),
+                );
+              end({ audio: Buffer.concat(chunks), contentType: 'audio/mpeg' });
+            });
+            const cutOff = () =>
+              end(new AiVoiceProviderError('unavailable', 'answer cut off'));
+            res.on('error', cutOff);
+            res.on('close', () => {
+              if (!res.complete) cutOff();
+            });
+          },
+        );
+      } catch {
+        return end(new AiVoiceProviderError('unavailable', 'no answer'));
+      }
+      req.on('error', () =>
+        end(new AiVoiceProviderError('unavailable', 'no answer')),
+      );
+      req.end(payload);
+    });
   }
 }

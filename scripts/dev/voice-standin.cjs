@@ -28,8 +28,10 @@
 //     ->  200 audio/mpeg. music_length_ms outside 3000 to 600000 answers 422.
 //     Silent MP3 frames of the asked length (10 seconds when none is asked).
 //     Both take the same markers in the text or prompt as the speech route
-//     ([[fail]], [[reject]], [[html]], [[slow:n]]). state.sfx and state.music
-//     list each call's asked length and switch (never the words).
+//     ([[fail]], [[reject]], [[html]], [[slow:n]]), and [[status:402]] (any
+//     400 to 599) to answer that status, as a key or plan refusal does.
+//     state.sfx and state.music list each call's asked length and switch
+//     (never the words).
 //   POST /v1/voices/add   multipart (name, files)  ->  200 { voice_id }
 //   DELETE /v1/voices/<id>                         ->  200
 //     The own-voice calls (VOICE-01); it then speaks with the voice it made.
@@ -201,6 +203,9 @@ function startVoiceStandin({
           return done(500, 'application/json', '{"detail":"down"}');
         if (text.includes('[[reject]]'))
           return done(422, 'application/json', '{"detail":"refused"}');
+        const status = /\[\[status:(4\d\d|5\d\d)\]\]/.exec(text);
+        if (status)
+          return done(Number(status[1]), 'application/json', '{"detail":"no"}');
         if (text.includes('[[html]]'))
           return done(200, 'text/html', '<html>not audio</html>');
         return done(200, 'audio/mpeg', silence(seconds));

@@ -234,8 +234,13 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
       .mockReturnValue(false);
     try {
       const view = await catalogue();
-      expect(view.tools.map((t) => t.id)).toEqual(['voiceover']);
-      expect(view.tools[0].enabled).toBe(false);
+      // AITOOLS-03 round 2: Sound effect and Music use no voice, so they stay
+      // listed with no voices set; the voice tools are what this case is about.
+      const voiceTools = view.tools.filter((t) =>
+        ['voiceover', 'quick-voice'].includes(t.id),
+      );
+      expect(voiceTools.map((t) => t.id)).toEqual(['voiceover']);
+      expect(voiceTools[0].enabled).toBe(false);
       const res = await createQuick(PLAIN, body());
       expect(res.status).toBe(503);
       expect(reasonOf(res).code).toBe('ai_tool_unavailable');

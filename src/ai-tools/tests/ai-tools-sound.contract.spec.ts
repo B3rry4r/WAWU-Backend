@@ -13,6 +13,7 @@ process.env.DATABASE_URL =
   'postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public';
 
 import { randomUUID } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import { AdminRole } from '../../../generated/prisma/enums';
 import type { AdminActor } from '../../common/audit/admin-ops-audit.service';
 import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
@@ -242,9 +243,24 @@ describe('AITOOLS-03: Sound effect and Music track (contract)', () => {
 
   it('check 1: with no voice provider set up neither tool is listed, and a job is refused with nothing held', async () => {
     await h.grant(PLAIN, MUSIC + SFX);
-    const provider = h.get<{ configured: boolean }>(AI_VOICE_PROVIDER);
-    const spy = jest
+    const provider = h.get<{
+      configured: boolean;
+      promptToolsConfigured: boolean;
+    }>(AI_VOICE_PROVIDER);
+    // Round 2: these two tools need a host and a key (promptToolsConfigured),
+    // not a voice; with no voices set they are still listed and run.
+    const noVoices = jest
       .spyOn(provider, 'configured', 'get')
+      .mockReturnValue(false);
+    try {
+      const ids = (await catalogue()).tools.map((t) => t.id);
+      expect(ids).toContain('sound-effect');
+      expect(ids).toContain('music');
+    } finally {
+      noVoices.mockRestore();
+    }
+    const spy = jest
+      .spyOn(provider, 'promptToolsConfigured', 'get')
       .mockReturnValue(false);
     try {
       const ids = (await catalogue()).tools.map((t) => t.id);
@@ -479,6 +495,15 @@ describe('AITOOLS-03: Sound effect and Music track (contract)', () => {
     );
     expect(ok.status).toBe(202);
     await h.finish(PLAIN, data<AiJobView>(ok).id);
+    // AITOOLS-03 round 2: a cap of one minute reads "1 minute", not "1 minutes".
+    await set('points.max_audio_min_per_job', 1);
+    const one = await createMusic(
+      PLAIN,
+      musicBody(TRACK, { lengthSeconds: 100 }),
+    );
+    expect(one.status).toBe(422);
+    expect(reasonOf(one).message).toContain('up to 1 minute.');
+    expect(reasonOf(one).message).not.toContain('1 minutes');
     await set('points.max_audio_min_per_job', null);
   });
 
@@ -866,6 +891,151 @@ describe('AITOOLS-03: Sound effect and Music track (contract)', () => {
         .set('Authorization', `Bearer ${h.tokensOf[BASIC]}`),
     );
     expect(basicList.items).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Round 2: each refusal names what is actually wrong
+  // ---------------------------------------------------------------------------
+
+  const bodyMessage = (res: { body: unknown }): string => {
+    const m = (res.body as { message?: unknown }).message;
+    return typeof m === 'string' ? m : '';
+  };
+
+  it('round 2: a length that is not a number says so, and a description that is too long says that (both tools)', async () => {
+    await h.grant(PLAIN, SFX + MUSIC);
+    const bad = await createSfx(
+      PLAIN,
+      sfxBody(SOUND, { durationSeconds: 'abc' }),
+    );
+    expect(bad.status).toBe(400);
+    expect(bodyMessage(bad)).toBe(
+      'durationSeconds must be a number of seconds.',
+    );
+    const badTrack = await createMusic(
+      PLAIN,
+      musicBody(TRACK, { lengthSeconds: 'abc' }),
+    );
+    expect(badTrack.status).toBe(400);
+    expect(bodyMessage(badTrack)).toBe(
+      'lengthSeconds must be a whole number of seconds.',
+    );
+    const huge = await createSfx(
+      PLAIN,
+      sfxBody(SOUND, { durationSeconds: 3601 }),
+    );
+    expect(huge.status).toBe(400);
+    expect(bodyMessage(huge)).toBe('That length is too long.');
+    const tooLongText = 'a'.repeat(20_001);
+    for (const res of [
+      await createSfx(PLAIN, sfxBody(tooLongText)),
+      await createMusic(PLAIN, musicBody(tooLongText)),
+    ]) {
+      expect(res.status).toBe(400);
+      expect(bodyMessage(res)).toBe('That description is too long.');
+    }
+    const notText = await createSfx(PLAIN, sfxBody(SOUND, { prompt: 42 }));
+    expect(notText.status).toBe(400);
+    expect(bodyMessage(notText)).toBe('prompt must be text.');
+    const empty = await createMusic(PLAIN, musicBody(''));
+    expect(empty.status).toBe(400);
+    expect(bodyMessage(empty)).toBe('Describe what you want to hear.');
+    await nothingHeld(SFX + MUSIC);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Round 2: the provider's HTTP status stays on the failed job (never shown)
+  // ---------------------------------------------------------------------------
+
+  it("round 2: a provider refusal's HTTP status (a key or plan refusal reads 401 or 402) stays on the failed job and in the log, and the person still reads that no points were taken", async () => {
+    await h.grant(PLAIN, (SFX + MUSIC) * 2);
+    const warn = jest.spyOn(Logger.prototype, 'warn');
+    try {
+      const made: { id: string; status: number }[] = [];
+      for (const status of [402, 401]) {
+        const sfx = await createSfx(
+          PLAIN,
+          sfxBody(`${SOUND} [[status:${status}]]`),
+        );
+        const music = await createMusic(
+          PLAIN,
+          musicBody(`${TRACK} [[status:${status}]]`),
+        );
+        made.push({ id: data<AiJobView>(sfx).id, status });
+        made.push({ id: data<AiJobView>(music).id, status });
+      }
+      // Let every run end before reading (a read between the give-back and the mark would call it timed out).
+      await h.jobs.drain();
+      for (const m of made) {
+        const end = (await h.finish(PLAIN, m.id)) as unknown as AiJobView;
+        expect(end.state).toBe('failed');
+        expect(end.message).toContain('No points were taken');
+        expect(end.message).not.toContain(String(m.status));
+        expect(Object.keys(end)).not.toContain('providerRef');
+        expect(JSON.stringify(end)).not.toContain('http_');
+      }
+      const jobs = await jobsOf(PLAIN);
+      expect(jobs.map((j) => j.providerRef).sort()).toEqual([
+        'http_401',
+        'http_401',
+        'http_402',
+        'http_402',
+      ]);
+      // 402 and 401 are refusals this key or plan will make again: not retryable.
+      expect(jobs.every((j) => j.failureCode === 'provider_failed')).toBe(true);
+      const lines = warn.mock.calls.map((c) => String(c[0]));
+      expect(
+        lines.filter((l) => /ai job .* answered 402/.test(l)),
+      ).toHaveLength(2);
+      expect(
+        lines.filter((l) => /ai job .* answered 401/.test(l)),
+      ).toHaveLength(2);
+      for (const l of lines) expect(l).not.toContain(SOUND);
+    } finally {
+      warn.mockRestore();
+    }
+    expect((await holdsOf(PLAIN)).every((x) => x.state === 'released')).toBe(
+      true,
+    );
+    expect(await h.balance(PLAIN)).toBe((SFX + MUSIC) * 2);
+  });
+
+  it('round 2: a failure with no answer from the provider (it is down) leaves no status on the job', async () => {
+    await h.grant(PLAIN, SFX);
+    const res = await createSfx(PLAIN, sfxBody(`${SOUND} [[html]]`));
+    await h.jobs.drain();
+    await h.finish(PLAIN, data<AiJobView>(res).id);
+    const [job] = await jobsOf(PLAIN);
+    expect(job.failureCode).toBe('provider_unavailable');
+    expect(job.providerRef).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Round 2: the Music call waits as long as its own setting says
+  // ---------------------------------------------------------------------------
+
+  it('round 2: a Music job the configured timeout is too short for fails provider_unavailable and every point goes back', async () => {
+    await h.grant(PLAIN, MUSIC);
+    const provider = h.get<{ musicTimeoutMs: number }>(AI_VOICE_PROVIDER);
+    const was = provider.musicTimeoutMs;
+    provider.musicTimeoutMs = 1000;
+    try {
+      const res = await createMusic(PLAIN, musicBody(`${TRACK} [[slow:2500]]`));
+      expect(res.status).toBe(202);
+      await h.jobs.drain();
+      const end = (await h.finish(
+        PLAIN,
+        data<AiJobView>(res).id,
+      )) as unknown as AiJobView;
+      expect(end.state).toBe('failed');
+      expect(end.message).toContain('No points were taken');
+    } finally {
+      provider.musicTimeoutMs = was;
+    }
+    const [job] = await jobsOf(PLAIN);
+    expect(job.failureCode).toBe('provider_unavailable');
+    expect((await holdsOf(PLAIN)).map((x) => x.state)).toEqual(['released']);
+    expect(await h.balance(PLAIN)).toBe(MUSIC);
   });
 
   it('no response string names the provider, a provider id or carries an em-dash', async () => {

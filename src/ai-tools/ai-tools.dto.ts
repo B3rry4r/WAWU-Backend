@@ -9,7 +9,9 @@ import {
   Length,
   Matches,
   Max,
+  MaxLength,
   Min,
+  MinLength,
 } from 'class-validator';
 
 /**
@@ -60,18 +62,25 @@ const MOST_SECONDS = 3600;
 export class CreateSoundEffectJobDto {
   /** What the sound is, in words. */
   @ApiProperty({ minLength: 1, maxLength: MOST_PROMPT_CHARACTERS })
-  @IsString({ message: 'prompt must be text.' })
-  @Length(1, MOST_PROMPT_CHARACTERS, {
-    message: 'Describe what you want to hear.',
+  @MinLength(1, { message: 'Describe what you want to hear.' })
+  @MaxLength(MOST_PROMPT_CHARACTERS, {
+    message: 'That description is too long.',
   })
+  // Last, so it is the first to answer: words that are not text say so.
+  @IsString({ message: 'prompt must be text.' })
   prompt!: string;
 
   /** How long the sound is, in seconds, from 0.5 up to the longest `GET /ai-tools` lists. Left out: the tool chooses. The price is the same whatever the length. */
   @ApiPropertyOptional({ type: 'number', minimum: 0.5, maximum: MOST_SECONDS })
   @IsOptional()
-  @IsNumber({ allowNaN: false, allowInfinity: false })
+  @Max(MOST_SECONDS, { message: 'That length is too long.' })
   @Min(0.5, { message: 'The shortest sound is half a second.' })
-  @Max(MOST_SECONDS)
+  // Last, so it is the first to answer: a value that is not a number says so
+  // (the first message is the one a person sees).
+  @IsNumber(
+    { allowNaN: false, allowInfinity: false },
+    { message: 'durationSeconds must be a number of seconds.' },
+  )
   durationSeconds?: number;
 
   /** `quoteToken` from the `POST /points/quote` the person saw. A different cost now is `409 quote_changed`. */
@@ -85,18 +94,21 @@ export class CreateSoundEffectJobDto {
 export class CreateMusicJobDto {
   /** What the track is like, in words. */
   @ApiProperty({ minLength: 1, maxLength: MOST_PROMPT_CHARACTERS })
-  @IsString({ message: 'prompt must be text.' })
-  @Length(1, MOST_PROMPT_CHARACTERS, {
-    message: 'Describe what you want to hear.',
+  @MinLength(1, { message: 'Describe what you want to hear.' })
+  @MaxLength(MOST_PROMPT_CHARACTERS, {
+    message: 'That description is too long.',
   })
+  // Last, so it is the first to answer: words that are not text say so.
+  @IsString({ message: 'prompt must be text.' })
   prompt!: string;
 
   /** How long the track is, in whole seconds, from 3 up to the longest `GET /ai-tools` lists. Left out: the tool chooses. The price is the same whatever the length. */
   @ApiPropertyOptional({ type: 'integer', minimum: 3, maximum: MOST_SECONDS })
   @IsOptional()
-  @IsInt({ message: 'lengthSeconds must be a whole number of seconds.' })
+  @Max(MOST_SECONDS, { message: 'That length is too long.' })
   @Min(3, { message: 'The shortest track is 3 seconds.' })
-  @Max(MOST_SECONDS)
+  // Last, so it is the first to answer (see durationSeconds).
+  @IsInt({ message: 'lengthSeconds must be a whole number of seconds.' })
   lengthSeconds?: number;
 
   /** True for a track without singing. */
