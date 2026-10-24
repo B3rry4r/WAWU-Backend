@@ -1,5 +1,3 @@
-import type { EntityStage } from '../../money/opening/review-stage';
-
 /**
  * Two read-only lists for support (OPS-26, lead ruling 24 Oct 2026, the owner
  * may override): wallet openings that are stuck, and identity holds. They are
@@ -8,8 +6,19 @@ import type { EntityStage } from '../../money/opening/review-stage';
  * name. Neither moves money, calls a provider or changes a row.
  */
 
-/** Where the provider's own review of the person stands (null: none recorded). */
-export type OpeningReviewStage = EntityStage | null;
+/**
+ * Where the provider's own review of the person stands (null: none recorded).
+ * Written out, not borrowed from `EntityStage`, so the dashboard's generator
+ * can read it; the service assigns `reviewStageOf`'s answer to it, so the
+ * compiler stops the two drifting apart.
+ */
+export type OpeningReviewStage =
+  | 'needs_documents'
+  | 'checking'
+  | 'approved'
+  | 'rejected'
+  | 'stopped'
+  | null;
 
 /** The openings that can be stuck: the states in which WAWU waits. */
 export type StuckOpeningState = 'opening' | 'unknown' | 'open' | 'conflict';
