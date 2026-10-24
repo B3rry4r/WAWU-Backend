@@ -22,7 +22,7 @@ import {
 } from '../payments/idempotency';
 import { successBody } from '../payments/wallet-payment.service';
 import { CARDS_ENABLED_SETTING, CardSettings } from './card-config';
-import { cleanCardName, type CreateCardDto } from './card-request.dto';
+import { cleanCardName, CreateCardDto } from './card-request.dto';
 import type {
   CardDetailsView,
   CardKind,

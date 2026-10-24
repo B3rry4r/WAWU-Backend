@@ -49,7 +49,7 @@ export interface CardQuoteView {
     activeNow: number;
     askedToday: number;
   };
-  /** True when a card can be asked for now. */
+  /** True when a card can be asked for: the product is on, the fee is set and the person is under the limits. */
   canCreate: boolean;
 }
 
