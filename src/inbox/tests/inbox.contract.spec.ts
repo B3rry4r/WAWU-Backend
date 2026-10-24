@@ -406,7 +406,9 @@ describe('Inbox (contract, INBOX-07)', () => {
       await as(hana).get('/inbox?limit=0').expect(400);
       await as(hana).get('/inbox?limit=101').expect(400);
       await as(hana).get('/inbox?limit=abc').expect(400);
-      await as(hana).get('/inbox?kind=money').expect(400);
+      // `money` was refused until FIX-114 made it the Money chip's filter; the
+      // sends alone (`money_move`) are still not a filter.
+      await as(hana).get('/inbox?kind=money_move').expect(400);
       await as(hana).get('/inbox?nope=1').expect(400);
       await as(hana).get('/inbox?cursor=not-a-cursor').expect(400);
       const wrongKey = Buffer.from(

@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -90,4 +91,12 @@ export class CreateContentDto {
 
   @IsUrl({ require_tld: false })
   fullAsset: string;
+
+  /**
+   * FIX-111 (H24): the creator's own course this piece comes from ("From the course VFX for Beginners"). Optional, and only for a
+   * piece that is not itself a course; the course must be the creator's, live or in review. Stored on the piece's side row.
+   */
+  @IsOptional()
+  @IsUUID()
+  parentCourseId?: string;
 }

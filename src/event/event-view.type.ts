@@ -169,3 +169,19 @@ export function initialsFor(name: string): string {
 export interface EventFromPricesView {
   prices: { eventId: string; priceFromNaira: number | null }[];
 }
+
+/**
+ * One of the host's events an admin sent back or took down, and the day they
+ * last did (FIX-110, E17's "Taken down 20 Sep"). A separate route and view:
+ * `EventView` is what the web already reads, and a field added to it would
+ * widen every route that answers it.
+ */
+export interface EventDecisionView {
+  eventId: string;
+  decidedAt: Date;
+}
+
+/** GET /events/mine/decisions. */
+export interface EventDecisionsView {
+  items: EventDecisionView[];
+}

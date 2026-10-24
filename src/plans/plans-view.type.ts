@@ -23,6 +23,17 @@ export interface PlanEventPassView {
    * announced".
    */
   eventDate?: string | null;
+  /**
+   * The name of the event ("Christmas event"), set in admin settings
+   * (`plan.event_name`, FIX-110, G-814). Left out when none is set.
+   */
+  eventName?: string | null;
+  /**
+   * The code the pass's QR carries (FIX-110, G-814): the pass's own id, which
+   * is the person's alone. Only `GET /me/tier` carries it, for a pass the
+   * person holds; `GET /plans` never does.
+   */
+  passCode?: string | null;
 }
 
 export interface PlanBadgeView {

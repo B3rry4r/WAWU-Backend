@@ -115,6 +115,11 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     files: ['frames'],
     why: "links to the person's own earlier content/ uploads (made through the gated presign) set as the frames of one of their own pieces that is not removed, whether it is waiting, live or turned down; creator accounts only, no tier asked (U3, PLANS.md section 6)",
   },
+  // FIX-107: the lessons of a course. Same reasoning as the frames: the route signs nothing.
+  'PUT content/:id/lessons': {
+    files: ['lessons.assetKey'],
+    why: "links the person's own earlier content/full uploads (made through the gated presign) as the lessons of one of their own courses that is not removed; creator accounts only, it signs no file and publishes nothing (FIX-107)",
+  },
   // Applications and requests: the documents are links to files uploaded through
   // the identity and document folders of the presign, which no tier is asked for.
   'POST legal/requests': {

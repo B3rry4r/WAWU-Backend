@@ -11,9 +11,12 @@ export interface InboxCursor {
   key: string;
 }
 
-/** `chat:<uuid>`, `community:<uuid>`, `money_request:<uuid>` or `paid_dm:<side>:<uuid>`. */
+/**
+ * `chat:<uuid>`, `community:<uuid>`, `money_request:<uuid>`, `money_move:<uuid>` (FIX-114)
+ * or `paid_dm:<side>:<uuid>`.
+ */
 const KEY =
-  /^(chat|community|money_request|paid_dm:(fan|creator)):[0-9a-f-]{36}$/i;
+  /^(chat|community|money_request|money_move|paid_dm:(fan|creator)):[0-9a-f-]{36}$/i;
 
 /**
  * The only time form this server writes: four-digit year, milliseconds, Z.

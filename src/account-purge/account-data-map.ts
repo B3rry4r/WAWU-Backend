@@ -119,6 +119,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // This person's saved creators and finished course lessons (ME-10): their
   // own bookmarks and their own progress. Both go with them.
   { model: 'SavedCreator', column: 'userWawuId', disposition: 'OWNED' },
+  // The school courses this person saved (FIX-107, SC3's bookmark): their own bookmarks, they go with them.
+  { model: 'SavedSchoolCourse', column: 'userWawuId', disposition: 'OWNED' },
   {
     model: 'CourseLessonProgress',
     column: 'userWawuId',

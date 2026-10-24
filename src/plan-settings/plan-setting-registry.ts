@@ -163,6 +163,13 @@ function dubbingLanguages(raw: unknown): string[] {
   });
 }
 
+/** One line of text: the `lines` rules with exactly one line (the event's name). */
+function oneLine(raw: unknown): string[] {
+  const one = lines(raw);
+  if (one.length !== 1) throw new SettingInvalid('must be exactly one line');
+  return one;
+}
+
 function date(raw: unknown): string {
   const ok =
     typeof raw === 'string' &&
@@ -503,6 +510,19 @@ export function buildRegistry(
     parse: date,
     apply: (d, v) => {
       d.eventDate = v as string;
+    },
+  });
+  add({
+    key: 'plan.event_name',
+    group: 'Event passes',
+    label: 'Name of the event (one line)',
+    unit: 'lines',
+    usedBy: ['W44 (your pass)', 'W1 (the Passes card)', 'GET /me/tier'],
+    provisional: BOARD,
+    default: extra('plan.event_name', null),
+    parse: oneLine,
+    apply: (d, v) => {
+      d.eventName = (v as string[])[0] ?? null;
     },
   });
 
@@ -999,6 +1019,24 @@ export function buildRegistry(
     'hours',
     ['WALLET-16 (R-55)'],
     hours,
+  );
+  for (const n of [1, 2, 3, 4]) {
+    other(
+      `content.price_preset_${n}_kobo`,
+      `Quick price ${n} on the create flow's price step`,
+      'kobo',
+      ['M24 (the quick prices), GET /content/sale-terms (FIX-110)'],
+      kobo,
+      BOARD,
+    );
+  }
+  other(
+    'content.review_hours',
+    'Hours a review of a new piece usually takes',
+    'hours',
+    ['M25 (Usually takes), GET /content/sale-terms (FIX-110)'],
+    hours,
+    'CONTENT-REVIEW-HOURS',
   );
 
   return out;
