@@ -1,3 +1,5 @@
+import type { AiAudioContentType } from '../audio/ai-audio-store';
+
 /**
  * THE ONE SEAM TO THE AI VOICE PROVIDER (AITOOLS-01, R-68).
  *
@@ -39,10 +41,51 @@ export interface MusicRequest {
   instrumental: boolean;
 }
 
+/** One word of a transcript with its place in the recording, in seconds. */
+export interface TranscriptWord {
+  text: string;
+  /** `word` for a spoken word; `spacing` and `audio_event` are not words. */
+  type: string;
+  start: number;
+  end: number;
+}
+
+/** A recording or video to turn into words (Captions, AITOOLS-04). */
+export interface TranscribeRequest {
+  /** The person's own file, read by the provider for this one run. */
+  file: VoiceSample;
+  /** ISO 639 code of the language spoken; null lets the provider detect it. */
+  languageCode: string | null;
+}
+
+/** What the provider heard. */
+export interface Transcript {
+  text: string;
+  words: TranscriptWord[];
+  /** The length the provider measured, in seconds; null when it did not say. */
+  durationSeconds: number | null;
+  /** The provider's own id for the transcript, to delete its copy; null when it gave none. */
+  id: string | null;
+}
+
+/** A recording or video to take the noise out of (Clean audio, AITOOLS-04). */
+export interface IsolateRequest {
+  file: VoiceSample;
+}
+
+/** The cleaned recording, as the provider answered it. */
+export interface IsolatedAudio {
+  audio: Buffer;
+  /** The type the provider answered, lower case, without parameters. The pipeline stores it only if the Hub serves it. */
+  contentType: string;
+  /** The provider's own id for its history item, to delete its copy; null when it gave none. */
+  historyId: string | null;
+}
+
 export interface SpokenAudio {
   audio: Buffer;
-  /** Always an audio type the Hub stores and serves (`audio/mpeg`). */
-  contentType: 'audio/mpeg';
+  /** An audio type the Hub stores and serves (`audio/mpeg` for every tool but Clean audio, which stores what the provider answered if the Hub serves it). */
+  contentType: AiAudioContentType;
 }
 
 /**
@@ -81,6 +124,8 @@ export interface AiVoiceProvider {
   readonly configured: boolean;
   /** True when a key and a host are set: Sound effect and Music track use no voice, so they do not need one. */
   readonly promptToolsConfigured: boolean;
+  /** True when a key and a host are set: Captions and Clean audio take a file and need no voice either. */
+  readonly fileToolsConfigured: boolean;
   /** The voices on offer, in the order a person sees them. */
   voices(): readonly AiVoice[];
   /**
@@ -123,6 +168,37 @@ export interface AiVoiceProvider {
     req: MusicRequest,
     opts?: { signal?: AbortSignal },
   ): Promise<SpokenAudio>;
+
+  /**
+   * Turns a recording or video into words (Captions, AITOOLS-04): one
+   * request, the words with their times in the answer. The call honours the
+   * configured file timeout (`AI_VOICE_FILE_TIMEOUT_MS`). A network call: the
+   * caller holds no transaction, no connection and no lock. Throws
+   * `AiVoiceProviderError`.
+   */
+  transcribe(
+    req: TranscribeRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<Transcript>;
+
+  /**
+   * Deletes the provider's copy of a transcript, so it keeps no copy of a
+   * person's words. Never throws: a failed delete is logged without the id.
+   */
+  deleteTranscript(id: string): Promise<void>;
+
+  /**
+   * Takes the noise out of a recording or video (Clean audio, AITOOLS-04):
+   * one request, the cleaned audio in the answer. Same rules as `transcribe`.
+   * Throws `AiVoiceProviderError`.
+   */
+  isolateVoice(
+    req: IsolateRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<IsolatedAudio>;
+
+  /** Deletes the provider's history item of a cleaned recording. Never throws. */
+  deleteIsolation(id: string): Promise<void>;
 
   /**
    * Says a name in the studio voice (VF3, VOICE-01): the first voice the Hub

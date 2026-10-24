@@ -35152,6 +35152,178 @@
         "x-wawu-built-by": "AITOOLS-03"
       }
     },
+    "/api/hub/ai-tools/captions/quote": {
+      "post": {
+        "operationId": "AiToolsController_quoteCaptions",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteFileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFileQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The points quote for a Captions file (AITOOLS-04): the `fileKey` of a file\nthe person uploaded. The Hub reads the file's length itself and prices the\nminutes from that, so the phone sends no length. Answers the same quote\n`POST /points/quote` does (with its `quoteToken`, to send to the job route\nwith the same `fileKey`), plus `file.seconds` and `file.minutes`. Nothing\nis held. `404 not_found` (not the caller's own file), `422 ai_file_too_large`,\n`422 ai_file_unreadable`; over the longest job the quote's `cap` names\n`minutes_per_job` and `canRun` is false.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-04"
+      }
+    },
+    "/api/hub/ai-tools/clean-audio/quote": {
+      "post": {
+        "operationId": "AiToolsController_quoteCleanAudio",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteFileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFileQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The points quote for a Clean audio file (AITOOLS-04): exactly `POST /ai-tools/captions/quote`, for the action `clean_audio_per_min`.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-04"
+      }
+    },
+    "/api/hub/ai-tools/captions/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createCaptions",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCaptionsJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Captions job (PT1 \"Captions\", AITOOLS-04): the `fileKey` of a\nrecording or video the person uploaded (`POST /uploads/presign`, folder\n`ai/input-audio` or `ai/input-video`, then `POST /uploads/confirm`), an\noptional `languageCode` and the `quoteToken` of the `POST /points/quote`\n(sent with the same `fileKey`) for the action `captions_per_min`. Priced by\nthe minute of the file, as the Hub reads it from the file itself (rounded\nup, at least 1). The done job's `outputs` hold the words (`text`) and a\nsubtitle file (`subtitles`, SRT). The request, the answer and the\n`Idempotency-Key` rule are those of `POST /ai-tools/voiceover/jobs`, plus\n`404 not_found` (not the caller's own file), `422 ai_file_too_large` and\n`422 ai_file_unreadable`, each with nothing held; over the longest job the\nanswer is `422 points_cap_reached` naming `minutes_per_job`. The uploaded\nfile is deleted when the job ends, either way.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-04"
+      }
+    },
+    "/api/hub/ai-tools/clean-audio/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createCleanAudio",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCleanAudioJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Clean audio job (PT1 \"Clean audio\", AITOOLS-04): the `fileKey` of\na recording or video the person uploaded and the `quoteToken` for the\naction `clean_audio_per_min`. The done job's `audioUrl` (and its `audio`\noutput) is the same recording with the noise taken out. The request, the\nanswer and every refusal are those of `POST /ai-tools/captions/jobs`.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-04"
+      }
+    },
     "/api/hub/ai-tools/jobs": {
       "get": {
         "operationId": "AiToolsController_listJobs",
@@ -37168,7 +37340,9 @@
               "event/speaker",
               "event/banner",
               "profile/work",
-              "voice/sample"
+              "voice/sample",
+              "ai/input-audio",
+              "ai/input-video"
             ]
           },
           "contentType": {
@@ -42855,6 +43029,67 @@
         },
         "required": [
           "prompt",
+          "quoteToken"
+        ]
+      },
+      "QuoteFileDto": {
+        "type": "object",
+        "properties": {
+          "fileKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "fileKey"
+        ]
+      },
+      "CreateCaptionsJobDto": {
+        "type": "object",
+        "properties": {
+          "fileKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "languageCode": {
+            "type": "string",
+            "description": "The language spoken, as an ISO 639 code (`en`, `yo`, `fra`). Left out: the language is detected.",
+            "pattern": "^[a-z]{2,3}$"
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (sent with the same `fileKey`). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "fileKey",
+          "quoteToken"
+        ]
+      },
+      "CreateCleanAudioJobDto": {
+        "type": "object",
+        "properties": {
+          "fileKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (sent with the same `fileKey`). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "fileKey",
           "quoteToken"
         ]
       },
@@ -63556,6 +63791,63 @@
           "useWallet"
         ]
       },
+      "AiToolFileView": {
+        "type": "object",
+        "properties": {
+          "folders": {
+            "type": "object",
+            "properties": {
+              "audio": {
+                "type": "string"
+              },
+              "video": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "audio",
+              "video"
+            ]
+          },
+          "accepts": {
+            "type": "object",
+            "properties": {
+              "audio": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "video": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "audio",
+              "video"
+            ]
+          },
+          "maxBytes": {
+            "type": "number"
+          },
+          "maxMinutes": {
+            "type": "number"
+          },
+          "languageCode": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "folders",
+          "accepts",
+          "maxBytes",
+          "maxMinutes",
+          "languageCode"
+        ]
+      },
       "AiVoiceView": {
         "type": "object",
         "properties": {
@@ -63584,7 +63876,9 @@
               "music",
               "voiceover",
               "quick-voice",
-              "sound-effect"
+              "sound-effect",
+              "captions",
+              "clean-audio"
             ]
           },
           "action": {
@@ -63617,6 +63911,7 @@
                 "type": "string",
                 "enum": [
                   "text",
+                  "file",
                   "prompt"
                 ]
               },
@@ -63628,6 +63923,10 @@
               },
               "instrumental": {
                 "type": "boolean",
+                "nullable": true
+              },
+              "file": {
+                "$ref": "#/components/schemas/AiToolFileView",
                 "nullable": true
               }
             },
@@ -63729,7 +64028,9 @@
               "music",
               "voiceover",
               "quick-voice",
-              "sound-effect"
+              "sound-effect",
+              "captions",
+              "clean-audio"
             ]
           },
           "state": {
@@ -63787,6 +64088,99 @@
           "message",
           "createdAt",
           "finishedAt"
+        ]
+      },
+      "AiFileQuoteView": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "object",
+            "properties": {
+              "seconds": {
+                "type": "number"
+              },
+              "minutes": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "seconds",
+              "minutes"
+            ]
+          },
+          "action": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "per": {
+            "type": "string",
+            "enum": [
+              "use",
+              "minute",
+              "track",
+              "message",
+              "minute_per_language"
+            ]
+          },
+          "units": {
+            "type": "number"
+          },
+          "languages": {
+            "type": "number"
+          },
+          "perUnitPoints": {
+            "type": "number"
+          },
+          "costPoints": {
+            "type": "number"
+          },
+          "balancePoints": {
+            "type": "number"
+          },
+          "shortfallPoints": {
+            "type": "number"
+          },
+          "useWallet": {
+            "type": "boolean"
+          },
+          "quoteToken": {
+            "type": "string"
+          },
+          "canRun": {
+            "type": "boolean"
+          },
+          "cap": {
+            "$ref": "#/components/schemas/PointsCapView",
+            "nullable": true
+          },
+          "wallet": {
+            "$ref": "#/components/schemas/PointsShortfallOfferView",
+            "nullable": true
+          },
+          "walletNote": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "file",
+          "action",
+          "title",
+          "per",
+          "units",
+          "languages",
+          "perUnitPoints",
+          "costPoints",
+          "balancePoints",
+          "shortfallPoints",
+          "useWallet",
+          "quoteToken",
+          "canRun",
+          "cap",
+          "wallet",
+          "walletNote"
         ]
       },
       "AiJobPage": {

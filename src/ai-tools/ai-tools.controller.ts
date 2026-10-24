@@ -21,13 +21,23 @@ import { BuiltBy } from '../money/money-contract';
 import { AiJobService } from './ai-job.service';
 import {
   AiJobListQueryDto,
+  CreateCaptionsJobDto,
+  CreateCleanAudioJobDto,
   CreateMusicJobDto,
   CreateQuickVoiceJobDto,
   CreateSoundEffectJobDto,
   CreateVoiceoverJobDto,
+  QuoteFileDto,
 } from './ai-tools.dto';
 import { AiToolsService } from './ai-tools.service';
-import type { AiJobPage, AiJobView, AiToolsView } from './ai-tools-view.type';
+import type {
+  AiFileQuoteView,
+  AiJobPage,
+  AiJobView,
+  AiToolsView,
+} from './ai-tools-view.type';
+import { CAPTIONS_TOOL } from './tools/captions.tool';
+import { CLEAN_AUDIO_TOOL } from './tools/clean-audio.tool';
 import { MUSIC_TOOL } from './tools/music.tool';
 import { QUICK_VOICE_TOOL } from './tools/quick-voice.tool';
 import { SOUND_EFFECT_TOOL } from './tools/sound-effect.tool';
@@ -200,6 +210,117 @@ export class AiToolsController {
   ): Promise<AiJobView> {
     const { job, replayed } = await this.jobs.createJob(
       MUSIC_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * The points quote for a Captions file (AITOOLS-04): the `fileKey` of a file
+   * the person uploaded. The Hub reads the file's length itself and prices the
+   * minutes from that, so the phone sends no length. Answers the same quote
+   * `POST /points/quote` does (with its `quoteToken`, to send to the job route
+   * with the same `fileKey`), plus `file.seconds` and `file.minutes`. Nothing
+   * is held. `404 not_found` (not the caller's own file), `422 ai_file_too_large`,
+   * `422 ai_file_unreadable`; over the longest job the quote's `cap` names
+   * `minutes_per_job` and `canRun` is false.
+   */
+  @Post('captions/quote')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-04')
+  quoteCaptions(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: QuoteFileDto,
+  ): Promise<AiFileQuoteView> {
+    return this.tools.quoteFile(user.sub, CAPTIONS_TOOL, dto.fileKey);
+  }
+
+  /** The points quote for a Clean audio file (AITOOLS-04): exactly `POST /ai-tools/captions/quote`, for the action `clean_audio_per_min`. */
+  @Post('clean-audio/quote')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-04')
+  quoteCleanAudio(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: QuoteFileDto,
+  ): Promise<AiFileQuoteView> {
+    return this.tools.quoteFile(user.sub, CLEAN_AUDIO_TOOL, dto.fileKey);
+  }
+
+  /**
+   * Starts a Captions job (PT1 "Captions", AITOOLS-04): the `fileKey` of a
+   * recording or video the person uploaded (`POST /uploads/presign`, folder
+   * `ai/input-audio` or `ai/input-video`, then `POST /uploads/confirm`), an
+   * optional `languageCode` and the `quoteToken` of the `POST /points/quote`
+   * (sent with the same `fileKey`) for the action `captions_per_min`. Priced by
+   * the minute of the file, as the Hub reads it from the file itself (rounded
+   * up, at least 1). The done job's `outputs` hold the words (`text`) and a
+   * subtitle file (`subtitles`, SRT). The request, the answer and the
+   * `Idempotency-Key` rule are those of `POST /ai-tools/voiceover/jobs`, plus
+   * `404 not_found` (not the caller's own file), `422 ai_file_too_large` and
+   * `422 ai_file_unreadable`, each with nothing held; over the longest job the
+   * answer is `422 points_cap_reached` naming `minutes_per_job`. The uploaded
+   * file is deleted when the job ends, either way.
+   */
+  @Post('captions/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-04')
+  async createCaptions(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateCaptionsJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      CAPTIONS_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * Starts a Clean audio job (PT1 "Clean audio", AITOOLS-04): the `fileKey` of
+   * a recording or video the person uploaded and the `quoteToken` for the
+   * action `clean_audio_per_min`. The done job's `audioUrl` (and its `audio`
+   * output) is the same recording with the noise taken out. The request, the
+   * answer and every refusal are those of `POST /ai-tools/captions/jobs`.
+   */
+  @Post('clean-audio/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-04')
+  async createCleanAudio(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateCleanAudioJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      CLEAN_AUDIO_TOOL,
       user.sub,
       key,
       dto,

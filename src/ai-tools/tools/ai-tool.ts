@@ -1,6 +1,10 @@
 import type { AiToolJob } from '../../../generated/prisma/client';
 import type { PlansConfig } from '../../plans/plans-config';
-import type { AiVoiceProvider, SpokenAudio } from '../voice/ai-voice-provider';
+import type {
+  AiVoiceProvider,
+  SpokenAudio,
+  VoiceSample,
+} from '../voice/ai-voice-provider';
 import type { AiAudioFolder } from '../audio/ai-audio-store';
 
 /**
@@ -16,10 +20,16 @@ import type { AiAudioFolder } from '../audio/ai-audio-store';
  */
 
 /** The tool's id in the routes (`POST /ai-tools/{id}/jobs`) and in a job's `tool`. */
-export type AiToolId = 'voiceover' | 'quick-voice' | 'sound-effect' | 'music';
+export type AiToolId =
+  | 'voiceover'
+  | 'quick-voice'
+  | 'sound-effect'
+  | 'music'
+  | 'captions'
+  | 'clean-audio';
 
-/** What a job takes in. `text` (words to speak) and `prompt` (a description); `file` and `chat` come with the tasks that need them. */
-export type AiToolInputKind = 'text' | 'prompt';
+/** What a job takes in. `text` (words to speak), `prompt` (a description) and `file` (a recording or video the person uploaded, AITOOLS-04); `chat` comes with the task that needs it. */
+export type AiToolInputKind = 'text' | 'prompt' | 'file';
 
 /** How a text request reads once the pipeline has checked it. */
 export interface TextJobRequest {
@@ -40,7 +50,34 @@ export interface PromptJobRequest {
   instrumental: boolean | null;
 }
 
-export type AiToolRequest = TextJobRequest | PromptJobRequest;
+/**
+ * How a file request reads once the Hub has opened the file (AITOOLS-04): the
+ * person's own file in an AI input folder, its length read by the Hub from
+ * the file itself (never from anything the phone sent), and the minutes the
+ * job is priced in.
+ */
+export interface FileJobRequest {
+  kind: 'file';
+  /** The storage key of the file, as `POST /uploads/presign` gave it. */
+  fileKey: string;
+  /** Captions: the language spoken (ISO 639), or null to let the provider detect it. */
+  languageCode: string | null;
+  /** The length the Hub read, in seconds. */
+  seconds: number;
+  /** Minutes the job is priced in: rounded up, at least 1. */
+  minutes: number;
+  bytes: number;
+  contentType: string;
+}
+
+export type AiToolRequest = TextJobRequest | PromptJobRequest | FileJobRequest;
+
+/** The request of a file tool; a tool is only ever handed the kind it declares. */
+export function asFile(req: AiToolRequest): FileJobRequest {
+  if (req.kind !== 'file')
+    throw new Error('a file tool was given another kind');
+  return req;
+}
 
 /** The request of a text tool; a tool is only ever handed the kind it declares. */
 export function asText(req: AiToolRequest): TextJobRequest {
@@ -62,6 +99,24 @@ export interface AiToolRunResult {
   texts?: { kind: 'text' | 'subtitles'; text: string }[];
   /** The provider's own id for a long job, kept for a later look-up (`providerRef`). */
   providerRef?: string;
+  /**
+   * Set when the provider answered but the answer cannot be kept (its length
+   * is more than a minute above the priced one, or the audio is a type the Hub
+   * does not serve): the job fails with this code and every point goes back.
+   */
+  failure?: string;
+  /**
+   * Deletes the provider's copy of what it made (a transcript, a cleaned
+   * recording's history item), so it keeps no copy of a person's words or
+   * voice. The pipeline calls it once the result is stored or refused, however
+   * the job ends. Never throws.
+   */
+  discard?: () => Promise<void>;
+}
+
+/** What the pipeline hands a file tool's run: the person's file, read for this one run. */
+export interface AiToolRunInput {
+  file: VoiceSample;
 }
 
 /** What a unit of a tool's price is: a minute of speech, one use, or one track. */
@@ -90,7 +145,14 @@ export interface PromptInputSpec {
   instrumental: boolean;
 }
 
-export type AiToolInputSpec = TextInputSpec | PromptInputSpec;
+/** A tool that takes the person's own recording or video (AITOOLS-04): priced by the minute of the file the Hub measures. */
+export interface FileInputSpec {
+  kind: 'file';
+  /** True when the request may name the language spoken (`languageCode`). */
+  languageCode: boolean;
+}
+
+export type AiToolInputSpec = TextInputSpec | PromptInputSpec | FileInputSpec;
 
 /** A tool's settings keys, read on each call (R-65). */
 export interface AiToolSettings {
@@ -108,8 +170,8 @@ export interface AiTool {
   readonly unit: AiToolUnit;
   /** What the job takes in and the settings that bound it. */
   readonly input: AiToolInputSpec;
-  /** Where the job's audio is stored (a folder of the Hub's own, recorded as the person's). */
-  readonly audioFolder: AiAudioFolder;
+  /** Where the job's audio is stored (a folder of the Hub's own, recorded as the person's); null for a tool that makes no audio (Captions). */
+  readonly audioFolder: AiAudioFolder | null;
   /**
    * Whether the catalogue lists the tool while the provider is not set up
    * (`enabled: false`). VoiceOver keeps AITOOLS-01's answer; a tool added
@@ -146,5 +208,6 @@ export interface AiTool {
     provider: AiVoiceProvider,
     job: Pick<AiToolJob, 'id' | 'voiceId'>,
     req: AiToolRequest,
+    input?: AiToolRunInput,
   ): Promise<AiToolRunResult>;
 }

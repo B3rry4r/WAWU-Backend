@@ -37,6 +37,28 @@
 //     The own-voice calls (VOICE-01); it then speaks with the voice it made.
 //     What the SAMPLE file can ask of it (found in the file's bytes):
 //     [[sample-fail]] answers 500, [[sample-reject]] answers 422.
+//   POST /v1/speech-to-text   (AITOOLS-04)
+//     header xi-api-key, multipart (model_id, file, language_code?,
+//     timestamps_granularity?)  ->  200 JSON { language_code, text, words[],
+//     audio_duration_secs, transcription_id }. The words are made up
+//     (word1 word2 ...), one every half second of the file's length (read
+//     from a WAV header, or from MP3 frames of 417 bytes). What the FILE can
+//     ask of it (found in the file's bytes, as the voice sample markers are):
+//       [[fail]] 500, [[reject]] 422, [[status:402]] (any 400 to 599),
+//       [[html]] 200 with a web page, [[slow:1500]] wait, [[nospeech]] an
+//       empty transcript, [[reported:SECS]] report that length instead,
+//       [[noid]] no transcription_id.
+//   DELETE /v1/speech-to-text/transcripts/<id>      ->  200, 404 when none
+//   POST /v1/audio-isolation   (AITOOLS-04)
+//     header xi-api-key, multipart (audio)  ->  200 audio/mpeg (silent MP3
+//     frames of the file's length) with a `history-item-id` header. The file
+//     takes the same [[fail]], [[reject]], [[status:n]], [[html]], [[slow:n]]
+//     markers, plus [[iso-type:audio/ogg]] (answer that type) and
+//     [[iso-nohistory]] (no history-item-id header).
+//   DELETE /v1/audio-isolation/history/<id>         ->  200, 404 when none
+//     state.transcribe and state.isolate list each call (byte count, model,
+//     language; never the file); state.deletedTranscripts and
+//     state.deletedIsolations list the ids deleted.
 //   GET /__standin/state lists the calls so far (never the text).
 // Nothing of a real provider beyond these. The Hub never sees a control route.
 // Nothing here leaves 127.0.0.1.
@@ -73,7 +95,17 @@ function startVoiceStandin({
     sfx: [],
     /** Each Music call: music_length_ms asked (null when none) and force_instrumental. */
     music: [],
+    /** Each speech to text call: the model, the language asked (null when none), the file's bytes and the field names sent. */
+    transcribe: [],
+    /** Each audio isolation call: the file's bytes. */
+    isolate: [],
+    deletedTranscripts: [],
+    deletedIsolations: [],
   };
+  const transcripts = new Set();
+  const isolations = new Set();
+  let transcriptSeq = 0;
+  let isolationSeq = 0;
   const clones = new Map();
   // MPEG-1 Layer III, 128 kbps, 44.1 kHz, no padding: 417 bytes of silence per frame.
   const frame = Buffer.alloc(417);
@@ -215,6 +247,162 @@ function startVoiceStandin({
     };
   }
 
+  /** A multipart body as { name -> { filename, type, data } }. */
+  function parseMultipart(contentType, raw) {
+    const m = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(String(contentType ?? ''));
+    if (!m) return null;
+    const boundary = Buffer.from(`--${m[1] ?? m[2]}`);
+    const parts = new Map();
+    let at = raw.indexOf(boundary);
+    while (at >= 0) {
+      const next = raw.indexOf(boundary, at + boundary.length);
+      if (next < 0) break;
+      const part = raw.subarray(at + boundary.length + 2, next - 2);
+      const split = part.indexOf('\r\n\r\n');
+      if (split >= 0) {
+        const head = part.subarray(0, split).toString('latin1');
+        const name = /name="([^"]*)"/.exec(head);
+        if (name)
+          parts.set(name[1], {
+            filename: (/filename="([^"]*)"/.exec(head) ?? [])[1] ?? null,
+            type: (/content-type:\s*([^\r\n]+)/i.exec(head) ?? [])[1] ?? null,
+            data: part.subarray(split + 4),
+          });
+      }
+      at = next;
+    }
+    return parts;
+  }
+
+  /** The length of a file the stand-in is sent, in seconds: a WAV header, MP3 frames, else 10. */
+  function lengthOf(data) {
+    if (data.length > 44 && data.toString('latin1', 0, 4) === 'RIFF') {
+      const byteRate = data.readUInt32LE(28);
+      const size = data.readUInt32LE(40);
+      if (byteRate > 0) return size / byteRate;
+    }
+    if (data.length > 417 && data[0] === 0xff && (data[1] & 0xe0) === 0xe0)
+      return (data.length / 417) * FRAME_SECONDS;
+    return 10;
+  }
+
+  /**
+   * The file routes (AITOOLS-04): speech to text and audio isolation, counted
+   * as calls like the others, with the markers read from the file's bytes.
+   */
+  function fileRoute(kind) {
+    return async (req, res, _m, raw) => {
+      state.calls += 1;
+      state.active += 1;
+      state.maxActive = Math.max(state.maxActive, state.active);
+      const done = (status, type, body, headers = {}) => {
+        state.active -= 1;
+        if (status === 200) state.ok += 1;
+        else state.failed += 1;
+        res.statusCode = status;
+        res.setHeader('content-type', type);
+        for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
+        res.end(body);
+      };
+      try {
+        if (req.headers['xi-api-key'] !== key)
+          return done(401, 'application/json', '{"detail":"bad key"}');
+        const form = parseMultipart(req.headers['content-type'], raw);
+        const stt = kind === 'stt';
+        const file = form?.get(stt ? 'file' : 'audio');
+        if (!form || !file || file.data.length === 0)
+          return done(400, 'application/json', '{"detail":"no file"}');
+        if (stt && !form.has('model_id'))
+          return done(422, 'application/json', '{"detail":"no model"}');
+        const bytes = file.data;
+        const marks = bytes.toString('latin1');
+        const language =
+          form.get('language_code')?.data.toString('utf8') ?? null;
+        if (stt)
+          state.transcribe.push({
+            model: form.get('model_id').data.toString('utf8'),
+            languageCode: language,
+            granularity:
+              form.get('timestamps_granularity')?.data.toString('utf8') ?? null,
+            bytes: bytes.length,
+            fileType: file.type,
+          });
+        else state.isolate.push({ bytes: bytes.length, fileType: file.type });
+        const slow = /\[\[slow:(\d{1,6})\]\]/.exec(marks);
+        const wait = slow ? Number(slow[1]) : delayMs;
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        if (marks.includes('[[fail]]'))
+          return done(500, 'application/json', '{"detail":"down"}');
+        if (marks.includes('[[reject]]'))
+          return done(422, 'application/json', '{"detail":"refused"}');
+        const status = /\[\[status:(4\d\d|5\d\d)\]\]/.exec(marks);
+        if (status)
+          return done(Number(status[1]), 'application/json', '{"detail":"no"}');
+        if (marks.includes('[[html]]'))
+          return done(200, 'text/html', '<html>not what was asked</html>');
+        const seconds = lengthOf(bytes);
+        if (stt) {
+          const reported = /\[\[reported:(\d{1,6})\]\]/.exec(marks);
+          const none = marks.includes('[[nospeech]]');
+          const count = none
+            ? 0
+            : Math.min(400, Math.max(1, Math.round(seconds / 0.5)));
+          const words = Array.from({ length: count }, (_, i) => ({
+            text: `word${i + 1}${(i + 1) % 6 === 0 ? '.' : ''}`,
+            type: 'word',
+            start: i * 0.5,
+            end: i * 0.5 + 0.4,
+            speaker_id: 'speaker_0',
+          }));
+          const id = marks.includes('[[noid]]')
+            ? undefined
+            : `tr-${++transcriptSeq}`;
+          if (id) transcripts.add(id);
+          return done(
+            200,
+            'application/json',
+            JSON.stringify({
+              language_code: language ?? 'en',
+              language_probability: 0.99,
+              text: words.map((w) => w.text).join(' '),
+              words,
+              audio_duration_secs: reported ? Number(reported[1]) : seconds,
+              ...(id ? { transcription_id: id } : {}),
+            }),
+          );
+        }
+        const kindOverride = /\[\[iso-type:([a-z]+\/[a-z0-9.+-]+)\]\]/.exec(
+          marks,
+        );
+        const id = `iso-${++isolationSeq}`;
+        const headers = {};
+        if (!marks.includes('[[iso-nohistory]]')) {
+          isolations.add(id);
+          headers['history-item-id'] = id;
+        }
+        return done(
+          200,
+          kindOverride ? kindOverride[1] : 'audio/mpeg',
+          silence(seconds),
+          headers,
+        );
+      } catch {
+        return done(500, 'application/json', '{"detail":"stand-in fault"}');
+      }
+    };
+  }
+
+  function removeFrom(set, list) {
+    return (req, res, m) => {
+      if (req.headers['xi-api-key'] !== key)
+        return json(res, 401, { detail: 'bad key' });
+      const id = decodeURIComponent(m[1]);
+      if (!set.delete(id)) return json(res, 404, { detail: 'no such item' });
+      list.push(id);
+      return json(res, 200, { status: 'ok' });
+    };
+  }
+
   /** The own-voice routes (VOICE-01). */
   function addVoice(req, res, _m, raw) {
     if (req.headers['xi-api-key'] !== key)
@@ -260,6 +448,26 @@ function startVoiceStandin({
       handle: generation('sfx'),
     },
     { method: 'POST', path: /^\/v1\/music$/, handle: generation('music') },
+    {
+      method: 'POST',
+      path: /^\/v1\/speech-to-text$/,
+      handle: fileRoute('stt'),
+    },
+    {
+      method: 'DELETE',
+      path: /^\/v1\/speech-to-text\/transcripts\/([^/]+)$/,
+      handle: removeFrom(transcripts, state.deletedTranscripts),
+    },
+    {
+      method: 'POST',
+      path: /^\/v1\/audio-isolation$/,
+      handle: fileRoute('iso'),
+    },
+    {
+      method: 'DELETE',
+      path: /^\/v1\/audio-isolation\/history\/([^/]+)$/,
+      handle: removeFrom(isolations, state.deletedIsolations),
+    },
     { method: 'POST', path: /^\/v1\/voices\/add$/, handle: addVoice },
     { method: 'DELETE', path: /^\/v1\/voices\/([^/]+)$/, handle: removeVoice },
   ];
@@ -295,6 +503,9 @@ function startVoiceStandin({
         state,
         /** Voices made and not yet removed. */
         openClones: () => clones.size,
+        /** Transcripts and cleaned recordings the provider still holds (AITOOLS-04). */
+        openTranscripts: () => transcripts.size,
+        openIsolations: () => isolations.size,
       }),
     );
   });

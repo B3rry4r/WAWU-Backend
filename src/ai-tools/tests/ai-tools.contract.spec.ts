@@ -122,10 +122,11 @@ describe('AITOOLS-01: the AI tools catalogue and VoiceOver (contract)', () => {
     expect(res.status).toBe(200);
     expect(res.headers['cache-control']).toContain('no-store');
     const view = data<AiToolsView>(res);
-    // AITOOLS-02 lists Quick voice second and AITOOLS-03 lists Sound effect and
-    // Music track after it (their own specs check them): the one assertion
-    // each task's scope changes. VoiceOver's entry below is as before.
-    expect(view.tools).toHaveLength(4);
+    // AITOOLS-02 lists Quick voice second, AITOOLS-03 lists Sound effect and
+    // Music track after it and AITOOLS-04 Captions and Clean audio (their own
+    // specs check them): the one assertion each task's scope changes.
+    // VoiceOver's entry below is as before.
+    expect(view.tools).toHaveLength(6);
     const tool = view.tools[0];
     expect(tool).toMatchObject({
       id: 'voiceover',

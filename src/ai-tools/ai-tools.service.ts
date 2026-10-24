@@ -1,7 +1,20 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PLANS_CONFIG, type PlansConfig } from '../plans/plans-config';
 import { PlanSettingsService } from '../plan-settings/plan-settings.service';
-import type { AiToolsView, AiToolView } from './ai-tools-view.type';
+import { PointsQuoteService } from '../points/spend/points-quote.service';
+import { AiToolError, UNAVAILABLE_MESSAGE } from './ai-tools-error';
+import { AiInputService } from './input/ai-input-files';
+import type { AiTool } from './tools/ai-tool';
+import type {
+  AiFileQuoteView,
+  AiToolsView,
+  AiToolView,
+} from './ai-tools-view.type';
+import {
+  AI_INPUT_FOLDERS,
+  AI_INPUT_MAX_BYTES_SETTING,
+  FOLDER_CONTENT_TYPES,
+} from '../storage/dto/presign-upload.dto';
 import { AI_TOOLS } from './tools';
 import {
   AI_VOICE_PROVIDER,
@@ -24,7 +37,33 @@ export class AiToolsService {
     @Inject(PLANS_CONFIG) private readonly plan: PlansConfig,
     private readonly settings: PlanSettingsService,
     @Inject(AI_VOICE_PROVIDER) private readonly voice: AiVoiceProvider,
+    private readonly input: AiInputService,
+    private readonly quotes: PointsQuoteService,
   ) {}
+
+  /**
+   * The points quote for a person's own file (AITOOLS-04): the Hub opens the
+   * file (their own, within the byte cap, its length readable), prices the
+   * minutes from its own reading, and hands the same quote `POST /points/quote`
+   * does. Nothing is held. The phone sends no length.
+   */
+  async quoteFile(
+    wawuUserId: string,
+    tool: AiTool,
+    fileKey: string,
+  ): Promise<AiFileQuoteView> {
+    if (!tool.enabled(this.voice))
+      throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
+    const opened = await this.input.open(wawuUserId, fileKey);
+    const quote = await this.quotes.quote(wawuUserId, {
+      action: tool.action,
+      units: opened.minutes,
+    });
+    return {
+      ...quote,
+      file: { seconds: Math.ceil(opened.seconds), minutes: opened.minutes },
+    };
+  }
 
   list(): AiToolsView {
     const plan = this.plan;
@@ -40,6 +79,38 @@ export class AiToolsService {
       const enabled = tool.enabled(this.voice);
       if (!enabled && !tool.listedWhenOff) continue;
       const spec = tool.input;
+      if (spec.kind === 'file') {
+        tools.push({
+          id: tool.id,
+          action: action.id,
+          name: tool.name,
+          description: tool.description,
+          unit: tool.unit,
+          costPointsPerUnit: action.points,
+          enabled,
+          input: {
+            kind: 'file',
+            // A file tool takes no text: the two fields every tool carries are 0.
+            maxCharacters: 0,
+            charactersPerUnit: 0,
+            file: {
+              folders: {
+                audio: AI_INPUT_FOLDERS[0],
+                video: AI_INPUT_FOLDERS[1],
+              },
+              accepts: {
+                audio: [...FOLDER_CONTENT_TYPES[AI_INPUT_FOLDERS[0]]],
+                video: [...FOLDER_CONTENT_TYPES[AI_INPUT_FOLDERS[1]]],
+              },
+              maxBytes: this.settings.number(AI_INPUT_MAX_BYTES_SETTING),
+              maxMinutes: plan.caps.maxAudioMinPerJob,
+              languageCode: spec.languageCode,
+            },
+          },
+          voices: [],
+        });
+        continue;
+      }
       const maxCharacters =
         spec.kind === 'prompt'
           ? // The tool's own limit, and never above the plan's per-job cap the hold also checks.

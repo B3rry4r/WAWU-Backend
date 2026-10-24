@@ -5,7 +5,7 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
-import type { AiToolJob, Prisma } from '../../generated/prisma/client';
+import { Prisma, type AiToolJob } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { isUniqueViolation } from '../money/prisma-unique';
 import { PlanSettingsService } from '../plan-settings/plan-settings.service';
@@ -22,6 +22,7 @@ import {
   audioKeyFor,
   type AiAudioStore,
 } from './audio/ai-audio-store';
+import { AiInputService } from './input/ai-input-files';
 import {
   AiToolError,
   JOB_FAILED_MESSAGE,
@@ -41,11 +42,18 @@ import type {
 } from './ai-tools-view.type';
 import type {
   AiJobListQueryDto,
+  CreateCaptionsJobDto,
+  CreateCleanAudioJobDto,
   CreateMusicJobDto,
   CreateSoundEffectJobDto,
   CreateVoiceoverJobDto,
 } from './ai-tools.dto';
-import type { AiTool, AiToolRequest, AiToolRunResult } from './tools/ai-tool';
+import type {
+  AiTool,
+  AiToolRequest,
+  AiToolRunInput,
+  AiToolRunResult,
+} from './tools/ai-tool';
 import { toolForAction } from './tools';
 import {
   CHARS_PER_MINUTE_SETTING,
@@ -59,6 +67,14 @@ import {
 } from './voice/ai-voice-provider';
 
 export { CHARS_PER_MINUTE_SETTING, VOICEOVER_ACTION };
+
+/** The body of any job route: words, a description or a file, by the tool's input kind. */
+type AiJobRequestBody =
+  | CreateVoiceoverJobDto
+  | CreateSoundEffectJobDto
+  | CreateMusicJobDto
+  | CreateCaptionsJobDto
+  | CreateCleanAudioJobDto;
 
 const KEY_FORMAT = /^[A-Za-z0-9_-]{8,128}$/;
 /** The only try a job's hold has: a failed job is never retried, a new job (and key) is. */
@@ -116,6 +132,7 @@ export class AiJobService {
     private readonly quotes: PointsJobQuoteToken,
     @Inject(AI_VOICE_PROVIDER) private readonly voice: AiVoiceProvider,
     @Inject(AI_AUDIO_STORE) private readonly audio: AiAudioStore,
+    private readonly input: AiInputService,
   ) {}
 
   /** Characters that make one minute of VoiceOver, from the settings. */
@@ -142,18 +159,20 @@ export class AiJobService {
     tool: AiTool,
     wawuUserId: string,
     idempotencyKey: string | undefined,
-    dto: CreateVoiceoverJobDto | CreateSoundEffectJobDto | CreateMusicJobDto,
+    dto: AiJobRequestBody,
     now: Date = new Date(),
   ): Promise<CreatedJob> {
     if (!idempotencyKey || !KEY_FORMAT.test(idempotencyKey))
       throw new AiToolError('idempotency_key_required', KEY_REQUIRED_MESSAGE);
-    const { req, voiceId, same } = requestOf(tool, dto);
+    const asked = requestOf(tool, dto);
+    const { voiceId, same } = asked;
+    let req = asked.req;
     const requestHash = hashRequest(
       wawuUserId,
       idempotencyKey,
       tool.action,
       voiceId,
-      req.kind === 'text' ? req.text : req.prompt,
+      asked.hashText,
       same,
     );
     const id = jobIdFor(wawuUserId, idempotencyKey);
@@ -165,12 +184,27 @@ export class AiJobService {
     if (!tool.enabled(this.voice))
       throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
     if (req.kind === 'text') {
-      if (!this.voice.voices().some((v) => v.id === req.voiceId))
+      const wanted = req.voiceId;
+      if (!this.voice.voices().some((v) => v.id === wanted))
         throw new AiToolError('ai_voice_unknown', VOICE_UNKNOWN_MESSAGE);
       if (req.text === '')
         throw new AiToolError('ai_text_empty', TEXT_EMPTY_MESSAGE);
-    } else if (req.prompt === '') {
-      throw new AiToolError('ai_prompt_empty', PROMPT_EMPTY_MESSAGE);
+    } else if (req.kind === 'prompt') {
+      if (req.prompt === '')
+        throw new AiToolError('ai_prompt_empty', PROMPT_EMPTY_MESSAGE);
+    } else {
+      // The person's own file: opened and measured by the Hub, before
+      // anything is priced or held. Another person's key is not found.
+      const opened = await this.input.open(wawuUserId, req.fileKey);
+      req = {
+        kind: 'file',
+        fileKey: opened.key,
+        languageCode: req.languageCode,
+        seconds: opened.seconds,
+        minutes: opened.minutes,
+        bytes: opened.bytes,
+        contentType: opened.contentType,
+      };
     }
     // The tool's own limits (a description or a length over its setting):
     // refused before anything is priced or held.
@@ -220,6 +254,7 @@ export class AiJobService {
         units,
         costPoints: held.costPoints,
         holdId: held.holdId,
+        inputRef: req.kind === 'file' ? req.fileKey : null,
       },
       requestHash,
     );
@@ -301,6 +336,7 @@ export class AiJobService {
       units: number;
       costPoints: number;
       holdId: string;
+      inputRef: string | null;
     },
     requestHash: string,
   ): Promise<{ job: AiToolJob; replayed: boolean }> {
@@ -374,9 +410,19 @@ export class AiJobService {
     holdId: string,
     req: AiToolRequest,
   ): Promise<void> {
+    // A file tool reads the person's file for this one run, before the call.
+    let input: AiToolRunInput | undefined;
+    if (req.kind === 'file') {
+      try {
+        input = { file: await this.input.read(req.fileKey) };
+      } catch {
+        await this.fail(job, holdId, 'file_unreadable');
+        return;
+      }
+    }
     let result: AiToolRunResult;
     try {
-      result = await tool.run(this.voice, job, req);
+      result = await tool.run(this.voice, job, req, input);
     } catch (e) {
       const code =
         e instanceof AiVoiceProviderError && e.kind === 'rejected'
@@ -397,6 +443,26 @@ export class AiJobService {
       await this.fail(job, holdId, code);
       return;
     }
+    try {
+      await this.finish(tool, job, holdId, result);
+    } finally {
+      // The provider keeps no copy of a person's words or voice: its copy is
+      // deleted once the result is stored or refused, however the job ends.
+      await result.discard?.().catch(() => undefined);
+    }
+  }
+
+  /** What follows a provider answer: refuse it, or store it, COMMIT the hold, mark the job done. */
+  private async finish(
+    tool: AiTool,
+    job: AiToolJob,
+    holdId: string,
+    result: AiToolRunResult,
+  ): Promise<void> {
+    if (result.failure) {
+      await this.fail(job, holdId, result.failure);
+      return;
+    }
     const outputs: StoredOutput[] = [];
     let key: string | null = null;
     try {
@@ -406,7 +472,7 @@ export class AiJobService {
           job.id,
           result.audio.audio,
           result.audio.contentType,
-          tool.audioFolder,
+          tool.audioFolder ?? undefined,
         );
         outputs.push({ kind: 'audio', key });
       }
@@ -416,23 +482,35 @@ export class AiJobService {
     }
     for (const t of result.texts ?? [])
       outputs.push({ kind: t.kind, text: t.text });
+    // What the job made is written to its row BEFORE the hold is committed, so
+    // a server that dies between the commit and the mark still has the result
+    // (a transcript lives only in the row). A failed job clears it again.
+    const made = {
+      outputs: outputs as unknown as Prisma.InputJsonValue,
+      providerRef: result.providerRef ?? null,
+    };
     try {
+      await this.prisma.aiToolJob.updateMany({
+        where: { id: job.id, state: 'working' },
+        data: made,
+      });
       // The deciding step: the sweep that gave the points back first wins, and
       // then this finish is refused.
       await this.spend.commit(holdId);
     } catch (e) {
       if (e instanceof PointsError && e.code === 'points_hold_settled') {
         if (key) await this.audio.remove(key);
-        await this.mark(job.id, 'failed', { failureCode: 'timed_out' });
+        await this.mark(job.id, 'failed', {
+          failureCode: 'timed_out',
+          outputs: Prisma.JsonNull,
+        });
+        await this.dropInput(job);
         return;
       }
       throw e;
     }
-    await this.mark(job.id, 'done', {
-      audioKey: key,
-      outputs: outputs as unknown as Prisma.InputJsonValue,
-      providerRef: result.providerRef ?? null,
-    });
+    await this.mark(job.id, 'done', { ...made, audioKey: key });
+    await this.dropInput(job);
   }
 
   /** The job did not work: every held point goes back, then the job says so. */
@@ -454,6 +532,19 @@ export class AiJobService {
       }
     }
     await this.mark(job.id, 'failed', { failureCode });
+    await this.dropInput(job);
+  }
+
+  /** The job has ended: the person's uploaded file is deleted (it was read for this one run). Never throws. */
+  private async dropInput(
+    job: Pick<AiToolJob, 'id' | 'inputRef'>,
+  ): Promise<void> {
+    if (!job.inputRef) return;
+    try {
+      await this.input.remove(job.inputRef);
+    } catch {
+      this.logger.warn(`ai job ${job.id}: the uploaded file was not removed`);
+    }
   }
 
   /** Moves a `working` job to its end, once; a job already ended is left as it is. */
@@ -463,7 +554,7 @@ export class AiJobService {
     data: {
       failureCode?: string;
       audioKey?: string | null;
-      outputs?: Prisma.InputJsonValue;
+      outputs?: Prisma.InputJsonValue | typeof Prisma.JsonNull;
       providerRef?: string | null;
     },
   ): Promise<void> {
@@ -485,15 +576,20 @@ export class AiJobService {
       select: { state: true },
     });
     if (!hold || hold.state === 'held') return job;
-    if (hold.state === 'committed')
+    if (hold.state === 'committed') {
+      // The result was written to the row before the commit; a job written
+      // before that existed (or one with no outputs) falls back to its key.
+      const folder = toolForAction(job.tool)?.audioFolder;
+      const stored = storedOutputsOf(job).find((o) => o.kind === 'audio');
       await this.mark(job.id, 'done', {
-        audioKey: audioKeyFor(
-          job.wawuUserId,
-          job.id,
-          toolForAction(job.tool)?.audioFolder,
-        ),
+        audioKey:
+          stored?.key ??
+          (folder === null
+            ? null
+            : audioKeyFor(job.wawuUserId, job.id, folder)),
       });
-    else await this.mark(job.id, 'failed', { failureCode: 'timed_out' });
+    } else await this.mark(job.id, 'failed', { failureCode: 'timed_out' });
+    await this.dropInput(job);
     return (
       (await this.prisma.aiToolJob.findUnique({ where: { id: job.id } })) ?? job
     );
@@ -596,15 +692,43 @@ function hashRequest(
  */
 function requestOf(
   tool: AiTool,
-  dto: CreateVoiceoverJobDto | CreateSoundEffectJobDto | CreateMusicJobDto,
-): { req: AiToolRequest; voiceId: string; same: readonly unknown[] } {
+  dto: AiJobRequestBody,
+): {
+  req: AiToolRequest;
+  voiceId: string;
+  same: readonly unknown[];
+  /** The words, description or file key the Idempotency-Key hash covers. */
+  hashText: string;
+} {
   const spec = tool.input;
   if (spec.kind === 'text') {
     const d = dto as CreateVoiceoverJobDto;
+    const text = d.text.trim();
     return {
-      req: { kind: 'text', text: d.text.trim(), voiceId: d.voiceId },
+      req: { kind: 'text', text, voiceId: d.voiceId },
       voiceId: d.voiceId,
       same: [],
+      hashText: text,
+    };
+  }
+  if (spec.kind === 'file') {
+    const d = dto as CreateCaptionsJobDto & CreateCleanAudioJobDto;
+    const languageCode = spec.languageCode ? (d.languageCode ?? null) : null;
+    // The length and the minutes are the Hub's own reading, made after this
+    // (`createJob` opens the file); only the key and the language are asked.
+    return {
+      req: {
+        kind: 'file',
+        fileKey: d.fileKey,
+        languageCode,
+        seconds: 0,
+        minutes: 0,
+        bytes: 0,
+        contentType: '',
+      },
+      voiceId: '',
+      same: [languageCode],
+      hashText: d.fileKey,
     };
   }
   const d = dto as CreateSoundEffectJobDto & CreateMusicJobDto;
@@ -613,15 +737,12 @@ function requestOf(
       ? d.durationSeconds
       : d.lengthSeconds) ?? null;
   const instrumental = spec.instrumental ? d.instrumental === true : null;
+  const prompt = d.prompt.trim();
   return {
-    req: {
-      kind: 'prompt',
-      prompt: d.prompt.trim(),
-      seconds,
-      instrumental,
-    },
+    req: { kind: 'prompt', prompt, seconds, instrumental },
     voiceId: '',
     same: [seconds, instrumental],
+    hashText: prompt,
   };
 }
 

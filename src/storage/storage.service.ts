@@ -3,10 +3,14 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   PayloadTooLargeException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import {
+  AI_INPUT_FOLDERS,
+  AI_INPUT_MAX_BYTES,
+  AI_INPUT_MAX_BYTES_SETTING,
   FOLDER_CONTENT_TYPES,
   FOLDER_MAX_BYTES,
   EXTENSION_FOR_CONTENT_TYPE,
@@ -43,6 +47,7 @@ import {
   type AllowanceDb,
 } from '../plans/publishing-allowance.service';
 import { PublishingGate } from '../plans/publishing-gate.service';
+import { PlanSettingsService } from '../plan-settings/plan-settings.service';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 /**
@@ -191,13 +196,14 @@ export function storedKeyProblem(stored: unknown): string | null {
 /**
  * Folders the Hub itself writes to with `putGenerated` (not offered to a
  * client). `ai/voiceover` is AITOOLS-01's audio, `ai/sound-effect` and
- * `ai/music` are AITOOLS-03's (AI_AUDIO_FOLDERS in
+ * `ai/music` are AITOOLS-03's, `ai/clean-audio` is AITOOLS-04's (AI_AUDIO_FOLDERS in
  * src/ai-tools/audio/ai-audio-store.ts, which a spec keeps equal to this).
  */
 export const GENERATED_KEY_FOLDERS = [
   'ai/voiceover',
   'ai/sound-effect',
   'ai/music',
+  'ai/clean-audio',
 ] as const;
 
 /**
@@ -392,6 +398,9 @@ export class StorageService {
     private readonly prisma: PrismaService,
     private readonly allowance: PublishingAllowanceService,
     private readonly gate: PublishingGate,
+    // AITOOLS-04: the live cap on a file for an AI tool. Absent in a spec that
+    // builds the service by hand, where the folder's own ceiling applies.
+    @Optional() private readonly settings?: PlanSettingsService,
   ) {
     const margin = Number(
       this.config.get<string>('UPLOAD_SWEEP_MARGIN_SECONDS'),
@@ -492,7 +501,17 @@ export class StorageService {
       );
     }
 
-    const folderCap = FOLDER_MAX_BYTES[folder];
+    let folderCap = FOLDER_MAX_BYTES[folder];
+    // The Studio tools' file cap is a setting an admin changes at any time
+    // (R-65), never above the folder's own ceiling.
+    if (
+      (AI_INPUT_FOLDERS as readonly string[]).includes(folder) &&
+      this.settings
+    )
+      folderCap = Math.min(
+        folderCap ?? AI_INPUT_MAX_BYTES,
+        this.settings.number(AI_INPUT_MAX_BYTES_SETTING),
+      );
     if (folderCap !== undefined && contentLength > folderCap) {
       throw new PayloadTooLargeException(
         `A file in ${folder} can be at most ${formatBytes(folderCap)}.`,

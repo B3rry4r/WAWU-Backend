@@ -47,6 +47,8 @@ describe('AITOOLS-03: where the AI tools keep their audio', () => {
 
   it('every folder a tool writes to is a folder the Hub writes, has a purge decision, and the key a job is found by matches it', () => {
     for (const tool of AI_TOOLS) {
+      // Captions makes words, not audio: no folder to check.
+      if (tool.audioFolder === null) continue;
       expect(AI_AUDIO_FOLDERS).toContain(tool.audioFolder);
       expect([...GENERATED_KEY_FOLDERS]).toContain(tool.audioFolder);
       expect(FILE_KINDS[tool.audioFolder]?.decision).toBe('DELETE');
@@ -60,6 +62,8 @@ describe('AITOOLS-03: where the AI tools keep their audio', () => {
       'ai/voiceover',
       'ai/sound-effect',
       'ai/music',
+      null,
+      'ai/clean-audio',
     ]);
   });
 });

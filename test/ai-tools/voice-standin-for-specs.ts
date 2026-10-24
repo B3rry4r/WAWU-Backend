@@ -19,7 +19,22 @@ export interface StandinHandle {
     sfx: (number | null)[];
     /** Each Music call: the `music_length_ms` asked (null when none) and whether it was instrumental. */
     music: { lengthMs: number | null; instrumental: boolean }[];
+    /** Each speech to text call (AITOOLS-04): the model, the language asked, the timestamps asked, the file's bytes and type. */
+    transcribe: {
+      model: string;
+      languageCode: string | null;
+      granularity: string | null;
+      bytes: number;
+      fileType: string | null;
+    }[];
+    /** Each audio isolation call: the file's bytes and type. */
+    isolate: { bytes: number; fileType: string | null }[];
+    deletedTranscripts: string[];
+    deletedIsolations: string[];
   };
+  /** Transcripts and cleaned recordings the provider still holds. */
+  openTranscripts: () => number;
+  openIsolations: () => number;
   /** Voices the stand-in made for a person's own sample and has not yet had removed. */
   openClones: () => number;
 }

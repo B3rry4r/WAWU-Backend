@@ -12,11 +12,22 @@ export const AI_AUDIO_FOLDER = 'ai/voiceover';
 export const AI_SFX_FOLDER = 'ai/sound-effect';
 /** A Music track job's audio (AITOOLS-03), under its own folder. */
 export const AI_MUSIC_FOLDER = 'ai/music';
+/** A Clean audio job's audio (AITOOLS-04), under its own folder. */
+export const AI_CLEAN_FOLDER = 'ai/clean-audio';
+/** The audio types the Hub stores and serves for a tool's result (its `putGenerated` list). */
+export const AI_AUDIO_CONTENT_TYPES = [
+  'audio/mpeg',
+  'audio/wav',
+  'audio/mp4',
+  'audio/aac',
+] as const;
+export type AiAudioContentType = (typeof AI_AUDIO_CONTENT_TYPES)[number];
 /** Every folder the AI tools write audio to: each is the person's own, so their account deletion removes it. */
 export const AI_AUDIO_FOLDERS = [
   AI_AUDIO_FOLDER,
   AI_SFX_FOLDER,
   AI_MUSIC_FOLDER,
+  AI_CLEAN_FOLDER,
 ] as const;
 export type AiAudioFolder = (typeof AI_AUDIO_FOLDERS)[number];
 
@@ -29,7 +40,7 @@ export interface AiAudioStore {
     wawuUserId: string,
     jobId: string,
     audio: Buffer,
-    contentType: 'audio/mpeg',
+    contentType: AiAudioContentType,
     folder?: AiAudioFolder,
   ): Promise<string>;
   /** A link the person's app plays the audio from. */
@@ -47,7 +58,7 @@ export class StorageAiAudioStore implements AiAudioStore {
     wawuUserId: string,
     jobId: string,
     audio: Buffer,
-    contentType: 'audio/mpeg',
+    contentType: AiAudioContentType,
     folder: AiAudioFolder = AI_AUDIO_FOLDER,
   ): Promise<string> {
     return this.storage.putGenerated(
@@ -73,6 +84,7 @@ export function audioKeyFor(
   wawuUserId: string,
   jobId: string,
   folder: AiAudioFolder = AI_AUDIO_FOLDER,
+  extension = 'mp3',
 ): string {
-  return `${folder}/${wawuUserId}/${jobId}.mp3`;
+  return `${folder}/${wawuUserId}/${jobId}.${extension}`;
 }

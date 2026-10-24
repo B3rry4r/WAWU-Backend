@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { PlansModule } from '../plans/plans.module';
 import { StorageService } from './storage.service';
 import { StorageController } from './storage.controller';
@@ -9,7 +10,7 @@ import { StorageSweepService } from './storage-sweep.service';
  * (TIER-02): a file for a product needs a tier.
  */
 @Module({
-  imports: [PlansModule],
+  imports: [PlansModule, PlanSettingsModule],
   controllers: [StorageController],
   providers: [StorageService, StorageSweepService],
   exports: [StorageService],

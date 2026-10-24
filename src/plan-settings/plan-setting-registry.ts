@@ -577,8 +577,8 @@ export function buildRegistry(
     voice_intro: 'POST /me/voice-intro/generate (VOICE-01)',
     voiceover_per_min: 'POST /ai-tools/voiceover/jobs (AITOOLS-01)',
     quick_voice_per_min: 'POST /ai-tools/quick-voice/jobs (AITOOLS-02)',
-    captions_per_min: 'the Captions job route (AITOOLS-04)',
-    clean_audio_per_min: 'the Clean audio job route (AITOOLS-04)',
+    captions_per_min: 'POST /ai-tools/captions/jobs (AITOOLS-04)',
+    clean_audio_per_min: 'POST /ai-tools/clean-audio/jobs (AITOOLS-04)',
     music_per_track: 'POST /ai-tools/music/jobs (AITOOLS-03)',
     sfx: 'POST /ai-tools/sound-effect/jobs (AITOOLS-03)',
     dub_standard_per_min_lang: 'the Dubbing job route (AITOOLS-05)',
@@ -805,6 +805,22 @@ export function buildRegistry(
     provisional: 'AITOOLS-LIMITS',
     default: extra('ai.music_max_seconds', 300),
     parse: whole(3, 600),
+  });
+  // AITOOLS-04: the biggest file a person may send to Captions or Clean
+  // audio. The provider's smallest documented limit (500 MB for the voice
+  // isolator) is the default and the ceiling: an admin may only lower it.
+  add({
+    key: 'ai.input_max_bytes',
+    group: 'Other rulings',
+    label: 'Largest file for Captions or Clean audio, in bytes',
+    unit: 'count',
+    usedBy: [
+      'POST /uploads/presign (folders ai/input-audio and ai/input-video)',
+      'GET /ai-tools (input.maxBytes), POST /ai-tools/captions/jobs, POST /ai-tools/clean-audio/jobs',
+    ],
+    provisional: 'AITOOLS-LIMITS',
+    default: extra('ai.input_max_bytes', 500 * 1024 * 1024),
+    parse: whole(1_048_576, 512 * 1024 * 1024),
   });
   other(
     'voice.intro_max_chars',
