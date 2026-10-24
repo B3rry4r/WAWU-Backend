@@ -1,3 +1,9 @@
+/** One quick price the price step offers. */
+export interface ContentSalePreset {
+  /** The price in kobo. */
+  priceKobo: number;
+}
+
 /**
  * GET /content/sale-terms (FIX-110, M24 and M25): the terms of selling a
  * piece, worked out by the Hub. Money is whole kobo (R-21).
@@ -7,8 +13,8 @@ export interface ContentSaleTerms {
   creatorSharePct: number;
   /** What it costs to list a piece, in kobo. 0: listing is free. */
   listingFeeKobo: number;
-  /** The quick prices the price step offers, in kobo, in the order drawn. */
-  presetsKobo: number[];
+  /** The quick prices the price step offers, in the order drawn (a list of objects, never an array in a Kobo field: CONVENTIONS section 1). */
+  presets: ContentSalePreset[];
   /** Hours a review of a new piece usually takes (an admin setting). */
   reviewHours: number;
   /** The price asked about, in kobo, as sent; null when none was sent. */

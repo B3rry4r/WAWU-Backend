@@ -48077,6 +48077,17 @@
           "flutterwaveConfig"
         ]
       },
+      "ContentSalePreset": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceKobo"
+        ]
+      },
       "ContentSaleTerms": {
         "type": "object",
         "properties": {
@@ -48086,10 +48097,10 @@
           "listingFeeKobo": {
             "type": "integer"
           },
-          "presetsKobo": {
+          "presets": {
             "type": "array",
             "items": {
-              "type": "number"
+              "$ref": "#/components/schemas/ContentSalePreset"
             }
           },
           "reviewHours": {
@@ -48107,7 +48118,7 @@
         "required": [
           "creatorSharePct",
           "listingFeeKobo",
-          "presetsKobo",
+          "presets",
           "reviewHours",
           "priceKobo",
           "earnPerSaleKobo"

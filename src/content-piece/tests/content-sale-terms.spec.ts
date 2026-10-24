@@ -43,7 +43,12 @@ describe('GET /content/sale-terms (FIX-110)', () => {
     expect(terms).toEqual({
       creatorSharePct: 85,
       listingFeeKobo: 0,
-      presetsKobo: [100_000, 250_000, 300_000, 500_000],
+      presets: [
+        { priceKobo: 100_000 },
+        { priceKobo: 250_000 },
+        { priceKobo: 300_000 },
+        { priceKobo: 500_000 },
+      ],
       reviewHours: 4,
       priceKobo: null,
       earnPerSaleKobo: null,
@@ -74,7 +79,12 @@ describe('GET /content/sale-terms (FIX-110)', () => {
       ]),
     );
     const terms = service.terms(undefined);
-    expect(terms.presetsKobo).toEqual([100_000, 200_000, 300_000, 500_000]);
+    expect(terms.presets).toEqual([
+      { priceKobo: 100_000 },
+      { priceKobo: 200_000 },
+      { priceKobo: 300_000 },
+      { priceKobo: 500_000 },
+    ]);
     expect(terms.reviewHours).toBe(24);
   });
 

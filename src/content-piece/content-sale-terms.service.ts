@@ -44,7 +44,9 @@ export class ContentSaleTermsService {
     return {
       creatorSharePct,
       listingFeeKobo: 0,
-      presetsKobo: CONTENT_PRESET_KEYS.map((key) => this.settings.number(key)),
+      presets: CONTENT_PRESET_KEYS.map((key) => ({
+        priceKobo: this.settings.number(key),
+      })),
       reviewHours: this.settings.number(CONTENT_REVIEW_HOURS_KEY),
       priceKobo: priceKobo ?? null,
       earnPerSaleKobo:
