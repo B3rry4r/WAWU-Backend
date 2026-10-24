@@ -5089,6 +5089,101 @@ model FintavaLedgerReference {
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
+/// ADDING MONEY BY CARD, APPLE PAY, USSD OR A BANK CHECKOUT (WALLET-25, WALLET-26, R-84)
+///
+/// One row per attempt to put money into a person's own wallet through a
+/// Nuvion payment rail that is not the account number: a card payment (a
+/// payment intent and its action), Apple Pay, or a funding session (a USSD
+/// prompt, or the hosted bank checkout). The row is the Hub's record of what
+/// was asked and how it stands; it is never a balance (Nuvion's is the truth).
+///
+/// The wallet is credited by the inflow Nuvion records on the person's
+/// account when the payment settles (the existing inflow ledger path,
+/// NUV-04), once, keyed on Nuvion's transfer and our `reference`. This row
+/// links that inflow to the attempt (`reference` is the payment intent's
+/// `reference` and the funding session's `unique_reference`), carries the
+/// quote the person saw, and says why an attempt failed in our own words.
+///
+/// `rail`: card, apple_pay, ussd, open_banking.
+/// `status`: created (Nuvion not asked yet), awaiting_user (the person has a
+/// page to open or a prompt to answer), processing (Nuvion has it), settled
+/// (credited to the wallet), failed, expired, cancelled.
+/// `frozen`: an admin stopped the attempt from crediting (WALLET-25 controls);
+/// a frozen attempt that settles at Nuvion is kept for review, not credited.
+/// Never a card number, an expiry, a CVV or the encrypted card text.
+/// ─────────────────────────────────────────────────────────────────────────
+model AddMoneySession {
+  id              String    @id @default(uuid())
+  wawuUserId      String
+  /// `nuvion`: the provider that holds the wallet (a server acts only on rows of its own provider).
+  provider        String    @default("nuvion")
+  rail            String
+  currency        String    @default("NGN")
+  /// What the wallet gets, in kobo.
+  amountKobo      BigInt
+  /// What the payer pays: the amount plus both fees, in kobo.
+  chargeKobo      BigInt
+  /// Nuvion's charge as quoted (config), then as Nuvion's own record says it was.
+  providerFeeKobo BigInt    @default(0)
+  /// WAWU's fee on top (R-10), from config; default 0.
+  wawuFeeKobo     BigInt    @default(0)
+  status          String    @default("created")
+  frozen          Boolean   @default(false)
+  /// Our unique reference, sent to Nuvion as the payment intent's `reference`
+  /// or the funding session's `unique_reference`; the inflow carries it back.
+  reference       String    @unique
+  /// The payment intent's or the funding session's id at Nuvion.
+  providerRef     String?
+  /// The payment intent's confirming action id (card and Apple Pay).
+  actionRef       String?
+  /// Where the person opens the hosted page (3-D Secure, Apple Pay, the bank checkout).
+  checkoutUrl     String?
+  /// The card's last four digits and network, when Nuvion says them; never more.
+  cardLast4       String?
+  cardBrand       String?
+  /// Why it failed, in our own words, and Nuvion's code for support.
+  failureMessage  String?
+  failureCode     String?
+  /// The ledger row that credited the wallet, and when.
+  ledgerEntryId   String?
+  creditedAt      DateTime?
+  /// WAWU's fee, moved from the wallet to WAWU's account once the credit is in.
+  feeCollectedAt  DateTime?
+  expiresAt       DateTime?
+  /// When Nuvion was last asked how this stands (the sweep's backoff).
+  checkedAt       DateTime?
+  /// A note for a person to look at (our words, never a card or Nuvion text).
+  reviewNote      String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  audits AddMoneyAudit[]
+
+  @@index([wawuUserId, createdAt])
+  @@index([status, checkedAt])
+  @@index([providerRef])
+}
+
+/// An admin's freeze, unfreeze or cancel of one attempt (WALLET-25 controls).
+/// Admin email and role are snapshots, as AdminOpsAudit keeps them.
+model AddMoneyAudit {
+  id                String          @id @default(uuid())
+  sessionId         String
+  session           AddMoneySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  action            String
+  reason            String?
+  fromStatus        String
+  toStatus          String
+  actedByAdminId    String
+  actedByAdminEmail String
+  actedByAdminRole  AdminRole
+  actedAt           DateTime        @default(now())
+
+  @@index([sessionId])
+  @@index([actedAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
 /// IDEMPOTENCY KEYS ON MONEY-MOVING REQUESTS (task MONEY-17)
 ///
 /// One row per (person, method, route, Idempotency-Key): the primary key is

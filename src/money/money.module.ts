@@ -89,6 +89,15 @@ import { MoneyCheckService } from './check/money-check.service';
 import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
 import { MoneyLimitsModule } from './limits/money-limits.module';
 import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
+import { NuvionAddMoneyHandler } from '../nuvion/handlers/add-money.handler';
+import { AddMoneySettings } from './add-money/add-money-config';
+import { AddMoneyPrecheckGuard } from './add-money/add-money-precheck.guard';
+import { AddMoneyService } from './add-money/add-money.service';
+import { AdminAddMoneyController } from './add-money/admin-add-money.controller';
+import {
+  AddMoneyReturnController,
+  MoneyAddMoneyController,
+} from './add-money/add-money.controller';
 
 /**
  * The served half of the Naira wallet contract. Routes move here from
@@ -271,8 +280,16 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyReceiptController,
     PublicReceiptController,
     MoneyRecipientController,
+    AddMoneyReturnController,
+    MoneyAddMoneyController,
+    AdminAddMoneyController,
   ],
   providers: [
+    // Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, WALLET-26).
+    AddMoneySettings,
+    AddMoneyService,
+    AddMoneyPrecheckGuard,
+    NuvionAddMoneyHandler,
     WalletGate,
     WalletGateGuard,
     TransactionPinService,

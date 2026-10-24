@@ -810,6 +810,24 @@ export function buildRegistry(
     count,
     'AITOOLS-CHARS-PER-MINUTE',
   );
+  // WALLET-25 and WALLET-26 (R-84, owner-asked controls): add money by card
+  // and Apple Pay, and by USSD and the bank checkout, each on or off without
+  // a deploy. 1 is on (the default), 0 is off: the route answers 409
+  // add_money_unavailable and the app draws the rail as not available.
+  for (const [key, label, usedBy] of [
+    [
+      'money.add_money_card_on',
+      'Add money by card and Apple Pay (1 is on, 0 is off)',
+      'GET /money/add-money/options, POST /money/add-money (W15, WALLET-25)',
+    ],
+    [
+      'money.add_money_ussd_on',
+      'Add money by USSD and the bank checkout (1 is on, 0 is off)',
+      'GET /money/add-money/options, POST /money/add-money (W15, WALLET-26)',
+    ],
+  ] as const) {
+    other(key, label, 'count', [usedBy], whole(0, 1));
+  }
   // AITOOLS-03: the limits of the two prompt tools. The description's length
   // starts at the plan's own per-job character cap (not a new figure); the
   // longest sound and track are the provider's own maximums.

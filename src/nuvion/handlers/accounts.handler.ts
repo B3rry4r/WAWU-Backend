@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { AddMoneyService } from '../../money/add-money/add-money.service';
 import { LedgerService } from '../../money/ledger/ledger.service';
 import { tellWalletReady } from '../../money/opening/wallet-ready-notice';
 import { NotificationService } from '../../notification/notification.service';
@@ -106,11 +107,19 @@ export class NuvionAccountsHandler implements NuvionEventHandler {
         if (!ledger) {
           return { outcome: 'wait', note: 'the ledger is not mounted' };
         }
+        // WALLET-25, WALLET-26: a payment made through Add money is credited by
+        // AddMoneyService (found like the ledger: it is in the app, or the
+        // hook is left out and the recorder answers as it always did).
+        const addMoney = this.find<AddMoneyService>(AddMoneyService);
         return new NuvionInflowRecorder(
           this.prisma,
           area,
           ledger,
           settings,
+          addMoney
+            ? (t, w, source, eventId) =>
+                addMoney.creditInflow(t, w, source, eventId)
+            : null,
         ).onInflow(d);
       }
       default:
