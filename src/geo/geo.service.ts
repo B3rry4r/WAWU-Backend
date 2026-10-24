@@ -333,11 +333,16 @@ export class GeoService {
       return hit;
     }
     const wanted = foldName(name!);
-    const hit = list.find((r) => foldName(r.name) === wanted);
+    // A name can be two places at different levels (a city and the province around
+    // it): then it names neither, and the person is asked to choose by code.
+    const matches = list.filter((r) => foldName(r.name) === wanted);
+    const hit = matches.length === 1 ? matches[0] : undefined;
     if (!hit) {
       throw refuse(
         'region_invalid',
-        'Choose a region of that country from the list.',
+        matches.length > 1
+          ? 'More than one region has that name. Choose it from the list.'
+          : 'Choose a region of that country from the list.',
       );
     }
     return hit;

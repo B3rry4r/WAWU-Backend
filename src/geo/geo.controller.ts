@@ -8,8 +8,8 @@ import type { GeoCountryList, GeoRegionList } from './geo.types';
  * regions. The app never carries a list of its own; it reads these.
  *
  * PUBLIC. A sign-up screen needs the lists before anyone has a token, and
- * nothing in them is about a person. They come from a pinned package that is
- * read at boot, so they change only with a release: a day's cache is safe,
+ * nothing in them is about a person. They come from pinned data (regions.json is committed,
+ * built from iso-3166 4.4.0), so they change only with a release: a day's cache is safe,
  * and the response carries an ETag (Express) beside the Cache-Control.
  *
  * `geo` is a first segment no other controller declares.

@@ -191,8 +191,13 @@ rule. Where a person's country is wanted, it is `ProfileDetails.countryCode`
   cached (`Cache-Control: public, max-age=86400`, with an `ETag`). Countries
   are ISO 3166-1 with `code`, `name`, `dialCode`, `flag`, `exampleNumber`,
   `exampleNational` and `hasRegions`; regions are ISO 3166-2 with the full
-  `code` (`NG-LA`), `name` and `type`. The data is two pinned packages read at
-  boot, so no request reaches the network.
+  `code` (`NG-LA`), `name` and `type`. Region codes are stored on profiles, so
+  they are ISO's for every country: `src/geo/data/regions.json` is written by
+  `scripts/geo/build-regions.mjs` from `iso-3166` 4.4.0 (pinned; ESM-only, so
+  it is read at build time and the Hub reads the JSON), with four places left
+  out and two names spelled as ISO does (listed in the file). Country names are
+  `i18n-iso-countries` 7.14.0 with a reviewed override table. No request
+  reaches the network.
 - A person's place is four nullable fields on `PATCH /users/me/profile-fields`
   (`countryCode`, `regionCode`, `regionName`, `city`), checked against those
   lists. A refusal is a 400 with `reason.code` `country_invalid`,

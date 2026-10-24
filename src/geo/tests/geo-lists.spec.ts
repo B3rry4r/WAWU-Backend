@@ -396,3 +396,25 @@ describe('The launch registration keeps its Nigerian forms and takes any valid n
     }
   });
 });
+
+describe('A region named by text when two regions share the name (GEO-02 round 2)', () => {
+  const geo = new GeoService();
+  const none = {
+    countryCode: null,
+    regionCode: null,
+    regionName: null,
+    city: null,
+  };
+
+  it('is refused, and the code picks one: Dhaka is a division and a district in Bangladesh', () => {
+    expect(() =>
+      geo.checkLocation({ countryCode: 'BD', regionName: 'Dhaka' }, none),
+    ).toThrow(/More than one region/);
+    expect(
+      geo.checkLocation({ countryCode: 'BD', regionCode: 'BD-C' }, none),
+    ).toMatchObject({ regionCode: 'BD-C', regionName: 'Dhaka' });
+    expect(
+      geo.checkLocation({ countryCode: 'BD', regionCode: 'BD-13' }, none),
+    ).toMatchObject({ regionCode: 'BD-13', regionName: 'Dhaka' });
+  });
+});

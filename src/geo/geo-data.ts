@@ -1,7 +1,4 @@
-import {
-  country as isoCountries,
-  subdivision as isoSubdivisions,
-} from '@koshmoney/countries';
+import { country as isoCountries } from '@koshmoney/countries';
 import {
   getCountries,
   getCountryCallingCode,
@@ -10,21 +7,26 @@ import {
 } from 'libphonenumber-js/max';
 import examples from 'libphonenumber-js/examples.mobile.json';
 import { englishName } from './country-names';
-import { REGION_REPLACEMENTS, applyRegionOverrides } from './region-overrides';
+import regionData from './data/regions.json';
 import type { GeoCountryView, GeoRegionView } from './geo.types';
 
 /**
- * The country and region lists, built once from two pinned packages. Nothing
- * here reaches the network: both packages ship their data.
+ * The country and region lists, built once from pinned data. Nothing here reaches
+ * the network or imports a large package at run time.
  *
- *  - `@koshmoney/countries` 1.0.1 (MIT): ISO 3166-1 countries and ISO 3166-2
- *    subdivisions with their names and types. Its data is the Wikipedia
- *    rendering of the ISO tables (its README, "Data Sources").
- *  - `libphonenumber-js` 1.13.15 (MIT; metadata from Google's libphonenumber,
- *    Apache 2.0): calling codes and example numbers.
+ *  - Countries: `@koshmoney/countries` 1.0.1 (MIT) for the ISO 3166-1 list and
+ *    its alpha-3 codes; the English names from `i18n-iso-countries` 7.14.0 (MIT)
+ *    with a reviewed override table (./country-names.ts); calling codes and
+ *    example numbers from `libphonenumber-js` 1.13.15 (MIT; metadata from Google's
+ *    libphonenumber, Apache 2.0).
+ *  - Regions: ./data/regions.json, written by scripts/geo/build-regions.mjs from
+ *    `iso-3166` 4.4.0 (MIT, a devDependency: it is ESM-only). That package is the
+ *    source of truth for every ISO 3166-2 code and name, because region codes are
+ *    stored on profiles. The script lists the few places it differs from it.
  *
- * Both are pinned to an exact version in package.json. The lists change only
- * when someone bumps them, so GEO-02's spec fails if the counts move.
+ * All are pinned to an exact version in package.json. The lists change only when
+ * someone bumps them and runs the script, so GEO-02's specs fail if the data and
+ * the script, or the data and the hand-written ISO lists, part.
  */
 
 /** ISO 3166-1 alpha-2 to a flag emoji (two regional indicator letters). */
@@ -63,28 +65,20 @@ let cache: {
   regions: Map<string, GeoRegionView[]>;
 } | null = null;
 
+const REGIONS = regionData.regions as unknown as Record<
+  string,
+  GeoRegionView[]
+>;
+
 function build() {
   const regions = new Map<string, GeoRegionView[]>();
-  for (const s of isoSubdivisions.all()) {
-    // The package lists an overseas territory as its own only subdivision
-    // ("AQ-AQ", type "Country"): the country again, not a region of it. Left
-    // out, so such a country has no regions (hasRegions false) and the app
-    // asks for none. Real ones whose code repeats the country's (BZ-BZ, DJ-DJ,
-    // MC-MC, MW-MW, SO-SO, SV-SV) have another type and stay.
-    if (s.type === 'Country' && s.regionCode === s.countryCode) continue;
-    const list = regions.get(s.countryCode) ?? [];
-    list.push({ code: s.code.toUpperCase(), name: s.name, type: s.type });
-    regions.set(s.countryCode, list);
-  }
-  for (const [code, list] of [...regions]) {
-    const fixed = applyRegionOverrides(code, list);
-    if (fixed.length === 0) regions.delete(code);
-    else regions.set(code, fixed.sort(byName));
-  }
-  // A country the package has no list for but an override replaces.
-  for (const code of Object.keys(REGION_REPLACEMENTS)) {
-    if (!regions.has(code))
-      regions.set(code, applyRegionOverrides(code, []).sort(byName));
+  for (const [code, list] of Object.entries(REGIONS)) {
+    regions.set(
+      code,
+      list
+        .map((r) => ({ code: r.code, name: r.name, type: r.type }))
+        .sort(byName),
+    );
   }
 
   const countries: GeoCountryView[] = isoCountries.all().map((c) => {

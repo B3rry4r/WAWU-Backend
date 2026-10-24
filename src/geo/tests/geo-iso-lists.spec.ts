@@ -1,16 +1,11 @@
 import { GeoService } from '../geo.service';
 import { COUNTRY_NAME_OVERRIDES, englishName } from '../country-names';
-import {
-  REGION_ADDITIONS,
-  REGION_REMOVALS,
-  REGION_RENAMES,
-  REGION_REPLACEMENTS,
-} from '../region-overrides';
 import { CA, GB, GH, KE, NG, US, ZA, type IsoRows } from './iso-3166-2.fixture';
-import {
-  country as isoCountries,
-  subdivision as isoSubdivisions,
-} from '@koshmoney/countries';
+import { spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { country as isoCountries } from '@koshmoney/countries';
+import regionData from '../data/regions.json';
 
 /**
  * GEO-02 round 1 (lead ruling): the lists agree with ISO 3166 for the countries
@@ -121,37 +116,107 @@ describe('The country and region lists against ISO 3166 (GEO-02 round 1)', () =>
     );
   });
 
-  describe('every correction still changes something', () => {
-    const packageList = (cc: string) =>
-      isoSubdivisions.forCountry(cc).map((s) => [s.code, s.name] as const);
+  describe('the region data is iso-3166 4.4.0, built by the script', () => {
+    const root = join(__dirname, '../../..');
+    const pkg = JSON.parse(
+      readFileSync(join(root, 'package.json'), 'utf8'),
+    ) as {
+      devDependencies: Record<string, string>;
+    };
+    const data = regionData as unknown as {
+      source: string;
+      excluded: Record<string, string>;
+      renamed: Record<string, string>;
+      regions: Record<
+        string,
+        Array<{ code: string; name: string; type: string }>
+      >;
+    };
 
-    it.each(Object.keys(REGION_REPLACEMENTS))(
-      '%s: the package alone differs from the replacement',
-      (cc) => {
-        const mine = REGION_REPLACEMENTS[cc].map(
-          (r) => [r.code, r.name] as const,
-        );
-        expect(sorted(packageList(cc))).not.toEqual(sorted(mine));
-      },
-    );
+    it('names its source, and iso-3166 is pinned to that exact version', () => {
+      expect(data.source).toBe('iso-3166@4.4.0');
+      expect(pkg.devDependencies['iso-3166']).toBe('4.4.0');
+    });
 
-    it('every removal is a code the package lists, and no addition is', () => {
-      for (const [cc, codes] of Object.entries(REGION_REMOVALS)) {
-        const have = new Set(packageList(cc).map((r) => r[0]));
-        for (const code of codes) expect(have.has(code)).toBe(true);
+    it('is exactly what scripts/geo/build-regions.mjs builds from it today (so a bump of either is a rebuild)', () => {
+      const run = spawnSync(
+        process.execPath,
+        ['scripts/geo/build-regions.mjs', '--check'],
+        { cwd: root, encoding: 'utf8' },
+      );
+      expect(run.stderr).toBe('');
+      expect(run.status).toBe(0);
+    });
+
+    it("every country's served codes and names are the JSON's, and no country is served that is not in ISO 3166-1", () => {
+      const isoCodes = new Set(isoCountries.all().map((c) => c.alpha2));
+      let total = 0;
+      for (const c of geo.countries()) {
+        const fromJson = (data.regions[c.code] ?? [])
+          .map((r) => [r.code, r.name] as const)
+          .sort((a, b) => a[0].localeCompare(b[0]));
+        expect(served(c.code)).toEqual(fromJson);
+        expect(c.hasRegions).toBe(fromJson.length > 0);
+        total += fromJson.length;
       }
-      for (const [cc, rows] of Object.entries(REGION_ADDITIONS)) {
-        const have = new Set(packageList(cc).map((r) => r[0]));
-        for (const r of rows) expect(have.has(r.code)).toBe(false);
+      for (const cc of Object.keys(data.regions))
+        expect(isoCodes.has(cc)).toBe(true);
+      expect(total).toBe(
+        Object.values(data.regions).reduce((n, l) => n + l.length, 0),
+      );
+      expect(total).toBeGreaterThan(5000);
+    });
+
+    it('holds each code once across the world, under its own country, with a name and a type', () => {
+      const seen = new Set<string>();
+      for (const [cc, list] of Object.entries(data.regions)) {
+        for (const r of list) {
+          expect(r.code.startsWith(`${cc}-`)).toBe(true);
+          expect(seen.has(r.code)).toBe(false);
+          seen.add(r.code);
+          expect(r.name.trim().length).toBeGreaterThan(0);
+          expect(r.type.trim().length).toBeGreaterThan(0);
+        }
       }
     });
 
-    it('every rename changes a name the package spells another way', () => {
-      for (const [code, name] of Object.entries(REGION_RENAMES)) {
-        const found = isoSubdivisions.whereCode(code);
-        expect(found).not.toBeNull();
-        expect(found!.name).not.toBe(name);
-      }
+    it('differs from iso-3166 only where the script says so: four places left out, two names spelled as ISO does', () => {
+      expect(Object.keys(data.excluded).sort()).toEqual([
+        'GB-EAW',
+        'GB-GBN',
+        'GB-UKM',
+        'GH-BA',
+      ]);
+      expect(data.renamed).toEqual({
+        'ZA-KZN': 'KwaZulu-Natal',
+        'ZA-NW': 'North West',
+      });
+      const served = new Set(
+        Object.values(data.regions).flatMap((l) => l.map((r) => r.code)),
+      );
+      for (const code of Object.keys(data.excluded))
+        expect(served.has(code)).toBe(false);
+    });
+
+    it('serves a type for the newer codes the type package has no entry for', () => {
+      const type = (cc: string, code: string) =>
+        geo.regions(cc)!.find((r) => r.code === code)?.type;
+      expect(type('ZA', 'ZA-GP')).toBe('Province');
+      expect(type('ZA', 'ZA-KZN')).toBe('Province');
+      expect(type('GB', 'GB-BCP')).toBe('Unitary authority');
+      expect(type('GB', 'GB-ABC')).toBe('District council area');
+      expect(type('GH', 'GH-AF')).toBe('Region');
+    });
+
+    it('a region is stored by the ISO code for countries outside the seven pinned, too', () => {
+      const code = (cc: string, name: string) =>
+        geo.regions(cc)!.find((r) => r.name === name)?.code;
+      expect(code('CN', 'Beijing Shi')).toBe('CN-BJ');
+      expect(code('PL', 'Mazowieckie')).toBe('PL-14');
+      const india = geo.regions('IN')!.map((r) => r.code);
+      expect(india).toEqual(expect.arrayContaining(['IN-UK', 'IN-CG']));
+      expect(india).not.toEqual(expect.arrayContaining(['IN-UT']));
+      expect(india).not.toEqual(expect.arrayContaining(['IN-CT']));
     });
   });
 
