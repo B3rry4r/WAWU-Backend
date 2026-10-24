@@ -226,22 +226,38 @@ export class AccountDeletionMoneyService {
       },
     });
     const waitingEarnings = owedSales + owedHostShares;
-    // A send abroad (NUV-11) the provider has not finished, or one whose WAWU
-    // fee is still to be taken or given back: its row is what the sweep finds
-    // the answer and the fee by, so it is not deleted from under it. The
-    // money already left the wallet, so the balance below does not hold the
-    // deletion; it counts as a payment with no final answer.
+    // A send abroad (NUV-11) the provider has not finished, or whose WAWU fee the sweep is still taking or giving back: its row is
+    // what the sweep finds the answer and the fee by, so it is not deleted from under it. The money already left the wallet, so the
+    // balance below does not hold the deletion; it counts as a payment with no final answer. It stops counting once the sweep has
+    // taken its last try (the fee is written off, or held for a person with a row in the admin audit, which a deletion keeps), so a
+    // person is never held for ever (R1-4).
     const abroadUnfinished = await this.prisma.abroadSend.count({
       where: {
         wawuUserId,
         OR: [
           { status: { in: ['sending', 'pending', 'needs_review'] } },
-          { status: 'completed', wawuFeeTaken: false },
+          {
+            status: 'completed',
+            wawuFeeTaken: false,
+            wawuFeeKobo: { gt: 0n },
+            feeSettledAt: null,
+            feeBackHeldAt: null,
+          },
           {
             status: { in: ['failed', 'reversed'] },
             wawuFeeTaken: true,
-            wawuFeeKobo: { gt: 0 },
+            wawuFeeKobo: { gt: 0n },
             feeGivenBackAt: null,
+            feeSettledAt: null,
+            feeBackHeldAt: null,
+          },
+          {
+            status: { in: ['failed', 'reversed'] },
+            wawuFeeTaken: false,
+            wawuFeeKobo: { gt: 0n },
+            feeAttempts: { gt: 0 },
+            feeSettledAt: null,
+            feeBackHeldAt: null,
           },
         ],
       },

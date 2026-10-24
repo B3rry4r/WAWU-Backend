@@ -20,12 +20,14 @@ import { AbroadAdminService } from './abroad-admin.service';
 import {
   AdminAbroadReasonDto,
   AdminAbroadSendsQueryDto,
+  AdminAbroadSettleFeeDto,
 } from './dto/abroad-request.dto';
 import type {
   AdminAbroadCancelView,
   AdminAbroadFreezeView,
   AdminAbroadSendPage,
   AdminAbroadSendView,
+  AdminAbroadSettleFeeView,
 } from './abroad-view.type';
 
 const SuperadminOrFinance = () =>
@@ -35,7 +37,7 @@ const SuperadminOrFinance = () =>
  * What the admin dashboard sees of sends abroad (task NUV-11, R-84): every
  * send with its provider state, one person frozen or let go, and a send that
  * never reached the provider cancelled. Superadmin and finance only;
- * reviewer and support are refused on every route. The three writes leave an
+ * reviewer and support are refused on every route. The four writes leave an
  * audit row each (who, what, why, when) and none of them moves money.
  */
 @UseGuards(AdminAuthGuard, AdminRolesGuard)
@@ -80,6 +82,26 @@ export class AbroadAdminController {
     @Body() dto: AdminAbroadReasonDto,
   ): Promise<AdminAbroadCancelView> {
     return this.admin.cancel(admin, id, dto.reason);
+  }
+
+  /**
+   * Closes the question of WAWU's fee on one decided send: `not_taken` writes
+   * off a fee that was never taken, `paid_back` closes a give-back owed to the
+   * person (the provider's record of it, or paid outside the system, which the
+   * reason says). The list's `feeOpen=true` finds them. Needs a reason; one
+   * audit row; settling a settled fee changes nothing. A fee the provider's
+   * record shows was taken cannot be written off (409). Moves no money.
+   */
+  @Post('sends/:id/settle-fee')
+  @HttpCode(200)
+  @BuiltBy('NUV-11')
+  @SuperadminOrFinance()
+  settleFee(
+    @CurrentAdmin() admin: AdminUserView,
+    @Param('id') id: string,
+    @Body() dto: AdminAbroadSettleFeeDto,
+  ): Promise<AdminAbroadSettleFeeView> {
+    return this.admin.settleFee(admin, id, dto.outcome, dto.reason);
   }
 
   /**

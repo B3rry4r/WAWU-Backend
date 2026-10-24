@@ -19191,6 +19191,16 @@
               }
             }
           },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
           "403": {
             "description": "reason.code: daily_limit_exceeded",
             "content": {
@@ -19257,7 +19267,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "What a send would deliver and cost: the provider's rate and real hold\nwhen the currencies differ (about three minutes on dev), both amounts,\nWAWU's fee from config. The quote is kept for this person and used once.\n`amount_out_of_range` carries the least and most the corridor takes,\n`rate_unavailable` says the provider cannot price the pair now,\n`402 insufficient_funds` (amount, the partner's fee and WAWU's fee) that\nthe account holds less. Like the other quotes it moves nothing and runs\nFeesSetGuard first: `503 fees_not_set` before anything else.",
+        "summary": "What a send would deliver and cost: the provider's rate and real hold\nwhen the currencies differ (about three minutes on dev), both amounts,\nWAWU's fee from config. The quote is kept for this person and used once.\n`amount_out_of_range` carries the least and most the corridor takes,\n`rate_unavailable` says the provider cannot price the pair now,\n`402 insufficient_funds` (amount, the partner's fee and WAWU's fee) that\nthe account holds less: a read of the balance, refused before the PIN so\nthe person is told early (named in money-moving-coverage.spec as a quote\nthat reads the balance). It moves nothing and runs FeesSetGuard first:\n`503 fees_not_set` before anything else.",
         "tags": [
           "Abroad"
         ],
@@ -19600,6 +19610,15 @@
                 "needs_review"
               ]
             }
+          },
+          {
+            "name": "feeOpen",
+            "required": false,
+            "in": "query",
+            "description": "`true`: only sends whose fee question is open (a fee not taken yet, a give-back owed to the person, or one held for a person), so finance finds what to settle.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -19689,6 +19708,48 @@
           }
         },
         "summary": "Cancels a send the provider never received (`sending` that stayed\n`sending`, or `needs_review` after a search of the provider's records\nfound nothing). The provider has no way to stop a payout it holds, so a\nsend it accepted is `409 send_not_cancellable`. Needs a reason; one audit\nrow; cancelling a cancelled send changes nothing.",
+        "tags": [
+          "AbroadAdmin"
+        ],
+        "x-wawu-built-by": "NUV-11"
+      }
+    },
+    "/api/hub/admin/money/abroad/sends/{id}/settle-fee": {
+      "post": {
+        "operationId": "AbroadAdminController_settleFee",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAbroadSettleFeeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAbroadSettleFeeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Closes the question of WAWU's fee on one decided send: `not_taken` writes\noff a fee that was never taken, `paid_back` closes a give-back owed to the\nperson (the provider's record of it, or paid outside the system, which the\nreason says). The list's `feeOpen=true` finds them. Needs a reason; one\naudit row; settling a settled fee changes nothing. A fee the provider's\nrecord shows was taken cannot be written off (409). Moves no money.",
         "tags": [
           "AbroadAdmin"
         ],
@@ -43246,6 +43307,29 @@
           "reason"
         ]
       },
+      "AdminAbroadSettleFeeDto": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "description": "`not_taken`: WAWU writes off a fee it never took. `paid_back`: the fee was taken from a send that did not stand and the person\nhas been paid back (the provider's record, or outside the system with the reason said).",
+            "enum": [
+              "not_taken",
+              "paid_back"
+            ],
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why, in a few plain words; kept on the audit row.",
+            "minLength": 3,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "outcome",
+          "reason"
+        ]
+      },
       "OpenFxAccountDto": {
         "type": "object",
         "properties": {
@@ -49674,6 +49758,17 @@
           "wawuFeeBackOwed": {
             "type": "boolean"
           },
+          "feeBackHeld": {
+            "type": "boolean"
+          },
+          "feeSettledAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "feeSettledHow": {
+            "type": "string",
+            "nullable": true
+          },
           "providerFeeEstimateMinor": {
             "type": "integer",
             "nullable": true
@@ -49717,6 +49812,9 @@
           "wawuFeeKobo",
           "wawuFeeOwed",
           "wawuFeeBackOwed",
+          "feeBackHeld",
+          "feeSettledAt",
+          "feeSettledHow",
           "providerFeeEstimateMinor",
           "feeDiffers",
           "reference",
@@ -49768,6 +49866,21 @@
         "required": [
           "id",
           "status"
+        ]
+      },
+      "AdminAbroadSettleFeeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "how": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "how"
         ]
       },
       "AdminAbroadFreezeView": {

@@ -15,8 +15,8 @@ import { AbroadAdminController } from '../abroad-admin.controller';
 import { AbroadAdminService } from '../abroad-admin.service';
 
 /**
- * Who may use the admin routes of sending abroad (NUV-11 round 1, F4): superadmin and finance, and no one else. Support and reviewer
- * sign in for real (a token the admin guard verifies) and are refused on every one of the five routes, with the service never called
+ * Who may use the admin routes of sending abroad (NUV-11 round 1, F4; round 2 adds settle-fee): superadmin and finance, and no one else. Support and reviewer
+ * sign in for real (a token the admin guard verifies) and are refused on every one of the six routes, with the service never called
  * and no audit row written; finance and superadmin reach the service; no token and a bad token are 401. The service is a stand-in
  * that counts its calls, so this proves the guard and the role list and nothing of the service (abroad.contract.spec.ts does that).
  */
@@ -34,6 +34,10 @@ const stub = {
   cancel: () => {
     calls.push('cancel');
     return Promise.resolve({ id: 'x', status: 'cancelled' });
+  },
+  settleFee: () => {
+    calls.push('settleFee');
+    return Promise.resolve({ id: 'x', how: 'not_taken', at: 'now' });
   },
   freeze: () => {
     calls.push('freeze');
@@ -77,6 +81,12 @@ const ROUTES: Array<{
     method: 'post',
     path: `${BASE}/sends/${SEND}/cancel`,
     body: { reason: 'confirmed with the partner' },
+  },
+  {
+    name: 'settle-fee',
+    method: 'post',
+    path: `${BASE}/sends/${SEND}/settle-fee`,
+    body: { outcome: 'not_taken', reason: 'the wallet was empty' },
   },
   {
     name: 'freeze',

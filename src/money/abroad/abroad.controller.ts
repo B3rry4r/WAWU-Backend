@@ -179,8 +179,10 @@ export class AbroadController {
    * `amount_out_of_range` carries the least and most the corridor takes,
    * `rate_unavailable` says the provider cannot price the pair now,
    * `402 insufficient_funds` (amount, the partner's fee and WAWU's fee) that
-   * the account holds less. Like the other quotes it moves nothing and runs
-   * FeesSetGuard first: `503 fees_not_set` before anything else.
+   * the account holds less: a read of the balance, refused before the PIN so
+   * the person is told early (named in money-moving-coverage.spec as a quote
+   * that reads the balance). It moves nothing and runs FeesSetGuard first:
+   * `503 fees_not_set` before anything else.
    */
   @Post('quotes')
   @HttpCode(201)
@@ -196,6 +198,7 @@ export class AbroadController {
     'fx_account_not_open',
     'amount_out_of_range',
     'daily_limit_exceeded',
+    'insufficient_funds',
     'corridor_not_supported',
     'rate_unavailable',
     'provider_declined',

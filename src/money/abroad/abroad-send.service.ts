@@ -62,6 +62,8 @@ export const PENDING_CHECK_CAP_MS = 30 * 60_000;
 export const FEE_ATTEMPTS = 5;
 /** A fee given back that is still not done a day after the send ended waits for a person. */
 export const FEE_BACK_HOLD_MS = 24 * 3_600_000;
+/** The name on an audit row the sweep itself writes. */
+export const SYSTEM_ACTOR = 'system';
 const SWEEP_BATCH = 50;
 const TERMINAL: AbroadSendStatus[] = [
   'completed',
@@ -301,14 +303,28 @@ export class AbroadSendService {
    * except that a completed send is never taken back to pending.
    */
   async apply(sendId: string, t: AbroadTransfer): Promise<SendRow> {
-    const row = await this.load(sendId);
+    // The write below holds only for the status this call read (compare-and-set): an admin cancel that commits between the read and
+    // the write makes the write find nothing, and the call looks again from the row as it now is (R1-2). Three looks at most; a
+    // row that keeps moving is left to the next pass, which asks the provider again.
+    for (let look = 1; look <= 3; look += 1) {
+      const row = await this.load(sendId);
+      if (await this.applyTo(row, t)) {
+        return this.load(sendId);
+      }
+    }
+    return this.load(sendId);
+  }
+
+  /** Applies the provider's word to the row as it was read. False when the row moved under the write and must be read again. */
+  private async applyTo(row: SendRow, t: AbroadTransfer): Promise<boolean> {
+    const sendId = row.id;
     const next = statusOf(t);
     if (row.status === 'cancelled') {
       // An admin cancelled it because the provider had nothing; now it has. The cancel stands (a decided row is never reopened):
       // the provider's facts are kept beside it and a person is told by the log and the admin list (`providerStatus`).
       await this.prisma.abroadSend
-        .update({
-          where: { id: sendId },
+        .updateMany({
+          where: { id: sendId, status: 'cancelled' },
           data: {
             providerTransferId: row.providerTransferId ?? t.id,
             providerStatus: t.providerStatus,
@@ -319,12 +335,12 @@ export class AbroadSendService {
       this.logger.error(
         `abroad send ${sendId}: cancelled by an admin, yet the provider holds transfer ${t.id} (${t.providerStatus}); the row stays cancelled and needs a person`,
       );
-      return this.load(sendId);
+      return true;
     }
-    if (row.status === 'completed' && next === 'pending') return row;
+    if (row.status === 'completed' && next === 'pending') return true;
     const now = new Date();
     const terminal = TERMINAL.includes(next);
-    const data: Prisma.AbroadSendUpdateInput = {
+    const data: Prisma.AbroadSendUpdateManyMutationInput = {
       providerTransferId: row.providerTransferId ?? t.id,
       providerStatus: t.providerStatus,
       checkedAt: now,
@@ -347,7 +363,11 @@ export class AbroadSendService {
             : null;
     }
     try {
-      await this.prisma.abroadSend.update({ where: { id: sendId }, data });
+      const { count } = await this.prisma.abroadSend.updateMany({
+        where: { id: sendId, status: row.status },
+        data,
+      });
+      if (count !== 1) return false;
     } catch (e) {
       // Two lookups of one send at once: the second finds the transfer id already stored.
       if (!(e instanceof Error) || !/Unique constraint/i.test(e.message))
@@ -361,7 +381,7 @@ export class AbroadSendService {
     ) {
       await this.giveBack(sendId).catch(() => undefined);
     }
-    return this.load(sendId);
+    return true;
   }
 
   async byReference(reference: string): Promise<SendRow | null> {
@@ -395,7 +415,7 @@ export class AbroadSendService {
   async takeFee(sendId: string): Promise<void> {
     const row = await this.load(sendId);
     if (row.wawuFeeTaken || row.wawuFeeKobo === 0n) return;
-    if (row.status === 'failed' || row.status === 'cancelled') return;
+    if (['failed', 'reversed', 'cancelled'].includes(row.status)) return;
     if (row.feeAttempts >= FEE_ATTEMPTS) return;
     await this.prisma.abroadSend.update({
       where: { id: sendId },
@@ -428,9 +448,10 @@ export class AbroadSendService {
         );
       }
       if (moved.result !== 'done') return;
+      // Taken: a fee question the sweep closed as "nothing taken" in the meantime is open again.
       await this.prisma.abroadSend.update({
         where: { id: sendId },
-        data: { wawuFeeTaken: true },
+        data: { wawuFeeTaken: true, feeSettledAt: null, feeSettledHow: null },
       });
     } catch (e) {
       this.logger.warn(
@@ -459,12 +480,10 @@ export class AbroadSendService {
     if (row.status !== 'failed' && row.status !== 'reversed') return;
     const since = (row.completedAt ?? row.updatedAt).getTime();
     const hold = async (why: string) => {
-      await this.prisma.abroadSend.updateMany({
-        where: { id: sendId, feeGivenBackAt: null, feeBackHeldAt: null },
-        data: { feeBackHeldAt: now },
-      });
-      this.logger.error(
-        `abroad send ${sendId}: WAWU's fee could not be given back (${why}); it waits for a person, still owed to the sender`,
+      await this.holdForPerson(
+        row,
+        `WAWU's fee could not be given back (${why}); still owed to the sender`,
+        now,
       );
     };
     try {
@@ -593,7 +612,147 @@ export class AbroadSendService {
       select: { id: true },
     });
     for (const f of owed) await this.giveBack(f.id, now);
+    await this.followOpenFees(now);
     return { checked, settled };
+  }
+
+  /**
+   * The fee questions that are open and that nothing makes any more (NUV-11 round 2, R1-3 and R1-4): a fee leg that was still on
+   * its way when the send failed, and a fee that could not be taken in its last try. The sweep only READS the leg here, it never
+   * makes one: a leg that completed is marked taken (and given back, once, if the send did not stand); one still on its way is
+   * waited for, and held for a person after a day; one that never completed closes the question, so that nothing waits on it for
+   * ever (an account deletion included). A fee WAWU could not take from a send that went through is written off with a row in the
+   * admin audit; for a send that failed there was nothing to take and nothing is said.
+   */
+  private async followOpenFees(now: Date): Promise<void> {
+    const rows = await this.prisma.abroadSend.findMany({
+      where: {
+        wawuFeeTaken: false,
+        wawuFeeKobo: { gt: 0n },
+        feeSettledAt: null,
+        feeAttempts: { gt: 0 },
+        OR: [
+          { status: { in: ['failed', 'reversed'] } },
+          { status: 'completed', feeAttempts: { gte: FEE_ATTEMPTS } },
+        ],
+      },
+      orderBy: { updatedAt: 'asc' },
+      take: 20,
+    });
+    for (const row of rows) {
+      try {
+        await this.followFeeLeg(row, now);
+      } catch (e) {
+        this.logger.warn(
+          `abroad send ${row.id}: WAWU's fee leg could not be read (${e instanceof WalletProviderError ? e.kind : 'error'}); asked again`,
+        );
+      }
+    }
+  }
+
+  private async followFeeLeg(
+    row: Prisma.AbroadSendGetPayload<object>,
+    now: Date,
+  ): Promise<void> {
+    const leg = await readLeg(this.walletProvider, `${row.reference}-fee`);
+    const failedSend = row.status === 'failed' || row.status === 'reversed';
+    if (leg.result === 'done') {
+      await this.prisma.abroadSend.updateMany({
+        where: { id: row.id, wawuFeeTaken: false },
+        data: { wawuFeeTaken: true },
+      });
+      if (failedSend) await this.giveBack(row.id, now);
+      return;
+    }
+    const since = (row.completedAt ?? row.updatedAt).getTime();
+    if (leg.result === 'wait') {
+      if (now.getTime() - since >= FEE_BACK_HOLD_MS) {
+        await this.holdForPerson(
+          row,
+          "WAWU's fee leg is still on its way a day after the send ended",
+          now,
+        );
+      }
+      return;
+    }
+    // The leg never completed. A send that failed is given a minute first: a take in flight may be about to make it.
+    if (failedSend && now.getTime() - since < LOOK_AFTER_MS) return;
+    await this.closeFee(row, failedSend ? 'nothing_taken' : 'not_taken', now);
+  }
+
+  /**
+   * The sweep's last word on a fee it cannot settle: held for a person (`feeBackHeldAt`), with a row in the admin audit so finance
+   * sees it however long it takes, and `POST /admin/money/abroad/sends/{id}/settle-fee` closes it. A held fee does not hold an
+   * account deletion (R1-4): the row of what is owed is the audit row, which a deletion keeps.
+   */
+  private async holdForPerson(
+    row: Prisma.AbroadSendGetPayload<object>,
+    why: string,
+    now: Date,
+  ): Promise<void> {
+    const held = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.abroadSend.updateMany({
+        where: { id: row.id, feeSettledAt: null, feeBackHeldAt: null },
+        data: { feeBackHeldAt: now },
+      });
+      if (count !== 1) return false;
+      await tx.abroadAdminAudit.create({
+        data: {
+          action: 'fee_held',
+          subjectWawuId: row.wawuUserId,
+          sendId: row.id,
+          reason: why,
+          detail: {
+            feeKobo: row.wawuFeeKobo.toString(),
+            status: row.status,
+            feeTaken: row.wawuFeeTaken,
+          },
+          adminId: SYSTEM_ACTOR,
+          adminEmail: SYSTEM_ACTOR,
+          adminRole: SYSTEM_ACTOR,
+        },
+      });
+      return true;
+    });
+    if (held) {
+      this.logger.error(
+        `abroad send ${row.id}: ${why}; it waits for a person (admin: settle-fee)`,
+      );
+    }
+  }
+
+  /** Closes the fee question of a send (once); a fee written off on a send that went through leaves a row in the admin audit. */
+  private async closeFee(
+    row: Prisma.AbroadSendGetPayload<object>,
+    how: 'not_taken' | 'nothing_taken',
+    now: Date,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.abroadSend.updateMany({
+        where: { id: row.id, wawuFeeTaken: false, feeSettledAt: null },
+        data: { feeSettledAt: now, feeSettledHow: how },
+      });
+      if (count !== 1 || how !== 'not_taken') return;
+      await tx.abroadAdminAudit.create({
+        data: {
+          action: 'fee_not_taken',
+          subjectWawuId: row.wawuUserId,
+          sendId: row.id,
+          reason:
+            "WAWU's fee could not be taken after the last try and was written off",
+          detail: {
+            feeKobo: row.wawuFeeKobo.toString(),
+            attempts: row.feeAttempts,
+          },
+          adminId: SYSTEM_ACTOR,
+          adminEmail: SYSTEM_ACTOR,
+          adminRole: SYSTEM_ACTOR,
+        },
+      });
+    });
+    this.logger.warn(
+      `abroad send ${row.id}: the fee question is closed (${how})`,
+    );
   }
 
   private due(row: SendRow, now: Date): boolean {

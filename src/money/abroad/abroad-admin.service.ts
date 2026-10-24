@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
@@ -7,6 +7,7 @@ import {
 } from '../../wallet-provider/wallet-provider.interface';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import { MoneyError } from '../money-error';
+import { readLeg } from './abroad-fee-legs';
 import { AbroadService, providerError } from './abroad.service';
 import {
   AbroadSendService,
@@ -21,9 +22,13 @@ import type {
   AdminAbroadCancelView,
   AdminAbroadFreezeView,
   AdminAbroadSendPage,
+  AdminAbroadSettleFeeView,
   AdminAbroadSendView,
 } from './abroad-view.type';
-import type { AdminAbroadSendsQueryDto } from './dto/abroad-request.dto';
+import type {
+  AbroadFeeOutcome,
+  AdminAbroadSendsQueryDto,
+} from './dto/abroad-request.dto';
 
 /** The acting admin: the three fields an audit row needs (AdminUserView satisfies it). */
 export interface AbroadAdminActor {
@@ -33,6 +38,26 @@ export interface AbroadAdminActor {
 }
 
 type Row = Prisma.AbroadSendGetPayload<{ include: { recipient: true } }>;
+
+/**
+ * Sends whose fee question is open (NUV-11 round 2): a fee not taken yet on a send that still may take it, a give-back owed to the
+ * person, or either held for a person. What finance filters by and settles with `settleFee`.
+ */
+const FEE_OPEN: Prisma.AbroadSendWhereInput[] = [
+  {
+    wawuFeeTaken: false,
+    wawuFeeKobo: { gt: 0n },
+    feeSettledAt: null,
+    status: { in: ['sending', 'pending', 'needs_review', 'completed'] },
+  },
+  {
+    wawuFeeTaken: true,
+    wawuFeeKobo: { gt: 0n },
+    feeGivenBackAt: null,
+    status: { in: ['failed', 'reversed'] },
+  },
+  { feeBackHeldAt: { not: null }, feeSettledAt: null },
+];
 
 /**
  * What the dashboard does with sends abroad (task NUV-11): list and read them
@@ -60,14 +85,19 @@ export class AbroadAdminService {
       where: {
         ...(q.wawuUserId ? { wawuUserId: q.wawuUserId } : {}),
         ...(q.status ? { status: q.status } : {}),
-        ...(at
-          ? {
-              OR: [
-                { createdAt: { lt: at.createdAt } },
-                { createdAt: at.createdAt, id: { lt: at.id } },
-              ],
-            }
-          : {}),
+        AND: [
+          ...(q.feeOpen === true ? [{ OR: FEE_OPEN }] : []),
+          ...(at
+            ? [
+                {
+                  OR: [
+                    { createdAt: { lt: at.createdAt } },
+                    { createdAt: at.createdAt, id: { lt: at.id } },
+                  ],
+                },
+              ]
+            : []),
+        ],
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: limit + 1,
@@ -123,12 +153,19 @@ export class AbroadAdminService {
       providerFeeMinor:
         r.providerFeeMinor === null ? null : Number(r.providerFeeMinor),
       wawuFeeKobo: Number(r.wawuFeeKobo),
-      wawuFeeOwed: !r.wawuFeeTaken,
+      wawuFeeOwed:
+        !r.wawuFeeTaken &&
+        r.wawuFeeKobo > 0n &&
+        r.feeSettledAt === null &&
+        !['failed', 'reversed', 'cancelled'].includes(r.status),
       wawuFeeBackOwed:
         r.wawuFeeTaken &&
         r.wawuFeeKobo > 0n &&
         (r.status === 'failed' || r.status === 'reversed') &&
         r.feeGivenBackAt === null,
+      feeBackHeld: r.feeBackHeldAt !== null && r.feeSettledAt === null,
+      feeSettledAt: r.feeSettledAt ? r.feeSettledAt.toISOString() : null,
+      feeSettledHow: r.feeSettledHow,
       providerFeeEstimateMinor:
         r.providerFeeEstimateMinor === null
           ? null
@@ -211,6 +248,126 @@ export class AbroadAdminService {
       reason: row?.reason ?? null,
       at: row ? row.frozenAt.toISOString() : null,
     };
+  }
+
+  /**
+   * Closes the question of WAWU's fee on one send, for a person to say (the sweep closes the plain cases itself): `not_taken` writes
+   * off a fee that was never taken (refused when the provider's record says the fee leg completed: then it WAS taken, and the sweep
+   * marks it and gives it back if the send did not stand); `paid_back` closes a give-back owed to the person (the provider's own
+   * record of it when there is one, else paid outside the system, which the reason says). A repeat changes nothing and writes no
+   * second row. Nothing here moves money.
+   */
+  async settleFee(
+    admin: AbroadAdminActor,
+    id: string,
+    outcome: AbroadFeeOutcome,
+    reason: string,
+  ): Promise<AdminAbroadSettleFeeView> {
+    const row = await this.row(id);
+    if (row.feeSettledAt !== null) {
+      return {
+        id,
+        how: row.feeSettledHow ?? 'not_taken',
+        at: row.feeSettledAt.toISOString(),
+      };
+    }
+    if (row.wawuFeeKobo === 0n) {
+      throw new ConflictException('This send has no WAWU fee to settle.');
+    }
+    if (['sending', 'pending', 'needs_review'].includes(row.status)) {
+      throw new ConflictException(
+        'This send is not decided yet. Settle its fee once it is.',
+      );
+    }
+    const now = new Date();
+    if (outcome === 'not_taken') {
+      if (row.wawuFeeTaken) {
+        throw new ConflictException(
+          'WAWU took its fee from this send. If it is owed back to the person, settle it as paid back.',
+        );
+      }
+      const leg = await readLeg(this.walletProvider, `${row.reference}-fee`);
+      if (leg.result === 'done') {
+        throw new ConflictException(
+          'The payment partner shows the fee was taken. The next sweep marks it, and gives it back if the send did not stand.',
+        );
+      }
+      await this.close(admin, row, 'not_taken', 'fee_not_taken', reason, now, {
+        feeLeg: leg.result,
+      });
+      return { id, how: 'not_taken', at: now.toISOString() };
+    }
+    if (
+      !row.wawuFeeTaken ||
+      (row.status !== 'failed' && row.status !== 'reversed') ||
+      row.feeGivenBackAt !== null
+    ) {
+      throw new ConflictException(
+        'No WAWU fee is owed back to the person on this send.',
+      );
+    }
+    const back = await readLeg(
+      this.walletProvider,
+      `${row.reference}-fee-back`,
+    );
+    if (back.result === 'wait') {
+      throw new ConflictException(
+        'A give-back for this send is still on its way at the payment partner. Look again later.',
+      );
+    }
+    const how = back.result === 'done' ? 'given_back' : 'paid_back_outside';
+    await this.close(admin, row, how, 'fee_paid_back', reason, now, {
+      giveBackLeg: back.result,
+    });
+    return { id, how, at: now.toISOString() };
+  }
+
+  /** The row and its audit row in one transaction; a send that changed under the write is `409`. */
+  private async close(
+    admin: AbroadAdminActor,
+    row: Row,
+    how: 'not_taken' | 'given_back' | 'paid_back_outside',
+    action: 'fee_not_taken' | 'fee_paid_back',
+    reason: string,
+    now: Date,
+    detail: Prisma.InputJsonObject,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.abroadSend.updateMany({
+        where: {
+          id: row.id,
+          feeSettledAt: null,
+          wawuFeeTaken: how === 'not_taken' ? false : true,
+          ...(how === 'not_taken' ? {} : { feeGivenBackAt: null }),
+        },
+        data: {
+          feeSettledAt: now,
+          feeSettledHow: how,
+          ...(how === 'not_taken' ? {} : { feeGivenBackAt: now }),
+        },
+      });
+      if (count !== 1) {
+        throw new ConflictException(
+          'This send changed while its fee was being settled. Look at it again.',
+        );
+      }
+      await tx.abroadAdminAudit.create({
+        data: {
+          action,
+          subjectWawuId: row.wawuUserId,
+          sendId: row.id,
+          reason,
+          detail: {
+            ...detail,
+            feeKobo: row.wawuFeeKobo.toString(),
+            statusBefore: row.status,
+          },
+          adminId: admin.id,
+          adminEmail: admin.email,
+          adminRole: admin.role,
+        },
+      });
+    });
   }
 
   /**

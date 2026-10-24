@@ -362,6 +362,19 @@ function guardName(guard: unknown): string {
 const runs = (r: Route, type: unknown) =>
   r.guards.some((g) => isGuard(g, type));
 
+/**
+ * Quotes that read the balance and move nothing, each with its reason: the one code only a debit answers that such a quote may
+ * document without counting as money-moving. A gate edit with a reason, ruled by the lead (NUV-11 round 2, R1-1, 24 Oct 2026): the
+ * abroad quote refuses with `insufficient_funds` before the PIN so the person is told early (F2), and the contract must say so.
+ * Nothing else changes: the PIN codes and the guard still make a route money-moving, and a quote named here still runs
+ * FeesSetGuard and documents `fees_not_set` (the non-moving rule below). The test after the coverage walk holds each entry to
+ * what it says.
+ */
+const BALANCE_READING_QUOTES: Readonly<Record<string, string>> = {
+  'POST money/abroad/quotes':
+    'a quote that reads the balance and moves nothing; it refuses with insufficient_funds before the PIN so the person is told early (F2)',
+};
+
 /** Why a route counts as moving money: the debit gates it carries. Empty when it carries none. */
 function debitGates(r: Route): string[] {
   return [
@@ -369,7 +382,8 @@ function debitGates(r: Route): string[] {
     ...r.documented.filter(
       (c) =>
         (PIN_CHECK_CODES as readonly string[]).includes(c) ||
-        MOVEMENT_ONLY_CODES.includes(c),
+        (MOVEMENT_ONLY_CODES.includes(c) &&
+          !(c === 'insufficient_funds' && r.key in BALANCE_READING_QUOTES)),
     ),
   ];
 }
@@ -905,6 +919,34 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
         'quote_changed',
       ].sort(),
     );
+  });
+
+  it('a quote allowed to answer insufficient_funds is mounted, a POST that carries no PIN guard, runs FeesSetGuard and documents insufficient_funds and fees_not_set, and moves no money (the allowance is not left standing when the route stops being that)', () => {
+    expect(Object.keys(BALANCE_READING_QUOTES)).toEqual([
+      'POST money/abroad/quotes',
+    ]);
+    for (const [key, why] of Object.entries(BALANCE_READING_QUOTES)) {
+      const r = mounted.find((x) => x.key === key);
+      expect(why.length).toBeGreaterThan(20);
+      expect(r).toBeDefined();
+      expect({
+        key,
+        checksPin: runs(r!, TransactionPinGuard),
+        feesGuard: runs(r!, FeesSetGuard),
+        documents: ['insufficient_funds', 'fees_not_set'].filter((c) =>
+          r!.documented.includes(c),
+        ),
+        movesMoney: movesMoney(r!),
+        named: key in NON_MONEY_WRITES,
+      }).toEqual({
+        key,
+        checksPin: false,
+        feesGuard: true,
+        documents: ['insufficient_funds', 'fees_not_set'],
+        movesMoney: false,
+        named: true,
+      });
+    }
   });
 
   it('the walk reads every import, a Promise of a dynamic module (ConfigModule.forRoot()) included, and the only global guard is the throttler (FIX-26)', () => {

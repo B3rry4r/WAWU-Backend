@@ -200,10 +200,15 @@ export interface AdminAbroadSendView {
   amountToMinor: number;
   providerFeeMinor: number | null;
   wawuFeeKobo: number;
-  /** WAWU's fee could not be taken from the naira wallet yet; finance looks at these. */
+  /** WAWU's fee has not been taken from the naira wallet yet and still may be (the send is not failed, reversed or cancelled, and the question is not closed). */
   wawuFeeOwed: boolean;
-  /** The send did not stand and WAWU's fee has not gone back to the person yet (held for a person after a day); finance looks at these. */
+  /** The send did not stand and WAWU's fee has not gone back to the person yet; finance looks at these. */
   wawuFeeBackOwed: boolean;
+  /** The fee waits for a person: a give-back that failed under three references or for a day, or a fee leg still on its way a day after the send ended. `POST sends/{id}/settle-fee` closes it. */
+  feeBackHeld: boolean;
+  /** When the fee question was closed, and how (`not_taken`, `paid_back_outside`, `given_back`, `nothing_taken`); null while it is open. */
+  feeSettledAt: string | null;
+  feeSettledHow: string | null;
   /** The partner's fee the review showed (from config), in the sending currency's smallest unit; null when none was configured. */
   providerFeeEstimateMinor: number | null;
   /** The partner's real fee was not the one shown: the configured figure needs a look. */
@@ -229,6 +234,13 @@ export interface AdminAbroadFreezeView {
   frozen: boolean;
   reason: string | null;
   at: string | null;
+}
+
+export interface AdminAbroadSettleFeeView {
+  id: string;
+  /** What finance settled: `not_taken` (WAWU writes the fee off), `given_back` (the provider's record shows the give-back completed) or `paid_back_outside` (the person was paid back outside the system). */
+  how: string;
+  at: string;
 }
 
 export interface AdminAbroadCancelView {

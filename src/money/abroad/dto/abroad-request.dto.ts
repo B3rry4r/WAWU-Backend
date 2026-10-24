@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsIn,
   IsInt,
   IsObject,
@@ -127,9 +128,44 @@ export class AdminAbroadSendsQueryDto extends AbroadPageQueryDto {
   @IsOptional()
   @IsIn(ABROAD_STATUSES)
   status?: AbroadSendStatus;
+
+  @ApiPropertyOptional({
+    description:
+      '`true`: only sends whose fee question is open (a fee not taken yet, a give-back owed to the person, or one held for a person), so finance finds what to settle.',
+  })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) =>
+    value === 'true' || value === '1'
+      ? true
+      : value === 'false' || value === '0'
+        ? false
+        : value,
+  )
+  @IsBoolean()
+  feeOpen?: boolean;
 }
 
 export class AdminAbroadReasonDto {
+  /** Why, in a few plain words; kept on the audit row. */
+  @ApiProperty({ minLength: 3, maxLength: 200 })
+  @IsString()
+  @Length(3, 200)
+  reason!: string;
+}
+
+export const ABROAD_FEE_OUTCOMES = ['not_taken', 'paid_back'] as const;
+export type AbroadFeeOutcome = (typeof ABROAD_FEE_OUTCOMES)[number];
+
+/** What finance settles about WAWU's fee on one send, and why. */
+export class AdminAbroadSettleFeeDto {
+  /**
+   * `not_taken`: WAWU writes off a fee it never took. `paid_back`: the fee was taken from a send that did not stand and the person
+   * has been paid back (the provider's record, or outside the system with the reason said).
+   */
+  @ApiProperty({ enum: ABROAD_FEE_OUTCOMES })
+  @IsIn(ABROAD_FEE_OUTCOMES)
+  outcome!: AbroadFeeOutcome;
+
   /** Why, in a few plain words; kept on the audit row. */
   @ApiProperty({ minLength: 3, maxLength: 200 })
   @IsString()

@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { ConflictException } from '@nestjs/common';
+import { AccountDeletionMoneyService } from '../../../account/account-deletion-money.service';
 import { PrismaService } from '../../../common/prisma/prisma.service';
 import { NuvionError } from '../../../nuvion/nuvion-error';
 import {
@@ -13,7 +15,6 @@ import type {
   IdempotencyScope,
   IdempotencyService,
 } from '../../payments/idempotency';
-import { AccountDeletionMoneyService } from '../../../account/account-deletion-money.service';
 import { AbroadAdminService } from '../abroad-admin.service';
 import { AbroadSendService } from '../abroad-send.service';
 import { AbroadService } from '../abroad.service';
@@ -165,6 +166,8 @@ const records = new Map<
 /** What the provider does with a reference the first time it is asked: complete (default), fail it, leave it pending, or refuse it. */
 const plan = new Map<string, 'fail' | 'pending' | 'refuse'>();
 let feeFails = false;
+/** What the provider does with every WAWU fee leg (`<reference>-fee`) the first time it is asked, unless `plan` names the reference. */
+let feeLegPlan: 'pending' | undefined;
 const provider = {
   name: 'nuvion',
   label: 'Nuvion',
@@ -218,7 +221,9 @@ const provider = {
         pending: earlier.outcome === 'pending',
       });
     }
-    const what = plan.get(i.reference);
+    const what =
+      plan.get(i.reference) ??
+      (i.reference.endsWith('-fee') ? feeLegPlan : undefined);
     if (what === 'refuse') {
       return Promise.reject(
         new NuvionError({
@@ -337,6 +342,7 @@ beforeEach(() => {
   abroadSide.lookup = 'absent';
   feeCalls.length = 0;
   feeFails = false;
+  feeLegPlan = undefined;
   records.clear();
   plan.clear();
   keyCalls.length = 0;
@@ -1266,6 +1272,358 @@ describe('the send', () => {
       expect((await admin.get(v2.id)).feeDiffers).toBe(false);
       await sends.apply(v2.id, transfer({ id: id2, feeMinor: 25 }));
       expect((await admin.get(v2.id)).feeDiffers).toBe(true);
+    });
+  });
+
+  describe('round 2 findings (R1-2, R1-3)', () => {
+    const back = (ref: string) => `${ref}-fee-back`;
+    const feeBack = () =>
+      feeCalls.filter((c) => c.reference.includes('-fee-back'));
+    const rowOf = (id: string) =>
+      prisma.abroadSend.findUniqueOrThrow({ where: { id } });
+    /** A person's send with a fee configured, made while the provider's fee leg does `feeLegPlan` (or fails when `feeFails`). */
+    async function sendWithFeeAs(w: OpenWallet) {
+      settings.wawuFeeKobo = 2_500;
+      const r = await recipient(w);
+      const q = await abroad.quote(w, {
+        recipientId: r.id,
+        fromCurrency: 'USD',
+        amountMinor: 10_000,
+      });
+      const view = await sends.send(w, scope(), { quoteId: q.id });
+      const row = await rowOf(view.id);
+      return { view, row, id: row.providerTransferId! };
+    }
+
+    it('R1-2: apply writes only if the row still has the status it read: a cancel that commits between its read and its write is not undone', async () => {
+      const r = await recipient();
+      const q = await quoteFor(r.id);
+      abroadSide.sendImpl = () =>
+        Promise.reject(
+          new NuvionError({
+            kind: 'outcome_unknown',
+            operation: 'abroad transfer',
+            recordMayExist: true,
+          }),
+        );
+      const view = await sends.send(me, scope(), { quoteId: q.id });
+      await age(view.id);
+      abroadSide.lookup = 'absent';
+      // The provider takes the send just as finance cancels it: the cancel commits after apply read the row and before it writes.
+      const service = sends as unknown as {
+        load: (id: string) => Promise<unknown>;
+      };
+      const realLoad = service.load.bind(sends);
+      let cancelled = false;
+      const spy = jest
+        .spyOn(service, 'load')
+        .mockImplementation(async (id: string) => {
+          const stale = await realLoad(id);
+          if (!cancelled) {
+            cancelled = true;
+            await admin.cancel(actor, id, 'confirmed with the partner');
+          }
+          return stale;
+        });
+      try {
+        const held = transfer({ state: 'pending', providerStatus: 'pending' });
+        const after = await sends.apply(view.id, held);
+        expect(after.status).toBe('cancelled');
+        expect(after.providerTransferId).toBe(held.id);
+      } finally {
+        spy.mockRestore();
+      }
+      expect((await rowOf(view.id)).status).toBe('cancelled');
+      expect(
+        await prisma.abroadAdminAudit.count({ where: { sendId: view.id } }),
+      ).toBe(1);
+    });
+
+    it('R1-3: takeFee skips a send already reversed, as it skips a failed one: no leg is made to be given back at once', async () => {
+      feeFails = true;
+      const { view, id } = await sendWithFeeAs(other);
+      feeFails = false;
+      expect((await rowOf(view.id)).wawuFeeTaken).toBe(false);
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'reversed', providerStatus: 'reversed' }),
+      );
+      await sends.takeFee(view.id);
+      expect(feeCalls).toHaveLength(0);
+    });
+
+    it('R1-3: a fee leg that was still pending when the send failed and then completes is found by the sweep and given back once', async () => {
+      feeLegPlan = 'pending';
+      const { view, row, id } = await sendWithFeeAs(other);
+      feeLegPlan = undefined;
+      expect((await rowOf(view.id)).wawuFeeTaken).toBe(false);
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'failed', providerStatus: 'failed' }),
+      );
+      // Nothing is given back for a fee not known to have been taken, and the admin list does not say it was.
+      expect(feeBack()).toHaveLength(0);
+      await sends.sweep(new Date(Date.now() + 2 * 60_000));
+      expect(feeBack()).toHaveLength(0);
+      // The slow book transfer completes: the fee is the person's money out and WAWU's in.
+      const rec = records.get(`${row.reference}-fee`)!;
+      records.set(`${row.reference}-fee`, { ...rec, outcome: 'completed' });
+      await sends.sweep(new Date(Date.now() + 3 * 60_000));
+      expect(feeBack().map((c) => c.reference)).toEqual([back(row.reference)]);
+      expect(feeBack()[0]).toMatchObject({
+        fromAccountNumber: 'PLATFORM',
+        toAccountNumber: other.accountNumber,
+        amountKobo: 2_500n,
+      });
+      const after = await rowOf(view.id);
+      expect(after.wawuFeeTaken).toBe(true);
+      expect(after.feeGivenBackAt).not.toBeNull();
+      await sends.sweep(new Date(Date.now() + 4 * 60_000));
+      await sends.sweep(new Date(Date.now() + 5 * 60_000));
+      expect(feeBack()).toHaveLength(1);
+    });
+
+    it('R1-3: a failed send whose fee leg never completed owes nothing and is closed quietly; one whose leg is still pending a day later is held for a person', async () => {
+      // The leg never completed (the provider failed every reference or knows none): nothing was taken, nothing to give back.
+      feeFails = true;
+      const a = await sendWithFeeAs(other);
+      feeFails = false;
+      await sends.apply(
+        a.view.id,
+        transfer({ id: a.id, state: 'failed', providerStatus: 'failed' }),
+      );
+      await sends.sweep(new Date(Date.now() + 2 * 60_000));
+      const closed = await rowOf(a.view.id);
+      expect(closed.wawuFeeTaken).toBe(false);
+      expect(closed.feeSettledHow).toBe('nothing_taken');
+      expect(closed.feeSettledAt).not.toBeNull();
+      expect(
+        await prisma.abroadAdminAudit.count({ where: { sendId: a.view.id } }),
+      ).toBe(0);
+      expect(feeBack()).toHaveLength(0);
+      // A leg still pending a day after the send ended waits for a person, who sees it in the admin list.
+      feeLegPlan = 'pending';
+      const b = await sendWithFeeAs(other);
+      feeLegPlan = undefined;
+      await sends.apply(
+        b.view.id,
+        transfer({ id: b.id, state: 'failed', providerStatus: 'failed' }),
+      );
+      await sends.sweep(new Date(Date.now() + 25 * 3_600_000));
+      const held = await rowOf(b.view.id);
+      expect(held.feeBackHeldAt).not.toBeNull();
+      expect(held.feeSettledAt).toBeNull();
+      // The fee is not WAWU's to take on a send that failed, so it is not "owed"; a person is asked to look, and finance has the row.
+      expect(await admin.get(b.view.id)).toMatchObject({
+        wawuFeeOwed: false,
+        feeBackHeld: true,
+      });
+      expect(
+        await prisma.abroadAdminAudit.count({
+          where: { sendId: b.view.id, action: 'fee_held' },
+        }),
+      ).toBe(1);
+    });
+  });
+
+  describe('round 2 findings (R1-4): a fee question always ends, and finance can see and settle it', () => {
+    const deletion = new AccountDeletionMoneyService(
+      {
+        name: 'nuvion',
+        label: 'Nuvion',
+        getBalance: () =>
+          Promise.resolve({ availableKobo: 0n, bookedKobo: 0n }),
+      } as unknown as WalletProvider,
+      prisma,
+    );
+    const holds = async () =>
+      (await deletion.check(other.wawuUserId)).blockers.includes(
+        'payment_in_progress',
+      );
+    const rowOf = (id: string) =>
+      prisma.abroadSend.findUniqueOrThrow({ where: { id } });
+    const auditOf = (id: string) =>
+      prisma.abroadAdminAudit.findMany({
+        where: { sendId: id },
+        orderBy: { at: 'asc' },
+      });
+    async function sendAs(w: OpenWallet) {
+      settings.wawuFeeKobo = 2_500;
+      const r = await recipient(w);
+      const q = await abroad.quote(w, {
+        recipientId: r.id,
+        fromCurrency: 'USD',
+        amountMinor: 10_000,
+      });
+      const view = await sends.send(w, scope(), { quoteId: q.id });
+      const row = await rowOf(view.id);
+      return { view, row, id: row.providerTransferId! };
+    }
+    /** `other` has no other send in these tests: whatever holds its deletion is the one made here. */
+    async function settleOthers() {
+      await prisma.abroadSend.updateMany({
+        where: { wawuUserId: other.wawuUserId },
+        data: { feeSettledAt: new Date(), feeSettledHow: 'nothing_taken' },
+      });
+    }
+
+    it('a fee that could not be taken is written off after the last try, with a row for finance, and the deletion is let go', async () => {
+      await settleOthers();
+      feeFails = true;
+      const { view, id } = await sendAs(other);
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'completed', providerStatus: 'successful' }),
+      );
+      expect(await holds()).toBe(true);
+      for (let pass = 1; pass <= 8; pass += 1) {
+        await sends.sweep(new Date(Date.now() + pass * 2 * 60_000));
+        if ((await rowOf(view.id)).feeSettledAt) break;
+      }
+      const closed = await rowOf(view.id);
+      expect(closed.feeAttempts).toBeGreaterThanOrEqual(5);
+      expect(closed).toMatchObject({
+        wawuFeeTaken: false,
+        feeSettledHow: 'not_taken',
+      });
+      expect(closed.feeSettledAt).not.toBeNull();
+      expect(
+        (await auditOf(view.id)).map((a) => [a.action, a.adminId]),
+      ).toEqual([['fee_not_taken', 'system']]);
+      expect(await admin.get(view.id)).toMatchObject({
+        wawuFeeOwed: false,
+        feeSettledHow: 'not_taken',
+      });
+      expect(await holds()).toBe(false);
+      // Another pass writes nothing more.
+      await sends.sweep(new Date(Date.now() + 30 * 60_000));
+      expect(await auditOf(view.id)).toHaveLength(1);
+    });
+
+    it('a give-back that could not be made is held for a person with a row for finance, finance finds it and settles it once, and the deletion is not held for ever', async () => {
+      await settleOthers();
+      const { view, row, id } = await sendAs(other);
+      for (const ref of [
+        `${row.reference}-fee-back`,
+        `${row.reference}-fee-back-2`,
+        `${row.reference}-fee-back-3`,
+      ]) {
+        plan.set(ref, 'fail');
+      }
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'failed', providerStatus: 'failed' }),
+      );
+      // While the sweep is still trying, the deletion waits for it.
+      expect(await holds()).toBe(true);
+      await sends.sweep(new Date(Date.now() + 2 * 60_000));
+      await sends.sweep(new Date(Date.now() + 4 * 60_000));
+      await sends.sweep(new Date(Date.now() + 6 * 60_000));
+      const held = await rowOf(view.id);
+      expect(held.feeBackHeldAt).not.toBeNull();
+      expect(held.feeGivenBackAt).toBeNull();
+      expect(
+        (await auditOf(view.id)).map((a) => [a.action, a.adminId]),
+      ).toEqual([['fee_held', 'system']]);
+      expect(await holds()).toBe(false);
+      // Finance sees it: the flags, and the list filtered to open fee questions.
+      expect(await admin.get(view.id)).toMatchObject({
+        wawuFeeBackOwed: true,
+        feeBackHeld: true,
+        feeSettledAt: null,
+      });
+      const open = await admin.list({
+        wawuUserId: other.wawuUserId,
+        feeOpen: true,
+      });
+      expect(open.items.map((i) => i.id)).toContain(view.id);
+      // A fee that WAS taken cannot be written off as not taken; a give-back still on its way is not settled over.
+      await expect(
+        admin.settleFee(actor, view.id, 'not_taken', 'write it off'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      records.set(`${row.reference}-fee-back-3`, {
+        outcome: 'pending',
+        input: feeCalls[feeCalls.length - 1],
+      });
+      await expect(
+        admin.settleFee(actor, view.id, 'paid_back', 'paid by finance'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      records.delete(`${row.reference}-fee-back-3`);
+      // Paid back outside the system: closed once, with the admin's own row; a repeat changes nothing.
+      const settled = await admin.settleFee(
+        actor,
+        view.id,
+        'paid_back',
+        'paid by finance on 25 Oct, bank ref 123',
+      );
+      expect(settled).toMatchObject({
+        id: view.id,
+        how: 'paid_back_outside',
+      });
+      const after = await rowOf(view.id);
+      expect(after.feeGivenBackAt).not.toBeNull();
+      expect(after.feeSettledHow).toBe('paid_back_outside');
+      await expect(
+        admin.settleFee(actor, view.id, 'paid_back', 'again'),
+      ).resolves.toMatchObject({ how: 'paid_back_outside' });
+      expect(
+        (await auditOf(view.id)).map((a) => [a.action, a.adminId]),
+      ).toEqual([
+        ['fee_held', 'system'],
+        ['fee_paid_back', actor.id],
+      ]);
+      expect(await admin.get(view.id)).toMatchObject({
+        wawuFeeBackOwed: false,
+        feeBackHeld: false,
+      });
+      expect(
+        (
+          await admin.list({ wawuUserId: other.wawuUserId, feeOpen: true })
+        ).items.map((i) => i.id),
+      ).not.toContain(view.id);
+    });
+
+    it('finance writes off a fee that was never taken, once; not while the partner shows it was taken; not on a send that is not decided; not when nothing is owed', async () => {
+      await settleOthers();
+      feeFails = true;
+      const { view, row, id } = await sendAs(other);
+      feeFails = false;
+      await expect(
+        admin.settleFee(actor, view.id, 'not_taken', 'too early'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'completed', providerStatus: 'successful' }),
+      );
+      await expect(
+        admin.settleFee(actor, view.id, 'paid_back', 'nothing is owed back'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      // The partner shows the fee leg completed: it was taken, and the sweep marks it.
+      records.set(`${row.reference}-fee`, {
+        outcome: 'completed',
+        input: {
+          fromAccountNumber: other.accountNumber,
+          toAccountNumber: 'PLATFORM',
+          amountKobo: 2_500n,
+          reference: `${row.reference}-fee`,
+        },
+      });
+      await expect(
+        admin.settleFee(actor, view.id, 'not_taken', 'try'),
+      ).rejects.toBeInstanceOf(ConflictException);
+      records.delete(`${row.reference}-fee`);
+      const done = await admin.settleFee(
+        actor,
+        view.id,
+        'not_taken',
+        'the wallet was empty and the fee is forgone',
+      );
+      expect(done.how).toBe('not_taken');
+      await admin.settleFee(actor, view.id, 'not_taken', 'again');
+      expect(
+        (await auditOf(view.id)).map((a) => [a.action, a.adminId]),
+      ).toEqual([['fee_not_taken', actor.id]]);
+      expect(await holds()).toBe(false);
     });
   });
 });
