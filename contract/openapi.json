@@ -30468,6 +30468,63 @@
         ]
       }
     },
+    "/api/hub/admin/featured-creators": {
+      "get": {
+        "operationId": "AdminFeaturedCreatorsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FeaturedCreatorAdminView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The rail in the order Explore shows it, hidden creators included.",
+        "tags": [
+          "AdminFeaturedCreators"
+        ]
+      }
+    },
+    "/api/hub/admin/featured-creators/order": {
+      "post": {
+        "operationId": "AdminFeaturedCreatorsController_reorder",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderFeaturedCreatorsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeaturedOrderView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Saves the rail order. The body must name every creator who is featured\nnow, once each: a list that misses someone, or names someone who is not\nfeatured, is refused so a screen that is out of date cannot quietly drop\nor re-add anyone. The places become 0, 1, 2 and so on in one save.",
+        "tags": [
+          "AdminFeaturedCreators"
+        ]
+      }
+    },
     "/api/hub/admin/featured-creators/{wawuId}": {
       "put": {
         "operationId": "AdminFeaturedCreatorsController_put",
@@ -42876,6 +42933,24 @@
         },
         "required": [
           "settings"
+        ]
+      },
+      "ReorderFeaturedCreatorsDto": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "uniqueItems": true,
+            "minItems": 1,
+            "maxItems": 500,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          }
+        },
+        "required": [
+          "order"
         ]
       },
       "PutFeaturedCreatorDto": {
@@ -56242,6 +56317,66 @@
           "status",
           "error",
           "sentAt"
+        ]
+      },
+      "FeaturedCreatorAdminView": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "position": {
+            "type": "number"
+          },
+          "featuredAt": {
+            "type": "string"
+          },
+          "pieceCount": {
+            "type": "number"
+          },
+          "shownInExplore": {
+            "type": "boolean"
+          },
+          "hiddenReason": {
+            "type": "string",
+            "enum": [
+              "no_live_content",
+              "hidden_from_member_lists",
+              "not_a_creator"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "position",
+          "featuredAt",
+          "pieceCount",
+          "shownInExplore",
+          "hiddenReason"
+        ]
+      },
+      "FeaturedOrderView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeaturedCreatorAdminView"
+            }
+          }
+        },
+        "required": [
+          "items"
         ]
       },
       "ExploreCreatorCard": {
