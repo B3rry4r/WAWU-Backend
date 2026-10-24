@@ -192,6 +192,41 @@ describe('AITOOLS-04 r3: hostile files cannot fill the Hub (service, real parser
     );
   });
 
+  it('a good quote that joins the line behind hostile files is served within 20 s (their parser limit is 15 s each, two at a time), and none of the waiting files was read first', async () => {
+    const files = new LazyFiles();
+    const gate = new ReadGate();
+    const service = new AiInputService(settings, files, gate);
+    const flood = atomFlood(8 * MB);
+    const hostile = ['h0', 'h1', 'h2'].map((user) => ({
+      user,
+      key: files.addLazy(user, 8 * MB, () => flood),
+    }));
+    const good = files.addLazy('good', 600_000, () => wavFile(5));
+    const t0 = Date.now();
+    const outcomes = hostile.map((h) =>
+      service.open(h.user, h.key).then(
+        () => 'read',
+        () => 'unreadable',
+      ),
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    // h0 and h1 hold the two turns; h2 waits and has not been read.
+    expect(gate.stats()).toMatchObject({ running: 2, waiting: 1 });
+    expect(files.reads.filter((r) => r.kind === 'whole')).toHaveLength(2);
+    const quote = await service.open('good', good);
+    const servedMs = Date.now() - t0;
+    console.log(
+      `good quote behind 3 hostile 8 MB files (2 parsing, 1 waiting): served after ${servedMs} ms`,
+    );
+    expect(quote.minutes).toBe(1);
+    expect(servedMs).toBeLessThan(20_000);
+    expect(await Promise.all(outcomes)).toEqual([
+      'unreadable',
+      'unreadable',
+      'unreadable',
+    ]);
+  });
+
   it('N hostile 100 MB files in flight keep memory bounded; waiting ones are not in memory; a good quote is refused at once while the line is full and served when a place frees', async () => {
     const files = new LazyFiles();
     const gate = new ReadGate();
