@@ -24,6 +24,7 @@ import {
   seedAdminFixtures,
   type AdminTokens,
 } from '../../common/tests/admin-session.helper';
+import { EXPORT_SECTIONS } from '../../data-export-request/data-export-sections';
 import { GeoModule } from '../geo.module';
 import { ProfileLocationService } from '../profile-location.service';
 
@@ -387,8 +388,22 @@ describe('Countries, regions and a person’s place (GEO-02, contract)', () => {
         400,
       );
       expect(reasonOf(orphan)).toBe('region_needs_country');
-      const long = await patch(userToken, { city: 'x'.repeat(81) }).expect(400);
-      expect(reasonOf(long)).toBe('city_too_long');
+      // One limit, 80, whatever the length: never a validation message with no reason.
+      for (const length of [81, 100, 101, 5000]) {
+        const long = await patch(userToken, {
+          city: 'x'.repeat(length),
+        }).expect(400);
+        expect(reasonOf(long)).toBe('city_too_long');
+      }
+      const edge = await patch(userToken, { city: 'x'.repeat(80) }).expect(200);
+      expect(edge.body.data.city).toHaveLength(80);
+      await patch(userToken, { city: null }).expect(200);
+      for (const key of ['countryCode', 'regionCode', 'regionName']) {
+        const res = await patch(userToken, { [key]: 'z'.repeat(5000) }).expect(
+          400,
+        );
+        expect(reasonOf(res)).toBeDefined();
+      }
       const mine = await http()
         .get('/api/hub/users/me/profile-fields')
         .set(asUser(userToken))
@@ -397,13 +412,15 @@ describe('Countries, regions and a person’s place (GEO-02, contract)', () => {
       expect(mine.body.data.countryCode).toBeNull();
     });
 
-    it('does not widen what the web reads: GET and PATCH /users/me carry none of the new keys', async () => {
+    it('adds nothing of its own to what the web reads: GET and PATCH /users/me carry none of the Hub’s new keys', async () => {
       await patch(userToken, { countryCode: 'NG', city: 'Ikeja' }).expect(200);
       const got = await http().get('/api/hub/users/me').set(asUser(userToken));
       expect(got.status).toBe(200);
       const body = JSON.stringify(got.body);
+      // GET /users/me spreads the WAWU ID token's claims, so with GEO-01's tokens it carries
+      // `countryCode` (WAWU ID's, additive and read-only, not the person's saved place; the
+      // mock WAWU ID does not send it). What the Hub saves never appears there.
       for (const key of [
-        'countryCode',
         'regionCode',
         'regionName',
         '"city"',
@@ -411,6 +428,23 @@ describe('Countries, regions and a person’s place (GEO-02, contract)', () => {
       ]) {
         expect(body).not.toContain(key);
       }
+    });
+
+    it('puts the place in the person’s data export', async () => {
+      await patch(userToken, {
+        countryCode: 'NG',
+        regionCode: 'NG-LA',
+        city: 'Ikeja',
+      }).expect(200);
+      const section = EXPORT_SECTIONS.find((s) => s.key === 'profileDetails')!;
+      const exported = await section.load(prisma, USER_PLAIN);
+      expect(exported).toMatchObject({
+        countryCode: 'NG',
+        regionCode: 'NG-LA',
+        regionName: 'Lagos',
+        city: 'Ikeja',
+        countrySource: 'profile',
+      });
     });
 
     it('shows a visitor a country only when the person chose it', async () => {

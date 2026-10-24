@@ -18,9 +18,6 @@ import {
   THREADS_HANDLE_MAX_LENGTH,
 } from '../profile-fields';
 
-/** A sanity bound on the structured location's text keys; the exact rules are GeoService.checkLocation's. */
-const PLACE_TEXT_MAX = 100;
-
 /**
  * PATCH /users/me/profile-fields (ME-05). Every key is optional and a key left
  * out is left as it is. Their limits are PROVISIONAL and live in
@@ -43,7 +40,6 @@ export class UpdateProfileFieldsDto {
    */
   @IsOptional()
   @IsString()
-  @MaxLength(PLACE_TEXT_MAX)
   countryCode?: string | null;
 
   /**
@@ -53,7 +49,6 @@ export class UpdateProfileFieldsDto {
    */
   @IsOptional()
   @IsString()
-  @MaxLength(PLACE_TEXT_MAX)
   regionCode?: string | null;
 
   /**
@@ -63,13 +58,17 @@ export class UpdateProfileFieldsDto {
    */
   @IsOptional()
   @IsString()
-  @MaxLength(PLACE_TEXT_MAX)
   regionName?: string | null;
 
-  /** City, free text up to 80 characters ("Ikeja"). null or "" clears it. */
+  /**
+   * City, free text ("Ikeja"). null or "" clears it. The one limit, 80
+   * characters (CITY_MAX_LENGTH in geo.service.ts), is checked there: any longer
+   * city is a 400 with `reason.code` `city_too_long`, not a validation message
+   * that depends on how long it is. The four place keys carry no length rule of
+   * their own for the same reason: GeoService.checkLocation answers them all.
+   */
   @IsOptional()
   @IsString()
-  @MaxLength(PLACE_TEXT_MAX)
   city?: string | null;
 
   /** Skills and expertise chips. [] clears them. */

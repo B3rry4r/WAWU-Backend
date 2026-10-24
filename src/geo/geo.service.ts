@@ -3,6 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { englishNames } from './country-names';
 import { geoData } from './geo-data';
 import type { GeoCountryView, GeoRegionView } from './geo.types';
 
@@ -158,6 +159,8 @@ export class GeoService {
     const display = new Intl.DisplayNames(['en'], { type: 'region' });
     for (const c of this.countries()) {
       index.set(foldName(c.name), c.code);
+      for (const other of englishNames(c.code))
+        index.set(foldName(other), c.code);
       index.set(foldName(c.code), c.code);
       try {
         const cldr = display.of(c.code);

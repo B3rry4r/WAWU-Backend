@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- Rollback of 20261120093000_geo_location (GEO-02). Run it only after the Hub build that reads these columns is gone.
+-- Rollback of 20261124090000_geo_location (GEO-02). Run it only after the Hub build that reads these columns is gone.
 -- Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while any row holds something a person chose or typed: a region, a city, or a country
 -- they picked themselves (countrySource 'profile'). Dropping the columns would lose it. A country that came from WAWU ID

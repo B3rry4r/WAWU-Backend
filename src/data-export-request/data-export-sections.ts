@@ -93,6 +93,13 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           openTo: true,
           threadsHandle: true,
           socialOrder: true,
+          // GEO-02: where the person is, as they chose it or as WAWU ID and
+          // their phone gave it (`countrySource` says which).
+          countryCode: true,
+          regionCode: true,
+          regionName: true,
+          city: true,
+          countrySource: true,
           createdAt: true,
           updatedAt: true,
         },

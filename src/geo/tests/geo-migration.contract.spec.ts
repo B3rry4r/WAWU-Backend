@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { Client } from 'pg';
 
 /**
- * Migration 20261120093000_geo_location (GEO-02) and its rollback.
+ * Migration 20261124090000_geo_location (GEO-02) and its rollback.
  *
  * The two files run for real, in a scratch schema holding the four tables they
  * touch as they stood before the migration, so nothing in the shared test
@@ -14,7 +14,7 @@ import { Client } from 'pg';
  * nothing) while any person has saved a country, region or city.
  */
 
-const NAME = '20261120093000_geo_location';
+const NAME = '20261124090000_geo_location';
 const DIR = join(__dirname, '..', '..', '..', 'prisma', 'migrations', NAME);
 const migrationSql = readFileSync(join(DIR, 'migration.sql'), 'utf8');
 // The first line is psql's `\set ON_ERROR_STOP on` (FIX-96); this runner is not

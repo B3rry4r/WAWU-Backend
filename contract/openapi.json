@@ -42209,26 +42209,22 @@
           "countryCode": {
             "type": "string",
             "nullable": true,
-            "description": "Country of residence, ISO 3166-1 alpha-2 from GET /geo/countries (\"NG\",\nany case). null or \"\" clears it (and the region, which belonged to it).\nChanging it clears a region that is not sent again.",
-            "maxLength": 100
+            "description": "Country of residence, ISO 3166-1 alpha-2 from GET /geo/countries (\"NG\",\nany case). null or \"\" clears it (and the region, which belonged to it).\nChanging it clears a region that is not sent again."
           },
           "regionCode": {
             "type": "string",
             "nullable": true,
-            "description": "Region, the full ISO 3166-2 code from GET /geo/countries/{code}/regions\n(\"NG-LA\"; its tail \"LA\" is accepted too). It must belong to the country\nsaved or sent with it. null or \"\" clears it.",
-            "maxLength": 100
+            "description": "Region, the full ISO 3166-2 code from GET /geo/countries/{code}/regions\n(\"NG-LA\"; its tail \"LA\" is accepted too). It must belong to the country\nsaved or sent with it. null or \"\" clears it."
           },
           "regionName": {
             "type": "string",
             "nullable": true,
-            "description": "The region's name (\"Lagos\"). Beside a regionCode it must be that code's\nname; alone it is looked up in the country's list; for a country with\nno list it is saved as typed. null or \"\" clears it.",
-            "maxLength": 100
+            "description": "The region's name (\"Lagos\"). Beside a regionCode it must be that code's\nname; alone it is looked up in the country's list; for a country with\nno list it is saved as typed. null or \"\" clears it."
           },
           "city": {
             "type": "string",
             "nullable": true,
-            "description": "City, free text up to 80 characters (\"Ikeja\"). null or \"\" clears it.",
-            "maxLength": 100
+            "description": "City, free text (\"Ikeja\"). null or \"\" clears it. The one limit, 80\ncharacters (CITY_MAX_LENGTH in geo.service.ts), is checked there: any longer\ncity is a 400 with `reason.code` `city_too_long`, not a validation message\nthat depends on how long it is. The four place keys carry no length rule of\ntheir own for the same reason: GeoService.checkLocation answers them all."
           },
           "skills": {
             "description": "Skills and expertise chips. [] clears them.",

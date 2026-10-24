@@ -9,6 +9,8 @@ import {
   type CountryCode,
 } from 'libphonenumber-js/max';
 import examples from 'libphonenumber-js/examples.mobile.json';
+import { englishName } from './country-names';
+import { REGION_REPLACEMENTS, applyRegionOverrides } from './region-overrides';
 import type { GeoCountryView, GeoRegionView } from './geo.types';
 
 /**
@@ -74,13 +76,22 @@ function build() {
     list.push({ code: s.code.toUpperCase(), name: s.name, type: s.type });
     regions.set(s.countryCode, list);
   }
-  for (const list of regions.values()) list.sort(byName);
+  for (const [code, list] of [...regions]) {
+    const fixed = applyRegionOverrides(code, list);
+    if (fixed.length === 0) regions.delete(code);
+    else regions.set(code, fixed.sort(byName));
+  }
+  // A country the package has no list for but an override replaces.
+  for (const code of Object.keys(REGION_REPLACEMENTS)) {
+    if (!regions.has(code))
+      regions.set(code, applyRegionOverrides(code, []).sort(byName));
+  }
 
   const countries: GeoCountryView[] = isoCountries.all().map((c) => {
     const example = exampleOf(c.alpha2);
     return {
       code: c.alpha2,
-      name: c.name,
+      name: englishName(c.alpha2) ?? c.name,
       dialCode: dialCodeOf(c.alpha2),
       flag: flagOf(c.alpha2),
       exampleNumber: example?.e164 ?? null,
