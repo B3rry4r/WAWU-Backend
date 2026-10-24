@@ -89,6 +89,15 @@ import { MoneyCheckService } from './check/money-check.service';
 import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
 import { MoneyLimitsModule } from './limits/money-limits.module';
 import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
+import { NuvionAddMoneyHandler } from '../nuvion/handlers/add-money.handler';
+import { AddMoneySettings } from './add-money/add-money-config';
+import { AddMoneyPrecheckGuard } from './add-money/add-money-precheck.guard';
+import { AddMoneyService } from './add-money/add-money.service';
+import { AdminAddMoneyController } from './add-money/admin-add-money.controller';
+import {
+  AddMoneyReturnController,
+  MoneyAddMoneyController,
+} from './add-money/add-money.controller';
 import { FxAccountsService } from './fx/fx-accounts.service';
 import { FxAdminController } from './fx/fx-admin.controller';
 import { FxAdminService } from './fx/fx-admin.service';
@@ -304,12 +313,20 @@ import { WalletCardService } from './cards/wallet-card.service';
     MoneyReceiptController,
     PublicReceiptController,
     MoneyRecipientController,
+    AddMoneyReturnController,
+    MoneyAddMoneyController,
+    AdminAddMoneyController,
     // WALLET-21 (R-83, R-84): foreign accounts, swaps and crypto sends, and the
     // admin reads and the freeze.
     FxController,
     FxAdminController,
   ],
   providers: [
+    // Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, WALLET-26).
+    AddMoneySettings,
+    AddMoneyService,
+    AddMoneyPrecheckGuard,
+    NuvionAddMoneyHandler,
     FxPort,
     FxSettings,
     FxAccountsService,

@@ -105,6 +105,7 @@ import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { NuvionWebhookModule } from './nuvion/webhook/nuvion-webhook.module';
 import { CapitalModule } from './capital/capital.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
+import { StoreModule } from './store/store.module';
 import { AdminAdsModule } from './admin/ads/admin-ads.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { HUB_THROTTLERS } from './hub-throttlers';
@@ -524,6 +525,13 @@ import { PushModule } from './push/push.module';
     // behind NotificationService. `push-tokens` is a first segment nothing else
     // declares.
     PushModule,
+
+    // Points, credits, tiers and community passes bought through Google Play and the
+    // App Store (task IAP-01, R-86): `store/products` and `store/purchases`, the stores'
+    // notifications `webhooks/google-play` and `webhooks/app-store`, and `admin/store`.
+    // `store` and `admin/store` are segments nothing else declares; the two webhook
+    // paths are fixed literals beside the Flutterwave, Fintava and Nuvion ones.
+    StoreModule,
 
     // LAST on purpose. PaymentWebhookModule imports every money module so it
     // can reuse their /verify settlement, and every one of them is already
