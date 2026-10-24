@@ -104,6 +104,7 @@ export class FxAdminService {
     return {
       currencies: FX_CURRENCIES.map((c) => ({
         code: c.code,
+        currency: c.code,
         name: c.name,
         kind: c.kind,
         decimals: s.decimalsOf(c.code),

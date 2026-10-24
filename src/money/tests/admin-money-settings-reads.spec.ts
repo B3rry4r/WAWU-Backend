@@ -92,6 +92,7 @@ describe('GET admin/money/fx/currencies', () => {
     const by = Object.fromEntries(view.currencies.map((c) => [c.code, c]));
     // A coin counts the places the Hub is configured with, not a guess.
     expect(by.USDT).toMatchObject({
+      currency: 'USDT',
       decimals: 6,
       kind: 'stablecoin',
       sendFeeMinor: 250000,

@@ -296,6 +296,8 @@ export interface AdminFxFreezeView {
  * config (R-10). Read only: nothing here changes a figure.
  */
 export interface AdminFxCurrencyView extends FxCurrencyView {
+  /** The currency the three figures below are in (the same code as `code`), beside every Minor field. */
+  currency: FxCurrencyCode;
   /** WAWU's fee on a swap out of this currency, in its smallest unit; 0 when none is set. */
   swapFeeMinor: number;
   /** WAWU's fee on a crypto send, in its smallest unit; 0 for a fiat currency and when none is set. */
