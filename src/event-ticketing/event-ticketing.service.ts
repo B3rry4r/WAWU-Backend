@@ -1036,6 +1036,14 @@ function planTiers<C extends TierKey & { id: string }, N extends TierKey>(
   return { drop: [...onSale.values()].flat(), create };
 }
 
+/**
+ * What the 409 for a sold tier says is the rule. R-79 (c) rules that the price and places of a ticket type cannot change once a
+ * ticket is sold; this route is stricter (it refuses any `PUT` once a ticket is sold: a rename, an added or a removed type too,
+ * and the web calls it), so the sentence says the whole rule it enforces and not only the ruled part.
+ */
+export const SOLD_TIER_RULE =
+  'Ticket types cannot change once a ticket is sold.';
+
 /** The refusal for buying a tier the host has changed since it was chosen. */
 export const TIER_CHANGED = 'This ticket has changed. Please choose again.';
 
@@ -1192,8 +1200,12 @@ async function assertNoneSold(db: Db, eventId: string): Promise<void> {
     // can sell on both, so the same name can come back twice from the query
     // while the host sees only one tier by that name.
     const names = [...new Set(sold.map((s) => s.name))];
+    // EVENTS-14: the second sentence says the rule this route enforces (any
+    // `PUT` is refused once a ticket is sold). The refusal itself is
+    // unchanged; the old second sentence offered adding a tier, which this
+    // route has never allowed.
     throw new ConflictException(
-      `Tickets have already sold for ${names.map((n) => `"${n}"`).join(', ')}. Add a new tier instead of editing one people have bought.`,
+      `Tickets have already sold for ${names.map((n) => `"${n}"`).join(', ')}. ${SOLD_TIER_RULE}`,
     );
   }
 }
