@@ -192,6 +192,11 @@ export const WEBHOOK_TABLE_READERS: readonly WebhookTableReader[] = [
       'The NUV-08 sweep: whether any stored delivery of a final event (inflows or outflows) names a transfer id (resourceId and event only, never a body). Columns the job keeps, so a delivery whose body was cleared still counts as held.',
   },
   {
+    file: 'src/money/add-money/add-money.service.ts',
+    reads:
+      "Add money (WALLET-25): after an admin unfreezes a held attempt, one update that makes the attempt's `pending` inflow deliveries due now (found by the payload's unique_reference, only rows still `pending`, which are never cleared). It reads no body into the app and touches no delivery in any other state.",
+  },
+  {
     file: 'src/webhook-retention/webhook-retention.service.ts',
     reads: 'This job: ids and states, to clear and to count the rows it holds.',
   },

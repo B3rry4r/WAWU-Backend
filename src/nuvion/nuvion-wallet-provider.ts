@@ -38,6 +38,15 @@ import {
 } from './areas/reconcile';
 import { BANK_SEND_REFERENCE_PREFIX } from '../wallet-provider/wallet-provider.interface';
 import type { NuvionClient } from './nuvion-client';
+import { NuvionAddMoneyArea } from './areas/add-money';
+import type {
+  AddMoneyProvider,
+  AddMoneyRail,
+  ProviderAddMoneyConfirm,
+  ProviderAddMoneyRef,
+  ProviderAddMoneyStart,
+  ProviderAddMoneyWallet,
+} from '../wallet-provider/add-money';
 import { reconcileBankSend } from './handlers/outflows-bank';
 
 /**
@@ -120,7 +129,7 @@ export function nuvionAreas(
  * A method whose area has no Nuvion call yet answers `not_supported`:
  * nothing is sent and nothing moves.
  */
-export class NuvionWalletProvider implements WalletProvider {
+export class NuvionWalletProvider implements WalletProvider, AddMoneyProvider {
   readonly name = 'nuvion' as const;
   readonly label = 'Nuvion';
   /** Built only with every Nuvion setting present (nuvion-config.ts). */
@@ -145,6 +154,9 @@ export class NuvionWalletProvider implements WalletProvider {
   readonly walletBankCode = '';
   readonly timings: WalletProviderTimings;
   private readonly areas: NuvionAreas;
+  /** Adding money by card, Apple Pay, USSD and the bank checkout (WALLET-25, WALLET-26): its own area, reached through `addMoneyOf`. */
+  private readonly addMoney: NuvionAddMoneyArea;
+  readonly addMoneyRails: readonly AddMoneyRail[];
 
   constructor(
     readonly client: NuvionClient,
@@ -159,6 +171,8 @@ export class NuvionWalletProvider implements WalletProvider {
       retryAfterSeconds: s.retryAfterSeconds,
     };
     this.areas = areas ?? nuvionAreas(client);
+    this.addMoney = new NuvionAddMoneyArea(client);
+    this.addMoneyRails = this.addMoney.addMoneyRails;
   }
 
   get deliveries() {
@@ -347,5 +361,26 @@ export class NuvionWalletProvider implements WalletProvider {
   /** Whether two names are one account at Nuvion (NUV-05, MONEY-17 R5-1). */
   isSameAccount(a: string, b: string) {
     return this.areas.book.isSameAccount(a, b);
+  }
+
+  // Adding money (WALLET-25, WALLET-26)
+  startAddMoney(input: ProviderAddMoneyStart) {
+    return this.addMoney.startAddMoney(input);
+  }
+  confirmAddMoney(input: ProviderAddMoneyConfirm) {
+    return this.addMoney.confirmAddMoney(input);
+  }
+  readAddMoney(ref: ProviderAddMoneyRef) {
+    return this.addMoney.readAddMoney(ref);
+  }
+  findAddMoney(
+    rail: AddMoneyRail,
+    wallet: ProviderAddMoneyWallet,
+    reference: string,
+  ) {
+    return this.addMoney.findAddMoney(rail, wallet, reference);
+  }
+  cancelAddMoney(ref: ProviderAddMoneyRef) {
+    return this.addMoney.cancelAddMoney(ref);
   }
 }

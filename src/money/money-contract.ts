@@ -132,6 +132,9 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // TIER-04. 402, as the publishing gate answers the same code (TIER-02,
   // CONVENTIONS section 23): the person has to pay for a tier first.
   tier_required: 402,
+  // WALLET-25, WALLET-26. Default (agent), owner may override: 409, as
+  // currency_not_supported: the request is understood; this way cannot be used now.
+  add_money_unavailable: 409,
   // WALLET-21 (R-83, R-84). Default (lead), owner may override: 409 for a
   // switch that is off (the request is understood, the service is not on, as
   // fees_not_set but not a fault); 409 for an expired or used quote (ask for

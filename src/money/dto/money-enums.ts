@@ -255,6 +255,9 @@ export const MONEY_ERROR_CODES = [
   // has none, or it ended. Also the code of the publishing gate (TIER-02), in
   // its own richer body on the routes that publish.
   'tier_required',
+  // Adding money by card, Apple Pay, USSD or a bank checkout (WALLET-25, WALLET-26):
+  // the way asked for is switched off, or the provider has not switched it on.
+  'add_money_unavailable',
   // Foreign-currency accounts, swaps and crypto sends (WALLET-21, R-83, R-84):
   // an admin switch is off for the currency or the product; a quote's real
   // expiry has passed (or it was used); the account is frozen by an admin; an
