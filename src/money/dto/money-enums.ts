@@ -255,5 +255,11 @@ export const MONEY_ERROR_CODES = [
   // has none, or it ended. Also the code of the publishing gate (TIER-02), in
   // its own richer body on the routes that publish.
   'tier_required',
+  // Capital (NUV-12, R-84): switched off or not offered by the wallet
+  // provider, or an order an admin has put on hold; a reservation that ran
+  // out of time; a holding the provider will not pay out now.
+  'capital_unavailable',
+  'reservation_expired',
+  'withdrawal_not_available',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

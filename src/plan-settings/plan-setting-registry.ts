@@ -934,6 +934,19 @@ export function buildRegistry(
     default: extra('ai.dubbing_max_run_minutes', 60),
     parse: whole(5, LIMIT.maxMinutes),
   });
+  add({
+    key: 'capital.enabled',
+    group: 'Other rulings',
+    label: 'Capital: 1 shows it in the app and takes orders, 0 switches it off',
+    unit: 'count',
+    usedBy: [
+      'GET /capital/availability, the Wallet tab row (NUV-12)',
+      'Every /capital route (NUV-12)',
+    ],
+    provisional: 'CAPITAL-ENABLED',
+    default: extra('capital.enabled', 1),
+    parse: whole(0, 1),
+  });
   other(
     'voice.intro_max_chars',
     'Characters a Voice Intro script can have',

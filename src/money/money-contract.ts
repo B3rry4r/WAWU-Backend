@@ -132,6 +132,12 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // TIER-04. 402, as the publishing gate answers the same code (TIER-02,
   // CONVENTIONS section 23): the person has to pay for a tier first.
   tier_required: 402,
+  // NUV-12. Default (agent), owner may override: 409, as target_not_payable.
+  // The request is understood; the product, the reservation or the holding is
+  // not in a state that allows it now.
+  capital_unavailable: 409,
+  reservation_expired: 409,
+  withdrawal_not_available: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

@@ -7722,6 +7722,80 @@ model NuvionReconcileFinding {
   @@index([resolvedAt, lastSeenAt])
 }
 
+/// A person's Capital order (NUV-12, R-84): the provider's fixed-return or
+/// share-offering product, reserved for 15 minutes and then confirmed with the
+/// PIN. The provider holds the order and the holding; this row is WAWU's side:
+/// the app's reservation key (so a double tap reserves once), the state WAWU
+/// shows, the admin's freeze or cancel, and the ledger links. Never a balance.
+model CapitalOrder {
+  id                   String    @id @default(uuid())
+  wawuUserId           String
+  /// The app's Idempotency-Key for the reservation, with the SHA-256 of what it sent.
+  reserveKey           String
+  fingerprint          String
+  /// reserving, reserved, confirming, confirmed, expired, rejected, cancelled, failed.
+  state                String
+  provider             String    @default("nuvion")
+  /// The provider's order id (set once the reservation is made).
+  nuvionOrderId        String?   @unique
+  productId            String
+  productName          String
+  /// FIXED_RETURN or SHARE_OFFERING.
+  productType          String
+  currency             String
+  /// What the person asked to invest, in the smallest unit of the currency.
+  amountMinor          BigInt
+  /// What the provider will debit for the product (its quote).
+  totalDebitMinor      BigInt?
+  /// WAWU's own fee in kobo, quoted at the reservation (config; 0 by default, R-10).
+  feeKobo              BigInt    @default(0)
+  /// none, owed (the order is confirmed, the fee is not yet taken) or paid.
+  feeState             String    @default("none")
+  feeReference         String?
+  /// The provider's quote and, once approved, the holding as last read: `{ quote, account }`.
+  snapshot             Json?
+  expiresAt            DateTime?
+  confirmedAt          DateTime?
+  capitalAccountId     String?
+  userCapitalAccountId String?
+  /// The holding's state as last read (ACTIVE, MATURED, EARLY_LIQUIDATING, WITHDRAWN, ...).
+  lifecycle            String?
+  payoutStatus         String?
+  /// The provider's transfers for the purchase and the payout, once seen.
+  purchaseTransferId   String?
+  payoutTransferId     String?
+  withdrawRequestedAt  DateTime?
+  /// An admin's hold: the person cannot start a withdrawal while set.
+  frozenAt             DateTime?
+  frozenReason         String?
+  cancelledAt          DateTime?
+  lastCheckedAt        DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@unique([wawuUserId, reserveKey])
+  @@index([wawuUserId, createdAt])
+  @@index([state, updatedAt])
+  @@index([userCapitalAccountId])
+}
+
+/// Who froze, released or cancelled a Capital order (NUV-12): one row per act.
+model CapitalAdminAudit {
+  id            String   @id @default(uuid())
+  orderId       String
+  subjectWawuId String
+  /// freeze, unfreeze or cancel.
+  action        String
+  note          String?
+  adminId       String
+  adminEmail    String
+  adminRole     String
+  createdAt     DateTime @default(now())
+
+  @@index([orderId, createdAt])
+  @@index([subjectWawuId, createdAt])
+}
+
 /// Where an AI tool job is (AITOOLS-01, PT2). `working` until the voice provider
 /// answers; then `done` (the points were kept) or `failed` (every held point
 /// went back).
