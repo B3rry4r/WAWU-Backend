@@ -9,11 +9,13 @@ import type {
 } from '../../wallet-provider/wallet-provider-fx';
 import type { AdminFxOperationsQueryDto } from './dto/fx-request.dto';
 import type { FxChain, FxQuoteCode } from './fx-currencies';
+import { FX_CURRENCIES } from './fx-currencies';
 import { FxPort } from './fx-provider';
 import { FxSettings } from './fx-settings';
 import { accountView, num, numOrNull } from './fx-views';
 import type {
   AdminFxAccountListView,
+  AdminFxCurrenciesView,
   AdminFxFreezeView,
   AdminFxOperationPage,
   AdminFxOperationView,
@@ -87,6 +89,45 @@ export class FxAdminService {
     private readonly port: FxPort,
     private readonly settings: FxSettings,
   ) {}
+
+  /**
+   * The nine currencies with their switch, their places, and the fee and
+   * daily limit in force, and the three product switches (task OPS-27). Read
+   * only: switches change in the admin settings, fees and limits in config.
+   */
+  currencies(): AdminFxCurrenciesView {
+    const s = this.settings;
+    const limit = (code: FxQuoteCode): number | null => {
+      const v = s.dailyLimitMinor(code);
+      return v === null ? null : Number(v);
+    };
+    return {
+      currencies: FX_CURRENCIES.map((c) => ({
+        code: c.code,
+        currency: c.code,
+        name: c.name,
+        kind: c.kind,
+        decimals: s.decimalsOf(c.code),
+        chains: [...c.chains],
+        enabled: s.currencyOn(c.code),
+        swapFeeMinor: Number(s.swapFeeMinor(c.code)),
+        sendFeeMinor:
+          c.kind === 'stablecoin' ? Number(s.sendFeeMinor(c.code)) : 0,
+        dailyLimitMinor: limit(c.code),
+      })),
+      products: {
+        openAccount: s.productOn('open_account'),
+        swap: s.productOn('swap'),
+        cryptoSend: s.productOn('crypto_send'),
+      },
+      naira: {
+        code: 'NGN',
+        decimals: 2,
+        swapFeeKobo: Number(s.swapFeeMinor('NGN')),
+        dailyLimitKobo: limit('NGN'),
+      },
+    };
+  }
 
   async personAccounts(wawuUserId: string): Promise<AdminFxAccountListView> {
     const rows = await this.prisma.fxAccount.findMany({

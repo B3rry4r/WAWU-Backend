@@ -23,6 +23,7 @@ import {
 import { FxAdminService } from './fx-admin.service';
 import type {
   AdminFxAccountListView,
+  AdminFxCurrenciesView,
   AdminFxFreezeView,
   AdminFxOperationPage,
   AdminFxOperationView,
@@ -41,6 +42,18 @@ import type {
 @Controller('admin/money/fx')
 export class FxAdminController {
   constructor(private readonly admin: FxAdminService) {}
+
+  /**
+   * The currencies and the three product switches as they stand, with WAWU's
+   * fee and daily limit for each and the places a coin counts (task OPS-27).
+   * Read only.
+   */
+  @Get('currencies')
+  @BuiltBy('OPS-27')
+  @AdminRoles(AdminRole.superadmin, AdminRole.finance)
+  currencies(): AdminFxCurrenciesView {
+    return this.admin.currencies();
+  }
 
   /** A person's foreign accounts with the provider's balances and details. */
   @Get('people/:wawuUserId/accounts')
