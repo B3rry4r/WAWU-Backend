@@ -1030,3 +1030,78 @@ The public profile route `GET /users/{wawuId}/public-profile` does not carry
 `voiceIntro`: its response is locked by the protected route suite, so the
 Voice Intro is served by the route above (G-VOICE-01-1).
 
+### Dubbing (AITOOLS-05)
+
+Task AITOOLS-05, R-78. The one slow tool: the person's own recording or video and
+a language go in, the job stays `working` while the Hub follows the provider, and
+the dubbed audio and its subtitles come back; the person can leave and come back.
+Priced by the minute of the file as the Hub reads it, for ONE language (a second
+language is a second job): `points.action.dub_standard_per_min_lang` (1,500,
+PROVISIONAL `DV2-BOARD-FIGURE`) times the minutes. The premium dub is not built
+(G-AITOOLS-05-2). Listed only when the provider can run it (R-47).
+
+| Route | Does |
+|---|---|
+| `POST /ai-tools/dubbing/quote` | Body `{ fileKey }`: exactly `POST /ai-tools/captions/quote`, for the action `dub_standard_per_min_lang`. |
+| `POST /ai-tools/dubbing/jobs` | Body `{ fileKey, targetLanguage, sourceLanguage?, quoteToken }` and a required `Idempotency-Key`. `202` with the job `working` at once (the points held); a repeat of the key `200`, `Idempotent-Replayed: true`, one provider project, one hold. The app reads `GET /ai-tools/jobs/{id}` later. |
+
+- **The catalogue.** `GET /ai-tools` lists `dubbing` with `unit` `minute`,
+  `costPointsPerUnit` 1500 and `input.file.dubbing.languages`, a list of
+  `{ code, name }` from the setting `ai.dubbing_languages`. `targetLanguage` and
+  `sourceLanguage` are codes from that list (matched without regard to case).
+  A job's view has `targetLanguage` (null for every other tool).
+- **The list of languages** is the provider's own, read from its help page on
+  24 Oct 2026 (the Dubbing v2 list, 94 base languages; region forms are not
+  offered). PROVISIONAL `AITOOLS-DUB-LANGUAGES`: an admin changes it any time.
+- **Refusals, each with nothing held and no provider call.** `422
+  ai_language_unsupported` for a language off the list or the same language as
+  the one spoken; plus the file refusals of Captions (`404 not_found`, `422
+  ai_file_too_large`, `422 ai_file_unreadable`, `422 points_cap_reached` naming
+  `minutes_per_job`) and the points refusals (`402 insufficient_points`, the
+  daily cap).
+- **Following the job.** The provider's project and language ids are kept on the
+  row (`providerRef`: `dubrun:<project>:<language>`, never shown). `AiDubService`
+  reads each working dub every 15 seconds (polling, not the provider's webhook,
+  which needs a public address and a setup on the provider's side), holding no
+  transaction, connection or lock across a read: `queued` and `processing` keep
+  it working; `completed` fetches the signed links once, stores the audio and
+  the subtitles, COMMITS the hold, marks the job done and deletes the project;
+  `failed` and `stale` RELEASE it. All the state is in the database, so a Hub that
+  restarts mid-dub picks every working dub up again; a read of the job follows the
+  hold (as for any tool) and does not call the provider.
+- **Its own longest run.** A dub that stays working past
+  `ai.dubbing_max_run_minutes` (60, PROVISIONAL `AITOOLS-DUB-RUN`: the provider
+  states no time and no real run has been made) is ended and its points given
+  back. The sweep of stale AI holds leaves a working dub's hold alone until then
+  (`points.job_max_run_minutes` is still 30 for every other tool).
+- **What comes back.** `outputs` hold `{ kind: 'audio', url }` (also `audioUrl`:
+  a lossless FLAC, `audio/flac`, kept under `ai/dubbing/<person>/<job>.flac`) and
+  `{ kind: 'subtitles', text }` (WebVTT, kept in the job like Captions' SRT).
+  There is NO dubbed video: a person who uploads a video gets the dubbed audio
+  (G-AITOOLS-05-1). The Hub serves `audio/flac` (an additive entry in the storage
+  types); the app must play it (POINTS-11).
+- **The signed links are not trusted.** Each must be https to a name (or the
+  configured provider host itself), with no user name, no redirect followed and
+  no key sent; the audio is stopped at a size bound from the priced minutes and
+  must open with the FLAC marker; subtitles must open with `WEBVTT` or are
+  dropped. One output fetch runs at a time, so the Hub holds one dubbed file in
+  memory. A fetch that fails is tried again on the next pass with fresh links, up
+  to 3 times, then the job fails and the points go back.
+- **Failure.** A failed or stale language, a project stuck past its longest run,
+  outputs that cannot be fetched, or a failed store RELEASES the hold (failure
+  codes `provider_failed`, `timed_out`, `output_missing`, `output_fetch_failed`,
+  `store_failed`; the person reads only "That didn't work. No points were taken.
+  Try again."). The provider's first-language charge at project creation is the
+  provider's, never the person's. The provider's HTTP status goes in the server
+  log only.
+- **The provider keeps nothing.** The uploaded file is deleted when the job
+  ends, either way, and the provider's project is deleted (`DELETE
+  /v1/dubbing/project/{id}`). The project is noted on the row (`dub:<project>`)
+  and cleared only by two reads of 404, each made with no delete just before it,
+  the first 10 minutes after the job ended and the second 5 minutes after the
+  first (AITOOLS-04 round 4, `ai.copy_confirm_after_minutes` and
+  `ai.copy_confirm_gap_minutes`).
+- **The file goes in as for Captions.** Its first bytes must name a container the
+  Hub takes before anything parses it, the length is the Hub's own reading behind
+  the read gate, and the provider run streams the file behind the same gate (about
+  64 KB held a job, one place per account).

@@ -129,6 +129,40 @@ function lines(raw: unknown): string[] {
   });
 }
 
+/**
+ * The languages Dubbing offers (AITOOLS-05): a list of lines, each a language
+ * code, one space and the name a person reads ("yo Yoruba"). 1 to 200 lines,
+ * each code once, no long dash in a name (R-5).
+ */
+function dubbingLanguages(raw: unknown): string[] {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 200) {
+    throw new SettingInvalid(
+      'must be a list of 1 to 200 lines, each a language code, a space and the name',
+    );
+  }
+  const seen = new Set<string>();
+  return raw.map((line: unknown) => {
+    const text = typeof line === 'string' ? line.trim() : '';
+    const m = /^([a-z]{2,3}(?:-[A-Za-z]{2,4})?) (\S.{0,59})$/.exec(text);
+    if (!m) {
+      throw new SettingInvalid(
+        'needs every line to be a language code, a space and the name (for example: yo Yoruba)',
+      );
+    }
+    if (LONG_DASH.test(text)) {
+      throw new SettingInvalid(
+        'needs names without a long dash (write a comma or two sentences)',
+      );
+    }
+    const code = m[1].toLowerCase();
+    if (seen.has(code)) {
+      throw new SettingInvalid(`lists the code ${m[1]} twice`);
+    }
+    seen.add(code);
+    return text;
+  });
+}
+
 function date(raw: unknown): string {
   const ok =
     typeof raw === 'string' &&
@@ -581,7 +615,7 @@ export function buildRegistry(
     clean_audio_per_min: 'POST /ai-tools/clean-audio/jobs (AITOOLS-04)',
     music_per_track: 'POST /ai-tools/music/jobs (AITOOLS-03)',
     sfx: 'POST /ai-tools/sound-effect/jobs (AITOOLS-03)',
-    dub_standard_per_min_lang: 'the Dubbing job route (AITOOLS-05)',
+    dub_standard_per_min_lang: 'POST /ai-tools/dubbing/jobs (AITOOLS-05)',
     dub_premium_per_min_lang: 'the Dubbing job route (AITOOLS-05)',
     receptionist_message: 'the Receptionist route (AITOOLS-06)',
     receptionist_voice_per_min: 'the Receptionist route (AITOOLS-06)',
@@ -847,6 +881,38 @@ export function buildRegistry(
     provisional: 'AITOOLS-COPY-CONFIRM',
     default: extra('ai.copy_confirm_gap_minutes', 5),
     parse: whole(1, 1440),
+  });
+  // AITOOLS-05: Dubbing. The languages it offers are the provider's own list
+  // (read from its help page on 24 Oct 2026); a dub that stays working longer
+  // than its own limit is ended and its points given back (the provider states no
+  // time, and no real run has been made).
+  add({
+    key: 'ai.dubbing_languages',
+    group: 'Other rulings',
+    label:
+      'Languages Dubbing offers (one per line: the code, a space, the name)',
+    unit: 'lines',
+    usedBy: [
+      'GET /ai-tools (input.file.dubbing.languages)',
+      'POST /ai-tools/dubbing/jobs',
+    ],
+    provisional: 'AITOOLS-DUB-LANGUAGES',
+    default: extra('ai.dubbing_languages', []),
+    parse: dubbingLanguages,
+  });
+  add({
+    key: 'ai.dubbing_max_run_minutes',
+    group: 'Other rulings',
+    label:
+      'Minutes a dub can run before its held points are given back (its own limit, not the other tools)',
+    unit: 'count',
+    usedBy: [
+      'The Dubbing follower (AITOOLS-05)',
+      'The sweep of stale AI holds (POINTS-03)',
+    ],
+    provisional: 'AITOOLS-DUB-RUN',
+    default: extra('ai.dubbing_max_run_minutes', 60),
+    parse: whole(5, LIMIT.maxMinutes),
   });
   other(
     'voice.intro_max_chars',

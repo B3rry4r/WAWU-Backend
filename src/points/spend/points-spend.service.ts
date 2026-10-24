@@ -204,15 +204,40 @@ export class PointsSpendService {
    * A job that commits late and the sweep cannot both win: whichever comes
    * second is refused by the points service (`points_hold_settled`) and that
    * is not an error here. At most `limit` holds a pass, oldest first.
+   *
+   * `longer` (AITOOLS-05): a tool that legitimately runs longer than the rest
+   * has its own longest run. A `working` job of that action keeps its hold
+   * until it is that old; past it the hold is swept like any other.
    */
   async releaseStale(
     maxRunMinutes: number,
     now: Date = new Date(),
     limit = 200,
+    longer: readonly { action: string; maxRunMinutes: number }[] = [],
   ): Promise<{ released: number; skipped: number; failed: number }> {
     const cutoff = new Date(now.getTime() - maxRunMinutes * 60_000);
+    const keep: string[] = [];
+    for (const l of longer) {
+      const jobs = await this.prisma.aiToolJob.findMany({
+        where: {
+          tool: l.action,
+          state: 'working',
+          holdId: { not: null },
+          createdAt: {
+            gte: new Date(now.getTime() - l.maxRunMinutes * 60_000),
+          },
+        },
+        select: { holdId: true },
+      });
+      for (const j of jobs) if (j.holdId) keep.push(j.holdId);
+    }
     const due = await this.prisma.pointHold.findMany({
-      where: { purpose: 'ai_job', state: 'held', createdAt: { lt: cutoff } },
+      where: {
+        purpose: 'ai_job',
+        state: 'held',
+        createdAt: { lt: cutoff },
+        ...(keep.length > 0 ? { id: { notIn: keep } } : {}),
+      },
       select: { id: true },
       orderBy: { createdAt: 'asc' },
       take: limit,
