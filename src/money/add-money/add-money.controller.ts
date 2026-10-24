@@ -188,7 +188,7 @@ export class MoneyAddMoneyController {
  * arrives from a browser with no token. A plain page with a button into the
  * app; it reads and shows nothing about the payment, and the app learns the
  * result from `GET /money/add-money/{id}`, never from this page. Mounted
- * before MoneyAddMoneyController, so `return` is never read as an id.
+ * before MoneyAddMoneyController, so the word `return` is not taken for an id.
  */
 @Controller('money/add-money/return')
 export class AddMoneyReturnController {

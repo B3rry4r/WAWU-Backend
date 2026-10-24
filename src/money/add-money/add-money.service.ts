@@ -183,7 +183,7 @@ export interface AddMoneyCaller {
  * never writes the credit from a payment's own status: a card is charged
  * before the money lands (Nuvion's card inflow is `pending` until it
  * settles, DEV-RESULTS), so the credit is written by NUV-04's inflow
- * recorder when the inflow settles, through `creditInflow` below (the hook
+ * recorder when the inflow settles, through `creditInflow` (the claim
  * the recorder calls for a rail that is not a bank transfer), keyed on the
  * transfer and our reference: a webhook, a replay and NUV-08's sweep land on
  * one ledger row. What this service reads from the provider says where an
