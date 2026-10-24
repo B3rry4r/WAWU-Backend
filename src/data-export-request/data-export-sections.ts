@@ -1281,6 +1281,155 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: { requestedAt: 'desc' },
       }),
   },
+  // The person's own foreign-currency accounts (WALLET-21, R-83, R-84): which
+  // currencies they opened, on which chain, and whether an admin froze one.
+  // The provider's ids, routing numbers and the freeze reason are not theirs
+  // to read (rule 3); the balance is the provider's and is not exported.
+  {
+    key: 'foreignAccounts',
+    models: ['FxAccount'],
+    load: (prisma, me) =>
+      prisma.fxAccount.findMany({
+        where: { wawuUserId: me },
+        select: {
+          currency: true,
+          chain: true,
+          status: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
+  // The rates this person asked for when they went to swap (WALLET-21).
+  {
+    key: 'foreignQuotes',
+    models: ['FxQuote'],
+    load: async (prisma, me) => {
+      const rows = await prisma.fxQuote.findMany({
+        where: { wawuUserId: me },
+        select: {
+          fromCurrency: true,
+          toCurrency: true,
+          amountFromMinor: true,
+          amountToMinor: true,
+          rate: true,
+          wawuFeeMinor: true,
+          expiresAt: true,
+          usedAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      });
+      return rows.map((r) => ({
+        ...r,
+        amountFromMinor: Number(r.amountFromMinor),
+        amountToMinor: Number(r.amountToMinor),
+        wawuFeeMinor: Number(r.wawuFeeMinor),
+      }));
+    },
+  },
+  // Their swaps and crypto sends (WALLET-21). The provider's transfer id and
+  // our reference stay out (rule 3), and an outside wallet address is another
+  // party's: only its last six characters are given, enough to recognise it.
+  {
+    key: 'foreignSwapsAndSends',
+    models: ['FxOperation'],
+    load: async (prisma, me) => {
+      const rows = await prisma.fxOperation.findMany({
+        where: { wawuUserId: me },
+        select: {
+          kind: true,
+          status: true,
+          fromCurrency: true,
+          toCurrency: true,
+          amountFromMinor: true,
+          amountToMinor: true,
+          rate: true,
+          providerFeeMinor: true,
+          wawuFeeMinor: true,
+          chain: true,
+          address: true,
+          failureReason: true,
+          createdAt: true,
+          completedAt: true,
+        },
+        orderBy: NEWEST,
+      });
+      return rows.map(({ address, ...r }) => ({
+        ...r,
+        amountFromMinor: Number(r.amountFromMinor),
+        amountToMinor:
+          r.amountToMinor === null ? null : Number(r.amountToMinor),
+        providerFeeMinor:
+          r.providerFeeMinor === null ? null : Number(r.providerFeeMinor),
+        wawuFeeMinor: Number(r.wawuFeeMinor),
+        addressEnd: address ? address.slice(-6) : null,
+      }));
+    },
+  },
+  // What moved on those accounts, as the provider told us (WALLET-21). The
+  // provider's transfer id and reference stay out (rule 3).
+  {
+    key: 'foreignMovements',
+    models: ['FxMovement'],
+    load: async (prisma, me) => {
+      const rows = await prisma.fxMovement.findMany({
+        where: { wawuUserId: me },
+        select: {
+          currency: true,
+          direction: true,
+          status: true,
+          amountMinor: true,
+          feeMinor: true,
+          paymentType: true,
+          occurredAt: true,
+        },
+        orderBy: { occurredAt: 'desc' as const },
+      });
+      return rows.map((r) => ({
+        ...r,
+        amountMinor: Number(r.amountMinor),
+        feeMinor: Number(r.feeMinor),
+      }));
+    },
+  },
+  // Their Capital orders (NUV-12, R-84): what they bought and where it stands.
+  // The provider's order, account and transfer ids, our idempotency material,
+  // the stored product snapshot and an admin's freeze reason stay out (rule 3).
+  {
+    key: 'capitalOrders',
+    models: ['CapitalOrder'],
+    load: async (prisma, me) => {
+      const rows = await prisma.capitalOrder.findMany({
+        where: { wawuUserId: me },
+        select: {
+          productName: true,
+          productType: true,
+          currency: true,
+          amountMinor: true,
+          totalDebitMinor: true,
+          feeKobo: true,
+          state: true,
+          lifecycle: true,
+          payoutStatus: true,
+          expiresAt: true,
+          confirmedAt: true,
+          withdrawRequestedAt: true,
+          frozenAt: true,
+          cancelledAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      });
+      return rows.map((r) => ({
+        ...r,
+        amountMinor: Number(r.amountMinor),
+        totalDebitMinor:
+          r.totalDebitMinor === null ? null : Number(r.totalDebitMinor),
+        feeKobo: Number(r.feeKobo),
+      }));
+    },
+  },
 ];
 
 /**

@@ -7726,6 +7726,80 @@ model NuvionReconcileFinding {
   @@index([resolvedAt, lastSeenAt])
 }
 
+/// A person's Capital order (NUV-12, R-84): the provider's fixed-return or
+/// share-offering product, reserved for 15 minutes and then confirmed with the
+/// PIN. The provider holds the order and the holding; this row is WAWU's side:
+/// the app's reservation key (so a double tap reserves once), the state WAWU
+/// shows, the admin's freeze or cancel, and the ledger links. Never a balance.
+model CapitalOrder {
+  id                   String    @id @default(uuid())
+  wawuUserId           String
+  /// The app's Idempotency-Key for the reservation, with the SHA-256 of what it sent.
+  reserveKey           String
+  fingerprint          String
+  /// reserving, reserved, confirming, confirmed, expired, rejected, cancelled, failed.
+  state                String
+  provider             String    @default("nuvion")
+  /// The provider's order id (set once the reservation is made).
+  nuvionOrderId        String?   @unique
+  productId            String
+  productName          String
+  /// FIXED_RETURN or SHARE_OFFERING.
+  productType          String
+  currency             String
+  /// What the person asked to invest, in the smallest unit of the currency.
+  amountMinor          BigInt
+  /// What the provider will debit for the product (its quote).
+  totalDebitMinor      BigInt?
+  /// WAWU's own fee in kobo, quoted at the reservation (config; 0 by default, R-10).
+  feeKobo              BigInt    @default(0)
+  /// none, owed (the order is confirmed, the fee is not yet taken) or paid.
+  feeState             String    @default("none")
+  feeReference         String?
+  /// The provider's quote and, once approved, the holding as last read: `{ quote, account }`.
+  snapshot             Json?
+  expiresAt            DateTime?
+  confirmedAt          DateTime?
+  capitalAccountId     String?
+  userCapitalAccountId String?
+  /// The holding's state as last read (ACTIVE, MATURED, EARLY_LIQUIDATING, WITHDRAWN, ...).
+  lifecycle            String?
+  payoutStatus         String?
+  /// The provider's transfers for the purchase and the payout, once seen.
+  purchaseTransferId   String?
+  payoutTransferId     String?
+  withdrawRequestedAt  DateTime?
+  /// An admin's hold: the person cannot start a withdrawal while set.
+  frozenAt             DateTime?
+  frozenReason         String?
+  cancelledAt          DateTime?
+  lastCheckedAt        DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@unique([wawuUserId, reserveKey])
+  @@index([wawuUserId, createdAt])
+  @@index([state, updatedAt])
+  @@index([userCapitalAccountId])
+}
+
+/// Who froze, released or cancelled a Capital order (NUV-12): one row per act.
+model CapitalAdminAudit {
+  id            String   @id @default(uuid())
+  orderId       String
+  subjectWawuId String
+  /// freeze, unfreeze or cancel.
+  action        String
+  note          String?
+  adminId       String
+  adminEmail    String
+  adminRole     String
+  createdAt     DateTime @default(now())
+
+  @@index([orderId, createdAt])
+  @@index([subjectWawuId, createdAt])
+}
+
 /// Where an AI tool job is (AITOOLS-01, PT2). `working` until the voice provider
 /// answers; then `done` (the points were kept) or `failed` (every held point
 /// went back).
@@ -8135,4 +8209,153 @@ model StoreAccountToken {
   wawuUserId String   @id
   token      String   @unique
   createdAt  DateTime @default(now())
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// FOREIGN ACCOUNTS ON NUVION (task WALLET-21, R-83, R-84)
+///
+/// A person's dollar, euro, pound, Canadian dollar, dirham or cedi account, or
+/// a USDT, USDC or RLUSD account on one chain, on the same Nuvion entity as
+/// their naira wallet. A stablecoin account holds one chain's wallet address
+/// (Nuvion: one account, one set of details), so USDT on two chains is two
+/// rows. The balance is never here: it is Nuvion's `available`, read when it
+/// is shown. Additive: nothing the web or the dashboard calls reads these.
+/// ─────────────────────────────────────────────────────────────────────────
+model FxAccount {
+  id                 String    @id @default(uuid())
+  wawuUserId         String
+  /// The provider this account is at (`nuvion`). A server acts only on its own.
+  provider           String    @default("nuvion")
+  /// WAWU's code: USD, EUR, GBP, CAD, AED, GHS, USDT, USDC, RLUSD.
+  currency           String
+  /// eth, base, matic or sol for a stablecoin; empty for a fiat currency.
+  chain              String    @default("")
+  /// The provider's customer (Nuvion's entity id).
+  providerCustomerId String
+  /// The provider's account id, once it has made it (null while `opening`).
+  providerAccountId  String?
+  /// What a book transfer is routed on to this account (Nuvion's nuvion_ban).
+  ban                String?
+  /// The provider's id for the account's details, once known.
+  detailsId          String?
+  /// opening (the provider has not answered), open, frozen (an admin froze it).
+  status             String    @default("opening")
+  frozenAt           DateTime?
+  frozenReason       String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@unique([wawuUserId, provider, currency, chain])
+  @@unique([provider, providerAccountId])
+  @@index([wawuUserId])
+  @@index([status])
+}
+
+/// A quote kept for one person: the provider's rate and real expiry, used once.
+model FxQuote {
+  id               String    @id @default(uuid())
+  wawuUserId       String
+  provider         String    @default("nuvion")
+  providerQuoteId  String
+  fromCurrency     String
+  toCurrency       String
+  /// FxAccount ids; null when that side is the naira wallet.
+  fromAccountId    String?
+  toAccountId      String?
+  amountFromMinor  BigInt
+  amountToMinor    BigInt
+  rate             String
+  providerFeeMinor BigInt?
+  wawuFeeMinor     BigInt    @default(0)
+  expiresAt        DateTime
+  usedAt           DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@index([wawuUserId, createdAt])
+}
+
+/// One swap or one crypto send. `reference` is our idempotency key at the
+/// provider; the row is written before the provider is asked and settled from
+/// its answer, its record or its webhook.
+model FxOperation {
+  id                 String    @id @default(uuid())
+  wawuUserId         String
+  provider           String    @default("nuvion")
+  /// swap | send
+  kind               String
+  /// pending | completed | failed
+  status             String    @default("pending")
+  reference          String    @unique
+  fromCurrency       String
+  toCurrency         String?
+  fromAccountId      String?
+  toAccountId        String?
+  amountFromMinor    BigInt
+  amountToMinor      BigInt?
+  rate               String?
+  providerFeeMinor   BigInt?
+  wawuFeeMinor       BigInt    @default(0)
+  quoteId            String?
+  chain              String?
+  address            String?
+  providerTransferId String?
+  failureReason      String?
+  /// When the naira side of a swap was written to the naira ledger.
+  ledgerAt           DateTime?
+  /// WAWU's fee: done (moved), owed (could not be moved yet), or null when none.
+  feeLeg             String?
+  /// The Lagos calendar day, for the per-currency daily limit.
+  day                String
+  createdAt          DateTime  @default(now())
+  completedAt        DateTime?
+
+  @@index([wawuUserId, createdAt])
+  @@index([status, createdAt])
+  @@index([wawuUserId, fromCurrency, day])
+}
+
+/// A movement on a foreign account, from the provider's webhooks (the
+/// ledger of these accounts). Keyed by the provider's transfer id.
+model FxMovement {
+  id                 String   @id @default(uuid())
+  provider           String   @default("nuvion")
+  providerTransferId String
+  wawuUserId         String
+  fxAccountId        String
+  currency           String
+  /// in | out
+  direction          String
+  /// completed | pending | failed | reversed
+  status             String
+  amountMinor        BigInt
+  feeMinor           BigInt   @default(0)
+  paymentType        String?
+  reference          String?
+  eventId            String?
+  occurredAt         DateTime
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([provider, providerTransferId])
+  @@index([wawuUserId, occurredAt])
+  @@index([fxAccountId, occurredAt])
+}
+
+/// An admin freezing or letting go of one foreign account. No foreign key to
+/// the account or the admin (an admin's email and role are snapshots).
+model FxAdminAudit {
+  id                String    @id @default(uuid())
+  fxAccountId       String
+  subjectWawuId     String
+  /// freeze | unfreeze
+  action            String
+  reason            String
+  actedByAdminId    String
+  actedByAdminEmail String
+  actedByAdminRole  AdminRole
+  actedAt           DateTime  @default(now())
+
+  @@index([fxAccountId])
+  @@index([actedByAdminId])
+  @@index([actedAt])
 }

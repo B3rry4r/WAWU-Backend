@@ -14,7 +14,8 @@
     "AITOOLS-COPY-CONFIRM": "AITOOLS-04 round 4: no ruling or board says how long to wait before believing that the voice provider has deleted a transcript. The real provider answers a read 404 for about a second after a delete and then shows the transcript again (8 of 9 real jobs, 24 Oct 2026), so the Hub counts a transcript as deleted only after two reads that say 404: the first 10 minutes after the job ended, the second 5 minutes after the first. The owner confirms both figures; an admin may change them.",
     "AITOOLS-DUB-LANGUAGES": "AITOOLS-05: the list of languages Dubbing offers is the provider's own, read from its help page \"Which languages are supported in Dubbing\" on 24 Oct 2026 (the Dubbing v2 list, which is the model the Hub uses when it names none): 94 base languages, one line each as a language code, a space and the name. Region forms (en-US, pt-BR, es-MX and the like) are not offered. The owner may shorten the list or add forms; a language outside it is refused with nothing held.",
     "AITOOLS-DUB-RUN": "AITOOLS-05: the provider states no time for a dub and no real run has been made (NOT RUN). 60 minutes is longer than a dub of the longest file the plan allows (10 minutes of audio) is expected to take, and short enough that a dub that never ends does not keep a person's points for long. It is the dub's own limit, not the 30 minutes of the other tools (points.job_max_run_minutes). The owner may change it after a measured run.",
-    "CONTENT-REVIEW-HOURS": "FIX-110 (G-ME-08-3): nothing measures how long a review takes, and no ruling names a figure. M25 draws 'Usually takes: A few hours', so 4 hours is the board's 'a few' as a number an admin can change; the app words it as 'About 4 hours'."
+    "CONTENT-REVIEW-HOURS": "FIX-110 (G-ME-08-3): nothing measures how long a review takes, and no ruling names a figure. M25 draws 'Usually takes: A few hours', so 4 hours is the board's 'a few' as a number an admin can change; the app words it as 'About 4 hours'.",
+    "CAPITAL-ENABLED": "NUV-12 (owner-asked control): Capital is on by default, as the owner asked on 24 Oct 2026 (R-84). An admin can switch it off here (0): new orders close (the product list, a reservation and a confirmation answer that Capital is not available) and a person with nothing held loses the Wallet tab row, but what a person already holds can still be read and withdrawn, and the row stays for them."
   },
   "values": {
     "ai.sfx_max_seconds": 30,
@@ -123,6 +124,18 @@
     "referral.claim_days": 7,
     "plan.event_date": null,
     "name_check_per_hour": 30,
+    "fx.currency.USD.on": 1,
+    "fx.currency.EUR.on": 1,
+    "fx.currency.GBP.on": 1,
+    "fx.currency.CAD.on": 1,
+    "fx.currency.AED.on": 1,
+    "fx.currency.GHS.on": 1,
+    "fx.currency.USDT.on": 1,
+    "fx.currency.USDC.on": 1,
+    "fx.currency.RLUSD.on": 1,
+    "fx.product.open_account.on": 1,
+    "fx.product.swap.on": 1,
+    "fx.product.crypto_send.on": 1,
     "popular_community_min_members": 10,
     "community_credit_cost_photo": 1,
     "community_credit_cost_video": 3,
@@ -148,6 +161,7 @@
     "content.review_hours": 4,
     "plan.event_name": [
       "Christmas event"
-    ]
+    ],
+    "capital.enabled": 1
   }
 }

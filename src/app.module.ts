@@ -103,6 +103,7 @@ import { VoiceIntroModule } from './voice-intro/voice-intro.module';
 import { WaitlistModule } from './waitlist/waitlist.module';
 import { FintavaWebhookModule } from './fintava/webhook/fintava-webhook.module';
 import { NuvionWebhookModule } from './nuvion/webhook/nuvion-webhook.module';
+import { CapitalModule } from './capital/capital.module';
 import { PaymentWebhookModule } from './payment-webhook/payment-webhook.module';
 import { StoreModule } from './store/store.module';
 import { AdminAdsModule } from './admin/ads/admin-ads.module';
@@ -507,6 +508,10 @@ import { PushModule } from './push/push.module';
     // so a rollback never loses a delivery. `webhooks/nuvion` is a fixed path no
     // other controller declares.
     NuvionWebhookModule,
+    // Capital (task NUV-12, SHARED-CHANGES NUV-12 #1): `capital/*` for the app
+    // and `admin/capital/orders/*` for the dashboard. `capital` is a first
+    // segment nothing else declares; it sits after the money modules it needs.
+    CapitalModule,
     // Admin ad management (task ADS-06): `admin/ads`, a second segment no other
     // controller declares, so it cannot shadow or be shadowed wherever it sits.
     AdminAdsModule,
