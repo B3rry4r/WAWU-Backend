@@ -1218,5 +1218,14 @@ export function buildRegistry(
     onOff,
   );
 
+  // ---- A wallet for a person outside Nigeria (WALLET-41, R-87) ----
+  other(
+    'world.open.on',
+    'Opening a wallet without a BVN for a person outside Nigeria: 1 is on, 0 is off',
+    'count',
+    ['GET /money/world/options', 'POST /money/wallet/open (WALLET-41, R-87)'],
+    onOff,
+  );
+
   return out;
 }

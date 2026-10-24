@@ -391,6 +391,9 @@ const WHOLE_NUMBER_DIRS = [
   path.join(ROOT, 'src', 'money', 'fx') + path.sep,
   // Send abroad (task NUV-11): the same rule for `...Minor`, seconds and counts.
   path.join(ROOT, 'src', 'money', 'abroad') + path.sep,
+  // A wallet for a person outside Nigeria (task WALLET-41): the fee to open
+  // is an integer in the currency's smallest unit, `decimals` a count.
+  path.join(ROOT, 'src', 'money', 'world') + path.sep,
 ];
 
 function numberAsInteger(schema) {

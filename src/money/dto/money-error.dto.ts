@@ -92,7 +92,13 @@ export class MoneyErrorReason {
   @ApiPropertyOptional({ type: 'integer' })
   maximumMinor?: number;
 
-  /** The fields a provider refused, by key (`recipient_details_invalid`). */
+  /**
+   * The fields a provider refused, by key (`recipient_details_invalid`).
+   * Also, on `account_not_opened` for a world opening (WALLET-41): the names
+   * of the fields the provider's own refusal pointed at (for example
+   * `person.ssn`), never a value. The app asks for them; the list is the
+   * provider's, not a fixed one of ours.
+   */
   @ApiPropertyOptional({ type: [String] })
   fields?: string[];
 

@@ -3,7 +3,7 @@ import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type { FxAccount, FxOperation } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import type { OpenWallet } from '../gate/wallet-gate';
+import { type OpenWallet, worldWalletOf } from '../gate/wallet-gate';
 import { LedgerService } from '../ledger/ledger.service';
 import { MoneyError } from '../money-error';
 import {
@@ -884,7 +884,9 @@ export class FxOperationsService {
     const w = await this.prisma.fintavaWallet.findUnique({
       where: { wawuUserId },
     });
-    if (!w || w.provider !== this.port.name || !w.walletId || !w.accountNumber)
+    // WALLET-41: a person outside Nigeria has no naira wallet; their operations are settled on their world wallet.
+    if (!w) return worldWalletOf(this.prisma, wawuUserId);
+    if (w.provider !== this.port.name || !w.walletId || !w.accountNumber)
       return null;
     return {
       wawuUserId,
@@ -946,6 +948,13 @@ export class FxOperationsService {
     if (currency === 'NGN') {
       if (accountId)
         throw new BadRequestException('the naira wallet takes no account id');
+      // WALLET-41: a world wallet has no naira account to swap from or into.
+      if (!wallet.walletId) {
+        throw new MoneyError(
+          'fx_account_not_open',
+          'You have no naira account. Swap between your other accounts.',
+        );
+      }
       return { row: null, side: { currency: 'NGN', accountId: null } };
     }
     if (!accountId)
