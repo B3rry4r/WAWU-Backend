@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- Rollback of 20261106140000_wallet_cards (WALLET-31). Drops the WalletCard
+-- Rollback of 20261114090000_wallet_cards (WALLET-31). Drops the WalletCard
 -- table and nothing else. Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while the table holds any card that is not
 -- `failed`: a card in `creating`, `unknown`, `active`, `frozen` or `cancelled`
