@@ -643,7 +643,19 @@ export class AbroadService {
     );
 
     const feeKobo = this.settings.wawuFeeKobo;
-    this.assertFunds(sources, dto.fromCurrency, quote.amountFromMinor, feeKobo);
+    // R-10: the person pays the partner's fee on top, from config (the provider's quote has none), shown before the PIN.
+    const partnerFee = this.settings.providerFeeMinor(
+      dto.fromCurrency,
+      recipient.currency,
+      recipient.method as AbroadMethod,
+    );
+    this.assertFunds(
+      sources,
+      dto.fromCurrency,
+      quote.amountFromMinor,
+      feeKobo,
+      partnerFee ?? 0,
+    );
 
     const row = await this.prisma.abroadQuote.create({
       data: {
@@ -657,6 +669,8 @@ export class AbroadService {
         rate: quote.rate,
         providerQuoteId: quote.quoteRef,
         wawuFeeKobo: BigInt(feeKobo),
+        providerFeeEstimateMinor:
+          partnerFee === null ? null : BigInt(partnerFee),
         expiresAt: quote.expiresAt,
       },
     });
@@ -678,7 +692,7 @@ export class AbroadService {
       amountToMinor: quote.amountToMinor,
       converted: quote.quoteRef !== null,
       rate: quote.rate,
-      providerFeeMinor: null,
+      providerFeeMinor: partnerFee,
       wawuFeeKobo: feeKobo,
       speed: speedOf(recipient),
       expiresAt: row.expiresAt.toISOString(),
@@ -696,9 +710,12 @@ export class AbroadService {
     currency: string,
     amountMinor: number,
     feeKobo: number,
+    partnerFeeMinor: number,
   ): void {
     const from = sources.find((s) => s.currency === currency);
-    const owed = currency === 'NGN' ? amountMinor + feeKobo : amountMinor;
+    // The amount, the partner's fee (in the sending currency) and, from the naira wallet, WAWU's fee on top.
+    const owed =
+      amountMinor + partnerFeeMinor + (currency === 'NGN' ? feeKobo : 0);
     if (from && from.availableMinor !== null && from.availableMinor < owed) {
       throw new MoneyError(
         'insufficient_funds',

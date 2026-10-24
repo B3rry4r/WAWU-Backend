@@ -8163,6 +8163,8 @@ model AbroadQuote {
   rate            String?
   providerQuoteId String?
   wawuFeeKobo     BigInt          @default(0)
+  /// What the provider is expected to charge on top, from config (NUV-11 round 1, R-10); null when none is configured.
+  providerFeeEstimateMinor BigInt?
   expiresAt       DateTime
   usedAt          DateTime?
   createdAt       DateTime        @default(now())
@@ -8201,6 +8203,15 @@ model AbroadSend {
   wawuFeeKobo        BigInt          @default(0)
   /// WAWU's fee has been taken from the naira wallet (true also when there was none to take).
   wawuFeeTaken       Boolean         @default(true)
+  /// When WAWU's fee was given back after the send failed or was reversed (set once); null while it is owed or was never taken.
+  feeGivenBackAt     DateTime?
+  /// The give-back could not be made for a day: it waits for a person, the fee still owed to the sender.
+  feeBackHeldAt      DateTime?
+  feeBackAttempts    Int             @default(0)
+  /// The fee the review showed (config), in the sending currency's smallest unit; null when none was configured.
+  providerFeeEstimateMinor BigInt?
+  /// The provider's real fee was not the one shown: config needs a look (admin list).
+  feeDiffers         Boolean         @default(false)
   feeAttempts        Int             @default(0)
   attemptedAt        DateTime?
   checkedAt          DateTime?

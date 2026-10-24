@@ -12,6 +12,7 @@ import {
   AbroadSendService,
   decodeCursor,
   encodeCursor,
+  LOOK_AFTER_MS,
   SEND_CANCELLED_REASON,
   SEND_NOT_FOUND_MESSAGE,
 } from './abroad-send.service';
@@ -123,6 +124,16 @@ export class AbroadAdminService {
         r.providerFeeMinor === null ? null : Number(r.providerFeeMinor),
       wawuFeeKobo: Number(r.wawuFeeKobo),
       wawuFeeOwed: !r.wawuFeeTaken,
+      wawuFeeBackOwed:
+        r.wawuFeeTaken &&
+        r.wawuFeeKobo > 0n &&
+        (r.status === 'failed' || r.status === 'reversed') &&
+        r.feeGivenBackAt === null,
+      providerFeeEstimateMinor:
+        r.providerFeeEstimateMinor === null
+          ? null
+          : Number(r.providerFeeEstimateMinor),
+      feeDiffers: r.feeDiffers,
       reference: r.reference,
       providerStatus: r.providerStatus,
       failureReason: r.failureReason,
@@ -218,6 +229,16 @@ export class AbroadAdminService {
   ): Promise<AdminAbroadCancelView> {
     const row = await this.row(id);
     if (row.status === 'cancelled') return { id, status: 'cancelled' };
+    // A send seconds old may still be on its way to the provider: it is looked for only once the sweep would look (F3).
+    if (
+      Date.now() - (row.attemptedAt ?? row.createdAt).getTime() <
+      LOOK_AFTER_MS
+    ) {
+      throw new MoneyError(
+        'send_not_cancellable',
+        'This send is too new to cancel: the payment partner may still be taking it. Try again in a minute.',
+      );
+    }
     const holdsIt =
       row.providerTransferId !== null ||
       !['sending', 'needs_review'].includes(row.status);
@@ -266,6 +287,9 @@ export class AbroadAdminService {
       );
     }
     await this.prisma.$transaction(async (tx) => {
+      // The row is locked while it is judged and changed, so a send that the provider takes and records at the same moment is not
+      // cancelled under it: the count below is zero, or `apply` finds the row cancelled and never reopens it.
+      await tx.$queryRaw`SELECT "id" FROM "AbroadSend" WHERE "id" = ${id} FOR UPDATE`;
       const { count } = await tx.abroadSend.updateMany({
         where: {
           id,

@@ -20,8 +20,10 @@ import {
 } from '../payments/idempotency';
 import { successBody } from '../payments/wallet-payment.service';
 import { ABROAD_DECIMALS } from './abroad-corridors';
+import { readLeg, settleLeg } from './abroad-fee-legs';
 import {
   AbroadService,
+  NOT_OFFERED_NOTE,
   recipientView,
   refusalError,
   speedOf,
@@ -58,6 +60,8 @@ export const PENDING_CHECK_BASE_MS = 30_000;
 export const PENDING_CHECK_CAP_MS = 30 * 60_000;
 /** How many times WAWU's fee is tried before it is left to finance (it never fails a send). */
 export const FEE_ATTEMPTS = 5;
+/** A fee given back that is still not done a day after the send ended waits for a person. */
+export const FEE_BACK_HOLD_MS = 24 * 3_600_000;
 const SWEEP_BATCH = 50;
 const TERMINAL: AbroadSendStatus[] = [
   'completed',
@@ -108,9 +112,17 @@ export class AbroadSendService {
       return;
     const q = await this.prisma.abroadQuote.findFirst({
       where: { id: quoteId, wawuUserId },
-      select: { usedAt: true, expiresAt: true },
+      select: {
+        usedAt: true,
+        expiresAt: true,
+        recipient: { select: { country: true } },
+      },
     });
     if (!q) throw new MoneyError('not_found', 'We could not find that quote.');
+    // A country switched off after the quote was taken is not sent to (F7).
+    if (this.abroad.settings.countriesOff().has(q.recipient.country)) {
+      throw new MoneyError('corridor_not_supported', NOT_OFFERED_NOTE);
+    }
     if (q.usedAt !== null || q.expiresAt.getTime() <= Date.now()) {
       throw new MoneyError(
         'quote_expired',
@@ -146,6 +158,9 @@ export class AbroadSendService {
             'This quote has run out. Get a new one and try again.',
           );
         }
+        if (this.abroad.settings.countriesOff().has(q.recipient.country)) {
+          throw new MoneyError('corridor_not_supported', NOT_OFFERED_NOTE);
+        }
         if (q.recipient.removedAt !== null) {
           throw new MoneyError(
             'not_found',
@@ -180,6 +195,7 @@ export class AbroadSendService {
             narration: dto.narration?.trim() || null,
             reference: `${ABROAD_REFERENCE_PREFIX}${id}`,
             wawuFeeKobo: q.wawuFeeKobo,
+            providerFeeEstimateMinor: q.providerFeeEstimateMinor,
             wawuFeeTaken: q.wawuFeeKobo === 0n,
             attemptedAt: now,
           },
@@ -287,15 +303,39 @@ export class AbroadSendService {
   async apply(sendId: string, t: AbroadTransfer): Promise<SendRow> {
     const row = await this.load(sendId);
     const next = statusOf(t);
+    if (row.status === 'cancelled') {
+      // An admin cancelled it because the provider had nothing; now it has. The cancel stands (a decided row is never reopened):
+      // the provider's facts are kept beside it and a person is told by the log and the admin list (`providerStatus`).
+      await this.prisma.abroadSend
+        .update({
+          where: { id: sendId },
+          data: {
+            providerTransferId: row.providerTransferId ?? t.id,
+            providerStatus: t.providerStatus,
+            checkedAt: new Date(),
+          },
+        })
+        .catch(() => undefined);
+      this.logger.error(
+        `abroad send ${sendId}: cancelled by an admin, yet the provider holds transfer ${t.id} (${t.providerStatus}); the row stays cancelled and needs a person`,
+      );
+      return this.load(sendId);
+    }
     if (row.status === 'completed' && next === 'pending') return row;
     const now = new Date();
     const terminal = TERMINAL.includes(next);
     const data: Prisma.AbroadSendUpdateInput = {
       providerTransferId: row.providerTransferId ?? t.id,
       providerStatus: t.providerStatus,
-      providerFeeMinor: t.feeMinor === null ? undefined : BigInt(t.feeMinor),
       checkedAt: now,
     };
+    if (t.feeMinor !== null) {
+      // What the provider really charged, against what the review showed (R-10: from config): a difference flags the send so config
+      // can be corrected. Without a configured figure, a charge above nothing is a difference too.
+      data.providerFeeMinor = BigInt(t.feeMinor);
+      data.feeDiffers =
+        Number(row.providerFeeEstimateMinor ?? 0n) !== t.feeMinor;
+    }
     if (row.status !== next) {
       data.status = next;
       data.completedAt = terminal ? now : null;
@@ -312,6 +352,14 @@ export class AbroadSendService {
       // Two lookups of one send at once: the second finds the transfer id already stored.
       if (!(e instanceof Error) || !/Unique constraint/i.test(e.message))
         throw e;
+    }
+    // A send that did not stand gives WAWU's fee back, once; the sweep asks again until it has landed.
+    if (
+      row.status !== next &&
+      (next === 'failed' || next === 'reversed') &&
+      row.wawuFeeTaken
+    ) {
+      await this.giveBack(sendId).catch(() => undefined);
     }
     return this.load(sendId);
   }
@@ -339,8 +387,10 @@ export class AbroadSendService {
 
   /**
    * WAWU's fee, taken from the naira wallet after the provider has the send
-   * (a book transfer to WAWU's account under `<reference>-fee`). A fee that
-   * cannot be taken is tried again by the sweep and never fails the send.
+   * (a book transfer to WAWU's account under `<reference>-fee`). It is taken
+   * only when the provider's own record says the transfer completed; one that
+   * cannot be taken is tried again by the sweep and never fails the send. A
+   * send that ended while the fee was on its way gives it back at once.
    */
   async takeFee(sendId: string): Promise<void> {
     const row = await this.load(sendId);
@@ -361,13 +411,23 @@ export class AbroadSendService {
       });
       if (!wallet?.accountNumber) return;
       const platform = await this.walletProvider.getPlatformAccount();
-      await this.walletProvider.walletToWallet({
-        fromAccountNumber: wallet.accountNumber,
-        toAccountNumber: platform.accountNumber,
-        amountKobo: row.wawuFeeKobo,
-        reference: `${row.reference}-fee`,
-        narration: 'WAWU fee',
-      });
+      const moved = await settleLeg(
+        this.walletProvider,
+        `${row.reference}-fee`,
+        {
+          fromAccountNumber: wallet.accountNumber,
+          toAccountNumber: platform.accountNumber,
+          amountKobo: row.wawuFeeKobo,
+          narration: 'WAWU fee',
+        },
+        (m) => this.logger.warn(`abroad send ${sendId}: WAWU's fee ${m}`),
+      );
+      if (moved.result === 'spent') {
+        this.logger.error(
+          `abroad send ${sendId}: the provider failed WAWU's fee under three references; it waits for a person`,
+        );
+      }
+      if (moved.result !== 'done') return;
       await this.prisma.abroadSend.update({
         where: { id: sendId },
         data: { wawuFeeTaken: true },
@@ -376,6 +436,99 @@ export class AbroadSendService {
       this.logger.warn(
         `abroad send ${sendId}: WAWU's fee was not taken yet (${e instanceof WalletProviderError ? e.kind : 'error'}); the sweep tries again`,
       );
+      return;
+    }
+    const after = await this.load(sendId);
+    if (after.status === 'failed' || after.status === 'reversed') {
+      await this.giveBack(sendId);
+    }
+  }
+
+  /**
+   * A send that failed or was reversed owes its sender the fee back, once
+   * (`<reference>-fee-back`, from WAWU's account to the person's wallet): the
+   * fee leg's own completed record says what was taken, and the give-back is
+   * marked only when the provider's record says it completed. A reference the
+   * provider failed is replaced in a later pass; three failed ones, or a day
+   * of trying, hold it for a person with the fee still owed.
+   */
+  async giveBack(sendId: string, now = new Date()): Promise<void> {
+    const row = await this.load(sendId);
+    if (!row.wawuFeeTaken || row.wawuFeeKobo === 0n) return;
+    if (row.feeGivenBackAt !== null || row.feeBackHeldAt !== null) return;
+    if (row.status !== 'failed' && row.status !== 'reversed') return;
+    const since = (row.completedAt ?? row.updatedAt).getTime();
+    const hold = async (why: string) => {
+      await this.prisma.abroadSend.updateMany({
+        where: { id: sendId, feeGivenBackAt: null, feeBackHeldAt: null },
+        data: { feeBackHeldAt: now },
+      });
+      this.logger.error(
+        `abroad send ${sendId}: WAWU's fee could not be given back (${why}); it waits for a person, still owed to the sender`,
+      );
+    };
+    try {
+      const wallet = await this.prisma.fintavaWallet.findFirst({
+        where: {
+          wawuUserId: row.wawuUserId,
+          provider: this.walletProvider.name,
+        },
+        select: { accountNumber: true },
+      });
+      if (!wallet?.accountNumber) return;
+      const taken = await readLeg(this.walletProvider, `${row.reference}-fee`);
+      if (taken.result === 'none') {
+        await hold('the fee leg has no completed record at the provider');
+        return;
+      }
+      if (taken.result === 'wait') {
+        await this.waitOrHold(sendId, now, since, hold);
+        return;
+      }
+      const platform = await this.walletProvider.getPlatformAccount();
+      const moved = await settleLeg(
+        this.walletProvider,
+        `${row.reference}-fee-back`,
+        {
+          fromAccountNumber: platform.accountNumber,
+          toAccountNumber: wallet.accountNumber,
+          amountKobo: taken.moved.amountKobo + taken.moved.feeKobo,
+          narration: 'WAWU fee given back',
+        },
+        (m) =>
+          this.logger.warn(`abroad send ${sendId}: the fee given back ${m}`),
+      );
+      if (moved.result === 'done') {
+        await this.prisma.abroadSend.updateMany({
+          where: { id: sendId, feeGivenBackAt: null },
+          data: { feeGivenBackAt: now },
+        });
+        return;
+      }
+      if (moved.result === 'spent') {
+        await hold('the provider failed it under three references');
+        return;
+      }
+      await this.waitOrHold(sendId, now, since, hold);
+    } catch (e) {
+      this.logger.warn(
+        `abroad send ${sendId}: giving WAWU's fee back failed (${e instanceof WalletProviderError ? e.kind : 'error'}); asked again`,
+      );
+    }
+  }
+
+  private async waitOrHold(
+    sendId: string,
+    now: Date,
+    since: number,
+    hold: (why: string) => Promise<void>,
+  ): Promise<void> {
+    await this.prisma.abroadSend.update({
+      where: { id: sendId },
+      data: { feeBackAttempts: { increment: 1 } },
+    });
+    if (now.getTime() - since >= FEE_BACK_HOLD_MS) {
+      await hold('a day of trying');
     }
   }
 
@@ -428,6 +581,18 @@ export class AbroadSendService {
       select: { id: true },
     });
     for (const f of fees) await this.takeFee(f.id);
+    const owed = await this.prisma.abroadSend.findMany({
+      where: {
+        wawuFeeTaken: true,
+        wawuFeeKobo: { gt: 0n },
+        feeGivenBackAt: null,
+        feeBackHeldAt: null,
+        status: { in: ['failed', 'reversed'] },
+      },
+      take: 20,
+      select: { id: true },
+    });
+    for (const f of owed) await this.giveBack(f.id, now);
     return { checked, settled };
   }
 

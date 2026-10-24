@@ -138,7 +138,11 @@ export interface AbroadQuoteView {
   converted: boolean;
   /** Units of `toCurrency` per unit of `fromCurrency`, as text; null when not converted. */
   rate: string | null;
-  /** Nuvion names its fee only when it takes the send (null here); the receipt carries it. */
+  /**
+   * The partner's fee, as configured for this corridor (R-10: the person pays it on top, so it is shown before the PIN): in
+   * `fromCurrency`'s smallest unit; null when none is configured, and then the receipt carries what was charged. The provider's
+   * quote has no fee of its own.
+   */
   providerFeeMinor: number | null;
   /** WAWU's fee in kobo, taken from the naira wallet. */
   wawuFeeKobo: number;
@@ -198,6 +202,12 @@ export interface AdminAbroadSendView {
   wawuFeeKobo: number;
   /** WAWU's fee could not be taken from the naira wallet yet; finance looks at these. */
   wawuFeeOwed: boolean;
+  /** The send did not stand and WAWU's fee has not gone back to the person yet (held for a person after a day); finance looks at these. */
+  wawuFeeBackOwed: boolean;
+  /** The partner's fee the review showed (from config), in the sending currency's smallest unit; null when none was configured. */
+  providerFeeEstimateMinor: number | null;
+  /** The partner's real fee was not the one shown: the configured figure needs a look. */
+  feeDiffers: boolean;
   /** Our reference at the provider. */
   reference: string;
   /** The provider's own word for its state, as last read; null before it answered. */

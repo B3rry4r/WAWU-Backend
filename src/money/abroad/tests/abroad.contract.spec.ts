@@ -43,6 +43,9 @@ class Settings {
   perSend: Record<string, number> = {};
   perDay: Record<string, number> = {};
   off = new Set<string>();
+  partnerFees: Record<string, number> = {};
+  providerFeeMinor = (src: string, dest: string, method: string) =>
+    this.partnerFees[`${src}|${dest}|${method}`] ?? null;
   maxPerSend = (c: string) => this.perSend[c] ?? null;
   maxPerDay = (c: string) => this.perDay[c] ?? null;
   countriesOff = () => this.off;
@@ -144,14 +147,46 @@ class FakeAbroad implements AbroadProvider {
 
 const settings = new Settings();
 const abroadSide = new FakeAbroad();
-const feeCalls: Array<{ amountKobo: bigint; reference: string }> = [];
+type LegInput = {
+  fromAccountNumber: string;
+  toAccountNumber: string;
+  amountKobo: bigint;
+  reference: string;
+  narration?: string;
+};
+/** Every leg the provider was asked to make, in order (a refused or lost ask is here too). */
+const feeCalls: LegInput[] = [];
+/** The provider's own record of each leg, found again by reference, as the book area's is. */
+const records = new Map<
+  string,
+  { outcome: 'completed' | 'failed' | 'pending'; input: LegInput }
+>();
+/** What the provider does with a reference the first time it is asked: complete (default), fail it, leave it pending, or refuse it. */
+const plan = new Map<string, 'fail' | 'pending' | 'refuse'>();
 let feeFails = false;
 const provider = {
   name: 'nuvion',
   label: 'Nuvion',
   abroad: abroadSide,
   getPlatformAccount: () => Promise.resolve({ accountNumber: 'PLATFORM' }),
-  walletToWallet: (i: { amountKobo: bigint; reference: string }) => {
+  findTransactionByReference: (reference: string) => {
+    const rec = records.get(reference);
+    return Promise.resolve(
+      rec
+        ? {
+            state: 'found' as const,
+            transaction: {
+              id: `T-${reference}`,
+              outcome: rec.outcome,
+              amountKobo: rec.input.amountKobo,
+              feeKobo: 0n,
+              createdAt: new Date().toISOString(),
+            },
+          }
+        : { state: 'absent' as const },
+    );
+  },
+  walletToWallet: (i: LegInput) => {
     if (feeFails) {
       return Promise.reject(
         new NuvionError({
@@ -162,7 +197,55 @@ const provider = {
       );
     }
     feeCalls.push(i);
-    return Promise.resolve({});
+    const earlier = records.get(i.reference);
+    if (earlier) {
+      // A repeat of a reference answers with the first record, whatever it was.
+      if (earlier.outcome === 'failed') {
+        return Promise.reject(
+          new NuvionError({
+            kind: 'refused',
+            operation: 'x',
+            providerFailed: true,
+            recordMayExist: true,
+          }),
+        );
+      }
+      return Promise.resolve({
+        amountKobo: i.amountKobo,
+        totalKobo: i.amountKobo,
+        feeKobo: 0n,
+        pending: earlier.outcome === 'pending',
+      });
+    }
+    const what = plan.get(i.reference);
+    if (what === 'refuse') {
+      return Promise.reject(
+        new NuvionError({
+          kind: 'refused',
+          operation: 'x',
+          recordMayExist: false,
+        }),
+      );
+    }
+    const outcome =
+      what === 'fail' ? 'failed' : what === 'pending' ? 'pending' : 'completed';
+    records.set(i.reference, { outcome, input: i });
+    if (outcome === 'failed') {
+      return Promise.reject(
+        new NuvionError({
+          kind: 'refused',
+          operation: 'x',
+          providerFailed: true,
+          recordMayExist: true,
+        }),
+      );
+    }
+    return Promise.resolve({
+      amountKobo: i.amountKobo,
+      totalKobo: i.amountKobo,
+      feeKobo: 0n,
+      pending: outcome === 'pending',
+    });
   },
 } as unknown as WalletProvider;
 
@@ -248,10 +331,13 @@ beforeEach(() => {
   settings.perSend = {};
   settings.perDay = {};
   settings.off = new Set();
+  settings.partnerFees = {};
   abroadSide.sendImpl = () => Promise.resolve(transfer());
   abroadSide.lookup = 'absent';
   feeCalls.length = 0;
   feeFails = false;
+  records.clear();
+  plan.clear();
   keyCalls.length = 0;
 });
 
@@ -279,6 +365,15 @@ async function quoteFor(
 const contains = (s: string): string => expect.stringContaining(s) as string;
 const containing = (a: string[]): string[] =>
   expect.arrayContaining(a) as string[];
+
+/** Lets the time a send needs to be looked for pass (the row says it was made ten minutes ago). */
+async function age(id: string) {
+  const before = new Date(Date.now() - 10 * 60_000);
+  await prisma.abroadSend.update({
+    where: { id },
+    data: { attemptedAt: before, createdAt: before },
+  });
+}
 
 const code = (e: unknown) => (e instanceof MoneyError ? e.code : String(e));
 const refused = async (p: Promise<unknown>) => p.then(() => 'no error', code);
@@ -659,6 +754,7 @@ describe('the send', () => {
         }),
       );
     const view = await sends.send(me, scope(), { quoteId: q.id });
+    await age(view.id);
     abroadSide.lookup = 'absent';
     await sends.sweep(new Date(Date.now() + 31 * 60_000));
     expect((await sends.read(U, view.id)).status).toBe('needs_review');
@@ -695,6 +791,14 @@ describe('the send', () => {
         }),
       );
     const view = await sends.send(me, scope(), { quoteId: q.id });
+    // Seconds old, the provider may still be taking it: not cancellable yet (F3).
+    expect(await refused(admin.cancel(actor, view.id, 'too soon'))).toBe(
+      'send_not_cancellable',
+    );
+    expect(
+      await prisma.abroadAdminAudit.count({ where: { sendId: view.id } }),
+    ).toBe(0);
+    await age(view.id);
     abroadSide.lookup = 'absent';
     expect(
       await admin.cancel(actor, view.id, 'confirmed with the partner'),
@@ -824,5 +928,302 @@ describe('the send', () => {
       all.items.every((s) => s.status === 'cancelled' && s.wawuUserId === U),
     ).toBe(true);
     expect(all.items.length).toBeGreaterThan(0);
+  });
+
+  describe("WAWU's fee after a send that did not stand (F1)", () => {
+    const back = (ref: string, attempt = 1) =>
+      `${ref}-fee-back${attempt === 1 ? '' : `-${attempt}`}`;
+    async function sendWithFee() {
+      settings.wawuFeeKobo = 2_500;
+      const r = await recipient();
+      const q = await quoteFor(r.id);
+      const view = await sends.send(me, scope(), { quoteId: q.id });
+      const row = await prisma.abroadSend.findUniqueOrThrow({
+        where: { id: view.id },
+      });
+      return { view, row, id: row.providerTransferId! };
+    }
+    const legs = (ref: string) =>
+      feeCalls.filter((c) => c.reference.startsWith(ref));
+
+    it('gives the fee back exactly once when the send fails, from WAWU to the person, and never says it did before it landed', async () => {
+      const { view, row, id } = await sendWithFee();
+      expect(records.get(`${row.reference}-fee`)?.outcome).toBe('completed');
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'failed', providerStatus: 'failed' }),
+      );
+      expect(legs(back(row.reference))).toEqual([
+        {
+          fromAccountNumber: 'PLATFORM',
+          toAccountNumber: me.accountNumber,
+          amountKobo: 2_500n,
+          reference: back(row.reference),
+          narration: 'WAWU fee given back',
+        },
+      ]);
+      const after = await prisma.abroadSend.findUniqueOrThrow({
+        where: { id: view.id },
+      });
+      expect(after.feeGivenBackAt).not.toBeNull();
+      // Applying the same word again, and a sweep, send nothing more.
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'failed', providerStatus: 'failed' }),
+      );
+      await sends.sweep(new Date(Date.now() + 10 * 60_000));
+      expect(
+        feeCalls.filter((c) => c.reference.includes('-fee-back')),
+      ).toHaveLength(1);
+    });
+
+    it('gives it back when a completed send is reversed afterwards, and not for a send that completed', async () => {
+      const { view, row, id } = await sendWithFee();
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'completed', providerStatus: 'successful' }),
+      );
+      expect(
+        feeCalls.filter((c) => c.reference.includes('-fee-back')),
+      ).toHaveLength(0);
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'reversed', providerStatus: 'reversed' }),
+      );
+      expect(legs(back(row.reference))).toHaveLength(1);
+      expect(
+        (await prisma.abroadSend.findUniqueOrThrow({ where: { id: view.id } }))
+          .feeGivenBackAt,
+      ).not.toBeNull();
+    });
+
+    it('is never marked given back unless the provider completed it: a failed give-back is tried again under a new reference in a later pass, and a pending one waits for its record', async () => {
+      const { view, row, id } = await sendWithFee();
+      plan.set(back(row.reference), 'fail');
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'failed', providerStatus: 'failed' }),
+      );
+      expect(
+        (await prisma.abroadSend.findUniqueOrThrow({ where: { id: view.id } }))
+          .feeGivenBackAt,
+      ).toBeNull();
+      expect(legs(back(row.reference))).toHaveLength(1);
+      // The next pass sees the first reference spent and uses the second.
+      plan.set(back(row.reference, 2), 'pending');
+      await sends.sweep(new Date(Date.now() + 5 * 60_000));
+      expect(legs(back(row.reference, 2))).toHaveLength(1);
+      expect(
+        (await prisma.abroadSend.findUniqueOrThrow({ where: { id: view.id } }))
+          .feeGivenBackAt,
+      ).toBeNull();
+      // The provider finishes it: the next pass reads that and marks it, sending nothing new.
+      records.set(back(row.reference, 2), {
+        outcome: 'completed',
+        input: feeCalls[feeCalls.length - 1],
+      });
+      await sends.sweep(new Date(Date.now() + 10 * 60_000));
+      expect(
+        (await prisma.abroadSend.findUniqueOrThrow({ where: { id: view.id } }))
+          .feeGivenBackAt,
+      ).not.toBeNull();
+      expect(
+        feeCalls.filter((c) => c.reference.includes('-fee-back')),
+      ).toHaveLength(2);
+      expect(legs(back(row.reference, 3))).toHaveLength(0);
+    });
+
+    it('owes nothing when no fee was taken: a fee of nothing, and a fee leg the provider failed', async () => {
+      const r = await recipient();
+      const q = await quoteFor(r.id);
+      const free = await sends.send(me, scope(), { quoteId: q.id });
+      const freeRow = await prisma.abroadSend.findUniqueOrThrow({
+        where: { id: free.id },
+      });
+      await sends.apply(
+        free.id,
+        transfer({
+          id: freeRow.providerTransferId!,
+          state: 'failed',
+          providerStatus: 'failed',
+        }),
+      );
+      expect(feeCalls).toHaveLength(0);
+
+      settings.wawuFeeKobo = 2_500;
+      const q2 = await quoteFor(r.id);
+      plan.set(`wawu-abroad-NONE`, 'fail');
+      feeFails = true;
+      const v2 = await sends.send(me, scope(), { quoteId: q2.id });
+      feeFails = false;
+      const row2 = await prisma.abroadSend.findUniqueOrThrow({
+        where: { id: v2.id },
+      });
+      expect(row2.wawuFeeTaken).toBe(false);
+      await sends.apply(
+        v2.id,
+        transfer({
+          id: row2.providerTransferId!,
+          state: 'failed',
+          providerStatus: 'failed',
+        }),
+      );
+      expect(
+        feeCalls.filter((c) => c.reference.includes('-fee-back')),
+      ).toHaveLength(0);
+      expect(
+        (await prisma.abroadSend.findUniqueOrThrow({ where: { id: v2.id } }))
+          .feeGivenBackAt,
+      ).toBeNull();
+    });
+
+    it('holds a give-back that cannot be made for a day for a person, still owed, and sends nothing more', async () => {
+      const { view, row, id } = await sendWithFee();
+      for (const n of [1, 2, 3]) plan.set(back(row.reference, n), 'fail');
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'failed', providerStatus: 'failed' }),
+      );
+      await sends.sweep(new Date(Date.now() + 5 * 60_000));
+      await sends.sweep(new Date(Date.now() + 10 * 60_000));
+      await sends.sweep(new Date(Date.now() + 25 * 3_600_000));
+      const held = await prisma.abroadSend.findUniqueOrThrow({
+        where: { id: view.id },
+      });
+      expect(held.feeGivenBackAt).toBeNull();
+      expect(held.feeBackHeldAt).not.toBeNull();
+      expect((await admin.get(view.id)).wawuFeeBackOwed).toBe(true);
+      const sent = feeCalls.filter((c) =>
+        c.reference.includes('-fee-back'),
+      ).length;
+      await sends.sweep(new Date(Date.now() + 26 * 3_600_000));
+      expect(
+        feeCalls.filter((c) => c.reference.includes('-fee-back')),
+      ).toHaveLength(sent);
+    });
+  });
+
+  describe('round 1 findings', () => {
+    it("F3: a cancelled send is never reopened by the provider's word, and the cancel leaves one audit row", async () => {
+      const r = await recipient();
+      const q = await quoteFor(r.id);
+      abroadSide.sendImpl = () =>
+        Promise.reject(
+          new NuvionError({
+            kind: 'outcome_unknown',
+            operation: 'abroad transfer',
+            recordMayExist: true,
+          }),
+        );
+      const view = await sends.send(me, scope(), { quoteId: q.id });
+      await age(view.id);
+      abroadSide.lookup = 'absent';
+      await admin.cancel(actor, view.id, 'confirmed with the partner');
+      // The provider takes it after all (a call that was in flight): the row stays cancelled, the provider's facts are kept beside it.
+      const held = transfer({ state: 'pending', providerStatus: 'pending' });
+      const after = await sends.apply(view.id, held);
+      expect(after.status).toBe('cancelled');
+      expect(after.providerTransferId).toBe(held.id);
+      expect(after.providerStatus).toBe('pending');
+      await sends.apply(
+        view.id,
+        transfer({
+          id: held.id,
+          state: 'completed',
+          providerStatus: 'successful',
+        }),
+      );
+      expect((await sends.read(U, view.id)).status).toBe('cancelled');
+      expect(
+        await prisma.abroadAdminAudit.count({ where: { sendId: view.id } }),
+      ).toBe(1);
+    });
+
+    it('F7: a country switched off after the quote was taken is not sent to, before the PIN and at the send', async () => {
+      const r = await recipient();
+      const q = await quoteFor(r.id);
+      settings.off = new Set(['GH']);
+      expect(await refused(sends.checkBeforePin(U, q.id))).toBe(
+        'corridor_not_supported',
+      );
+      expect(await refused(sends.send(me, scope(), { quoteId: q.id }))).toBe(
+        'corridor_not_supported',
+      );
+      expect(await prisma.abroadSend.count({ where: { quoteId: q.id } })).toBe(
+        0,
+      );
+      settings.off = new Set();
+      await expect(
+        sends.send(me, scope(), { quoteId: q.id }),
+      ).resolves.toMatchObject({ status: 'pending' });
+    });
+
+    it("F2: the partner's fee from config is shown on the quote, counted in the funds check, and kept on the send", async () => {
+      settings.partnerFees = { 'USD|GHS|bank': 150 };
+      const r = await recipient();
+      const q = await quoteFor(r.id);
+      expect(q).toMatchObject({
+        providerFeeMinor: 150,
+        amountFromMinor: 10_000,
+      });
+      // USD 1,000.00 is all the account holds (the fake's balance is 100,000 cents): the amount alone fits, with the fee it does not.
+      await expect(
+        quoteFor(r.id, { amountMinor: 99_900 }),
+      ).rejects.toMatchObject({
+        response: {
+          reason: {
+            code: 'insufficient_funds',
+            balanceMinor: 100_000,
+            totalMinor: 100_050,
+            shortfallMinor: 50,
+          },
+        },
+      });
+      await expect(
+        quoteFor(r.id, { amountMinor: 99_800 }),
+      ).resolves.toMatchObject({ providerFeeMinor: 150 });
+      // A corridor with no figure is not estimated.
+      expect(
+        (await quoteFor(r.id, { fromCurrency: 'NGN', amountMinor: 1_000_000 }))
+          .providerFeeMinor,
+      ).toBeNull();
+      const view = await sends.send(me, scope(), { quoteId: q.id });
+      const row = await prisma.abroadSend.findUniqueOrThrow({
+        where: { id: view.id },
+      });
+      expect(row.providerFeeEstimateMinor).toBe(150n);
+    });
+
+    it('F2: a real fee that is not the one shown flags the send for admin, and one that is does not', async () => {
+      settings.partnerFees = { 'USD|GHS|bank': 150 };
+      const r = await recipient();
+      const q = await quoteFor(r.id);
+      const view = await sends.send(me, scope(), { quoteId: q.id });
+      const id = (
+        await prisma.abroadSend.findUniqueOrThrow({ where: { id: view.id } })
+      ).providerTransferId!;
+      await sends.apply(view.id, transfer({ id, feeMinor: 150 }));
+      expect(await admin.get(view.id)).toMatchObject({
+        feeDiffers: false,
+        providerFeeEstimateMinor: 150,
+        providerFeeMinor: 150,
+      });
+      await sends.apply(view.id, transfer({ id, feeMinor: 200 }));
+      expect(await admin.get(view.id)).toMatchObject({
+        feeDiffers: true,
+        providerFeeMinor: 200,
+      });
+      // No figure configured: a charge above nothing is a difference; nothing charged is not.
+      settings.partnerFees = {};
+      const q2 = await quoteFor(r.id);
+      const v2 = await sends.send(me, scope(), { quoteId: q2.id });
+      const id2 = (
+        await prisma.abroadSend.findUniqueOrThrow({ where: { id: v2.id } })
+      ).providerTransferId!;
+      await sends.apply(v2.id, transfer({ id: id2, feeMinor: 0 }));
+      expect((await admin.get(v2.id)).feeDiffers).toBe(false);
+      await sends.apply(v2.id, transfer({ id: id2, feeMinor: 25 }));
+      expect((await admin.get(v2.id)).feeDiffers).toBe(true);
+    });
   });
 });
