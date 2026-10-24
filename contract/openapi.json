@@ -39126,7 +39126,7 @@
             }
           },
           "503": {
-            "description": "reason.code: provider_unreachable",
+            "description": "reason.code: fees_not_set, provider_unreachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -39141,7 +39141,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Reserves a product for the person for a few minutes at the provider's\nquote. NO money moves and no PIN is asked. The `Idempotency-Key` makes a\ndouble tap reserve once: the same key and body answer the same order;\nanother body is `409 idempotency_key_reused`. The body must say the\nperson opened and agreed to the product's documents. Answers 201.",
+        "summary": "Reserves a product for the person for a few minutes at the provider's\nquote. NO money moves and no PIN is asked. The `Idempotency-Key` makes a\ndouble tap reserve once: the same key and body answer the same order;\nanother body is `409 idempotency_key_reused`. The body must say the\nperson opened and agreed to the product's documents. Answers 201.\n`503 fees_not_set` comes first, before the wallet gate and the key, as on\nevery money route (NUV-07): the provider's fees are settings not filled in.",
         "tags": [
           "Capital"
         ],

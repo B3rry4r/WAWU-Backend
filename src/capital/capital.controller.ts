@@ -15,6 +15,7 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
+import { RequireFeesSet } from '../money/fees/fees-set.guard';
 import {
   CurrentWallet,
   type OpenWallet,
@@ -169,6 +170,8 @@ export class CapitalController {
    * double tap reserve once: the same key and body answer the same order;
    * another body is `409 idempotency_key_reused`. The body must say the
    * person opened and agreed to the product's documents. Answers 201.
+   * `503 fees_not_set` comes first, before the wallet gate and the key, as on
+   * every money route (NUV-07): the provider's fees are settings not filled in.
    */
   @Post('orders')
   @HttpCode(201)
@@ -185,9 +188,11 @@ export class CapitalController {
     'target_not_payable',
     'amount_out_of_range',
     'insufficient_funds',
+    'fees_not_set',
     'limit_reached',
     'provider_unreachable',
   )
+  @RequireFeesSet()
   reserve(
     @CurrentWallet() wallet: OpenWallet,
     @Headers('idempotency-key') key: string | undefined,
@@ -223,6 +228,7 @@ export class CapitalController {
     'reservation_expired',
     'not_found',
   )
+  @RequireFeesSet()
   confirm(
     @CurrentWallet() wallet: OpenWallet,
     @CurrentIdempotencyScope() scope: IdempotencyScope,
@@ -300,6 +306,7 @@ export class CapitalController {
     'withdrawal_not_available',
     'not_found',
   )
+  @RequireFeesSet()
   withdraw(
     @CurrentWallet() wallet: OpenWallet,
     @CurrentIdempotencyScope() scope: IdempotencyScope,
