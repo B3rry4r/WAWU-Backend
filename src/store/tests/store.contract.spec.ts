@@ -45,7 +45,7 @@ import {
   STAND_IN_CONFIG,
   healthy,
   HOST,
-  login,
+  mintToken,
   MOCK,
   OTHER,
   PEOPLE,
@@ -68,7 +68,7 @@ describe('IAP-01: nothing is asked of a store the Hub has no keys for', () => {
       if (!(await healthy(`${MOCK}/health`)))
         throw new Error('mock-wawu-id not healthy');
     }
-    token = await login('user@test.wawu.dev');
+    token = mintToken(BUYER);
     ({ app } = await build(loadStoreConfig({}), null, null));
   });
   afterAll(async () => {
@@ -362,9 +362,9 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
       if (!(await healthy(`${MOCK}/health`)))
         throw new Error('mock-wawu-id not healthy');
     }
-    buyer = await login('user@test.wawu.dev');
-    other = await login('creator-basic@test.wawu.dev');
-    host = await login('creator-pro@test.wawu.dev');
+    buyer = mintToken(BUYER);
+    other = mintToken(OTHER);
+    host = mintToken(HOST);
     google = new StandInGooglePlay();
     apple = new StandInAppStore();
     ({ app, moduleRef } = await build(STAND_IN_CONFIG, google, apple));
@@ -415,6 +415,9 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
   afterAll(async () => {
     if (prisma) {
       await wipe();
+      await prisma.storeAccountToken.deleteMany({
+        where: { wawuUserId: { in: PEOPLE } },
+      });
       await prisma.storeProduct.deleteMany({});
       await prisma.storePlatformSetting.deleteMany({});
       await prisma.communityPassPrice.deleteMany({

@@ -27,7 +27,7 @@ import {
   dataOf,
   ensureMockWawuId,
   STAND_IN_CONFIG,
-  login,
+  mintToken,
   OTHER,
   HOST,
   PEOPLE,
@@ -150,8 +150,8 @@ describe('IAP-01 round 1: another person cannot take a subscription, a renewal o
 
   beforeAll(async () => {
     mock = await ensureMockWawuId();
-    a = await login('user@test.wawu.dev');
-    b = await login('creator-basic@test.wawu.dev');
+    a = mintToken(BUYER);
+    b = mintToken(OTHER);
     google = new StandInGooglePlay();
     apple = new StandInAppStore();
     ({ app, moduleRef } = await build(STAND_IN_CONFIG, google, apple));
@@ -200,6 +200,9 @@ describe('IAP-01 round 1: another person cannot take a subscription, a renewal o
   afterAll(async () => {
     if (prisma) {
       await wipe();
+      await prisma.storeAccountToken.deleteMany({
+        where: { wawuUserId: { in: PEOPLE } },
+      });
       await prisma.storeProduct.deleteMany({});
       await prisma.communityPassPrice.deleteMany({
         where: { communityId: { in: communityIds } },

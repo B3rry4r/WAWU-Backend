@@ -2,6 +2,9 @@
 // store clients replaced by stand-ins, and the three people the specs use.
 
 import { spawn, type ChildProcess } from 'child_process';
+import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import * as jwt from 'jsonwebtoken';
 import * as path from 'path';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
@@ -23,9 +26,15 @@ export const dataOf = <T>(res: { body: unknown }): T =>
 export const codeOf = (res: { body: unknown }): string | undefined =>
   (res.body as Env<unknown>).reason?.code;
 
-export const BUYER = '00000000-0000-4000-8000-000000000001';
-export const OTHER = '00000000-0000-4000-8000-000000000002';
-export const HOST = '00000000-0000-4000-8000-000000000003';
+/**
+ * The people the store specs use are made up for each spec file: a random id each, with a
+ * token signed by mock-wawu-id's key. Never the seeded accounts: the specs delete the rows
+ * they make for these people, and a seeded account's rows (its memberships, tier, points)
+ * belong to every other spec that runs after.
+ */
+export const BUYER = randomUUID();
+export const OTHER = randomUUID();
+export const HOST = randomUUID();
 export const PEOPLE = [BUYER, OTHER, HOST];
 
 export const PORT = process.env.WAWU_ID_JWKS_URL
@@ -46,14 +55,27 @@ export async function healthy(url: string, ms = 15000): Promise<boolean> {
   }
   return false;
 }
-export async function login(identifier: string): Promise<string> {
-  const res = await fetch(`${MOCK}/auth/login`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identifier }),
-  });
-  if (!res.ok) throw new Error(`mock-wawu-id login failed for ${identifier}`);
-  return ((await res.json()) as { accessToken: string }).accessToken;
+/** A token for a person the spec made up, signed by mock-wawu-id's key (the Hub reads its public key). */
+export function mintToken(sub: string): string {
+  const privateKey = readFileSync(
+    path.join(__dirname, '../../mock-wawu-id/private.pem'),
+    'utf8',
+  );
+  return jwt.sign(
+    {
+      sub,
+      email: `store-${sub}@test.wawu.dev`,
+      phone: '+2348000009927',
+      firstName: 'Store',
+      lastName: 'Spec',
+      country: 'Nigeria',
+      verificationTier: 'basic',
+      trustScore: 0,
+      status: 'active',
+    },
+    privateKey,
+    { algorithm: 'RS256', keyid: 'mock-wawu-id-key-1', expiresIn: '30m' },
+  );
 }
 
 export const STAND_IN_CONFIG: StoreConfig = {
