@@ -36,7 +36,11 @@ export interface StandinHandle {
       kind: 'transcript' | 'isolation';
       id: string;
       status: number;
+      /** True when the provider answered 2xx and left the copy there (`[[ack-then-appear:MS]]`). */
+      kept?: boolean;
     }[];
+    /** Every read of a transcript copy by id and the status it got (round 3). */
+    reads: { kind: 'transcript'; id: string; status: number }[];
   };
   /** Transcripts and cleaned recordings the provider still holds. */
   openTranscripts: () => number;

@@ -8,6 +8,18 @@
 -- a person paid points for), an "outputs" value that is not a list at all, a
 -- provider's job id, or a person's uploaded input. Copy them out first only if
 -- you mean to lose them.
+-- If "providerRef" is the only thing that refuses: it is the note of a copy the
+-- AI provider may still hold of a person's words or recording (AITOOLS-04). The
+-- Hub clears it on its own as soon as a read of the copy says it is gone, in the
+-- minute after the job or at the next per-minute sweep (a cleaned recording's
+-- item: up to 11 minutes). So stop the Hub (or wait two minutes and look again),
+-- list what is left with
+--   SELECT "id", "providerRef", "finishedAt" FROM "AiToolJob" WHERE "providerRef" IS NOT NULL;
+-- and for each note either delete the copy at the provider by hand and then run
+--   UPDATE "AiToolJob" SET "providerRef" = NULL WHERE "id" = '<id>';
+-- or, if the copy is known to be gone, run that UPDATE straight away. Never clear
+-- a note for a copy that may still be there: it is the only record that the
+-- provider holds a person's words.
 DO $$
 BEGIN
   IF EXISTS (

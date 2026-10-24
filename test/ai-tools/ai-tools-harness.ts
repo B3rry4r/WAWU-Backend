@@ -173,11 +173,20 @@ export class MemoryInputFiles implements AiInputFiles {
       contentType: f.contentType,
     });
   }
+  /** Every read of a file's bytes, whole or its head, in order (the specs count them). */
+  readonly reads: { key: string; kind: 'head' | 'whole' }[] = [];
+  readHead(key: string, bytes: number): Promise<Buffer> {
+    const f = this.files.get(key);
+    this.reads.push({ key, kind: 'head' });
+    if (this.failRead || !f) return Promise.reject(new Error('file gone'));
+    return Promise.resolve(Buffer.from(f.data.subarray(0, bytes)));
+  }
   read(
     key: string,
     maxBytes: number,
   ): Promise<{ audio: Buffer; contentType: string }> {
     const f = this.files.get(key);
+    this.reads.push({ key, kind: 'whole' });
     if (this.failRead || !f || f.data.length > maxBytes)
       return Promise.reject(new Error('file gone'));
     // A fresh copy each time, as the storage read gives (the length reader

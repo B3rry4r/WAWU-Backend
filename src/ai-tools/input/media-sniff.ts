@@ -18,6 +18,12 @@ export const MIME_OF_CONTAINER: Record<MediaContainer, string> = {
   webm: 'video/webm',
 };
 
+/**
+ * How many of a file's first bytes the sniff needs: two ADTS frames in a row
+ * (the first at most 8191 bytes long, then the next header's 7 bytes).
+ */
+export const SNIFF_HEAD_BYTES = 16 * 1024;
+
 const ascii = (b: Uint8Array, from: number, to: number): string =>
   String.fromCharCode(...b.subarray(from, to));
 
@@ -56,10 +62,9 @@ export function sniffContainer(head: Uint8Array): MediaContainer | null {
     return 'webm';
   if (isId3v2(head)) return 'mp3';
   if (head[0] === 0xff && (head[1] & 0xe0) === 0xe0) {
-    // ADTS AAC: sync word, layer bits 00, a valid sampling-frequency index.
-    if ((head[1] & 0xf6) === 0xf0) {
-      return ((head[2] >> 2) & 0x0f) <= 12 ? 'aac' : null;
-    }
+    // ADTS AAC: sync word, layer bits 00, then the header's fields must hold
+    // for two frames in a row (round 3: any file opening FF F1 was taken).
+    if ((head[1] & 0xf6) === 0xf0) return twoAdtsFrames(head) ? 'aac' : null;
     // An MPEG audio frame: a real version, a real layer, a real bitrate and sample rate.
     const version = (head[1] >> 3) & 3;
     const layer = (head[1] >> 1) & 3;
@@ -69,4 +74,35 @@ export function sniffContainer(head: Uint8Array): MediaContainer | null {
       return 'mp3';
   }
   return null;
+}
+
+/**
+ * An ADTS header at `at`: sync word, layer 00, a real sampling-frequency
+ * index (0 to 12), a frame length that holds at least the header itself (7
+ * bytes, 9 with a CRC). Returns the fields the next frame must repeat and the
+ * frame's length, or null.
+ */
+function adtsHeader(
+  b: Uint8Array,
+  at: number,
+): { length: number; same: number } | null {
+  if (at + 7 > b.length) return null;
+  if (b[at] !== 0xff || (b[at + 1] & 0xf6) !== 0xf0) return null;
+  const rate = (b[at + 2] >> 2) & 0x0f;
+  if (rate > 12) return null;
+  const length =
+    ((b[at + 3] & 0x03) << 11) | (b[at + 4] << 3) | (b[at + 5] >> 5);
+  const header = (b[at + 1] & 0x01) === 0 ? 9 : 7; // protection_absent = 0 means a CRC follows
+  if (length < header) return null;
+  // The stream's version bit, profile and sampling rate do not change from frame to frame.
+  const same = ((b[at + 1] & 0x08) << 8) | (b[at + 2] & 0xfc);
+  return { length, same };
+}
+
+/** At least two ADTS frames in a row, the second where the first says it ends. */
+function twoAdtsFrames(head: Uint8Array): boolean {
+  const first = adtsHeader(head, 0);
+  if (first === null) return false;
+  const second = adtsHeader(head, first.length);
+  return second !== null && second.same === first.same;
 }

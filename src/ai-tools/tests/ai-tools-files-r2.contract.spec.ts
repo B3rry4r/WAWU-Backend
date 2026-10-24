@@ -266,10 +266,13 @@ describe('AITOOLS-04 r2: Captions and Clean audio (contract)', () => {
     expect(h.standin.openTranscripts()).toBe(0);
     expect((await jobRow(id)).providerRef).toBeNull();
 
-    // A copy the provider never had: 404 inside the window is kept, 404 after it is cleared.
+    // A cleaned item the provider never had (no read exists for it): 404 inside
+    // the window is kept, 404 after it is cleared. (Round 3 changed this line from
+    // a transcript to an isolation marker: a transcript is cleared by a read that
+    // says 404, with no window; see ai-tools-files-r3.contract.spec.ts.)
     await h.prisma.aiToolJob.update({
       where: { id },
-      data: { providerRef: 'transcript:tr-never-existed' },
+      data: { providerRef: 'isolation:iso-never-existed' },
     });
     expect(await copies.sweep(new Date(finishedAt.getTime() + 60_000))).toEqual(
       {

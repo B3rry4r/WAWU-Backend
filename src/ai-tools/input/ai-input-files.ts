@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import {
@@ -8,6 +8,8 @@ import {
 import { StorageService } from '../../storage/storage.service';
 import { AiToolError } from '../ai-tools-error';
 import { minutesOf, readSeconds } from './media-length';
+import { SNIFF_HEAD_BYTES, sniffContainer } from './media-sniff';
+import { type ReadGate, readGate } from './read-gate';
 
 /**
  * A person's own file for an AI tool (AITOOLS-04): the Hub's way to take a
@@ -29,7 +31,16 @@ export interface InputFileRow {
 export interface AiInputFiles {
   /** The caller's own landed file in an AI input folder, or null (another person's, not there, wrong folder, not landed). */
   find(wawuUserId: string, key: string): Promise<InputFileRow | null>;
-  /** The file's bytes; throws when it cannot be read or is over `maxBytes`. A network call. */
+  /**
+   * The file's first `bytes` bytes (fewer when the file is shorter), enough to
+   * tell what it is without reading the rest. Throws when it cannot be read.
+   * A network call.
+   */
+  readHead(key: string, bytes: number): Promise<Buffer>;
+  /**
+   * The file's bytes, read as a stream that is stopped at `maxBytes`; throws
+   * when it cannot be read, is empty or is over `maxBytes`. A network call.
+   */
   read(
     key: string,
     maxBytes: number,
@@ -71,6 +82,10 @@ export class StorageAiInputFiles implements AiInputFiles {
       bytes: Number(row.bytes),
       contentType: row.contentType,
     };
+  }
+
+  readHead(key: string, bytes: number): Promise<Buffer> {
+    return this.storage.readStoredHead(key, bytes);
   }
 
   read(
@@ -118,6 +133,8 @@ export class AiInputService {
   constructor(
     private readonly settings: PlanSettingsService,
     @Inject(AI_INPUT_FILES) private readonly files: AiInputFiles,
+    /** Only a spec passes its own gate; the Hub has one (`readGate`). */
+    @Optional() private readonly gate: ReadGate = readGate,
   ) {}
 
   /** The cap on a file's size, from the settings. */
@@ -135,15 +152,7 @@ export class AiInputService {
         `That file is too big. The most is ${sizeText(cap)}. No points were taken.`,
         { cap: 'file_bytes', capLimit: cap, capUnit: 'bytes' },
       );
-    let seconds: number | null = null;
-    try {
-      const { audio } = await this.files.read(row.key, cap);
-      // The bytes are handed to the reader's worker thread without a copy and
-      // are not used again here; the provider run reads the file afresh.
-      seconds = await readSeconds(audio, { transfer: true });
-    } catch {
-      seconds = null;
-    }
+    const seconds = await this.measure(wawuUserId, row);
     if (seconds === null)
       throw new AiToolError('ai_file_unreadable', FILE_UNREADABLE_MESSAGE);
     return {
@@ -153,6 +162,43 @@ export class AiInputService {
       seconds,
       minutes: minutesOf(seconds),
     };
+  }
+
+  /**
+   * The file's length in seconds, or null when it cannot be read. Round 3: the
+   * Hub reads one file per account at a time (a second read from the account
+   * waits for the first, a third is refused busy); a file that is not one of the
+   * containers the tools take is refused from its first 16 KB, without the
+   * rest; the rest is read only after the file has its parser turn (a file
+   * that waits is not in memory); too many waiting, or a wait too long, is the
+   * Hub's busy answer (a `ServiceUnavailableException`, nothing held).
+   */
+  private async measure(
+    wawuUserId: string,
+    row: InputFileRow,
+  ): Promise<number | null> {
+    const releaseAccount = await this.gate.claimAccount(wawuUserId);
+    try {
+      try {
+        const head = await this.files.readHead(row.key, SNIFF_HEAD_BYTES);
+        if (sniffContainer(head) === null) return null;
+      } catch {
+        return null;
+      }
+      const releaseTurn = await this.gate.takeTurn(row.bytes);
+      try {
+        const { audio } = await this.files.read(row.key, this.maxBytes());
+        // The bytes are handed to the reader's worker thread without a copy and
+        // are not used again here; the provider run reads the file afresh.
+        return await readSeconds(audio, { transfer: true });
+      } catch {
+        return null;
+      } finally {
+        releaseTurn();
+      }
+    } finally {
+      releaseAccount();
+    }
   }
 
   /** The bytes of an opened file, for the one provider run. */

@@ -11,6 +11,7 @@ import {
   AiVoiceProviderError,
   type AiVoice,
   type AiVoiceProvider,
+  type CopyPresence,
   type CopyRemoval,
   type MusicRequest,
   type IsolatedAudio,
@@ -730,6 +731,25 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     return this.removeItem(
       `/v1/speech-to-text/transcripts/${encodeURIComponent(id)}`,
     );
+  }
+
+  async transcriptPresence(id: string): Promise<CopyPresence> {
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/v1/speech-to-text/transcripts/${encodeURIComponent(id)}`,
+        {
+          method: 'GET',
+          headers: { 'xi-api-key': this.apiKey ?? '' },
+          signal: AbortSignal.timeout(this.timeoutMs),
+        },
+      );
+      // Only the status matters; the body (a person's words) is dropped unopened.
+      await res.body?.cancel().catch(() => undefined);
+      if (res.ok) return 'present';
+      return res.status === 404 ? 'absent' : 'unknown';
+    } catch {
+      return 'unknown';
+    }
   }
 
   async isolateVoice(

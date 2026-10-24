@@ -131,6 +131,23 @@ describe('AITOOLS-04: the AI provider seam, Captions and Clean audio', () => {
     ).resolves.toBe('failed');
   });
 
+  it('round 3: transcriptPresence reads the copy by id: present while it is held, absent after the delete or when it never existed, unknown when the key is refused; it never throws', async () => {
+    const p = provider();
+    const t = await p.transcribe({ file: file(2), languageCode: null });
+    await expect(p.transcriptPresence(t.id!)).resolves.toBe('present');
+    await p.deleteTranscript(t.id!);
+    await expect(p.transcriptPresence(t.id!)).resolves.toBe('absent');
+    await expect(p.transcriptPresence('tr-none')).resolves.toBe('absent');
+    await expect(
+      provider({ AI_VOICE_API_KEY: 'wrong' }).transcriptPresence(t.id!),
+    ).resolves.toBe('unknown');
+    await expect(
+      provider({ AI_VOICE_BASE_URL: 'http://127.0.0.1:1' }).transcriptPresence(
+        'x',
+      ),
+    ).resolves.toBe('unknown');
+  });
+
   it("HIGH 3 (round 2): the cleaned item's id is the audio-isolation-id header, as the real provider sends it; history-item-id is not read", async () => {
     const answer = (headers: Record<string, string>) =>
       new Promise<{ server: Server; port: number }>((resolve) => {

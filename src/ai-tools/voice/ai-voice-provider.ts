@@ -75,6 +75,12 @@ export interface Transcript {
  */
 export type CopyRemoval = 'deleted' | 'not_found' | 'failed';
 
+/**
+ * Whether the provider still holds a copy, from a read of it: `present` (a
+ * 2xx), `absent` (404) or `unknown` (any other answer, or none).
+ */
+export type CopyPresence = 'present' | 'absent' | 'unknown';
+
 /** A copy the provider keeps of what it made, to delete once the Hub has the result. */
 export interface ProviderCopy {
   kind: 'transcript' | 'isolation';
@@ -201,6 +207,15 @@ export interface AiVoiceProvider {
    * it has not stored yet, which is `not_found` here too.
    */
   deleteTranscript(id: string): Promise<CopyRemoval>;
+
+  /**
+   * Reads the provider's copy of a transcript by id, only to learn whether it
+   * is there (the body is dropped unopened). Round 3: the provider answers 200 (or
+   * 404) to a delete sent just after its answer and the transcript still
+   * appears afterwards, so a delete's answer is not proof; a read that says
+   * 404 after a delete is. Never throws.
+   */
+  transcriptPresence(id: string): Promise<CopyPresence>;
 
   /**
    * Takes the noise out of a recording or video (Clean audio, AITOOLS-04):

@@ -53,6 +53,14 @@
 //     89 ms after the transcript, and 200 about 40 s later). The file can ask
 //     for [[store-delay:MS]]: the copy is not deletable until MS after the
 //     answer (the transcript, and the cleaned recording's item, alike).
+//     [[ack-then-appear:MS]] (transcripts only): a DELETE sent before MS after
+//     the answer answers 200 and does nothing, and the copy is still there
+//     afterwards (what 4 of 6 real runs showed, 24 Oct 2026): only a DELETE
+//     after MS removes it.
+//   GET /v1/speech-to-text/transcripts/<id>         ->  200 { transcription_id,
+//     text } while the provider holds the copy (from the answer on, even while
+//     a DELETE still answers 404: the real provider returned 200 with the full
+//     text 89 ms after the answer), 404 once it is deleted or never existed.
 //   POST /v1/audio-isolation   (AITOOLS-04)
 //     header xi-api-key, multipart (audio)  ->  200 audio/mpeg (silent MP3
 //     frames of the file's length) with an `audio-isolation-id` header (the
@@ -110,8 +118,10 @@ function startVoiceStandin({
     deletedIsolations: [],
     /** Every delete try on a transcript or cleaned item, with the status it was answered. */
     deleteTries: [],
+    /** Every read of a transcript copy by id, with the status it was answered. */
+    reads: [],
   };
-  // id -> the time (ms) from which the provider has the copy stored and a delete finds it.
+  // id -> { storedAt: the time (ms) from which a delete finds the copy, ackUntil: before it a delete answers 200 and removes nothing }.
   const transcripts = new Map();
   const isolations = new Map();
   let transcriptSeq = 0;
@@ -367,7 +377,11 @@ function startVoiceStandin({
           const id = marks.includes('[[noid]]')
             ? undefined
             : `tr-${++transcriptSeq}`;
-          if (id) transcripts.set(id, Date.now() + storeDelayOf(marks));
+          if (id)
+            transcripts.set(id, {
+              storedAt: Date.now() + storeDelayOf(marks),
+              ackUntil: Date.now() + ackDelayOf(marks),
+            });
           return done(
             200,
             'application/json',
@@ -387,7 +401,10 @@ function startVoiceStandin({
         const id = `iso-${++isolationSeq}`;
         const headers = {};
         if (!marks.includes('[[iso-nohistory]]')) {
-          isolations.set(id, Date.now() + storeDelayOf(marks));
+          isolations.set(id, {
+            storedAt: Date.now() + storeDelayOf(marks),
+            ackUntil: 0,
+          });
           headers['audio-isolation-id'] = id;
         }
         return done(
@@ -408,6 +425,12 @@ function startVoiceStandin({
     return m ? Number(m[1]) : 0;
   }
 
+  /** How long after the answer a DELETE is only acknowledged ([[ack-then-appear:MS]]). */
+  function ackDelayOf(marks) {
+    const m = /\[\[ack-then-appear:(\d{1,7})\]\]/.exec(marks);
+    return m ? Number(m[1]) : 0;
+  }
+
   /**
    * DELETE of a transcript (200) or a cleaned item (204). A copy the provider
    * has not stored yet answers 404 like one that does not exist, and the try
@@ -418,10 +441,19 @@ function startVoiceStandin({
       if (req.headers['xi-api-key'] !== key)
         return json(res, 401, { detail: 'bad key' });
       const id = decodeURIComponent(m[1]);
-      const storedAt = items.get(id);
-      if (storedAt === undefined || Date.now() < storedAt) {
+      const item = items.get(id);
+      if (item === undefined || Date.now() < item.storedAt) {
         state.deleteTries.push({ kind, id, status: 404 });
         return json(res, 404, { detail: 'no such item' });
+      }
+      if (Date.now() < item.ackUntil) {
+        // Acknowledged, nothing removed: the copy is still there afterwards.
+        state.deleteTries.push({ kind, id, status: okStatus, kept: true });
+        if (okStatus === 204) {
+          res.statusCode = 204;
+          return res.end();
+        }
+        return json(res, okStatus, { status: 'ok' });
       }
       items.delete(id);
       list.push(id);
@@ -432,6 +464,17 @@ function startVoiceStandin({
       }
       return json(res, okStatus, { status: 'ok' });
     };
+  }
+
+  /** GET of a transcript by id: 200 while the provider holds the copy, else 404. */
+  function readTranscript(req, res, m) {
+    if (req.headers['xi-api-key'] !== key)
+      return json(res, 401, { detail: 'bad key' });
+    const id = decodeURIComponent(m[1]);
+    const status = transcripts.has(id) ? 200 : 404;
+    state.reads.push({ kind: 'transcript', id, status });
+    if (status === 404) return json(res, 404, { detail: 'no such item' });
+    return json(res, 200, { transcription_id: id, text: 'stand-in words' });
   }
 
   /** The own-voice routes (VOICE-01). */
@@ -495,6 +538,11 @@ function startVoiceStandin({
       ),
     },
     {
+      method: 'GET',
+      path: /^\/v1\/speech-to-text\/transcripts\/([^/]+)$/,
+      handle: readTranscript,
+    },
+    {
       method: 'POST',
       path: /^\/v1\/audio-isolation$/,
       handle: fileRoute('iso'),
@@ -502,12 +550,7 @@ function startVoiceStandin({
     {
       method: 'DELETE',
       path: /^\/v1\/audio-isolation\/history\/([^/]+)$/,
-      handle: removeFrom(
-        isolations,
-        state.deletedIsolations,
-        'isolation',
-        204,
-      ),
+      handle: removeFrom(isolations, state.deletedIsolations, 'isolation', 204),
     },
     { method: 'POST', path: /^\/v1\/voices\/add$/, handle: addVoice },
     { method: 'DELETE', path: /^\/v1\/voices\/([^/]+)$/, handle: removeVoice },

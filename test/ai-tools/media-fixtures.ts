@@ -235,3 +235,33 @@ export function withId3(rest: Buffer): Buffer {
   h[3] = 3;
   return Buffer.concat([h, rest]);
 }
+
+/**
+ * A hostile file that gets past the sniff (it opens as an MP4) and then costs
+ * the parser as much as it can: `bytes` long, an 'ftyp' box followed by
+ * nothing but 8-byte 'free' atoms. Built by repeating one pattern, so a
+ * 100 MB file takes a moment and no more memory than itself.
+ */
+export function atomFlood(bytes: number): Buffer {
+  const head = box('ftyp', Buffer.from('isom'), u32(0), Buffer.from('isom'));
+  const atom = Buffer.from([0, 0, 0, 8, 0x66, 0x72, 0x65, 0x65]);
+  const out = Buffer.alloc(
+    head.length + Math.floor((bytes - head.length) / 8) * 8,
+  );
+  head.copy(out, 0);
+  out.fill(atom, head.length);
+  return out;
+}
+
+/** A valid ADTS AAC frame header (LC, 44.1 kHz, stereo) for a frame of `length` bytes. */
+export function adtsHeader(length: number, rateIndex = 4): Buffer {
+  const h = Buffer.alloc(7);
+  h[0] = 0xff;
+  h[1] = 0xf1;
+  h[2] = 0x40 | (rateIndex << 2);
+  h[3] = 0x80 | ((length >> 11) & 3);
+  h[4] = (length >> 3) & 0xff;
+  h[5] = ((length & 7) << 5) | 0x1f;
+  h[6] = 0xfc;
+  return h;
+}

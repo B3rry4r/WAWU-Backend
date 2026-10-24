@@ -1,5 +1,9 @@
 import { Worker } from 'node:worker_threads';
-import { MIME_OF_CONTAINER, sniffContainer } from './media-sniff';
+import {
+  MIME_OF_CONTAINER,
+  SNIFF_HEAD_BYTES,
+  sniffContainer,
+} from './media-sniff';
 
 /**
  * How long a recording is, read from the file's own container (AITOOLS-04).
@@ -17,13 +21,14 @@ import { MIME_OF_CONTAINER, sniffContainer } from './media-sniff';
  *      memory limits and a hard time limit, terminated on overrun, so even a
  *      file that passes the sniff cannot block the event loop; an overrun, a
  *      crash or an out-of-memory is "unreadable";
- *   3. at most `MAX_PARALLEL_READS` workers run at once.
+ *   3. how many files are read and parsed at once, how many wait and for how
+ *      long, and one read per account, is `ReadGate`'s (`read-gate.ts`): a
+ *      read takes its turn BEFORE the file is read into memory, so a file that
+ *      waits holds nothing (round 3).
  */
 
 /** The hard time limit of one reading, in milliseconds; the worker is terminated at it. */
 export const MEDIA_READ_TIMEOUT_MS = 15_000;
-/** Workers reading at once; the rest wait their turn (each holds a copy of a parser's heap). */
-const MAX_PARALLEL_READS = 2;
 /**
  * How much memory a reading may use beyond the file's own bytes (heap plus
  * external allocations). `resourceLimits` below is also set, but on the Node
@@ -73,28 +78,12 @@ const { parentPort, workerData } = require('node:worker_threads');
 })();
 `;
 
-let running = 0;
-const waiting: (() => void)[] = [];
-
-async function takeTurn(): Promise<void> {
-  if (running < MAX_PARALLEL_READS) {
-    running += 1;
-    return;
-  }
-  await new Promise<void>((resolve) => waiting.push(resolve));
-}
-
-function giveTurn(): void {
-  const next = waiting.shift();
-  if (next) next();
-  else running -= 1;
-}
-
 /**
  * Runs `source` in a worker thread with `bytes` and answers the number of
  * seconds it posts, or null on any failure, crash, out-of-memory or when
  * `timeoutMs` passes (then the worker is terminated, loop or not). Never
- * throws and never blocks the calling thread. Exported for the specs, which
+ * throws and never blocks the calling thread. The caller holds a turn of the
+ * `ReadGate` (a spec that calls it directly needs none). Exported for the specs, which
  * run the real parser without the sniff to prove the limits hold.
  *
  * `transfer` hands the worker the caller's own memory (no copy): the caller's
@@ -111,65 +100,60 @@ export async function parseInWorker(
   } = {},
 ): Promise<number | null> {
   const timeoutMs = opts.timeoutMs ?? MEDIA_READ_TIMEOUT_MS;
-  await takeTurn();
-  try {
-    return await new Promise<number | null>((resolve) => {
-      let arrayBuffer: ArrayBuffer;
-      const whole =
-        bytes.buffer instanceof ArrayBuffer &&
-        bytes.byteOffset === 0 &&
-        bytes.byteLength === bytes.buffer.byteLength;
-      if (opts.transfer && whole) arrayBuffer = bytes.buffer;
-      else arrayBuffer = new Uint8Array(bytes).buffer;
-      let worker: Worker;
-      try {
-        worker = new Worker(opts.source ?? PARSE_WORKER_SOURCE, {
-          eval: true,
-          workerData: {
-            library: require.resolve('music-metadata'),
-            bytes: arrayBuffer,
-            mime,
-          },
-          transferList: [arrayBuffer],
-          resourceLimits: WORKER_LIMITS,
-          env: {},
-          stdout: true,
-          stderr: true,
-        });
-      } catch {
-        return resolve(null);
-      }
-      const fileBytes = arrayBuffer.byteLength;
-      let settled = false;
-      const end = (seconds: number | null) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        clearInterval(watchdog);
-        void worker.terminate().catch(() => undefined);
-        resolve(seconds);
-      };
-      const timer = setTimeout(() => end(null), timeoutMs);
-      const watchdog = setInterval(() => {
-        if (settled) return;
-        worker
-          .getHeapStatistics()
-          .then((st) => {
-            const used = st.used_heap_size + st.external_memory;
-            if (used - fileBytes > WORKER_EXTRA_MEMORY_BYTES) end(null);
-          })
-          .catch(() => undefined);
-      }, WATCH_EVERY_MS);
-      worker.once('message', (m: unknown) => {
-        const s = (m as { seconds?: unknown } | null)?.seconds;
-        end(typeof s === 'number' && Number.isFinite(s) && s > 0 ? s : null);
+  return await new Promise<number | null>((resolve) => {
+    let arrayBuffer: ArrayBuffer;
+    const whole =
+      bytes.buffer instanceof ArrayBuffer &&
+      bytes.byteOffset === 0 &&
+      bytes.byteLength === bytes.buffer.byteLength;
+    if (opts.transfer && whole) arrayBuffer = bytes.buffer;
+    else arrayBuffer = new Uint8Array(bytes).buffer;
+    let worker: Worker;
+    try {
+      worker = new Worker(opts.source ?? PARSE_WORKER_SOURCE, {
+        eval: true,
+        workerData: {
+          library: require.resolve('music-metadata'),
+          bytes: arrayBuffer,
+          mime,
+        },
+        transferList: [arrayBuffer],
+        resourceLimits: WORKER_LIMITS,
+        env: {},
+        stdout: true,
+        stderr: true,
       });
-      worker.once('error', () => end(null));
-      worker.once('exit', () => end(null));
+    } catch {
+      return resolve(null);
+    }
+    const fileBytes = arrayBuffer.byteLength;
+    let settled = false;
+    const end = (seconds: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearInterval(watchdog);
+      void worker.terminate().catch(() => undefined);
+      resolve(seconds);
+    };
+    const timer = setTimeout(() => end(null), timeoutMs);
+    const watchdog = setInterval(() => {
+      if (settled) return;
+      worker
+        .getHeapStatistics()
+        .then((st) => {
+          const used = st.used_heap_size + st.external_memory;
+          if (used - fileBytes > WORKER_EXTRA_MEMORY_BYTES) end(null);
+        })
+        .catch(() => undefined);
+    }, WATCH_EVERY_MS);
+    worker.once('message', (m: unknown) => {
+      const s = (m as { seconds?: unknown } | null)?.seconds;
+      end(typeof s === 'number' && Number.isFinite(s) && s > 0 ? s : null);
     });
-  } finally {
-    giveTurn();
-  }
+    worker.once('error', () => end(null));
+    worker.once('exit', () => end(null));
+  });
 }
 
 /**
@@ -182,7 +166,7 @@ export async function readSeconds(
   bytes: Uint8Array,
   opts: { timeoutMs?: number; transfer?: boolean } = {},
 ): Promise<number | null> {
-  const container = sniffContainer(bytes.subarray(0, 64));
+  const container = sniffContainer(bytes.subarray(0, SNIFF_HEAD_BYTES));
   if (container === null) return null;
   return parseInWorker(bytes, MIME_OF_CONTAINER[container], opts);
 }

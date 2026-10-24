@@ -27,6 +27,7 @@ import { LOCKED_TX, inPersonsTurn, lockStorageQuota } from './storage-lock';
 import { sweepLateFiles, type LateSweepResult } from './late-file-sweep';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
+import type { Readable } from 'node:stream';
 import {
   S3Client,
   PutObjectCommand,
@@ -743,6 +744,11 @@ export class StorageService {
    * issued for. A network call: the caller holds no transaction and no lock.
    * Throws when there is no bucket, no such object, or it is empty or over
    * `maxBytes`.
+   *
+   * The body is read as a stream into ONE buffer of the object's own length
+   * and stopped the moment it passes `maxBytes` (or the length it declared),
+   * so a file larger than the cap is never held, and the bytes are never held
+   * twice (AITOOLS-04 round 3; this used to read the whole body and copy it).
    */
   async readStored(
     key: string,
@@ -756,10 +762,61 @@ export class StorageService {
     const out = await this.client.send(
       new GetObjectCommand({ Bucket: this.bucket, Key: key }),
     );
-    const bytes = await out.Body?.transformToByteArray();
-    if (!bytes || bytes.length === 0 || bytes.length > maxBytes)
+    const body = out.Body as Readable | undefined;
+    const declared = out.ContentLength;
+    if (
+      !body ||
+      (declared !== undefined && (declared <= 0 || declared > maxBytes))
+    ) {
+      body?.destroy?.();
       throw new Error('readStored: the file is empty or too large');
-    return { audio: Buffer.from(bytes), contentType: serveAs(key).contentType };
+    }
+    // Stopped at the cap whatever the store says its length is; into one
+    // buffer of the declared length when it said one.
+    const limit = declared ?? maxBytes;
+    const whole = declared !== undefined ? Buffer.allocUnsafe(declared) : null;
+    const parts: Uint8Array[] = [];
+    let at = 0;
+    try {
+      for await (const chunk of body) {
+        const part = chunk as Uint8Array;
+        if (at + part.length > limit)
+          throw new Error('readStored: the file is longer than allowed');
+        if (whole) whole.set(part, at);
+        else parts.push(part);
+        at += part.length;
+      }
+    } catch (e) {
+      body.destroy?.();
+      throw e;
+    }
+    if (at === 0 || (whole && at !== declared))
+      throw new Error('readStored: the file is empty or ended early');
+    const audio = whole ?? Buffer.concat(parts, at);
+    return { audio, contentType: serveAs(key).contentType };
+  }
+
+  /**
+   * The first `bytes` bytes of a stored object (a ranged read), to tell what
+   * a file is without reading the rest of it. Fewer come back for a shorter
+   * file. Throws when there is no bucket, no such object or it is empty.
+   */
+  async readStoredHead(key: string, bytes: number): Promise<Buffer> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const out = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Range: `bytes=0-${Math.max(1, Math.floor(bytes)) - 1}`,
+      }),
+    );
+    const got = await out.Body?.transformToByteArray();
+    if (!got || got.length === 0) throw new Error('readStoredHead: empty');
+    return Buffer.from(got.subarray(0, bytes));
   }
 
   /**
