@@ -3,11 +3,12 @@ import { Prisma } from '../../generated/prisma/client';
 /**
  * The inbox's one ranking, as SQL (task INBOX-07).
  *
- * Four sources, one row each, with the same four columns:
+ * Four sources, one row each, with the same four columns (a fifth, the
+ * sends of FIX-114, joins them only when a call asks for it):
  *
- *   kind    'chat' | 'community' | 'paid_dm' | 'money_request'
+ *   kind    'chat' | 'community' | 'paid_dm' | 'money_request' | 'money_move'
  *   key     'chat:<id>' | 'community:<id>' | 'paid_dm:<side>:<wawuId>' |
- *           'money_request:<id>', unique
+ *           'money_request:<id>' | 'money_move:<id>', unique
  *   at      the time the row is ranked by
  *   unread  what that source calls unread
  *
@@ -41,6 +42,17 @@ import { Prisma } from '../../generated/prisma/client';
  *               the request is also a message in its chat, which counts it,
  *               so the badge counts a request once.
  *
+ *   sends       WalletTransfer (FIX-114, G-INBOX-15-1): one row per send of
+ *               kind `wawu_user` the caller made or received, joined to the
+ *               one chat of the two people (a send with no chat has nothing
+ *               to open and is not a row). A failed send is not a row. A send
+ *               still pending is its sender's only: the receiver has nothing
+ *               yet. A send that paid a money request is the request's row,
+ *               not a second one. Ranked by when the send was made. Unread is
+ *               always 0. These rows are in the feed only when `withMoves` is
+ *               set (`GET /inbox?kind=money`), so the unfiltered list, the
+ *               other filters and the badge read exactly as they did.
+ *
  * Every value reaches the SQL as a parameter. Raw SQL because one statement
  * has to rank three tables together.
  */
@@ -52,8 +64,11 @@ export function utc(at: Date): Prisma.Sql {
 
 const EPOCH = Prisma.sql`TIMESTAMP '1970-01-01 00:00:00'`;
 
-/** The three source CTEs plus `feed`, the union the list and the badge read. */
-export function feedCtes(me: string, now: Date): Prisma.Sql {
+/**
+ * The source CTEs plus `feed`, the union the list and the badge read.
+ * `withMoves` adds the sends (FIX-114) to `feed`; nothing else changes.
+ */
+export function feedCtes(me: string, now: Date, withMoves = false): Prisma.Sql {
   const nowTs = utc(now);
 
   const paidSide = (side: 'fan' | 'creator'): Prisma.Sql => {
@@ -154,10 +169,31 @@ export function feedCtes(me: string, now: Date): Prisma.Sql {
       FROM "MoneyRequest" r
       WHERE r."requesterWawuId" = ${me} OR r."payerWawuId" = ${me}
     ),
+    moves AS (
+      SELECT 'money_move'::text AS kind,
+             'money_move:' || t."id" AS key,
+             t."createdAt" AS at,
+             0::bigint AS unread
+      FROM "WalletTransfer" t
+      WHERE t."kind" = 'wawu_user'
+        AND t."status" IN ('pending', 'completed', 'reversed')
+        AND (t."payerWawuUserId" = ${me}
+             OR (t."recipientWawuUserId" = ${me} AND t."status" <> 'pending'))
+        AND EXISTS (
+          SELECT 1 FROM "ChatConversation" c
+          WHERE (c."userAWawuId" = t."payerWawuUserId" AND c."userBWawuId" = t."recipientWawuUserId")
+             OR (c."userAWawuId" = t."recipientWawuUserId" AND c."userBWawuId" = t."payerWawuUserId"))
+        AND NOT EXISTS (SELECT 1 FROM "MoneyRequest" q WHERE q."transferId" = t."id")
+    ),
     feed AS (
       SELECT kind, key, at, unread FROM chats
       UNION ALL SELECT kind, key, at, unread FROM communities
       UNION ALL SELECT kind, key, at, unread FROM paid
-      UNION ALL SELECT kind, key, at, unread FROM money
+      UNION ALL SELECT kind, key, at, unread FROM money${
+        withMoves
+          ? Prisma.sql`
+      UNION ALL SELECT kind, key, at, unread FROM moves`
+          : Prisma.empty
+      }
     )`;
 }
