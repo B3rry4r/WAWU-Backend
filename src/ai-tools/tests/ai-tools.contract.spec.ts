@@ -126,7 +126,8 @@ describe('AITOOLS-01: the AI tools catalogue and VoiceOver (contract)', () => {
     // Music track after it and AITOOLS-04 Captions and Clean audio (their own
     // specs check them): the one assertion each task's scope changes.
     // VoiceOver's entry below is as before.
-    expect(view.tools).toHaveLength(6);
+    // AITOOLS-05 lists Dubbing last: seven tools (this count pinned six).
+    expect(view.tools).toHaveLength(7);
     const tool = view.tools[0];
     expect(tool).toMatchObject({
       id: 'voiceover',

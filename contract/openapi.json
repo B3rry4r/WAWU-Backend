@@ -35736,6 +35736,92 @@
         "x-wawu-built-by": "AITOOLS-04"
       }
     },
+    "/api/hub/ai-tools/dubbing/quote": {
+      "post": {
+        "operationId": "AiToolsController_quoteDubbing",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteFileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFileQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The points quote for a Dubbing file (AITOOLS-05): exactly `POST\n/ai-tools/captions/quote`, for the action `dub_standard_per_min_lang`. The\nprice is the minutes of the file the Hub reads, for one language.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-05"
+      }
+    },
+    "/api/hub/ai-tools/dubbing/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createDubbing",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDubbingJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Dubbing job (PT1 \"Dubbing\", AITOOLS-05): the `fileKey` of a\nrecording or video the person uploaded, the `targetLanguage` to hear it in\n(a code from `GET /ai-tools`, `input.file.dubbing.languages`), an optional\n`sourceLanguage` and the `quoteToken` of the quote for the action\n`dub_standard_per_min_lang`. One language a job: a second language is a second\njob. The points are held and the job answers `working` at once; a dub takes\nminutes, so the person may leave and the app reads `GET /ai-tools/jobs/{id}`\nlater. Done, `outputs` hold the dubbed audio (`audio`, FLAC) and the subtitles\n(`subtitles`, WebVTT); there is no dubbed video, so a video comes back as\naudio. The points are kept only on success and given back when the provider\nfails the dub, it stays too long, or the result cannot be stored. The\nrequest, the answer and the `Idempotency-Key` rule are those of `POST\n/ai-tools/captions/jobs`, plus `422 ai_language_unsupported` (a language not\non the list, or the same language as the one spoken), with nothing held. The\nuploaded file and the provider's project are deleted when the job ends.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-05"
+      }
+    },
     "/api/hub/ai-tools/jobs": {
       "get": {
         "operationId": "AiToolsController_listJobs",
@@ -43582,6 +43668,38 @@
         },
         "required": [
           "fileKey",
+          "quoteToken"
+        ]
+      },
+      "CreateDubbingJobDto": {
+        "type": "object",
+        "properties": {
+          "fileKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "targetLanguage": {
+            "type": "string",
+            "description": "The language to hear the file in: a code from the list `GET /ai-tools` gives (`input.file.dubbing.languages`). Another is `422 ai_language_unsupported`.",
+            "pattern": "^[A-Za-z]{2,3}(-[A-Za-z]{2,4})?$"
+          },
+          "sourceLanguage": {
+            "type": "string",
+            "description": "The language spoken in the file, from the same list. Left out: the language is detected.",
+            "pattern": "^[A-Za-z]{2,3}(-[A-Za-z]{2,4})?$"
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (sent with the same `fileKey`). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "fileKey",
+          "targetLanguage",
           "quoteToken"
         ]
       },
@@ -64704,6 +64822,32 @@
           "useWallet"
         ]
       },
+      "AiToolDubbingView": {
+        "type": "object",
+        "properties": {
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "name"
+              ]
+            }
+          }
+        },
+        "required": [
+          "languages"
+        ]
+      },
       "AiToolFileView": {
         "type": "object",
         "properties": {
@@ -64751,6 +64895,10 @@
           },
           "languageCode": {
             "type": "boolean"
+          },
+          "dubbing": {
+            "$ref": "#/components/schemas/AiToolDubbingView",
+            "nullable": true
           }
         },
         "required": [
@@ -64791,7 +64939,8 @@
               "quick-voice",
               "sound-effect",
               "captions",
-              "clean-audio"
+              "clean-audio",
+              "dubbing"
             ]
           },
           "action": {
@@ -64943,7 +65092,8 @@
               "quick-voice",
               "sound-effect",
               "captions",
-              "clean-audio"
+              "clean-audio",
+              "dubbing"
             ]
           },
           "state": {
@@ -64956,6 +65106,10 @@
           },
           "voiceId": {
             "type": "string"
+          },
+          "targetLanguage": {
+            "type": "string",
+            "nullable": true
           },
           "characters": {
             "type": "number"
@@ -64993,6 +65147,7 @@
           "tool",
           "state",
           "voiceId",
+          "targetLanguage",
           "characters",
           "units",
           "costPoints",

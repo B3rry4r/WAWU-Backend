@@ -179,6 +179,43 @@ export class CreateCleanAudioJobDto {
   quoteToken!: string;
 }
 
+/**
+ * `POST /ai-tools/dubbing/jobs` (AITOOLS-05). The Idempotency-Key is a header.
+ * The file is one the person uploaded through `POST /uploads/presign` (folder
+ * `ai/input-audio` or `ai/input-video`) and confirmed; the Hub reads its length
+ * itself. One language a job.
+ */
+export class CreateDubbingJobDto {
+  /** The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`. */
+  @ApiProperty({ minLength: 1, maxLength: MOST_KEY_CHARACTERS })
+  @IsString({ message: 'fileKey must be text.' })
+  @Length(1, MOST_KEY_CHARACTERS, { message: 'Send the file you uploaded.' })
+  fileKey!: string;
+
+  /** The language to hear the file in: a code from the list `GET /ai-tools` gives (`input.file.dubbing.languages`). Another is `422 ai_language_unsupported`. */
+  @ApiProperty({ pattern: '^[A-Za-z]{2,3}(-[A-Za-z]{2,4})?$' })
+  @Matches(/^[A-Za-z]{2,3}(-[A-Za-z]{2,4})?$/, {
+    message: 'targetLanguage must be a language code from the list.',
+  })
+  @IsString({ message: 'targetLanguage must be text.' })
+  targetLanguage!: string;
+
+  /** The language spoken in the file, from the same list. Left out: the language is detected. */
+  @ApiPropertyOptional({ pattern: '^[A-Za-z]{2,3}(-[A-Za-z]{2,4})?$' })
+  @IsOptional()
+  @Matches(/^[A-Za-z]{2,3}(-[A-Za-z]{2,4})?$/, {
+    message: 'sourceLanguage must be a language code from the list.',
+  })
+  @IsString({ message: 'sourceLanguage must be text.' })
+  sourceLanguage?: string;
+
+  /** `quoteToken` from the `POST /points/quote` the person saw (sent with the same `fileKey`). A different cost now is `409 quote_changed`. */
+  @ApiProperty()
+  @IsString({ message: 'quoteToken must be text.' })
+  @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
+  quoteToken!: string;
+}
+
 /** `GET /ai-tools/jobs`: a cursor page (docs/contract/CONVENTIONS.md section 6). */
 export class AiJobListQueryDto {
   /** `nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page. */

@@ -13,6 +13,7 @@ import {
   StorageAiInputFiles,
 } from './input/ai-input-files';
 import { AiToolsService } from './ai-tools.service';
+import { AiDubService } from './dub/ai-dub.service';
 import { AI_VOICE_PROVIDER } from './voice/ai-voice-provider';
 import { HttpVoiceProvider } from './voice/http-voice-provider';
 import { ProviderCopyService } from './voice/provider-copy.service';
@@ -51,6 +52,8 @@ import { ProviderCopyService } from './voice/provider-copy.service';
     // AITOOLS-04 round 2: deletes the provider's copy of a transcript or a
     // cleaned recording, trying again until the provider has stored it.
     ProviderCopyService,
+    // AITOOLS-05: follows the dubs the provider is working on, until each is done or failed.
+    AiDubService,
   ],
   exports: [AiJobService, AiInputService, AI_VOICE_PROVIDER, AI_AUDIO_STORE],
 })

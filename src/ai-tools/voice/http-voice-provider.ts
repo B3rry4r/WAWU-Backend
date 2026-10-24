@@ -14,6 +14,9 @@ import {
   type AiVoiceProvider,
   type CopyPresence,
   type CopyRemoval,
+  type DubOutputs,
+  type DubProgress,
+  type DubStatus,
   type MusicRequest,
   type IsolatedAudio,
   type IsolateRequest,
@@ -21,6 +24,8 @@ import {
   type SoundEffectRequest,
   type SpeakRequest,
   type SpokenAudio,
+  type StartDubRequest,
+  type StartedDub,
   type StreamedFile,
   type Transcript,
   type TranscribeRequest,
@@ -79,6 +84,20 @@ const MAX_JSON_BYTES = 32 * 1024 * 1024;
 export const DEFAULT_QUICK_MODEL = 'eleven_flash_v2_5';
 /** The most audio one job may bring back: a request bound, not a product figure. */
 const MAX_AUDIO_BYTES = 64 * 1024 * 1024;
+
+/** A language tag as the dubbing route takes it: `yo`, `fil`, `pt-BR`. */
+const DUB_LANGUAGE_TAG = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/;
+/** The shape of an id the provider gives (a project, a language): kept to this before it is put in a path or a note. */
+const PROVIDER_ID = /^[A-Za-z0-9_-]{1,100}$/;
+/** The most a subtitle file may be: a request bound, not a product figure. */
+const MAX_SUBTITLE_BYTES = 2 * 1024 * 1024;
+const DUB_STATUSES: readonly DubStatus[] = [
+  'queued',
+  'processing',
+  'completed',
+  'stale',
+  'failed',
+];
 
 /** The redirects the Music call follows, like `fetch`: up to three. */
 const MAX_REDIRECTS = 3;
@@ -857,6 +876,226 @@ export class HttpVoiceProvider implements AiVoiceProvider {
   }
 
   /**
+   * Starts a dub (AITOOLS-05): `POST /v1/dubbing/project`, multipart: `file`
+   * (the person's, streamed behind the read gate like Captions' and Clean
+   * audio's), `target_language` (the shortcut that also queues the first
+   * language) and `source_language` when the person gave it. The answer (201) is
+   * small: `project_id` and `language_ids`. Only the standard dub is built, so no
+   * `model_id` is sent (the provider's default is `dubbing_v2`).
+   */
+  async startDub(
+    req: StartDubRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<StartedDub> {
+    if (!this.fileToolsConfigured || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'dubbing is not available');
+    // The language tags go into a multipart field by hand: only a tag is allowed.
+    if (
+      !DUB_LANGUAGE_TAG.test(req.targetLanguage) ||
+      (req.sourceLanguage !== null &&
+        !DUB_LANGUAGE_TAG.test(req.sourceLanguage))
+    )
+      throw new AiVoiceProviderError('rejected', 'language');
+    const form = this.multipart(
+      {
+        target_language: req.targetLanguage,
+        ...(req.sourceLanguage ? { source_language: req.sourceLanguage } : {}),
+      },
+      'file',
+      req.file,
+    );
+    const done = await this.longCall({
+      path: '/v1/dubbing/project',
+      query: '',
+      contentType: form.contentType,
+      payload: form.payload,
+      accept: 'application/json',
+      typeOk: (type) => type.startsWith('application/json'),
+      notOkMessage: 'not a project',
+      maxBytes: MAX_JSON_BYTES,
+      timeoutMs: this.fileTimeoutMs,
+      outer: opts.signal,
+    });
+    return parseStartedDub(done.body);
+  }
+
+  /** One read of a dub's language target: `GET /v1/dubbing/project/{id}/language/{id}`. */
+  async readDub(
+    projectId: string,
+    languageId: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<DubProgress> {
+    if (
+      !this.fileToolsConfigured ||
+      this.baseUrl === null ||
+      !PROVIDER_ID.test(projectId) ||
+      !PROVIDER_ID.test(languageId)
+    )
+      throw new AiVoiceProviderError('rejected', 'dubbing is not available');
+    let res: Response;
+    try {
+      res = await fetch(
+        `${this.baseUrl}/v1/dubbing/project/${encodeURIComponent(projectId)}/language/${encodeURIComponent(languageId)}`,
+        {
+          method: 'GET',
+          headers: {
+            'xi-api-key': this.apiKey ?? '',
+            accept: 'application/json',
+          },
+          signal: this.signalFor(opts.signal),
+        },
+      );
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'no answer');
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw failureForStatus(res.status);
+    }
+    let raw: Buffer;
+    try {
+      raw = Buffer.from(await res.arrayBuffer());
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'answer cut off');
+    }
+    return parseDubProgress(raw);
+  }
+
+  /**
+   * Fetches the signed links of a finished dub, once (AITOOLS-05). The links
+   * are the provider's to name, so each is checked before it is fetched: https
+   * (or http to the very host the Hub is configured with, the local stand-in), a
+   * name and not an address, no user name in it, no redirect followed. The
+   * provider's key is NOT sent (a signed link needs none and may be another
+   * host). The audio is read as a stream and stopped at `maxAudioBytes`, and
+   * must open with the FLAC marker; the subtitles stop at 2 MB and must open
+   * with WEBVTT, else they are dropped (the dub is the audio).
+   */
+  async fetchDubOutputs(
+    links: { audioUrl: string; subtitlesUrl: string | null },
+    opts: { maxAudioBytes: number; signal?: AbortSignal },
+  ): Promise<DubOutputs> {
+    const audio = await this.download(
+      links.audioUrl,
+      opts.maxAudioBytes,
+      opts.signal,
+    );
+    if (audio.length < 4 || audio.toString('latin1', 0, 4) !== 'fLaC')
+      throw new AiVoiceProviderError('unavailable', 'not flac');
+    let subtitles: string | null = null;
+    if (links.subtitlesUrl) {
+      try {
+        const text = (
+          await this.download(
+            links.subtitlesUrl,
+            MAX_SUBTITLE_BYTES,
+            opts.signal,
+          )
+        )
+          .toString('utf8')
+          .replace(/^\uFEFF/, '');
+        if (text.startsWith('WEBVTT')) subtitles = text;
+      } catch {
+        // The subtitles are a help, not the dub: the job goes on without them.
+        this.logger.warn('a dub finished without its subtitles');
+      }
+    }
+    return { audio, contentType: 'audio/flac', subtitles };
+  }
+
+  /** One signed link, fetched with no key, no redirect and a size stop. */
+  private async download(
+    link: string,
+    maxBytes: number,
+    outer?: AbortSignal,
+  ): Promise<Buffer> {
+    let url: URL;
+    try {
+      url = new URL(link);
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'bad link');
+    }
+    const base = this.baseUrl === null ? null : new URL(this.baseUrl);
+    const sameAsProvider =
+      base !== null && url.protocol === base.protocol && url.host === base.host;
+    const named =
+      url.protocol === 'https:' &&
+      url.username === '' &&
+      url.password === '' &&
+      !/^\[|^[0-9.]+$/.test(url.hostname) &&
+      url.hostname !== 'localhost';
+    if (!named && !(sameAsProvider && url.username === ''))
+      throw new AiVoiceProviderError('unavailable', 'bad link');
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: 'GET',
+        redirect: 'error',
+        signal: this.signalFor(outer, this.fileTimeoutMs),
+      });
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'no answer');
+    }
+    if (!res.ok || !res.body) {
+      await res.body?.cancel().catch(() => undefined);
+      throw failureForStatus(res.status || 502);
+    }
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      await res.body.cancel().catch(() => undefined);
+      throw new AiVoiceProviderError('unavailable', 'answer size');
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    try {
+      const reader = res.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          throw new AiVoiceProviderError('unavailable', 'answer size');
+        }
+        chunks.push(Buffer.from(value));
+      }
+    } catch (e) {
+      if (e instanceof AiVoiceProviderError) throw e;
+      throw new AiVoiceProviderError('unavailable', 'answer cut off');
+    }
+    if (size === 0)
+      throw new AiVoiceProviderError('unavailable', 'answer size');
+    return Buffer.concat(chunks, size);
+  }
+
+  removeDub(projectId: string): Promise<CopyRemoval> {
+    if (!PROVIDER_ID.test(projectId)) return Promise.resolve('failed');
+    return this.removeItem(
+      `/v1/dubbing/project/${encodeURIComponent(projectId)}`,
+    );
+  }
+
+  async dubPresence(projectId: string): Promise<CopyPresence> {
+    if (!PROVIDER_ID.test(projectId)) return 'unknown';
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/v1/dubbing/project/${encodeURIComponent(projectId)}`,
+        {
+          method: 'GET',
+          headers: { 'xi-api-key': this.apiKey ?? '' },
+          signal: AbortSignal.timeout(this.timeoutMs),
+        },
+      );
+      // Only the status matters; the body is dropped unopened.
+      await res.body?.cancel().catch(() => undefined);
+      if (res.ok) return 'present';
+      return res.status === 404 ? 'absent' : 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /**
    * One try at deleting one item the provider keeps. Never throws and never
    * logs (the caller decides what a failed try means: the provider answers
    * 404 for a copy it has not stored yet, so a 404 is not yet "gone").
@@ -920,5 +1159,64 @@ export function parseTranscript(raw: Buffer): Transcript {
     durationSeconds:
       typeof dur === 'number' && Number.isFinite(dur) && dur >= 0 ? dur : null,
     id: typeof id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(id) ? id : null,
+  };
+}
+
+/**
+ * Reads the answer that starts a dub (docs/elevenlabs/API-FACTS.md, "Dubbing"):
+ * `project_id` and `language_ids`. No project id is no project (`unavailable`:
+ * the call may be tried again); a project with no language id is returned with
+ * `languageId: null` so the Hub can delete it.
+ */
+export function parseStartedDub(raw: Buffer): StartedDub {
+  let o: Record<string, unknown>;
+  try {
+    o = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+  } catch {
+    throw new AiVoiceProviderError('unavailable', 'not a project');
+  }
+  const id = o?.project_id;
+  if (typeof id !== 'string' || !PROVIDER_ID.test(id))
+    throw new AiVoiceProviderError('unavailable', 'not a project');
+  const ids: unknown[] = Array.isArray(o.language_ids) ? o.language_ids : [];
+  const first = ids[0];
+  return {
+    projectId: id,
+    languageId:
+      typeof first === 'string' && PROVIDER_ID.test(first) ? first : null,
+  };
+}
+
+/**
+ * Reads a language target (docs/elevenlabs/API-FACTS.md, "Dubbing"): `status`
+ * and, once completed, `outputs.lossless_audio` and `outputs.subtitles`, each
+ * a signed link or null. A status the Hub does not know is `unavailable`
+ * (read again later), never guessed. The provider's error text, if any, is
+ * not read.
+ */
+export function parseDubProgress(raw: Buffer): DubProgress {
+  let o: Record<string, unknown>;
+  try {
+    o = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+  } catch {
+    throw new AiVoiceProviderError('unavailable', 'not a dub');
+  }
+  const status = o?.status;
+  if (typeof status !== 'string' || !DUB_STATUSES.includes(status as DubStatus))
+    throw new AiVoiceProviderError('unavailable', 'not a dub');
+  const outputs = (o.outputs ?? {}) as Record<string, unknown>;
+  const link = (v: unknown): string | null => {
+    const url =
+      typeof v === 'string'
+        ? v
+        : typeof (v as { url?: unknown } | null)?.url === 'string'
+          ? (v as { url: string }).url
+          : null;
+    return url !== null && url.length > 0 && url.length <= 4096 ? url : null;
+  };
+  return {
+    status: status as DubStatus,
+    audioUrl: link(outputs.lossless_audio),
+    subtitlesUrl: link(outputs.subtitles),
   };
 }

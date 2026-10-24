@@ -16,6 +16,8 @@ import {
   FOLDER_CONTENT_TYPES,
 } from '../storage/dto/presign-upload.dto';
 import { AI_TOOLS } from './tools';
+import { DUBBING_LANGUAGES_SETTING } from './tools/dubbing.tool';
+import { dubLanguagesOf } from './dub/dub-support';
 import {
   AI_VOICE_PROVIDER,
   type AiVoiceProvider,
@@ -105,6 +107,15 @@ export class AiToolsService {
               maxBytes: this.settings.number(AI_INPUT_MAX_BYTES_SETTING),
               maxMinutes: plan.caps.maxAudioMinPerJob,
               languageCode: spec.languageCode,
+              ...(spec.dubbing
+                ? {
+                    dubbing: {
+                      languages: dubLanguagesOf(
+                        this.settings.lines(DUBBING_LANGUAGES_SETTING),
+                      ),
+                    },
+                  }
+                : {}),
             },
           },
           voices: [],

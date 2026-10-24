@@ -10,6 +10,7 @@ import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import {
   AI_VOICE_PROVIDER,
   type AiVoiceProvider,
+  type CopyPresence,
   type ProviderCopy,
 } from './ai-voice-provider';
 
@@ -78,7 +79,11 @@ export function copyOfMarker(marker: string | null): NotedCopy | null {
     absentSince = Number(mark[1]);
     id = id.slice(0, mark.index);
   }
-  if ((kind !== 'transcript' && kind !== 'isolation') || id === '') return null;
+  if (
+    (kind !== 'transcript' && kind !== 'isolation' && kind !== 'dub') ||
+    id === ''
+  )
+    return null;
   return { copy: { kind, id }, absentSince };
 }
 
@@ -214,14 +219,24 @@ export class ProviderCopyService implements OnModuleDestroy {
           ? 'not_found'
           : 'keep';
     }
+    // A transcript (Captions) and a dub's project (AITOOLS-05) are read and
+    // deleted the same way, by their own routes: the same "two clean reads of
+    // 404" rule applies to both.
+    const present = (): Promise<CopyPresence> =>
+      copy.kind === 'dub'
+        ? this.voice.dubPresence(copy.id)
+        : this.voice.transcriptPresence(copy.id);
+    const remove = (): Promise<unknown> =>
+      copy.kind === 'dub'
+        ? this.voice.removeDub(copy.id)
+        : this.voice.deleteTranscript(copy.id);
     if (confirming) {
-      if ((await this.voice.transcriptPresence(copy.id)) === 'absent')
-        return 'absent';
-      await this.voice.deleteTranscript(copy.id);
+      if ((await present()) === 'absent') return 'absent';
+      await remove();
       return 'keep';
     }
-    await this.voice.deleteTranscript(copy.id);
-    await this.voice.transcriptPresence(copy.id);
+    await remove();
+    await present();
     return 'keep';
   }
 
@@ -343,6 +358,7 @@ export class ProviderCopyService implements OnModuleDestroy {
               OR: [
                 { providerRef: { startsWith: 'transcript:' } },
                 { providerRef: { startsWith: 'isolation:' } },
+                { providerRef: { startsWith: 'dub:' } },
               ],
             },
             {

@@ -64,6 +64,8 @@ describe('AITOOLS-03: where the AI tools keep their audio', () => {
       'ai/music',
       null,
       'ai/clean-audio',
+      // AITOOLS-05: Dubbing's lossless audio. This list pinned the registry's six tools; it names the seventh.
+      'ai/dubbing',
     ]);
   });
 });

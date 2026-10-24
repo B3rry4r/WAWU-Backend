@@ -226,6 +226,9 @@ export const EXTENSION_FOR_CONTENT_TYPE: Record<string, string> = {
   'audio/wav': 'wav',
   'audio/mp4': 'm4a',
   'audio/aac': 'aac',
+  // AITOOLS-05: the lossless audio Dubbing makes. Only the Hub writes it (putGenerated);
+  // no upload folder takes it.
+  'audio/flac': 'flac',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
     'docx',

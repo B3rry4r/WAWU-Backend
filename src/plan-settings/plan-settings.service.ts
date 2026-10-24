@@ -148,6 +148,15 @@ export class PlanSettingsService
     return v;
   }
 
+  /** The value of a setting that holds a list of lines of text (the languages Dubbing offers). */
+  lines(key: string): string[] {
+    const v = this.value(key);
+    if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) {
+      throw new Error(`The setting ${key} does not hold a list of lines.`);
+    }
+    return v as string[];
+  }
+
   private mustHave(key: string): SettingDef {
     const def = this.byKey.get(key);
     if (!def) throw new Error(`There is no setting ${key}.`);

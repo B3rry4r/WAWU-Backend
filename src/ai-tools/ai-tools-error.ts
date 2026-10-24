@@ -23,6 +23,8 @@ export type AiToolErrorCode =
   | 'ai_file_too_large'
   /** A file whose length the Hub cannot read (AITOOLS-04). Nothing is held. */
   | 'ai_file_unreadable'
+  /** A language Dubbing does not offer (AITOOLS-05), or the same language as the one spoken. Nothing is held. */
+  | 'ai_language_unsupported'
   | 'ai_tool_unavailable'
   | 'not_found';
 
@@ -37,6 +39,7 @@ export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
   ai_length_too_long: HttpStatus.UNPROCESSABLE_ENTITY,
   ai_file_too_large: HttpStatus.UNPROCESSABLE_ENTITY,
   ai_file_unreadable: HttpStatus.UNPROCESSABLE_ENTITY,
+  ai_language_unsupported: HttpStatus.UNPROCESSABLE_ENTITY,
   ai_tool_unavailable: HttpStatus.SERVICE_UNAVAILABLE,
   not_found: HttpStatus.NOT_FOUND,
 };

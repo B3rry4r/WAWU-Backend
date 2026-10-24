@@ -82,10 +82,52 @@ export type CopyRemoval = 'deleted' | 'not_found' | 'failed';
  */
 export type CopyPresence = 'present' | 'absent' | 'unknown';
 
-/** A copy the provider keeps of what it made, to delete once the Hub has the result. */
+/** A copy the provider keeps of what it made, to delete once the Hub has the result. `dub` is a Dubbing project (AITOOLS-05). */
 export interface ProviderCopy {
-  kind: 'transcript' | 'isolation';
+  kind: 'transcript' | 'isolation' | 'dub';
   id: string;
+}
+
+/**
+ * A recording or video to dub into one language (Dubbing, AITOOLS-05): the
+ * person's own file, streamed to the provider for this one run, the language
+ * to hear it in and, when the person said it, the language spoken in it.
+ */
+export interface StartDubRequest {
+  file: VoiceSample | StreamedFile;
+  /** BCP-47 tag from the list the Hub offers (`ai.dubbing_languages`). */
+  targetLanguage: string;
+  /** The language spoken in the file; null lets the provider detect it. */
+  sourceLanguage: string | null;
+}
+
+/** The provider's ids for a dub it has started. */
+export interface StartedDub {
+  projectId: string;
+  /** The language target the dub is followed on; null when the provider named none (the Hub then ends the job and deletes the project). */
+  languageId: string | null;
+}
+
+/** Where a dub's language target stands (the provider's own words). */
+export type DubStatus =
+  'queued' | 'processing' | 'completed' | 'stale' | 'failed';
+
+/**
+ * One read of a dub's language target. The links are signed, last about an
+ * hour and are for the Hub to fetch once (`fetchDubOutputs`); they never reach
+ * a person.
+ */
+export interface DubProgress {
+  status: DubStatus;
+  audioUrl: string | null;
+  subtitlesUrl: string | null;
+}
+
+/** What `fetchDubOutputs` brings back: the lossless audio (FLAC) and, when the provider made them, the WebVTT subtitles. */
+export interface DubOutputs {
+  audio: Buffer;
+  contentType: 'audio/flac';
+  subtitles: string | null;
 }
 
 /** A recording or video to take the noise out of (Clean audio, AITOOLS-04). */
@@ -249,6 +291,47 @@ export interface AiVoiceProvider {
 
   /** One try at deleting the provider's history item of a cleaned recording. Never throws; same answers as `deleteTranscript`. */
   deleteIsolation(id: string): Promise<CopyRemoval>;
+
+  /**
+   * Starts a dub (Dubbing, AITOOLS-05): `POST /v1/dubbing/project` with the
+   * person's file streamed as the body, the target language and the source
+   * language when given. Answers at once with the provider's project and
+   * language ids; the dub itself takes minutes and is followed with `readDub`.
+   * A network call: the caller holds no transaction, no connection and no
+   * lock. Throws `AiVoiceProviderError`.
+   */
+  startDub(
+    req: StartDubRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<StartedDub>;
+
+  /**
+   * One read of a dub's language target. Throws `AiVoiceProviderError` (the
+   * provider's HTTP status rides on it, for the log only). The caller holds
+   * no transaction, connection or lock.
+   */
+  readDub(
+    projectId: string,
+    languageId: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<DubProgress>;
+
+  /**
+   * Fetches a finished dub's signed links once: the audio (checked to be a
+   * FLAC file, at most `maxAudioBytes`) and the subtitles (checked to be
+   * WebVTT, dropped when they are not). The provider's key is never sent to a
+   * link. Throws `AiVoiceProviderError`.
+   */
+  fetchDubOutputs(
+    links: { audioUrl: string; subtitlesUrl: string | null },
+    opts: { maxAudioBytes: number; signal?: AbortSignal },
+  ): Promise<DubOutputs>;
+
+  /** One try at deleting the provider's project of a dub. Never throws; same answers as `deleteTranscript`. */
+  removeDub(projectId: string): Promise<CopyRemoval>;
+
+  /** Reads the provider's project of a dub by id, only to learn whether it is there (status only). Never throws; same answers as `transcriptPresence`. */
+  dubPresence(projectId: string): Promise<CopyPresence>;
 
   /**
    * Says a name in the studio voice (VF3, VOICE-01): the first voice the Hub

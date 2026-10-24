@@ -118,7 +118,9 @@ export class MemoryAudioStore implements AiAudioStore {
           ? 'm4a'
           : contentType === 'audio/aac'
             ? 'aac'
-            : 'mp3';
+            : contentType === 'audio/flac'
+              ? 'flac'
+              : 'mp3';
     const key = `${folder}/${wawuUserId}/${jobId}.${ext}`;
     this.files.set(key, audio);
     return Promise.resolve(key);
