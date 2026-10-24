@@ -21,7 +21,8 @@ import { PointsSpendService } from './points-spend.service';
  * `release`) the AI tools' server code calls, and the sweep that gives back
  * AI holds a dead job left behind. It sits beside PointsModule, as the
  * convert module does: points need no wallet provider to boot (POINTS-01).
- * Exported for the tool tasks: `PointsSpendService`.
+ * Exported for the tool tasks: `PointsSpendService`, `PointsJobQuoteToken` and
+ * (AITOOLS-04, the quote of a person's file) `PointsQuoteService`.
  *
  * Mounting it in AppModule is SHARED-CHANGES POINTS-03 #1 (one import and one
  * entry, after PointsConvertModule).
@@ -42,6 +43,6 @@ import { PointsSpendService } from './points-spend.service';
     PointsHoldSweepService,
     PointsJobQuoteToken,
   ],
-  exports: [PointsSpendService, PointsJobQuoteToken],
+  exports: [PointsSpendService, PointsJobQuoteToken, PointsQuoteService],
 })
 export class PointsSpendModule {}

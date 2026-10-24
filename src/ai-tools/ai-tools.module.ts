@@ -7,9 +7,15 @@ import { StorageModule } from '../storage/storage.module';
 import { AI_AUDIO_STORE, StorageAiAudioStore } from './audio/ai-audio-store';
 import { AiJobService } from './ai-job.service';
 import { AiToolsController } from './ai-tools.controller';
+import {
+  AI_INPUT_FILES,
+  AiInputService,
+  StorageAiInputFiles,
+} from './input/ai-input-files';
 import { AiToolsService } from './ai-tools.service';
 import { AI_VOICE_PROVIDER } from './voice/ai-voice-provider';
 import { HttpVoiceProvider } from './voice/http-voice-provider';
+import { ProviderCopyService } from './voice/provider-copy.service';
 
 /**
  * The AI tools catalogue and VoiceOver (AITOOLS-01): `GET /ai-tools`,
@@ -39,7 +45,13 @@ import { HttpVoiceProvider } from './voice/http-voice-provider';
       inject: [ConfigService],
     },
     { provide: AI_AUDIO_STORE, useClass: StorageAiAudioStore },
+    // AITOOLS-04: the person's own file for Captions and Clean audio.
+    { provide: AI_INPUT_FILES, useClass: StorageAiInputFiles },
+    AiInputService,
+    // AITOOLS-04 round 2: deletes the provider's copy of a transcript or a
+    // cleaned recording, trying again until the provider has stored it.
+    ProviderCopyService,
   ],
-  exports: [AiJobService, AI_VOICE_PROVIDER, AI_AUDIO_STORE],
+  exports: [AiJobService, AiInputService, AI_VOICE_PROVIDER, AI_AUDIO_STORE],
 })
 export class AiToolsModule {}

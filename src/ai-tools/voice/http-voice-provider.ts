@@ -1,16 +1,30 @@
-import { request as httpRequest, type ClientRequest } from 'node:http';
+import {
+  request as httpRequest,
+  type ClientRequest,
+  type IncomingHttpHeaders,
+} from 'node:http';
 import { request as httpsRequest } from 'node:https';
+import { randomBytes } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   AiVoiceProviderError,
   type AiVoice,
   type AiVoiceProvider,
+  type CopyPresence,
+  type CopyRemoval,
   type MusicRequest,
+  type IsolatedAudio,
+  type IsolateRequest,
   type OwnVoiceRequest,
   type SoundEffectRequest,
   type SpeakRequest,
   type SpokenAudio,
+  type StreamedFile,
+  type Transcript,
+  type TranscribeRequest,
+  type TranscriptWord,
 } from './ai-voice-provider';
 
 /** The settings of the adapter, all from the environment. */
@@ -22,6 +36,8 @@ export const AI_VOICE_ENV = {
   quickModel: 'AI_VOICE_QUICK_MODEL',
   timeoutMs: 'AI_VOICE_TIMEOUT_MS',
   musicTimeoutMs: 'AI_VOICE_MUSIC_TIMEOUT_MS',
+  fileTimeoutMs: 'AI_VOICE_FILE_TIMEOUT_MS',
+  transcribeModel: 'AI_VOICE_TRANSCRIBE_MODEL',
 } as const;
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -36,6 +52,25 @@ const DEFAULT_TIMEOUT_MS = 120_000;
  * no answer in 300 seconds whatever this says (undici's own header wait).
  */
 export const DEFAULT_MUSIC_TIMEOUT_MS = 600_000;
+/**
+ * How long a Captions or Clean audio call may run (AITOOLS-04). NO real run
+ * has happened, so this is set from the longest file the plan allows, not from
+ * a measured time: 10 minutes of audio (`points.max_audio_min_per_job`) in at
+ * most 10 minutes, inside the 30 minutes after which the sweep gives a job's
+ * points back. A real run sets it. Like the Music call, these calls are made
+ * with `node:http(s)` so Node's own 300 second wait for a first answer never
+ * cuts them short.
+ */
+export const DEFAULT_FILE_TIMEOUT_MS = 600_000;
+/**
+ * The provider's speech to text model, for Captions (AITOOLS-04):
+ * `scribe_v2` is the model the provider's documentation names for the route
+ * (docs/elevenlabs/API-FACTS.md, "Speech to text"). A builder's name only; no
+ * person sees it (R-68). `AI_VOICE_TRANSCRIBE_MODEL` changes it.
+ */
+export const DEFAULT_TRANSCRIBE_MODEL = 'scribe_v2';
+/** The most a transcript answer may be: a request bound, not a product figure. */
+const MAX_JSON_BYTES = 32 * 1024 * 1024;
 /**
  * The provider's faster text-to-speech model, for Quick voice (AITOOLS-02):
  * `eleven_flash_v2_5` in the account's model list (docs/elevenlabs/API-FACTS.md,
@@ -125,6 +160,20 @@ export function parseVoiceCatalogue(raw: string | undefined): {
 }
 
 /**
+ * A request body that is read from a stream as it is sent (a person's file on
+ * its way to the provider): it can be opened once. `sent` is called when the
+ * last byte is written or the call has an answer; `abort` when the call is
+ * given up. Both hand back the file's place at the read gate and destroy the
+ * stream; either may be called again.
+ */
+interface StreamedBody {
+  length: number;
+  open(): Readable | null;
+  sent(): void;
+  abort(): void;
+}
+
+/**
  * The adapter that speaks to the provider over HTTPS: one request per job,
  * `POST {base}/v1/text-to-speech/{voice}` with the key in `xi-api-key`, the
  * text in a JSON body and the audio (`audio/mpeg`) in the answer.
@@ -152,6 +201,8 @@ export class HttpVoiceProvider implements AiVoiceProvider {
   private readonly quickModel: string;
   private readonly timeoutMs: number;
   private readonly musicTimeoutMs: number;
+  private readonly fileTimeoutMs: number;
+  private readonly transcribeModel: string;
   private readonly catalogue: readonly CatalogueEntry[];
 
   constructor(config: ConfigService) {
@@ -170,6 +221,12 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     const mt = Number(config.get<string>(AI_VOICE_ENV.musicTimeoutMs));
     this.musicTimeoutMs =
       Number.isFinite(mt) && mt >= 1000 ? mt : DEFAULT_MUSIC_TIMEOUT_MS;
+    const ft = Number(config.get<string>(AI_VOICE_ENV.fileTimeoutMs));
+    this.fileTimeoutMs =
+      Number.isFinite(ft) && ft >= 1000 ? ft : DEFAULT_FILE_TIMEOUT_MS;
+    this.transcribeModel =
+      (config.get<string>(AI_VOICE_ENV.transcribeModel) ?? '').trim() ||
+      DEFAULT_TRANSCRIBE_MODEL;
     const { voices, problem } = parseVoiceCatalogue(
       config.get<string>(AI_VOICE_ENV.voices),
     );
@@ -197,6 +254,11 @@ export class HttpVoiceProvider implements AiVoiceProvider {
    * for them, even when `AI_VOICE_VOICES` is empty (AITOOLS-03 round 2).
    */
   get promptToolsConfigured(): boolean {
+    return this.baseUrl !== null && this.apiKey !== null;
+  }
+
+  /** Captions and Clean audio take a file and use no voice: a host and a key are enough (AITOOLS-04). */
+  get fileToolsConfigured(): boolean {
     return this.baseUrl !== null && this.apiKey !== null;
   }
 
@@ -457,23 +519,65 @@ export class HttpVoiceProvider implements AiVoiceProvider {
    * with no usable `location`, or one to a scheme other than http(s) is
    * answered like any other status (`failureForStatus`).
    */
-  private postForAudioLong(
+  private async postForAudioLong(
     path: string,
     body: Record<string, unknown>,
     timeoutMs: number,
     outer?: AbortSignal,
   ): Promise<SpokenAudio> {
-    const first = new URL(`${this.baseUrl}${path}?output_format=mp3_44100_128`);
-    const payload = Buffer.from(JSON.stringify(body));
-    return new Promise<SpokenAudio>((resolve, reject) => {
+    const done = await this.longCall({
+      path,
+      query: '?output_format=mp3_44100_128',
+      contentType: 'application/json',
+      payload: Buffer.from(JSON.stringify(body)),
+      accept: 'audio/mpeg',
+      typeOk: (type) => type.startsWith('audio/'),
+      notOkMessage: 'not audio',
+      maxBytes: MAX_AUDIO_BYTES,
+      timeoutMs,
+      outer,
+    });
+    return { audio: done.body, contentType: 'audio/mpeg' };
+  }
+
+  /**
+   * One request with a body that can run for a long time, over `node:http(s)`
+   * (see `postForAudioLong`): the one deadline `timeoutMs`, up to
+   * `MAX_REDIRECTS` redirects, a new connection per call. Used by the Music
+   * call (a JSON body, audio back) and by Captions and Clean audio (a
+   * multipart body with the person's file, JSON or audio back). The answer
+   * must be a 2xx whose content type `typeOk` accepts and whose size is
+   * between 1 byte and `maxBytes`. The provider's reply and the person's
+   * file or words never go into an error message.
+   */
+  private longCall(spec: {
+    path: string;
+    query: string;
+    contentType: string;
+    payload: Buffer | StreamedBody;
+    accept: string;
+    typeOk: (type: string) => boolean;
+    notOkMessage: string;
+    maxBytes: number;
+    timeoutMs: number;
+    outer?: AbortSignal;
+  }): Promise<{
+    body: Buffer;
+    type: string;
+    headers: IncomingHttpHeaders;
+  }> {
+    const { payload, timeoutMs, outer } = spec;
+    const first = new URL(`${this.baseUrl}${spec.path}${spec.query}`);
+    type Done = { body: Buffer; type: string; headers: IncomingHttpHeaders };
+    return new Promise<Done>((resolve, reject) => {
       let settled = false;
       /** The request of the hop now running; an earlier hop's events are ignored. */
       let req: ClientRequest | null = null;
       const onAbort = () =>
         end(new AiVoiceProviderError('unavailable', 'no answer'));
       const timer = setTimeout(onAbort, timeoutMs);
-      /** Ends the call once: the audio, or the error; either way nothing stays open. */
-      const end = (outcome: SpokenAudio | AiVoiceProviderError) => {
+      /** Ends the call once: the answer, or the error; either way nothing stays open. */
+      const end = (outcome: Done | AiVoiceProviderError) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -481,8 +585,10 @@ export class HttpVoiceProvider implements AiVoiceProvider {
         if (outcome instanceof AiVoiceProviderError) {
           reject(outcome);
           req?.destroy();
+          if (!Buffer.isBuffer(payload)) payload.abort();
         } else {
           resolve(outcome);
+          if (!Buffer.isBuffer(payload)) payload.sent();
         }
       };
       /** One hop: a POST with the body, or (after 301, 302, 303) a GET without. */
@@ -498,11 +604,11 @@ export class HttpVoiceProvider implements AiVoiceProvider {
               headers: {
                 ...(withBody
                   ? {
-                      'content-type': 'application/json',
+                      'content-type': spec.contentType,
                       'content-length': payload.length,
                     }
                   : {}),
-                accept: 'audio/mpeg',
+                accept: spec.accept,
                 'user-agent': FETCH_USER_AGENT,
                 'xi-api-key': this.apiKey ?? '',
               },
@@ -517,39 +623,41 @@ export class HttpVoiceProvider implements AiVoiceProvider {
                 const next = redirectTarget(url, res.headers.location);
                 if (next === null || redirects >= MAX_REDIRECTS)
                   return end(failureForStatus(status));
-                return attempt(
-                  next,
-                  withBody && (status === 307 || status === 308),
-                  redirects + 1,
-                );
+                const again = withBody && (status === 307 || status === 308);
+                // A streamed file has been read once and is gone: a redirect
+                // that asks for the body again cannot be followed.
+                if (again && !Buffer.isBuffer(payload))
+                  return end(failureForStatus(status));
+                return attempt(next, again, redirects + 1);
               }
               if (status < 200 || status > 299)
                 return end(failureForStatus(status));
               const type = String(
                 res.headers['content-type'] ?? '',
               ).toLowerCase();
-              if (!type.startsWith('audio/'))
+              if (!spec.typeOk(type))
                 return end(
-                  new AiVoiceProviderError('unavailable', 'not audio'),
+                  new AiVoiceProviderError('unavailable', spec.notOkMessage),
                 );
               const chunks: Buffer[] = [];
               let size = 0;
               res.on('data', (chunk: Buffer) => {
                 size += chunk.length;
-                if (size > MAX_AUDIO_BYTES)
+                if (size > spec.maxBytes)
                   return end(
-                    new AiVoiceProviderError('unavailable', 'audio size'),
+                    new AiVoiceProviderError('unavailable', 'answer size'),
                   );
                 chunks.push(chunk);
               });
               res.on('end', () => {
                 if (size === 0)
                   return end(
-                    new AiVoiceProviderError('unavailable', 'audio size'),
+                    new AiVoiceProviderError('unavailable', 'answer size'),
                   );
                 end({
-                  audio: Buffer.concat(chunks),
-                  contentType: 'audio/mpeg',
+                  body: Buffer.concat(chunks),
+                  type,
+                  headers: res.headers,
                 });
               });
               const cutOff = () =>
@@ -568,12 +676,249 @@ export class HttpVoiceProvider implements AiVoiceProvider {
           if (mine === req)
             end(new AiVoiceProviderError('unavailable', 'no answer'));
         });
-        if (withBody) mine.end(payload);
-        else mine.end();
+        if (!withBody) mine.end();
+        else if (Buffer.isBuffer(payload)) mine.end(payload);
+        else {
+          const body = payload.open();
+          if (body === null)
+            return end(new AiVoiceProviderError('unavailable', 'no answer'));
+          body.on('error', () => {
+            if (mine === req)
+              end(new AiVoiceProviderError('unavailable', 'no answer'));
+          });
+          // The last byte is written: the file no longer holds the Hub's place.
+          mine.on('finish', () => payload.sent());
+          body.pipe(mine);
+        }
       };
       if (outer?.aborted) return onAbort();
       outer?.addEventListener('abort', onAbort, { once: true });
       attempt(first, true, 0);
     });
   }
+
+  /**
+   * A multipart body with the person's file and plain fields, built by hand
+   * (the long call sends bytes). `fileField` is the field that holds the file.
+   * The file's name is a fixed word, never the person's own. A file in memory
+   * is joined into one buffer; a streamed file (AITOOLS-04 round 4) is sent on
+   * as it arrives, framed by a head and a tail of a few hundred bytes, so the
+   * Hub holds only the stream's own buffers (about 64 KB) however big it is.
+   */
+  private multipart(
+    fields: Record<string, string>,
+    fileField: string,
+    file: { audio: Buffer; contentType: string } | StreamedFile,
+  ): { contentType: string; payload: Buffer | StreamedBody } {
+    const boundary = `----wawu${randomBytes(16).toString('hex')}`;
+    const parts: Buffer[] = [];
+    for (const [name, value] of Object.entries(fields))
+      parts.push(
+        Buffer.from(
+          `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`,
+        ),
+      );
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${fileField}"; filename="recording"\r\nContent-Type: ${file.contentType}\r\n\r\n`,
+      ),
+    );
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const contentType = `multipart/form-data; boundary=${boundary}`;
+    if (!('stream' in file))
+      return {
+        contentType,
+        payload: Buffer.concat([...parts, file.audio, tail]),
+      };
+    const head = Buffer.concat(parts);
+    const streamed = file;
+    let opened = false;
+    return {
+      contentType,
+      payload: {
+        length: head.length + streamed.bytes + tail.length,
+        open: () => {
+          if (opened) return null;
+          opened = true;
+          return Readable.from(
+            (async function* () {
+              yield head;
+              let n = 0;
+              for await (const chunk of streamed.stream as AsyncIterable<Buffer>) {
+                n += chunk.length;
+                if (n > streamed.bytes)
+                  throw new Error('the file is longer than it said');
+                yield chunk;
+              }
+              if (n !== streamed.bytes) throw new Error('the file ended early');
+              yield tail;
+            })(),
+            { objectMode: false },
+          );
+        },
+        sent: () => streamed.sent(),
+        abort: () => streamed.sent(),
+      },
+    };
+  }
+
+  async transcribe(
+    req: TranscribeRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<Transcript> {
+    if (!this.fileToolsConfigured || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'captions are not available');
+    const form = this.multipart(
+      {
+        model_id: this.transcribeModel,
+        timestamps_granularity: 'word',
+        ...(req.languageCode ? { language_code: req.languageCode } : {}),
+      },
+      'file',
+      req.file,
+    );
+    const done = await this.longCall({
+      path: '/v1/speech-to-text',
+      query: '',
+      contentType: form.contentType,
+      payload: form.payload,
+      accept: 'application/json',
+      typeOk: (type) => type.startsWith('application/json'),
+      notOkMessage: 'not a transcript',
+      maxBytes: MAX_JSON_BYTES,
+      timeoutMs: this.fileTimeoutMs,
+      outer: opts.signal,
+    });
+    return parseTranscript(done.body);
+  }
+
+  deleteTranscript(id: string): Promise<CopyRemoval> {
+    return this.removeItem(
+      `/v1/speech-to-text/transcripts/${encodeURIComponent(id)}`,
+    );
+  }
+
+  async transcriptPresence(id: string): Promise<CopyPresence> {
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/v1/speech-to-text/transcripts/${encodeURIComponent(id)}`,
+        {
+          method: 'GET',
+          headers: { 'xi-api-key': this.apiKey ?? '' },
+          signal: AbortSignal.timeout(this.timeoutMs),
+        },
+      );
+      // Only the status matters; the body (a person's words) is dropped unopened.
+      await res.body?.cancel().catch(() => undefined);
+      if (res.ok) return 'present';
+      return res.status === 404 ? 'absent' : 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  async isolateVoice(
+    req: IsolateRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<IsolatedAudio> {
+    if (!this.fileToolsConfigured || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'cleaning is not available');
+    const form = this.multipart({}, 'audio', req.file);
+    const done = await this.longCall({
+      path: '/v1/audio-isolation',
+      query: '',
+      contentType: form.contentType,
+      payload: form.payload,
+      accept: 'audio/*',
+      typeOk: (type) => type.startsWith('audio/'),
+      notOkMessage: 'not audio',
+      maxBytes: MAX_AUDIO_BYTES,
+      timeoutMs: this.fileTimeoutMs,
+      outer: opts.signal,
+    });
+    // The id of the item the provider keeps comes in the `audio-isolation-id`
+    // header (seen on the real provider, 24 Oct 2026; it sends no `history-item-id`).
+    const historyId = done.headers['audio-isolation-id'];
+    return {
+      audio: done.body,
+      contentType: done.type.split(';')[0].trim(),
+      historyId:
+        typeof historyId === 'string' &&
+        /^[A-Za-z0-9_-]{1,100}$/.test(historyId)
+          ? historyId
+          : null,
+    };
+  }
+
+  deleteIsolation(id: string): Promise<CopyRemoval> {
+    return this.removeItem(
+      `/v1/audio-isolation/history/${encodeURIComponent(id)}`,
+    );
+  }
+
+  /**
+   * One try at deleting one item the provider keeps. Never throws and never
+   * logs (the caller decides what a failed try means: the provider answers
+   * 404 for a copy it has not stored yet, so a 404 is not yet "gone").
+   */
+  private async removeItem(path: string): Promise<CopyRemoval> {
+    try {
+      const res = await fetch(`${this.baseUrl}${path}`, {
+        method: 'DELETE',
+        headers: { 'xi-api-key': this.apiKey ?? '' },
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      await res.arrayBuffer().catch(() => undefined);
+      if (res.ok) return 'deleted';
+      return res.status === 404 ? 'not_found' : 'failed';
+    } catch {
+      return 'failed';
+    }
+  }
+}
+
+/**
+ * Reads a speech to text answer (docs/elevenlabs/API-FACTS.md): `text`,
+ * `words[{text,type,start,end}]`, `audio_duration_secs`, `transcription_id`.
+ * An answer with no text field is not a transcript (`unavailable`: the call
+ * may be tried again). An empty `text` is a recording with no speech and is
+ * a valid transcript.
+ */
+export function parseTranscript(raw: Buffer): Transcript {
+  let o: Record<string, unknown>;
+  try {
+    o = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+  } catch {
+    throw new AiVoiceProviderError('unavailable', 'not a transcript');
+  }
+  if (typeof o?.text !== 'string')
+    throw new AiVoiceProviderError('unavailable', 'not a transcript');
+  const words: TranscriptWord[] = [];
+  if (Array.isArray(o.words)) {
+    for (const item of o.words as unknown[]) {
+      const w = (item ?? {}) as Record<string, unknown>;
+      if (
+        typeof w.text === 'string' &&
+        typeof w.start === 'number' &&
+        typeof w.end === 'number' &&
+        Number.isFinite(w.start) &&
+        Number.isFinite(w.end)
+      )
+        words.push({
+          text: w.text,
+          type: typeof w.type === 'string' ? w.type : 'word',
+          start: w.start,
+          end: w.end,
+        });
+    }
+  }
+  const dur = o.audio_duration_secs;
+  const id = o.transcription_id;
+  return {
+    text: o.text,
+    words,
+    durationSeconds:
+      typeof dur === 'number' && Number.isFinite(dur) && dur >= 0 ? dur : null,
+    id: typeof id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(id) ? id : null,
+  };
 }

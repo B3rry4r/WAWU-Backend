@@ -66,6 +66,14 @@ export const UPLOAD_FOLDERS = [
   // voice, read only by the Hub for that person's own runs (never served to
   // anyone), and is removed when they replace it or delete the account.
   'voice/sample',
+  // AITOOLS-04 (R-78). A recording or a video a person sends to an AI tool
+  // (Captions, Clean audio, later Dubbing). Their own prefixes: the file is a
+  // person's own words or voice, read only by the Hub for that person's own
+  // run (never served to anyone else), counted in no allowance, and removed
+  // when the job ends and when the account is deleted. Audio and video are
+  // two folders so the Hub knows what it was given before it opens the file.
+  'ai/input-audio',
+  'ai/input-video',
 ] as const;
 
 /**
@@ -97,6 +105,13 @@ export type UploadFolder = PublicUploadFolder | ChatUploadFolder;
 
 /** 512MB — the largest asset the product allows (video). */
 export const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
+
+/** 500 MB: the most a file for an AI tool may be (AITOOLS-04), the provider's smallest documented limit. The setting `ai.input_max_bytes` starts here. */
+export const AI_INPUT_MAX_BYTES = 500 * 1024 * 1024;
+/** The admin setting (R-65) that caps a file for an AI tool, in bytes; it starts at `AI_INPUT_MAX_BYTES` and may only go lower. */
+export const AI_INPUT_MAX_BYTES_SETTING = 'ai.input_max_bytes';
+/** The two folders a person's file for an AI tool goes in. */
+export const AI_INPUT_FOLDERS = ['ai/input-audio', 'ai/input-video'] as const;
 
 /**
  * What each destination may actually hold.
@@ -157,6 +172,11 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   'profile/work': [...IMAGE, 'video/mp4'],
   // VOICE-01. What a phone records, or the usual audio files.
   'voice/sample': ['audio/mp4', 'audio/aac', 'audio/mpeg', 'audio/wav'],
+  // AITOOLS-04. The audio and video types the Hub already serves (AV above,
+  // split by kind). Other types the provider accepts (FLAC, OGG, OPUS) are not
+  // offered until the Hub serves them.
+  'ai/input-audio': ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/aac'],
+  'ai/input-video': ['video/mp4', 'video/quicktime', 'video/webm'],
   ...CHAT_FOLDER_CONTENT_TYPES,
 };
 
@@ -174,6 +194,9 @@ export const FOLDER_MAX_BYTES: Partial<Record<UploadFolder, number>> = {
   'community/message-voice': 25 * 1024 * 1024,
   // PROVISIONAL(VOICE-SAMPLE-MAX-BYTES, owner=YOU, why=no ruling sizes the 30 second Voice Intro sample; the allowance does not count this folder): 10MB, more than 30 seconds of uncompressed phone audio.
   'voice/sample': 10 * 1024 * 1024,
+  // 500MB: the provider's smallest documented limit for a file (docs/elevenlabs/API-FACTS.md). The live cap is the setting `ai.input_max_bytes` (provisional AITOOLS-LIMITS in plan-settings.defaults.json), which an admin may only lower; this is its ceiling.
+  'ai/input-audio': AI_INPUT_MAX_BYTES,
+  'ai/input-video': AI_INPUT_MAX_BYTES,
 };
 
 /**

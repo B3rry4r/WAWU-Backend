@@ -1,5 +1,6 @@
 /** What the AI tools routes answer (AITOOLS-01, AITOOLS-02, PT1 and PT2). Points are a count, never naira. */
 
+import type { PointsQuoteView } from '../points/spend/points-spend-view.type';
 import type { AiToolId, AiToolInputKind, AiToolUnit } from './tools/ai-tool';
 
 export interface AiVoiceView {
@@ -25,23 +26,44 @@ export interface AiToolView {
   enabled: boolean;
   /** What a job takes in: the app builds the tool's screen from this. */
   input: {
-    /** The kind of input the job route takes: `text` (the words to speak, and a `voiceId`) or `prompt` (a description in words). */
+    /** The kind of input the job route takes: `text` (the words to speak, and a `voiceId`), `prompt` (a description in words) or `file` (a recording or video the person uploads first, AITOOLS-04). */
     kind: AiToolInputKind;
-    /** The longest text or description one job takes (a setting). */
+    /** `text` and `prompt` tools: the longest text or description one job takes (a setting). 0 for a `file` tool, which takes no text. */
     maxCharacters: number;
     /**
      * Characters that make one unit (a setting): `units` of a job is its
      * characters over this, rounded up, at least 1. For a `prompt` tool, one
      * use or track covers a description of any allowed length, so this equals
-     * `maxCharacters`.
+     * `maxCharacters`. 0 for a `file` tool, which is priced by the minute of
+     * the file the Hub measures.
      */
     charactersPerUnit: number;
     /** `prompt` tools: the optional length a person may ask for, in seconds. The price is the same whatever the length. */
     length?: AiToolLengthView;
     /** `prompt` tools: true when the job takes an `instrumental` switch (a track without singing). */
     instrumental?: boolean;
+    /** `file` tools: what the person may send, and the limits that stop a job. */
+    file?: AiToolFileView;
   };
   voices: AiVoiceView[];
+}
+
+/**
+ * What a `file` tool takes (AITOOLS-04). The person uploads the file first
+ * (`POST /uploads/presign` with the folder for its kind, a PUT to the link,
+ * then `POST /uploads/confirm`) and names it by its `key`.
+ */
+export interface AiToolFileView {
+  /** The folder for a recording and the folder for a video. */
+  folders: { audio: string; video: string };
+  /** The content types each folder takes. */
+  accepts: { audio: string[]; video: string[] };
+  /** The largest file, in bytes (a setting). */
+  maxBytes: number;
+  /** The longest file one job takes, in minutes (a setting). The Hub reads the real length itself. */
+  maxMinutes: number;
+  /** True when the job takes a `languageCode`. */
+  languageCode: boolean;
 }
 
 /** The optional length of a `prompt` tool's audio (`input.length`). */
@@ -106,4 +128,19 @@ export interface AiJobPage {
   items: AiJobView[];
   /** Send it back as `cursor` for the next page; null on the last page. */
   nextCursor: string | null;
+}
+
+/**
+ * `POST /ai-tools/{captions|clean-audio}/quote` (AITOOLS-04): the points quote
+ * (the same shape as `POST /points/quote`, with its `quoteToken`) for the
+ * person's own file, priced by the length the Hub read from the file itself,
+ * plus that length.
+ */
+export interface AiFileQuoteView extends PointsQuoteView {
+  file: {
+    /** The length the Hub read, in whole seconds (rounded up). */
+    seconds: number;
+    /** The minutes the job is priced in: rounded up, at least 1. */
+    minutes: number;
+  };
 }

@@ -54,6 +54,8 @@ export class CreateQuickVoiceJobDto extends CreateVoiceoverJobDto {}
 const MOST_PROMPT_CHARACTERS = 20_000;
 /** The longest length this route will read, in seconds: a request bound (the real limit is a setting, named when it refuses). */
 const MOST_SECONDS = 3600;
+/** The longest storage key this route will read: a request bound. */
+const MOST_KEY_CHARACTERS = 300;
 
 /**
  * `POST /ai-tools/sound-effect/jobs` (AITOOLS-03). The Idempotency-Key is a
@@ -118,6 +120,59 @@ export class CreateMusicJobDto {
   instrumental?: boolean;
 
   /** `quoteToken` from the `POST /points/quote` the person saw. A different cost now is `409 quote_changed`. */
+  @ApiProperty()
+  @IsString({ message: 'quoteToken must be text.' })
+  @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
+  quoteToken!: string;
+}
+
+/**
+ * `POST /ai-tools/captions/jobs` (AITOOLS-04). The Idempotency-Key is a
+ * header. The file is one the person uploaded through `POST /uploads/presign`
+ * (folder `ai/input-audio` or `ai/input-video`) and confirmed; the Hub reads
+ * its length itself, so no length is sent.
+ */
+export class CreateCaptionsJobDto {
+  /** The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`. */
+  @ApiProperty({ minLength: 1, maxLength: MOST_KEY_CHARACTERS })
+  @IsString({ message: 'fileKey must be text.' })
+  @Length(1, MOST_KEY_CHARACTERS, { message: 'Send the file you uploaded.' })
+  fileKey!: string;
+
+  /** The language spoken, as an ISO 639 code (`en`, `yo`, `fra`). Left out: the language is detected. */
+  @ApiPropertyOptional({ pattern: '^[a-z]{2,3}$' })
+  @IsOptional()
+  @IsString({ message: 'languageCode must be text.' })
+  @Matches(/^[a-z]{2,3}$/, {
+    message: 'languageCode must be a two or three letter language code.',
+  })
+  languageCode?: string;
+
+  /** `quoteToken` from the `POST /points/quote` the person saw (sent with the same `fileKey`). A different cost now is `409 quote_changed`. */
+  @ApiProperty()
+  @IsString({ message: 'quoteToken must be text.' })
+  @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
+  quoteToken!: string;
+}
+
+/** `POST /ai-tools/captions/quote` and `POST /ai-tools/clean-audio/quote` (AITOOLS-04): the file to price. */
+export class QuoteFileDto {
+  /** The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`. */
+  @ApiProperty({ minLength: 1, maxLength: MOST_KEY_CHARACTERS })
+  @IsString({ message: 'fileKey must be text.' })
+  @Length(1, MOST_KEY_CHARACTERS, { message: 'Send the file you uploaded.' })
+  fileKey!: string;
+}
+
+/** `POST /ai-tools/clean-audio/jobs` (AITOOLS-04): the same file and quote as Captions, with no language. */
+export class CreateCleanAudioJobDto {
+  /** The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`. */
+  @ApiProperty({ minLength: 1, maxLength: MOST_KEY_CHARACTERS })
+  @IsString({ message: 'fileKey must be text.' })
+  @Length(1, MOST_KEY_CHARACTERS, { message: 'Send the file you uploaded.' })
+  fileKey!: string;
+
+  /** `quoteToken` from the `POST /points/quote` the person saw (sent with the same `fileKey`). A different cost now is `409 quote_changed`. */
   @ApiProperty()
   @IsString({ message: 'quoteToken must be text.' })
   @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })

@@ -1,3 +1,6 @@
+import type { Readable } from 'node:stream';
+import type { AiAudioContentType } from '../audio/ai-audio-store';
+
 /**
  * THE ONE SEAM TO THE AI VOICE PROVIDER (AITOOLS-01, R-68).
  *
@@ -39,10 +42,70 @@ export interface MusicRequest {
   instrumental: boolean;
 }
 
+/** One word of a transcript with its place in the recording, in seconds. */
+export interface TranscriptWord {
+  text: string;
+  /** `word` for a spoken word; `spacing` and `audio_event` are not words. */
+  type: string;
+  start: number;
+  end: number;
+}
+
+/** A recording or video to turn into words (Captions, AITOOLS-04). */
+export interface TranscribeRequest {
+  /** The person's own file, read by the provider for this one run (streamed from the store, or in memory). */
+  file: VoiceSample | StreamedFile;
+  /** ISO 639 code of the language spoken; null lets the provider detect it. */
+  languageCode: string | null;
+}
+
+/** What the provider heard. */
+export interface Transcript {
+  text: string;
+  words: TranscriptWord[];
+  /** The length the provider measured, in seconds; null when it did not say. */
+  durationSeconds: number | null;
+  /** The provider's own id for the transcript, to delete its copy; null when it gave none. */
+  id: string | null;
+}
+
+/**
+ * How one try at deleting the provider's copy went: `deleted` (a 2xx), `not_found`
+ * (404: the copy may not be stored yet, or is already gone) or `failed` (any other
+ * answer, or none).
+ */
+export type CopyRemoval = 'deleted' | 'not_found' | 'failed';
+
+/**
+ * Whether the provider still holds a copy, from a read of it: `present` (a
+ * 2xx), `absent` (404) or `unknown` (any other answer, or none).
+ */
+export type CopyPresence = 'present' | 'absent' | 'unknown';
+
+/** A copy the provider keeps of what it made, to delete once the Hub has the result. */
+export interface ProviderCopy {
+  kind: 'transcript' | 'isolation';
+  id: string;
+}
+
+/** A recording or video to take the noise out of (Clean audio, AITOOLS-04). */
+export interface IsolateRequest {
+  file: VoiceSample | StreamedFile;
+}
+
+/** The cleaned recording, as the provider answered it. */
+export interface IsolatedAudio {
+  audio: Buffer;
+  /** The type the provider answered, lower case, without parameters. The pipeline stores it only if the Hub serves it. */
+  contentType: string;
+  /** The provider's own id for the item it keeps (the `audio-isolation-id` header), to delete its copy; null when it gave none. */
+  historyId: string | null;
+}
+
 export interface SpokenAudio {
   audio: Buffer;
-  /** Always an audio type the Hub stores and serves (`audio/mpeg`). */
-  contentType: 'audio/mpeg';
+  /** An audio type the Hub stores and serves (`audio/mpeg` for every tool but Clean audio, which stores what the provider answered if the Hub serves it). */
+  contentType: AiAudioContentType;
 }
 
 /**
@@ -63,6 +126,25 @@ export class AiVoiceProviderError extends Error {
   }
 }
 
+/**
+ * A person's file on its way to the provider for one run (AITOOLS-04 round
+ * 4): the bytes are sent on as the store gives them and the Hub never holds the
+ * file whole (a few hundred KB at a time, however big the file is). The stream
+ * carries exactly `bytes` bytes, the object's real length from the store.
+ */
+export interface StreamedFile {
+  bytes: number;
+  contentType: string;
+  stream: Readable;
+  /**
+   * Called by the provider seam when the last byte has been written to the
+   * provider, or the call was given up: it hands the Hub's place at the read
+   * gate back (the provider thinking afterwards holds none of the file).
+   * Safe to call more than once; also destroys the stream.
+   */
+  sent: () => void;
+}
+
 /** Someone's own recording, kept by the Hub as theirs; the provider only reads it for one run. */
 export interface VoiceSample {
   audio: Buffer;
@@ -81,6 +163,8 @@ export interface AiVoiceProvider {
   readonly configured: boolean;
   /** True when a key and a host are set: Sound effect and Music track use no voice, so they do not need one. */
   readonly promptToolsConfigured: boolean;
+  /** True when a key and a host are set: Captions and Clean audio take a file and need no voice either. */
+  readonly fileToolsConfigured: boolean;
   /** The voices on offer, in the order a person sees them. */
   voices(): readonly AiVoice[];
   /**
@@ -123,6 +207,48 @@ export interface AiVoiceProvider {
     req: MusicRequest,
     opts?: { signal?: AbortSignal },
   ): Promise<SpokenAudio>;
+
+  /**
+   * Turns a recording or video into words (Captions, AITOOLS-04): one
+   * request, the words with their times in the answer. The call honours the
+   * configured file timeout (`AI_VOICE_FILE_TIMEOUT_MS`). A network call: the
+   * caller holds no transaction, no connection and no lock. Throws
+   * `AiVoiceProviderError`.
+   */
+  transcribe(
+    req: TranscribeRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<Transcript>;
+
+  /**
+   * One try at deleting the provider's copy of a transcript, so it keeps no
+   * copy of a person's words. Never throws; says how the try went (the caller
+   * decides whether to try again). The provider answers 404 for a transcript
+   * it has not stored yet, which is `not_found` here too.
+   */
+  deleteTranscript(id: string): Promise<CopyRemoval>;
+
+  /**
+   * Reads the provider's copy of a transcript by id, only to learn whether it
+   * is there (the body is dropped unopened). Round 3: the provider answers 200 (or
+   * 404) to a delete sent just after its answer and the transcript still
+   * appears afterwards, so a delete's answer is not proof; a read that says
+   * 404 after a delete is. Never throws.
+   */
+  transcriptPresence(id: string): Promise<CopyPresence>;
+
+  /**
+   * Takes the noise out of a recording or video (Clean audio, AITOOLS-04):
+   * one request, the cleaned audio in the answer. Same rules as `transcribe`.
+   * Throws `AiVoiceProviderError`.
+   */
+  isolateVoice(
+    req: IsolateRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<IsolatedAudio>;
+
+  /** One try at deleting the provider's history item of a cleaned recording. Never throws; same answers as `deleteTranscript`. */
+  deleteIsolation(id: string): Promise<CopyRemoval>;
 
   /**
    * Says a name in the studio voice (VF3, VOICE-01): the first voice the Hub
