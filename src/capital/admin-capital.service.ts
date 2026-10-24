@@ -30,7 +30,7 @@ export interface AdminCapitalOrderView {
   createdAt: string;
   confirmedAt: string | null;
   expiresAt: string | null;
-  lastAct: { action: string; at: string; adminEmail: string } | null;
+  lastAct: { action: string; actedAt: string; adminEmail: string } | null;
 }
 
 export interface AdminCapitalPage {
@@ -81,7 +81,7 @@ export class AdminCapitalService {
       lastAct: last
         ? {
             action: last.action,
-            at: last.createdAt.toISOString(),
+            actedAt: last.createdAt.toISOString(),
             adminEmail: last.adminEmail,
           }
         : null,

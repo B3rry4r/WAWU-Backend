@@ -224,7 +224,7 @@ export interface CapitalTransactionView {
   amountKobo: number;
   /** The day an accrual is for, when it is one. */
   accruedOn: string | null;
-  at: string | null;
+  occurredAt: string | null;
 }
 
 export interface CapitalTransactionPageView {

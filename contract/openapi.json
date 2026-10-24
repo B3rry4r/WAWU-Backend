@@ -68354,12 +68354,16 @@
               "action": {
                 "type": "string"
               },
+              "actedAt": {
+                "type": "string"
+              },
               "adminEmail": {
                 "type": "string"
               }
             },
             "required": [
               "action",
+              "actedAt",
               "adminEmail"
             ],
             "nullable": true
@@ -69150,13 +69154,18 @@
           "accruedOn": {
             "type": "string",
             "nullable": true
+          },
+          "occurredAt": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
           "id",
           "event",
           "amountKobo",
-          "accruedOn"
+          "accruedOn",
+          "occurredAt"
         ]
       },
       "CapitalTransactionPageView": {

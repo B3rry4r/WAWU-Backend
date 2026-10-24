@@ -317,7 +317,7 @@ export class CapitalService {
           event: t.eventType,
           amountKobo: t.amountMinor,
           accruedOn: t.accruedOn,
-          at: t.createdAt,
+          occurredAt: t.createdAt,
         })),
         nextCursor: page.nextCursor,
       };
