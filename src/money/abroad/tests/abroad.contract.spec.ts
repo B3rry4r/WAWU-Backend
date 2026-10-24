@@ -13,6 +13,7 @@ import type {
   IdempotencyScope,
   IdempotencyService,
 } from '../../payments/idempotency';
+import { AccountDeletionMoneyService } from '../../../account/account-deletion-money.service';
 import { AbroadAdminService } from '../abroad-admin.service';
 import { AbroadSendService } from '../abroad-send.service';
 import { AbroadService } from '../abroad.service';
@@ -1104,6 +1105,47 @@ describe('the send', () => {
   });
 
   describe('round 1 findings', () => {
+    it('a send the provider has not finished, or a fee still to be given back, holds an account deletion as a payment with no final answer, and a settled one does not', async () => {
+      const deletion = new AccountDeletionMoneyService(
+        {
+          name: 'nuvion',
+          label: 'Nuvion',
+          getBalance: () =>
+            Promise.resolve({ availableKobo: 0n, bookedKobo: 0n }),
+        } as unknown as WalletProvider,
+        prisma,
+      );
+      const blockers = async () =>
+        (await deletion.check(other.wawuUserId)).blockers;
+      settings.wawuFeeKobo = 2_500;
+      const r = await recipient(other);
+      const q = await abroad.quote(other, {
+        recipientId: r.id,
+        fromCurrency: 'USD',
+        amountMinor: 10_000,
+      });
+      const view = await sends.send(other, scope(), { quoteId: q.id });
+      const row = await prisma.abroadSend.findUniqueOrThrow({
+        where: { id: view.id },
+      });
+      const id = row.providerTransferId!;
+      expect(await blockers()).toContain('payment_in_progress');
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'completed', providerStatus: 'successful' }),
+      );
+      expect(await blockers()).not.toContain('payment_in_progress');
+      // Reversed with the give-back refused: the fee is still owed to the person, so the row stays findable.
+      plan.set(`${row.reference}-fee-back`, 'fail');
+      await sends.apply(
+        view.id,
+        transfer({ id, state: 'reversed', providerStatus: 'reversed' }),
+      );
+      expect(await blockers()).toContain('payment_in_progress');
+      await sends.sweep(new Date(Date.now() + 5 * 60_000));
+      expect(await blockers()).not.toContain('payment_in_progress');
+    });
+
     it("F3: a cancelled send is never reopened by the provider's word, and the cancel leaves one audit row", async () => {
       const r = await recipient();
       const q = await quoteFor(r.id);

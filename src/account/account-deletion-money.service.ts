@@ -21,7 +21,8 @@ import { WalletProviderError } from '../wallet-provider/wallet-provider-error';
  *   open_hold            a paid DM, ticket or bill is held, for or against them (R-19)
  *   waiting_earnings     a sale's share, or a community host's share of spent
  *                        credits, has not reached their wallet yet (R-11)
- *   payment_in_progress  a payment of theirs has no final answer yet
+ *   payment_in_progress  a payment of theirs has no final answer yet (a send
+ *                        abroad included, NUV-11)
  *   cash_out_in_flight   points are held for a cash-out
  *   wallet_opening       their wallet is being opened right now
  */
@@ -225,6 +226,26 @@ export class AccountDeletionMoneyService {
       },
     });
     const waitingEarnings = owedSales + owedHostShares;
+    // A send abroad (NUV-11) the provider has not finished, or one whose WAWU
+    // fee is still to be taken or given back: its row is what the sweep finds
+    // the answer and the fee by, so it is not deleted from under it. The
+    // money already left the wallet, so the balance below does not hold the
+    // deletion; it counts as a payment with no final answer.
+    const abroadUnfinished = await this.prisma.abroadSend.count({
+      where: {
+        wawuUserId,
+        OR: [
+          { status: { in: ['sending', 'pending', 'needs_review'] } },
+          { status: 'completed', wawuFeeTaken: false },
+          {
+            status: { in: ['failed', 'reversed'] },
+            wawuFeeTaken: true,
+            wawuFeeKobo: { gt: 0 },
+            feeGivenBackAt: null,
+          },
+        ],
+      },
+    });
     const blockers: DeletionBlocker[] = [];
     let balanceKobo: number | null = null;
     if (wallet) {
@@ -243,7 +264,9 @@ export class AccountDeletionMoneyService {
     }
     if (openHolds > 0) blockers.push('open_hold');
     if (waitingEarnings > 0) blockers.push('waiting_earnings');
-    if (pendingPayments > 0) blockers.push('payment_in_progress');
+    if (pendingPayments + abroadUnfinished > 0) {
+      blockers.push('payment_in_progress');
+    }
     if (cashOuts > 0) blockers.push('cash_out_in_flight');
 
     return {

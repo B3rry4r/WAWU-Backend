@@ -15,6 +15,7 @@ import {
 import { ApiBearerAuth } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
+import { RequireFeesSet } from '../fees/fees-set.guard';
 import {
   CurrentWallet,
   type OpenWallet,
@@ -54,9 +55,11 @@ import type {
 /**
  * Sending money abroad (task NUV-11, R-84): to a bank account or a mobile
  * money wallet in another country, from any of the person's accounts, with a
- * conversion quote when the currencies differ. * Every route needs an open naira wallet (R-6) and reaches the provider only
- * through WALLET_PROVIDER; a provider that cannot pay abroad (Fintava)
- * answers `409 currency_not_supported`.
+ * conversion quote when the currencies differ. Every route needs an open
+ * naira wallet (R-6) and reaches the provider only through WALLET_PROVIDER;
+ * a provider that cannot pay abroad (Fintava) answers `409
+ * currency_not_supported`. The quote and the send run FeesSetGuard first
+ * (`503 fees_not_set` while the running provider's fees are not set, NUV-07).
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)
@@ -175,7 +178,9 @@ export class AbroadController {
    * WAWU's fee from config. The quote is kept for this person and used once.
    * `amount_out_of_range` carries the least and most the corridor takes,
    * `rate_unavailable` says the provider cannot price the pair now,
-   * `insufficient_funds` that the account holds less.
+   * `402 insufficient_funds` (amount, the partner's fee and WAWU's fee) that
+   * the account holds less. Like the other quotes it moves nothing and runs
+   * FeesSetGuard first: `503 fees_not_set` before anything else.
    */
   @Post('quotes')
   @HttpCode(201)
@@ -191,12 +196,13 @@ export class AbroadController {
     'fx_account_not_open',
     'amount_out_of_range',
     'daily_limit_exceeded',
-    'insufficient_funds',
     'corridor_not_supported',
     'rate_unavailable',
     'provider_declined',
     'provider_unreachable',
+    'fees_not_set',
   )
+  @RequireFeesSet()
   quote(
     @CurrentWallet() wallet: OpenWallet,
     @Body() dto: AbroadQuoteDto,
@@ -233,6 +239,7 @@ export class AbroadController {
     'daily_limit_exceeded',
     'provider_declined',
   )
+  @RequireFeesSet()
   send(
     @CurrentWallet() wallet: OpenWallet,
     @CurrentIdempotencyScope() scope: IdempotencyScope,

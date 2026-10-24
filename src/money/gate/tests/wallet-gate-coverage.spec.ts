@@ -216,6 +216,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
         .map((r) => r.key)
         .sort(),
     ).toEqual([
+      'DELETE money/abroad/recipients/:id',
       'DELETE money/beneficiaries/:id',
       'DELETE money/device',
       'GET bills/wallet/:id/quote',
@@ -230,6 +231,12 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET events/orders/wallet/:orderId/quote',
       // LEGAL-05: the pay sheet of a legal fee.
       'GET legal/requests/:id/pay/wallet/quote',
+      'GET money/abroad/banks/:country',
+      'GET money/abroad/corridors',
+      'GET money/abroad/recipients',
+      'GET money/abroad/sends',
+      'GET money/abroad/sends/:id',
+      'GET money/abroad/sources',
       'GET money/beneficiaries',
       'GET money/device',
       'GET money/fees/quote',
@@ -279,6 +286,9 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST events/orders/wallet/pay',
       // LEGAL-05: a legal fee pays from the wallet.
       'POST legal/requests/:id/pay/wallet',
+      'POST money/abroad/quotes',
+      'POST money/abroad/recipients',
+      'POST money/abroad/sends',
       'POST money/approval/verify',
       'POST money/beneficiaries',
       'POST money/device/challenge',
@@ -320,6 +330,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST dm/send/wallet/pay',
       'POST events/orders/wallet/pay',
       'POST legal/requests/:id/pay/wallet',
+      'POST money/abroad/sends',
       'POST money/approval/verify',
       'POST money/fx/sends',
       'POST money/fx/swaps',

@@ -19191,16 +19191,6 @@
               }
             }
           },
-          "402": {
-            "description": "reason.code: insufficient_funds",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
           "403": {
             "description": "reason.code: daily_limit_exceeded",
             "content": {
@@ -19252,7 +19242,7 @@
             }
           },
           "503": {
-            "description": "reason.code: provider_unreachable",
+            "description": "reason.code: provider_unreachable, fees_not_set",
             "content": {
               "application/json": {
                 "schema": {
@@ -19267,7 +19257,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "What a send would deliver and cost: the provider's rate and real hold\nwhen the currencies differ (about three minutes on dev), both amounts,\nWAWU's fee from config. The quote is kept for this person and used once.\n`amount_out_of_range` carries the least and most the corridor takes,\n`rate_unavailable` says the provider cannot price the pair now,\n`insufficient_funds` that the account holds less.",
+        "summary": "What a send would deliver and cost: the provider's rate and real hold\nwhen the currencies differ (about three minutes on dev), both amounts,\nWAWU's fee from config. The quote is kept for this person and used once.\n`amount_out_of_range` carries the least and most the corridor takes,\n`rate_unavailable` says the provider cannot price the pair now,\n`402 insufficient_funds` (amount, the partner's fee and WAWU's fee) that\nthe account holds less. Like the other quotes it moves nothing and runs\nFeesSetGuard first: `503 fees_not_set` before anything else.",
         "tags": [
           "Abroad"
         ],

@@ -193,6 +193,13 @@ const NON_MONEY_WRITES: Readonly<Record<string, string>> = {
     'opens an account at the provider for the person; no money is in it yet',
   'POST money/fx/quotes':
     'asks the provider for a rate and keeps it for the person, to use once; a read sent as a POST',
+  // Sending abroad (NUV-11): saving or removing a recipient and asking for a quote move nothing; the send is the money-moving route
+  'POST money/abroad/recipients':
+    'saves a recipient abroad ; the person sends later, with a PIN',
+  'DELETE money/abroad/recipients/:id':
+    'removes a saved recipient abroad; sends already made keep their record',
+  'POST money/abroad/quotes':
+    'asks the provider for a rate and keeps the quote for the person, to use once; a read sent as a POST. It runs FeesSetGuard like the other quotes',
 };
 
 /** A controller class, as a module lists it. */
@@ -848,6 +855,7 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
       'POST dm/send/wallet/pay',
       'POST events/orders/wallet/pay',
       'POST legal/requests/:id/pay/wallet',
+      'POST money/abroad/sends',
       'POST money/fx/sends',
       'POST money/fx/swaps',
       'POST money/payments',

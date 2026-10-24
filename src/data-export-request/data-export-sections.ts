@@ -1388,6 +1388,45 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'MoneyBeneficiary',
       reason: 'Other people bank details.',
     },
+    // NUV-11. Sends abroad are money records of the same kind as the wallet
+    // ledger above: statements are an after-launch task (G-130).
+    {
+      model: 'AbroadRecipient',
+      reason:
+        'Other people bank or mobile money details, saved as this account list.',
+    },
+    {
+      model: 'AbroadQuote',
+      reason: 'An internal quote that expires; the sends are the record.',
+    },
+    {
+      model: 'AbroadSend',
+      reason:
+        'Wallet transactions carry the other side bank details; statements are after launch (G-130).',
+    },
+    {
+      model: 'AbroadFreeze',
+      reason:
+        'An admin hold on the account with the admin note, not data the person gave.',
+    },
+    // WALLET-21. Foreign-currency accounts are money records of the same kind.
+    {
+      model: 'FxAccount',
+      reason:
+        'A pointer to a foreign-currency account at the wallet provider, which holds the balance.',
+    },
+    {
+      model: 'FxQuote',
+      reason: 'An internal conversion quote that expires; not a record.',
+    },
+    {
+      model: 'FxOperation',
+      reason: 'Wallet money records; statements are after launch (G-130).',
+    },
+    {
+      model: 'FxMovement',
+      reason: 'Wallet money records; statements are after launch (G-130).',
+    },
     { model: 'MoneyPayoutAccount', reason: 'A bank account number.' },
     {
       model: 'MoneyIdempotencyKey',
