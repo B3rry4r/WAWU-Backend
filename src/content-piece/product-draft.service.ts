@@ -62,6 +62,7 @@ function toView(d: ProductDraftModel): ProductDraftView {
     accessType: d.accessType,
     price: d.price,
     missing: missingFor(d),
+    mediaJobId: d.mediaJobId,
     createdAt: d.createdAt.toISOString(),
     updatedAt: d.updatedAt.toISOString(),
   };
@@ -96,6 +97,8 @@ export class ProductDraftService {
     wawuUserId: string,
     dto: CreateProductDraftDto,
   ): Promise<ProductDraftView> {
+    if (dto.mediaJobId)
+      await this.assertOwnFinishedJob(wawuUserId, dto.mediaJobId);
     const row = await this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`product-drafts:${wawuUserId}`}, 0))`;
       const kept = await tx.productDraft.count({ where: { wawuUserId } });
@@ -121,6 +124,7 @@ export class ProductDraftService {
           tags: dto.tags ?? [],
           accessType: dto.accessType,
           price: dto.price,
+          ...(dto.mediaJobId ? { mediaJobId: dto.mediaJobId } : {}),
         },
       });
     });
@@ -146,6 +150,8 @@ export class ProductDraftService {
     dto: UpdateProductDraftDto,
   ): Promise<ProductDraftView> {
     await this.ownOrThrow(wawuUserId, id);
+    if (dto.mediaJobId)
+      await this.assertOwnFinishedJob(wawuUserId, dto.mediaJobId);
     const data = {
       ...(dto.title === undefined ? {} : { title: dto.title.trim() }),
       ...(dto.contentType === undefined
@@ -161,6 +167,8 @@ export class ProductDraftService {
       ...(dto.tags === undefined ? {} : { tags: dto.tags }),
       ...(dto.accessType === undefined ? {} : { accessType: dto.accessType }),
       ...(dto.price === undefined ? {} : { price: dto.price }),
+      // AITOOLS-07: a job id attaches its audio, `null` detaches it.
+      ...(dto.mediaJobId === undefined ? {} : { mediaJobId: dto.mediaJobId }),
     };
     if (Object.keys(data).length === 0)
       throw new BadRequestException('Send at least one field to change.');
@@ -235,6 +243,37 @@ export class ProductDraftService {
       if (gone.count === 0)
         throw new ConflictException('This draft was published a moment ago.');
     });
+  }
+
+  /**
+   * "Use in a product" (AITOOLS-07): the job must be the caller's own and
+   * finished with audio. Another person's job and one that is not there are the
+   * same 404; one still working, failed or without audio is a 409.
+   */
+  private async assertOwnFinishedJob(
+    wawuUserId: string,
+    jobId: string,
+  ): Promise<void> {
+    const job = await this.prisma.aiToolJob.findFirst({
+      where: { id: jobId, wawuUserId },
+      select: { state: true, audioKey: true, outputs: true },
+    });
+    if (!job) throw new NotFoundException('Result not found.');
+    const hasAudio =
+      job.audioKey !== null ||
+      (Array.isArray(job.outputs) &&
+        (job.outputs as { kind?: unknown; key?: unknown }[]).some(
+          (o) => o?.kind === 'audio' && typeof o.key === 'string',
+        ));
+    if (job.state !== 'done' || !hasAudio)
+      throw new ConflictException({
+        message: 'Only a finished result with audio can be used in a product.',
+        reason: {
+          code: 'job_not_ready',
+          message:
+            'Only a finished result with audio can be used in a product.',
+        },
+      });
   }
 
   private async ownOrThrow(

@@ -54,7 +54,7 @@ export type CopyTry = 'gone' | 'not_found' | 'absent' | 'keep';
 
 /**
  * What a job's `providerRef` holds while the provider's copy is not yet
- * confirmed deleted: `transcript:<id>` or `isolation:<id>`; for a transcript
+ * confirmed deleted: `transcript:<id>`, `isolation:<id>` or `voice:<id>` (AITOOLS-07); for a transcript
  * that has answered 404 once after the confirm window opened, `@<ms>` is added
  * (when that first 404 was read), and a later read of the copy removes it.
  */
@@ -80,7 +80,10 @@ export function copyOfMarker(marker: string | null): NotedCopy | null {
     id = id.slice(0, mark.index);
   }
   if (
-    (kind !== 'transcript' && kind !== 'isolation' && kind !== 'dub') ||
+    (kind !== 'transcript' &&
+      kind !== 'isolation' &&
+      kind !== 'voice' &&
+      kind !== 'dub') ||
     id === ''
   )
     return null;
@@ -146,15 +149,26 @@ export class ProviderCopyService implements OnModuleDestroy {
     };
   }
 
-  /** Notes the provider's copy on the job's row. Never throws. */
-  async note(jobId: string, copy: ProviderCopy): Promise<void> {
+  /**
+   * Notes the provider's copy on the job's row. Never throws. Answers true only
+   * when the note is on the row (the write went through and found the job); a
+   * caller that hands a copy's removal over on the strength of the note (a
+   * person's own voice) must not do so on a false.
+   */
+  async note(jobId: string, copy: ProviderCopy): Promise<boolean> {
     try {
-      await this.prisma.aiToolJob.updateMany({
+      const written = await this.prisma.aiToolJob.updateMany({
         where: { id: jobId },
         data: { providerRef: markerOf(copy) },
       });
+      if (written.count > 0) return true;
+      this.logger.warn(
+        `ai job ${jobId}: no job to note the provider's copy on`,
+      );
+      return false;
     } catch {
       this.logger.warn(`ai job ${jobId}: the provider's copy was not noted`);
+      return false;
     }
   }
 
@@ -211,6 +225,12 @@ export class ProviderCopyService implements OnModuleDestroy {
     copy: ProviderCopy,
     confirming: boolean,
   ): Promise<CopyTry> {
+    if (copy.kind === 'voice') {
+      // AITOOLS-07: the AI version of a person's own voice. The Hub knows the
+      // voice exists (the provider named it), so a 404 means it is already gone.
+      const removed = await this.voice.deleteOwnVoice(copy.id);
+      return removed === 'failed' ? 'keep' : 'gone';
+    }
     if (copy.kind === 'isolation') {
       const removed = await this.voice.deleteIsolation(copy.id);
       return removed === 'deleted'
@@ -257,7 +277,7 @@ export class ProviderCopyService implements OnModuleDestroy {
       copy,
       age >= afterMs || absentSince !== null,
     );
-    if (copy.kind === 'isolation') {
+    if (copy.kind === 'voice' || copy.kind === 'isolation') {
       if (
         outcome === 'gone' ||
         (outcome === 'not_found' && age >= NOT_STORED_YET_MS)
@@ -358,6 +378,7 @@ export class ProviderCopyService implements OnModuleDestroy {
               OR: [
                 { providerRef: { startsWith: 'transcript:' } },
                 { providerRef: { startsWith: 'isolation:' } },
+                { providerRef: { startsWith: 'voice:' } },
                 { providerRef: { startsWith: 'dub:' } },
               ],
             },

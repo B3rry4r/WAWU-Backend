@@ -44,4 +44,43 @@ describe('data export map', () => {
     const keys = EXPORT_SECTIONS.map((s) => s.key);
     expect(new Set(keys).size).toBe(keys.length);
   });
+
+  // AITOOLS-07 round 3: the map above checks models, not columns, so a column a
+  // task adds to an exported model can be left out unseen. These read what each
+  // section really asks the database for.
+  describe('the columns AITOOLS-07 added to exported models are exported', () => {
+    async function selectOf(key: string): Promise<string[]> {
+      const section = EXPORT_SECTIONS.find((s) => s.key === key);
+      if (!section) throw new Error(`no export section ${key}`);
+      let seen: Record<string, unknown> | undefined;
+      const model = new Proxy(
+        {},
+        {
+          get: () => (args: { select?: Record<string, unknown> }) => {
+            seen = args.select;
+            return Promise.resolve([]);
+          },
+        },
+      );
+      const prisma = new Proxy({}, { get: () => model });
+      await section.load(prisma as never, 'someone');
+      return Object.entries(seen ?? {})
+        .filter(([, on]) => on === true)
+        .map(([column]) => column);
+    }
+
+    it("gives the agreement for VoiceOver in the person's own voice, with its time and its words", async () => {
+      expect(await selectOf('voiceProfile')).toEqual(
+        expect.arrayContaining(['ownVoiceConsentAt', 'ownVoiceConsentLine']),
+      );
+    });
+
+    it('gives the time a result was saved to the library', async () => {
+      expect(await selectOf('aiToolJobs')).toContain('savedAt');
+    });
+
+    it('gives the AI tool result a draft product uses', async () => {
+      expect(await selectOf('productDrafts')).toContain('mediaJobId');
+    });
+  });
 });

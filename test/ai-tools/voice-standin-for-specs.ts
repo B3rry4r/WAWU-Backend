@@ -10,11 +10,19 @@ export interface StandinHandle {
     failed: number;
     active: number;
     maxActive: number;
+    /** The provider voice of each speech call, in order (a made voice reads `clone-N`). */
+    voices: string[];
     /** The `model_id` of each speech call, in order (null when none was sent). */
     models: (string | null)[];
     lastModel: string | null;
     cloned: number;
     deleted: number;
+    /** The ids of the voices made for a person's own sample, in order. */
+    clones: string[];
+    /** Deletes of a voice refused on purpose (a sample with `[[remove-fail]]`). */
+    removeRefused: number;
+    /** Reads of the provider's voice list. */
+    voiceListReads: number;
     /** Each Sound effect call: the `duration_seconds` asked (null when none). */
     sfx: (number | null)[];
     /** Each Music call: the `music_length_ms` asked (null when none) and whether it was instrumental. */
@@ -78,6 +86,8 @@ export interface StandinHandle {
   openDubs: () => number;
   /** Voices the stand-in made for a person's own sample and has not yet had removed. */
   openClones: () => number;
+  /** Lets the voices a `[[remove-fail]]` sample made be deleted from now on. */
+  releaseStubborn: () => void;
 }
 
 type StandinModule = {

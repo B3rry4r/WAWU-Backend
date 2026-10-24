@@ -21,7 +21,12 @@ import { dubLanguagesOf } from './dub/dub-support';
 import {
   AI_VOICE_PROVIDER,
   type AiVoiceProvider,
+  type SpokenAudio,
 } from './voice/ai-voice-provider';
+
+/** Where a voice's sample is served: a public path on the Hub, from the API's own address (the app adds the address). */
+export const voiceSamplePath = (voiceId: string): string =>
+  `/api/hub/ai-tools/voices/${voiceId}/sample`;
 
 /**
  * `GET /ai-tools` (AITOOLS-01, AITOOLS-02, PT1): the AI tools the Hub can
@@ -67,12 +72,16 @@ export class AiToolsService {
     };
   }
 
-  list(): AiToolsView {
+  async list(): Promise<AiToolsView> {
     const plan = this.plan;
+    // AITOOLS-07: a link to a short sample of each voice, when the provider has one.
+    const samples = await this.voice.samples();
     const voices = this.voice.voices().map((v) => ({
       id: v.id,
       name: v.name,
       description: v.description,
+      // The Hub's own path (the app adds its address): the provider's link never leaves the adapter.
+      ...(samples.has(v.id) ? { sampleUrl: voiceSamplePath(v.id) } : {}),
     }));
     const tools: AiToolView[] = [];
     for (const tool of AI_TOOLS) {
@@ -171,5 +180,12 @@ export class AiToolsService {
         maxAudioMinutesPerJob: plan.caps.maxAudioMinPerJob,
       },
     };
+  }
+
+  /** A short sample of a listed voice (`GET /ai-tools/voices/{voiceId}/sample`), or null when there is none. */
+  sample(voiceId: string): Promise<SpokenAudio | null> {
+    return this.voice.voices().some((v) => v.id === voiceId)
+      ? this.voice.sample(voiceId)
+      : Promise.resolve(null);
   }
 }

@@ -7,6 +7,9 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import request from 'supertest';
+import { AccountPurgeService } from '../../src/account-purge/account-purge.service';
+import { AccountPurgeHooks } from '../../src/account-purge/purge-hooks';
+import { AiToolsPurgeService } from '../../src/ai-tools/ai-tools-purge.service';
 import { WawuAuthModule } from '../../src/common/auth/wawu-auth.module';
 import { AllExceptionsFilter } from '../../src/common/filters/all-exceptions.filter';
 import { ResponseInterceptor } from '../../src/common/interceptors/response.interceptor';
@@ -23,6 +26,7 @@ import { PointsShortfallService } from '../../src/points/spend/points-shortfall.
 import { PointsSpendService } from '../../src/points/spend/points-spend.service';
 import { AiJobService } from '../../src/ai-tools/ai-job.service';
 import { AiToolsController } from '../../src/ai-tools/ai-tools.controller';
+import { AiVoiceSamplesController } from '../../src/ai-tools/ai-voice-samples.controller';
 import { AiToolsService } from '../../src/ai-tools/ai-tools.service';
 import {
   AI_AUDIO_STORE,
@@ -39,6 +43,12 @@ import { startStandin, type StandinHandle } from './voice-standin-for-specs';
 import { AppController } from '../../src/app.controller';
 import { HttpVoiceProvider } from '../../src/ai-tools/voice/http-voice-provider';
 import { ProviderCopyService } from '../../src/ai-tools/voice/provider-copy.service';
+import { OwnVoiceService } from '../../src/ai-tools/own-voice/own-voice.service';
+import {
+  VOICE_FILES,
+  type VoiceFiles,
+} from '../../src/voice-intro/voice-files';
+import type { VoiceSample } from '../../src/ai-tools/voice/ai-voice-provider';
 
 /**
  * The shared set-up of the AI tools specs: the real controller, services,
@@ -237,6 +247,27 @@ export class MemoryInputFiles implements AiInputFiles {
 
 type Standin = StandinHandle;
 
+/** The person's Voice Intro recordings, kept in memory (AITOOLS-07: "Your voice" is made from one). */
+export class MemoryVoiceFiles implements VoiceFiles {
+  readonly samples = new Map<string, VoiceSample>();
+  keyFromLink(): Promise<string | null> {
+    return Promise.resolve(null);
+  }
+  readSample(key: string): Promise<VoiceSample> {
+    const s = this.samples.get(key);
+    return s ? Promise.resolve(s) : Promise.reject(new Error('no such file'));
+  }
+  putAudio(): Promise<string> {
+    return Promise.resolve('memory');
+  }
+  urlFor(key: string): Promise<string> {
+    return Promise.resolve(`https://files.test/${key}`);
+  }
+  remove(): Promise<void> {
+    return Promise.resolve();
+  }
+}
+
 export interface AiHarness {
   app: INestApplication;
   prisma: PrismaService;
@@ -247,6 +278,7 @@ export interface AiHarness {
   quotes: PointsQuoteService;
   store: MemoryAudioStore;
   inputs: MemoryInputFiles;
+  voiceFiles: MemoryVoiceFiles;
   standin: Standin;
   tokensOf: Record<string, string>;
   get<T>(token: unknown): T;
@@ -296,6 +328,7 @@ export async function bootAiTools(): Promise<AiHarness> {
 
   const store = new MemoryAudioStore();
   const inputs = new MemoryInputFiles();
+  const voiceFiles = new MemoryVoiceFiles();
   const moduleRef: TestingModule = await Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ isGlobal: true }),
@@ -305,7 +338,7 @@ export async function bootAiTools(): Promise<AiHarness> {
       PointsModule,
     ],
     // AppController: GET /health, so a spec can show the Hub answers while a hostile file is being read.
-    controllers: [AiToolsController, AppController],
+    controllers: [AiToolsController, AiVoiceSamplesController, AppController],
     providers: [
       FeeSettings,
       PointsSpendService,
@@ -330,6 +363,13 @@ export async function bootAiTools(): Promise<AiHarness> {
       { provide: AI_INPUT_FILES, useValue: inputs },
       AiInputService,
       ProviderCopyService,
+      OwnVoiceService,
+      { provide: VOICE_FILES, useValue: voiceFiles },
+      // AITOOLS-07 round 3: the account purge, with the AI tools' step that
+      // removes a voice copy at the provider before the job rows go.
+      AccountPurgeHooks,
+      AccountPurgeService,
+      AiToolsPurgeService,
     ],
   }).compile();
   const app = moduleRef.createNestApplication();
@@ -358,6 +398,7 @@ export async function bootAiTools(): Promise<AiHarness> {
     quotes: moduleRef.get(PointsQuoteService),
     store,
     inputs,
+    voiceFiles,
     standin,
     tokensOf,
     get: <T>(token: unknown) => moduleRef.get<T>(token as never),
@@ -401,6 +442,12 @@ export async function bootAiTools(): Promise<AiHarness> {
     balance: (who) => points.balanceOf(who),
     clean: async () => {
       await prisma.aiToolJob.deleteMany({
+        where: { wawuUserId: { in: SEEDED } },
+      });
+      await prisma.voiceProfile.deleteMany({
+        where: { wawuUserId: { in: SEEDED } },
+      });
+      await prisma.productDraft.deleteMany({
         where: { wawuUserId: { in: SEEDED } },
       });
       for (const who of SEEDED) await purgePersonPoints(prisma, who);

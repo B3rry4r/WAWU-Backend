@@ -26,6 +26,16 @@ export type AiToolErrorCode =
   /** A language Dubbing does not offer (AITOOLS-05), or the same language as the one spoken. Nothing is held. */
   | 'ai_language_unsupported'
   | 'ai_tool_unavailable'
+  /** AITOOLS-07: "Your voice" picked before the person agreed to it for VoiceOver, or after they took it back. Nothing is held. */
+  | 'own_voice_consent_required'
+  /** AITOOLS-07: the person has no Voice Intro recording to make their voice from. Nothing is held. */
+  | 'own_voice_recording_required'
+  /** AITOOLS-07: the agreement sent is not the words the Hub served. */
+  | 'own_voice_consent_line_changed'
+  /** AITOOLS-07: the Hub holds no name for the person, so the agreement cannot say who agrees. */
+  | 'own_voice_name_required'
+  /** AITOOLS-07: a result that is not finished (or failed) cannot be saved or used. */
+  | 'job_not_ready'
   | 'not_found';
 
 export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
@@ -41,6 +51,11 @@ export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
   ai_file_unreadable: HttpStatus.UNPROCESSABLE_ENTITY,
   ai_language_unsupported: HttpStatus.UNPROCESSABLE_ENTITY,
   ai_tool_unavailable: HttpStatus.SERVICE_UNAVAILABLE,
+  own_voice_consent_required: HttpStatus.CONFLICT,
+  own_voice_recording_required: HttpStatus.CONFLICT,
+  own_voice_consent_line_changed: HttpStatus.CONFLICT,
+  own_voice_name_required: HttpStatus.CONFLICT,
+  job_not_ready: HttpStatus.CONFLICT,
   not_found: HttpStatus.NOT_FOUND,
 };
 
@@ -86,3 +101,15 @@ export const JOB_NOT_FOUND_MESSAGE = "We couldn't find that job.";
 /** What a person reads when a job failed. PT2c. */
 export const JOB_FAILED_MESSAGE =
   "That didn't work. No points were taken. Try again.";
+
+/** AITOOLS-07. No message names the provider (R-68) or holds a long dash (R-5). */
+export const OWN_VOICE_CONSENT_REQUIRED_MESSAGE =
+  'Agree to use your own voice here first. No points were taken.';
+export const OWN_VOICE_RECORDING_REQUIRED_MESSAGE =
+  'Record your Voice Intro first, then your voice can read your VoiceOver. No points were taken.';
+export const OWN_VOICE_LINE_CHANGED_MESSAGE =
+  'Those are not the words we showed you. Read them again and agree.';
+export const OWN_VOICE_NAME_REQUIRED_MESSAGE =
+  'Add your name to your profile first, so we can say who agrees.';
+export const JOB_NOT_READY_MESSAGE =
+  'Only a finished result can be saved or used.';

@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { AI_AUDIO_CONTENT_TYPES } from '../audio/ai-audio-store';
 import {
   AiVoiceProviderError,
   type AiVoice,
@@ -84,6 +85,41 @@ const MAX_JSON_BYTES = 32 * 1024 * 1024;
 export const DEFAULT_QUICK_MODEL = 'eleven_flash_v2_5';
 /** The most audio one job may bring back: a request bound, not a product figure. */
 const MAX_AUDIO_BYTES = 64 * 1024 * 1024;
+/** How long the links to the voices' samples are kept before the provider's list is read again (AITOOLS-07). */
+const SAMPLES_KEPT_MS = 60 * 60_000;
+/** The most a voice's sample may be: a request bound, not a product figure. */
+const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Reads the provider's voice list (`GET /v1/voices`, real answer 24 Oct 2026:
+ * `{ voices: [{ voice_id, name, category, preview_url, ... }] }`) into one https
+ * link per listed voice, by WAWU voice id. A voice the list does not hold, or
+ * holds with no https link, has no sample.
+ */
+export function sampleLinksFrom(
+  body: unknown,
+  catalogue: readonly { id: string; providerVoiceId: string }[],
+  /** True only when the provider's own address is plain http (the local stand-in): then its links are too. */
+  allowHttp = false,
+): ReadonlyMap<string, string> {
+  const out = new Map<string, string>();
+  const list = (body as { voices?: unknown } | null)?.voices;
+  if (!Array.isArray(list)) return out;
+  const byProviderId = new Map<string, string>();
+  for (const item of list as unknown[]) {
+    const o = (item ?? {}) as Record<string, unknown>;
+    if (typeof o.voice_id !== 'string' || typeof o.preview_url !== 'string')
+      continue;
+    const shape = allowHttp ? /^https?:\/\/[^\s/]+\// : /^https:\/\/[^\s/]+\//;
+    if (!shape.test(o.preview_url) || o.preview_url.length > 500) continue;
+    byProviderId.set(o.voice_id, o.preview_url);
+  }
+  for (const v of catalogue) {
+    const link = byProviderId.get(v.providerVoiceId);
+    if (link) out.set(v.id, link);
+  }
+  return out;
+}
 
 /** A language tag as the dubbing route takes it: `yo`, `fil`, `pt-BR`. */
 const DUB_LANGUAGE_TAG = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/;
@@ -373,15 +409,107 @@ export class HttpVoiceProvider implements AiVoiceProvider {
    */
   async speakInOwnVoice(
     req: OwnVoiceRequest,
-    opts: { signal?: AbortSignal } = {},
+    opts: {
+      signal?: AbortSignal;
+      handOver?: (providerVoiceId: string) => Promise<boolean>;
+    } = {},
   ): Promise<SpokenAudio> {
     if (!this.configured || this.baseUrl === null || this.apiKey === null)
       throw new AiVoiceProviderError('rejected', 'voice is not available');
     const voiceId = await this.addVoice(req.sample, opts.signal);
+    // AITOOLS-07: the caller may take over the voice's removal (it notes the id
+    // on the job and deletes the voice with a retry and a sweep). Only a clean
+    // `true` hands it over; the adapter removes the voice itself otherwise.
+    let handedOver = false;
+    if (opts.handOver) {
+      try {
+        handedOver = (await opts.handOver(voiceId)) === true;
+      } catch {
+        handedOver = false;
+      }
+    }
     try {
       return await this.synthesize(voiceId, req.text, opts.signal);
     } finally {
-      await this.removeVoice(voiceId);
+      if (!handedOver) await this.removeVoice(voiceId);
+    }
+  }
+
+  async deleteOwnVoice(providerVoiceId: string): Promise<CopyRemoval> {
+    if (this.baseUrl === null || this.apiKey === null) return 'failed';
+    return this.removeItem(`/v1/voices/${encodeURIComponent(providerVoiceId)}`);
+  }
+
+  private samplesAt = 0;
+  private sampleLinks: ReadonlyMap<string, string> = new Map();
+  private readonly sampleAudio = new Map<
+    string,
+    { at: number; audio: SpokenAudio }
+  >();
+
+  async samples(): Promise<ReadonlySet<string>> {
+    return new Set((await this.links()).keys());
+  }
+
+  /** The provider's list read at most once an hour, as a map of WAWU voice id to the provider's own link. */
+  private async links(): Promise<ReadonlyMap<string, string>> {
+    if (!this.configured || this.baseUrl === null || this.apiKey === null)
+      return new Map();
+    if (Date.now() - this.samplesAt < SAMPLES_KEPT_MS) return this.sampleLinks;
+    // Set first so a slow or failing provider is asked once an hour, not once per catalogue read.
+    this.samplesAt = Date.now();
+    try {
+      const res = await fetch(`${this.baseUrl}/v1/voices?page_size=100`, {
+        headers: { 'xi-api-key': this.apiKey },
+        signal: AbortSignal.timeout(Math.min(this.timeoutMs, 10_000)),
+      });
+      if (!res.ok) {
+        await res.arrayBuffer().catch(() => undefined);
+        return this.sampleLinks;
+      }
+      this.sampleLinks = sampleLinksFrom(
+        (await res.json()) as unknown,
+        this.catalogue,
+        this.baseUrl.startsWith('http://'),
+      );
+    } catch {
+      // The catalogue is served without samples; the next read after the hour tries again.
+    }
+    return this.sampleLinks;
+  }
+
+  async sample(voiceId: string): Promise<SpokenAudio | null> {
+    const kept = this.sampleAudio.get(voiceId);
+    if (kept && Date.now() - kept.at < SAMPLES_KEPT_MS) return kept.audio;
+    const link = (await this.links()).get(voiceId);
+    if (!link) return null;
+    try {
+      const res = await fetch(link, {
+        signal: AbortSignal.timeout(Math.min(this.timeoutMs, 10_000)),
+      });
+      if (!res.ok) {
+        await res.arrayBuffer().catch(() => undefined);
+        return null;
+      }
+      const type = (res.headers.get('content-type') ?? '')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+      const bytes = Buffer.from(await res.arrayBuffer());
+      if (
+        bytes.length === 0 ||
+        bytes.length > MAX_PREVIEW_BYTES ||
+        !(AI_AUDIO_CONTENT_TYPES as readonly string[]).includes(type)
+      )
+        return null;
+      const audio: SpokenAudio = {
+        audio: bytes,
+        contentType: type as SpokenAudio['contentType'],
+      };
+      this.sampleAudio.set(voiceId, { at: Date.now(), audio });
+      return audio;
+    } catch {
+      return null;
     }
   }
 

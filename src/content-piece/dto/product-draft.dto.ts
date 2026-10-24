@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  IsUUID,
   Matches,
   Max,
   MaxLength,
@@ -77,6 +78,14 @@ export class CreateProductDraftDto {
   @Min(0)
   @Max(10_000_000)
   price?: number;
+  /**
+   * The AI tool job whose audio this product uses (AITOOLS-07): one of the
+   * caller's own finished jobs, or `null` to detach it. Optional; a draft
+   * without it behaves exactly as before.
+   */
+  @IsOptional()
+  @IsUUID('all', { message: 'mediaJobId must be a job id.' })
+  mediaJobId?: string | null;
 }
 
 /**
@@ -128,6 +137,14 @@ export class UpdateProductDraftDto {
   @Min(0)
   @Max(10_000_000)
   price?: number;
+  /**
+   * The AI tool job whose audio this product uses (AITOOLS-07): one of the
+   * caller's own finished jobs, or `null` to detach it. Optional; a draft
+   * without it behaves exactly as before.
+   */
+  @IsOptional()
+  @IsUUID('all', { message: 'mediaJobId must be a job id.' })
+  mediaJobId?: string | null;
 }
 
 /**

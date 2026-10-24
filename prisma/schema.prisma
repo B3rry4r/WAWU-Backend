@@ -523,6 +523,8 @@ model ProductDraft {
   tags            String[]     @default([])
   accessType      AccessType?
   price           Int?
+  /// The AI tool job whose audio the person chose to use in this product (AITOOLS-07); null when none. The job is the person's own (checked when it is set).
+  mediaJobId      String?
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
@@ -7763,6 +7765,8 @@ model AiToolJob {
   providerRef    String?
   /// The key of the file the person uploaded for the job (captions, clean audio, dubbing).
   inputRef       String?
+  /// When the person saved the result to their library (AITOOLS-07); null until they do.
+  savedAt        DateTime?
   createdAt      DateTime   @default(now())
   finishedAt     DateTime?
 
@@ -7794,6 +7798,10 @@ model VoiceProfile {
   sampleAt        DateTime?
   /// The time of the consent in force when the sample was set.
   sampleConsentAt DateTime?
+  /// The person's separate agreement that WAWU may speak their VoiceOver in an AI version of their own voice (AITOOLS-07). The Voice Intro consent covers intros only.
+  ownVoiceConsentAt   DateTime?
+  /// The exact words they agreed to for VoiceOver (the line the Hub served).
+  ownVoiceConsentLine String?
   /// The current Voice Intro audio (a `StorageObject` key), once a run is done.
   audioKey        String?
   audioAt         DateTime?

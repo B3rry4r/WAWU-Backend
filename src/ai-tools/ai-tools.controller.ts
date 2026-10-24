@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
   Headers,
@@ -21,6 +22,7 @@ import { BuiltBy } from '../money/money-contract';
 import { AiJobService } from './ai-job.service';
 import {
   AiJobListQueryDto,
+  OwnVoiceConsentDto,
   CreateCaptionsJobDto,
   CreateCleanAudioJobDto,
   CreateDubbingJobDto,
@@ -36,7 +38,11 @@ import type {
   AiJobPage,
   AiJobView,
   AiToolsView,
+  OwnVoiceRemovedView,
+  OwnVoiceView,
 } from './ai-tools-view.type';
+import { OwnVoiceService } from './own-voice/own-voice.service';
+import { personName } from '../voice-intro/voice-profile.service';
 import { CAPTIONS_TOOL } from './tools/captions.tool';
 import { CLEAN_AUDIO_TOOL } from './tools/clean-audio.tool';
 import { DUBBING_TOOL } from './tools/dubbing.tool';
@@ -57,6 +63,7 @@ export class AiToolsController {
   constructor(
     private readonly tools: AiToolsService,
     private readonly jobs: AiJobService,
+    private readonly own: OwnVoiceService,
   ) {}
 
   /**
@@ -67,7 +74,7 @@ export class AiToolsController {
   @Get()
   @Header('Cache-Control', 'no-store')
   @BuiltBy('AITOOLS-01')
-  list(): AiToolsView {
+  list(): Promise<AiToolsView> {
     return this.tools.list();
   }
 
@@ -426,5 +433,80 @@ export class AiToolsController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<AiJobView> {
     return this.jobs.read(user.sub, id);
+  }
+  /**
+   * Saves a finished result to the person's library (PT2b "Save", AITOOLS-07).
+   * Only the person's own finished job: another person's job and one that is
+   * not there are the same `404 not_found`, one still working or failed is
+   * `409 job_not_ready`. Saving twice keeps the first time and answers the job
+   * again. The job reads `saved: true`; `GET /ai-tools/jobs?saved=true` lists
+   * the saved results.
+   */
+  @Post('jobs/:id/save')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-07')
+  saveJob(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<AiJobView> {
+    return this.jobs.setSaved(user.sub, id, true);
+  }
+
+  /** Takes a result out of the library again (`saved: false`). The result itself stays on the job. */
+  @Delete('jobs/:id/save')
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-07')
+  unsaveJob(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<AiJobView> {
+    return this.jobs.setSaved(user.sub, id, false);
+  }
+
+  /**
+   * "Your voice" on PT2 (AITOOLS-07): whether the person's own voice can read
+   * their VoiceOver, and the words they agree to first. It is made from the
+   * recording of their Voice Intro and nothing else. `ready` is true when the
+   * tools are on, the recording is there and they agreed; then a VoiceOver job
+   * may name the voice `own`.
+   */
+  @Get('own-voice')
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-07')
+  ownVoice(@CurrentUser() user: WawuJwtClaims): Promise<OwnVoiceView> {
+    return this.own.view(user.sub, personName(user));
+  }
+
+  /**
+   * The person agrees to the words the Hub served in `consent.line`, sent back
+   * unchanged. Stored exactly, with the time. `409 own_voice_consent_line_changed`
+   * for any other words, `409 own_voice_recording_required` before the Voice
+   * Intro recording, `409 own_voice_name_required` with no name on the account.
+   */
+  @Post('own-voice/consent')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-07')
+  giveOwnVoiceConsent(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: OwnVoiceConsentDto,
+  ): Promise<OwnVoiceView> {
+    return this.own.giveConsent(user.sub, personName(user), dto.line);
+  }
+
+  /**
+   * Takes the agreement back and has the provider drop every copy of the
+   * person's voice it still holds. The answer says whether the provider holds
+   * none (`gone`) or the Hub is still removing one (`pending`, it keeps trying).
+   * The Voice Intro and its recording stay. Nothing is charged.
+   */
+  @Delete('own-voice')
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-07')
+  removeOwnVoice(
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<OwnVoiceRemovedView> {
+    return this.own.remove(user.sub, personName(user));
   }
 }

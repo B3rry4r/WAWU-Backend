@@ -84,7 +84,8 @@ export type CopyPresence = 'present' | 'absent' | 'unknown';
 
 /** A copy the provider keeps of what it made, to delete once the Hub has the result. `dub` is a Dubbing project (AITOOLS-05). */
 export interface ProviderCopy {
-  kind: 'transcript' | 'isolation' | 'dub';
+  /** `voice` (AITOOLS-07): the AI version of a person's own voice the provider made for one VoiceOver. */
+  kind: 'transcript' | 'isolation' | 'voice' | 'dub';
   id: string;
 }
 
@@ -352,6 +353,40 @@ export interface AiVoiceProvider {
    */
   speakInOwnVoice(
     req: OwnVoiceRequest,
-    opts?: { signal?: AbortSignal },
+    opts?: {
+      signal?: AbortSignal;
+      /**
+       * AITOOLS-07: called with the provider's id of the voice it made, right
+       * after it was made. When it answers `true` the caller has noted the id
+       * (so a server that dies still knows the voice is there) and owns its
+       * removal (`deleteOwnVoice`, tried again until the provider has dropped
+       * it): the adapter then leaves the voice in place. Anything else (false,
+       * a throw, not given) and the adapter removes the voice itself, as VOICE-01 does.
+       */
+      handOver?: (providerVoiceId: string) => Promise<boolean>;
+    },
   ): Promise<SpokenAudio>;
+
+  /**
+   * The WAWU ids of the listed voices the provider has a sample for
+   * (AITOOLS-07, G-POINTS-08-1): one read of the provider's voice list, kept for
+   * an hour. A read that fails answers what it has (nothing, the first time).
+   * Never throws. The provider's own links never leave the adapter: the Hub
+   * serves each sample itself (`sample`).
+   */
+  samples(): Promise<ReadonlySet<string>>;
+
+  /**
+   * A short sample of one listed voice, for the play button on its row; null
+   * when the provider has none, or it cannot be read now. Kept for an hour. A
+   * network call, never holds a transaction, connection or lock. Never throws.
+   */
+  sample(voiceId: string): Promise<SpokenAudio | null>;
+
+  /**
+   * One try at removing a voice made for a person's own voice (AITOOLS-07).
+   * Never throws; same answers as `deleteTranscript`. `not_found` here means
+   * the voice is already gone.
+   */
+  deleteOwnVoice(providerVoiceId: string): Promise<CopyRemoval>;
 }

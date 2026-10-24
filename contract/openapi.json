@@ -36036,6 +36036,15 @@
               "default": 20,
               "type": "integer"
             }
+          },
+          {
+            "name": "saved",
+            "required": false,
+            "in": "query",
+            "description": "AITOOLS-07: `true` lists only the results the person saved to their library; `false` lists only the ones not saved. Absent: every job, as before.",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -36097,6 +36106,202 @@
           "AiTools"
         ],
         "x-wawu-built-by": "AITOOLS-01"
+      }
+    },
+    "/api/hub/ai-tools/jobs/{id}/save": {
+      "post": {
+        "operationId": "AiToolsController_saveJob",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Saves a finished result to the person's library (PT2b \"Save\", AITOOLS-07).\nOnly the person's own finished job: another person's job and one that is\nnot there are the same `404 not_found`, one still working or failed is\n`409 job_not_ready`. Saving twice keeps the first time and answers the job\nagain. The job reads `saved: true`; `GET /ai-tools/jobs?saved=true` lists\nthe saved results.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-07"
+      },
+      "delete": {
+        "operationId": "AiToolsController_unsaveJob",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Takes a result out of the library again (`saved: false`). The result itself stays on the job.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-07"
+      }
+    },
+    "/api/hub/ai-tools/own-voice": {
+      "get": {
+        "operationId": "AiToolsController_ownVoice",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnVoiceView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "\"Your voice\" on PT2 (AITOOLS-07): whether the person's own voice can read\ntheir VoiceOver, and the words they agree to first. It is made from the\nrecording of their Voice Intro and nothing else. `ready` is true when the\ntools are on, the recording is there and they agreed; then a VoiceOver job\nmay name the voice `own`.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-07"
+      },
+      "delete": {
+        "operationId": "AiToolsController_removeOwnVoice",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnVoiceRemovedView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Takes the agreement back and has the provider drop every copy of the\nperson's voice it still holds. The answer says whether the provider holds\nnone (`gone`) or the Hub is still removing one (`pending`, it keeps trying).\nThe Voice Intro and its recording stay. Nothing is charged.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-07"
+      }
+    },
+    "/api/hub/ai-tools/own-voice/consent": {
+      "post": {
+        "operationId": "AiToolsController_giveOwnVoiceConsent",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnVoiceConsentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnVoiceView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The person agrees to the words the Hub served in `consent.line`, sent back\nunchanged. Stored exactly, with the time. `409 own_voice_consent_line_changed`\nfor any other words, `409 own_voice_recording_required` before the Voice\nIntro recording, `409 own_voice_name_required` with no name on the account.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-07"
+      }
+    },
+    "/api/hub/ai-tools/voices/{voiceId}/sample": {
+      "get": {
+        "operationId": "AiVoiceSamplesController_sample",
+        "parameters": [
+          {
+            "name": "voiceId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sample, as audio.",
+            "content": {
+              "audio/mpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AiVoiceSamples"
+        ],
+        "x-wawu-built-by": "AITOOLS-07"
       }
     },
     "/api/hub/me/voice": {
@@ -39254,6 +39459,12 @@
             "type": "number",
             "minimum": 0,
             "maximum": 10000000
+          },
+          "mediaJobId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The AI tool job whose audio this product uses (AITOOLS-07): one of the\ncaller's own finished jobs, or `null` to detach it. Optional; a draft\nwithout it behaves exactly as before.",
+            "format": "uuid"
           }
         },
         "required": [
@@ -39338,6 +39549,12 @@
             "type": "number",
             "minimum": 0,
             "maximum": 10000000
+          },
+          "mediaJobId": {
+            "type": "string",
+            "nullable": true,
+            "description": "The AI tool job whose audio this product uses (AITOOLS-07): one of the\ncaller's own finished jobs, or `null` to detach it. Optional; a draft\nwithout it behaves exactly as before.",
+            "format": "uuid"
           }
         }
       },
@@ -43907,6 +44124,19 @@
           "fileKey",
           "targetLanguage",
           "quoteToken"
+        ]
+      },
+      "OwnVoiceConsentDto": {
+        "type": "object",
+        "properties": {
+          "line": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "line"
         ]
       },
       "NamePreviewDto": {
@@ -50417,6 +50647,10 @@
               "type": "string"
             }
           },
+          "mediaJobId": {
+            "type": "string",
+            "nullable": true
+          },
           "createdAt": {
             "type": "string"
           },
@@ -50435,6 +50669,7 @@
           "accessType",
           "price",
           "missing",
+          "mediaJobId",
           "createdAt",
           "updatedAt"
         ]
@@ -65416,6 +65651,10 @@
           },
           "description": {
             "type": "string"
+          },
+          "sampleUrl": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -65630,6 +65869,9 @@
             "type": "string",
             "nullable": true
           },
+          "saved": {
+            "type": "boolean"
+          },
           "createdAt": {
             "type": "string"
           },
@@ -65650,6 +65892,7 @@
           "audioUrl",
           "outputs",
           "message",
+          "saved",
           "createdAt",
           "finishedAt"
         ]
@@ -65764,6 +66007,60 @@
         "required": [
           "items",
           "nextCursor"
+        ]
+      },
+      "OwnVoiceView": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "hasRecording": {
+            "type": "boolean"
+          },
+          "consent": {
+            "type": "object",
+            "properties": {
+              "line": {
+                "type": "string"
+              },
+              "given": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "line",
+              "given"
+            ]
+          },
+          "ready": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "available",
+          "hasRecording",
+          "consent",
+          "ready"
+        ]
+      },
+      "OwnVoiceRemovedView": {
+        "type": "object",
+        "properties": {
+          "own": {
+            "$ref": "#/components/schemas/OwnVoiceView"
+          },
+          "atProvider": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "gone"
+            ]
+          }
+        },
+        "required": [
+          "own",
+          "atProvider"
         ]
       },
       "MovieCardView": {
