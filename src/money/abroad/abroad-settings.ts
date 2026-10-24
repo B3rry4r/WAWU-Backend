@@ -14,8 +14,30 @@ export class AbroadSettings {
   /** The partner's fee per corridor from the environment, read once and checked at boot (a wrong figure stops the server). */
   private readonly providerFees: ReadonlyMap<string, number>;
 
+  /** Where WAWU's fee is paid, per currency: the routing number of its collecting account (the same `FX_FEE_COLLECTOR_<CODE>_BAN` the swap fee uses). */
+  private readonly collectors: ReadonlyMap<string, string>;
+
   constructor(private readonly plan: PlanSettingsService) {
     this.providerFees = readProviderFees(process.env);
+    this.collectors = readFeeCollectors(process.env);
+  }
+
+  /**
+   * WAWU's fee for a send from a foreign account, in that currency's smallest unit (WALLET-42): the line for the currency and way
+   * in `abroad.wawu_fee_foreign`, or 0 when none names it.
+   */
+  wawuFeeMinor(currency: string, method: 'bank' | 'mobile_money'): number {
+    const way = method === 'mobile_money' ? 'MOBILE_MONEY' : 'BANK';
+    for (const line of this.plan.lines('abroad.wawu_fee_foreign')) {
+      const [code, rail, amount] = line.split(' ');
+      if (code === currency && rail === way) return Number(amount);
+    }
+    return 0;
+  }
+
+  /** WAWU's collecting account in a currency, or null when none is configured (a fee in that currency then cannot be taken). */
+  feeCollectorBan(currency: string): string | null {
+    return this.collectors.get(currency) ?? null;
   }
 
   /** What the payment partner charges on top for a send, or null when no figure is configured (R-10). */
@@ -102,4 +124,21 @@ export function providerFeeFor(
   if (specific !== undefined) return specific;
   // The plain figure is the dollar one.
   return source === 'USD' ? (fees.get(base) ?? null) : null;
+}
+
+/** `FX_FEE_COLLECTOR_<CODE>_BAN` for each currency a send can leave from; a value that is set and wrong stops the server at boot. */
+export function readFeeCollectors(
+  env: Record<string, string | undefined>,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const code of ['USD', 'EUR', 'GBP', 'CAD', 'AED', 'GHS']) {
+    const key = `FX_FEE_COLLECTOR_${code}_BAN`;
+    const raw = env[key]?.trim();
+    if (!raw) continue;
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(raw)) {
+      throw new Error(`${key} is not an account number`);
+    }
+    out.set(code, raw);
+  }
+  return out;
 }

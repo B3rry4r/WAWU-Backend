@@ -20,7 +20,15 @@ import {
 } from '../payments/idempotency';
 import { successBody } from '../payments/wallet-payment.service';
 import { ABROAD_DECIMALS } from './abroad-corridors';
-import { readLeg, settleLeg } from './abroad-fee-legs';
+import {
+  foreignPort,
+  readLeg,
+  readLegWith,
+  settleLeg,
+  settleLegWith,
+  type LegRead,
+  type LegResult,
+} from './abroad-fee-legs';
 import {
   AbroadService,
   NOT_OFFERED_NOTE,
@@ -73,6 +81,25 @@ const TERMINAL: AbroadSendStatus[] = [
 ];
 
 type SendRow = Prisma.AbroadSendGetPayload<{ include: { recipient: true } }>;
+
+/**
+ * WAWU's fee on a send, whichever account it leaves (WALLET-42): `foreign` when it is taken from the foreign account the money
+ * leaves (a person with no naira wallet, `wawuFeeMinor`, in that currency), else the naira wallet's (`wawuFeeKobo`). At most one is
+ * above 0.
+ */
+export function feeOf(row: { wawuFeeKobo: bigint; wawuFeeMinor: bigint }): {
+  amount: bigint;
+  foreign: boolean;
+} {
+  return row.wawuFeeMinor > 0n
+    ? { amount: row.wawuFeeMinor, foreign: true }
+    : { amount: row.wawuFeeKobo, foreign: false };
+}
+
+/** The sends whose fee is above 0 in either account (for a where clause). */
+export const HAS_FEE: Prisma.AbroadSendWhereInput = {
+  OR: [{ wawuFeeKobo: { gt: 0n } }, { wawuFeeMinor: { gt: 0n } }],
+};
 
 function statusOf(t: AbroadTransfer): AbroadSendStatus {
   return t.state;
@@ -197,8 +224,9 @@ export class AbroadSendService {
             narration: dto.narration?.trim() || null,
             reference: `${ABROAD_REFERENCE_PREFIX}${id}`,
             wawuFeeKobo: q.wawuFeeKobo,
+            wawuFeeMinor: q.wawuFeeMinor,
             providerFeeEstimateMinor: q.providerFeeEstimateMinor,
-            wawuFeeTaken: q.wawuFeeKobo === 0n,
+            wawuFeeTaken: q.wawuFeeKobo === 0n && q.wawuFeeMinor === 0n,
             attemptedAt: now,
           },
           include: { recipient: true },
@@ -414,7 +442,8 @@ export class AbroadSendService {
    */
   async takeFee(sendId: string): Promise<void> {
     const row = await this.load(sendId);
-    if (row.wawuFeeTaken || row.wawuFeeKobo === 0n) return;
+    const fee = feeOf(row);
+    if (row.wawuFeeTaken || fee.amount === 0n) return;
     if (['failed', 'reversed', 'cancelled'].includes(row.status)) return;
     if (row.feeAttempts >= FEE_ATTEMPTS) return;
     await this.prisma.abroadSend.update({
@@ -422,26 +451,10 @@ export class AbroadSendService {
       data: { feeAttempts: { increment: 1 } },
     });
     try {
-      const wallet = await this.prisma.fintavaWallet.findFirst({
-        where: {
-          wawuUserId: row.wawuUserId,
-          provider: this.walletProvider.name,
-        },
-        select: { accountNumber: true },
-      });
-      if (!wallet?.accountNumber) return;
-      const platform = await this.walletProvider.getPlatformAccount();
-      const moved = await settleLeg(
-        this.walletProvider,
-        `${row.reference}-fee`,
-        {
-          fromAccountNumber: wallet.accountNumber,
-          toAccountNumber: platform.accountNumber,
-          amountKobo: row.wawuFeeKobo,
-          narration: 'WAWU fee',
-        },
-        (m) => this.logger.warn(`abroad send ${sendId}: WAWU's fee ${m}`),
-      );
+      const warn = (m: string) =>
+        this.logger.warn(`abroad send ${sendId}: WAWU's fee ${m}`);
+      const moved = await this.settleFeeLeg(row, 'take', fee.amount, warn);
+      if (moved === null) return;
       if (moved.result === 'spent') {
         this.logger.error(
           `abroad send ${sendId}: the provider failed WAWU's fee under three references; it waits for a person`,
@@ -466,6 +479,102 @@ export class AbroadSendService {
   }
 
   /**
+   * Makes the fee leg of a send once, through the one set of legs: out of the naira wallet to WAWU's account, or (a person with no
+   * naira wallet, WALLET-42) out of the foreign account to WAWU's collecting account in the same currency, or back. Null when the
+   * leg cannot be made yet (no wallet, no collecting account, no foreign fee support at the provider): it waits for a later pass.
+   */
+  private async settleFeeLeg(
+    row: Prisma.AbroadSendGetPayload<object>,
+    direction: 'take' | 'give_back',
+    amount: bigint,
+    warn: (message: string) => void,
+  ): Promise<LegResult | null> {
+    const base =
+      direction === 'take'
+        ? `${row.reference}-fee`
+        : `${row.reference}-fee-back`;
+    if (feeOf(row).foreign) {
+      const ref = await this.foreignRef(row, direction);
+      const abroad = this.abroad.provider();
+      if (!ref || !abroad.feeLeg) return null;
+      return settleLegWith(
+        foreignPort(
+          abroad,
+          ref,
+          amount,
+          direction === 'take' ? 'WAWU fee' : 'WAWU fee given back',
+        ),
+        base,
+        warn,
+      );
+    }
+    const wallet = await this.prisma.fintavaWallet.findFirst({
+      where: {
+        wawuUserId: row.wawuUserId,
+        provider: this.walletProvider.name,
+      },
+      select: { accountNumber: true },
+    });
+    if (!wallet?.accountNumber) return null;
+    const platform = await this.walletProvider.getPlatformAccount();
+    return settleLeg(
+      this.walletProvider,
+      base,
+      direction === 'take'
+        ? {
+            fromAccountNumber: wallet.accountNumber,
+            toAccountNumber: platform.accountNumber,
+            amountKobo: amount,
+            narration: 'WAWU fee',
+          }
+        : {
+            fromAccountNumber: platform.accountNumber,
+            toAccountNumber: wallet.accountNumber,
+            amountKobo: amount,
+            narration: 'WAWU fee given back',
+          },
+      warn,
+    );
+  }
+
+  /** The foreign account and WAWU's collecting account a fee leg runs between; null while either is missing. */
+  private async foreignRef(
+    row: Prisma.AbroadSendGetPayload<object>,
+    direction: 'take' | 'give_back',
+  ) {
+    const holder = await this.abroad.holderOf(row.wawuUserId);
+    const collectorBan = this.abroad.settings.feeCollectorBan(row.fromCurrency);
+    if (!holder || !collectorBan) return null;
+    return {
+      holder,
+      currency: row.fromCurrency,
+      accountRef: row.fromAccountRef,
+      collectorBan,
+      direction,
+    };
+  }
+
+  /**
+   * The provider's record of a send's fee leg (`fee`) or of its give-back (`fee_back`), read and never made. A leg that cannot be
+   * looked for yet reads as `wait`.
+   */
+  async readFeeLeg(
+    row: Prisma.AbroadSendGetPayload<object>,
+    which: 'fee' | 'fee_back',
+  ): Promise<LegRead> {
+    const base =
+      which === 'fee' ? `${row.reference}-fee` : `${row.reference}-fee-back`;
+    if (!feeOf(row).foreign) return readLeg(this.walletProvider, base);
+    const ref = await this.foreignRef(
+      row,
+      which === 'fee' ? 'take' : 'give_back',
+    );
+    const abroad = this.abroad.provider();
+    if (!ref || !abroad.findFeeLeg) return { result: 'wait' };
+    return readLegWith(foreignPort(abroad, ref), base);
+  }
+
+  /**
    * A send that failed or was reversed owes its sender the fee back, once
    * (`<reference>-fee-back`, from WAWU's account to the person's wallet): the
    * fee leg's own completed record says what was taken, and the give-back is
@@ -475,7 +584,8 @@ export class AbroadSendService {
    */
   async giveBack(sendId: string, now = new Date()): Promise<void> {
     const row = await this.load(sendId);
-    if (!row.wawuFeeTaken || row.wawuFeeKobo === 0n) return;
+    const fee = feeOf(row);
+    if (!row.wawuFeeTaken || fee.amount === 0n) return;
     if (row.feeGivenBackAt !== null || row.feeBackHeldAt !== null) return;
     if (row.status !== 'failed' && row.status !== 'reversed') return;
     const since = (row.completedAt ?? row.updatedAt).getTime();
@@ -487,15 +597,7 @@ export class AbroadSendService {
       );
     };
     try {
-      const wallet = await this.prisma.fintavaWallet.findFirst({
-        where: {
-          wawuUserId: row.wawuUserId,
-          provider: this.walletProvider.name,
-        },
-        select: { accountNumber: true },
-      });
-      if (!wallet?.accountNumber) return;
-      const taken = await readLeg(this.walletProvider, `${row.reference}-fee`);
+      const taken = await this.readFeeLeg(row, 'fee');
       if (taken.result === 'none') {
         await hold('the fee leg has no completed record at the provider');
         return;
@@ -504,19 +606,14 @@ export class AbroadSendService {
         await this.waitOrHold(sendId, now, since, hold);
         return;
       }
-      const platform = await this.walletProvider.getPlatformAccount();
-      const moved = await settleLeg(
-        this.walletProvider,
-        `${row.reference}-fee-back`,
-        {
-          fromAccountNumber: platform.accountNumber,
-          toAccountNumber: wallet.accountNumber,
-          amountKobo: taken.moved.amountKobo + taken.moved.feeKobo,
-          narration: 'WAWU fee given back',
-        },
+      const moved = await this.settleFeeLeg(
+        row,
+        'give_back',
+        taken.moved.amountKobo + taken.moved.feeKobo,
         (m) =>
           this.logger.warn(`abroad send ${sendId}: the fee given back ${m}`),
       );
+      if (moved === null) return;
       if (moved.result === 'done') {
         await this.prisma.abroadSend.updateMany({
           where: { id: sendId, feeGivenBackAt: null },
@@ -603,7 +700,7 @@ export class AbroadSendService {
     const owed = await this.prisma.abroadSend.findMany({
       where: {
         wawuFeeTaken: true,
-        wawuFeeKobo: { gt: 0n },
+        AND: [HAS_FEE],
         feeGivenBackAt: null,
         feeBackHeldAt: null,
         status: { in: ['failed', 'reversed'] },
@@ -628,7 +725,7 @@ export class AbroadSendService {
     const rows = await this.prisma.abroadSend.findMany({
       where: {
         wawuFeeTaken: false,
-        wawuFeeKobo: { gt: 0n },
+        AND: [HAS_FEE],
         feeSettledAt: null,
         feeAttempts: { gt: 0 },
         OR: [
@@ -654,7 +751,7 @@ export class AbroadSendService {
     row: Prisma.AbroadSendGetPayload<object>,
     now: Date,
   ): Promise<void> {
-    const leg = await readLeg(this.walletProvider, `${row.reference}-fee`);
+    const leg = await this.readFeeLeg(row, 'fee');
     const failedSend = row.status === 'failed' || row.status === 'reversed';
     if (leg.result === 'done') {
       await this.prisma.abroadSend.updateMany({
@@ -704,6 +801,7 @@ export class AbroadSendService {
           reason: why,
           detail: {
             feeKobo: row.wawuFeeKobo.toString(),
+            feeMinor: row.wawuFeeMinor.toString(),
             status: row.status,
             feeTaken: row.wawuFeeTaken,
           },
@@ -742,6 +840,7 @@ export class AbroadSendService {
             "WAWU's fee could not be taken after the last try and was written off",
           detail: {
             feeKobo: row.wawuFeeKobo.toString(),
+            feeMinor: row.wawuFeeMinor.toString(),
             attempts: row.feeAttempts,
           },
           adminId: SYSTEM_ACTOR,
@@ -862,6 +961,7 @@ export class AbroadSendService {
       providerFeeMinor:
         r.providerFeeMinor === null ? null : Number(r.providerFeeMinor),
       wawuFeeKobo: Number(r.wawuFeeKobo),
+      wawuFeeMinor: Number(r.wawuFeeMinor),
       narration: r.narration,
       failureReason: r.failureReason,
       speed: speedOf(r.recipient),

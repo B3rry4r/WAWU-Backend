@@ -17,6 +17,7 @@ import type { Response } from 'express';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import { RequireFeesSet } from '../fees/fees-set.guard';
 import {
+  AllowWorldWallet,
   CurrentWallet,
   type OpenWallet,
   RequireOpenWallet,
@@ -56,7 +57,9 @@ import type {
  * Sending money abroad (task NUV-11, R-84): to a bank account or a mobile
  * money wallet in another country, from any of the person's accounts, with a
  * conversion quote when the currencies differ. Every route needs an open
- * naira wallet (R-6) and reaches the provider only through WALLET_PROVIDER;
+ * wallet (R-6): a naira wallet, or (WALLET-42, R-87) a world wallet, whose
+ * person can send only from a foreign account they hold. It reaches the
+ * provider only through WALLET_PROVIDER;
  * a provider that cannot pay abroad (Fintava) answers `409
  * currency_not_supported`. The quote and the send run FeesSetGuard first
  * (`503 fees_not_set` while the running provider's fees are not set, NUV-07).
@@ -78,7 +81,7 @@ export class AbroadController {
   @Get('corridors')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('NUV-11')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(...WALLET_GATE_ERRORS, 'currency_not_supported')
   corridors(): AbroadCorridorsView {
     return this.abroad.corridors();
@@ -88,7 +91,7 @@ export class AbroadController {
   @Get('banks/:country')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('NUV-11')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'currency_not_supported',
@@ -103,7 +106,7 @@ export class AbroadController {
   @Get('sources')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('NUV-11')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'currency_not_supported',
@@ -117,7 +120,7 @@ export class AbroadController {
   @Get('recipients')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('NUV-11')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(...WALLET_GATE_ERRORS)
   recipients(
     @CurrentWallet() wallet: OpenWallet,
@@ -138,7 +141,7 @@ export class AbroadController {
   @Post('recipients')
   @HttpCode(201)
   @BuiltBy('NUV-11')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'currency_not_supported',
@@ -163,7 +166,7 @@ export class AbroadController {
   @Delete('recipients/:id')
   @HttpCode(204)
   @BuiltBy('NUV-11')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(...WALLET_GATE_ERRORS, 'not_found')
   removeRecipient(
     @CurrentWallet() wallet: OpenWallet,
@@ -188,7 +191,7 @@ export class AbroadController {
   @HttpCode(201)
   @Header('Cache-Control', 'no-store')
   @BuiltBy('NUV-11')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'currency_not_supported',
@@ -222,11 +225,13 @@ export class AbroadController {
    * quote is `409 quote_expired`; a frozen person `423 account_frozen`. The
    * same key and body answer the first result again
    * (`Idempotent-Replayed: true`) without checking the PIN. WAWU's fee, when
-   * set, is taken from the naira wallet after the provider takes the send.
+   * set, is taken after the provider takes the send: from the naira wallet, or
+   * (a world wallet, which has none) from the foreign account the money left.
    */
   @Post('sends')
   @HttpCode(201)
   @BuiltBy('NUV-11')
+  @AllowWorldWallet()
   @RequireIdempotentApproval(ABROAD_SEND_ROUTE, AbroadSendGuard)
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
@@ -255,7 +260,7 @@ export class AbroadController {
   @Get('sends')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('NUV-11')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(...WALLET_GATE_ERRORS)
   sends(
     @CurrentWallet() wallet: OpenWallet,
@@ -268,7 +273,7 @@ export class AbroadController {
   @Get('sends/:id')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('NUV-11')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(...WALLET_GATE_ERRORS, 'not_found')
   sendById(
     @CurrentWallet() wallet: OpenWallet,

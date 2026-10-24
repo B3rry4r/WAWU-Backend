@@ -1,5 +1,9 @@
 import type {
   AbroadBank,
+  AbroadFeeLeg,
+  AbroadFeeLegInput,
+  AbroadFeeLegLookup,
+  AbroadFeeLegRef,
   AbroadHolder,
   AbroadLookup,
   AbroadProvider,
@@ -16,6 +20,7 @@ import { AbroadRefusal } from '../../wallet-provider/abroad-provider';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import type { NuvionClient, NuvionOp } from '../nuvion-client';
 import { NuvionError } from '../nuvion-error';
+import { readNuvionTransfer } from '../nuvion-ledger-delivery';
 import { isNuvionId, readNuvionAccount, readNuvionWalletId } from './accounts';
 import {
   NuvionPayoutsArea,
@@ -42,6 +47,22 @@ export const ABROAD_META_KEY = 'wawu_abroad';
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/**
+ * The entity (and, for a naira holder, the naira account) a holder stands for. A person with a world wallet (WALLET-42, R-87) has
+ * no naira account: their holder carries an empty `walletId` and the entity is the customer id. Anything else that is not a
+ * Nuvion wallet id is refused, as before.
+ */
+function holderIds(
+  holder: AbroadHolder,
+): { entityId: string; accountId: string | null } | null {
+  const ids = readNuvionWalletId(holder.walletId);
+  if (ids) return ids;
+  if (holder.walletId === '' && isNuvionId(holder.customerId)) {
+    return { entityId: holder.customerId, accountId: null };
+  }
+  return null;
 }
 
 function text(o: Record<string, unknown>, key: string): string | null {
@@ -190,7 +211,7 @@ export class NuvionAbroadArea implements AbroadProvider {
 
   async sources(holder: AbroadHolder): Promise<AbroadSource[]> {
     const op: NuvionOp = { name: 'list accounts', call: 'read' };
-    const ids = readNuvionWalletId(holder.walletId);
+    const ids = holderIds(holder);
     if (!ids) {
       throw new NuvionError({
         kind: 'validation',
@@ -232,7 +253,7 @@ export class NuvionAbroadArea implements AbroadProvider {
   async saveRecipient(
     input: AbroadRecipientInput,
   ): Promise<AbroadRecipientSaved> {
-    const ids = readNuvionWalletId(input.holder.walletId);
+    const ids = holderIds(input.holder);
     if (!ids || !COUNTRY.test(input.country)) {
       throw new NuvionError({
         kind: 'validation',
@@ -444,7 +465,7 @@ export class NuvionAbroadArea implements AbroadProvider {
         validForSeconds: SAME_CURRENCY_HOLD_SECONDS,
       };
     }
-    const ids = readNuvionWalletId(input.holder.walletId);
+    const ids = holderIds(input.holder);
     if (!ids || !isNuvionId(input.fromAccountRef)) {
       throw new NuvionError({
         kind: 'validation',
@@ -518,7 +539,7 @@ export class NuvionAbroadArea implements AbroadProvider {
   // -------------------------------------------------------------------------
 
   async send(input: AbroadSendInput): Promise<AbroadTransfer> {
-    const ids = readNuvionWalletId(input.holder.walletId);
+    const ids = holderIds(input.holder);
     if (
       !ids ||
       !isNuvionId(input.fromAccountRef) ||
@@ -617,7 +638,7 @@ export class NuvionAbroadArea implements AbroadProvider {
     holder: AbroadHolder,
     transferId: string,
   ): Promise<AbroadTransfer> {
-    const ids = readNuvionWalletId(holder.walletId);
+    const ids = holderIds(holder);
     if (!ids) {
       throw new NuvionError({
         kind: 'validation',
@@ -633,7 +654,7 @@ export class NuvionAbroadArea implements AbroadProvider {
     reference: string,
     since: Date | null,
   ): Promise<AbroadLookup> {
-    const ids = readNuvionWalletId(holder.walletId);
+    const ids = holderIds(holder);
     if (!ids) return { state: 'unknown' };
     try {
       const found = await this.payouts.findTransferByReference(
@@ -652,6 +673,178 @@ export class NuvionAbroadArea implements AbroadProvider {
       if (e.kind === 'auth' || e.kind === 'not_configured') throw e;
       return { state: 'unknown' };
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // WAWU's fee on a send from a foreign account (WALLET-42)
+  // -------------------------------------------------------------------------
+
+  private readonly collectors = new Map<string, string>();
+
+  /**
+   * WAWU's own account that collects in `currency`, found by the routing number config names. WAWU's own accounts are the key's
+   * entity's, so the list names no entity.
+   */
+  private async collectorAccount(
+    currency: string,
+    ban: string,
+  ): Promise<string | null> {
+    const cached = this.collectors.get(`${currency}:${ban}`);
+    if (cached) return cached;
+    const op: NuvionOp = { name: 'find fee account', call: 'read' };
+    const listed = await this.client.listAll<unknown>(op, '/accounts', {
+      limit: 100,
+    });
+    for (const raw of listed.items) {
+      const a = readNuvionAccount(raw);
+      if (a && !a.deleted && a.currency === currency && a.nuvionBan === ban) {
+        this.collectors.set(`${currency}:${ban}`, a.id);
+        return a.id;
+      }
+    }
+    return null;
+  }
+
+  /** The account a fee leg is listed on, and whose entity: the person's for a take, WAWU's collecting account for a give back. */
+  private async feeSide(
+    ref: AbroadFeeLegRef,
+  ): Promise<{ accountId: string; entityId: string | null } | null> {
+    const ids = holderIds(ref.holder);
+    if (
+      !ids ||
+      !isNuvionId(ref.accountRef) ||
+      !/^[A-Z]{3}$/.test(ref.currency) ||
+      ref.currency === 'NGN' ||
+      !/^[A-Za-z0-9_-]{1,64}$/.test(ref.collectorBan)
+    ) {
+      return null;
+    }
+    if (ref.direction === 'take') {
+      return { accountId: ref.accountRef, entityId: ids.entityId };
+    }
+    const collector = await this.collectorAccount(
+      ref.currency,
+      ref.collectorBan,
+    );
+    return collector ? { accountId: collector, entityId: null } : null;
+  }
+
+  private feeLegFrom(raw: unknown, reference: string): AbroadFeeLeg | null {
+    const read = readNuvionTransfer(raw);
+    if (!read.ok) return null;
+    const t = read.transfer;
+    if (t.uniqueReference !== null && t.uniqueReference !== reference) {
+      return null;
+    }
+    const status = t.status.toLowerCase();
+    return {
+      state:
+        status === 'successful'
+          ? 'completed'
+          : status === 'failed' || status === 'reversed'
+            ? 'failed'
+            : 'pending',
+      amountMinor: BigInt(t.amountKobo),
+      feeMinor: BigInt(t.feeKobo),
+    };
+  }
+
+  async feeLeg(input: AbroadFeeLegInput): Promise<AbroadFeeLeg> {
+    const op: NuvionOp = { name: 'foreign fee leg', call: 'write' };
+    const bad = (why: string) =>
+      new NuvionError({
+        kind: 'validation',
+        operation: op.name,
+        messages: [`${AREA}: ${why}`],
+        reference: input.reference,
+        recordMayExist: false,
+      });
+    if (
+      input.amountMinor <= 0n ||
+      !/^[A-Za-z0-9._:-]{1,64}$/.test(input.reference)
+    ) {
+      throw bad('the amount or the reference is not usable');
+    }
+    const side = await this.feeSide(input);
+    if (!side) throw bad('the fee accounts are not usable');
+    let to = input.collectorBan;
+    if (input.direction === 'give_back') {
+      const answer = await this.client.get<unknown>(
+        { name: 'read account routing', call: 'read' },
+        `/accounts/${encodeURIComponent(input.accountRef)}`,
+        { entity_id: side.entityId ?? holderIds(input.holder)!.entityId },
+      );
+      const read = readNuvionAccount(answer.data);
+      if (!read?.nuvionBan)
+        throw bad("the person's account has no routing number");
+      to = read.nuvionBan;
+    }
+    const body: Record<string, unknown> = {
+      account_id: side.accountId,
+      amount: Number(input.amountMinor),
+      currency: input.currency,
+      payment_type: 'book-transfer',
+      nuvion_ban: to,
+      narration: input.narration.slice(0, NARRATION_MAX),
+      unique_reference: input.reference,
+      ...(side.entityId === null ? {} : { entity_id: side.entityId }),
+    };
+    try {
+      const answer = await this.client.post<unknown>(op, '/transfers', body, {
+        reference: input.reference,
+      });
+      const leg = this.feeLegFrom(answer.data, input.reference);
+      if (!leg) {
+        throw new NuvionError({
+          kind: 'not_confirmed',
+          operation: op.name,
+          httpStatus: answer.httpStatus,
+          messages: [`${AREA}: the answer is not the fee transfer`],
+          reference: input.reference,
+          recordMayExist: true,
+          requestId: answer.requestId,
+        });
+      }
+      return leg;
+    } catch (e) {
+      if (
+        e instanceof WalletProviderError &&
+        e.kind === 'duplicate_reference'
+      ) {
+        // Nuvion holds a transfer under this reference: its record is the answer, never a second transfer.
+        const found = await this.findFeeLeg(input, input.reference);
+        if (found.state === 'found') return found.leg;
+      }
+      throw e;
+    }
+  }
+
+  async findFeeLeg(
+    ref: AbroadFeeLegRef,
+    reference: string,
+  ): Promise<AbroadFeeLegLookup> {
+    const op: NuvionOp = { name: 'find fee transfer', call: 'read' };
+    const side = await this.feeSide(ref);
+    if (!side) return { state: 'unknown' };
+    const listed = await this.client.listAll<unknown>(
+      op,
+      '/transfers',
+      {
+        account_id: side.accountId,
+        limit: 100,
+        ...(side.entityId === null ? {} : { entity_id: side.entityId }),
+      },
+      { maxPages: 5 },
+    );
+    for (const row of listed.items) {
+      if (!isRecord(row) || text(row, 'unique_reference') !== reference) {
+        continue;
+      }
+      const leg = this.feeLegFrom(row, reference);
+      if (leg) return { state: 'found', leg };
+    }
+    // Only a complete list is proof that there is none.
+    return listed.complete ? { state: 'absent' } : { state: 'unknown' };
   }
 
   // -------------------------------------------------------------------------

@@ -1482,6 +1482,7 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           amountToMinor: true,
           rate: true,
           wawuFeeKobo: true,
+          wawuFeeMinor: true,
           providerFeeEstimateMinor: true,
           expiresAt: true,
           usedAt: true,
@@ -1494,6 +1495,7 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         amountFromMinor: Number(r.amountFromMinor),
         amountToMinor: Number(r.amountToMinor),
         wawuFeeKobo: Number(r.wawuFeeKobo),
+        wawuFeeMinor: Number(r.wawuFeeMinor),
         providerFeeEstimateMinor:
           r.providerFeeEstimateMinor === null
             ? null
@@ -1523,6 +1525,7 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           rate: true,
           providerFeeMinor: true,
           wawuFeeKobo: true,
+          wawuFeeMinor: true,
           wawuFeeTaken: true,
           feeGivenBackAt: true,
           narration: true,
@@ -1548,6 +1551,7 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         providerFeeMinor:
           r.providerFeeMinor === null ? null : Number(r.providerFeeMinor),
         wawuFeeKobo: Number(r.wawuFeeKobo),
+        wawuFeeMinor: Number(r.wawuFeeMinor),
         to: {
           country: recipient.country,
           method: recipient.method,

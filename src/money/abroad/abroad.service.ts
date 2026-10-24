@@ -13,7 +13,7 @@ import {
   type WalletProvider,
 } from '../../wallet-provider/wallet-provider.interface';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
-import type { OpenWallet } from '../gate/wallet-gate';
+import { worldWalletOf, type OpenWallet } from '../gate/wallet-gate';
 import { MoneyError } from '../money-error';
 import { isUniqueViolation } from '../prisma-unique';
 import {
@@ -262,13 +262,25 @@ export class AbroadService {
     return { customerId: wallet.customerId, walletId: wallet.walletId };
   }
 
-  /** The holder of a person who is not making this request (the sweep, the admin). */
+  /**
+   * True for a world wallet (WALLET-42, R-87): the person has no naira wallet, so the gate hands the seam an empty `walletId` and the
+   * only money they can send from is a foreign account.
+   */
+  static isWorld(wallet: Pick<OpenWallet, 'walletId'>): boolean {
+    return wallet.walletId === '';
+  }
+
+  /** The holder of a person who is not making this request (the sweep, the admin): a naira wallet's, else a world wallet's. */
   async holderOf(wawuUserId: string): Promise<AbroadHolder | null> {
     const w = await this.prisma.fintavaWallet.findFirst({
       where: { wawuUserId, provider: this.walletProvider.name },
       select: { customerId: true, walletId: true },
     });
-    return w ? { customerId: w.customerId, walletId: w.walletId } : null;
+    if (w) return { customerId: w.customerId, walletId: w.walletId };
+    const world = await worldWalletOf(this.prisma, wawuUserId);
+    return world
+      ? { customerId: world.customerId, walletId: world.walletId }
+      : null;
   }
 
   // -- what can be drawn -------------------------------------------------------
@@ -594,7 +606,9 @@ export class AbroadService {
     if (!source) {
       throw new MoneyError(
         'fx_account_not_open',
-        `You do not have a ${dto.fromCurrency} account to send from.`,
+        dto.fromCurrency === 'NGN'
+          ? 'You have no naira account. Send from one of your other currency accounts.'
+          : `You do not have a ${dto.fromCurrency} account to send from.`,
         { currency: dto.fromCurrency },
       );
     }
@@ -642,7 +656,26 @@ export class AbroadService {
       amountFrom,
     );
 
-    const feeKobo = this.settings.wawuFeeKobo;
+    // WALLET-42: a person with no naira wallet pays WAWU's fee from the foreign account the money leaves, in its own currency, from
+    // config per currency and way (R-10); everyone else keeps the naira fee, taken from the naira wallet.
+    const world = AbroadService.isWorld(wallet);
+    const feeKobo = world ? 0 : this.settings.wawuFeeKobo;
+    const feeMinor = world
+      ? this.settings.wawuFeeMinor(
+          dto.fromCurrency,
+          recipient.method as AbroadMethod,
+        )
+      : 0;
+    if (
+      feeMinor > 0 &&
+      (!this.settings.feeCollectorBan(dto.fromCurrency) || !abroad.feeLeg)
+    ) {
+      throw new MoneyError(
+        'currency_not_supported',
+        `Sending abroad from a ${dto.fromCurrency} account is not available yet.`,
+        { currency: dto.fromCurrency },
+      );
+    }
     // R-10: the person pays the partner's fee on top, from config (the provider's quote has none), shown before the PIN.
     const partnerFee = this.settings.providerFeeMinor(
       dto.fromCurrency,
@@ -655,6 +688,7 @@ export class AbroadService {
       quote.amountFromMinor,
       feeKobo,
       partnerFee ?? 0,
+      feeMinor,
     );
 
     const row = await this.prisma.abroadQuote.create({
@@ -669,6 +703,7 @@ export class AbroadService {
         rate: quote.rate,
         providerQuoteId: quote.quoteRef,
         wawuFeeKobo: BigInt(feeKobo),
+        wawuFeeMinor: BigInt(feeMinor),
         providerFeeEstimateMinor:
           partnerFee === null ? null : BigInt(partnerFee),
         expiresAt: quote.expiresAt,
@@ -694,6 +729,7 @@ export class AbroadService {
       rate: quote.rate,
       providerFeeMinor: partnerFee,
       wawuFeeKobo: feeKobo,
+      wawuFeeMinor: feeMinor,
       speed: speedOf(recipient),
       expiresAt: row.expiresAt.toISOString(),
       validForSeconds: validFor,
@@ -711,11 +747,16 @@ export class AbroadService {
     amountMinor: number,
     feeKobo: number,
     partnerFeeMinor: number,
+    feeMinor = 0,
   ): void {
     const from = sources.find((s) => s.currency === currency);
-    // The amount, the partner's fee (in the sending currency) and, from the naira wallet, WAWU's fee on top.
+    // The amount, the partner's fee (in the sending currency) and WAWU's fee on top: in kobo from the naira wallet, or (a person with
+    // no naira wallet) in the sending currency from the account the money leaves.
     const owed =
-      amountMinor + partnerFeeMinor + (currency === 'NGN' ? feeKobo : 0);
+      amountMinor +
+      partnerFeeMinor +
+      (currency === 'NGN' ? feeKobo : 0) +
+      feeMinor;
     if (from && from.availableMinor !== null && from.availableMinor < owed) {
       throw new MoneyError(
         'insufficient_funds',
