@@ -12,6 +12,8 @@ import { NotificationService } from '../notification/notification.service';
 import type { SetPreviewDto } from './dto/set-preview.dto';
 import { readHidden } from './deletion-hid';
 import { FeedCardsService, type FeedCreator } from './feed-cards.service';
+import { freeLessonCount } from './course-lessons.service';
+import { StorageService } from '../storage/storage.service';
 
 /** The one wording for a piece that is missing, hidden or not the caller's. */
 const NOT_FOUND = 'Content not found';
@@ -30,8 +32,22 @@ export interface DetailLesson {
   title: string;
   order: number;
   durationLabel: string | null;
-  /** Inside the free preview (the first `freePreview.lessons` by order). */
+  /** Open to everyone: the first lesson of a course (always), and the first `freePreview.lessons` when the creator opened more. */
   isFree: boolean;
+  /** The lesson has a file to play (FIX-107). A lesson without one opens nothing. */
+  hasFile: boolean;
+}
+
+/** FIX-111 (H24, G-HOME-08-1): the course a piece comes from, for the "From the course <title>" row. */
+export interface ParentCourse {
+  id: string;
+  title: string;
+  /** How many lessons the course holds. */
+  lessonCount: number;
+  /** The course's price in whole naira; 0 for a free course. */
+  price: number;
+  /** The course's public preview picture or clip (a fresh link), for the row's picture. */
+  previewAssetUrl: string | null;
 }
 
 export type CannotRateReason = 'own_content' | 'not_purchased';
@@ -71,6 +87,8 @@ export interface ContentDetail {
   freePreview: FreePreview;
   /** The course's lessons in order; empty for a piece that is not a course. */
   lessons: DetailLesson[];
+  /** The live course this piece comes from, or null: none was named, or the course is not live (in review, turned down, taken down). */
+  parentCourse: ParentCourse | null;
   rating: RatingState;
   /** Name, avatar, ticks, headline and followers of whoever made it: the page needs no second call. */
   creator: DetailCreator;
@@ -99,6 +117,7 @@ export class ContentDetailService {
     private readonly blocked: BlockedAccountService,
     private readonly notifications: NotificationService,
     private readonly cards: FeedCardsService,
+    private readonly storage: StorageService,
   ) {}
 
   /**
@@ -153,6 +172,45 @@ export class ContentDetailService {
       myRating: mine?.stars ?? null,
       canRate: cannotRateReason === null,
       cannotRateReason,
+    };
+  }
+
+  /**
+   * The row on a piece that comes from a course (FIX-111). Only a course that anyone may open is named: the same creator's, and
+   * live. One that is in review, turned down or taken down is left out, so the row never leads to a page that is not there.
+   */
+  private async parentCourseOf(
+    parentCourseId: string | null,
+    creatorWawuId: string,
+  ): Promise<ParentCourse | null> {
+    if (!parentCourseId) return null;
+    const parent = await this.prisma.contentPiece.findUnique({
+      where: { id: parentCourseId },
+      select: {
+        id: true,
+        title: true,
+        price: true,
+        status: true,
+        contentType: true,
+        creatorWawuId: true,
+        previewAssetUrl: true,
+        _count: { select: { lessons: true } },
+      },
+    });
+    if (
+      !parent ||
+      parent.status !== 'live' ||
+      parent.contentType !== 'course' ||
+      parent.creatorWawuId !== creatorWawuId
+    ) {
+      return null;
+    }
+    return {
+      id: parent.id,
+      title: parent.title,
+      lessonCount: parent._count.lessons,
+      price: parent.price,
+      previewAssetUrl: await this.storage.freshUrlFor(parent.previewAssetUrl),
     };
   }
 
@@ -213,6 +271,10 @@ export class ContentDetailService {
       ]);
     const freeLessons = extra?.freePreviewLessons ?? null;
     const buyerCount = buyers.length;
+    const parentCourse = await this.parentCourseOf(
+      extra?.parentCourseId ?? null,
+      piece.creatorWawuId,
+    );
 
     return {
       contentId,
@@ -234,8 +296,10 @@ export class ContentDetailService {
         title: l.title,
         order: l.order,
         durationLabel: l.durationLabel,
-        isFree: freeLessons !== null && i < freeLessons,
+        isFree: i < freeLessonCount(freeLessons, lessons.length),
+        hasFile: l.assetKey !== null,
       })),
+      parentCourse,
       rating: await this.ratingState(contentId, viewer, piece, !!purchase),
       creator: {
         ...(creators.get(piece.creatorWawuId) as FeedCreator),

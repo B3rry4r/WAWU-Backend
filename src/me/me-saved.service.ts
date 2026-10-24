@@ -11,6 +11,8 @@ import { StorageService } from '../storage/storage.service';
 import { decodeMeCursor, pageOf } from './me-cursor';
 import type {
   SavedContentView,
+  SavedCourseState,
+  SavedCourseView,
   SavedCreatorState,
   SavedEntryView,
   SavedEventView,
@@ -18,7 +20,7 @@ import type {
   SavedPage,
 } from './me-view.type';
 
-type SavedTab = 'all' | 'content' | 'events' | 'creators';
+type SavedTab = 'all' | 'content' | 'events' | 'creators' | 'courses';
 
 interface SavedRow {
   kind: SavedKind;
@@ -28,9 +30,10 @@ interface SavedRow {
 }
 
 const CREATOR_NOT_FOUND = 'Creator not found.';
+const COURSE_NOT_FOUND = 'Course not found.';
 
 /**
- * Saved (M30): content, events and creators the caller saved, newest first,
+ * Saved (M30): content, events, creators and school courses the caller saved, newest first,
  * in one list or by tab (task ME-10).
  *
  * WHAT IS LISTED. A save is shown only while the thing is still there for the
@@ -38,7 +41,8 @@ const CREATOR_NOT_FOUND = 'Creator not found.';
  *  - a piece while it is `live`;
  *  - an event while it is `published`, or `cancelled` (an event called off
  *    stays readable, so a person sees what became of it);
- *  - a creator while they have a profile.
+ *  - a creator while they have a profile;
+ *  - a school course while neither it nor its school is hidden (FIX-107).
  * A save of something hidden by a block (SETTINGS-04: the caller blocked its
  * creator, host or the person, or was blocked by them) is not listed and not
  * counted. The save row itself is kept: unblocking brings it back.
@@ -85,6 +89,17 @@ export class MeSavedService {
         WHERE sc."userWawuId" = ${me}
           AND NOT (sc."creatorWawuId" = ANY(${hidden}::text[]))`);
     }
+    if (tab === 'all' || tab === 'courses') {
+      // FIX-107 (G-627): a school course while it and its school are shown (the dashboard's hidden flags).
+      parts.push(Prisma.sql`
+        SELECT 'course'::text AS "kind", sc."id", sc."savedAt" AS "at", sc."courseId" AS "ref"
+        FROM "SavedSchoolCourse" sc
+        JOIN "SchoolCourse" c ON c."id" = sc."courseId"
+        JOIN "School" s ON s."id" = c."schoolId"
+        WHERE sc."userWawuId" = ${me}
+          AND c."hiddenAt" IS NULL
+          AND s."hiddenAt" IS NULL`);
+    }
     return Prisma.join(parts, ' UNION ALL ');
   }
 
@@ -118,7 +133,7 @@ export class MeSavedService {
 
     const ids = (kind: SavedKind) =>
       rows.filter((r) => r.kind === kind).map((r) => r.ref);
-    const [pieces, events, bought] = await Promise.all([
+    const [pieces, events, bought, courses] = await Promise.all([
       this.prisma.contentPiece.findMany({
         where: { id: { in: ids('content') } },
         select: {
@@ -151,6 +166,16 @@ export class MeSavedService {
           contentId: { in: ids('content') },
         },
         select: { contentId: true },
+      }),
+      this.prisma.schoolCourse.findMany({
+        where: { id: { in: ids('course') } },
+        select: {
+          id: true,
+          title: true,
+          weeks: true,
+          priceKobo: true,
+          school: { select: { name: true, logo: true } },
+        },
       }),
     ]);
     const people = await this.cards.creatorsFor([
@@ -186,6 +211,18 @@ export class MeSavedService {
       ]),
     );
 
+    const courseById = new Map<string, SavedCourseView>();
+    for (const c of courses) {
+      courseById.set(c.id, {
+        id: c.id,
+        title: c.title,
+        schoolName: c.school.name,
+        schoolLogo: await this.storage.freshUrlFor(c.school.logo),
+        weeks: c.weeks,
+        priceKobo: c.priceKobo,
+      });
+    }
+
     const items: SavedEntryView[] = rows.map((r) => ({
       id: r.id,
       kind: r.kind,
@@ -193,6 +230,7 @@ export class MeSavedService {
       content: r.kind === 'content' ? (pieceById.get(r.ref) ?? null) : null,
       event: r.kind === 'event' ? (eventById.get(r.ref) ?? null) : null,
       creator: r.kind === 'creator' ? (people.get(r.ref) ?? null) : null,
+      course: r.kind === 'course' ? (courseById.get(r.ref) ?? null) : null,
     }));
     return { items, nextCursor };
   }
@@ -231,5 +269,42 @@ export class MeSavedService {
       where: { userWawuId: me, creatorWawuId },
     });
     return { creatorWawuId, saved: false };
+  }
+
+  /** The course must be one the public pages show: not hidden, and its school not hidden. */
+  private async assertCourseShown(courseId: string): Promise<void> {
+    const course = await this.prisma.schoolCourse.findFirst({
+      where: { id: courseId, hiddenAt: null, school: { hiddenAt: null } },
+      select: { id: true },
+    });
+    if (!course) throw new NotFoundException(COURSE_NOT_FOUND);
+  }
+
+  /** GET /me/saved/courses/:courseId: whether the caller saved it (SC3's bookmark, filled or not). */
+  async courseState(me: string, courseId: string): Promise<SavedCourseState> {
+    await this.assertCourseShown(courseId);
+    const row = await this.prisma.savedSchoolCourse.findUnique({
+      where: { userWawuId_courseId: { userWawuId: me, courseId } },
+      select: { id: true },
+    });
+    return { courseId, saved: row !== null };
+  }
+
+  /** PUT /me/saved/courses/:courseId. Idempotent: saving again keeps the first save's time. */
+  async saveCourse(me: string, courseId: string): Promise<SavedCourseState> {
+    await this.assertCourseShown(courseId);
+    await this.prisma.savedSchoolCourse.createMany({
+      data: [{ userWawuId: me, courseId }],
+      skipDuplicates: true,
+    });
+    return { courseId, saved: true };
+  }
+
+  /** DELETE /me/saved/courses/:courseId. Removing a save that is not there is the same success (even for a course since hidden). */
+  async unsaveCourse(me: string, courseId: string): Promise<SavedCourseState> {
+    await this.prisma.savedSchoolCourse.deleteMany({
+      where: { userWawuId: me, courseId },
+    });
+    return { courseId, saved: false };
   }
 }

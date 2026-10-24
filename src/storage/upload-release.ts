@@ -53,7 +53,7 @@ export interface ReleaseDeps {
 export async function isClaimed(
   prisma: Pick<
     Prisma.TransactionClient,
-    'contentPiece' | 'contentFrame' | 'chatMessage'
+    'contentPiece' | 'contentFrame' | 'courseLesson' | 'chatMessage'
   >,
   key: string,
 ): Promise<boolean> {
@@ -66,7 +66,7 @@ export async function isClaimed(
     });
     return Boolean(message);
   }
-  const [piece, frame] = await Promise.all([
+  const [piece, frame, lesson] = await Promise.all([
     prisma.contentPiece.findFirst({
       where: {
         OR: [
@@ -80,8 +80,13 @@ export async function isClaimed(
       where: { url: { contains: key } },
       select: { id: true },
     }),
+    // FIX-107: a course lesson's own file.
+    prisma.courseLesson.findFirst({
+      where: { assetKey: key },
+      select: { id: true },
+    }),
   ]);
-  return Boolean(piece ?? frame);
+  return Boolean(piece ?? frame ?? lesson);
 }
 
 /** Whether `key` is in a folder only a chat writes to (`<folder>/<wawuId>/<uuid>.<ext>`). */

@@ -31,6 +31,7 @@ import { walletStateOf } from '../gate/wallet-gate';
 import { AccountLimits } from '../limits/account-limits.service';
 import { MoneyError } from '../money-error';
 import type { WalletState, WalletView } from '../money-view.type';
+import { FeeQuoteService } from '../fees/fee-quote.service';
 import { TransactionPinService } from '../pin/transaction-pin.service';
 import type { OpenNairaWalletDto } from './dto/open-wallet.dto';
 import { visibleBeneficiaries } from '../saved-accounts/beneficiary.service';
@@ -210,6 +211,8 @@ export class WalletOpeningService {
     @Optional() private readonly notifications?: NotificationService,
     // WALLET-23: W35's limits row. Absent: no row.
     @Optional() private readonly accountLimits?: AccountLimits,
+    // FIX-109: W15's "Free" and its arrival line. Absent: no `transferIn`.
+    @Optional() private readonly fees?: FeeQuoteService,
   ) {
     this.reviewed = new ReviewedOpening({
       prisma,
@@ -336,6 +339,9 @@ export class WalletOpeningService {
       ...(review !== undefined
         ? { openingFlow: 'review' as const, review }
         : {}),
+      // FIX-109, additive: the Hub's own word on a transfer in (what it costs,
+      // how long it takes), only for what is set. Never from the app.
+      ...(this.fees?.transferIn ? { transferIn: this.fees.transferIn } : {}),
     };
   }
 

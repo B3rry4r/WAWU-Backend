@@ -27,6 +27,8 @@ import {
   initialsFor,
   type EventGoingView,
   type EventSaveView,
+  type EventDecisionsView,
+  type EventDecisionView,
   type EventView,
 } from './event-view.type';
 import type {
@@ -216,6 +218,39 @@ export class EventService {
       perPage: query.perPage,
       total,
     };
+  }
+
+  /**
+   * GET /events/mine/decisions (FIX-110): the day an admin last sent back or
+   * took down each of the host's events that is rejected or removed now. Read
+   * from the review trail, which stays authoritative; nothing is copied onto
+   * Event. An event edited back into review is not here: it has no decision
+   * standing.
+   */
+  async decisionsMine(userWawuId: string): Promise<EventDecisionsView> {
+    const events = await this.prisma.event.findMany({
+      where: {
+        hostWawuId: userWawuId,
+        status: { in: ['rejected', 'removed'] },
+      },
+      select: { id: true },
+      take: 200,
+    });
+    if (events.length === 0) return { items: [] };
+    const trail = await this.prisma.adminEventReview.groupBy({
+      by: ['eventId'],
+      where: {
+        eventId: { in: events.map((e) => e.id) },
+        newStatus: { in: ['rejected', 'removed'] },
+      },
+      _max: { reviewedAt: true },
+    });
+    const items: EventDecisionView[] = [];
+    for (const row of trail) {
+      if (row._max.reviewedAt)
+        items.push({ eventId: row.eventId, decidedAt: row._max.reviewedAt });
+    }
+    return { items };
   }
 
   /**

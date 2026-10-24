@@ -567,7 +567,13 @@ describe('GET /plans and GET /me/tier (TIER-01) over HTTP', () => {
         extraProducts: config.extraProducts.count,
         pointsIncluded: t.bonusPoints,
         firstVoiceIntroIncluded: t.firstVoiceIntro,
-        eventPass: { id: high.id, name: high.name },
+        // FIX-110 (additive): the pass also carries the event's name and its QR code.
+        eventPass: {
+          id: high.id,
+          name: high.name,
+          eventName: 'Christmas event',
+          passCode: expect.any(String),
+        },
       });
     });
 

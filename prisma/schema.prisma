@@ -800,7 +800,9 @@ model ContentPiece {
   viewedBy  ContentView[]
   sharedBy  ContentShare[]
   ratings   ContentRating[]
-  detail    ContentDetail?
+  detail    ContentDetail? @relation("DetailOf")
+  /// FIX-111: the side rows of pieces that say they come from this course (H24's "From the course" row). Not a column: see ContentDetail.
+  childDetails ContentDetail[] @relation("ParentCourse")
 
   @@index([creatorWawuId])
   @@index([status])
@@ -824,6 +826,9 @@ model CourseLesson {
   title         String
   order         Int
   durationLabel String?
+  /// FIX-107: the lesson's own file, as an object key under the creator's `content/full/` folder (never a link: the
+  /// read path signs a short-lived link per play). Null: the lesson has no file yet and plays nothing.
+  assetKey      String?
 
   /// ME-10: who has finished this lesson (M29 "3 of 12 done").
   progress CourseLessonProgress[]
@@ -1039,12 +1044,19 @@ model ContentRating {
 /// the free preview file holds; the server cannot open the file to check.
 model ContentDetail {
   contentId          String       @id
-  content            ContentPiece @relation(fields: [contentId], references: [id], onDelete: Cascade)
+  content            ContentPiece @relation("DetailOf", fields: [contentId], references: [id], onDelete: Cascade)
   freePreviewPages   Int?
   freePreviewSeconds Int?
   freePreviewLessons Int?
   /// Set when the creator changes the piece or its preview.
   contentUpdatedAt   DateTime?
+  /// FIX-111 (H24, G-HOME-08-1): the course, one of the same creator's own, that this piece comes from ("From the course <title>").
+  /// It lives on this side row and not on ContentPiece because every live content response is the piece's row (`toResponse`
+  /// spreads it), so a column there would widen what the web reads. Cleared when the course row is deleted.
+  parentCourseId     String?
+  parentCourse       ContentPiece? @relation("ParentCourse", fields: [parentCourseId], references: [id], onDelete: SetNull)
+
+  @@index([parentCourseId])
 }
 
 /// One person looked at one profile, on one day.
@@ -5812,8 +5824,24 @@ model SchoolCourse {
   intakes    CourseIntake[]
   clicks     SchoolLinkClick[]
   enrolments SchoolEnrolment[]
+  savedBy    SavedSchoolCourse[]
 
   @@index([schoolId])
+}
+
+/// FIX-107 (G-627): one person's bookmark on one school course (SC3). Mirrors SavedCreator: a join row with a unique
+/// (person, course) pair, so a repeat save is a no-op and "did THIS person save THIS course" has an answer. It goes with
+/// the course (cascade) and with the person's account (account-data-map).
+model SavedSchoolCourse {
+  id         String       @id @default(uuid())
+  userWawuId String
+  courseId   String
+  course     SchoolCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  savedAt    DateTime     @default(now())
+
+  @@unique([userWawuId, courseId])
+  @@index([userWawuId, savedAt])
+  @@index([courseId])
 }
 
 /// One dated class of a course. Seats are claimed by a CONDITIONAL write

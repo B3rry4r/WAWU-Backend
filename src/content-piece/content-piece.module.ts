@@ -8,6 +8,8 @@ import {
 import { ContentEngagementService } from './content-engagement.service';
 import { ContentDetailController } from './content-detail.controller';
 import { ContentDetailService } from './content-detail.service';
+import { CourseLessonsController } from './course-lessons.controller';
+import { CourseLessonsService } from './course-lessons.service';
 import { ContentMediaController } from './content-media.controller';
 import { ContentMediaService } from './content-media.service';
 import { ProductDraftController } from './product-draft.controller';
@@ -25,6 +27,8 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
 import { NotificationModule } from '../notification/notification.module';
 import { StorageModule } from '../storage/storage.module';
 import { PlansModule } from '../plans/plans.module';
+import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
+import { ContentSaleTermsService } from './content-sale-terms.service';
 import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
 
 /**
@@ -46,6 +50,8 @@ import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
     PlansModule,
     // The tier badge on the creator and professional cards (TIER-07).
     TierBadgeModule,
+    // The quick prices and the review time are admin settings (FIX-110).
+    PlanSettingsModule,
   ],
   controllers: [
     ContentPieceController,
@@ -54,15 +60,19 @@ import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
     ContentDetailController,
     FeedController,
     ContentMediaController,
+    // FIX-107: a course's lessons, one file each (H25).
+    CourseLessonsController,
     // Draft products (TIER-02): its own first segment, `product-drafts`.
     ProductDraftController,
   ],
   providers: [
     ContentPieceService,
+    ContentSaleTermsService,
     ProductDraftService,
     ContentEngagementService,
     ContentDetailService,
     ContentMediaService,
+    CourseLessonsService,
     FeedCardsService,
     FeedEntriesService,
     CreatorAccountGuard,

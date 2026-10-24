@@ -7948,6 +7948,39 @@
         ]
       }
     },
+    "/api/hub/content/sale-terms": {
+      "get": {
+        "operationId": "ContentPieceController_saleTermsAt",
+        "parameters": [
+          {
+            "name": "priceKobo",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "maximum": 1000000000,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentSaleTerms"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What a creator keeps of a sale, the listing fee, the quick prices and how\nlong a review usually takes (M24, M25, FIX-110). Read only. Before `:id`\nso the literal is never taken for an id.",
+        "tags": [
+          "ContentPiece"
+        ]
+      }
+    },
     "/api/hub/content": {
       "get": {
         "operationId": "ContentPieceController_list",
@@ -8163,6 +8196,18 @@
                 "live",
                 "pending",
                 "rejected"
+              ]
+            }
+          },
+          {
+            "name": "contentType",
+            "required": false,
+            "in": "query",
+            "description": "Only the creator's own courses. Left out, every kind.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "course"
               ]
             }
           }
@@ -9310,6 +9355,97 @@
         },
         "tags": [
           "ContentMedia"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/lessons/{lessonId}/play": {
+      "get": {
+        "operationId": "CourseLessonsController_play",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lessonId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LessonPlay"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A fresh link to play one lesson: free lessons for anyone who may open the piece, the rest for buyers and the creator.",
+        "tags": [
+          "CourseLessons"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/lessons": {
+      "put": {
+        "operationId": "CourseLessonsController_set",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetLessonsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "lessons": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LessonView"
+                      }
+                    }
+                  },
+                  "required": [
+                    "lessons"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "The creator states the lessons: the list, the order and each lesson's file.",
+        "tags": [
+          "CourseLessons"
         ]
       }
     },
@@ -29267,6 +29403,28 @@
         ]
       }
     },
+    "/api/hub/events/mine/decisions": {
+      "get": {
+        "operationId": "EventController_mineDecisions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDecisionsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The day an admin last sent back or took down each of the host's events\n(FIX-110, E17's \"Taken down 20 Sep\"). A route of its own, so the shape the\nweb reads from `mine` does not change.",
+        "tags": [
+          "Event"
+        ]
+      }
+    },
     "/api/hub/events/options": {
       "get": {
         "operationId": "EventController_options",
@@ -31107,14 +31265,15 @@
             "name": "kind",
             "required": false,
             "in": "query",
-            "description": "Only rows of this kind (the Paid DMs, Communities and Money chips; the\nMoney chip is `money_request`). All kinds when left out.",
+            "description": "Only rows of this kind (the Paid DMs, Communities and Money chips). The\nMoney chip is `money`: requests and sends between two WAWU people\ntogether (FIX-114). `money_request` stays what it was, requests only.\nSends are served only under `money`; the unfiltered list never holds\nthem. All kinds when left out.",
             "schema": {
               "type": "string",
               "enum": [
                 "chat",
                 "paid_dm",
                 "community",
-                "money_request"
+                "money_request",
+                "money"
               ]
             }
           }
@@ -31209,7 +31368,8 @@
                 "all",
                 "content",
                 "events",
-                "creators"
+                "creators",
+                "courses"
               ]
             }
           },
@@ -31298,6 +31458,95 @@
           }
         },
         "summary": "Remove a saved creator. Idempotent.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
+    "/api/hub/me/saved/courses/{courseId}": {
+      "get": {
+        "operationId": "MeController_courseSaved",
+        "parameters": [
+          {
+            "name": "courseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedCourseState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Whether a school course is saved (SC3's bookmark).",
+        "tags": [
+          "Me"
+        ]
+      },
+      "put": {
+        "operationId": "MeController_saveCourse",
+        "parameters": [
+          {
+            "name": "courseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedCourseState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Save a school course (SC3's bookmark). Idempotent.",
+        "tags": [
+          "Me"
+        ]
+      },
+      "delete": {
+        "operationId": "MeController_unsaveCourse",
+        "parameters": [
+          {
+            "name": "courseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedCourseState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Remove a saved school course. Idempotent.",
         "tags": [
           "Me"
         ]
@@ -38643,6 +38892,11 @@
           "fullAsset": {
             "type": "string",
             "format": "uri"
+          },
+          "parentCourseId": {
+            "type": "string",
+            "description": "FIX-111 (H24): the creator's own course this piece comes from (\"From the course VFX for Beginners\"). Optional, and only for a\npiece that is not itself a course; the course must be the creator's, live or in review. Stored on the piece's side row.",
+            "format": "uuid"
           }
         },
         "required": [
@@ -38808,6 +39062,48 @@
             "maximum": 5000
           }
         }
+      },
+      "LessonInputDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "An existing lesson of this course to keep (its progress and place stay); left out, a new lesson is made.",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "durationLabel": {
+            "type": "string",
+            "description": "The lesson's length as a player writes it: `4:12` or `1:20:05`."
+          },
+          "assetKey": {
+            "type": "string",
+            "nullable": true,
+            "description": "The lesson's file: the key (or link) of an upload this person made under `content/full`. A new lesson with none has no file yet.\nA lesson kept by `id` keeps the file it has when this is left out (FIX-111: the editor does not know the key of a file it did not\nupload), takes a new one when a key is sent, and loses its file only when this is `null`."
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "SetLessonsDto": {
+        "type": "object",
+        "properties": {
+          "lessons": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LessonInputDto"
+            }
+          }
+        },
+        "required": [
+          "lessons"
+        ]
       },
       "CreateProductDraftDto": {
         "type": "object",
@@ -44561,6 +44857,10 @@
           },
           "expiresAt": {
             "type": "string"
+          },
+          "arrivalMinutes": {
+            "type": "number",
+            "nullable": true
           }
         },
         "required": [
@@ -44872,6 +45172,19 @@
           "decidedAt"
         ]
       },
+      "TransferInView": {
+        "type": "object",
+        "properties": {
+          "feeKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "arrivalMinutes": {
+            "type": "number",
+            "nullable": true
+          }
+        }
+      },
       "WalletView": {
         "type": "object",
         "properties": {
@@ -44929,6 +45242,14 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/WalletReviewView"
+              }
+            ],
+            "nullable": true
+          },
+          "transferIn": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransferInView"
               }
             ],
             "nullable": true
@@ -45983,6 +46304,10 @@
           "completedAt": {
             "type": "string",
             "nullable": true
+          },
+          "arrivalMinutes": {
+            "type": "number",
+            "nullable": true
           }
         },
         "required": [
@@ -46550,6 +46875,14 @@
             "nullable": true
           },
           "eventDate": {
+            "type": "string",
+            "nullable": true
+          },
+          "eventName": {
+            "type": "string",
+            "nullable": true
+          },
+          "passCode": {
             "type": "string",
             "nullable": true
           }
@@ -48614,6 +48947,53 @@
           "flutterwaveConfig"
         ]
       },
+      "ContentSalePreset": {
+        "type": "object",
+        "properties": {
+          "priceKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceKobo"
+        ]
+      },
+      "ContentSaleTerms": {
+        "type": "object",
+        "properties": {
+          "creatorSharePct": {
+            "type": "number"
+          },
+          "listingFeeKobo": {
+            "type": "integer"
+          },
+          "presets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContentSalePreset"
+            }
+          },
+          "reviewHours": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "earnPerSaleKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "creatorSharePct",
+          "listingFeeKobo",
+          "presets",
+          "reviewHours",
+          "priceKobo",
+          "earnPerSaleKobo"
+        ]
+      },
       "ContentPieceResponse": {
         "type": "object",
         "properties": {
@@ -49574,6 +49954,9 @@
           },
           "isFree": {
             "type": "boolean"
+          },
+          "hasFile": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -49581,7 +49964,36 @@
           "title",
           "order",
           "durationLabel",
-          "isFree"
+          "isFree",
+          "hasFile"
+        ]
+      },
+      "ParentCourse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "lessonCount": {
+            "type": "number"
+          },
+          "price": {
+            "type": "number"
+          },
+          "previewAssetUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "lessonCount",
+          "price",
+          "previewAssetUrl"
         ]
       },
       "RatingState": {
@@ -49689,6 +50101,10 @@
               "$ref": "#/components/schemas/DetailLesson"
             }
           },
+          "parentCourse": {
+            "$ref": "#/components/schemas/ParentCourse",
+            "nullable": true
+          },
           "rating": {
             "$ref": "#/components/schemas/RatingState"
           },
@@ -49705,8 +50121,65 @@
           "studentCount",
           "freePreview",
           "lessons",
+          "parentCourse",
           "rating",
           "creator"
+        ]
+      },
+      "LessonPlay": {
+        "type": "object",
+        "properties": {
+          "contentId": {
+            "type": "string"
+          },
+          "lessonId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "contentId",
+          "lessonId",
+          "url",
+          "expiresAt",
+          "durationLabel"
+        ]
+      },
+      "LessonView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "order": {
+            "type": "number"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "hasFile": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "order",
+          "durationLabel",
+          "hasFile"
         ]
       },
       "ProductDraftView": {
@@ -60258,6 +60731,36 @@
           "lastDecisionReason"
         ]
       },
+      "EventDecisionView": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "decidedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "eventId",
+          "decidedAt"
+        ]
+      },
+      "EventDecisionsView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventDecisionView"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
       "EventTicketRulesView": {
         "type": "object",
         "properties": {
@@ -61068,6 +61571,55 @@
           "canMessage"
         ]
       },
+      "InboxMoneyMove": {
+        "type": "object",
+        "properties": {
+          "transferId": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "outgoing",
+              "incoming"
+            ]
+          },
+          "other": {
+            "$ref": "#/components/schemas/InboxPerson"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "reversed"
+            ]
+          },
+          "canMessage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "transferId",
+          "chatId",
+          "direction",
+          "other",
+          "amountKobo",
+          "note",
+          "status",
+          "canMessage"
+        ]
+      },
       "InboxItem": {
         "type": "object",
         "properties": {
@@ -61080,7 +61632,8 @@
               "paid_dm",
               "community",
               "chat",
-              "money_request"
+              "money_request",
+              "money_move"
             ]
           },
           "lastActivityAt": {
@@ -61126,6 +61679,14 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/InboxMoneyRequest"
+              }
+            ],
+            "nullable": true
+          },
+          "moneyMove": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InboxMoneyMove"
               }
             ],
             "nullable": true
@@ -61509,6 +62070,38 @@
           "status"
         ]
       },
+      "SavedCourseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "schoolName": {
+            "type": "string"
+          },
+          "schoolLogo": {
+            "type": "string",
+            "nullable": true
+          },
+          "weeks": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "schoolName",
+          "schoolLogo",
+          "weeks",
+          "priceKobo"
+        ]
+      },
       "SavedEntryView": {
         "type": "object",
         "properties": {
@@ -61519,6 +62112,7 @@
             "type": "string",
             "enum": [
               "creator",
+              "course",
               "event",
               "content"
             ]
@@ -61549,6 +62143,14 @@
               }
             ],
             "nullable": true
+          },
+          "course": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedCourseView"
+              }
+            ],
+            "nullable": true
           }
         },
         "required": [
@@ -61557,7 +62159,8 @@
           "savedAt",
           "content",
           "event",
-          "creator"
+          "creator",
+          "course"
         ]
       },
       "SavedPage": {
@@ -61591,6 +62194,21 @@
         },
         "required": [
           "creatorWawuId",
+          "saved"
+        ]
+      },
+      "SavedCourseState": {
+        "type": "object",
+        "properties": {
+          "courseId": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "courseId",
           "saved"
         ]
       },

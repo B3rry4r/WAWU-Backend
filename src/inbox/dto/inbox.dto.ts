@@ -26,10 +26,13 @@ export class InboxPageQueryDto {
   limit?: number;
 
   /**
-   * Only rows of this kind (the Paid DMs, Communities and Money chips; the
-   * Money chip is `money_request`). All kinds when left out.
+   * Only rows of this kind (the Paid DMs, Communities and Money chips). The
+   * Money chip is `money`: requests and sends between two WAWU people
+   * together (FIX-114). `money_request` stays what it was, requests only.
+   * Sends are served only under `money`; the unfiltered list never holds
+   * them. All kinds when left out.
    */
   @IsOptional()
-  @IsIn(['chat', 'paid_dm', 'community', 'money_request'])
-  kind?: 'chat' | 'paid_dm' | 'community' | 'money_request';
+  @IsIn(['chat', 'paid_dm', 'community', 'money_request', 'money'])
+  kind?: 'chat' | 'paid_dm' | 'community' | 'money_request' | 'money';
 }
