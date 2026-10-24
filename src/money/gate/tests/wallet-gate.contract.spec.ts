@@ -394,7 +394,7 @@ describe('No wallet yet: every wallet route answers the same (MONEY-13) over HTT
       'delete /api/hub/money/beneficiaries/:id',
       'delete /api/hub/money/device',
       // WALLET-25, WALLET-26: add money (the list, one attempt, the ways, the quote).
-      'get /api/hub/money/add-money',
+      'get /api/hub/money/add-money/',
       'get /api/hub/money/add-money/:id',
       'get /api/hub/money/add-money/options',
       'get /api/hub/money/add-money/quote',
@@ -427,7 +427,7 @@ describe('No wallet yet: every wallet route answers the same (MONEY-13) over HTT
       'get /api/hub/money/transfers/presets',
       'get /api/hub/money/wallet/balance',
       // WALLET-25, WALLET-26: start adding money (PIN), and cancel an unpaid attempt.
-      'post /api/hub/money/add-money',
+      'post /api/hub/money/add-money/',
       'post /api/hub/money/add-money/:id/cancel',
       'post /api/hub/money/approval/verify',
       'post /api/hub/money/beneficiaries',
