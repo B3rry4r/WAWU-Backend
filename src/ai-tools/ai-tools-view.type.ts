@@ -66,6 +66,13 @@ export interface AiToolFileView {
   maxMinutes: number;
   /** True when the job takes a `languageCode`. */
   languageCode: boolean;
+  /** Dubbing only (AITOOLS-05): the languages the file can be heard in. The job takes `targetLanguage` from this list and may take `sourceLanguage` from it. One language a job. */
+  dubbing?: AiToolDubbingView;
+}
+
+/** What Dubbing takes beyond the file (AITOOLS-05): the languages on offer, from the settings. */
+export interface AiToolDubbingView {
+  languages: { code: string; name: string }[];
 }
 
 /** The optional length of a `prompt` tool's audio (`input.length`). */
@@ -108,8 +115,10 @@ export interface AiJobView {
   id: string;
   tool: AiToolId;
   state: AiJobStateView;
-  /** The voice of a text job; empty for a `prompt` tool, which has no voice. */
+  /** The voice of a text job; empty for a `prompt` tool and a `file` tool, which have no voice. */
   voiceId: string;
+  /** Dubbing (AITOOLS-05): the language the file is heard in; null for every other tool. */
+  targetLanguage: string | null;
   characters: number;
   /** What the job was priced in: minutes of speech, or 1 for a use or a track. */
   units: number;

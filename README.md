@@ -227,6 +227,17 @@ its failure markers (`[[fail]]`, `[[reject]]`, `[[status:n]]`, `[[html]]`,
 `[[slow:n]]`, `[[reported:secs]]`, `[[iso-type:type]]`) from the file's bytes.
 `docs/contract/PLANS.md` section "Captions and Clean audio" says the rest.
 
+Dubbing (AITOOLS-05) needs the same two settings. The stand-in answers
+`POST /v1/dubbing/project`, `GET /v1/dubbing/project/{id}/language/{id}`,
+`GET` and `DELETE /v1/dubbing/project/{id}` and the two signed links of a finished
+dub (`/__standin/dub-out/<project>/audio` and `/subtitles`, FLAC and WebVTT, fetched
+with no key). A dub completes after `--dub-delay-ms` (default 0) or the file's
+`[[dub-delay:ms]]`; the file's other markers are `[[dub-failed]]`, `[[dub-stale]]`,
+`[[dub-stuck]]` (never finishes), `[[dub-nolang]]`, `[[dub-noaudio]]`, `[[dub-nosubs]]`,
+`[[dub-outfail]]`, `[[dub-notflac]]`, `[[dub-badvtt]]`, `[[dub-bytes:n]]` and the
+copy markers above. On the stack the Hub follows a dub every 15 seconds
+(`AiDubService`); `docs/contract/PLANS.md` section "Dubbing" says the rest.
+
 Since AITOOLS-02 the stand-in answers from one route table (a later tool adds its
 route and its markers there) and keeps the `model_id` of each speech call in
 `GET /__standin/state` (`models`, `lastModel`), so a spec can see that Quick voice

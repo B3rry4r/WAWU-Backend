@@ -138,7 +138,7 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
 
   it('the registry lists VoiceOver first and Quick voice second, each priced by a plan action, and every tool answers for its action', () => {
     // AITOOLS-03 adds Sound effect and Music track after them, AITOOLS-04
-    // Captions and Clean audio.
+    // Captions and Clean audio, AITOOLS-05 Dubbing.
     expect(AI_TOOLS.map((t) => t.id)).toEqual([
       'voiceover',
       'quick-voice',
@@ -146,12 +146,17 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
       'music',
       'captions',
       'clean-audio',
+      // AITOOLS-05: Dubbing is the seventh tool. This list pinned the registry's six.
+      'dubbing',
     ]);
     for (const t of AI_TOOLS) {
       expect(plan.actions.some((a) => a.id === t.action)).toBe(true);
       expect(toolForAction(t.action)).toBe(t);
     }
-    expect(toolForAction('dub_standard_per_min_lang')).toBeNull();
+    // AITOOLS-05 built Dubbing, so this assertion (which named its standard
+    // action as the unbuilt one) names the premium action instead: not built,
+    // the board draws no choice (G-AITOOLS-05-2).
+    expect(toolForAction('dub_premium_per_min_lang')).toBeNull();
     expect(VOICEOVER_TOOL.listedWhenOff).toBe(true);
     expect(QUICK_VOICE_TOOL.listedWhenOff).toBe(false);
   });
@@ -165,6 +170,8 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
       'music',
       'captions',
       'clean-audio',
+      // AITOOLS-05: Dubbing is the seventh tool. This list pinned the registry's six.
+      'dubbing',
     ]);
     const tool = view.tools[1];
     expect(tool).toMatchObject({
@@ -188,8 +195,8 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
       costPointsPerUnit: voiceover.points,
       input: { kind: 'text', charactersPerUnit: 900 },
     });
-    // Nothing a person could not act on: no unbuilt tool (Dubbing and the rest; Captions and Clean audio are built by AITOOLS-04).
-    expect(view.tools.some((t) => /dub|receptionist/i.test(t.id))).toBe(false);
+    // Nothing a person could not act on: no unbuilt tool (the Receptionist; Captions and Clean audio are built by AITOOLS-04 and Dubbing by AITOOLS-05, so this no longer matches `dub`).
+    expect(view.tools.some((t) => /receptionist/i.test(t.id))).toBe(false);
     // No provider name, no provider id, no model name and no em-dash (R-68, R-5).
     const text = JSON.stringify(view);
     expect(text).not.toMatch(/eleven|stand-in|xi-api|flash/i);

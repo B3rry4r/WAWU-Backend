@@ -25,6 +25,7 @@ import {
   OwnVoiceConsentDto,
   CreateCaptionsJobDto,
   CreateCleanAudioJobDto,
+  CreateDubbingJobDto,
   CreateMusicJobDto,
   CreateQuickVoiceJobDto,
   CreateSoundEffectJobDto,
@@ -44,6 +45,7 @@ import { OwnVoiceService } from './own-voice/own-voice.service';
 import { personName } from '../voice-intro/voice-profile.service';
 import { CAPTIONS_TOOL } from './tools/captions.tool';
 import { CLEAN_AUDIO_TOOL } from './tools/clean-audio.tool';
+import { DUBBING_TOOL } from './tools/dubbing.tool';
 import { MUSIC_TOOL } from './tools/music.tool';
 import { QUICK_VOICE_TOOL } from './tools/quick-voice.tool';
 import { SOUND_EFFECT_TOOL } from './tools/sound-effect.tool';
@@ -328,6 +330,67 @@ export class AiToolsController {
   ): Promise<AiJobView> {
     const { job, replayed } = await this.jobs.createJob(
       CLEAN_AUDIO_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * The points quote for a Dubbing file (AITOOLS-05): exactly `POST
+   * /ai-tools/captions/quote`, for the action `dub_standard_per_min_lang`. The
+   * price is the minutes of the file the Hub reads, for one language.
+   */
+  @Post('dubbing/quote')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-05')
+  quoteDubbing(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: QuoteFileDto,
+  ): Promise<AiFileQuoteView> {
+    return this.tools.quoteFile(user.sub, DUBBING_TOOL, dto.fileKey);
+  }
+
+  /**
+   * Starts a Dubbing job (PT1 "Dubbing", AITOOLS-05): the `fileKey` of a
+   * recording or video the person uploaded, the `targetLanguage` to hear it in
+   * (a code from `GET /ai-tools`, `input.file.dubbing.languages`), an optional
+   * `sourceLanguage` and the `quoteToken` of the quote for the action
+   * `dub_standard_per_min_lang`. One language a job: a second language is a second
+   * job. The points are held and the job answers `working` at once; a dub takes
+   * minutes, so the person may leave and the app reads `GET /ai-tools/jobs/{id}`
+   * later. Done, `outputs` hold the dubbed audio (`audio`, FLAC) and the subtitles
+   * (`subtitles`, WebVTT); there is no dubbed video, so a video comes back as
+   * audio. The points are kept only on success and given back when the provider
+   * fails the dub, it stays too long, or the result cannot be stored. The
+   * request, the answer and the `Idempotency-Key` rule are those of `POST
+   * /ai-tools/captions/jobs`, plus `422 ai_language_unsupported` (a language not
+   * on the list, or the same language as the one spoken), with nothing held. The
+   * uploaded file and the provider's project are deleted when the job ends.
+   */
+  @Post('dubbing/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-05')
+  async createDubbing(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateDubbingJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      DUBBING_TOOL,
       user.sub,
       key,
       dto,

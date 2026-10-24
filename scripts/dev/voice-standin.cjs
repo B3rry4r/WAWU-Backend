@@ -1,7 +1,7 @@
 // A stand-in for the AI voice provider, on this machine only (AITOOLS-01,
 // AITOOLS-02).
 //
-//   node scripts/dev/voice-standin.cjs <port|0> [--key <api key>] [--delay-ms <n>]
+//   node scripts/dev/voice-standin.cjs <port|0> [--key <api key>] [--delay-ms <n>] [--dub-delay-ms <n>]
 //
 // It answers the calls the Hub's adapter makes, with the same wire shape, from
 // ONE ROUTE TABLE (`ROUTES` below): one entry per provider route, each with
@@ -87,6 +87,37 @@
 //     state.transcribe and state.isolate list each call (byte count, model,
 //     language; never the file); state.deletedTranscripts and
 //     state.deletedIsolations list the ids deleted.
+//   POST /v1/dubbing/project   (AITOOLS-05)
+//     header xi-api-key, multipart (file, target_language, source_language?,
+//     model_id?)  ->  201 JSON { project_id, status: queued, language_ids: [one]
+//     (the target_language shortcut), ... }. A missing or malformed
+//     target_language is 422. What the FILE can ask of it (found in its bytes):
+//       [[fail]] 500, [[reject]] 422, [[status:402]] (any 400 to 599), [[html]]
+//       200 with a web page, [[slow:1500]] wait, [[dub-nolang]] answer no
+//       language_ids, [[dub-delay:MS]] how long until the dub is completed
+//       (the project is `queued` for the first third and `processing` for the
+//       rest; the default is --dub-delay-ms, 0: completed at the first read),
+//       [[dub-failed]] the language ends `failed` (with an error text), [[dub-stale]]
+//       the language reads `stale`, [[dub-stuck]] it stays `processing` forever,
+//       [[dub-noaudio]] completed with no lossless_audio link, [[dub-nosubs]] no
+//       subtitles link, [[dub-outfail]] the audio link answers 500, [[dub-notflac]]
+//       the audio is not a FLAC file, [[dub-badvtt]] the subtitles are not WebVTT,
+//       [[dub-bytes:N]] the audio is N bytes, [[store-delay:MS]],
+//       [[ack-then-appear:MS]] and [[get404-after-delete:MS]] as for a transcript
+//       (a dub project is deletable from MS after the answer, and so on).
+//   GET /v1/dubbing/project/<id>/language/<id>   ->  200 JSON { language_id,
+//     project_id, target_language, status: queued | processing | completed |
+//     stale | failed, outputs: { lossless_audio, subtitles } | null, error }.
+//     The two links are absolute links back to this stand-in
+//     (/__standin/dub-out/<project>/audio and /subtitles); they are fetched with
+//     no key (state.dubKeyLeaks counts a fetch that sent one) and every fetch is
+//     listed in state.dubDownloads. 404 for a project that is deleted or unknown.
+//   GET /v1/dubbing/project/<id>   ->  200 { project_id, status: ready } while
+//     the provider holds the project, 404 once deleted (the hidden window above
+//     applies). DELETE /v1/dubbing/project/<id>  ->  204, 404 when none or not
+//     stored yet. state.dubs lists each start (target, source, bytes, type,
+//     model; never the file); state.dubReads each language read;
+//     state.deletedDubs the project ids deleted.
 //   GET /__standin/state lists the calls so far (never the text).
 // Nothing of a real provider beyond these. The Hub never sees a control route.
 // Nothing here leaves 127.0.0.1.
@@ -104,6 +135,7 @@ function startVoiceStandin({
   port = 0,
   key = 'standin-key',
   delayMs = 0,
+  dubDelayMs = 0,
 } = {}) {
   const VOICES = new Set(['stand-in-ada', 'stand-in-tunde']);
   const state = {
@@ -135,9 +167,21 @@ function startVoiceStandin({
     deletedIsolations: [],
     /** Every delete try on a transcript or cleaned item, with the status it was answered. */
     deleteTries: [],
-    /** Every read of a transcript copy by id, with the status it was answered. */
+    /** Every read of a transcript or dub project copy by id, with the status it was answered. */
     reads: [],
+    /** Each Dubbing start (AITOOLS-05): the target and source language, the model, the file's bytes and type. */
+    dubs: [],
+    /** Each read of a dub's language target: the project, the language and the status answered. */
+    dubReads: [],
+    /** Each fetch of a dub's signed link: the project, `audio` or `subtitles`, the status, and whether the fetch sent the provider's key. */
+    dubDownloads: [],
+    /** Fetches of a signed link that carried the provider's key (the Hub must never send it). */
+    dubKeyLeaks: 0,
+    deletedDubs: [],
   };
+  // project id -> the dub: its language, when it began, how long it takes, what its file asked for, and the delete fields shared with the transcripts.
+  const dubProjects = new Map();
+  let dubSeq = 0;
   // id -> { storedAt: the time (ms) from which a delete finds the copy, ackUntil: before it a delete answers 200 and removes nothing }.
   const transcripts = new Map();
   const isolations = new Map();
@@ -511,6 +555,207 @@ function startVoiceStandin({
     return json(res, 200, { transcription_id: id, text: 'stand-in words' });
   }
 
+  /** A FLAC file for a dub: the marker, a STREAMINFO block for `seconds` of 44.1 kHz stereo, then filler. */
+  function flacOf(seconds, size) {
+    const head = Buffer.alloc(8 + 34);
+    head.write('fLaC', 0, 'latin1');
+    head[4] = 0x80; // last metadata block, type STREAMINFO
+    head.writeUIntBE(34, 5, 3);
+    const total = Math.round(seconds * 44100);
+    // 16-bit min and max block size, 24-bit min and max frame size, then
+    // 20 bits of sample rate, 3 of channels - 1, 5 of bits per sample - 1, 36 of total samples.
+    head.writeUInt16BE(4096, 8);
+    head.writeUInt16BE(4096, 10);
+    const packed = (BigInt(44100) << 44n) | (1n << 41n) | (15n << 36n) | BigInt(total);
+    head.writeBigUInt64BE(packed, 18);
+    return Buffer.concat([head, Buffer.alloc(Math.max(0, size - head.length), 7)]);
+  }
+
+  function vttOf(seconds) {
+    const cues = Math.min(60, Math.max(1, Math.round(seconds / 2)));
+    const at = (t) => {
+      const ms = Math.round(t * 1000);
+      const p = (n, w) => String(n).padStart(w, '0');
+      return `${p(Math.floor(ms / 3600000), 2)}:${p(Math.floor(ms / 60000) % 60, 2)}:${p(Math.floor(ms / 1000) % 60, 2)}.${p(ms % 1000, 3)}`;
+    };
+    let out = 'WEBVTT\n\n';
+    for (let i = 0; i < cues; i++)
+      out += `${at(i * 2)} --> ${at(i * 2 + 1.8)}\ndubbed line ${i + 1}\n\n`;
+    return out;
+  }
+
+  /** POST /v1/dubbing/project: counted as a call, with the markers read from the file's bytes. */
+  async function dubStart(req, res, _m, raw) {
+    state.calls += 1;
+    state.active += 1;
+    state.maxActive = Math.max(state.maxActive, state.active);
+    const done = (status, type, body) => {
+      state.active -= 1;
+      if (status === 200 || status === 201) state.ok += 1;
+      else state.failed += 1;
+      res.statusCode = status;
+      res.setHeader('content-type', type);
+      res.end(body);
+    };
+    try {
+      if (req.headers['xi-api-key'] !== key)
+        return done(401, 'application/json', '{"detail":"bad key"}');
+      const form = parseMultipart(req.headers['content-type'], raw);
+      const file = form?.get('file');
+      if (!form || !file || file.data.length === 0)
+        return done(400, 'application/json', '{"detail":"no file"}');
+      const tag = /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/;
+      const target = form.get('target_language')?.data.toString('utf8') ?? '';
+      const source = form.get('source_language')?.data.toString('utf8') ?? null;
+      if (!tag.test(target) || (source !== null && !tag.test(source)))
+        return done(422, 'application/json', '{"detail":"bad language"}');
+      const marks = file.data.toString('latin1');
+      state.dubs.push({
+        target,
+        source,
+        model: form.get('model_id')?.data.toString('utf8') ?? null,
+        bytes: file.data.length,
+        fileType: file.type,
+      });
+      const slow = /\[\[slow:(\d{1,6})\]\]/.exec(marks);
+      const wait = slow ? Number(slow[1]) : delayMs;
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      if (marks.includes('[[fail]]'))
+        return done(500, 'application/json', '{"detail":"down"}');
+      if (marks.includes('[[reject]]'))
+        return done(422, 'application/json', '{"detail":"refused"}');
+      const status = /\[\[status:(4\d\d|5\d\d)\]\]/.exec(marks);
+      if (status)
+        return done(Number(status[1]), 'application/json', '{"detail":"no"}');
+      if (marks.includes('[[html]]'))
+        return done(200, 'text/html', '<html>not what was asked</html>');
+      const n = ++dubSeq;
+      const id = `dub-${n}`;
+      const delay = /\[\[dub-delay:(\d{1,8})\]\]/.exec(marks);
+      const bytes = /\[\[dub-bytes:(\d{1,9})\]\]/.exec(marks);
+      const seconds = lengthOf(file.data);
+      dubProjects.set(id, {
+        languageId: `lang-${n}`,
+        target,
+        beganAt: Date.now(),
+        delayMs: delay ? Number(delay[1]) : dubDelayMs,
+        seconds,
+        audioBytes: bytes ? Number(bytes[1]) : Math.min(5_000_000, Math.round(seconds * 2000) + 64),
+        marks,
+        storedAt: Date.now() + storeDelayOf(marks),
+        ackUntil: Date.now() + ackDelayOf(marks),
+        hideMs: hideDelayOf(marks),
+        hiddenUntil: 0,
+      });
+      return done(
+        201,
+        'application/json',
+        JSON.stringify({
+          project_id: id,
+          status: 'queued',
+          revision: 1,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          source_language: source,
+          model_id: 'dubbing_v2',
+          language_ids: marks.includes('[[dub-nolang]]') ? [] : [`lang-${n}`],
+          webhook_ids: [],
+          warnings: [],
+        }),
+      );
+    } catch {
+      return done(500, 'application/json', '{"detail":"stand-in fault"}');
+    }
+  }
+
+  /** GET /v1/dubbing/project/<id>/language/<id>. */
+  function dubLanguage(req, res, m) {
+    if (req.headers['xi-api-key'] !== key)
+      return json(res, 401, { detail: 'bad key' });
+    const id = decodeURIComponent(m[1]);
+    const lang = decodeURIComponent(m[2]);
+    const p = dubProjects.get(id);
+    if (p === undefined || p.languageId !== lang) {
+      state.dubReads.push({ project: id, language: lang, status: 404 });
+      return json(res, 404, { detail: 'no such language' });
+    }
+    const elapsed = Date.now() - p.beganAt;
+    let st;
+    if (p.marks.includes('[[dub-stuck]]')) st = elapsed < 1 ? 'queued' : 'processing';
+    else if (elapsed < p.delayMs / 3) st = 'queued';
+    else if (elapsed < p.delayMs) st = 'processing';
+    else if (p.marks.includes('[[dub-failed]]')) st = 'failed';
+    else if (p.marks.includes('[[dub-stale]]')) st = 'stale';
+    else st = 'completed';
+    state.dubReads.push({ project: id, language: lang, status: 200, dub: st });
+    const base = `http://127.0.0.1:${req.socket.localPort}/__standin/dub-out/${id}`;
+    return json(res, 200, {
+      language_id: lang,
+      project_id: id,
+      target_language: p.target,
+      status: st,
+      revision: 1,
+      created_at: new Date(p.beganAt).toISOString(),
+      updated_at: new Date().toISOString(),
+      model_id: 'dubbing_v2',
+      voice_settings: null,
+      outputs:
+        st === 'completed'
+          ? {
+              lossless_audio: p.marks.includes('[[dub-noaudio]]') ? null : base + '/audio',
+              subtitles: p.marks.includes('[[dub-nosubs]]') ? null : base + '/subtitles',
+            }
+          : null,
+      output_revision: st === 'completed' ? 1 : null,
+      error: st === 'failed' ? { message_type: 'error', error: 'the dub could not be made' } : null,
+      warnings: [],
+    });
+  }
+
+  /** The signed links of a finished dub: no key is needed, and one that is sent is counted. */
+  function dubOut(req, res, m) {
+    const id = decodeURIComponent(m[1]);
+    const kind = m[2];
+    const leaked = req.headers['xi-api-key'] !== undefined;
+    if (leaked) state.dubKeyLeaks += 1;
+    const p = dubProjects.get(id);
+    if (p === undefined || p.marks.includes('[[dub-stuck]]')) {
+      state.dubDownloads.push({ project: id, kind, status: 404, leaked });
+      return json(res, 404, { detail: 'no such file' });
+    }
+    if (kind === 'audio' && p.marks.includes('[[dub-outfail]]')) {
+      state.dubDownloads.push({ project: id, kind, status: 500, leaked });
+      return json(res, 500, { detail: 'down' });
+    }
+    state.dubDownloads.push({ project: id, kind, status: 200, leaked });
+    res.statusCode = 200;
+    if (kind === 'audio') {
+      res.setHeader('content-type', 'audio/flac');
+      return res.end(
+        p.marks.includes('[[dub-notflac]]')
+          ? Buffer.alloc(p.audioBytes, 7)
+          : flacOf(p.seconds, p.audioBytes),
+      );
+    }
+    res.setHeader('content-type', 'text/vtt');
+    return res.end(
+      p.marks.includes('[[dub-badvtt]]') ? 'not subtitles\n' : vttOf(p.seconds),
+    );
+  }
+
+  /** GET /v1/dubbing/project/<id>: 200 while the provider holds the project, else 404 (hidden for a moment after a delete that removed nothing, as for a transcript). */
+  function dubProject(req, res, m) {
+    if (req.headers['xi-api-key'] !== key)
+      return json(res, 401, { detail: 'bad key' });
+    const id = decodeURIComponent(m[1]);
+    const item = dubProjects.get(id);
+    const hidden = item !== undefined && Date.now() < item.hiddenUntil;
+    const status = item !== undefined && !hidden ? 200 : 404;
+    state.reads.push({ kind: 'dub', id, status, ...(hidden ? { hidden: true } : {}) });
+    if (status === 404) return json(res, 404, { detail: 'no such project' });
+    return json(res, 200, { project_id: id, status: 'ready', language_ids: [item.languageId] });
+  }
+
   /** The own-voice routes (VOICE-01). */
   function addVoice(req, res, _m, raw) {
     if (req.headers['xi-api-key'] !== key)
@@ -619,6 +864,27 @@ function startVoiceStandin({
       path: /^\/__standin\/sample\/([^/]+)\.mp3$/,
       handle: sampleAudio,
     },
+    { method: 'POST', path: /^\/v1\/dubbing\/project$/, handle: dubStart },
+    {
+      method: 'GET',
+      path: /^\/v1\/dubbing\/project\/([^/]+)\/language\/([^/]+)$/,
+      handle: dubLanguage,
+    },
+    {
+      method: 'GET',
+      path: /^\/v1\/dubbing\/project\/([^/]+)$/,
+      handle: dubProject,
+    },
+    {
+      method: 'DELETE',
+      path: /^\/v1\/dubbing\/project\/([^/]+)$/,
+      handle: removeFrom(dubProjects, state.deletedDubs, 'dub', 204),
+    },
+    {
+      method: 'GET',
+      path: /^\/__standin\/dub-out\/([^/]+)\/(audio|subtitles)$/,
+      handle: dubOut,
+    },
     { method: 'POST', path: /^\/v1\/voices\/add$/, handle: addVoice },
     { method: 'DELETE', path: /^\/v1\/voices\/([^/]+)$/, handle: removeVoice },
   ];
@@ -659,6 +925,8 @@ function startVoiceStandin({
         /** Transcripts and cleaned recordings the provider still holds (AITOOLS-04). */
         openTranscripts: () => transcripts.size,
         openIsolations: () => isolations.size,
+        /** Dub projects the provider still holds (AITOOLS-05). */
+        openDubs: () => dubProjects.size,
       }),
     );
   });
@@ -671,6 +939,7 @@ if (require.main === module) {
     port: Number(args[0] ?? 0),
     key: opt('--key', 'standin-key'),
     delayMs: Number(opt('--delay-ms', 0)),
+    dubDelayMs: Number(opt('--dub-delay-ms', 0)),
   }).then(({ port }) => {
     console.log(`LISTENING ${port}`);
   });

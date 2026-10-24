@@ -5,6 +5,13 @@ import { PointsSpendService } from './points-spend.service';
 
 /** The setting: the longest an AI job may run before its held points are given back. */
 export const JOB_MAX_RUN_SETTING = 'points.job_max_run_minutes';
+/**
+ * Dubbing is the one slow tool (AITOOLS-05): the provider works on a dub for
+ * minutes, so its hold has its OWN longest run, a setting, and the sweep leaves a
+ * dub's hold alone until then. The action is the Dubbing job's `tool`.
+ */
+export const DUB_MAX_RUN_SETTING = 'ai.dubbing_max_run_minutes';
+export const DUB_ACTION_ID = 'dub_standard_per_min_lang';
 
 /**
  * The sweep for stale AI holds (task POINTS-03, lead note of 8 Oct). Every
@@ -34,6 +41,13 @@ export class PointsHoldSweepService {
       const { released, failed } = await this.spend.releaseStale(
         this.settings.number(JOB_MAX_RUN_SETTING),
         now,
+        undefined,
+        [
+          {
+            action: DUB_ACTION_ID,
+            maxRunMinutes: this.settings.number(DUB_MAX_RUN_SETTING),
+          },
+        ],
       );
       if (released > 0 || failed > 0) {
         this.logger.log(

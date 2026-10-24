@@ -28,7 +28,8 @@ export type AiToolId =
   | 'sound-effect'
   | 'music'
   | 'captions'
-  | 'clean-audio';
+  | 'clean-audio'
+  | 'dubbing';
 
 /** What a job takes in. `text` (words to speak), `prompt` (a description) and `file` (a recording or video the person uploaded, AITOOLS-04); `chat` comes with the task that needs it. */
 export type AiToolInputKind = 'text' | 'prompt' | 'file';
@@ -64,6 +65,10 @@ export interface FileJobRequest {
   fileKey: string;
   /** Captions: the language spoken (ISO 639), or null to let the provider detect it. */
   languageCode: string | null;
+  /** Dubbing (AITOOLS-05): the language to hear the file in (a tag from `ai.dubbing_languages`). */
+  targetLanguage?: string | null;
+  /** Dubbing: the language spoken in the file, or null to let the provider detect it. */
+  sourceLanguage?: string | null;
   /** The length the Hub read, in seconds. */
   seconds: number;
   /** Minutes the job is priced in: rounded up, at least 1. */
@@ -115,6 +120,18 @@ export interface AiToolRunResult {
    * until the provider has it stored and it is gone).
    */
   providerCopy?: ProviderCopy;
+  /**
+   * Set by a tool that FOLLOWS the provider (Dubbing, AITOOLS-05): the
+   * provider took the work on and the job stays `working`. `ref` is what the
+   * job row keeps (`providerRef`) so the follower can read the work again, also
+   * after a restart. Nothing is stored, committed or released yet.
+   */
+  follow?: { ref: string };
+  /**
+   * A followed job's provider copy (its project), written onto the row in the
+   * same update that ends the job, and deleted once the job has ended.
+   */
+  endCopy?: ProviderCopy;
 }
 
 /** What the pipeline hands a file tool's run: the person's file, streamed to the provider for this one run. */
@@ -159,6 +176,8 @@ export interface FileInputSpec {
   kind: 'file';
   /** True when the request may name the language spoken (`languageCode`). */
   languageCode: boolean;
+  /** True for Dubbing (AITOOLS-05): the request names `targetLanguage` (from the settings' list) and may name `sourceLanguage`. */
+  dubbing?: boolean;
 }
 
 export type AiToolInputSpec = TextInputSpec | PromptInputSpec | FileInputSpec;
@@ -166,6 +185,8 @@ export type AiToolInputSpec = TextInputSpec | PromptInputSpec | FileInputSpec;
 /** A tool's settings keys, read on each call (R-65). */
 export interface AiToolSettings {
   number(key: string): number;
+  /** A setting that holds a list of lines (the languages Dubbing offers). */
+  lines(key: string): string[];
 }
 
 export interface AiTool {
@@ -181,6 +202,8 @@ export interface AiTool {
   readonly input: AiToolInputSpec;
   /** Where the job's audio is stored (a folder of the Hub's own, recorded as the person's); null for a tool that makes no audio (Captions). */
   readonly audioFolder: AiAudioFolder | null;
+  /** The extension of the audio this tool stores when it is not `mp3` (Dubbing: `flac`). */
+  readonly audioExtension?: string;
   /**
    * Whether the catalogue lists the tool while the provider is not set up
    * (`enabled: false`). VoiceOver keeps AITOOLS-01's answer; a tool added
@@ -200,6 +223,13 @@ export interface AiTool {
     settings: AiToolSettings,
     plan: Pick<PlansConfig, 'caps'>,
   ): void;
+  /**
+   * Refuses a request on its own words before the person's file is opened
+   * (Dubbing: a language that is not on the list), so a refusal costs no read.
+   * Returns the request with its values set to the form the tool uses (a
+   * language tag in the list's own spelling). Nothing is held when it throws.
+   */
+  precheck?(req: AiToolRequest, settings: AiToolSettings): AiToolRequest;
   /**
    * Prices the request into the plan's units for the hold. `characters` is
    * what the caps count. Pure.

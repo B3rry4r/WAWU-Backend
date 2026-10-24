@@ -18,6 +18,7 @@ import {
 import { AiToolsService } from './ai-tools.service';
 import { OwnVoiceService } from './own-voice/own-voice.service';
 import { StorageVoiceFiles, VOICE_FILES } from '../voice-intro/voice-files';
+import { AiDubService } from './dub/ai-dub.service';
 import { AI_VOICE_PROVIDER } from './voice/ai-voice-provider';
 import { HttpVoiceProvider } from './voice/http-voice-provider';
 import { ProviderCopyService } from './voice/provider-copy.service';
@@ -63,6 +64,8 @@ import { ProviderCopyService } from './voice/provider-copy.service';
     ProviderCopyService,
     // AITOOLS-07: account deletion removes any voice copy the provider still holds, before the job rows go.
     AiToolsPurgeService,
+    // AITOOLS-05: follows the dubs the provider is working on, until each is done or failed.
+    AiDubService,
   ],
   exports: [AiJobService, AiInputService, AI_VOICE_PROVIDER, AI_AUDIO_STORE],
 })

@@ -49,6 +49,7 @@ import { MoneyHoldsController } from './holds/money-holds.controller';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
 import { AdminEarningsController } from './earnings/admin-earnings.controller';
 import { EarningSettlementService } from './earnings/earning-settlement.service';
+import { EarningsInReviewService } from './earnings/earnings-in-review.service';
 import { EarningsViewService } from './earnings/earnings-view.service';
 import { MoneyEarningsController } from './earnings/money-earnings.controller';
 import { WalletHoldService } from './holds/wallet-hold.service';
@@ -319,6 +320,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletHoldService,
     EarningSettlementService,
     EarningsViewService,
+    EarningsInReviewService,
     ReceiptSettings,
     ReceiptService,
     RecipientService,

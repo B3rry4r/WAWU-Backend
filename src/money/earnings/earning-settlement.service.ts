@@ -24,6 +24,7 @@ import { koboNumber, LedgerService } from '../ledger/ledger.service';
 import { PaymentSettings } from '../payments/payment-config';
 import { joinNotes } from '../payments/payment-figures';
 import { isUniqueViolation } from '../prisma-unique';
+import { EARNING_REVIEW_REASONS } from './earning-review-reasons';
 import {
   EARNING_ADOPT_MAX_PAGES,
   EARNING_ADOPT_PAGE,
@@ -464,7 +465,7 @@ export class EarningSettlementService {
                 tx,
                 c.id,
                 now,
-                'the sale is no longer a finished one (not completed, or under review); the earning waits for a person',
+                EARNING_REVIEW_REASONS.saleNotFinished.make(),
               );
               continue;
             }
@@ -473,7 +474,7 @@ export class EarningSettlementService {
                 tx,
                 c.id,
                 now,
-                `the earning of ${c.amountKobo} kobo is above the cap of ${cap} kobo on one move through WAWU's account`,
+                EARNING_REVIEW_REASONS.earningAboveCap.make(c.amountKobo, cap),
               );
               continue;
             }
@@ -926,7 +927,9 @@ export class EarningSettlementService {
     if (this.refusedTooLong(m, now)) {
       return this.toReview(
         m,
-        `the wallet first refused this move ${this.settings.earningsRefusedReviewAfterHours} hours ago and it has not landed`,
+        EARNING_REVIEW_REASONS.refusedTooLong.make(
+          this.settings.earningsRefusedReviewAfterHours,
+        ),
       );
     }
     const amount = m.amountKobo;
@@ -935,7 +938,7 @@ export class EarningSettlementService {
       // Refuse, never split (WALLET.md, lead ruling 1): a person decides.
       return this.toReview(
         m,
-        `the move of ${amount} kobo is above the cap of ${cap} kobo on one move through WAWU's account`,
+        EARNING_REVIEW_REASONS.moveAboveCap.make(amount, cap),
       );
     }
 
@@ -950,10 +953,7 @@ export class EarningSettlementService {
     if (
       await this.isWawuAccount(m.merchantAccountNumber, wallet.accountNumber)
     ) {
-      return this.toReview(
-        m,
-        "the move would take money from WAWU's account to WAWU's account",
-      );
+      return this.toReview(m, EARNING_REVIEW_REASONS.sameAccount.make());
     }
 
     // The lease: only the caller that wins it hands the move to the provider.
@@ -1007,8 +1007,7 @@ export class EarningSettlementService {
         // Nothing may be sent for these: out of the move, for a person. The
         // move shrinks (a new reference, the old one may have been tried) or,
         // with nothing left, is withdrawn.
-        const note =
-          'the sale is no longer a finished one (not completed, or under review); the earning waits for a person';
+        const note = EARNING_REVIEW_REASONS.saleNotFinished.make();
         await tx.earningSettlement.updateMany({
           where: { id: { in: gone.map((x) => x.id) }, moveId: m.id },
           data: { moveId: null, reviewSince: now, discrepancy: note },
@@ -1194,7 +1193,9 @@ export class EarningSettlementService {
     if (this.refusedTooLong(fresh, now)) {
       return this.toReview(
         fresh,
-        `the wallet first refused this move ${this.settings.earningsRefusedReviewAfterHours} hours ago and it has not landed`,
+        EARNING_REVIEW_REASONS.refusedTooLong.make(
+          this.settings.earningsRefusedReviewAfterHours,
+        ),
       );
     }
     return this.moveResult(fresh);
@@ -1254,7 +1255,11 @@ export class EarningSettlementService {
       // written with a figure we did not ask for; a person looks.
       return this.toReview(
         m,
-        `${this.provider.label} moved ${receipt.amountKobo} kobo for a move of ${m.amountKobo} kobo`,
+        EARNING_REVIEW_REASONS.movedOtherAmount.make(
+          this.provider.label,
+          receipt.amountKobo,
+          m.amountKobo,
+        ),
       );
     }
     return this.land(
@@ -1295,7 +1300,11 @@ export class EarningSettlementService {
         if (t.amountKobo !== m.amountKobo) {
           return this.toReview(
             m,
-            `${this.provider.label} moved ${t.amountKobo} kobo for a move of ${m.amountKobo} kobo`,
+            EARNING_REVIEW_REASONS.movedOtherAmount.make(
+              this.provider.label,
+              t.amountKobo,
+              m.amountKobo,
+            ),
           );
         }
         const tagapay =
@@ -1326,7 +1335,7 @@ export class EarningSettlementService {
       if (t.outcome === 'reversed') {
         return this.toReview(
           m,
-          `${this.provider.label} moved the earnings and then reversed it; WAWU's account holds the money again`,
+          EARNING_REVIEW_REASONS.reversed.make(this.provider.label),
         );
       }
       // Pending, or a word we do not know: neither says no money moved.
@@ -1343,7 +1352,10 @@ export class EarningSettlementService {
     if (now.getTime() - since >= this.settings.reviewAfterHours * HOUR) {
       return this.toReview(
         m,
-        `no answer from ${this.provider.label} about the move after ${this.settings.reviewAfterHours} hours; it may have moved`,
+        EARNING_REVIEW_REASONS.noAnswer.make(
+          this.provider.label,
+          this.settings.reviewAfterHours,
+        ),
       );
     }
     await this.schedule(m, now, m.checks + 1);
@@ -1460,7 +1472,10 @@ export class EarningSettlementService {
             ? {
                 discrepancy: joinNotes(
                   m.discrepancy,
-                  `${this.provider.label} reported a charge of ${fig.feeKobo} kobo on the move`,
+                  EARNING_REVIEW_REASONS.chargeOnLandedMove.make(
+                    this.provider.label,
+                    fig.feeKobo,
+                  ),
                 ),
               }
             : {}),

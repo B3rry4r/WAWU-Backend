@@ -14994,6 +14994,93 @@
         ]
       }
     },
+    "/api/hub/admin/identity-holds": {
+      "get": {
+        "operationId": "AdminIdentityHoldsListController_list",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100 (20 when absent, CONVENTIONS section 6).",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the page before; opaque, sent back as given.",
+            "schema": {
+              "maxLength": 300,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityHoldsPage"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminIdentityHoldsList"
+        ]
+      }
+    },
+    "/api/hub/admin/wallet-openings/stuck": {
+      "get": {
+        "operationId": "AdminWalletOpeningsController_stuck",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100 (20 when absent, CONVENTIONS section 6).",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the page before; opaque, sent back as given.",
+            "schema": {
+              "maxLength": 300,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StuckOpeningsPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Openings with no wallet that are waiting on the provider or on a person, oldest first.",
+        "tags": [
+          "AdminWalletOpenings"
+        ]
+      }
+    },
     "/api/hub/money/pin": {
       "get": {
         "operationId": "MoneyPinController_state",
@@ -18267,6 +18354,50 @@
           }
         },
         "summary": "Finished sales with a payee made before the sweep's start, oldest first.",
+        "tags": [
+          "AdminEarnings"
+        ]
+      }
+    },
+    "/api/hub/admin/money/earnings/in-review": {
+      "get": {
+        "operationId": "AdminEarningsController_inReview",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100 (20 when absent, CONVENTIONS section 6).",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the page before; opaque, sent back as given.",
+            "schema": {
+              "maxLength": 300,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EarningsInReviewPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Moves and earnings a person has to look at, oldest first, a cursor page.",
         "tags": [
           "AdminEarnings"
         ]
@@ -30468,6 +30599,63 @@
         ]
       }
     },
+    "/api/hub/admin/featured-creators": {
+      "get": {
+        "operationId": "AdminFeaturedCreatorsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FeaturedCreatorAdminView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "The rail in the order Explore shows it, hidden creators included.",
+        "tags": [
+          "AdminFeaturedCreators"
+        ]
+      }
+    },
+    "/api/hub/admin/featured-creators/order": {
+      "post": {
+        "operationId": "AdminFeaturedCreatorsController_reorder",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReorderFeaturedCreatorsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeaturedOrderView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Saves the rail order. The body must name every creator who is featured\nnow, once each: a list that misses someone, or names someone who is not\nfeatured, is refused so a screen that is out of date cannot quietly drop\nor re-add anyone. The places become 0, 1, 2 and so on in one save.",
+        "tags": [
+          "AdminFeaturedCreators"
+        ]
+      }
+    },
     "/api/hub/admin/featured-creators/{wawuId}": {
       "put": {
         "operationId": "AdminFeaturedCreatorsController_put",
@@ -35734,6 +35922,92 @@
           "AiTools"
         ],
         "x-wawu-built-by": "AITOOLS-04"
+      }
+    },
+    "/api/hub/ai-tools/dubbing/quote": {
+      "post": {
+        "operationId": "AiToolsController_quoteDubbing",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteFileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFileQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The points quote for a Dubbing file (AITOOLS-05): exactly `POST\n/ai-tools/captions/quote`, for the action `dub_standard_per_min_lang`. The\nprice is the minutes of the file the Hub reads, for one language.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-05"
+      }
+    },
+    "/api/hub/ai-tools/dubbing/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createDubbing",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDubbingJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Dubbing job (PT1 \"Dubbing\", AITOOLS-05): the `fileKey` of a\nrecording or video the person uploaded, the `targetLanguage` to hear it in\n(a code from `GET /ai-tools`, `input.file.dubbing.languages`), an optional\n`sourceLanguage` and the `quoteToken` of the quote for the action\n`dub_standard_per_min_lang`. One language a job: a second language is a second\njob. The points are held and the job answers `working` at once; a dub takes\nminutes, so the person may leave and the app reads `GET /ai-tools/jobs/{id}`\nlater. Done, `outputs` hold the dubbed audio (`audio`, FLAC) and the subtitles\n(`subtitles`, WebVTT); there is no dubbed video, so a video comes back as\naudio. The points are kept only on success and given back when the provider\nfails the dub, it stays too long, or the result cannot be stored. The\nrequest, the answer and the `Idempotency-Key` rule are those of `POST\n/ai-tools/captions/jobs`, plus `422 ai_language_unsupported` (a language not\non the list, or the same language as the one spoken), with nothing held. The\nuploaded file and the provider's project are deleted when the job ends.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-05"
       }
     },
     "/api/hub/ai-tools/jobs": {
@@ -43009,6 +43283,24 @@
           "settings"
         ]
       },
+      "ReorderFeaturedCreatorsDto": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "uniqueItems": true,
+            "minItems": 1,
+            "maxItems": 500,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{1,64}$"
+            }
+          }
+        },
+        "required": [
+          "order"
+        ]
+      },
       "PutFeaturedCreatorDto": {
         "type": "object",
         "properties": {
@@ -43799,6 +44091,38 @@
         },
         "required": [
           "fileKey",
+          "quoteToken"
+        ]
+      },
+      "CreateDubbingJobDto": {
+        "type": "object",
+        "properties": {
+          "fileKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "targetLanguage": {
+            "type": "string",
+            "description": "The language to hear the file in: a code from the list `GET /ai-tools` gives (`input.file.dubbing.languages`). Another is `422 ai_language_unsupported`.",
+            "pattern": "^[A-Za-z]{2,3}(-[A-Za-z]{2,4})?$"
+          },
+          "sourceLanguage": {
+            "type": "string",
+            "description": "The language spoken in the file, from the same list. Left out: the language is detected.",
+            "pattern": "^[A-Za-z]{2,3}(-[A-Za-z]{2,4})?$"
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (sent with the same `fileKey`). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "fileKey",
+          "targetLanguage",
           "quoteToken"
         ]
       },
@@ -45811,6 +46135,88 @@
         "required": [
           "startsAt",
           "source",
+          "count",
+          "items",
+          "nextCursor"
+        ]
+      },
+      "EarningInReviewView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "earning",
+              "daily_move"
+            ]
+          },
+          "payeeWawuUserId": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "earnings": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "dayKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "provider": {
+            "type": "string"
+          },
+          "firstRefusedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "reviewSince": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "payeeWawuUserId",
+          "amountKobo",
+          "earnings",
+          "title",
+          "dayKey",
+          "provider",
+          "firstRefusedAt",
+          "reviewSince",
+          "reason"
+        ]
+      },
+      "EarningsInReviewPage": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EarningInReviewView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
           "count",
           "items",
           "nextCursor"
@@ -54800,6 +55206,154 @@
           "state"
         ]
       },
+      "IdentityHoldView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "review",
+              "stopped"
+            ]
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "needs_documents",
+              "checking",
+              "approved",
+              "rejected",
+              "stopped"
+            ],
+            "nullable": true
+          },
+          "failureCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "provider": {
+            "type": "string"
+          },
+          "heldSince": {
+            "type": "string"
+          },
+          "changedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "state",
+          "stage",
+          "failureCode",
+          "provider",
+          "heldSince",
+          "changedAt"
+        ]
+      },
+      "IdentityHoldsPage": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IdentityHoldView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "count",
+          "items",
+          "nextCursor"
+        ]
+      },
+      "StuckOpeningView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "opening",
+              "open",
+              "unknown",
+              "conflict"
+            ]
+          },
+          "failureCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "provider": {
+            "type": "string"
+          },
+          "attempts": {
+            "type": "number"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "needs_documents",
+              "checking",
+              "approved",
+              "rejected",
+              "stopped"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "state",
+          "failureCode",
+          "provider",
+          "attempts",
+          "startedAt",
+          "stage"
+        ]
+      },
+      "StuckOpeningsPage": {
+        "type": "object",
+        "properties": {
+          "stuckAfterMinutes": {
+            "type": "number"
+          },
+          "count": {
+            "type": "number"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StuckOpeningView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "stuckAfterMinutes",
+          "count",
+          "items",
+          "nextCursor"
+        ]
+      },
       "ChatPerson": {
         "type": "object",
         "properties": {
@@ -56359,6 +56913,66 @@
           "status",
           "error",
           "sentAt"
+        ]
+      },
+      "FeaturedCreatorAdminView": {
+        "type": "object",
+        "properties": {
+          "wawuId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          },
+          "position": {
+            "type": "number"
+          },
+          "featuredAt": {
+            "type": "string"
+          },
+          "pieceCount": {
+            "type": "number"
+          },
+          "shownInExplore": {
+            "type": "boolean"
+          },
+          "hiddenReason": {
+            "type": "string",
+            "enum": [
+              "no_live_content",
+              "hidden_from_member_lists",
+              "not_a_creator"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuId",
+          "name",
+          "handle",
+          "position",
+          "featuredAt",
+          "pieceCount",
+          "shownInExplore",
+          "hiddenReason"
+        ]
+      },
+      "FeaturedOrderView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FeaturedCreatorAdminView"
+            }
+          }
+        },
+        "required": [
+          "items"
         ]
       },
       "ExploreCreatorCard": {
@@ -64939,6 +65553,32 @@
           "useWallet"
         ]
       },
+      "AiToolDubbingView": {
+        "type": "object",
+        "properties": {
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "name"
+              ]
+            }
+          }
+        },
+        "required": [
+          "languages"
+        ]
+      },
       "AiToolFileView": {
         "type": "object",
         "properties": {
@@ -64986,6 +65626,10 @@
           },
           "languageCode": {
             "type": "boolean"
+          },
+          "dubbing": {
+            "$ref": "#/components/schemas/AiToolDubbingView",
+            "nullable": true
           }
         },
         "required": [
@@ -65030,7 +65674,8 @@
               "quick-voice",
               "sound-effect",
               "captions",
-              "clean-audio"
+              "clean-audio",
+              "dubbing"
             ]
           },
           "action": {
@@ -65182,7 +65827,8 @@
               "quick-voice",
               "sound-effect",
               "captions",
-              "clean-audio"
+              "clean-audio",
+              "dubbing"
             ]
           },
           "state": {
@@ -65195,6 +65841,10 @@
           },
           "voiceId": {
             "type": "string"
+          },
+          "targetLanguage": {
+            "type": "string",
+            "nullable": true
           },
           "characters": {
             "type": "number"
@@ -65235,6 +65885,7 @@
           "tool",
           "state",
           "voiceId",
+          "targetLanguage",
           "characters",
           "units",
           "costPoints",

@@ -24,9 +24,10 @@ import {
   type AiAudioStore,
 } from './audio/ai-audio-store';
 import { AiInputService } from './input/ai-input-files';
+import { endMarkerOf, parseFollowRef } from './dub/dub-support';
 import { OWN_VOICE_ID } from './own-voice/own-voice-id';
 import { OwnVoiceService } from './own-voice/own-voice.service';
-import { ProviderCopyService } from './voice/provider-copy.service';
+import { markerOf, ProviderCopyService } from './voice/provider-copy.service';
 import {
   AiToolError,
   JOB_FAILED_MESSAGE,
@@ -51,6 +52,7 @@ import type {
   AiJobListQueryDto,
   CreateCaptionsJobDto,
   CreateCleanAudioJobDto,
+  CreateDubbingJobDto,
   CreateMusicJobDto,
   CreateSoundEffectJobDto,
   CreateVoiceoverJobDto,
@@ -82,7 +84,8 @@ type AiJobRequestBody =
   | CreateSoundEffectJobDto
   | CreateMusicJobDto
   | CreateCaptionsJobDto
-  | CreateCleanAudioJobDto;
+  | CreateCleanAudioJobDto
+  | CreateDubbingJobDto;
 
 const KEY_FORMAT = /^[A-Za-z0-9_-]{8,128}$/;
 /** The only try a job's hold has: a failed job is never retried, a new job (and key) is. */
@@ -193,6 +196,9 @@ export class AiJobService {
 
     if (!tool.enabled(this.voice))
       throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
+    // A tool's own checks of the words of the request (Dubbing: a language
+    // that is not on the list), before the person's file is read.
+    if (tool.precheck) req = tool.precheck(req, this.settings);
     if (req.kind === 'text') {
       const wanted = req.voiceId;
       if (wanted === OWN_VOICE_ID && tool.id === 'voiceover') {
@@ -213,6 +219,8 @@ export class AiJobService {
         kind: 'file',
         fileKey: opened.key,
         languageCode: req.languageCode,
+        targetLanguage: req.targetLanguage ?? null,
+        sourceLanguage: req.sourceLanguage ?? null,
         seconds: opened.seconds,
         minutes: opened.minutes,
         bytes: opened.bytes,
@@ -262,7 +270,12 @@ export class AiJobService {
         tool: tool.action,
         idempotencyKey,
         requestHash,
-        voiceId,
+        // A dub keeps the language it was asked for in the voice column (a file
+        // tool has no voice); the job view names it `targetLanguage`.
+        voiceId:
+          req.kind === 'file' && req.targetLanguage
+            ? req.targetLanguage
+            : voiceId,
         characters,
         units,
         costPoints: held.costPoints,
@@ -369,6 +382,83 @@ export class AiJobService {
       items,
       nextCursor: rows.length > limit && last ? encodeCursor(last) : null,
     };
+  }
+
+  /**
+   * A followed job's provider ids are written to its row (Dubbing, AITOOLS-05).
+   * If the row has already ended (the sweep gave the points back while the
+   * provider was answering) nobody will follow the work, so its project is
+   * deleted at once: noted, then tried, then left to the copy sweep.
+   */
+  private async keepFollowRef(job: AiToolJob, ref: string): Promise<void> {
+    const kept = await this.prisma.aiToolJob.updateMany({
+      where: { id: job.id, state: 'working' },
+      data: { providerRef: ref },
+    });
+    if (kept.count > 0) return;
+    const parsed = parseFollowRef(ref);
+    if (!parsed) return;
+    const copy: ProviderCopy = { kind: 'dub', id: parsed.projectId };
+    await this.copies.note(job.id, copy);
+    await this.dropInput(job);
+    await this.copies.discard(job.id, copy).catch(() => undefined);
+  }
+
+  /**
+   * A followed job's work is done (Dubbing, called by the follower): store
+   * what the provider made, COMMIT the hold, mark the job done, then delete
+   * the provider's project. The same finish as any tool's. A job that is no
+   * longer `working` (the sweep or a read ended it) is left alone.
+   */
+  async completeFollowed(
+    jobId: string,
+    result: AiToolRunResult & { endCopy: ProviderCopy },
+  ): Promise<void> {
+    const job = await this.prisma.aiToolJob.findUnique({
+      where: { id: jobId },
+    });
+    const tool = job ? toolForAction(job.tool) : null;
+    if (!job || !tool || job.state !== 'working' || !job.holdId) return;
+    try {
+      await this.finish(tool, job, job.holdId, result);
+    } finally {
+      await this.discardIfEnded(jobId, result.endCopy);
+    }
+  }
+
+  /**
+   * A followed job did not work (the provider failed it, it stayed too long,
+   * its outputs could not be fetched): every held point goes back, the job says
+   * so, and the provider's project is deleted. `copy` is null when the job never
+   * learned a project.
+   */
+  async failFollowed(
+    jobId: string,
+    code: string,
+    copy: ProviderCopy | null,
+  ): Promise<void> {
+    const job = await this.prisma.aiToolJob.findUnique({
+      where: { id: jobId },
+    });
+    if (!job || job.state !== 'working' || !job.holdId) return;
+    try {
+      await this.fail(job, job.holdId, code, copy ? markerOf(copy) : undefined);
+    } finally {
+      if (copy) await this.discardIfEnded(jobId, copy);
+    }
+  }
+
+  /** Deletes the provider's copy once the job has ended (never while it is still working: the points may not be settled yet). */
+  private async discardIfEnded(
+    jobId: string,
+    copy: ProviderCopy,
+  ): Promise<void> {
+    const after = await this.prisma.aiToolJob.findUnique({
+      where: { id: jobId },
+      select: { state: true },
+    });
+    if (after && after.state !== 'working')
+      await this.copies.discard(jobId, copy).catch(() => undefined);
   }
 
   /** Waits for the jobs this server is running. For specs and a clean stop. */
@@ -557,6 +647,13 @@ export class AiJobService {
       // The file's place at the read gate goes back however the call ended.
       if (input && 'stream' in input.file) input.file.sent();
     }
+    // A followed tool (Dubbing): the provider took the work on. The job stays
+    // `working`; the row keeps the provider's ids so the follower (also after a
+    // restart) can read the work again. The file stays until the job ends.
+    if (result.follow) {
+      await this.keepFollowRef(job, result.follow.ref);
+      return;
+    }
     // The provider's copy of what it made is noted on the row at once, so a
     // server that dies before it is deleted still has it to delete.
     if (result.providerCopy)
@@ -581,8 +678,9 @@ export class AiJobService {
     holdId: string,
     result: AiToolRunResult,
   ): Promise<void> {
+    const endRef = result.endCopy ? markerOf(result.endCopy) : undefined;
     if (result.failure) {
-      await this.fail(job, holdId, result.failure);
+      await this.fail(job, holdId, result.failure, endRef);
       return;
     }
     const outputs: StoredOutput[] = [];
@@ -599,7 +697,7 @@ export class AiJobService {
         outputs.push({ kind: 'audio', key });
       }
     } catch {
-      await this.fail(job, holdId, 'store_failed');
+      await this.fail(job, holdId, 'store_failed', endRef);
       return;
     }
     for (const t of result.texts ?? [])
@@ -630,6 +728,7 @@ export class AiJobService {
         await this.mark(job.id, 'failed', {
           failureCode: 'timed_out',
           outputs: Prisma.JsonNull,
+          ...(endRef ? { providerRef: endRef } : {}),
         });
         await this.prisma.aiToolJob.updateMany({
           where: { id: job.id, state: 'failed' },
@@ -640,7 +739,11 @@ export class AiJobService {
       }
       throw e;
     }
-    await this.mark(job.id, 'done', { ...made, audioKey: key });
+    await this.mark(job.id, 'done', {
+      ...made,
+      audioKey: key,
+      ...(endRef ? { providerRef: endRef } : {}),
+    });
     await this.dropInput(job);
   }
 
@@ -649,6 +752,8 @@ export class AiJobService {
     job: AiToolJob,
     holdId: string,
     failureCode: string,
+    /** A followed job's note of the provider's project, written with the end state. */
+    providerRef?: string,
   ): Promise<void> {
     try {
       await this.spend.release(holdId);
@@ -662,7 +767,10 @@ export class AiJobService {
         return;
       }
     }
-    await this.mark(job.id, 'failed', { failureCode });
+    await this.mark(job.id, 'failed', {
+      failureCode,
+      ...(providerRef ? { providerRef } : {}),
+    });
     await this.dropInput(job);
   }
 
@@ -700,7 +808,7 @@ export class AiJobService {
    * that died after releasing) means failed; spent (a run that died after the
    * commit) means done. Still held means still working.
    */
-  private async reconcile(job: AiToolJob): Promise<AiToolJob> {
+  async reconcile(job: AiToolJob): Promise<AiToolJob> {
     if (job.state !== 'working' || !job.holdId) return job;
     const hold = await this.prisma.pointHold.findUnique({
       where: { id: job.holdId },
@@ -712,12 +820,22 @@ export class AiJobService {
       // before that existed (or one with no outputs) falls back to its key.
       const folder = toolForAction(job.tool)?.audioFolder;
       const stored = storedOutputsOf(job).find((o) => o.kind === 'audio');
+      const tool = toolForAction(job.tool);
       await this.mark(job.id, 'done', {
         audioKey:
           stored?.key ??
           (folder === null
             ? null
-            : audioKeyFor(job.wawuUserId, job.id, folder)),
+            : audioKeyFor(
+                job.wawuUserId,
+                job.id,
+                folder,
+                tool?.audioExtension,
+              )),
+        // A followed job that ends leaves its provider project to be deleted.
+        ...(endMarkerOf(job.providerRef)
+          ? { providerRef: endMarkerOf(job.providerRef) }
+          : {}),
       });
     } else
       await this.mark(job.id, 'failed', {
@@ -725,6 +843,9 @@ export class AiJobService {
         // A run may have written its words just before the sweep gave the
         // points back: a failed job keeps none.
         outputs: Prisma.JsonNull,
+        ...(endMarkerOf(job.providerRef)
+          ? { providerRef: endMarkerOf(job.providerRef) }
+          : {}),
       });
     await this.dropInput(job);
     return (
@@ -733,6 +854,7 @@ export class AiJobService {
   }
 
   private async view(job: AiToolJob): Promise<AiJobView> {
+    const tool = toolForAction(job.tool);
     const outputs: AiJobOutputView[] = [];
     let audioUrl: string | null = null;
     if (job.state === 'done') {
@@ -752,9 +874,13 @@ export class AiJobService {
     }
     return {
       id: job.id,
-      tool: toolForAction(job.tool)?.id ?? VOICEOVER_TOOL.id,
+      tool: tool?.id ?? VOICEOVER_TOOL.id,
       state: job.state,
-      voiceId: job.voiceId,
+      // A dub keeps its target language in the voice column; the view names it.
+      voiceId:
+        tool?.input.kind === 'file' && tool.input.dubbing ? '' : job.voiceId,
+      targetLanguage:
+        tool?.input.kind === 'file' && tool.input.dubbing ? job.voiceId : null,
       characters: job.characters,
       units: job.units,
       costPoints: job.costPoints,
@@ -847,6 +973,32 @@ function requestOf(
       voiceId: d.voiceId,
       same: [],
       hashText: text,
+    };
+  }
+  if (spec.kind === 'file' && spec.dubbing) {
+    const d = dto as CreateDubbingJobDto;
+    const target = d.targetLanguage.trim().toLowerCase();
+    const source = d.sourceLanguage
+      ? d.sourceLanguage.trim().toLowerCase()
+      : null;
+    // One language a job. The language is checked against the list, in
+    // `precheck`, before the file is opened; the length and the minutes are
+    // the Hub's own reading, made then.
+    return {
+      req: {
+        kind: 'file',
+        fileKey: d.fileKey,
+        languageCode: null,
+        targetLanguage: target,
+        sourceLanguage: source,
+        seconds: 0,
+        minutes: 0,
+        bytes: 0,
+        contentType: '',
+      },
+      voiceId: target,
+      same: [source],
+      hashText: d.fileKey,
     };
   }
   if (spec.kind === 'file') {

@@ -239,7 +239,8 @@ export function storedKeyProblem(stored: unknown): string | null {
 /**
  * Folders the Hub itself writes to with `putGenerated` (not offered to a
  * client). `ai/voiceover` is AITOOLS-01's audio, `ai/sound-effect` and
- * `ai/music` are AITOOLS-03's, `ai/clean-audio` is AITOOLS-04's (AI_AUDIO_FOLDERS in
+ * `ai/music` are AITOOLS-03's, `ai/clean-audio` is AITOOLS-04's, `ai/dubbing` is
+ * AITOOLS-05's (AI_AUDIO_FOLDERS in
  * src/ai-tools/audio/ai-audio-store.ts, which a spec keeps equal to this).
  */
 export const GENERATED_KEY_FOLDERS = [
@@ -247,6 +248,7 @@ export const GENERATED_KEY_FOLDERS = [
   'ai/sound-effect',
   'ai/music',
   'ai/clean-audio',
+  'ai/dubbing',
 ] as const;
 
 /**

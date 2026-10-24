@@ -41,18 +41,49 @@ export interface StandinHandle {
     deletedIsolations: string[];
     /** Every delete try on a provider copy and the status it got (404 while the copy is not stored yet). */
     deleteTries: {
-      kind: 'transcript' | 'isolation';
+      kind: 'transcript' | 'isolation' | 'dub';
       id: string;
       status: number;
       /** True when the provider answered 2xx and left the copy there (`[[ack-then-appear:MS]]`). */
       kept?: boolean;
     }[];
     /** Every read of a transcript copy by id and the status it got (round 3). */
-    reads: { kind: 'transcript'; id: string; status: number }[];
+    reads: {
+      kind: 'transcript' | 'dub';
+      id: string;
+      status: number;
+      hidden?: boolean;
+    }[];
+    /** Each Dubbing start (AITOOLS-05): the languages, the model and the file's bytes and type. */
+    dubs: {
+      target: string;
+      source: string | null;
+      model: string | null;
+      bytes: number;
+      fileType: string | null;
+    }[];
+    /** Each read of a dub's language target and the provider status it answered. */
+    dubReads: {
+      project: string;
+      language: string;
+      status: number;
+      dub?: string;
+    }[];
+    /** Each fetch of a dub's signed link, and whether it carried the provider's key. */
+    dubDownloads: {
+      project: string;
+      kind: string;
+      status: number;
+      leaked: boolean;
+    }[];
+    dubKeyLeaks: number;
+    deletedDubs: string[];
   };
   /** Transcripts and cleaned recordings the provider still holds. */
   openTranscripts: () => number;
   openIsolations: () => number;
+  /** Dub projects the provider still holds (AITOOLS-05). */
+  openDubs: () => number;
   /** Voices the stand-in made for a person's own sample and has not yet had removed. */
   openClones: () => number;
   /** Lets the voices a `[[remove-fail]]` sample made be deleted from now on. */
@@ -63,15 +94,20 @@ type StandinModule = {
   startVoiceStandin: (o: {
     port: number;
     key: string;
+    dubDelayMs?: number;
   }) => Promise<StandinHandle>;
 };
 
-export function startStandin(key: string): Promise<StandinHandle> {
+export function startStandin(
+  key: string,
+  opts: { dubDelayMs?: number } = {},
+): Promise<StandinHandle> {
   /* eslint-disable @typescript-eslint/no-require-imports */
   const mod = require('../../scripts/dev/voice-standin.cjs') as StandinModule;
   /* eslint-enable @typescript-eslint/no-require-imports */
   return mod.startVoiceStandin({
     port: Number(process.env.VOICE_STANDIN_PORT ?? 0),
     key,
+    ...opts,
   });
 }
