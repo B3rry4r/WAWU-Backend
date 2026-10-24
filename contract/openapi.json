@@ -48355,6 +48355,10 @@
           },
           "status": {
             "type": "string"
+          },
+          "occurredAt": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -48365,7 +48369,8 @@
           "merchant",
           "place",
           "narration",
-          "status"
+          "status",
+          "occurredAt"
         ]
       },
       "CardTransactionPage": {

@@ -309,7 +309,7 @@ export class WalletCardService implements OnModuleInit {
           place: t.place,
           narration: t.narration,
           status: t.status,
-          at: t.at ? t.at.toISOString() : null,
+          occurredAt: t.at ? t.at.toISOString() : null,
         })),
         nextCursor: page.nextCursor,
       };

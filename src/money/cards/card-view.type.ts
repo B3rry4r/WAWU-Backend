@@ -80,7 +80,8 @@ export interface CardTransactionView {
   place: string | null;
   narration: string | null;
   status: string;
-  at: string | null;
+  /** When it happened (ISO 8601); null when the issuer gave no time. */
+  occurredAt: string | null;
 }
 
 /** GET /money/cards/{id}/transactions. `nextCursor` null means the last page. */

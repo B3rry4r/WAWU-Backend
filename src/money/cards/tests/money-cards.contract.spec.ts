@@ -711,6 +711,9 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
       merchant: 'Acme Corp',
       place: 'San Francisco, US',
     });
+    expect(txns.items[0].occurredAt).toBe(
+      new Date(1788190545125).toISOString(),
+    );
     for (const [method, path] of [
       ['get', `${BASE}/${card.id}`],
       ['get', `${BASE}/${card.id}/transactions`],
