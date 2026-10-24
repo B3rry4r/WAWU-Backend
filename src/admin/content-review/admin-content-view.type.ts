@@ -1,5 +1,4 @@
 import type { AdminContentReviewModel } from '../../../generated/prisma/models';
-import type { AdminPlaceView } from '../../geo/geo.types';
 import type {
   AccessType,
   AccountType,
@@ -43,8 +42,6 @@ export interface AdminContentCreatorView {
   accountType: AccountType | null;
   /** ReviewStatus, plus the synthesized 'not_started' — see hazard H-5. Never written back. */
   kycStatus: string | null;
-  /** Where the creator is (GEO-02, R-85); null before the creator has any place recorded. */
-  place: AdminPlaceView | null;
   slotsUsed: number | null;
   slotsTotal: number | null;
 }

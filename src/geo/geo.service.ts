@@ -140,7 +140,14 @@ export class GeoService {
     if (typeof text !== 'string') return null;
     const t = text.trim();
     if (t === '' || t.length > 80) return null;
-    if (/^[A-Za-z]{2}$/.test(t)) return this.country(t)?.code ?? null;
+    if (/^[A-Za-z]{2}$/.test(t)) {
+      const byCode = this.country(t)?.code;
+      if (byCode) return byCode;
+    }
+    if (/^[A-Za-z]{3}$/.test(t)) {
+      const byAlpha3 = geoData().alpha3.get(t.toUpperCase());
+      if (byAlpha3) return byAlpha3;
+    }
     const index = this.names();
     return index.get(foldName(t)) ?? null;
   }
@@ -203,7 +210,10 @@ export class GeoService {
     const countryChanged = country !== stored.countryCode;
 
     if (!regionSent) {
-      if (countryChanged) {
+      if (
+        countryChanged &&
+        (stored.regionCode !== null || stored.regionName !== null)
+      ) {
         write.regionCode = null;
         write.regionName = null;
       }

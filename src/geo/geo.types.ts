@@ -71,16 +71,6 @@ export interface MeLocationView {
   phoneCountryCode: string | null;
 }
 
-/** A person's place on an admin row. Every key is null for someone with no country or region yet. */
-export interface AdminPlaceView {
-  countryCode: string | null;
-  regionCode: string | null;
-  regionName: string | null;
-  city: string | null;
-  /** How the country got there: `profile`, `wawu_id` or `phone`. */
-  countrySource: CountrySource | null;
-}
-
 /** One region's line in GET /admin/geo/counts. `regionCode` is null for the people of that country with no region. */
 export interface AdminGeoRegionCount {
   regionCode: string | null;

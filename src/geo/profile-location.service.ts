@@ -6,18 +6,16 @@ import {
   type LocationWrite,
 } from './geo.service';
 import { phoneCountryCode } from './phone';
-import type {
-  AdminPlaceView,
-  CountrySource,
-  MeLocationView,
-} from './geo.types';
+import type { CountrySource, MeLocationView } from './geo.types';
 
 /**
- * What WAWU ID's token says about where a person is. `countryCode` is the
- * ISO claim GEO-01 adds to WAWU ID; until it is there `country` is the free
- * text sign-up has always sent ("Nigeria", "NG", "United Kingdom"). Either
- * may be missing, null or not text at all; anything that is not text is read
- * as not given. `src/common/**` is fenced, so these are read off the token as
+ * What WAWU ID's token says about where a person is. `countryCode` is the ISO
+ * 3166-1 alpha-2 claim GEO-01 added to WAWU ID (wawu-id `wmt/GEO-01`,
+ * 7fb7dea: "NG", or null for an account that never said); `country` is the
+ * older free text sign-up has always sent ("Nigeria", "NG", "United
+ * Kingdom") and stays the fallback for a token made before GEO-01. Either may
+ * be missing, null or not text at all; anything that is not text is read as
+ * not given. `src/common/**` is fenced, so these are read off the token as
  * they arrive and not added to the claims interface.
  */
 export interface IdentityGeoClaims {
@@ -106,27 +104,6 @@ export class ProfileLocationService {
       select: { wawuUserId: true },
     });
     return rows.map((r) => r.wawuUserId);
-  }
-
-  /** The place of each of these people, for an admin row. A person with none is absent from the map. */
-  async placesOf(wawuUserIds: string[]): Promise<Map<string, AdminPlaceView>> {
-    if (wawuUserIds.length === 0) return new Map();
-    const rows = await this.prisma.profileDetails.findMany({
-      where: { wawuUserId: { in: wawuUserIds } },
-      select: { wawuUserId: true, ...PLACE_SELECT },
-    });
-    return new Map(
-      rows.map((r) => [
-        r.wawuUserId,
-        {
-          countryCode: r.countryCode,
-          regionCode: r.regionCode,
-          regionName: r.regionName,
-          city: r.city,
-          countrySource: (r.countrySource as CountrySource | null) ?? null,
-        },
-      ]),
-    );
   }
 
   /** The country WAWU ID holds for the account, as an ISO code, or null. */

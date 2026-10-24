@@ -56,12 +56,20 @@ const byName = (a: { name: string }, b: { name: string }) =>
 let cache: {
   countries: GeoCountryView[];
   byCode: Map<string, GeoCountryView>;
+  /** ISO 3166-1 alpha-3 ("NGA") to alpha-2 ("NG"). */
+  alpha3: Map<string, string>;
   regions: Map<string, GeoRegionView[]>;
 } | null = null;
 
 function build() {
   const regions = new Map<string, GeoRegionView[]>();
   for (const s of isoSubdivisions.all()) {
+    // The package lists an overseas territory as its own only subdivision
+    // ("AQ-AQ", type "Country"): the country again, not a region of it. Left
+    // out, so such a country has no regions (hasRegions false) and the app
+    // asks for none. Real ones whose code repeats the country's (BZ-BZ, DJ-DJ,
+    // MC-MC, MW-MW, SO-SO, SV-SV) have another type and stay.
+    if (s.type === 'Country' && s.regionCode === s.countryCode) continue;
     const list = regions.get(s.countryCode) ?? [];
     list.push({ code: s.code.toUpperCase(), name: s.name, type: s.type });
     regions.set(s.countryCode, list);
@@ -82,7 +90,8 @@ function build() {
   });
   countries.sort(byName);
   const byCode = new Map(countries.map((c) => [c.code, c]));
-  return { countries, byCode, regions };
+  const alpha3 = new Map(isoCountries.all().map((c) => [c.alpha3, c.alpha2]));
+  return { countries, byCode, alpha3, regions };
 }
 
 /** The lists, built on first use and kept. The arrays are shared: never mutate them. */

@@ -11,7 +11,6 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { objectKeyFrom, StorageService } from '../../storage/storage.service';
 import { PublishingAllowanceService } from '../../plans/publishing-allowance.service';
 import { ProfileLocationService } from '../../geo/profile-location.service';
-import type { AdminPlaceView } from '../../geo/geo.types';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { ContentPieceModel } from '../../../generated/prisma/models';
 import type { AdminUserView } from '../auth/admin-user-view.type';
@@ -473,23 +472,16 @@ export class AdminContentReviewService {
     const ids = [...new Set(wawuUserIds)];
     if (ids.length === 0) return new Map();
 
-    const [profiles, states, submitted, allowances, placeById] =
-      await Promise.all([
-        this.prisma.userProfile.findMany({
-          where: { wawuUserId: { in: ids } },
-        }),
-        this.prisma.creatorState.findMany({
-          where: { wawuUserId: { in: ids } },
-        }),
-        this.prisma.kycSubmission.findMany({
-          where: { wawuUserId: { in: ids } },
-          select: { wawuUserId: true },
-          distinct: ['wawuUserId'],
-        }),
-        this.publishing.ofMany(ids),
-        this.places?.placesOf(ids) ??
-          Promise.resolve(new Map<string, AdminPlaceView>()),
-      ]);
+    const [profiles, states, submitted, allowances] = await Promise.all([
+      this.prisma.userProfile.findMany({ where: { wawuUserId: { in: ids } } }),
+      this.prisma.creatorState.findMany({ where: { wawuUserId: { in: ids } } }),
+      this.prisma.kycSubmission.findMany({
+        where: { wawuUserId: { in: ids } },
+        select: { wawuUserId: true },
+        distinct: ['wawuUserId'],
+      }),
+      this.publishing.ofMany(ids),
+    ]);
 
     const profileById = new Map(profiles.map((p) => [p.wawuUserId, p]));
     const stateById = new Map(states.map((s) => [s.wawuUserId, s]));
@@ -510,7 +502,6 @@ export class AdminContentReviewService {
                 ? 'not_started'
                 : state.kycStatus
               : null,
-            place: placeById.get(wawuUserId) ?? null,
             slotsUsed: state?.slotsUsed ?? null,
             slotsTotal: state
               ? (allowances.get(wawuUserId)?.productsAllowed ?? null)
@@ -571,7 +562,6 @@ function emptyCreatorView(wawuUserId: string): AdminContentCreatorView {
     handle: null,
     accountType: null,
     kycStatus: null,
-    place: null,
     slotsUsed: null,
     slotsTotal: null,
   };
