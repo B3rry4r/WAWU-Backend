@@ -1776,6 +1776,18 @@ model CommunityNoticeCursor {
   leaseUntil  DateTime?
 }
 
+/// FIX-105 round 2 (verifier finding H1). A room whose notices could not be written in a pass is listed here and tried
+/// again later by itself, so one room that keeps failing never holds the cursor (and so every other room's notices).
+/// `fromAt` is the start of the stretch not yet folded for the room; folding it again is safe because each person's
+/// notices for the room remember how far they have counted (the largest `countedUpTo` of their `CommunityMessageNotice`
+/// rows for it). No person's data: a room id and times only.
+model CommunityNoticeRetry {
+  communityId String   @id
+  fromAt      DateTime
+  retryAt     DateTime
+  attempts    Int      @default(1)
+}
+
 model NotificationSettings {
   userWawuId        String   @id
   newReplies        Boolean  @default(true)
@@ -1804,8 +1816,9 @@ model NotificationSettings {
   /// NULL means never asked, which behaves as ON.
   contentReviews    Boolean?
   /// "Community messages" in Settings (SETTINGS-07). NULL means never asked,
-  /// which behaves as ON. It gates nothing today: no community message kind
-  /// or sender exists yet, so this only stores the choice.
+  /// which behaves as ON. It gates the grouped "new messages" notice
+  /// (`community_messages`, FIX-105, R-81): off means that notice is neither
+  /// written nor pushed for this person.
   communityMessages Boolean?
 }
 

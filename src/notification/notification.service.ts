@@ -424,9 +424,10 @@ export class NotificationService {
    * and its time moves to now. A person without one gets a new notice. A
    * notice the person has read, or that is older than their last visit to the
    * room, is closed, and the next message starts a new one. Nobody whose
-   * "Community messages" switch is off is written to. A notice that already
-   * holds this window (`countedUpTo`) is left alone, so a sweep that ran twice
-   * counts once.
+   * "Community messages" switch is off is written to or changed (an unread
+   * notice of theirs stays as it is). The caller counts only messages newer
+   * than the person's `countedUpTo` mark for the room, and a notice that
+   * already holds this window is left alone, so a window replayed counts once.
    *
    * Bounded: per chunk it reads three tables once (the switches, the open
    * notices) and writes in one transaction with at most six statements, however
@@ -469,7 +470,12 @@ export class NotificationService {
       const muted = new Set(off.map((r) => r.userWawuId));
       // The newest open notice of each person; any older unread one is stale.
       const openBy = new Map(open.map((n) => [n.userWawuId, n]));
-      const staleIds = new Set(open.map((n) => n.notificationId));
+      // A muted person's notices are left exactly as they are (not marked read).
+      const staleIds = new Set(
+        open
+          .filter((n) => !muted.has(n.userWawuId))
+          .map((n) => n.notificationId),
+      );
 
       const toUpdate: Array<{
         notificationId: string;

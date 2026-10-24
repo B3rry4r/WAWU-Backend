@@ -30,3 +30,21 @@ export const COMMUNITY_NOTICE_MAX_WINDOW_SECONDS = seconds(
 );
 /** How long one instance holds the sweep before another may take it over. */
 export const COMMUNITY_NOTICE_LEASE_SECONDS = 120;
+
+/** The lease is renewed when a pass has held it this long (a long pass never lets it lapse). */
+export const COMMUNITY_NOTICE_LEASE_RENEW_SECONDS = 30;
+
+/**
+ * A room whose notices failed is tried again after this long, then twice as
+ * long each time it fails again, up to the cap. It never holds the other
+ * rooms back (FIX-105 round 2).
+ */
+export const COMMUNITY_NOTICE_RETRY_BASE_SECONDS = seconds(
+  'COMMUNITY_NOTICE_RETRY_BASE_SECONDS',
+  30,
+);
+export const COMMUNITY_NOTICE_RETRY_MAX_SECONDS = 900;
+/** At most this many waiting rooms are tried again in one pass. */
+export const COMMUNITY_NOTICE_RETRY_ROOMS = 20;
+/** Messages older than this are no longer announced when a room is tried again. */
+export const COMMUNITY_NOTICE_RETRY_MAX_AGE_SECONDS = 86_400;

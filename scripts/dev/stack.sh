@@ -351,11 +351,15 @@ run_step() {
 service() {
   local name="$1" port="$2" cwd="$3" url="$4" secs="$5"; shift 5
   launch "$name" "$port" "$cwd" "$@"
+  # The address shown for a page (web, mobile) is the one the Hub's CORS list allows: localhost, not 127.0.0.1.
+  # The health probe below keeps the address it was given.
+  local shown="$url"
+  case "$name" in web|mobile) shown="${url/127.0.0.1/localhost}" ;; esac
   if wait_up "$name" "$port" "$url" "$secs"; then
-    SUMMARY+=("$name|$url|$LAST_PID|UP")
+    SUMMARY+=("$name|$shown|$LAST_PID|UP")
     return 0
   fi
-  SUMMARY+=("$name|$url|$LAST_PID|FAILED")
+  SUMMARY+=("$name|$shown|$LAST_PID|FAILED")
   FAIL_NAME="$name"; FAIL_LOG="$LOGS/$name.log"; FAIL_WHY="$WAIT_WHY"
   return 1
 }

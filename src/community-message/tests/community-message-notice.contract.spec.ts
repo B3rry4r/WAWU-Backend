@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -60,17 +61,23 @@ describe('community message notices (FIX-105)', () => {
     });
   }
 
-  /** Puts the cursor just before a window and runs one pass that ends inside it. */
+  /**
+   * Puts the cursor just before a window and runs one pass whose window ends
+   * `windowSeconds` later, as a real window ends soon after its messages (the
+   * notices remember how far they counted, so a window must not end long after
+   * the messages a spec wrote).
+   */
   async function foldWindow(
     from: Date,
     service: CommunityMessageNoticeService = sweep,
+    windowSeconds = 90,
   ) {
     await prisma.communityNoticeCursor.upsert({
       where: { id: 1 },
       create: { id: 1, countedUpTo: from, leaseUntil: null },
       update: { countedUpTo: from, leaseUntil: null },
     });
-    return service.runOnce(SETTLE);
+    return service.runOnce(SETTLE, windowSeconds);
   }
 
   const noticesOf = (userWawuId: string, communityId = room) =>
@@ -132,6 +139,9 @@ describe('community message notices (FIX-105)', () => {
       where: { userWawuId: { in: everyone }, kind: 'community_messages' },
     });
     await prisma.communityNoticeCursor.deleteMany({});
+    await prisma.communityNoticeRetry.deleteMany({
+      where: { communityId: { in: roomIds } },
+    });
     await prisma.community.deleteMany({ where: { id: { in: roomIds } } });
     await prisma.notificationSettings.deleteMany({
       where: { userWawuId: { in: everyone } },
@@ -296,8 +306,8 @@ describe('community message notices (FIX-105)', () => {
       passAccess,
     );
     const [one, two] = await Promise.all([
-      sweep.runOnce(SETTLE),
-      other.runOnce(SETTLE),
+      sweep.runOnce(SETTLE, 90),
+      other.runOnce(SETTLE, 90),
     ]);
     expect([one.ran, two.ran].filter(Boolean)).toHaveLength(1);
     expect((await noticesOf(A))[0].communityMessageNotice?.messageCount).toBe(
@@ -449,5 +459,192 @@ describe('community message notices (FIX-105)', () => {
       where: { userWawuId: A, notificationId: { in: quiet.map((n) => n.id) } },
     });
     expect(final).toBe(after);
+  });
+  // ---------------------------------------------------------------------------
+  // Round 2 (verifier finding H1): the count is exact whatever is replayed, and
+  // one failing room never holds the others.
+  // ---------------------------------------------------------------------------
+  const P = fillers[2];
+  const Q = fillers[3];
+
+  async function makeRoom(label: string, members: string[]): Promise<string> {
+    const made = await prisma.community.create({
+      data: {
+        name: `FIX-105 ${label} room ${run}`,
+        description: 'A room for a spec.',
+        hostWawuId: HOST,
+        kind: 'open',
+      },
+    });
+    roomIds.push(made.id);
+    await prisma.communityMembership.createMany({
+      data: members.map((userWawuId) => ({
+        userWawuId,
+        communityId: made.id,
+        status: 'joined' as const,
+        joinedAt: at(-60),
+      })),
+    });
+    return made.id;
+  }
+
+  const countsOf = async (
+    userWawuId: string,
+    communityId: string,
+  ): Promise<Array<number | undefined>> =>
+    (await noticesOf(userWawuId, communityId)).map(
+      (n) => n.communityMessageNotice?.messageCount,
+    );
+
+  it('a window folded again that ends later counts each message once, even for a notice already read (H1)', async () => {
+    const r = await makeRoom('replay', [SENDER, P, Q]);
+    await post(r, SENDER, at(40, 1));
+    await post(r, SENDER, at(40, 2));
+    await foldWindow(at(39, 30), sweep, 60); // the window ends at 40:30
+    expect(await countsOf(P, r)).toEqual([2]);
+    expect(await countsOf(HOST, r)).toEqual([2]);
+
+    // A third message lands after that window. The Hub stopped before the
+    // cursor moved, so the same start is folded again and now ends later.
+    await post(r, SENDER, at(40, 45));
+    const again = await foldWindow(at(39, 30), sweep, 120); // ends at 41:30
+    expect(again.messages).toBe(3);
+    expect(await countsOf(P, r)).toEqual([3]);
+    expect(await countsOf(Q, r)).toEqual([3]);
+    expect(await countsOf(HOST, r)).toEqual([3]);
+    expect((await noticesOf(P, r))[0].body).toBe(
+      `There are 3 new messages in “FIX-105 replay room ${run}”.`,
+    );
+
+    // P read the notice from the list (not by opening the room), and the
+    // window is folded yet again: no new notice, no new count.
+    await prisma.notification.updateMany({
+      where: {
+        userWawuId: P,
+        kind: 'community_messages',
+        target: { is: { targetId: r } },
+      },
+      data: { read: true },
+    });
+    const third = await foldWindow(at(39, 30), sweep, 150);
+    expect(third.created + third.updated).toBe(0);
+    expect(await noticesOf(P, r)).toHaveLength(1);
+    expect(await countsOf(Q, r)).toEqual([3]);
+  });
+
+  it('a Hub that stops after writing the notices and before it moves the cursor counts nothing twice (H1)', async () => {
+    const r = await makeRoom('crash', [SENDER, P, Q]);
+    await post(r, SENDER, at(50, 1));
+    await post(r, SENDER, at(50, 2));
+    jest
+      .spyOn(sweep as never, 'release' as never)
+      .mockRejectedValueOnce(new Error('the Hub stopped') as never);
+    await expect(foldWindow(at(49, 30), sweep, 60)).rejects.toThrow(
+      'the Hub stopped',
+    );
+    jest.restoreAllMocks();
+    // The notices are written; the cursor did not move and the claim is still held.
+    expect(await countsOf(P, r)).toEqual([2]);
+    const cursor = await prisma.communityNoticeCursor.findUnique({
+      where: { id: 1 },
+    });
+    expect(cursor?.countedUpTo.getTime()).toBe(at(49, 30).getTime());
+
+    // Another message, then the next Hub folds from the old cursor to a later end.
+    await post(r, SENDER, at(50, 50));
+    await foldWindow(at(49, 30), sweep, 120);
+    expect(await countsOf(P, r)).toEqual([3]);
+    expect(await countsOf(Q, r)).toEqual([3]);
+    expect(await countsOf(HOST, r)).toEqual([3]);
+    expect(await noticesOf(P, r)).toHaveLength(1);
+  });
+
+  it('one room that fails is put on a retry list and tried again; it never stops another room, however long it fails (H1)', async () => {
+    jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const bad = await makeRoom('failing', [SENDER, P]);
+    const good = await makeRoom('healthy', [SENDER, Q]);
+    const real = notifications.emitCommunityMessages.bind(notifications);
+    jest
+      .spyOn(notifications, 'emitCommunityMessages')
+      .mockImplementation((community, entries, upTo) =>
+        community.id === bad
+          ? Promise.reject(new Error('this room cannot be written'))
+          : real(community, entries, upTo),
+      );
+
+    await post(bad, SENDER, at(60, 1));
+    await post(good, SENDER, at(60, 2));
+    const first = await foldWindow(at(59, 30), sweep, 60); // ends at 60:30
+    expect(first.ran).toBe(true);
+    expect(await countsOf(Q, good)).toEqual([1]);
+    expect(await noticesOf(P, bad)).toHaveLength(0);
+    // The cursor moved past the window and the failing room is listed.
+    const cursor = await prisma.communityNoticeCursor.findUnique({
+      where: { id: 1 },
+    });
+    expect(cursor?.countedUpTo.getTime()).toBe(at(60, 30).getTime());
+    const listed = await prisma.communityNoticeRetry.findUnique({
+      where: { communityId: bad },
+    });
+    expect(listed?.fromAt.getTime()).toBe(at(59, 30).getTime());
+    expect(listed?.attempts).toBe(1);
+
+    // It fails again when its turn comes, and the healthy room still gets its notice.
+    await prisma.communityNoticeRetry.update({
+      where: { communityId: bad },
+      data: { retryAt: new Date(0) },
+    });
+    await post(good, SENDER, at(61, 1));
+    await post(bad, SENDER, at(61, 2));
+    await foldWindow(at(60, 30), sweep, 60); // ends at 61:30
+    expect(await countsOf(Q, good)).toEqual([2]);
+    expect(await noticesOf(P, bad)).toHaveLength(0);
+    const second = await prisma.communityNoticeRetry.findUnique({
+      where: { communityId: bad },
+    });
+    expect(second?.attempts).toBe(2);
+    expect(second?.retryAt.getTime()).toBeGreaterThan(Date.now());
+    expect(second?.fromAt.getTime()).toBe(at(59, 30).getTime());
+
+    // The room can be written again: its turn comes and it is folded from where it
+    // failed, each message once.
+    jest.restoreAllMocks();
+    await prisma.communityNoticeRetry.update({
+      where: { communityId: bad },
+      data: { retryAt: new Date(0) },
+    });
+    await post(good, SENDER, at(62, 1));
+    await foldWindow(at(61, 30), sweep, 60); // ends at 62:30
+    expect(await countsOf(Q, good)).toEqual([3]);
+    expect(await countsOf(P, bad)).toEqual([2]); // 60:01 and 61:02
+    expect(await countsOf(HOST, bad)).toEqual([2]);
+    expect(
+      await prisma.communityNoticeRetry.findUnique({
+        where: { communityId: bad },
+      }),
+    ).toBeNull();
+    // Folded once more from the same start, nothing is counted twice.
+    await foldWindow(at(61, 30), sweep, 60);
+    expect(await countsOf(P, bad)).toEqual([2]);
+  });
+
+  it('a person who switched the notice off keeps an unread notice exactly as it was (L1)', async () => {
+    const r = await makeRoom('muted', [SENDER, P, Q]);
+    await post(r, SENDER, at(70, 1));
+    await foldWindow(at(69, 30), sweep, 60);
+    expect(await countsOf(P, r)).toEqual([1]);
+
+    await prisma.notificationSettings.upsert({
+      where: { userWawuId: P },
+      create: { userWawuId: P, communityMessages: false },
+      update: { communityMessages: false },
+    });
+    await post(r, SENDER, at(70, 50));
+    await foldWindow(at(70, 30), sweep, 60);
+    const [mine] = await noticesOf(P, r);
+    expect(mine.read).toBe(false); // not marked read behind their back
+    expect(mine.communityMessageNotice?.messageCount).toBe(1);
+    expect(await noticesOf(P, r)).toHaveLength(1);
+    expect(await countsOf(Q, r)).toEqual([2]); // others are counted as ever
   });
 });
