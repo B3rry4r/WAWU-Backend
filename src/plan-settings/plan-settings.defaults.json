@@ -17,7 +17,8 @@
     "CONTENT-REVIEW-HOURS": "FIX-110 (G-ME-08-3): nothing measures how long a review takes, and no ruling names a figure. M25 draws 'Usually takes: A few hours', so 4 hours is the board's 'a few' as a number an admin can change; the app words it as 'About 4 hours'.",
     "ABROAD-FEE": "NUV-11: R-10 says the user pays the provider's fee plus WAWU's on top, from config, and no ruling or board names WAWU's fee for sending abroad. 0 until the owner names it. It is charged in naira from the person's wallet, whatever account the money leaves.",
     "ABROAD-LIMITS": "NUV-11: no ruling or board names a most per send or per day for sending abroad. None until the owner names them (the provider's own limits still apply); an admin may set one per currency.",
-    "ABROAD-CORRIDORS": "NUV-11: on 24 Oct 2026 Nuvion's dev server refused a transfer to Uganda, Mexico, Singapore and Hong Kong (\"not supported for currency yet\"). They are listed as not available until an admin empties this list, which is the day Nuvion switches them on."
+    "ABROAD-CORRIDORS": "NUV-11: on 24 Oct 2026 Nuvion's dev server refused a transfer to Uganda, Mexico, Singapore and Hong Kong (\"not supported for currency yet\"). They are listed as not available until an admin empties this list, which is the day Nuvion switches them on.",
+    "CAPITAL-ENABLED": "NUV-12 (owner-asked control): Capital is on by default, as the owner asked on 24 Oct 2026 (R-84). An admin can switch it off here (0): new orders close (the product list, a reservation and a confirmation answer that Capital is not available) and a person with nothing held loses the Wallet tab row, but what a person already holds can still be read and withdrawn, and the row stays for them."
   },
   "values": {
     "ai.sfx_max_seconds": 30,
@@ -163,6 +164,7 @@
     "content.review_hours": 4,
     "plan.event_name": [
       "Christmas event"
-    ]
+    ],
+    "capital.enabled": 1
   }
 }

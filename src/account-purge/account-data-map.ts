@@ -356,6 +356,28 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // not the account at Nuvion, which stays there; deletion needs an empty
   // wallet first (R-17).
   { model: 'NuvionEntity', column: 'wawuUserId', disposition: 'OWNED' },
+  // Other-currency accounts and what moves on them (WALLET-21, R-83, R-84),
+  // reasoned as the naira wallet and its ledger are above. FxAccount is WAWU's
+  // pointer to the person's account at the provider (like FintavaWallet and
+  // NuvionEntity): removing it removes the pointer, not the account, which is
+  // why deletion needs the money out first (R-17). FxQuote is a short-lived
+  // quote the person asked for. FxOperation (a swap or a send abroad) and
+  // FxMovement (the mirror of one movement on one of their accounts) are the
+  // person's own money history, like their FintavaLedgerEntry rows, and go with
+  // them; the provider keeps its own record of the same movements. Default
+  // (agent), owner may override: how long money records are kept after an
+  // account is deleted is the owner's call.
+  { model: 'FxAccount', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'FxQuote', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'FxOperation', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'FxMovement', column: 'wawuUserId', disposition: 'OWNED' },
+  // Capital (NUV-12, R-84): WAWU's record of the person's investment orders,
+  // the link between the person and the holding the provider keeps. It is the
+  // person's own money record, like FintavaLedgerEntry, and goes with them
+  // (the same default, owner may override). An order whose holding is not over
+  // is not yet a reason to refuse the deletion the way a wallet balance is:
+  // that is a gap, named in the task's hand-back (NUV-12), not settled here.
+  { model: 'CapitalOrder', column: 'wawuUserId', disposition: 'OWNED' },
   // FIX-20. FintavaWebhookEvent and NuvionWebhookEvent, the stored provider
   // deliveries, have no person column: each keeps the delivery's raw body and
   // a parsed copy, which hold names, account numbers and narrations, and the
@@ -497,16 +519,6 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // the account, so it goes with the account. The history of freezing and
   // unfreezing stays in AbroadAdminAudit (AUDIT, below).
   { model: 'AbroadFreeze', column: 'wawuUserId', disposition: 'OWNED' },
-  // The person's foreign-currency accounts, quotes, conversions and movements
-  // (WALLET-21, written by the multi-currency task, classified with this task
-  // because the drift guard names them): money records of the same kind as
-  // FintavaWallet and FintavaLedgerEntry above, none pointing at another, so
-  // they go with the person after an empty wallet first (R-17). Default
-  // (lead), owner may override.
-  { model: 'FxMovement', column: 'wawuUserId', disposition: 'OWNED' },
-  { model: 'FxOperation', column: 'wawuUserId', disposition: 'OWNED' },
-  { model: 'FxQuote', column: 'wawuUserId', disposition: 'OWNED' },
-  { model: 'FxAccount', column: 'wawuUserId', disposition: 'OWNED' },
 
   // ── points (POINTS-01) ──────────────────────────────────────────────────
   // This person's points: the ledger of every change, the holds that spent
@@ -826,6 +838,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'AUDIT',
   },
   { model: 'AdminOpsAudit', column: 'subjectWawuId', disposition: 'AUDIT' },
+  // Who froze, released or cancelled a person's other-currency account
+  // (WALLET-21) or Capital order (NUV-12): an admin action record, kept like
+  // AdminOpsAudit above.
+  { model: 'FxAdminAudit', column: 'subjectWawuId', disposition: 'AUDIT' },
+  { model: 'CapitalAdminAudit', column: 'subjectWawuId', disposition: 'AUDIT' },
   {
     model: 'AdminContentReview',
     column: 'creatorWawuId',
@@ -835,8 +852,6 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // What an admin did to a person's sends abroad (NUV-11): freeze, unfreeze,
   // cancel. Kept like every other admin action record.
   { model: 'AbroadAdminAudit', column: 'subjectWawuId', disposition: 'AUDIT' },
-  // What an admin did to a person's foreign-currency accounts (WALLET-21).
-  { model: 'FxAdminAudit', column: 'subjectWawuId', disposition: 'AUDIT' },
 ];
 
 /**
@@ -867,7 +882,7 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'AbroadQuote', column: 'wawuFeeKobo' },
   { model: 'AbroadSend', column: 'wawuFeeKobo' },
   { model: 'AbroadSend', column: 'wawuFeeTaken' },
-  // WAWU's fee, in the smallest unit, on a foreign-currency quote and conversion (WALLET-21): not a person.
+  // WAWU's fee in the currency's smallest unit on a quote and on an operation (WALLET-21), not a person.
   { model: 'FxQuote', column: 'wawuFeeMinor' },
   { model: 'FxOperation', column: 'wawuFeeMinor' },
 ];

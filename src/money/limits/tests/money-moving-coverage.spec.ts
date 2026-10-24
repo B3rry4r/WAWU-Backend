@@ -861,6 +861,10 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
         .sort(),
     ).toEqual([
       'POST bills/wallet/pay',
+      // NUV-12: Capital's reservation, confirmation and withdrawal.
+      'POST capital/orders',
+      'POST capital/orders/:id/confirm',
+      'POST capital/orders/:id/withdrawal',
       'POST chats/:chatId/money-requests/:requestId/pay',
       // INBOX-24: a private community's monthly pass pays from the wallet.
       'POST communities/:id/pass',

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { NuvionAbroadHandler } from './abroad.handler';
 import { NuvionAccountsHandler } from './accounts.handler';
 import { NuvionBookHandler } from './book.handler';
+import { NuvionCapitalHandler } from './capital.handler';
 import { NuvionDocumentsHandler } from './documents.handler';
 import { NuvionFxHandler } from './fx.handler';
 import type { NuvionEventHandler } from './nuvion-handler.interface';
@@ -30,6 +31,7 @@ export class NuvionHandlerRegistry {
     reconcile: NuvionReconcileHandler,
     abroad: NuvionAbroadHandler,
     fx: NuvionFxHandler,
+    capital: NuvionCapitalHandler,
   ) {
     for (const h of [
       opening,
@@ -40,6 +42,7 @@ export class NuvionHandlerRegistry {
       reconcile,
       abroad,
       fx,
+      capital,
     ]) {
       this.add(h);
     }

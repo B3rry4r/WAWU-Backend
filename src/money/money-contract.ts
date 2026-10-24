@@ -156,6 +156,12 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   recipient_details_invalid: 422,
   rate_unavailable: 409,
   send_not_cancellable: 409,
+  // NUV-12. Default (agent), owner may override: 409, as target_not_payable.
+  // The request is understood; the product, the reservation or the holding is
+  // not in a state that allows it now.
+  capital_unavailable: 409,
+  reservation_expired: 409,
+  withdrawal_not_available: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

@@ -4,6 +4,7 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { WebhookRetentionModule } from '../../webhook-retention/webhook-retention.module';
 import { NuvionAccountsHandler } from '../handlers/accounts.handler';
 import { NuvionBookHandler } from '../handlers/book.handler';
+import { NuvionCapitalHandler } from '../handlers/capital.handler';
 import { NuvionDocumentsHandler } from '../handlers/documents.handler';
 import { NuvionFxHandler } from '../handlers/fx.handler';
 import { NuvionHandlerRegistry } from '../handlers/nuvion-handler-registry';
@@ -48,6 +49,7 @@ import { NuvionWebhookStore } from './nuvion-webhook.service';
     NuvionReconcileHandler,
     NuvionAbroadHandler,
     NuvionFxHandler,
+    NuvionCapitalHandler,
   ],
   exports: [NuvionWebhookDispatcher, NuvionHandlerRegistry],
 })
