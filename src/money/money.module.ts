@@ -89,6 +89,15 @@ import { MoneyCheckService } from './check/money-check.service';
 import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
 import { MoneyLimitsModule } from './limits/money-limits.module';
 import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
+import { NuvionAddMoneyHandler } from '../nuvion/handlers/add-money.handler';
+import { AddMoneySettings } from './add-money/add-money-config';
+import { AddMoneyPrecheckGuard } from './add-money/add-money-precheck.guard';
+import { AddMoneyService } from './add-money/add-money.service';
+import { AdminAddMoneyController } from './add-money/admin-add-money.controller';
+import {
+  AddMoneyReturnController,
+  MoneyAddMoneyController,
+} from './add-money/add-money.controller';
 import { FxAccountsService } from './fx/fx-accounts.service';
 import { FxAdminController } from './fx/fx-admin.controller';
 import { FxAdminService } from './fx/fx-admin.service';
@@ -101,6 +110,19 @@ import { WorldAdminService } from './world/world-admin.service';
 import { WorldController } from './world/world.controller';
 import { WorldSettings } from './world/world-settings';
 import { WorldWalletService } from './world/world-wallet.service';
+import { AdminOpsAuditModule } from '../common/audit/admin-ops-audit.module';
+import { AdminCardsController } from './cards/admin-cards.controller';
+import { AdminCardsService } from './cards/admin-cards.service';
+import { CardCreatableGuard } from './cards/card-creatable.guard';
+import { CardSettings } from './cards/card-config';
+import { WalletCardPurge } from './cards/card-purge.service';
+import {
+  CardRevealLimitGuard,
+  CardRevealLimiter,
+} from './cards/card-reveal-limit';
+import { AccountPurgeModule } from '../account-purge/account-purge.module';
+import { MoneyCardsController } from './cards/money-cards.controller';
+import { WalletCardService } from './cards/wallet-card.service';
 
 /**
  * The served half of the Naira wallet contract. Routes move here from
@@ -269,6 +291,10 @@ import { WorldWalletService } from './world/world-wallet.service';
     MoneyInNoticeModule,
     // The admin settings (task HOME-17): the name checks an hour are read live.
     PlanSettingsModule,
+    // The audit row of support freezing or blocking a card (task WALLET-31).
+    AdminOpsAuditModule,
+    // The before-erase hook that blocks a person's cards (WALLET-31 round 1).
+    AccountPurgeModule,
   ],
   controllers: [
     MoneyPinController,
@@ -287,9 +313,14 @@ import { WorldWalletService } from './world/world-wallet.service';
     MoneyHoldsController,
     MoneyEarningsController,
     AdminEarningsController,
+    MoneyCardsController,
+    AdminCardsController,
     MoneyReceiptController,
     PublicReceiptController,
     MoneyRecipientController,
+    AddMoneyReturnController,
+    MoneyAddMoneyController,
+    AdminAddMoneyController,
     // WALLET-21 (R-83, R-84): foreign accounts, swaps and crypto sends, and the
     // admin reads and the freeze.
     FxController,
@@ -302,11 +333,24 @@ import { WorldWalletService } from './world/world-wallet.service';
     WorldSettings,
     WorldWalletService,
     WorldAdminService,
+    // Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, WALLET-26).
+    AddMoneySettings,
+    AddMoneyService,
+    AddMoneyPrecheckGuard,
+    NuvionAddMoneyHandler,
     FxPort,
     FxSettings,
     FxAccountsService,
     FxOperationsService,
     FxAdminService,
+    // The WAWU card (task WALLET-31).
+    CardSettings,
+    WalletCardService,
+    CardCreatableGuard,
+    CardRevealLimiter,
+    CardRevealLimitGuard,
+    WalletCardPurge,
+    AdminCardsService,
     WalletGate,
     WalletGateGuard,
     TransactionPinService,

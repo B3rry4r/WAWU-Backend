@@ -194,6 +194,23 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // (WalletPayment below, anonymised); its id is this row's key and is not a
   // link anyone follows once the account is gone.
   { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
+  // What this account bought through Google Play or the App Store (IAP-01, R-86):
+  // the product, what the store charged, what was granted and what a refund took
+  // back. OWNED, like MakerPurchase above: the row exists only because this account
+  // bought something. The money is the store's and WAWU's own accounting, not a
+  // wallet payment, so there is no payer's record to keep. `creatorWawuUserId` names
+  // a room's host on somebody else's purchase of a pass: their record survives.
+  { model: 'StorePurchase', column: 'wawuUserId', disposition: 'OWNED' },
+  {
+    model: 'StorePurchase',
+    column: 'creatorWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
+  // Who holds a store subscription, and the id this account's store purchases are
+  // bound to (IAP-01 fix round 1). OWNED: both exist only because this account
+  // bought through a store, and name no counterparty.
+  { model: 'StoreSubscription', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'StoreAccountToken', column: 'wawuUserId', disposition: 'OWNED' },
   // More products this account bought on its tier (TIER-04): how many and what
   // it cost. OWNED, like MakerPurchase above: the row exists only because this
   // account bought something and names no counterparty. The money's record is
@@ -378,6 +395,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // is not yet a reason to refuse the deletion the way a wallet balance is:
   // that is a gap, named in the task's hand-back (NUV-12), not settled here.
   { model: 'CapitalOrder', column: 'wawuUserId', disposition: 'OWNED' },
+  // The WAWU card (WALLET-31, R-84): one row per card a person asked for, its
+  // kind, state and Nuvion's id; never the number, expiry or CVV. Like
+  // NuvionEntity it is WAWU's pointer, not the card at Nuvion. Before the rows
+  // go, WalletCardPurge (a before-erase hook) blocks every card the person
+  // still holds at Nuvion, so no card outlives its owner's record; a block
+  // that cannot be made stops the purge, which tries again. Default (lead),
+  // owner may override: the record of a card goes with the account.
+  { model: 'WalletCard', column: 'wawuUserId', disposition: 'OWNED' },
   // FIX-20. FintavaWebhookEvent and NuvionWebhookEvent, the stored provider
   // deliveries, have no person column: each keeps the delivery's raw body and
   // a parsed copy, which hold names, account numbers and narrations, and the
@@ -541,6 +566,20 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'wawuUserId',
     disposition: 'ANONYMISED',
     clear: ['destinationAccountNumber'],
+  },
+
+  // An attempt to add money by card, Apple Pay, USSD or a bank checkout
+  // (WALLET-25, WALLET-26): the link between a ledger row on this person's
+  // wallet and the provider's inflow (the reference, the amounts, the credit),
+  // which the nightly check and the provider's own record still need after the
+  // account is gone, and an inflow still on its way is credited by it. A
+  // financial record: kept, with the person set to null; it holds no card (only
+  // the provider's ids, the last four digits and the network) and no name. Its
+  // admin audit rows hang from it and name no person.
+  {
+    model: 'AddMoneySession',
+    column: 'wawuUserId',
+    disposition: 'ANONYMISED',
   },
 
   // ── referral points (REF-02) ────────────────────────────────────────────
@@ -858,11 +897,15 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'SchoolEnrolment', column: 'wawuShareKobo' },
   // WAWU's 15% share in kobo on a school fee settlement (SCHOOLS-11), not a person.
   { model: 'SchoolSettlement', column: 'wawuShareKobo' },
+  // WAWU's fee in kobo on an attempt to add money (WALLET-25, R-10), not a person.
+  { model: 'AddMoneySession', column: 'wawuFeeKobo' },
   // WAWU's fee in kobo on a send between two people (WALLET-07), not a person.
   { model: 'WalletTransfer', column: 'wawuFeeKobo' },
   // WAWU's fee in the currency's smallest unit on a quote and on an operation (WALLET-21), not a person.
   { model: 'FxQuote', column: 'wawuFeeMinor' },
   { model: 'FxOperation', column: 'wawuFeeMinor' },
+  // WAWU's fee in kobo on a card (WALLET-31), not a person.
+  { model: 'WalletCard', column: 'wawuFeeKobo' },
 ];
 
 /** The rows a purge keeps with the account's side set to null. */

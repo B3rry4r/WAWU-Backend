@@ -25,6 +25,8 @@ import { MePaidPurchasesService } from './me-paid-purchases.service';
 import { MeNotificationsService } from './me-notifications.service';
 import { MeEarningsService } from './me-earnings.service';
 import { MeCoursesService } from './me-courses.service';
+import { ProfileLocationService } from '../geo/profile-location.service';
+import type { MeLocationView } from '../geo/geo.types';
 import type {
   EarningSalePage,
   LessonDoneState,
@@ -57,6 +59,7 @@ export class MeController {
     private readonly notifications: MeNotificationsService,
     private readonly earnings: MeEarningsService,
     private readonly courses: MeCoursesService,
+    private readonly places: ProfileLocationService,
   ) {}
 
   /** M7's figures in one read: purchases, saved, unread notifications, enrolled courses. */
@@ -70,6 +73,18 @@ export class MeController {
         this.courses.enrolledCount(user.sub),
       ]);
     return { purchases, saved, unreadNotifications, enrolledCourses };
+  }
+
+  /**
+   * Where the signed-in person is (GEO-02, R-85): their country of residence
+   * (what they chose, else the country WAWU ID holds, else their phone's),
+   * with their region and city when they have set them. The app calls it
+   * after sign-in; where the person has not chosen a country it records the
+   * one WAWU ID gives, so the dashboard counts them.
+   */
+  @Get('location')
+  location(@CurrentUser() user: WawuJwtClaims): Promise<MeLocationView> {
+    return this.places.me(user.sub, user);
   }
 
   /** Saved (M30): content, events and creators, newest first, by tab. */

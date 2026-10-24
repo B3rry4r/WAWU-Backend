@@ -309,8 +309,30 @@ model ProfileDetails {
   /// The order the person wants their social links shown above the follower
   /// count: platform keys, first to last. Empty means the default order.
   socialOrder   String[] @default([])
+  /// ── WHERE THE PERSON IS, AS DATA (GEO-02, R-85) ──────────────────────────
+  /// `location` above stays the free line the web shows. These four are the
+  /// structured answer the app asks for and the dashboard counts by. All are
+  /// nullable; an account that never says has none.
+  ///
+  /// ISO 3166-1 alpha-2, upper case ("NG"). Checked against the Hub's own
+  /// country list (GET /geo/countries) on every write.
+  countryCode   String?
+  /// The full ISO 3166-2 code, upper case ("NG-LA"). It must belong to
+  /// `countryCode`. Null when the country has no list or none was chosen.
+  regionCode    String?
+  /// The region's name as the list had it when it was saved ("Lagos").
+  regionName    String?
+  /// Free text, trimmed ("Ikeja"). No list: the Hub keeps no list of cities.
+  city          String?
+  /// How `countryCode` got here: `profile` (the person chose it), `wawu_id`
+  /// (the country WAWU ID holds for the account) or `phone` (the phone's
+  /// country code). Only `profile` is shown to other people; the other two
+  /// exist so the dashboard can count everyone. A choice always replaces them.
+  countrySource String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+
+  @@index([countryCode, regionCode])
 }
 
 // -----------------------------------------------------------------------------
@@ -1501,6 +1523,10 @@ model CreditPurchase {
   /// `flutterwaveTxRef` carries `wallet:<payment id>` on these rows (it is
   /// required and unique, and no Flutterwave charge exists to name).
   walletPaymentId  String?           @unique
+  /// The app-store purchase that bought this pack (IAP-01, R-86); null for a
+  /// Flutterwave or wallet purchase. Unique: one store purchase settles at
+  /// most one pack. `flutterwaveTxRef` carries `store:<id>` on these rows.
+  storePurchaseId  String?           @unique
   /// The cost-basis lot this purchase opens. Created ONLY when the charge is
   /// verified `completed` — see CreditLot.
   lot              CreditLot?
@@ -2690,6 +2716,8 @@ enum AdminOpsResource {
   wallet_identity_hold
   /// A launch figure set in admin settings (TIER-06, R-65).
   plan_setting
+  /// A person's WAWU card, frozen or blocked by support (WALLET-31, R-84).
+  wallet_card
 }
 
 /// Every consequential ops action that used to be anonymous behind
@@ -2724,6 +2752,10 @@ enum AdminOpsAction {
   /// One or more launch figures were set, or put back to their default
   /// (TIER-06, R-65). `detail` carries each key with its old and new value.
   plan_setting_set
+  /// WALLET-31 (R-84): support froze a person's card, let it go again, or blocked it for good.
+  wallet_card_frozen
+  wallet_card_unfrozen
+  wallet_card_cancelled
 }
 
 /// Attribution for the operator surfaces that moved from AdminKeyGuard onto
@@ -5129,6 +5161,102 @@ model FintavaLedgerReference {
   @@id([accountNumber, direction, value])
   @@index([entryId])
   @@index([value])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// ADDING MONEY BY CARD, APPLE PAY, USSD OR A BANK CHECKOUT (WALLET-25, WALLET-26, R-84)
+///
+/// One row per attempt to put money into a person's own wallet through a
+/// Nuvion payment rail that is not the account number: a card payment (a
+/// payment intent and its action), Apple Pay, or a funding session (a USSD
+/// prompt, or the hosted bank checkout). The row is the Hub's record of what
+/// was asked and how it stands; it is never a balance (Nuvion's is the truth).
+///
+/// The wallet is credited by the inflow Nuvion records on the person's
+/// account when the payment settles (the existing inflow ledger path,
+/// NUV-04), once, keyed on Nuvion's transfer and our `reference`. This row
+/// links that inflow to the attempt (`reference` is the payment intent's
+/// `reference` and the funding session's `unique_reference`), carries the
+/// quote the person saw, and says why an attempt failed in our own words.
+///
+/// `rail`: card, apple_pay, ussd, open_banking.
+/// `status`: created (Nuvion not asked yet), awaiting_user (the person has a
+/// page to open or a prompt to answer), processing (Nuvion has it), settled
+/// (credited to the wallet), failed, expired, cancelled.
+/// `frozen`: an admin stopped the attempt from crediting (WALLET-25 controls);
+/// a frozen attempt that settles at Nuvion is kept for review, not credited.
+/// Never a card number, an expiry, a CVV or the encrypted card text.
+/// ─────────────────────────────────────────────────────────────────────────
+model AddMoneySession {
+  id              String    @id @default(uuid())
+  /// Null once the account is deleted: the attempt is a financial record, kept and anonymised (ACCOUNT_DATA_MAP).
+  wawuUserId      String?
+  /// `nuvion`: the provider that holds the wallet (a server acts only on rows of its own provider).
+  provider        String    @default("nuvion")
+  rail            String
+  currency        String    @default("NGN")
+  /// What the wallet gets, in kobo.
+  amountKobo      BigInt
+  /// What the payer pays: the amount plus both fees, in kobo.
+  chargeKobo      BigInt
+  /// Nuvion's charge as quoted (config), then as Nuvion's own record says it was.
+  providerFeeKobo BigInt    @default(0)
+  /// WAWU's fee on top (R-10), from config; default 0.
+  wawuFeeKobo     BigInt    @default(0)
+  status          String    @default("created")
+  frozen          Boolean   @default(false)
+  /// Our unique reference, sent to Nuvion as the payment intent's `reference`
+  /// or the funding session's `unique_reference`; the inflow carries it back.
+  reference       String    @unique
+  /// The payment intent's or the funding session's id at Nuvion.
+  providerRef     String?
+  /// The payment intent's confirming action id (card and Apple Pay).
+  actionRef       String?
+  /// Where the person opens the hosted page (3-D Secure, Apple Pay, the bank checkout).
+  checkoutUrl     String?
+  /// The card's last four digits and network, when Nuvion says them; never more.
+  cardLast4       String?
+  cardBrand       String?
+  /// Why it failed, in our own words, and Nuvion's code for support.
+  failureMessage  String?
+  failureCode     String?
+  /// The ledger row that credited the wallet, and when.
+  ledgerEntryId   String?
+  creditedAt      DateTime?
+  /// WAWU's fee, moved from the wallet to WAWU's account once the credit is in.
+  feeCollectedAt  DateTime?
+  expiresAt       DateTime?
+  /// When Nuvion was last asked how this stands (the sweep's backoff).
+  checkedAt       DateTime?
+  /// A note for a person to look at (our words, never a card or Nuvion text).
+  reviewNote      String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  audits AddMoneyAudit[]
+
+  @@index([wawuUserId, createdAt])
+  @@index([status, checkedAt])
+  @@index([providerRef])
+}
+
+/// An admin's freeze, unfreeze or cancel of one attempt (WALLET-25 controls).
+/// Admin email and role are snapshots, as AdminOpsAudit keeps them.
+model AddMoneyAudit {
+  id                String          @id @default(uuid())
+  sessionId         String
+  session           AddMoneySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  action            String
+  reason            String?
+  fromStatus        String
+  toStatus          String
+  actedByAdminId    String
+  actedByAdminEmail String
+  actedByAdminRole  AdminRole
+  actedAt           DateTime        @default(now())
+
+  @@index([sessionId])
+  @@index([actedAt])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
@@ -8076,6 +8204,180 @@ model MoviePartnerConsent {
   @@index([wawuUserId])
 }
 
+/// Which store a purchase was made in (IAP-01, R-86).
+enum StorePlatform {
+  android
+  ios
+}
+
+/// What a store product grants (IAP-01): points (a points pack), credits (a
+/// WAWU Credits pack), tier (a maker tier, a subscription in the store) or
+/// pass (a community pass, a subscription in the store).
+enum StoreProductKind {
+  points
+  credits
+  tier
+  pass
+}
+
+/// granted: the purchase gave what it sold. refunded: the store paid the
+/// buyer back, and what it gave was taken back. revoked: the store withdrew
+/// it (family sharing ended, a chargeback), taken back the same way.
+enum StorePurchaseStatus {
+  granted
+  refunded
+  revoked
+}
+
+/// The store product map (IAP-01, R-86): one row per product id in a store,
+/// edited by an admin. `grants` says what ONE purchase gives, by kind:
+/// points `{ packId }` (a pack of the live plan), credits `{ pack }`
+/// (starter, popular or pro), tier `{ tierId }`, pass `{ days }`. Nothing is
+/// granted for a product id that has no active row here. Rows are never
+/// deleted once a purchase names them (`StorePurchase.productId` restricts).
+model StoreProduct {
+  id             String           @id @default(uuid())
+  platform       StorePlatform
+  storeProductId String
+  kind           StoreProductKind
+  title          String
+  grants         Json
+  /// What one purchase is worth in kobo BEFORE the store's share (Default
+  /// (lead), owner may override): the 85/15 split on credits and passes works
+  /// from this less the platform's store fee. Null for points and tiers,
+  /// which pay no creator.
+  referenceKobo  Int?
+  active         Boolean          @default(true)
+  sortOrder      Int              @default(0)
+  /// The admin who last wrote the row (their id).
+  updatedBy      String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  purchases StorePurchase[]
+
+  @@unique([platform, storeProductId])
+  @@index([platform, active, sortOrder])
+}
+
+/// A store's switch (IAP-01): whether the Hub takes purchases from that store
+/// at all, and the store's cut in basis points (1500 = 15%) a purchase
+/// records when it is made. A missing row means on, with the config's cut.
+model StorePlatformSetting {
+  platform    StorePlatform @id
+  enabled     Boolean       @default(true)
+  /// Null means the config's `STORE_FEE_BPS_*` (default 1500).
+  storeFeeBps Int?
+  updatedBy   String?
+  updatedAt   DateTime      @updatedAt
+}
+
+/// One store transaction, granted once (IAP-01, R-86). `storeTransactionId` is
+/// the store's own id for it (Apple's transactionId; Google's orderId, which a
+/// renewal changes; the purchase token for a one-time product with no order
+/// id): unique with the platform, so a replay, a restore and a webhook that
+/// races the app can each ask and only the first grants. `subscriptionKey`
+/// ties the renewals of one subscription together (Apple's
+/// originalTransactionId; Google's first purchase token).
+model StorePurchase {
+  id                 String              @id @default(uuid())
+  wawuUserId         String
+  platform           StorePlatform
+  storeTransactionId String
+  subscriptionKey    String?
+  productId          String
+  product            StoreProduct        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  storeProductId     String
+  kind               StoreProductKind
+  status             StorePurchaseStatus @default(granted)
+  /// `production` or `sandbox`, as the store said.
+  environment        String
+  /// The room a pass was bought for.
+  communityId        String?
+  /// What was granted, as written when it was: the take-back reads this and
+  /// never the product map, which may have changed since.
+  grant              Json
+  /// What the product was worth before the store's share, the store's cut in
+  /// basis points as it stood then, and what is left (the 85/15 split base).
+  referenceKobo      Int?
+  storeFeeBps        Int
+  netKobo            Int?
+  /// The room's host and their 85% of `netKobo`, for a pass. Recorded here;
+  /// paying it needs WAWU's store proceeds in the merchant account (BACKEND_GAPS).
+  creatorWawuUserId  String?
+  creatorShareKobo   Int?
+  /// What the store charged, in the buyer's own currency (display only).
+  currency           String?
+  priceMicros        BigInt?
+  purchasedAt        DateTime
+  /// When a subscription period ends, as the store last said.
+  expiresAt          DateTime?
+  endedAt            DateTime?
+  endReason          String?
+  /// What the take-back actually took (a spent point is not taken back).
+  takenBack          Json?
+  /// Set when the Hub recorded the purchase but did not give what it sold and
+  /// an admin has to look (IAP-01 round 1): `member_removed`, a pass renewal for
+  /// a member the host removed. The store keeps billing until they cancel.
+  flag               String?
+  flaggedAt          DateTime?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@unique([platform, storeTransactionId])
+  @@index([wawuUserId, createdAt])
+  @@index([platform, subscriptionKey])
+  @@index([status, createdAt])
+  @@index([productId])
+}
+
+/// A store notification, kept once (IAP-01): Google's Pub/Sub message id or
+/// Apple's notificationUUID, unique with the platform, so a redelivery is
+/// answered and not acted on twice. `outcome` says what the Hub did.
+model StoreNotification {
+  id         String        @id @default(uuid())
+  platform   StorePlatform
+  externalId String
+  kind       String
+  outcome    String
+  receivedAt DateTime      @default(now())
+
+  @@unique([platform, externalId])
+  @@index([receivedAt])
+}
+
+/// Who holds a store subscription (IAP-01 round 1): written once, by the first
+/// purchase of the subscription (Google's purchase token, Apple's
+/// originalTransactionId), and never moved. Unique with the platform, so two
+/// people posting the same new subscription at once cannot both hold it, and a
+/// later order of it is refused to anyone else whatever its order id. The
+/// store's notices follow this row, never the newest purchase.
+model StoreSubscription {
+  id              String        @id @default(uuid())
+  platform        StorePlatform
+  subscriptionKey String
+  wawuUserId      String
+  /// The room a pass subscription is for.
+  communityId     String?
+  /// Set when the store says the subscription ended (expired, on hold, paused, revoked).
+  lapsedAt        DateTime?
+  createdAt       DateTime      @default(now())
+
+  @@unique([platform, subscriptionKey])
+  @@index([wawuUserId, communityId])
+}
+
+/// The id a person's store purchases are bound to (IAP-01 round 1): a stable
+/// random UUID per person, never their user id. The app hands it to Google
+/// (`obfuscatedAccountIdAndroid`) and Apple (`appAccountToken`) at purchase, the
+/// store returns it on every answer about that purchase, and the Hub refuses a
+/// purchase that carries another person's. Unique, so no two people share one.
+model StoreAccountToken {
+  wawuUserId String   @id
+  token      String   @unique
+  createdAt  DateTime @default(now())
+}
+
 /// ─────────────────────────────────────────────────────────────────────────
 /// FOREIGN ACCOUNTS ON NUVION (task WALLET-21, R-83, R-84)
 ///
@@ -8223,4 +8525,54 @@ model FxAdminAudit {
   @@index([fxAccountId])
   @@index([actedByAdminId])
   @@index([actedAt])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE WAWU CARD (task WALLET-31, R-84)
+///
+/// One row per card a person asked for. The card itself lives at Nuvion: a
+/// virtual or single-use dollar card funded from the person's own account,
+/// Nuvion converting at use. This row keeps only what WAWU needs to list,
+/// control and audit it: whose it is, which kind, its state, and Nuvion's id.
+/// NEVER the card number, the expiry, the CVV or the billing address: those
+/// are read from Nuvion behind the PIN each time they are shown and are not
+/// kept (or logged) here.
+///
+/// `reference` is ours and goes to Nuvion as the card's name, so a card made
+/// while the answer was lost can be found again (`GET /cards`) and adopted
+/// instead of being made twice. `state`: `creating` (claimed, the call is
+/// out), `unknown` (no answer came back: it is looked for before anything is
+/// sent again), `active`, `frozen`, `cancelled` (blocked for good: Nuvion
+/// soft-deletes it) and `failed` (Nuvion refused it; nothing was made).
+/// `frozenBy`: `person` or `admin`; a card support froze is not unfrozen by
+/// the person.
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletCard {
+  id              String    @id @default(uuid())
+  wawuUserId      String
+  /// The wallet provider that issued it: `nuvion`.
+  provider        String
+  /// Nuvion's card id, once Nuvion answered or the card was found.
+  providerCardId  String?   @unique
+  reference       String    @unique
+  /// `virtual` or `single_use`.
+  type            String
+  /// What the person calls it (30 characters at most).
+  name            String
+  currency        String    @default("USD")
+  state           String
+  frozenBy        String?
+  /// Nuvion's fee for making it and WAWU's, in kobo, as quoted when it was asked for.
+  providerFeeKobo BigInt?
+  wawuFeeKobo     BigInt    @default(0)
+  /// Our own words for a card that failed; never Nuvion's text.
+  failure         String?
+  cancelledAt     DateTime?
+  /// When WAWU's fee on the card (`wawuFeeKobo`) was confirmed as moved to WAWU's account; null while it is owed or when it is 0 (round 1, M1).
+  feeCollectedAt  DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([wawuUserId, state])
+  @@index([state, createdAt])
 }

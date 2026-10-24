@@ -52,13 +52,14 @@ export class CommunityPassReminderService {
   /** The sweep itself, callable directly. Returns how many reminders it sent. */
   async run(now: Date = new Date()): Promise<number> {
     const windowEnd = reminderWindowEnd(now);
-    // The passes that are due: running, inside the window, not reminded, the
+    // The passes that are due (a store pass is not one: the store renews it, IAP-01): running, inside the window, not reminded, the
     // person's latest in the room (so not renewed), and the person still in.
     const due = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT p."id"
         FROM "CommunityPass" p
        WHERE p."reminderSentAt" IS NULL
          AND p."endsAt" > ${now} AND p."endsAt" <= ${windowEnd}
+         AND p."walletPaymentId" NOT LIKE 'store:%'
          AND NOT EXISTS (SELECT 1 FROM "CommunityPass" q
                           WHERE q."communityId" = p."communityId"
                             AND q."userWawuId" = p."userWawuId"

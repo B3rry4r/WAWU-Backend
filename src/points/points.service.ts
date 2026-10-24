@@ -436,6 +436,53 @@ export class PointsService {
   }
 
   /**
+   * Ends a lot at once because what bought it was paid back (IAP-01: a store
+   * refund or revocation). Takes what the lot still has, written to the ledger
+   * as an expiry, and marks the lot lapsed, so points that come back from a job
+   * in flight (a release) are written off at once (a lot with a lapse time is
+   * over, whatever its end date). Points already
+   * spent are not taken back. Under the person's lock; idempotent (a lot with
+   * nothing left, or none, takes 0). Returns what was taken and what the lot
+   * granted.
+   */
+  async revokeLot(
+    source: PointLotSource,
+    sourceRef: string,
+    opts: PointsCallOptions = {},
+  ): Promise<{ taken: number; granted: number }> {
+    const now = opts.now ?? new Date();
+    const candidate = await (opts.tx ?? this.prisma).pointLot.findUnique({
+      where: { source_sourceRef: { source, sourceRef } },
+      select: { id: true, wawuUserId: true },
+    });
+    if (candidate === null) return { taken: 0, granted: 0 };
+    return this.inTx(opts.tx, async (tx) => {
+      await lockPersonPoints(tx, candidate.wawuUserId);
+      const lot = await tx.pointLot.findUnique({
+        where: { id: candidate.id },
+      });
+      if (lot === null) return { taken: 0, granted: 0 };
+      if (lot.remaining > 0) {
+        await takeFromLot(tx, lot.id, lot.remaining, lot.lapsedAt ?? now);
+        await tx.pointLedger.create({
+          data: {
+            wawuUserId: lot.wawuUserId,
+            lotId: lot.id,
+            delta: -lot.remaining,
+            reason: 'expire',
+          },
+        });
+      } else if (lot.lapsedAt === null) {
+        await tx.pointLot.update({
+          where: { id: lot.id },
+          data: { lapsedAt: now },
+        });
+      }
+      return { taken: lot.remaining, granted: lot.quantity };
+    });
+  }
+
+  /**
    * The points a person can spend now: every live lot that has points and
    * has not ended, summed. The same figure `view` calls `balance`, read
    * alone for the routes that only need the number (POINTS-04's quote and
@@ -588,8 +635,9 @@ export class PointsService {
               reference: hold.reference,
             },
           });
-          if (lot.expiresAt <= now) {
-            // The lot's first lapse time stands.
+          if (lot.expiresAt <= now || lot.lapsedAt !== null) {
+            // The lot's first lapse time stands. A lot with a lapse time is
+            // over (IAP-01: a refunded pack's lot ends before its date).
             await takeFromLot(tx, lot.id, part.points, lot.lapsedAt ?? now);
             await tx.pointLedger.create({
               data: {

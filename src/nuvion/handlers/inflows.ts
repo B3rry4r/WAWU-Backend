@@ -33,6 +33,22 @@ const failed = (note: string): NuvionHandlerResult => ({
 /** The rail this task credits: money in by bank transfer (R-42). */
 export const NUVION_BANK_TRANSFER = 'bank-transfer';
 
+/**
+ * WALLET-25 and WALLET-26 (R-84): the hook for an inflow that is not a bank
+ * transfer. Adding money by card, Apple Pay, USSD or the bank checkout lands
+ * as an inflow of its own rail (`card-acq`, `applepay-acq`, ...), carrying the
+ * attempt's reference as its `unique_reference`. The hook (AddMoneyService.
+ * creditInflow) answers null when the inflow is none of ours, and the
+ * recorder then answers as it always did; otherwise it credits once, waits, or
+ * stops, and its answer is the recorder's.
+ */
+export type AddMoneyInflowClaim = (
+  t: NuvionTransferReading,
+  wallet: NuvionInflowWallet,
+  source: LedgerSource,
+  sourceEventId: string | null,
+) => Promise<NuvionHandlerResult | null>;
+
 /** A person's Nuvion wallet, as the ledger writes on it. */
 export interface NuvionInflowWallet {
   wawuUserId: string;
@@ -74,6 +90,7 @@ export class NuvionInflowRecorder {
     private readonly area: NuvionAccountsArea,
     private readonly ledger: LedgerService,
     private readonly settings: { operationalAccountId: string },
+    private readonly addMoney: AddMoneyInflowClaim | null = null,
   ) {}
 
   async onInflow(d: NuvionDelivery): Promise<NuvionHandlerResult> {
@@ -196,13 +213,19 @@ export class NuvionInflowRecorder {
       if (t.paymentType?.startsWith('capital-') === true) {
         return done('a Capital payout: recorded by its order (NUV-12)');
       }
-      return t.paymentType === 'book-transfer'
-        ? done(
-            'a book transfer between Nuvion accounts: recorded by its sender (NUV-05)',
-          )
-        : failed(
-            `an inflow by ${t.paymentType ?? 'no named rail'}: not money in by bank transfer; nothing credited (review)`,
-          );
+      if (t.paymentType === 'book-transfer') {
+        return done(
+          'a book transfer between Nuvion accounts: recorded by its sender (NUV-05)',
+        );
+      }
+      // WALLET-25, WALLET-26: a payment made through Add money is credited by its own hook.
+      const mine = this.addMoney
+        ? await this.addMoney(t, wallet, source, sourceEventId)
+        : null;
+      if (mine) return mine;
+      return failed(
+        `an inflow by ${t.paymentType ?? 'no named rail'}: not money in by bank transfer; nothing credited (review)`,
+      );
     }
     const m = nuvionInflowMovement(t);
     if (m.status === 'pending') {

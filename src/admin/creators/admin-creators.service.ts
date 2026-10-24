@@ -6,6 +6,7 @@ import {
 } from '../../common/verification/verification-state';
 import { CreatorEarningsService } from '../../creator-earnings/creator-earnings.service';
 import { PublishingAllowanceService } from '../../plans/publishing-allowance.service';
+import { ProfileLocationService } from '../../geo/profile-location.service';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import type { CreatorStateModel, UserProfileModel } from '../../../generated/prisma/models';
 import type { ReviewStatus } from '../../../generated/prisma/enums';
@@ -73,12 +74,15 @@ type KycSafeRow = {
  * operator tool — and it is written here rather than hidden so the next person
  * knows what would need a relation to fix.
  */
+const inSet = (set: Set<string>) => (id: string) => set.has(id);
+
 @Injectable()
 export class AdminCreatorsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly earnings: CreatorEarningsService,
     private readonly publishing: PublishingAllowanceService,
+    private readonly places: ProfileLocationService,
   ) {}
 
   /**
@@ -92,7 +96,17 @@ export class AdminCreatorsService {
   async listCreators(
     query: AdminCreatorSearchQueryDto,
   ): Promise<Paginated<AdminCreatorListItemView>> {
-    const stateScopedIds = await this.idsMatchingStateFilters(query);
+    const byState = await this.idsMatchingStateFilters(query);
+    const byPlace = await this.places.idsInPlace(
+      query.countryCode,
+      query.regionCode,
+    );
+    const stateScopedIds =
+      byState === null
+        ? byPlace
+        : byPlace === null
+          ? byState
+          : byState.filter(inSet(new Set(byPlace)));
     if (stateScopedIds !== null && stateScopedIds.length === 0) {
       return { items: [], currentPage: query.page, perPage: query.perPage, total: 0 };
     }

@@ -1,16 +1,25 @@
 import { toLocalNigerianPhone } from '../wallet-provider/nigerian-phone';
+import { parseInternationalPhone } from '../geo/phone';
 import { ACCESS_CODE_LENGTH, EMAIL_MAX } from './waitlist-config';
 
 /**
- * A phone as the registration stores it (JOIN-01). Nigerian mobiles in any of
- * the four forms (`08031234567`, `8031234567`, `2348031234567`,
- * `+2348031234567`, with spaces, dashes and brackets) become `+234...`; any
- * other number must carry its country code (`+` or `00`) and is kept in
- * E.164 (`+447700900123`). Null when it is neither.
+ * A phone as the registration stores it (JOIN-01, widened by GEO-02/R-85).
+ * Nigerian mobiles in any of the four forms (`08031234567`, `8031234567`,
+ * `2348031234567`, `+2348031234567`, with spaces, dashes and brackets) become
+ * `+234...`. Any other number must carry its country code (`+` or `00`) and
+ * is kept in E.164 (`+447911123456`): read by libphonenumber when it is a
+ * valid number (so `+44 (0)7911 123456` loses its bracketed 0), else by the
+ * plain length rule registrations have always had, so nothing taken before is
+ * refused now. Null when it is neither.
+ *
+ * A +234 number that is not a valid Nigerian mobile is never kept: the claim
+ * proof matches this phone against the one a wallet proved.
  */
 export function normalisePhone(raw: string): string | null {
   const local = toLocalNigerianPhone(raw);
   if (local !== null) return `+234${local.slice(1)}`;
+  const valid = parseInternationalPhone(raw);
+  if (valid !== null) return valid.callingCode === '234' ? null : valid.e164;
   const d = raw.trim().replace(/[\s\-().]/g, '');
   const abroad = /^(?:\+|00)([1-9]\d{7,14})$/.exec(d);
   if (abroad === null) return null;

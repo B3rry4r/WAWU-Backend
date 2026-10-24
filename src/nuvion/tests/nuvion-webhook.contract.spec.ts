@@ -625,12 +625,12 @@ describe('NUV-01: Nuvion webhooks are received, checked and stored once', () => 
         where: {
           eventId: { startsWith: RUN },
           processingStatus: 'pending',
-          event: { not: 'cards.deleted' },
+          event: { not: 'payment_dispute.created' },
         },
       });
       registry.add({
         task: 'SPEC',
-        events: ['cards.deleted'],
+        events: ['payment_dispute.created'],
         handle: (d) => {
           seen.push(d);
           return behaviour(d);
@@ -644,7 +644,7 @@ describe('NUV-01: Nuvion webhooks are received, checked and stored once', () => 
 
     async function stored(n: number) {
       const id = eventId();
-      const body = { ...inflow(n), event: 'cards.deleted' };
+      const body = { ...inflow(n), event: 'payment_dispute.created' };
       await deliver(JSON.stringify(body), { id }).expect(200);
       return prisma.nuvionWebhookEvent.findUniqueOrThrow({
         where: { eventId: id },
@@ -656,7 +656,7 @@ describe('NUV-01: Nuvion webhooks are received, checked and stored once', () => 
       expect(await dispatcher.dispatch(row.id)).toBe('processed');
       expect(seen).toHaveLength(1);
       expect(seen[0]).toMatchObject({
-        event: 'cards.deleted',
+        event: 'payment_dispute.created',
         eventId: row.eventId,
         attempts: 1,
       });
@@ -741,9 +741,12 @@ describe('NUV-01: Nuvion webhooks are received, checked and stored once', () => 
 
     it('an event no handler lists stays pending, untouched; a test delivery is never handled', async () => {
       const id = eventId();
-      await deliver(JSON.stringify({ ...inflow(340), event: 'cards.frozen' }), {
-        id,
-      }).expect(200);
+      await deliver(
+        JSON.stringify({ ...inflow(340), event: 'payment_dispute.completed' }),
+        {
+          id,
+        },
+      ).expect(200);
       const row = await prisma.nuvionWebhookEvent.findUniqueOrThrow({
         where: { eventId: id },
       });

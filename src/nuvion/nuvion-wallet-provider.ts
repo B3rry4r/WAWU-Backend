@@ -24,6 +24,7 @@ import {
 } from './areas/accounts';
 import { NuvionBookArea, type NuvionBookMethods } from './areas/book';
 import { NuvionFxArea } from './areas/fx';
+import { NuvionCardsArea, type NuvionCardsMethods } from './areas/cards';
 import { type NuvionBookStore } from './areas/book-store';
 import { NuvionCapitalArea } from './areas/capital';
 import {
@@ -42,6 +43,15 @@ import {
 } from './areas/reconcile';
 import { BANK_SEND_REFERENCE_PREFIX } from '../wallet-provider/wallet-provider.interface';
 import type { NuvionClient } from './nuvion-client';
+import { NuvionAddMoneyArea } from './areas/add-money';
+import type {
+  AddMoneyProvider,
+  AddMoneyRail,
+  ProviderAddMoneyConfirm,
+  ProviderAddMoneyRef,
+  ProviderAddMoneyStart,
+  ProviderAddMoneyWallet,
+} from '../wallet-provider/add-money';
 import { reconcileBankSend } from './handlers/outflows-bank';
 
 /**
@@ -75,6 +85,8 @@ export interface NuvionAreas {
   fx?: NuvionFxArea;
   /** Capital (NUV-12): reached through `WalletProvider.capital`. */
   capital: WalletProviderCapital;
+  /** The WAWU card (WALLET-31, R-84). */
+  cards: NuvionCardsMethods;
 }
 
 /**
@@ -96,6 +108,7 @@ export function nuvionAreas(
     reconcile: new NuvionReconcileArea(client),
     fx: new NuvionFxArea(client),
     capital: new NuvionCapitalArea(client),
+    cards: new NuvionCardsArea(client),
   };
 }
 
@@ -116,11 +129,12 @@ export function nuvionAreas(
  * | fx.ts | WALLET-21 | the optional `fx` port: foreign-currency accounts, quotes, swaps, crypto sends, statements |
  * | reconcile.ts | NUV-08 | deliveries, listTransactions (the statement); the lookups above are widened to every rail by id (findTransactionById, confirmMovement) |
  * | capital.ts | NUV-12 | `capital`: products, orders, portfolio, capital transactions, withdrawal (its own member, not one of the methods above) |
+ * | cards.ts | WALLET-31 | `cards`: createCard, findCard, getCard, revealCard, freezeCard, unfreezeCard, deleteCard, listCardTransactions |
  *
  * A method whose area has no Nuvion call yet answers `not_supported`:
  * nothing is sent and nothing moves.
  */
-export class NuvionWalletProvider implements WalletProvider {
+export class NuvionWalletProvider implements WalletProvider, AddMoneyProvider {
   readonly name = 'nuvion' as const;
   readonly label = 'Nuvion';
   /** Built only with every Nuvion setting present (nuvion-config.ts). */
@@ -145,6 +159,9 @@ export class NuvionWalletProvider implements WalletProvider {
   readonly walletBankCode = '';
   readonly timings: WalletProviderTimings;
   private readonly areas: NuvionAreas;
+  /** Adding money by card, Apple Pay, USSD and the bank checkout (WALLET-25, WALLET-26): its own area, reached through `addMoneyOf`. */
+  private readonly addMoney: NuvionAddMoneyArea;
+  readonly addMoneyRails: readonly AddMoneyRail[];
 
   constructor(
     readonly client: NuvionClient,
@@ -159,6 +176,8 @@ export class NuvionWalletProvider implements WalletProvider {
       retryAfterSeconds: s.retryAfterSeconds,
     };
     this.areas = areas ?? nuvionAreas(client);
+    this.addMoney = new NuvionAddMoneyArea(client);
+    this.addMoneyRails = this.addMoney.addMoneyRails;
   }
 
   get deliveries() {
@@ -182,6 +201,11 @@ export class NuvionWalletProvider implements WalletProvider {
   /** Nuvion's investment products (NUV-12, R-84). */
   get capital(): WalletProviderCapital {
     return this.areas.capital;
+  }
+
+  /** The WAWU card (WALLET-31, R-84): src/nuvion/areas/cards.ts. */
+  get cards(): NuvionCardsMethods {
+    return this.areas.cards;
   }
 
   /** The book transfer area (NUV-05): the handler reads transfers through it. */
@@ -351,5 +375,26 @@ export class NuvionWalletProvider implements WalletProvider {
   /** Whether two names are one account at Nuvion (NUV-05, MONEY-17 R5-1). */
   isSameAccount(a: string, b: string) {
     return this.areas.book.isSameAccount(a, b);
+  }
+
+  // Adding money (WALLET-25, WALLET-26)
+  startAddMoney(input: ProviderAddMoneyStart) {
+    return this.addMoney.startAddMoney(input);
+  }
+  confirmAddMoney(input: ProviderAddMoneyConfirm) {
+    return this.addMoney.confirmAddMoney(input);
+  }
+  readAddMoney(ref: ProviderAddMoneyRef) {
+    return this.addMoney.readAddMoney(ref);
+  }
+  findAddMoney(
+    rail: AddMoneyRail,
+    wallet: ProviderAddMoneyWallet,
+    reference: string,
+  ) {
+    return this.addMoney.findAddMoney(rail, wallet, reference);
+  }
+  cancelAddMoney(ref: ProviderAddMoneyRef) {
+    return this.addMoney.cancelAddMoney(ref);
   }
 }

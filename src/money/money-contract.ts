@@ -132,6 +132,9 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // TIER-04. 402, as the publishing gate answers the same code (TIER-02,
   // CONVENTIONS section 23): the person has to pay for a tier first.
   tier_required: 402,
+  // WALLET-25, WALLET-26. Default (agent), owner may override: 409, as
+  // currency_not_supported: the request is understood; this way cannot be used now.
+  add_money_unavailable: 409,
   // WALLET-21 (R-83, R-84). Default (lead), owner may override: 409 for a
   // switch that is off (the request is understood, the service is not on, as
   // fees_not_set but not a fault); 409 for an expired or used quote (ask for
@@ -164,6 +167,18 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   capital_unavailable: 409,
   reservation_expired: 409,
   withdrawal_not_available: 409,
+  // WALLET-31 (R-84). Default (agent), owner may override: 503 when cards are
+  // switched off, not built for this provider, or the fee is not set (nothing
+  // was sent, trying later is right); 409 when this person holds or has asked
+  // for the most cards one may (they have to block one or wait), and 409 when
+  // the card cannot take that action (blocked for good, still being made, or
+  // frozen by support), as target_not_payable.
+  cards_unavailable: 503,
+  card_limit_reached: 409,
+  card_blocked: 409,
+  // WALLET-31 round 1, L1. Default (agent), owner may override: 429, as
+  // statement_rate_limited, with retryAfterSeconds.
+  card_reveal_rate_limited: 429,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

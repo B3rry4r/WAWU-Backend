@@ -283,6 +283,15 @@ export class NuvionClient {
     return this.request<T>(op, 'PATCH', path, { body });
   }
 
+  /** A DELETE (WALLET-31: a card). Nuvion reads `entity_id` from the body here, as on PATCH. */
+  delete<T = unknown>(
+    op: NuvionOp,
+    path: string,
+    body?: unknown,
+  ): Promise<NuvionAnswer<T>> {
+    return this.request<T>(op, 'DELETE', path, { body });
+  }
+
   /** One page of a list: `data.data` and `data.meta.pagination`. */
   async listPage<T = unknown>(
     op: NuvionOp,
@@ -465,7 +474,7 @@ export class NuvionClient {
 
   private async request<T>(
     op: NuvionOp,
-    method: 'GET' | 'POST' | 'PATCH',
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     path: string,
     opts: {
       query?: NuvionListQuery;

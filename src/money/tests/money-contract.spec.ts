@@ -25,6 +25,14 @@ import { MoneyPinController } from '../pin/money-pin.controller';
 
 /** Money routes a mounted module serves, and the task that serves each. */
 const SERVED_MONEY_ROUTES: Record<string, string> = {
+  // WALLET-25, WALLET-26: add money by card, Apple Pay, USSD and the bank checkout.
+  'GET /api/hub/money/add-money/options': 'WALLET-25',
+  'GET /api/hub/money/add-money/quote': 'WALLET-25',
+  'GET /api/hub/money/add-money/return': 'WALLET-25',
+  'POST /api/hub/money/add-money': 'WALLET-25',
+  'GET /api/hub/money/add-money': 'WALLET-25',
+  'GET /api/hub/money/add-money/{id}': 'WALLET-25',
+  'POST /api/hub/money/add-money/{id}/cancel': 'WALLET-25',
   'GET /api/hub/money/pin': 'MONEY-09',
   'POST /api/hub/money/pin': 'MONEY-09',
   'PUT /api/hub/money/pin': 'MONEY-09',
@@ -54,6 +62,16 @@ const SERVED_MONEY_ROUTES: Record<string, string> = {
   'DELETE /api/hub/money/device': 'MONEY-14',
   'POST /api/hub/money/device/challenge': 'MONEY-14',
   'POST /api/hub/money/approval/verify': 'MONEY-14',
+  // WALLET-31 (R-84): the WAWU card.
+  'GET /api/hub/money/cards': 'WALLET-31',
+  'POST /api/hub/money/cards': 'WALLET-31',
+  'GET /api/hub/money/cards/quote': 'WALLET-31',
+  'GET /api/hub/money/cards/{id}': 'WALLET-31',
+  'DELETE /api/hub/money/cards/{id}': 'WALLET-31',
+  'POST /api/hub/money/cards/{id}/reveal': 'WALLET-31',
+  'POST /api/hub/money/cards/{id}/freeze': 'WALLET-31',
+  'POST /api/hub/money/cards/{id}/unfreeze': 'WALLET-31',
+  'GET /api/hub/money/cards/{id}/transactions': 'WALLET-31',
   'GET /api/hub/money/transactions': 'MONEY-15',
   'GET /api/hub/money/transactions/summary': 'MONEY-15',
   'GET /api/hub/money/transactions/{id}': 'MONEY-15',

@@ -145,6 +145,11 @@ const MOVES_NO_MONEY: Readonly<Record<string, string>> = {
     'turns on approving from this phone; the PIN is its approval',
   'POST money/approval/verify':
     'checks an approval (the PIN, or the phone) for a screen that confirms the person first',
+  // WALLET-31 (R-84): the WAWU card.
+  'POST money/cards/:id/reveal':
+    "reads a card's number, expiry and CVV from the issuer and shows them; nothing is stored or moved, the PIN is its approval",
+  'POST money/cards/:id/unfreeze':
+    'lets a frozen card be used again; no money moves, the PIN is its approval',
 };
 
 /**
@@ -186,6 +191,9 @@ const NON_MONEY_WRITES: Readonly<Record<string, string>> = {
     "asks the bank for an account's name before a send; a read",
   'POST money/transactions/:id/receipt':
     'renders a receipt of one finished transaction; a read',
+  // WALLET-25: the attempt is unpaid, so nothing moves.
+  'POST money/add-money/:id/cancel':
+    'cancels an unpaid attempt; moves no money',
   'POST money/statements/email':
     "emails a statement of finished transactions to the person's own confirmed address; a read sent as a POST",
   // Foreign accounts (WALLET-21): opening one and asking for a rate move nothing
@@ -197,6 +205,11 @@ const NON_MONEY_WRITES: Readonly<Record<string, string>> = {
     'opens an account at the provider for the person; no money is in it yet',
   'POST money/fx/quotes':
     'asks the provider for a rate and keeps it for the person, to use once; a read sent as a POST',
+  // WALLET-31 (R-84): the WAWU card. Stopping a card must not wait for a PIN.
+  'POST money/cards/:id/freeze':
+    "freezes one of the person's own cards at the issuer; no money moves, and a lost card is stopped at once",
+  'DELETE money/cards/:id':
+    "blocks one of the person's own cards for good at the issuer; no money moves, and a lost card is stopped at once",
 };
 
 /** A controller class, as a module lists it. */
@@ -856,6 +869,9 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
       'POST dm/send/wallet/pay',
       'POST events/orders/wallet/pay',
       'POST legal/requests/:id/pay/wallet',
+      // WALLET-25, WALLET-26: add money takes fees and a PIN (a card or a bank checkout pays into the wallet).
+      'POST money/add-money',
+      'POST money/cards',
       'POST money/fx/sends',
       'POST money/fx/swaps',
       'POST money/payments',

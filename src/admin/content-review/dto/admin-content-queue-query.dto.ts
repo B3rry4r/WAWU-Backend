@@ -1,4 +1,4 @@
-import { IsIn, IsOptional } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 
 /**
@@ -23,4 +23,20 @@ export class AdminContentQueueQueryDto extends PaginationQueryDto {
   @IsOptional()
   @IsIn(['oldest', 'newest'])
   sort: 'oldest' | 'newest' = 'oldest';
+
+  /**
+   * Only pieces whose creator lives in this country, ISO 3166-1 alpha-2
+   * ("NG", any case) from GET /geo/countries (GEO-02, R-85). An unknown code
+   * is a 400.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  countryCode?: string;
+
+  /** Only pieces whose creator lives in this region, the full ISO 3166-2 code ("NG-LA"). Alone it also narrows the country. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  regionCode?: string;
 }

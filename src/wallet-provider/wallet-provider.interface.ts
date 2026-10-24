@@ -762,6 +762,107 @@ export interface ProviderDeliveries {
  * method fails with a `WalletProviderError` (wallet-provider-error.ts);
  * anything else thrown is a bug, passed through.
  */
+// ---------------------------------------------------------------------------
+// Cards (WALLET-31, R-84)
+// ---------------------------------------------------------------------------
+
+/** The two kinds of card a provider issues for a person: reusable, and one payment only. */
+export type ProviderCardType = 'virtual' | 'single_use';
+
+/**
+ * A card as the provider describes it for a list or a status read. Never the
+ * number, the expiry or the CVV: those are `ProviderCardSecrets`, read on
+ * their own and never kept. `status` is the provider's: `blocked` is a frozen
+ * card (or a deleted one, which no longer lists).
+ */
+export interface ProviderCard {
+  id: string;
+  type: ProviderCardType | null;
+  /** The name the card was made under: our reference. */
+  name: string;
+  status: 'active' | 'blocked' | 'fraud';
+  /** ISO 4217, the currency the card spends in (USD). */
+  currency: string;
+  /** The last four digits, when the provider says them; null otherwise. */
+  last4: string | null;
+}
+
+/** The card's secrets. Read on one call, handed to the person and forgotten: never stored, never logged. */
+export interface ProviderCardSecrets {
+  number: string;
+  expirationMonth: string;
+  expirationYear: string;
+  cvv: string;
+  cardholderName: string;
+  billing: {
+    line1: string | null;
+    line2: string | null;
+    city: string | null;
+    state: string | null;
+    postalCode: string | null;
+  } | null;
+}
+
+/** One card payment, reversal or refund, as the provider lists it. */
+export interface ProviderCardTransaction {
+  id: string;
+  kind: 'purchase' | 'reversal' | 'refund';
+  /** Smallest unit of `currency` (cents for USD). */
+  amountMinor: number;
+  currency: string;
+  status: string;
+  merchant: string | null;
+  place: string | null;
+  narration: string | null;
+  at: Date | null;
+}
+
+export interface ProviderCardWallet {
+  /** The wallet id this provider gave the person's account (`WalletProvider.getWalletAccount`). */
+  walletId: string;
+}
+
+/**
+ * The card operations of a provider that issues cards. Optional on
+ * `WalletProvider`: a provider without `cards` (Fintava) is asked nothing and
+ * the Hub answers that cards are not available, never a guess. Every method
+ * fails with a `WalletProviderError`; a write whose answer was lost is
+ * `outcome_unknown` and is looked for (`findCard`), never made twice.
+ */
+export interface ProviderCards {
+  /** Makes a card funded from the person's account; the provider converts at use. Takes the provider's own fee from that account. */
+  createCard(input: {
+    wallet: ProviderCardWallet;
+    type: ProviderCardType;
+    /** Ours; becomes the card's name so `findCard` can find it. */
+    reference: string;
+    currency: 'USD';
+  }): Promise<ProviderCard>;
+  /** The card made under this reference, or null when the provider has none. */
+  findCard(
+    wallet: ProviderCardWallet,
+    reference: string,
+  ): Promise<ProviderCard | null>;
+  /** One card's status. */
+  getCard(wallet: ProviderCardWallet, cardId: string): Promise<ProviderCard>;
+  /** The card's number, expiry and CVV, read now. */
+  revealCard(
+    wallet: ProviderCardWallet,
+    cardId: string,
+  ): Promise<ProviderCardSecrets>;
+  /** Idempotent. */
+  freezeCard(wallet: ProviderCardWallet, cardId: string): Promise<void>;
+  /** Idempotent. */
+  unfreezeCard(wallet: ProviderCardWallet, cardId: string): Promise<void>;
+  /** For good: the provider soft-deletes the card. A second call fails `not_found`. */
+  deleteCard(wallet: ProviderCardWallet, cardId: string): Promise<void>;
+  listCardTransactions(
+    wallet: ProviderCardWallet,
+    cardId: string,
+    query: { limit?: number; cursor?: string },
+  ): Promise<{ items: ProviderCardTransaction[]; nextCursor: string | null }>;
+}
+
 export interface WalletProvider {
   readonly name: WalletProviderName;
   /** The provider's name as notes and logs print it ("Fintava"). */
@@ -930,6 +1031,14 @@ export interface WalletProvider {
    * Optional: a provider that does not review the person (Fintava) leaves it out.
    */
   readReview?(customerId: string): Promise<ProviderReviewState>;
+
+  // Cards (WALLET-31, R-84)
+  /**
+   * The WAWU card, where the provider issues one. Optional: Fintava has none
+   * (it answers nothing, so the Hub says cards are not available), Nuvion
+   * serves it from `src/nuvion/areas/cards.ts`.
+   */
+  readonly cards?: ProviderCards;
 }
 
 /** One PIN reset code for one person, as an `OtpSender` sends it (NUV-01). */

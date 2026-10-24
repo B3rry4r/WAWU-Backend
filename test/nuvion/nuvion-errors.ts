@@ -98,6 +98,8 @@ export const NUVION_DOCUMENTED_ERRORS: ReadonlyArray<[string, number]> = [
   ['error_fx_quote_rate_provider_unavailable', 503],
   // Transfers
   ['error_transfer_insufficient_funds', 400],
+  // WALLET-31 (dev, 24 Oct 2026: "Card creation requires at least 657.72 NGN to be available for the card creation fee").
+  ['error_card_creation_fee_required', 400],
   ['error_transfer_daily_limit_exceeded', 400],
   ['error_transfer_transaction_limit_exceeded', 400],
   ['error_transfer_monthly_volume_exceeded', 400],
