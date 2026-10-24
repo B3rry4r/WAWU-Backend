@@ -224,6 +224,11 @@ app.post("/auth/register", (req, res) => {
     email,
     phone,
     dialCode: dialCode ?? null,
+    // GEO-01: WAWU ID's claim for the country of residence (ISO 3166-1 alpha-2), which the Hub's opening reads.
+    // Only when the request names one, so every older caller (and the protected route lock) sees no new claim.
+    ...(/^[A-Za-z]{2}$/.test(String(req.body.countryCode ?? ''))
+      ? { countryCode: String(req.body.countryCode).toUpperCase() }
+      : {}),
     firstName: firstName ?? fullName,
     lastName: rest.join(" ") || null,
     country,

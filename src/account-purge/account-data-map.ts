@@ -877,6 +877,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     disposition: 'AUDIT',
   },
   { model: 'AdminOpsAudit', column: 'subjectWawuId', disposition: 'AUDIT' },
+  // WALLET-41: the record of an admin freezing, unfreezing or cancelling a
+  // person's world wallet. Like the other admin audit rows, it is WAWU's
+  // record of an act and outlives the person; it holds a stage word and a
+  // reason, never a name, a document or a number.
+  { model: 'WorldAdminAudit', column: 'subjectWawuId', disposition: 'AUDIT' },
   // Who froze, released or cancelled a person's other-currency account
   // (WALLET-21) or Capital order (NUV-12): an admin action record, kept like
   // AdminOpsAudit above.

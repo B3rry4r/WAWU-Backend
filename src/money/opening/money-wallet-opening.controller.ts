@@ -15,6 +15,7 @@ import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import { openingAddressOf } from '../identity/identity-config';
 import { BuiltBy, MoneyErrors } from '../money-contract';
 import type { WalletView } from '../money-view.type';
+import { residenceOf } from '../world/world-residence';
 import { OpenNairaWalletDto } from './dto/open-wallet.dto';
 import { WalletOpeningService } from './wallet-opening.service';
 
@@ -80,6 +81,11 @@ export class MoneyWalletController {
     'identity_checks_exhausted',
     // NUV-02 round 3: the tries from one address in an hour.
     'open_address_limited',
+    // WALLET-41: a world opening needs a stored residence that is not Nigeria, and the request must name it.
+    'residence_not_set',
+    'residence_mismatch',
+    // WALLET-41 round 3: a passport names the country that issued it.
+    'passport_country_required',
   )
   open(
     @CurrentUser() user: WawuJwtClaims,
@@ -92,6 +98,8 @@ export class MoneyWalletController {
       body,
       user.phone,
       openingAddressOf(req),
+      // WAWU ID's `countryCode` claim: the stored country of residence decides a world opening.
+      residenceOf(user as WawuJwtClaims & { countryCode?: unknown }),
     );
   }
 }

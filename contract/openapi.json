@@ -13197,8 +13197,8 @@
                             "enum": [
                               "pending",
                               "failed",
-                              "refunded",
                               "cancelled",
+                              "refunded",
                               "paid"
                             ]
                           },
@@ -13364,8 +13364,8 @@
                       "enum": [
                         "pending",
                         "failed",
-                        "refunded",
                         "cancelled",
+                        "refunded",
                         "paid"
                       ]
                     },
@@ -16311,8 +16311,18 @@
               }
             }
           },
+          "400": {
+            "description": "reason.code: passport_country_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "reason.code: bvn_not_checked, selfie_required, identity_has_wallet, phone_held_by_other_identity, identity_under_review",
+            "description": "reason.code: bvn_not_checked, selfie_required, identity_has_wallet, phone_held_by_other_identity, identity_under_review, residence_not_set, residence_mismatch",
             "content": {
               "application/json": {
                 "schema": {
@@ -21822,7 +21832,7 @@
             }
           },
           "423": {
-            "description": "reason.code: wallet_frozen",
+            "description": "reason.code: wallet_frozen, account_frozen",
             "content": {
               "application/json": {
                 "schema": {
@@ -22905,6 +22915,331 @@
           "FxAdmin"
         ],
         "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/money/world/countries": {
+      "get": {
+        "operationId": "WorldController_countries",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldCountriesView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The countries a person can say they live in, with English names. Nigeria\nis among them. Until GEO-02's list lands this is the app's picker.",
+        "tags": [
+          "World"
+        ],
+        "x-wawu-built-by": "WALLET-41"
+      }
+    },
+    "/api/hub/money/world/options": {
+      "get": {
+        "operationId": "WorldController_options",
+        "parameters": [
+          {
+            "name": "country",
+            "required": true,
+            "in": "query",
+            "description": "The country the person lives in, ISO 3166-1 alpha-2.",
+            "schema": {
+              "pattern": "^[A-Z]{2}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorldOptionsView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What a person living in a country is offered before they open: whether a\nwallet can be opened from there now, the currency their country is\nfirst offered, every currency the first account can be in, and what\nWAWU charges to open (default 0). Reads config and the admin switches\nonly; the provider is not called.",
+        "tags": [
+          "World"
+        ],
+        "x-wawu-built-by": "WALLET-41"
+      }
+    },
+    "/api/hub/money/world/first-account": {
+      "post": {
+        "operationId": "WorldController_firstAccount",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorldFirstAccountDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: currency_not_supported, fx_switched_off, provider_declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Opens the first account of a person Nuvion approved, when its own\nnotice has not (yet). Safe to repeat: one first account per person.\n`currency` changes the first currency while no account is open (the\nprovider may decline a country's own, with its reason in `message`).\nAnswers the wallet as `GET /money/wallet` does; `world.state` `open`\nsays it is done, `opening` that Nuvion has not approved yet or has not\nanswered. A refusal in the provider's own words is `provider_declined`.",
+        "tags": [
+          "World"
+        ],
+        "x-wawu-built-by": "WALLET-41"
+      }
+    },
+    "/api/hub/admin/money/world/openings": {
+      "get": {
+        "operationId": "WorldAdminController_openings",
+        "parameters": [
+          {
+            "name": "country",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "pattern": "^[A-Z]{2}$",
+              "type": "string"
+            }
+          },
+          {
+            "name": "stage",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "started",
+                "needs_documents",
+                "checking",
+                "rejected",
+                "approved",
+                "open",
+                "stopped",
+                "expired",
+                "frozen",
+                "cancelled"
+              ]
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 400,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 25,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWorldOpeningPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "World openings and wallets, newest first; filters `country` and `stage`; a cursor page.",
+        "tags": [
+          "WorldAdmin"
+        ],
+        "x-wawu-built-by": "WALLET-41"
+      }
+    },
+    "/api/hub/admin/money/world/openings/{wawuUserId}/freeze": {
+      "post": {
+        "operationId": "WorldAdminController_freeze",
+        "parameters": [
+          {
+            "name": "wawuUserId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminWorldActDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWorldActView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Freezes a person's world wallet: their foreign accounts stop paying out\n(money can still arrive) and no new account is opened for them. Freezing\na frozen wallet changes nothing and writes no second audit row.",
+        "tags": [
+          "WorldAdmin"
+        ],
+        "x-wawu-built-by": "WALLET-41"
+      }
+    },
+    "/api/hub/admin/money/world/openings/{wawuUserId}/unfreeze": {
+      "post": {
+        "operationId": "WorldAdminController_unfreeze",
+        "parameters": [
+          {
+            "name": "wawuUserId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminWorldActDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWorldActView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Lets go of a frozen world wallet (only the accounts this freeze froze).",
+        "tags": [
+          "WorldAdmin"
+        ],
+        "x-wawu-built-by": "WALLET-41"
+      }
+    },
+    "/api/hub/admin/money/world/openings/{wawuUserId}/cancel": {
+      "post": {
+        "operationId": "WorldAdminController_cancel",
+        "parameters": [
+          {
+            "name": "wawuUserId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminWorldActDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminWorldActView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cancels an opening that is not open yet: the review is stopped on WAWU's\nside and the identity claim is let go (nothing is deleted at the provider).\nRefused for a wallet that is already open (freeze it instead).",
+        "tags": [
+          "WorldAdmin"
+        ],
+        "x-wawu-built-by": "WALLET-41"
       }
     },
     "/api/hub/money/identity/documents": {
@@ -45960,6 +46295,12 @@
               "recipient_details_invalid",
               "rate_unavailable",
               "send_not_cancellable",
+              "world_switched_off",
+              "world_limit_reached",
+              "country_not_supported",
+              "residence_not_set",
+              "residence_mismatch",
+              "passport_country_required",
               "capital_unavailable",
               "reservation_expired",
               "withdrawal_not_available",
@@ -46017,7 +46358,7 @@
             "type": "integer"
           },
           "fields": {
-            "description": "The fields a provider refused, by key (`recipient_details_invalid`).",
+            "description": "The fields a provider refused, by key (`recipient_details_invalid`).\nAlso, on `account_not_opened` for a world opening (WALLET-41): the names\nof the fields the provider's own refusal pointed at (for example\n`person.ssn`), never a value. The app asks for them; the list is the\nprovider's, not a fixed one of ours.",
             "type": "array",
             "items": {
               "type": "string"
@@ -46408,6 +46749,27 @@
           "idExpiryDate": {
             "type": "string",
             "description": "When it expires, `YYYY-MM-DD`, when it says; not already passed."
+          },
+          "countryCode": {
+            "type": "string",
+            "pattern": "^[A-Z]{2}$"
+          },
+          "nationality": {
+            "type": "string",
+            "description": "Nationality, ISO 3166-1 alpha-2, for a world opening when it is not the\ncountry they live in. Omitted: the country of residence.",
+            "pattern": "^[A-Z]{2}$"
+          },
+          "firstCurrency": {
+            "description": "The currency of the first account, when the person picks one (GET\n/money/world/options names the country's own and what else is on).\nOmitted: the country's own by the table in config.",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS"
+            ],
+            "type": "string"
           },
           "proofOfAddressType": {
             "description": "The proof of address the person will upload (NUV-03).",
@@ -47170,6 +47532,36 @@
             "description": "Why, in a few plain words; kept on the audit row.",
             "minLength": 3,
             "maxLength": 200
+          }
+        },
+        "required": [
+          "reason"
+        ]
+      },
+      "WorldFirstAccountDto": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS"
+            ],
+            "type": "string",
+            "description": "Change the currency of the first account before it is open (for example after the provider declined the first one)."
+          }
+        }
+      },
+      "AdminWorldActDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 300
           }
         },
         "required": [
@@ -52034,6 +52426,45 @@
           }
         }
       },
+      "WorldWalletView": {
+        "type": "object",
+        "properties": {
+          "country": {
+            "type": "string"
+          },
+          "firstCurrency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS"
+            ],
+            "nullable": true
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "opening",
+              "open",
+              "frozen",
+              "cancelled"
+            ]
+          },
+          "accountOpenedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "country",
+          "firstCurrency",
+          "state",
+          "accountOpenedAt"
+        ]
+      },
       "WalletView": {
         "type": "object",
         "properties": {
@@ -52099,6 +52530,14 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/TransferInView"
+              }
+            ],
+            "nullable": true
+          },
+          "world": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WorldWalletView"
               }
             ],
             "nullable": true
@@ -53704,11 +54143,11 @@
             "enum": [
               "failed",
               "expired",
+              "cancelled",
               "created",
               "awaiting_user",
               "processing",
-              "settled",
-              "cancelled"
+              "settled"
             ]
           },
           "currency": {
@@ -53950,11 +54389,11 @@
             "enum": [
               "failed",
               "expired",
+              "cancelled",
               "created",
               "awaiting_user",
               "processing",
-              "settled",
-              "cancelled"
+              "settled"
             ]
           },
           "currency": {
@@ -55163,13 +55602,13 @@
           "fromCurrency": {
             "type": "string",
             "enum": [
-              "NGN",
               "USD",
               "EUR",
               "GBP",
               "CAD",
               "AED",
               "GHS",
+              "NGN",
               "USDT",
               "USDC",
               "RLUSD"
@@ -55178,13 +55617,13 @@
           "toCurrency": {
             "type": "string",
             "enum": [
-              "NGN",
               "USD",
               "EUR",
               "GBP",
               "CAD",
               "AED",
               "GHS",
+              "NGN",
               "USDT",
               "USDC",
               "RLUSD"
@@ -55524,13 +55963,13 @@
           "fromCurrency": {
             "type": "string",
             "enum": [
-              "NGN",
               "USD",
               "EUR",
               "GBP",
               "CAD",
               "AED",
               "GHS",
+              "NGN",
               "USDT",
               "USDC",
               "RLUSD"
@@ -55539,13 +55978,13 @@
           "toCurrency": {
             "type": "string",
             "enum": [
-              "NGN",
               "USD",
               "EUR",
               "GBP",
               "CAD",
               "AED",
               "GHS",
+              "NGN",
               "USDT",
               "USDC",
               "RLUSD"
@@ -55684,13 +56123,13 @@
           "fromCurrency": {
             "type": "string",
             "enum": [
-              "NGN",
               "USD",
               "EUR",
               "GBP",
               "CAD",
               "AED",
               "GHS",
+              "NGN",
               "USDT",
               "USDC",
               "RLUSD"
@@ -55699,13 +56138,13 @@
           "toCurrency": {
             "type": "string",
             "enum": [
-              "NGN",
               "USD",
               "EUR",
               "GBP",
               "CAD",
               "AED",
               "GHS",
+              "NGN",
               "USDT",
               "USDC",
               "RLUSD"
@@ -55786,13 +56225,13 @@
           "fromCurrency": {
             "type": "string",
             "enum": [
-              "NGN",
               "USD",
               "EUR",
               "GBP",
               "CAD",
               "AED",
               "GHS",
+              "NGN",
               "USDT",
               "USDC",
               "RLUSD"
@@ -55801,13 +56240,13 @@
           "toCurrency": {
             "type": "string",
             "enum": [
-              "NGN",
               "USD",
               "EUR",
               "GBP",
               "CAD",
               "AED",
               "GHS",
+              "NGN",
               "USDT",
               "USDC",
               "RLUSD"
@@ -56013,6 +56452,255 @@
           "failureReason",
           "createdAt",
           "completedAt"
+        ]
+      },
+      "AdminWorldOpeningView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "firstCurrency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS"
+            ],
+            "nullable": true
+          },
+          "stage": {
+            "type": "string"
+          },
+          "reviewStatus": {
+            "type": "string",
+            "nullable": true
+          },
+          "frozenAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "frozenReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "cancelledAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountOpenedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "country",
+          "firstCurrency",
+          "stage",
+          "reviewStatus",
+          "frozenAt",
+          "frozenReason",
+          "cancelledAt",
+          "accountOpenedAt",
+          "createdAt"
+        ]
+      },
+      "AdminWorldOpeningPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminWorldOpeningView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "AdminWorldActView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "freeze",
+              "unfreeze",
+              "cancel"
+            ]
+          },
+          "changed": {
+            "type": "boolean"
+          },
+          "stageBefore": {
+            "type": "string"
+          },
+          "stageAfter": {
+            "type": "string"
+          },
+          "accountsChanged": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "action",
+          "changed",
+          "stageBefore",
+          "stageAfter",
+          "accountsChanged"
+        ]
+      },
+      "WorldCountryView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "name"
+        ]
+      },
+      "WorldCountriesView": {
+        "type": "object",
+        "properties": {
+          "countries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorldCountryView"
+            }
+          }
+        },
+        "required": [
+          "countries"
+        ]
+      },
+      "WorldCurrencyChoiceView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "decimals": {
+            "type": "integer"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "decimals",
+          "enabled"
+        ]
+      },
+      "WorldOptionsView": {
+        "type": "object",
+        "properties": {
+          "country": {
+            "type": "string"
+          },
+          "abroad": {
+            "type": "boolean"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "unavailableReason": {
+            "type": "string",
+            "enum": [
+              "switched_off",
+              "country_blocked",
+              "limit_reached",
+              "nigeria"
+            ],
+            "nullable": true
+          },
+          "suggested": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS"
+            ]
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorldCurrencyChoiceView"
+            }
+          },
+          "openFee": {
+            "type": "object",
+            "properties": {
+              "currency": {
+                "type": "string",
+                "enum": [
+                  "USD",
+                  "EUR",
+                  "GBP",
+                  "CAD",
+                  "AED",
+                  "GHS"
+                ]
+              },
+              "amountMinor": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "currency",
+              "amountMinor"
+            ]
+          }
+        },
+        "required": [
+          "country",
+          "abroad",
+          "available",
+          "unavailableReason",
+          "suggested",
+          "choices",
+          "openFee"
         ]
       },
       "AdminCardSettingsView": {
@@ -56801,8 +57489,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "currencyFixed": {
@@ -61233,8 +61921,8 @@
             "enum": [
               "pending",
               "failed",
-              "refunded",
               "cancelled",
+              "refunded",
               "paid"
             ]
           },
@@ -64177,9 +64865,9 @@
             "enum": [
               "pending",
               "failed",
+              "cancelled",
               "refunded",
-              "settled",
-              "cancelled"
+              "settled"
             ]
           },
           "sourceStatus": {
@@ -72866,8 +73554,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "planMinor": {
@@ -72918,8 +73606,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "packMinor": {
@@ -72976,8 +73664,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "extraMinor": {
@@ -73101,8 +73789,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "amountMinor": {
@@ -73240,8 +73928,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "amountMinor": {
@@ -73358,8 +74046,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "amountMinor": {
@@ -73477,8 +74165,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "amountMinor": {
@@ -76711,8 +77399,8 @@
               "review",
               "rejected",
               "expired",
-              "confirming",
               "cancelled",
+              "confirming",
               "reserved",
               "invested",
               "matured",
@@ -77428,8 +78116,8 @@
               "review",
               "rejected",
               "expired",
-              "confirming",
               "cancelled",
+              "confirming",
               "reserved",
               "invested",
               "matured",

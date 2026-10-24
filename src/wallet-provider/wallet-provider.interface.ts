@@ -274,6 +274,12 @@ export interface ProviderReviewDetails {
   address: ProviderAddressParts;
   idDocument: ProviderIdDocument;
   proofOfAddressType: 'utility_bill' | 'bank_statement';
+  /**
+   * WALLET-41 (R-87): the person lives outside Nigeria. No BVN or NIN is
+   * sent (`bvn` and `nin` are empty); the provider checks them with the ID
+   * document and the liveness check it asks for in their country.
+   */
+  world?: true;
   /** The customer to correct instead of making another; null for a new one. */
   customerId: string | null;
   /**
@@ -1016,6 +1022,15 @@ export interface WalletProvider {
    * it out, and the Hub answers `currency_not_supported`.
    */
   readonly fx?: ProviderForeignAccounts;
+
+  // The provider's own review of a person (WALLET-41 round 1)
+  /**
+   * Where the provider's review of one customer stands now, read from the
+   * provider and not from what a delivery left on file: the backstop that
+   * opens a person's first account asks it when the delivery never came.
+   * Optional: a provider that does not review the person (Fintava) leaves it out.
+   */
+  readReview?(customerId: string): Promise<ProviderReviewState>;
 
   // Cards (WALLET-31, R-84)
   /**

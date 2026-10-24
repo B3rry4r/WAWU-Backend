@@ -4,6 +4,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { PrismaService } from '../../common/prisma/prisma.service';
+import { toInternationalPhone } from '../../wallet-provider/international-phone';
 import { toLocalNigerianPhone } from '../../wallet-provider/nigerian-phone';
 import { isRowOf } from '../../wallet-provider/provider-rows';
 import type {
@@ -29,6 +30,7 @@ import {
 import { noteDocumentRefusals } from './document-refusals';
 import type { OpenNairaWalletDto } from './dto/open-wallet.dto';
 import {
+  isAbroad,
   isStringifiedNull,
   REVIEW_REQUIRED_FIELDS,
 } from './dto/open-wallet.dto';
@@ -68,6 +70,8 @@ export interface ReviewedOpeningRow {
   checkedAt: Date | null;
   failure: string | null;
   provider?: string | null;
+  /** WALLET-41: the country of a world opening; null for a Nigerian one. */
+  worldCountry?: string | null;
 }
 
 /** What the reviewed path needs from the opening service. */
@@ -92,6 +96,12 @@ export const EMAIL_NEEDED_FOR_REVIEW =
   'Add an email address to your account, then try again.';
 export const PHONE_NOT_NIGERIAN_FOR_REVIEW =
   'Your account needs a Nigerian mobile number to open a naira wallet.';
+/** WALLET-41: a world opening needs a number with its country code. */
+export const PHONE_NEEDS_COUNTRY_CODE =
+  'Add a phone number with your country code to your account, then try again.';
+/** WALLET-41: an opening started one way is not finished the other. */
+export const OPENING_STARTED_OTHER_WAY =
+  'This wallet was started another way. Contact support.';
 /**
  * The one answer for a BVN (or phone) another account holds, whether that
  * account has a wallet or its opening is still being checked: it says
@@ -100,6 +110,9 @@ export const PHONE_NOT_NIGERIAN_FOR_REVIEW =
  */
 export const OPENING_HELD_MESSAGE =
   "We can't use this BVN or phone number for a new wallet. If it's yours, contact support.";
+/** The same answer for a person with no BVN: it says neither "wallet" nor "check in progress" (WALLET-41 round 1). */
+export const WORLD_HELD_MESSAGE =
+  "We can't use this ID or phone number for a new wallet. If it's yours, contact support.";
 export const CHECK_HANDLE_UNDER_REVIEW =
   'Send bvn and nin with your details: this wallet is opened without a separate BVN check.';
 
@@ -146,6 +159,12 @@ interface Send {
   input: OpenNairaWalletDto;
   /** The keyed hash of the caller's address, or null when there is none. */
   addressKey: string | null;
+  /**
+   * WALLET-41: set for a person outside Nigeria. Then `bvn` is the keyed
+   * identity of their ID document (`worldIdentityKey`), never sent on, and
+   * `nin` is empty.
+   */
+  world: { country: string; currency: string } | null;
   /**
    * The place held on that address while this request takes its claim
    * (`ReviewedOpening.withPlace`), null when none is held.
@@ -290,24 +309,41 @@ export class ReviewedOpening {
       throw host.unavailable();
     }
     if (await host.hasWallet(wawuUserId)) return;
+    const abroad = isAbroad(input);
     const details = this.details(input);
     const mail = (claims.email ?? '').trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(mail)) {
       throw new MoneyError('account_not_opened', EMAIL_NEEDED_FOR_REVIEW);
     }
-    const local = toLocalNigerianPhone(claims.phone ?? '');
-    if (local === null) {
-      throw new MoneyError('phone_not_nigerian', PHONE_NOT_NIGERIAN_FOR_REVIEW);
+    let phone: string;
+    if (abroad) {
+      // WALLET-41: a number from any country, in full international form.
+      const intl = toInternationalPhone(claims.phone);
+      if (intl === null) {
+        throw new MoneyError('account_not_opened', PHONE_NEEDS_COUNTRY_CODE);
+      }
+      phone = intl;
+    } else {
+      const local = toLocalNigerianPhone(claims.phone ?? '');
+      if (local === null) {
+        throw new MoneyError(
+          'phone_not_nigerian',
+          PHONE_NOT_NIGERIAN_FOR_REVIEW,
+        );
+      }
+      phone = `+234${local.slice(1)}`;
     }
-    const phone = `+234${local.slice(1)}`;
     const send: Send = {
-      bvn: input.bvn!,
-      nin: input.nin!,
+      bvn: abroad ? worldIdentityKey(input) : input.bvn!,
+      nin: abroad ? '' : input.nin!,
       email: mail,
       phone,
       details,
       input,
       addressKey: addressKeyOf(host.hasher, address),
+      world: abroad
+        ? { country: input.countryCode!, currency: input.firstCurrency ?? '' }
+        : null,
       place: null,
     };
 
@@ -318,6 +354,15 @@ export class ReviewedOpening {
       !isRowOf(host.provider.name, row.provider)
     ) {
       return;
+    }
+    // A Nigerian opening is not finished as a world one, nor the other way
+    // round: the claim on the person's identity would be a different kind.
+    if (
+      row &&
+      row.state !== 'failed' &&
+      ((row.worldCountry ?? null) !== null) !== abroad
+    ) {
+      throw new MoneyError('account_not_opened', OPENING_STARTED_OTHER_WAY);
     }
     if (row) row = await host.unstick(row, await host.dbNow());
     if (row) {
@@ -594,7 +639,8 @@ export class ReviewedOpening {
     ProviderReviewDetails,
     'customerId' | 'numbersAgain' | 'lostAttemptAt'
   > {
-    if (input.checkHandle !== undefined) {
+    const abroad = isAbroad(input);
+    if (input.checkHandle !== undefined && !abroad) {
       throw new BadRequestException(CHECK_HANDLE_UNDER_REVIEW);
     }
     for (const field of REVIEW_REQUIRED_FIELDS) {
@@ -611,26 +657,50 @@ export class ReviewedOpening {
         );
       }
     }
+    // WALLET-41 round 3: a passport is the one document whose country is not
+    // the person's to leave out. Without it the claim on the document would
+    // fall back to where the account lives, and two accounts in two countries
+    // could hold one passport. Nothing is claimed, sent or counted.
+    if (
+      abroad &&
+      input.idType === 'international_passport' &&
+      (input.nationality === undefined ||
+        input.nationality === null ||
+        isStringifiedNull(input.nationality))
+    ) {
+      throw new MoneyError(
+        'passport_country_required',
+        PASSPORT_COUNTRY_REQUIRED_MESSAGE,
+        { fields: ['nationality'] },
+      );
+    }
     return {
       middleName: input.middleName ?? null,
       gender: input.gender!,
-      nationality: 'NG',
+      nationality: abroad ? (input.nationality ?? input.countryCode!) : 'NG',
       address: {
         line1: input.address,
         line2: input.addressLine2 ?? null,
         city: input.city!,
         state: input.state!,
         postalCode: input.postalCode!,
-        countryCode: 'NG',
+        countryCode: abroad ? input.countryCode! : 'NG',
       },
       idDocument: {
         type: input.idType!,
         number: input.idNumber!,
         issueDate: input.idIssueDate ?? null,
         expiryDate: input.idExpiryDate ?? null,
-        issuingCountry: 'NG',
+        // A passport is issued by the person's nationality; a licence or a
+        // national ID by the country they live in (WALLET-41).
+        issuingCountry: abroad
+          ? input.idType === 'international_passport'
+            ? worldDocumentCountry(input)
+            : input.countryCode!
+          : 'NG',
       },
       proofOfAddressType: input.proofOfAddressType!,
+      ...(abroad ? { world: true } : {}),
     };
   }
 
@@ -669,6 +739,7 @@ export class ReviewedOpening {
             bvnHash,
             bvnVerifiedAt: startedAt,
             phone: send.phone,
+            ...worldColumns(send),
           },
         });
         return 1;
@@ -694,6 +765,7 @@ export class ReviewedOpening {
           failure: from === 'unknown' ? 'looking_first' : null,
           checkedAt: null,
           provider: this.host.provider.name,
+          ...worldColumns(send),
         },
       });
       return taken.count === 1 ? next : null;
@@ -734,7 +806,10 @@ export class ReviewedOpening {
       await this.attempts.give(place);
       throw e;
     }
-    throw new MoneyError('identity_has_wallet', OPENING_HELD_MESSAGE);
+    throw new MoneyError(
+      'identity_has_wallet',
+      send.world === null ? OPENING_HELD_MESSAGE : WORLD_HELD_MESSAGE,
+    );
   }
 
   /**
@@ -758,7 +833,10 @@ export class ReviewedOpening {
       if (!isUniqueViolation(e)) throw e;
       // This request's try is already spent (it won the claim); the number
       // is another account's, so nothing goes out.
-      throw new MoneyError('identity_has_wallet', OPENING_HELD_MESSAGE);
+      throw new MoneyError(
+        'identity_has_wallet',
+        bvn.startsWith('world:') ? WORLD_HELD_MESSAGE : OPENING_HELD_MESSAGE,
+      );
     }
     if (moved.count !== 1) throw new ClaimMoved();
   }
@@ -788,8 +866,10 @@ export class ReviewedOpening {
         email: send.email,
         address: send.input.address,
         dateOfBirth: send.input.dateOfBirth,
-        bvn: send.bvn,
-        nin: send.nin,
+        // A world opening's `bvn` is the claim on the ID document: it stays
+        // here, and the provider is sent no number at all.
+        bvn: send.world === null ? send.bvn : '',
+        nin: send.world === null ? send.nin : '',
         review: {
           ...send.details,
           customerId: null,
@@ -822,7 +902,7 @@ export class ReviewedOpening {
       });
       // Nuvion made nothing: the BVN is let go at once.
       if (refused.count === 1) await alignClaim(prisma, wawuUserId);
-      throw this.host.refusal(e);
+      throw this.worldRefusal(send, e) ?? this.host.refusal(e);
     }
     if (opened.state !== 'provisioning' || !opened.review) {
       // A reviewing provider answers the customer and its review; anything
@@ -995,6 +1075,7 @@ export class ReviewedOpening {
             failure: 'correcting',
             bvnHash: claimHash,
             phone: send.phone,
+            ...worldColumns(send),
             // The claim's time moves only with the claim: a number taken
             // (after an expiry, or typed anew) starts a lifetime; the same
             // number kept does not, whatever the person sends (R4-2).
@@ -1033,8 +1114,10 @@ export class ReviewedOpening {
         email: send.email,
         address: send.input.address,
         dateOfBirth: send.input.dateOfBirth,
-        bvn: send.bvn,
-        nin: send.nin,
+        // A world opening's `bvn` is the claim on the ID document: it stays
+        // here, and the provider is sent no number at all.
+        bvn: send.world === null ? send.bvn : '',
+        nin: send.world === null ? send.nin : '',
         review: {
           ...send.details,
           customerId: entity.entityId,
@@ -1056,7 +1139,7 @@ export class ReviewedOpening {
       // A correction whose answer was lost is the same correction when sent
       // again: the person may simply send it again.
       if (this.host.mayHaveOpened(e)) return;
-      throw this.host.refusal(e);
+      throw this.worldRefusal(send, e) ?? this.host.refusal(e);
     }
     const review =
       opened.state === 'provisioning' ? (opened.review ?? null) : null;
@@ -1094,6 +1177,28 @@ export class ReviewedOpening {
     this.logger.log('wallet opening (review): corrected details sent');
   }
 
+  /**
+   * WALLET-41: a refusal of a world opening's details names, in the
+   * provider's own answer, the fields it wants (`person.ssn` ...). They go
+   * to the app as names only, so the person is asked for what the provider
+   * asks, not for a list of ours. Null for a Nigerian opening or for a
+   * refusal that names none.
+   */
+  private worldRefusal(send: Send, e: WalletProviderError): MoneyError | null {
+    if (send.world === null || e.kind !== 'validation') return null;
+    const fields = [
+      ...new Set(
+        e.messages
+          .map((m) => /^([A-Za-z_][A-Za-z0-9_.[\]]{0,59}):\s/.exec(m)?.[1])
+          .filter((f): f is string => f !== undefined),
+      ),
+    ].slice(0, 10);
+    if (fields.length === 0) return null;
+    return new MoneyError('account_not_opened', WORLD_FIELDS_MESSAGE, {
+      fields,
+    });
+  }
+
   /** The answer was lost: `unknown`, never sent again blindly. */
   private async lost(wawuUserId: string, attempt: number): Promise<void> {
     await this.prisma.fintavaWalletOpening.updateMany({
@@ -1104,3 +1209,57 @@ export class ReviewedOpening {
 }
 
 class HeldEntity extends Error {}
+
+/** WALLET-41 round 3: a world opening with a passport and no issuing country. */
+export const PASSPORT_COUNTRY_REQUIRED_MESSAGE =
+  'Tell us which country issued your passport.';
+
+/** WALLET-41: the provider asked for something the details did not carry. */
+export const WORLD_FIELDS_MESSAGE = 'Check this and try again.';
+
+/** The world columns of an opening row for this request (none for a Nigerian one). */
+function worldColumns(send: Send): {
+  worldCountry?: string;
+  worldFirstCurrency?: string;
+} {
+  return send.world === null
+    ? {}
+    : {
+        worldCountry: send.world.country,
+        worldFirstCurrency: send.world.currency,
+      };
+}
+
+/**
+ * The country of the ID document in a world opening, for the claim on it.
+ * The opening form collects no separate issuing country, so it is the
+ * `nationality` field. A passport must carry it (`details` refuses a
+ * passport without one: `passport_country_required`); a licence or a
+ * national ID, for which the form has nothing closer, falls back to the
+ * country the person lives in when none is sent. A passport's key is never
+ * the account's residence: two accounts that say they live in different
+ * countries and hold the same passport hold one document.
+ */
+export function worldDocumentCountry(
+  input: Pick<OpenNairaWalletDto, 'countryCode' | 'nationality'>,
+): string {
+  return input.nationality ?? input.countryCode ?? '';
+}
+
+/**
+ * The claim a world opening takes in place of a BVN: the keyed identity of
+ * the ID document, hashed like a BVN under `FintavaWalletOpening.bvnHash`.
+ * It is the document's country (`worldDocumentCountry`) and the number with
+ * letters and digits only, in upper case, WHATEVER kind of document the
+ * person says it is (a changed type is not a second wallet) and wherever the
+ * account says it lives (re-check: the key followed the residence, so a
+ * second account in another country opened a second wallet with the same
+ * passport). It can never equal an 11-digit BVN's, so the two kinds of claim
+ * never meet.
+ */
+export function worldIdentityKey(
+  input: Pick<OpenNairaWalletDto, 'countryCode' | 'nationality' | 'idNumber'>,
+): string {
+  const number = (input.idNumber ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return `world:${worldDocumentCountry(input)}:${number}`;
+}

@@ -3557,3 +3557,80 @@ Admin (`/api/hub/admin/money/abroad`, superadmin and finance only): `GET sends` 
 **A fee question always ends (round 2).** WAWU's fee on a send is open until it is taken (and, on a send that did not stand, given back) or closed. The sweep reads, and never makes, the fee leg of a send that failed or was reversed while the leg was still on its way: a leg that completed is marked taken and given back once, one that never completed closes the question quietly (`nothing_taken`), one still on its way a day on is held for a person. A fee that could not be taken from a send that went through is written off after the last try (`not_taken`, a `fee_not_taken` row in `AbroadAdminAudit` by `system`). A give-back or a fee the sweep gives up on is held for a person (`fee_held` row, `feeBackHeld` in the admin list) and stops holding an account deletion, which counts only what the sweep is still trying. Finance finds open ones with `GET /admin/money/abroad/sends?feeOpen=true` and closes one with `POST /admin/money/abroad/sends/{id}/settle-fee` (`outcome` `not_taken` or `paid_back`, a reason; superadmin and finance; one audit row; a repeat changes nothing; `409` for a fee the partner's record shows was taken, a give-back still on its way, a send not decided yet, or nothing owed). The provider's status word is applied with a compare-and-set on the status read, so a cancel that commits in between is never undone, and a fee is not taken from a send already reversed. The quote lists `402 insufficient_funds` again (it reads the balance and moves nothing; `money-moving-coverage.spec.ts` names it).
 
 **What the app is told, and not.** A send is a row first (`sending`); a lost answer is found again by its reference (`wawu-abroad-<id>`), never sent a second time; a send nobody can find after 30 minutes is `needs_review` and waits for a person. WAWU's fee is taken from the naira wallet after the provider takes the send; one that cannot be taken is tried again by the sweep, never fails the send, and shows as owed in the admin list. An admin cancels only a send the provider never had, at least a minute old, under a row lock; a cancelled send is never reopened.
+
+---
+
+## 31. A wallet for a person outside Nigeria (WALLET-41, R-87)
+
+A person whose country of residence is not Nigeria opens a wallet without a
+BVN. Nuvion checks them with their own country's ID document and a liveness
+check (the same two steps as section 22 of Open your wallet: the documents
+route and the hosted selfie). Their first account is a foreign one; they have
+no naira account, and every naira route answers them `409 wallet_not_open`
+("You have no naira account. Use your other currency accounts.").
+A person in Nigeria keeps the BVN wallet (R-6) and is not touched by any of
+this.
+
+| Route | What it does |
+| --- | --- |
+| `GET /money/world/countries` | the countries a person can say they live in (`code`, English `name`), from the platform's region data, Nigeria among them; cached a day. GEO-02's `GET /geo/countries` replaces it when it lands (G-WALLET-41-5) |
+| `GET /money/world/options?country=XX` | what a person living in that country is offered: `available` (and `unavailableReason`), `suggested` (the currency the country is first offered, from config), `choices` (every fiat currency, each `enabled` or not), `openFee` (WAWU's fee to open, `amountMinor` beside `currency`, default 0). Needs no wallet. No provider call |
+| `POST /money/wallet/open` | the same route, with `countryCode` (not `NG`) and optionally `firstCurrency` and `nationality`. No `bvn`, `nin` or `checkHandle`. `idType`, `idNumber`, the address and the proof of address are that country's. The phone on the account must carry its country code |
+| `GET /money/wallet` | adds `world` (`country`, `firstCurrency`, `state`, `accountOpenedAt`) for such a person. `state` is `open` once the first foreign account is, `account` stays null, `accountNumberStatus` `none`. `review` is the same review as for a Nigerian opening |
+| `POST /money/world/first-account` | opens the first account of an approved person when Nuvion's notice has not: it asks Nuvion where the review stands (not our own record), records an approval as the notice would, and opens the account. Body `{ currency? }` changes the first currency while none is open. Answers the wallet, as `GET /money/wallet`. Safe to repeat |
+| every `/money/fx/*` route | open to an open wallet of any kind, naira or world: a person outside Nigeria swaps between their foreign accounts and coins and sends coins out with no naira wallet. A swap with a naira side is `409 fx_account_not_open` ("You have no naira account"). Sends abroad from a foreign account follow with NUV-11 |
+
+Admin (`/api/hub/admin/money/world`, superadmin and finance only):
+`GET openings` (filters `country` and `stage`, a cursor page; no name,
+document or number), and `POST openings/{wawuUserId}/freeze`, `/unfreeze` and
+`/cancel` (a reason; one audit row each, in the same transaction). A freeze
+stops the person's foreign accounts paying out and stops a new one opening; an
+unfreeze lets go only of the accounts that freeze froze. A cancel stops an
+opening that is not open yet and lets go of its claim on the ID document; an
+open wallet is frozen, not cancelled (a cancel of one is `409 wallet_already_open`).
+
+**Residence decides** (round 1; R-87, R-85). The Hub reads the country of
+residence the account carries (WAWU ID's `countryCode` claim now, GEO-02's
+`/me/location` once it lands), not the request and not the phone. A world
+opening needs a stored residence that is not Nigeria, and the `countryCode`
+sent must be it: no stored country is `409 residence_not_set`, a person who
+lives in Nigeria or names another country is `409 residence_mismatch`, each
+with a plain sentence. A person who lives in Nigeria opens with their BVN. A
++234 number abroad is allowed (Nigerians abroad).
+
+**One document, one wallet.** A world opening has no BVN to claim, so it
+claims the ID document: the keyed hash of the document's country and the
+number with letters and digits only, in upper case, whatever kind of document
+is said (held like a BVN's: unique; let go when the opening ends or expires).
+The document's country is the `nationality` sent (the passport's issuing
+country). A passport without one is `400 passport_country_required` ("Tell us
+which country issued your passport.", `reason.fields` `["nationality"]`),
+refused before anything is claimed, sent or counted. The form collects no
+separate issuing country for a licence or a national ID, so for those the same
+field is used and the country of residence stands in when none is sent. Where
+the account says it lives does not make a second wallet from the same
+passport. The number itself is never stored or logged.
+The refusal for a document someone else holds says "ID", never "BVN".
+
+**What Nuvion asks for is Nuvion's to say.** The app asks for the ID document,
+the proof of address and the selfie, and for whatever else Nuvion's own refusal
+names: a refused opening is `409 account_not_opened` with `reason.fields`, the
+names of the fields Nuvion pointed at (for example `person.ssn`), never a
+value. Dev asks for nothing beyond the document (docs/nuvion/DEV-RESULTS.md,
+WALLET-41); production may ask for a US person's SSN (Nuvion's docs say so).
+
+**Errors.** The usual money errors (section 3) plus `residence_not_set` and `residence_mismatch` (409, above), `passport_country_required` (400, above), `world_switched_off` (409:
+the admin switch of the whole product is off), `world_limit_reached` (429: the
+day's cap on new openings is reached), `country_not_supported` (422: no
+opening is taken from that country), `fx_switched_off` (a currency is off) and
+`currency_not_supported` (409: this server's wallet provider holds no foreign
+accounts). A provider refusal of the first account is `provider_declined` with
+its words (dev: AED for a person in the United Arab Emirates, USD details for
+Kenya); the person picks another first currency.
+
+**Config** (all read at start; a bad value stops the server): `WORLD_FIRST_
+CURRENCY_MAP` (for example `KE:GHS`) and `WORLD_FIRST_CURRENCY_DEFAULT` (the
+table is R-87's by default), `WORLD_OPEN_FEE_<CODE>_MINOR` (default 0, R-10;
+quoted by `options`, not yet collected: G-WALLET-41-4), `WORLD_OPEN_DAILY_LIMIT`
+(new openings per UTC day, all countries; unset is none) and `WORLD_BLOCKED_
+COUNTRIES`. The admin switch is the setting `world.open.on`.

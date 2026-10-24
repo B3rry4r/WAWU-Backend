@@ -4,7 +4,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { ConfirmPinResetDto } from '../dto/money-request.dto';
-import { RequireOpenWallet } from '../gate/wallet-gate';
+import { AllowWorldWallet, RequireOpenWallet } from '../gate/wallet-gate';
 import { BuiltBy, MoneyErrors, WALLET_GATE_ERRORS } from '../money-contract';
 import type { PinResetView, PinStateView } from '../money-view.type';
 import {
@@ -31,6 +31,9 @@ import { PinResetService } from './pin-reset.service';
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)
+// WALLET-41 round 1: the PIN, the phone's approval and the PIN reset never read the naira wallet, and a person outside
+// Nigeria needs them to swap and send: they take an open wallet of any kind.
+@AllowWorldWallet()
 @Controller('money')
 export class MoneyPinResetController {
   constructor(

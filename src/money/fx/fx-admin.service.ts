@@ -21,15 +21,15 @@ import type {
   AdminFxOperationView,
 } from './fx-view.type';
 
-interface Cursor {
+export interface Cursor {
   t: string;
   id: string;
 }
 
-function encode(c: Cursor): string {
+export function encode(c: Cursor): string {
   return Buffer.from(JSON.stringify(c)).toString('base64url');
 }
-function decode(raw: string): Cursor | null {
+export function decode(raw: string): Cursor | null {
   try {
     const c = JSON.parse(
       Buffer.from(raw, 'base64url').toString('utf8'),

@@ -138,6 +138,17 @@ export class FxAccountsService {
     const fx = this.port.get();
     const def = fxCurrency(dto.currency);
     if (!def) throw new BadRequestException('currency is not one we hold');
+    // WALLET-41: an admin froze this person's world wallet; nothing new opens.
+    const frozen = await this.prisma.fintavaWalletOpening.findUnique({
+      where: { wawuUserId: wallet.wawuUserId },
+      select: { worldFrozenAt: true },
+    });
+    if (frozen?.worldFrozenAt) {
+      throw new MoneyError(
+        'account_frozen',
+        'This wallet is frozen. No new account can be opened.',
+      );
+    }
     if (
       !this.settings.productOn('open_account') ||
       !this.settings.currencyOn(def.code)
