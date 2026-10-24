@@ -67,6 +67,8 @@ const NOT_GATED: Record<string, string> = {
     'Earnings: one month piece by piece, for a creator with no wallet yet (W39, R-11, WALLET-16)',
   // Declared, not served: Nigeria's bank list and a name check need no wallet.
   'GET money/banks': 'the bank list (WALLET-09) reads no wallet',
+  'GET money/add-money/return':
+    'the page a hosted payment sends the person back to (WALLET-25) arrives from a browser with no token, reads no wallet and shows nothing of the payment',
   'POST money/banks/name-check':
     'a bank name check (WALLET-09) reads no wallet',
 };
@@ -209,7 +211,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     expect(half).toEqual([]);
   });
 
-  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08), the payment quote, the payment and the poll of one payment (MONEY-17, MONEY-19), holds (MONEY-18), bills paid from the wallet (BILLS-04), the send to a WAWU user and the read of one send (WALLET-07), the points-to-cash quote and conversion (POINTS-04)', () => {
+  it('the gated routes today: the PIN, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08), the payment quote, the payment and the poll of one payment (MONEY-17, MONEY-19), holds (MONEY-18), bills paid from the wallet (BILLS-04), the send to a WAWU user and the read of one send (WALLET-07), the points-to-cash quote and conversion (POINTS-04), add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, WALLET-26)', () => {
     expect(
       mounted
         .filter((r) => r.guards.includes(WalletGateGuard))
@@ -239,6 +241,11 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET events/orders/wallet/:orderId/quote',
       // LEGAL-05: the pay sheet of a legal fee.
       'GET legal/requests/:id/pay/wallet/quote',
+      // WALLET-25, WALLET-26: add money (the list, one attempt, the ways, the quote).
+      'GET money/add-money',
+      'GET money/add-money/:id',
+      'GET money/add-money/options',
+      'GET money/add-money/quote',
       'GET money/beneficiaries',
       'GET money/cards',
       'GET money/cards/:id',
@@ -296,6 +303,9 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST events/orders/wallet/pay',
       // LEGAL-05: a legal fee pays from the wallet.
       'POST legal/requests/:id/pay/wallet',
+      // WALLET-25, WALLET-26: start adding money (PIN), and cancel an attempt.
+      'POST money/add-money',
+      'POST money/add-money/:id/cancel',
       'POST money/approval/verify',
       'POST money/beneficiaries',
       'POST money/cards',
@@ -344,6 +354,7 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST dm/send/wallet/pay',
       'POST events/orders/wallet/pay',
       'POST legal/requests/:id/pay/wallet',
+      'POST money/add-money',
       'POST money/approval/verify',
       'POST money/cards',
       'POST money/cards/:id/reveal',

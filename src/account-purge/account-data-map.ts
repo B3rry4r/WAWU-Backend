@@ -194,6 +194,23 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // (WalletPayment below, anonymised); its id is this row's key and is not a
   // link anyone follows once the account is gone.
   { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
+  // What this account bought through Google Play or the App Store (IAP-01, R-86):
+  // the product, what the store charged, what was granted and what a refund took
+  // back. OWNED, like MakerPurchase above: the row exists only because this account
+  // bought something. The money is the store's and WAWU's own accounting, not a
+  // wallet payment, so there is no payer's record to keep. `creatorWawuUserId` names
+  // a room's host on somebody else's purchase of a pass: their record survives.
+  { model: 'StorePurchase', column: 'wawuUserId', disposition: 'OWNED' },
+  {
+    model: 'StorePurchase',
+    column: 'creatorWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
+  // Who holds a store subscription, and the id this account's store purchases are
+  // bound to (IAP-01 fix round 1). OWNED: both exist only because this account
+  // bought through a store, and name no counterparty.
+  { model: 'StoreSubscription', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'StoreAccountToken', column: 'wawuUserId', disposition: 'OWNED' },
   // More products this account bought on its tier (TIER-04): how many and what
   // it cost. OWNED, like MakerPurchase above: the row exists only because this
   // account bought something and names no counterparty. The money's record is
@@ -551,6 +568,20 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     clear: ['destinationAccountNumber'],
   },
 
+  // An attempt to add money by card, Apple Pay, USSD or a bank checkout
+  // (WALLET-25, WALLET-26): the link between a ledger row on this person's
+  // wallet and the provider's inflow (the reference, the amounts, the credit),
+  // which the nightly check and the provider's own record still need after the
+  // account is gone, and an inflow still on its way is credited by it. A
+  // financial record: kept, with the person set to null; it holds no card (only
+  // the provider's ids, the last four digits and the network) and no name. Its
+  // admin audit rows hang from it and name no person.
+  {
+    model: 'AddMoneySession',
+    column: 'wawuUserId',
+    disposition: 'ANONYMISED',
+  },
+
   // ── referral points (REF-02) ────────────────────────────────────────────
   // This person's own code, the code they used, and the rewards and milestones
   // that rest on those. A reward and a claim name two people, and either one's
@@ -861,6 +892,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'SchoolEnrolment', column: 'wawuShareKobo' },
   // WAWU's 15% share in kobo on a school fee settlement (SCHOOLS-11), not a person.
   { model: 'SchoolSettlement', column: 'wawuShareKobo' },
+  // WAWU's fee in kobo on an attempt to add money (WALLET-25, R-10), not a person.
+  { model: 'AddMoneySession', column: 'wawuFeeKobo' },
   // WAWU's fee in kobo on a send between two people (WALLET-07), not a person.
   { model: 'WalletTransfer', column: 'wawuFeeKobo' },
   // WAWU's fee in the currency's smallest unit on a quote and on an operation (WALLET-21), not a person.

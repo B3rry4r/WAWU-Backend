@@ -13198,8 +13198,8 @@
                               "pending",
                               "failed",
                               "refunded",
-                              "paid",
-                              "cancelled"
+                              "cancelled",
+                              "paid"
                             ]
                           },
                           "flutterwaveTxRef": {
@@ -13365,8 +13365,8 @@
                         "pending",
                         "failed",
                         "refunded",
-                        "paid",
-                        "cancelled"
+                        "cancelled",
+                        "paid"
                       ]
                     },
                     "flutterwaveTxRef": {
@@ -19884,6 +19884,741 @@
         ],
         "x-wawu-built-by": "WALLET-08",
         "x-wawu-max-items": 10
+      }
+    },
+    "/api/hub/money/add-money/return": {
+      "get": {
+        "operationId": "AddMoneyReturnController_page",
+        "parameters": [
+          {
+            "name": "id",
+            "required": false,
+            "in": "query",
+            "schema": {}
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page that opens the app.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AddMoneyReturn"
+        ],
+        "x-wawu-built-by": "WALLET-25"
+      }
+    },
+    "/api/hub/money/add-money/options": {
+      "get": {
+        "operationId": "MoneyAddMoneyController_options",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddMoneyOptionsView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The ways to add money and whether each can be used now, with the reason in\nplain words when it cannot (switched off, not set up, or not switched on\nfor naira at the provider yet). `cardPublicKey` is what the phone encrypts\na card with. Reads our own settings only; it never calls the provider.",
+        "tags": [
+          "MoneyAddMoney"
+        ],
+        "x-wawu-built-by": "WALLET-25"
+      }
+    },
+    "/api/hub/money/add-money/quote": {
+      "get": {
+        "operationId": "MoneyAddMoneyController_quote",
+        "parameters": [
+          {
+            "name": "rail",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "card",
+                "apple_pay",
+                "ussd",
+                "open_banking"
+              ]
+            }
+          },
+          {
+            "name": "amountKobo",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100000000000,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddMoneyQuoteView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, add_money_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What the person pays and what the wallet gets for one amount by one way:\nthe provider's charge plus WAWU's (R-10, both from config). `409\nadd_money_unavailable` when the way cannot be used; `503 fees_not_set`\nwhile the provider's charge for it is not set.",
+        "tags": [
+          "MoneyAddMoney"
+        ],
+        "x-wawu-built-by": "WALLET-25"
+      }
+    },
+    "/api/hub/money/add-money": {
+      "post": {
+        "operationId": "MoneyAddMoneyController_start",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddMoneyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddMoneyView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, add_money_unavailable, email_not_verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: below_minimum",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts adding money. Answers 201 with the attempt: `awaiting_user` with a\n`checkoutUrl` to open in the browser (3-D Secure, Apple Pay, the bank\ncheckout) or a prompt to answer on the phone (USSD), `processing` (paid,\nbeing added to the wallet), or `failed` with the reason in plain words\n(a declined card, or a way the provider has not switched on for naira).\nThe wallet is credited by the provider's inflow, once; poll `GET\n/money/add-money/{id}`. The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN.\nBefore the PIN, changing nothing: `409 add_money_unavailable`, `503\nfees_not_set`, `422 below_minimum`, `403 limit_reached`, `409\nquote_changed`, `409 wallet_not_open`. A card is sent already encrypted on\nthe phone; the Hub passes it on and never keeps it.",
+        "tags": [
+          "MoneyAddMoney"
+        ],
+        "x-wawu-built-by": "WALLET-25"
+      },
+      "get": {
+        "operationId": "MoneyAddMoneyController_list",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddMoneyPage"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The caller's attempts, newest first, in cursor pages.",
+        "tags": [
+          "MoneyAddMoney"
+        ],
+        "x-wawu-built-by": "WALLET-25"
+      }
+    },
+    "/api/hub/money/add-money/{id}": {
+      "get": {
+        "operationId": "MoneyAddMoneyController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddMoneyView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One attempt as it stands, asked of the provider when it is still open. Only\nits owner reads it; another person's and an id nobody holds are the same\n`404 not_found`.",
+        "tags": [
+          "MoneyAddMoney"
+        ],
+        "x-wawu-built-by": "WALLET-25"
+      }
+    },
+    "/api/hub/money/add-money/{id}/cancel": {
+      "post": {
+        "operationId": "MoneyAddMoneyController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddMoneyView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, add_money_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Cancels an attempt that is not paid yet. One the provider has taken, or\nthat is already credited, is `409 add_money_unavailable`.",
+        "tags": [
+          "MoneyAddMoney"
+        ],
+        "x-wawu-built-by": "WALLET-25"
+      }
+    },
+    "/api/hub/admin/money/add-money": {
+      "get": {
+        "operationId": "AdminAddMoneyController_list",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "created",
+                "awaiting_user",
+                "processing",
+                "settled",
+                "failed",
+                "expired",
+                "cancelled"
+              ]
+            }
+          },
+          {
+            "name": "rail",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "card",
+                "apple_pay",
+                "ussd",
+                "open_banking"
+              ]
+            }
+          },
+          {
+            "name": "wawuUserId",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAddMoneyPage"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminAddMoney"
+        ]
+      }
+    },
+    "/api/hub/admin/money/add-money/{id}": {
+      "get": {
+        "operationId": "AdminAddMoneyController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAddMoneyView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminAddMoney"
+        ]
+      }
+    },
+    "/api/hub/admin/money/add-money/{id}/freeze": {
+      "post": {
+        "operationId": "AdminAddMoneyController_freeze",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAddMoneyActDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAddMoneyView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Stops an open attempt from being credited until it is unfrozen.",
+        "tags": [
+          "AdminAddMoney"
+        ]
+      }
+    },
+    "/api/hub/admin/money/add-money/{id}/unfreeze": {
+      "post": {
+        "operationId": "AdminAddMoneyController_unfreeze",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAddMoneyActDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAddMoneyView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminAddMoney"
+        ]
+      }
+    },
+    "/api/hub/admin/money/add-money/{id}/cancel": {
+      "post": {
+        "operationId": "AdminAddMoneyController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminAddMoneyActDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAddMoneyView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cancels an attempt the provider has not taken. A taken or credited one is refused.",
+        "tags": [
+          "AdminAddMoney"
+        ]
       }
     },
     "/api/hub/money/fx/currencies": {
@@ -41566,6 +42301,480 @@
           "AdsEvents"
         ]
       }
+    },
+    "/api/hub/store/products": {
+      "get": {
+        "operationId": "StoreController_products",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": true,
+            "in": "query",
+            "description": "The store the app runs on: `android` (Google Play) or `ios` (App Store).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "android",
+                "ios"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreProductListView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The products on sale in one store, from the product map an admin keeps.\n`available` is false (with a `reason`) when the Hub has no credentials for\nthat store yet or an admin has switched it off, and then no product is\nlisted. A price is never here: the app shows the store's own, in the\nperson's own currency. `accountToken` is the signed-in person's own id\nfor the stores: the app MUST pass it to Google Play Billing as\n`obfuscatedAccountIdAndroid` and to StoreKit as `appAccountToken` when it\nstarts a purchase; a purchase that carries another person's token, or none,\nis refused.",
+        "tags": [
+          "Store"
+        ]
+      }
+    },
+    "/api/hub/store/purchases": {
+      "post": {
+        "operationId": "StoreController_buy",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorePurchaseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorePurchaseView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Hands the Hub a purchase the store has just completed. The Hub asks the\nstore's own server about it (the app's word is never taken), then gives\nwhat was bought, once per store transaction: the same call again, a\nrestore, or the store's own notice arriving first all answer the same\npurchase with `alreadyGranted: true`. Send `purchaseToken` on `android`,\n`transactionId` on `ios`, and `communityId` for a pass.\n\nRefusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,\n`store_product_unknown` (404), `store_receipt_missing` (400),\n`store_purchase_invalid` (422), `store_purchase_pending`,\n`store_purchase_taken` (that purchase, or that subscription, was already used on another account, or was made with another account's token), `store_account_token_missing` (422, the purchase carries no account token),\n`store_pass_not_available`, `store_unreachable` (503, safe to repeat) and `store_grant_failed` (500, the store has the payment but the Hub could not finish; ask again).",
+        "tags": [
+          "Store"
+        ]
+      }
+    },
+    "/api/hub/webhooks/google-play": {
+      "post": {
+        "operationId": "StoreWebhookController_googlePlay",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreWebhookAck"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Google Play's real-time developer notifications, pushed by Pub/Sub. The body is Pub/Sub's envelope; the bearer token is checked first.",
+        "tags": [
+          "PaymentWebhook"
+        ]
+      }
+    },
+    "/api/hub/webhooks/app-store": {
+      "post": {
+        "operationId": "StoreWebhookController_appStore",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreWebhookAck"
+                }
+              }
+            }
+          }
+        },
+        "summary": "App Store Server Notifications V2: `{ signedPayload }`, a JWS Apple signed.",
+        "tags": [
+          "PaymentWebhook"
+        ]
+      }
+    },
+    "/api/hub/admin/store/products": {
+      "get": {
+        "operationId": "AdminStoreController_products",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStoreProductListView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every product in the map, both stores, with what each gives now.",
+        "tags": [
+          "AdminStore"
+        ]
+      },
+      "post": {
+        "operationId": "AdminStoreController_createProduct",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateStoreProductDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStoreProductView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Adds a product to the map. The store product id and the kind cannot be changed afterwards.",
+        "tags": [
+          "AdminStore"
+        ]
+      }
+    },
+    "/api/hub/admin/store/products/{id}": {
+      "patch": {
+        "operationId": "AdminStoreController_updateProduct",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStoreProductDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStoreProductView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Changes a product's title, grant, reference kobo, order or on/off. Only what is sent changes.",
+        "tags": [
+          "AdminStore"
+        ]
+      }
+    },
+    "/api/hub/admin/store/platforms": {
+      "get": {
+        "operationId": "AdminStoreController_platforms",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStorePlatformListView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Both stores: the switch, whether the Hub holds the store's credentials, and the cut a new purchase records.",
+        "tags": [
+          "AdminStore"
+        ]
+      }
+    },
+    "/api/hub/admin/store/platforms/{platform}": {
+      "patch": {
+        "operationId": "AdminStoreController_updatePlatform",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "android",
+                "ios"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStorePlatformDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStorePlatformView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Switches one store's purchases on or off, and sets its cut in basis points (`-1` goes back to the config's).",
+        "tags": [
+          "AdminStore"
+        ]
+      }
+    },
+    "/api/hub/admin/store/purchases": {
+      "get": {
+        "operationId": "AdminStoreController_purchases",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "android",
+                "ios"
+              ]
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "points",
+                "credits",
+                "tier",
+                "pass"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Purchases only (the refunds route always lists refunded and revoked).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "granted",
+                "refunded",
+                "revoked"
+              ]
+            }
+          },
+          {
+            "name": "wawuUserId",
+            "required": false,
+            "in": "query",
+            "description": "One person's purchases.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "From the `nextCursor` of the page before.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 300,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, default 20.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStorePurchasePageView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every store purchase, newest first.",
+        "tags": [
+          "AdminStore"
+        ]
+      }
+    },
+    "/api/hub/admin/store/refunds": {
+      "get": {
+        "operationId": "AdminStoreController_refunds",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "android",
+                "ios"
+              ]
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "points",
+                "credits",
+                "tier",
+                "pass"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Purchases only (the refunds route always lists refunded and revoked).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "granted",
+                "refunded",
+                "revoked"
+              ]
+            }
+          },
+          {
+            "name": "wawuUserId",
+            "required": false,
+            "in": "query",
+            "description": "One person's purchases.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "From the `nextCursor` of the page before.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 300,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, default 20.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStorePurchasePageView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The purchases a store paid back or withdrew, newest first, with what was taken back.",
+        "tags": [
+          "AdminStore"
+        ]
+      }
     }
   },
   "info": {
@@ -43688,6 +44897,7 @@
               "points_cap_reached",
               "points_not_short",
               "tier_required",
+              "add_money_unavailable",
               "fx_switched_off",
               "quote_expired",
               "account_frozen",
@@ -44450,6 +45660,149 @@
         "required": [
           "kind"
         ]
+      },
+      "AddMoneyBillingDto": {
+        "type": "object",
+        "properties": {
+          "line1": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 120
+          },
+          "city": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 60
+          },
+          "state": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 60
+          },
+          "postalCode": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 12
+          }
+        },
+        "required": [
+          "line1",
+          "city",
+          "state"
+        ]
+      },
+      "AddMoneyDeviceDto": {
+        "type": "object",
+        "properties": {
+          "language": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 20
+          },
+          "screenWidth": {
+            "type": "string",
+            "pattern": "^[0-9]{3,5}$",
+            "maxLength": 6
+          },
+          "screenHeight": {
+            "type": "string",
+            "pattern": "^[0-9]{3,5}$",
+            "maxLength": 6
+          },
+          "colorDepth": {
+            "type": "string",
+            "pattern": "^[0-9]{1,2}$",
+            "maxLength": 4
+          },
+          "timezoneOffset": {
+            "type": "string",
+            "pattern": "^-?[0-9]{1,4}$",
+            "description": "Minutes from UTC, as the phone says, for example -60."
+          }
+        }
+      },
+      "AddMoneyCardDto": {
+        "type": "object",
+        "properties": {
+          "encrypted": {
+            "type": "string",
+            "minLength": 40,
+            "maxLength": 2048,
+            "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+            "description": "The card encrypted on the phone with the provider public key (RSA-OAEP, SHA-256, base64)."
+          },
+          "billing": {
+            "$ref": "#/components/schemas/AddMoneyBillingDto"
+          },
+          "device": {
+            "$ref": "#/components/schemas/AddMoneyDeviceDto"
+          }
+        },
+        "required": [
+          "encrypted",
+          "billing"
+        ]
+      },
+      "AddMoneyUssdDto": {
+        "type": "object",
+        "properties": {
+          "msisdn": {
+            "type": "string",
+            "pattern": "^\\+?[0-9]{10,15}$",
+            "description": "The paying phone in international form; left out, the phone on the account is used."
+          }
+        }
+      },
+      "AddMoneyDto": {
+        "type": "object",
+        "properties": {
+          "rail": {
+            "enum": [
+              "card",
+              "apple_pay",
+              "ussd",
+              "open_banking"
+            ],
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000000000
+          },
+          "chargeKobo": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000000000,
+            "description": "What the person was shown they pay. If the quote changed, 409 quote_changed and nothing is charged."
+          },
+          "card": {
+            "description": "Required for rail card.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AddMoneyCardDto"
+              }
+            ]
+          },
+          "ussd": {
+            "$ref": "#/components/schemas/AddMoneyUssdDto"
+          }
+        },
+        "required": [
+          "rail",
+          "amountKobo",
+          "chargeKobo"
+        ]
+      },
+      "AdminAddMoneyActDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        }
       },
       "OpenFxAccountDto": {
         "type": "object",
@@ -48354,6 +49707,179 @@
           "type"
         ]
       },
+      "StorePurchaseDto": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "description": "The store the purchase was made in.",
+            "enum": [
+              "android",
+              "ios"
+            ],
+            "type": "string"
+          },
+          "productId": {
+            "type": "string",
+            "description": "The id the store sold it under (`storeProductId` from `GET /store/products`).",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "purchaseToken": {
+            "type": "string",
+            "description": "Google Play: the purchase token the billing library returned. Required on `android`.",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "transactionId": {
+            "type": "string",
+            "description": "App Store: the StoreKit transaction id. Required on `ios`.",
+            "minLength": 1,
+            "maxLength": 100,
+            "pattern": "^[0-9]+$"
+          },
+          "communityId": {
+            "type": "string",
+            "description": "The room a community pass is bought for. Required for a pass product, refused for any other.",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "platform",
+          "productId"
+        ]
+      },
+      "StoreProductGrantsDto": {
+        "type": "object",
+        "properties": {
+          "packId": {
+            "type": "string",
+            "description": "points: a pack of the live plan, by id.",
+            "minLength": 1,
+            "maxLength": 40,
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "pack": {
+            "description": "credits: starter, popular or pro.",
+            "enum": [
+              "starter",
+              "popular",
+              "pro"
+            ],
+            "type": "string"
+          },
+          "tierId": {
+            "type": "string",
+            "description": "tier: a tier of the live plan, by id.",
+            "minLength": 1,
+            "maxLength": 40,
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "days": {
+            "type": "integer",
+            "description": "pass: the days one period runs.",
+            "minimum": 1,
+            "maximum": 366
+          }
+        }
+      },
+      "CreateStoreProductDto": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "enum": [
+              "android",
+              "ios"
+            ],
+            "type": "string"
+          },
+          "storeProductId": {
+            "type": "string",
+            "description": "The id the store sells it under. Fixed once created.",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "kind": {
+            "description": "Fixed once created.",
+            "enum": [
+              "points",
+              "credits",
+              "tier",
+              "pass"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "grants": {
+            "$ref": "#/components/schemas/StoreProductGrantsDto"
+          },
+          "referenceKobo": {
+            "type": "integer",
+            "description": "Kobo one purchase is worth before the store's share. Needed for credits and pass products.",
+            "minimum": 1,
+            "maximum": 2000000000
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "platform",
+          "storeProductId",
+          "kind",
+          "title",
+          "grants"
+        ]
+      },
+      "UpdateStoreProductDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "grants": {
+            "$ref": "#/components/schemas/StoreProductGrantsDto"
+          },
+          "referenceKobo": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000000000
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        }
+      },
+      "UpdateStorePlatformDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Switch purchases from this store on or off."
+          },
+          "storeFeeBps": {
+            "type": "integer",
+            "description": "The store's cut in basis points (1500 = 15%), 0 to 10000. Send `-1` to go back to the config's.",
+            "minimum": -1,
+            "maximum": 10000
+          }
+        }
+      },
       "FintavaWebhookAck": {
         "type": "object",
         "properties": {
@@ -50890,6 +52416,430 @@
           "canStart"
         ]
       },
+      "AdminAddMoneyView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string",
+            "nullable": true
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "providerRef": {
+            "type": "string",
+            "nullable": true
+          },
+          "frozen": {
+            "type": "boolean"
+          },
+          "failureCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "reviewNote": {
+            "type": "string",
+            "nullable": true
+          },
+          "feeCollectedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "audits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "fromStatus": {
+                  "type": "string"
+                },
+                "toStatus": {
+                  "type": "string"
+                },
+                "actedByAdminEmail": {
+                  "type": "string"
+                },
+                "actedAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "action",
+                "reason",
+                "fromStatus",
+                "toStatus",
+                "actedByAdminEmail",
+                "actedAt"
+              ]
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "rail": {
+            "type": "string",
+            "enum": [
+              "card",
+              "apple_pay",
+              "ussd",
+              "open_banking"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "expired",
+              "created",
+              "awaiting_user",
+              "processing",
+              "settled",
+              "cancelled"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "chargeKobo": {
+            "type": "integer"
+          },
+          "providerFeeKobo": {
+            "type": "integer"
+          },
+          "wawuFeeKobo": {
+            "type": "integer"
+          },
+          "checkoutUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "failureMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "cardLast4": {
+            "type": "string",
+            "nullable": true
+          },
+          "cardBrand": {
+            "type": "string",
+            "nullable": true
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "creditedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "provider",
+          "reference",
+          "providerRef",
+          "frozen",
+          "failureCode",
+          "reviewNote",
+          "feeCollectedAt",
+          "audits",
+          "id",
+          "rail",
+          "status",
+          "currency",
+          "amountKobo",
+          "chargeKobo",
+          "providerFeeKobo",
+          "wawuFeeKobo",
+          "checkoutUrl",
+          "message",
+          "failureMessage",
+          "cardLast4",
+          "cardBrand",
+          "expiresAt",
+          "createdAt",
+          "creditedAt"
+        ]
+      },
+      "AdminAddMoneyPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAddMoneyView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "AddMoneyRailView": {
+        "type": "object",
+        "properties": {
+          "rail": {
+            "type": "string",
+            "enum": [
+              "card",
+              "apple_pay",
+              "ussd",
+              "open_banking"
+            ]
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          },
+          "hosted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "rail",
+          "available",
+          "reason",
+          "hosted"
+        ]
+      },
+      "AddMoneyOptionsView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "rails": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddMoneyRailView"
+            }
+          },
+          "cardPublicKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "minKobo": {
+                "type": "integer",
+                "nullable": true
+              },
+              "maxKobo": {
+                "type": "integer",
+                "nullable": true
+              },
+              "dailyMaxKobo": {
+                "type": "integer",
+                "nullable": true
+              }
+            },
+            "required": [
+              "minKobo",
+              "maxKobo",
+              "dailyMaxKobo"
+            ]
+          }
+        },
+        "required": [
+          "currency",
+          "rails",
+          "cardPublicKey",
+          "limits"
+        ]
+      },
+      "AddMoneyQuoteView": {
+        "type": "object",
+        "properties": {
+          "rail": {
+            "type": "string",
+            "enum": [
+              "card",
+              "apple_pay",
+              "ussd",
+              "open_banking"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "providerFeeKobo": {
+            "type": "integer"
+          },
+          "wawuFeeKobo": {
+            "type": "integer"
+          },
+          "feeKobo": {
+            "type": "integer"
+          },
+          "chargeKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "rail",
+          "currency",
+          "amountKobo",
+          "providerFeeKobo",
+          "wawuFeeKobo",
+          "feeKobo",
+          "chargeKobo"
+        ]
+      },
+      "AddMoneyView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "rail": {
+            "type": "string",
+            "enum": [
+              "card",
+              "apple_pay",
+              "ussd",
+              "open_banking"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "expired",
+              "created",
+              "awaiting_user",
+              "processing",
+              "settled",
+              "cancelled"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "NGN"
+            ]
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "chargeKobo": {
+            "type": "integer"
+          },
+          "providerFeeKobo": {
+            "type": "integer"
+          },
+          "wawuFeeKobo": {
+            "type": "integer"
+          },
+          "checkoutUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "failureMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "cardLast4": {
+            "type": "string",
+            "nullable": true
+          },
+          "cardBrand": {
+            "type": "string",
+            "nullable": true
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "creditedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "rail",
+          "status",
+          "currency",
+          "amountKobo",
+          "chargeKobo",
+          "providerFeeKobo",
+          "wawuFeeKobo",
+          "checkoutUrl",
+          "message",
+          "failureMessage",
+          "cardLast4",
+          "cardBrand",
+          "expiresAt",
+          "createdAt",
+          "creditedAt"
+        ]
+      },
+      "AddMoneyPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AddMoneyView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
       "AdminFxCurrencyView": {
         "type": "object",
         "properties": {
@@ -51280,6 +53230,7 @@
           "fromCurrency": {
             "type": "string",
             "enum": [
+              "NGN",
               "USD",
               "EUR",
               "GBP",
@@ -51288,13 +53239,13 @@
               "GHS",
               "USDT",
               "USDC",
-              "RLUSD",
-              "NGN"
+              "RLUSD"
             ]
           },
           "toCurrency": {
             "type": "string",
             "enum": [
+              "NGN",
               "USD",
               "EUR",
               "GBP",
@@ -51303,8 +53254,7 @@
               "GHS",
               "USDT",
               "USDC",
-              "RLUSD",
-              "NGN"
+              "RLUSD"
             ],
             "nullable": true
           },
@@ -51641,6 +53591,7 @@
           "fromCurrency": {
             "type": "string",
             "enum": [
+              "NGN",
               "USD",
               "EUR",
               "GBP",
@@ -51649,13 +53600,13 @@
               "GHS",
               "USDT",
               "USDC",
-              "RLUSD",
-              "NGN"
+              "RLUSD"
             ]
           },
           "toCurrency": {
             "type": "string",
             "enum": [
+              "NGN",
               "USD",
               "EUR",
               "GBP",
@@ -51664,8 +53615,7 @@
               "GHS",
               "USDT",
               "USDC",
-              "RLUSD",
-              "NGN"
+              "RLUSD"
             ]
           },
           "rate": {
@@ -51801,6 +53751,7 @@
           "fromCurrency": {
             "type": "string",
             "enum": [
+              "NGN",
               "USD",
               "EUR",
               "GBP",
@@ -51809,13 +53760,13 @@
               "GHS",
               "USDT",
               "USDC",
-              "RLUSD",
-              "NGN"
+              "RLUSD"
             ]
           },
           "toCurrency": {
             "type": "string",
             "enum": [
+              "NGN",
               "USD",
               "EUR",
               "GBP",
@@ -51824,8 +53775,7 @@
               "GHS",
               "USDT",
               "USDC",
-              "RLUSD",
-              "NGN"
+              "RLUSD"
             ]
           },
           "fromAccountId": {
@@ -51903,6 +53853,7 @@
           "fromCurrency": {
             "type": "string",
             "enum": [
+              "NGN",
               "USD",
               "EUR",
               "GBP",
@@ -51911,13 +53862,13 @@
               "GHS",
               "USDT",
               "USDC",
-              "RLUSD",
-              "NGN"
+              "RLUSD"
             ]
           },
           "toCurrency": {
             "type": "string",
             "enum": [
+              "NGN",
               "USD",
               "EUR",
               "GBP",
@@ -51926,8 +53877,7 @@
               "GHS",
               "USDT",
               "USDC",
-              "RLUSD",
-              "NGN"
+              "RLUSD"
             ]
           },
           "fromAccountId": {
@@ -52918,8 +54868,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "USD",
-              "NGN"
+              "NGN",
+              "USD"
             ]
           },
           "currencyFixed": {
@@ -56283,10 +58233,10 @@
             "type": "string",
             "enum": [
               "failed",
+              "settled",
               "owed",
               "not_owed",
-              "submitted",
-              "settled"
+              "submitted"
             ]
           },
           "refundReference": {
@@ -57351,8 +59301,8 @@
               "pending",
               "failed",
               "refunded",
-              "paid",
-              "cancelled"
+              "cancelled",
+              "paid"
             ]
           },
           "subtotalNaira": {
@@ -61031,8 +62981,8 @@
             "type": "string",
             "enum": [
               "pending",
-              "paid",
               "cancelled",
+              "paid",
               "declined"
             ]
           },
@@ -61462,8 +63412,8 @@
             "enum": [
               "pending",
               "rejected",
-              "removed",
               "cancelled",
+              "removed",
               "published"
             ]
           },
@@ -61655,8 +63605,8 @@
             "enum": [
               "pending",
               "rejected",
-              "removed",
               "cancelled",
+              "removed",
               "published"
             ]
           },
@@ -61740,8 +63690,8 @@
             "enum": [
               "pending",
               "rejected",
-              "removed",
               "cancelled",
+              "removed",
               "published"
             ]
           },
@@ -61750,8 +63700,8 @@
             "enum": [
               "pending",
               "rejected",
-              "removed",
               "cancelled",
+              "removed",
               "published"
             ]
           },
@@ -61897,8 +63847,8 @@
             "enum": [
               "pending",
               "rejected",
-              "removed",
               "cancelled",
+              "removed",
               "published"
             ]
           },
@@ -62053,8 +64003,8 @@
             "enum": [
               "pending",
               "rejected",
-              "removed",
               "cancelled",
+              "removed",
               "published"
             ]
           },
@@ -66877,8 +68827,8 @@
             "enum": [
               "pending",
               "rejected",
-              "removed",
               "cancelled",
+              "removed",
               "published"
             ]
           },
@@ -67596,8 +69546,8 @@
                 "type": "string",
                 "enum": [
                   "pending",
-                  "paid",
                   "cancelled",
+                  "paid",
                   "declined"
                 ]
               }
@@ -67768,8 +69718,8 @@
             "type": "string",
             "enum": [
               "pending",
-              "paid",
               "cancelled",
+              "paid",
               "declined"
             ]
           },
@@ -68983,8 +70933,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "USD",
-              "NGN"
+              "NGN",
+              "USD"
             ]
           },
           "planMinor": {
@@ -69035,8 +70985,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "USD",
-              "NGN"
+              "NGN",
+              "USD"
             ]
           },
           "packMinor": {
@@ -69093,8 +71043,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "USD",
-              "NGN"
+              "NGN",
+              "USD"
             ]
           },
           "extraMinor": {
@@ -69218,8 +71168,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "USD",
-              "NGN"
+              "NGN",
+              "USD"
             ]
           },
           "amountMinor": {
@@ -69357,8 +71307,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "USD",
-              "NGN"
+              "NGN",
+              "USD"
             ]
           },
           "amountMinor": {
@@ -69475,8 +71425,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "USD",
-              "NGN"
+              "NGN",
+              "USD"
             ]
           },
           "amountMinor": {
@@ -69594,8 +71544,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "USD",
-              "NGN"
+              "NGN",
+              "USD"
             ]
           },
           "amountMinor": {
@@ -70055,6 +72005,10 @@
           },
           "isHost": {
             "type": "boolean"
+          },
+          "cancelInStore": {
+            "type": "boolean",
+            "nullable": true
           }
         },
         "required": [
@@ -70612,8 +72566,8 @@
             "type": "string",
             "enum": [
               "failed",
-              "paid",
               "processing",
+              "paid",
               "awaiting_payment"
             ]
           },
@@ -73737,6 +75691,538 @@
           "daysHeld"
         ]
       },
+      "StoreProductGrantsConfig": {
+        "type": "object",
+        "properties": {
+          "packId": {
+            "type": "string",
+            "nullable": true
+          },
+          "pack": {
+            "type": "string",
+            "enum": [
+              "starter",
+              "popular",
+              "pro"
+            ],
+            "nullable": true
+          },
+          "tierId": {
+            "type": "string",
+            "nullable": true
+          },
+          "days": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "packId",
+          "pack",
+          "tierId",
+          "days"
+        ]
+      },
+      "StoreGrantsView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "number",
+            "nullable": true
+          },
+          "credits": {
+            "type": "number",
+            "nullable": true
+          },
+          "tierId": {
+            "type": "string",
+            "nullable": true
+          },
+          "days": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "points",
+          "credits",
+          "tierId",
+          "days"
+        ]
+      },
+      "AdminStoreProductView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "storeProductId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tier",
+              "credits",
+              "points",
+              "pass"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "grants": {
+            "$ref": "#/components/schemas/StoreProductGrantsConfig"
+          },
+          "resolved": {
+            "$ref": "#/components/schemas/StoreGrantsView"
+          },
+          "referenceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "number"
+          },
+          "updatedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "platform",
+          "storeProductId",
+          "kind",
+          "title",
+          "grants",
+          "resolved",
+          "referenceKobo",
+          "active",
+          "sortOrder",
+          "updatedBy",
+          "updatedAt"
+        ]
+      },
+      "AdminStoreProductListView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminStoreProductView"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "AdminStorePlatformView": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "storeFeeBps": {
+            "type": "number"
+          },
+          "storeFeeOverridden": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "platform",
+          "enabled",
+          "configured",
+          "storeFeeBps",
+          "storeFeeOverridden",
+          "updatedAt"
+        ]
+      },
+      "AdminStorePlatformListView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminStorePlatformView"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "AdminStorePurchaseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "wawuUserId": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "storeProductId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tier",
+              "credits",
+              "points",
+              "pass"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "refunded",
+              "granted",
+              "revoked"
+            ]
+          },
+          "environment": {
+            "type": "string"
+          },
+          "storeTransactionId": {
+            "type": "string"
+          },
+          "communityId": {
+            "type": "string",
+            "nullable": true
+          },
+          "currency": {
+            "type": "string",
+            "nullable": true
+          },
+          "priceMicros": {
+            "type": "string",
+            "nullable": true
+          },
+          "referenceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "storeFeeBps": {
+            "type": "number"
+          },
+          "netKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "creatorWawuUserId": {
+            "type": "string",
+            "nullable": true
+          },
+          "creatorShareKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "purchasedAt": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "endedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "endReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "takenBack": {
+            "type": "object",
+            "additionalProperties": {},
+            "nullable": true
+          },
+          "flag": {
+            "type": "string",
+            "nullable": true
+          },
+          "flaggedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "wawuUserId",
+          "platform",
+          "storeProductId",
+          "kind",
+          "status",
+          "environment",
+          "storeTransactionId",
+          "communityId",
+          "currency",
+          "priceMicros",
+          "referenceKobo",
+          "storeFeeBps",
+          "netKobo",
+          "creatorWawuUserId",
+          "creatorShareKobo",
+          "purchasedAt",
+          "expiresAt",
+          "endedAt",
+          "endReason",
+          "takenBack",
+          "flag",
+          "flaggedAt"
+        ]
+      },
+      "AdminStorePurchasePageView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminStorePurchaseView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "StoreProductView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "storeProductId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tier",
+              "credits",
+              "points",
+              "pass"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "subscription": {
+            "type": "boolean"
+          },
+          "grants": {
+            "$ref": "#/components/schemas/StoreGrantsView"
+          }
+        },
+        "required": [
+          "id",
+          "platform",
+          "storeProductId",
+          "kind",
+          "title",
+          "subscription",
+          "grants"
+        ]
+      },
+      "StoreProductListView": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "accountToken": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "store_not_configured",
+              "store_disabled"
+            ],
+            "nullable": true
+          },
+          "products": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoreProductView"
+            }
+          }
+        },
+        "required": [
+          "platform",
+          "accountToken",
+          "available",
+          "reason",
+          "products"
+        ]
+      },
+      "StoreGrantedView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "number",
+            "nullable": true
+          },
+          "credits": {
+            "type": "number",
+            "nullable": true
+          },
+          "tierId": {
+            "type": "string",
+            "nullable": true
+          },
+          "until": {
+            "type": "string",
+            "nullable": true
+          },
+          "communityId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "points",
+          "credits",
+          "tierId",
+          "until",
+          "communityId"
+        ]
+      },
+      "StorePurchaseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "storeProductId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tier",
+              "credits",
+              "points",
+              "pass"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "refunded",
+              "granted",
+              "revoked"
+            ]
+          },
+          "alreadyGranted": {
+            "type": "boolean"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/StoreGrantedView"
+          },
+          "purchasedAt": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "flag": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "platform",
+          "storeProductId",
+          "kind",
+          "status",
+          "alreadyGranted",
+          "grant",
+          "purchasedAt",
+          "expiresAt",
+          "flag"
+        ]
+      },
+      "StoreWebhookAck": {
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "boolean"
+          },
+          "outcome": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "received",
+          "outcome"
+        ]
+      },
       "AdCreativeView": {
         "type": "object",
         "properties": {
@@ -73787,8 +76273,8 @@
             "enum": [
               "pending",
               "rejected",
-              "removed",
               "cancelled",
+              "removed",
               "published"
             ]
           },
@@ -74153,11 +76639,11 @@
           "action": {
             "type": "string",
             "enum": [
+              "created",
               "ended",
               "paused",
               "updated",
               "scheduled",
-              "created",
               "resumed",
               "deleted"
             ]

@@ -151,6 +151,8 @@
     "points.job_max_run_minutes": 30,
     "ai.voiceover_chars_per_minute": 900,
     "ai.quick_voice_chars_per_minute": 900,
+    "money.add_money_card_on": 1,
+    "money.add_money_ussd_on": 1,
     "voice.intro_max_chars": 500,
     "voice_intro.sample_min_seconds": 15,
     "voice_intro.sample_max_seconds": 30,
