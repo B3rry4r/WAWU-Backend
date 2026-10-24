@@ -25,6 +25,8 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
 import { NotificationModule } from '../notification/notification.module';
 import { StorageModule } from '../storage/storage.module';
 import { PlansModule } from '../plans/plans.module';
+import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
+import { ContentSaleTermsService } from './content-sale-terms.service';
 import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
 
 /**
@@ -46,6 +48,8 @@ import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
     PlansModule,
     // The tier badge on the creator and professional cards (TIER-07).
     TierBadgeModule,
+    // The quick prices and the review time are admin settings (FIX-110).
+    PlanSettingsModule,
   ],
   controllers: [
     ContentPieceController,
@@ -59,6 +63,7 @@ import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
   ],
   providers: [
     ContentPieceService,
+    ContentSaleTermsService,
     ProductDraftService,
     ContentEngagementService,
     ContentDetailService,

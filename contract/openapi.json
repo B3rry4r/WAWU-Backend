@@ -7948,6 +7948,39 @@
         ]
       }
     },
+    "/api/hub/content/sale-terms": {
+      "get": {
+        "operationId": "ContentPieceController_saleTermsAt",
+        "parameters": [
+          {
+            "name": "priceKobo",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 0,
+              "maximum": 1000000000,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContentSaleTerms"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What a creator keeps of a sale, the listing fee, the quick prices and how\nlong a review usually takes (M24, M25, FIX-110). Read only. Before `:id`\nso the literal is never taken for an id.",
+        "tags": [
+          "ContentPiece"
+        ]
+      }
+    },
     "/api/hub/content": {
       "get": {
         "operationId": "ContentPieceController_list",
@@ -45952,6 +45985,14 @@
           "eventDate": {
             "type": "string",
             "nullable": true
+          },
+          "eventName": {
+            "type": "string",
+            "nullable": true
+          },
+          "passCode": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -48012,6 +48053,42 @@
         },
         "required": [
           "flutterwaveConfig"
+        ]
+      },
+      "ContentSaleTerms": {
+        "type": "object",
+        "properties": {
+          "creatorSharePct": {
+            "type": "number"
+          },
+          "listingFeeKobo": {
+            "type": "integer"
+          },
+          "presetsKobo": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            }
+          },
+          "reviewHours": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "earnPerSaleKobo": {
+            "type": "integer",
+            "nullable": true
+          }
+        },
+        "required": [
+          "creatorSharePct",
+          "listingFeeKobo",
+          "presetsKobo",
+          "reviewHours",
+          "priceKobo",
+          "earnPerSaleKobo"
         ]
       },
       "ContentPieceResponse": {
@@ -59570,6 +59647,11 @@
           "lastDecisionReason": {
             "type": "string",
             "nullable": true
+          },
+          "decidedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
           }
         },
         "required": [
@@ -59608,7 +59690,8 @@
           "priceFromNaira",
           "speakers",
           "createdAt",
-          "lastDecisionReason"
+          "lastDecisionReason",
+          "decidedAt"
         ]
       },
       "EventTicketRulesView": {

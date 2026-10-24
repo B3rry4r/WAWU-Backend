@@ -137,6 +137,13 @@ export interface EventView {
   createdAt: Date;
   /** Why the last rejection or takedown happened. Host-only; null for everyone else. */
   lastDecisionReason: string | null;
+  /**
+   * When an admin last sent the event back or took it down (FIX-110, E17's
+   * "Taken down 20 Sep"). Host-only, like the reason; null for everyone else,
+   * and for an event nobody has sent back or taken down (an approved or
+   * pending one, or one edited since: an edit puts it back to review).
+   */
+  decidedAt: Date | null;
 }
 
 /**

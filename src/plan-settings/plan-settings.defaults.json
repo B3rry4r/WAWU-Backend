@@ -10,7 +10,8 @@
     "VOICE-NAME-PREVIEWS": "VOICE-01: the free name preview calls the voice provider and no ruling limits it. 20 an hour is far more than anyone needs to get a spelling right, and stops a loop from running up the provider's bill.",
     "VOICE-SAMPLE-SECONDS": "VERIFY-03 and FIX-95: no ruling names the shortest or longest Voice Intro recording. 30 seconds is the board's (VF9 'Record 30 seconds') and the Hub's own wording; 15 is half of it, since the boards show 8 seconds as too short. The owner may change both.",
     "AITOOLS-CHARS-PER-MINUTE": "AITOOLS-01: the PT2 board prices a script of 132 characters as one minute and no ruling says how long a minute of speech is in text. 900 characters is about 150 words at a steady pace (an average word with its space is about 6 characters), so the 5,000 character limit is about six minutes, inside the 10 minute cap. AITOOLS-02: Quick voice reads the same words at the same pace on a faster model, so its minute is the same 900 characters until the owner says otherwise.",
-    "AITOOLS-LIMITS": "AITOOLS-03: no ruling or board sizes the two prompt tools. The description starts at the plan's own per-job character cap (points.max_chars_per_job), not a new figure, and the longest sound (30 seconds) and track (300 seconds) are the provider's own maximums (docs/elevenlabs/API-FACTS.md, Sound effects and Music), so the owner may only lower them."
+    "AITOOLS-LIMITS": "AITOOLS-03: no ruling or board sizes the two prompt tools. The description starts at the plan's own per-job character cap (points.max_chars_per_job), not a new figure, and the longest sound (30 seconds) and track (300 seconds) are the provider's own maximums (docs/elevenlabs/API-FACTS.md, Sound effects and Music), so the owner may only lower them.",
+    "CONTENT-REVIEW-HOURS": "FIX-110 (G-ME-08-3): nothing measures how long a review takes, and no ruling names a figure. M25 draws 'Usually takes: A few hours', so 4 hours is the board's 'a few' as a number an admin can change; the app words it as 'About 4 hours'."
   },
   "values": {
     "ai.sfx_max_seconds": 30,
@@ -36,6 +37,14 @@
     "voice.intro_max_chars": 500,
     "voice_intro.sample_min_seconds": 15,
     "voice_intro.sample_max_seconds": 30,
-    "voice.name_previews_per_hour": 20
+    "voice.name_previews_per_hour": 20,
+    "content.price_preset_1_kobo": 100000,
+    "content.price_preset_2_kobo": 250000,
+    "content.price_preset_3_kobo": 300000,
+    "content.price_preset_4_kobo": 500000,
+    "content.review_hours": 4,
+    "plan.event_name": [
+      "Christmas event"
+    ]
   }
 }
