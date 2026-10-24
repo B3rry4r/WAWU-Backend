@@ -206,6 +206,11 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'creatorWawuUserId',
     disposition: 'COUNTERPARTY',
   },
+  // Who holds a store subscription, and the id this account's store purchases are
+  // bound to (IAP-01 fix round 1). OWNED: both exist only because this account
+  // bought through a store, and name no counterparty.
+  { model: 'StoreSubscription', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'StoreAccountToken', column: 'wawuUserId', disposition: 'OWNED' },
   // More products this account bought on its tier (TIER-04): how many and what
   // it cost. OWNED, like MakerPurchase above: the row exists only because this
   // account bought something and names no counterparty. The money's record is

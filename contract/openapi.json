@@ -38093,7 +38093,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "The products on sale in one store, from the product map an admin keeps.\n`available` is false (with a `reason`) when the Hub has no credentials for\nthat store yet or an admin has switched it off, and then no product is\nlisted. A price is never here: the app shows the store's own, in the\nperson's own currency.",
+        "summary": "The products on sale in one store, from the product map an admin keeps.\n`available` is false (with a `reason`) when the Hub has no credentials for\nthat store yet or an admin has switched it off, and then no product is\nlisted. A price is never here: the app shows the store's own, in the\nperson's own currency. `accountToken` is the signed-in person's own id\nfor the stores: the app MUST pass it to Google Play Billing as\n`obfuscatedAccountIdAndroid` and to StoreKit as `appAccountToken` when it\nstarts a purchase; a purchase that carries another person's token, or none,\nis refused.",
         "tags": [
           "Store"
         ]
@@ -38130,7 +38130,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Hands the Hub a purchase the store has just completed. The Hub asks the\nstore's own server about it (the app's word is never taken), then gives\nwhat was bought, once per store transaction: the same call again, a\nrestore, or the store's own notice arriving first all answer the same\npurchase with `alreadyGranted: true`. Send `purchaseToken` on `android`,\n`transactionId` on `ios`, and `communityId` for a pass.\n\nRefusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,\n`store_product_unknown` (404), `store_receipt_missing` (400),\n`store_purchase_invalid` (422), `store_purchase_pending`,\n`store_purchase_taken` (that transaction was already used on another account),\n`store_pass_not_available` and `store_unreachable` (503, safe to repeat).",
+        "summary": "Hands the Hub a purchase the store has just completed. The Hub asks the\nstore's own server about it (the app's word is never taken), then gives\nwhat was bought, once per store transaction: the same call again, a\nrestore, or the store's own notice arriving first all answer the same\npurchase with `alreadyGranted: true`. Send `purchaseToken` on `android`,\n`transactionId` on `ios`, and `communityId` for a pass.\n\nRefusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,\n`store_product_unknown` (404), `store_receipt_missing` (400),\n`store_purchase_invalid` (422), `store_purchase_pending`,\n`store_purchase_taken` (that purchase, or that subscription, was already used on another account, or was made with another account's token), `store_account_token_missing` (422, the purchase carries no account token),\n`store_pass_not_available`, `store_unreachable` (503, safe to repeat) and `store_grant_failed` (500, the store has the payment but the Hub could not finish; ask again).",
         "tags": [
           "Store"
         ]
@@ -65043,6 +65043,10 @@
           },
           "isHost": {
             "type": "boolean"
+          },
+          "cancelInStore": {
+            "type": "boolean",
+            "nullable": true
           }
         },
         "required": [
@@ -68031,6 +68035,14 @@
             "type": "object",
             "additionalProperties": {},
             "nullable": true
+          },
+          "flag": {
+            "type": "string",
+            "nullable": true
+          },
+          "flaggedAt": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -68054,7 +68066,9 @@
           "expiresAt",
           "endedAt",
           "endReason",
-          "takenBack"
+          "takenBack",
+          "flag",
+          "flaggedAt"
         ]
       },
       "AdminStorePurchasePageView": {
@@ -68131,6 +68145,9 @@
               "ios"
             ]
           },
+          "accountToken": {
+            "type": "string"
+          },
           "available": {
             "type": "boolean"
           },
@@ -68151,6 +68168,7 @@
         },
         "required": [
           "platform",
+          "accountToken",
           "available",
           "reason",
           "products"
@@ -68233,6 +68251,10 @@
           "expiresAt": {
             "type": "string",
             "nullable": true
+          },
+          "flag": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -68244,7 +68266,8 @@
           "alreadyGranted",
           "grant",
           "purchasedAt",
-          "expiresAt"
+          "expiresAt",
+          "flag"
         ]
       },
       "StoreWebhookAck": {

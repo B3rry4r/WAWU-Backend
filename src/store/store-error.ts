@@ -27,7 +27,11 @@ export type StoreErrorCode =
   /** A pass was bought for a room that does not sell one, or that the person hosts or cannot join. */
   | 'store_pass_not_available'
   /** An admin's product body is wrong (the grant does not fit the kind, an id is taken). */
-  | 'store_product_invalid';
+  | 'store_product_invalid'
+  /** The purchase carries no account token and the cutover has passed: the app did not bind it to the person. */
+  | 'store_account_token_missing'
+  /** The purchase was paid but the Hub could not finish giving it (a fault on our side). Nothing is lost; asking again, or the store's own notice, tries again. */
+  | 'store_grant_failed';
 
 export const STORE_ERROR_STATUS: Record<StoreErrorCode, HttpStatus> = {
   store_not_configured: HttpStatus.SERVICE_UNAVAILABLE,
@@ -40,6 +44,8 @@ export const STORE_ERROR_STATUS: Record<StoreErrorCode, HttpStatus> = {
   store_unreachable: HttpStatus.SERVICE_UNAVAILABLE,
   store_pass_not_available: HttpStatus.CONFLICT,
   store_product_invalid: HttpStatus.BAD_REQUEST,
+  store_account_token_missing: HttpStatus.UNPROCESSABLE_ENTITY,
+  store_grant_failed: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 
 export class StoreError extends HttpException {
@@ -57,3 +63,6 @@ export const DISABLED_MESSAGE =
   'Buying through this store is paused right now.';
 export const UNREACHABLE_MESSAGE =
   'We could not reach the store to check this purchase. Please try again in a moment.';
+
+export const GRANT_FAILED_MESSAGE =
+  'The store has your payment, but we could not finish giving it yet. Please try again in a moment.';

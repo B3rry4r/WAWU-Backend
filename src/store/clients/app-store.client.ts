@@ -185,5 +185,9 @@ export function purchaseOf(
         ? 'cancelled'
         : 'purchased',
     needsAcknowledge: false,
+    accountToken:
+      typeof t.appAccountToken === 'string' && t.appAccountToken !== ''
+        ? t.appAccountToken
+        : null,
   };
 }

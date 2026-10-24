@@ -153,6 +153,23 @@ describe('IAP-01: the App Store adapter reads a verified transaction', () => {
     expect(p.expiresAt?.getTime()).toBe(expiry);
   });
 
+  it('carries the appAccountToken the app bound the purchase to, or null', () => {
+    expect(
+      purchaseOf(
+        {
+          ...base,
+          type: 'Consumable',
+          appAccountToken: '7D1E5C0A-0000-4000-8000-00000000AAAA',
+        },
+        Environment.PRODUCTION,
+      ).accountToken,
+    ).toBe('7D1E5C0A-0000-4000-8000-00000000AAAA');
+    expect(
+      purchaseOf({ ...base, type: 'Consumable' }, Environment.PRODUCTION)
+        .accountToken,
+    ).toBeNull();
+  });
+
   it('a consumable has no subscription key; a revoked or lapsed transaction is not in force; the sandbox is named', () => {
     const c = purchaseOf({ ...base, type: 'Consumable' }, Environment.SANDBOX);
     expect(c).toMatchObject({

@@ -38,6 +38,13 @@ export interface VerifiedStorePurchase {
   state: 'purchased' | 'pending' | 'cancelled' | 'refunded';
   /** True when the store still wants the purchase acknowledged or consumed. */
   needsAcknowledge: boolean;
+  /**
+   * The id the app bound the purchase to when it was made (Google's
+   * `obfuscatedExternalAccountId`, Apple's `appAccountToken`): the person's
+   * `accountToken` from `GET /store/products`. Null when the purchase carries
+   * none.
+   */
+  accountToken: string | null;
 }
 
 export interface GooglePlayClient {

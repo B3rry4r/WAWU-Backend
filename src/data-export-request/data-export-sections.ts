@@ -1297,6 +1297,20 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       reason:
         'An admin choice to show the creator in Explore, with the admin id; the person wrote none of it.',
     },
+    // The Hub's own bookkeeping for store purchases (IAP-01 fix round 1): a store's
+    // subscription key is a purchase token or transaction id, and the account token
+    // is an id the Hub made; neither is data the person gave, and both are ids (rule 3).
+    // What they bought is in `storePurchases`.
+    {
+      model: 'StoreSubscription',
+      reason:
+        'Which store subscription the person holds, by the store token; the purchases themselves are exported under storePurchases.',
+    },
+    {
+      model: 'StoreAccountToken',
+      reason:
+        'A random id the Hub made to tie the person to their store purchases; not data the person gave.',
+    },
     // Secrets and identity records: never in an email.
     {
       model: 'EventDoorStaff',

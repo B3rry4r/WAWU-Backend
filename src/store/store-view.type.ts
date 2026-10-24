@@ -42,6 +42,13 @@ export type StoreUnavailableReason = 'store_not_configured' | 'store_disabled';
 /** `GET /store/products`. */
 export interface StoreProductListView {
   platform: StorePlatform;
+  /**
+   * The signed-in person's account token: a stable random UUID for them, never
+   * their user id. The app MUST hand it to the store when it starts a purchase,
+   * as Google `obfuscatedAccountIdAndroid` and as Apple `appAccountToken`. The
+   * Hub refuses a purchase that carries another person's token, or none.
+   */
+  accountToken: string;
   /** False when nothing can be bought in this store right now (`reason` says why); then `products` is empty. */
   available: boolean;
   reason: StoreUnavailableReason | null;
@@ -72,6 +79,8 @@ export interface StorePurchaseView {
   purchasedAt: string;
   /** When the subscription period ends as the store said; null for a points or credits pack. */
   expiresAt: string | null;
+  /** `member_removed` when the purchase was recorded but the pass was not given because the host removed the person; they cancel in the store. Null otherwise. */
+  flag: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -154,6 +163,9 @@ export interface AdminStorePurchaseView {
   endReason: string | null;
   /** What the take-back took (a spent point or credit is not taken back). */
   takenBack: Record<string, unknown> | null;
+  /** `member_removed` when a pass renewal was paid for a member the host removed and nothing was given; an admin looks. Null otherwise. */
+  flag: string | null;
+  flaggedAt: string | null;
 }
 
 export interface AdminStorePurchasePageView {

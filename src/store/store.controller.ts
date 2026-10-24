@@ -39,14 +39,19 @@ export class StoreController {
    * `available` is false (with a `reason`) when the Hub has no credentials for
    * that store yet or an admin has switched it off, and then no product is
    * listed. A price is never here: the app shows the store's own, in the
-   * person's own currency.
+   * person's own currency. `accountToken` is the signed-in person's own id
+   * for the stores: the app MUST pass it to Google Play Billing as
+   * `obfuscatedAccountIdAndroid` and to StoreKit as `appAccountToken` when it
+   * starts a purchase; a purchase that carries another person's token, or none,
+   * is refused.
    */
   @Get('products')
   @Header('Cache-Control', 'no-store')
   products(
+    @CurrentUser() user: WawuJwtClaims,
     @Query() query: StoreProductsQueryDto,
   ): Promise<StoreProductListView> {
-    return this.catalog.listForApp(query.platform);
+    return this.catalog.listForApp(query.platform, user.sub);
   }
 
   /**
@@ -60,8 +65,8 @@ export class StoreController {
    * Refusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,
    * `store_product_unknown` (404), `store_receipt_missing` (400),
    * `store_purchase_invalid` (422), `store_purchase_pending`,
-   * `store_purchase_taken` (that transaction was already used on another account),
-   * `store_pass_not_available` and `store_unreachable` (503, safe to repeat).
+   * `store_purchase_taken` (that purchase, or that subscription, was already used on another account, or was made with another account's token), `store_account_token_missing` (422, the purchase carries no account token),
+   * `store_pass_not_available`, `store_unreachable` (503, safe to repeat) and `store_grant_failed` (500, the store has the payment but the Hub could not finish; ask again).
    */
   @Post('purchases')
   @HttpCode(201)

@@ -29,6 +29,15 @@ export interface CommunityPassView {
   canBuy: boolean;
   /** True for the room's host, who is always inside and pays nothing. */
   isHost: boolean;
+  /**
+   * True when the host removed the caller and the caller still holds a store
+   * subscription for this room's pass (IAP-01). Always sent by this Hub; optional in the
+   * contract so a response shape the web or an older app reads gains a field and loses
+   * none: absent means false. The store keeps billing them
+   * until they cancel it there, and a renewal gives them nothing. The pass screen
+   * tells them to cancel in the store. False otherwise.
+   */
+  cancelInStore?: boolean;
 }
 
 /** `GET /communities/:id/pass/quote`: the pay sheet before the PIN. */

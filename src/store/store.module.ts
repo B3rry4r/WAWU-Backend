@@ -13,6 +13,7 @@ import {
   STORE_CONFIG,
   type StoreConfig,
 } from './store-config';
+import { StoreAccountService } from './store-account.service';
 import { StoreAdminService } from './store-admin.service';
 import { StoreCatalogService } from './store-catalog.service';
 import { StoreGrantService } from './store-grant.service';
@@ -51,6 +52,7 @@ import { StoreWebhookController } from './store-webhook.controller';
         config.apple === null ? null : new RealAppStoreClient(config.apple),
       inject: [STORE_CONFIG],
     },
+    StoreAccountService,
     StoreCatalogService,
     StoreGrantService,
     StorePurchaseService,

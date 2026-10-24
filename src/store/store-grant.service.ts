@@ -62,6 +62,8 @@ export interface StoreGrantSnapshot {
   until?: string;
   bonusPoints?: number;
   communityId?: string;
+  /** Set when the purchase was recorded and nothing was given: `member_removed`. */
+  skipped?: string;
 }
 
 /**
@@ -235,6 +237,21 @@ export class StoreGrantService {
         const communityId = purchase.communityId;
         if (communityId === null || days < 1)
           throw new Error(`Purchase ${purchase.id} names no room or no days.`);
+        // A member the host removed (a pending row) is not let back in by a
+        // renewal the store bills them for: the purchase is recorded, flagged for
+        // an admin, and no period is written. They cancel in the store. The row
+        // is locked, so a removal landing now waits for this decision.
+        const rows = await tx.$queryRaw<{ status: string }[]>`
+          SELECT "status"::text AS "status" FROM "CommunityMembership"
+          WHERE "userWawuId" = ${userId} AND "communityId" = ${communityId}
+          FOR UPDATE`;
+        if (rows[0]?.status === 'pending')
+          return {
+            kind: 'pass',
+            communityId,
+            days,
+            skipped: 'member_removed',
+          };
         await grantPassPeriod(tx, {
           communityId,
           userWawuId: userId,

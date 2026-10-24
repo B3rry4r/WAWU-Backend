@@ -69,10 +69,18 @@ export class RealGooglePlayClient implements GooglePlayClient {
       orderId?: string;
       purchaseType?: number;
       refundableQuantity?: number;
+      productId?: string;
+      obfuscatedExternalAccountId?: string;
     }>(
       'GET',
       `purchases/products/${enc(storeProductId)}/tokens/${enc(purchaseToken)}`,
     );
+    // The answer names the product the token was bought for. A token bought
+    // for another product is not this purchase, whatever the URL asked.
+    if (typeof body.productId === 'string' && body.productId !== storeProductId)
+      throw new StorePurchaseNotFound(
+        'The purchase token is for another product.',
+      );
     const state =
       body.purchaseState === 0
         ? 'purchased'
@@ -83,7 +91,8 @@ export class RealGooglePlayClient implements GooglePlayClient {
       platform: 'android',
       // purchaseType 0 is a test purchase (a licence tester); absent is a real one.
       environment: body.purchaseType === 0 ? 'sandbox' : 'production',
-      storeProductId,
+      storeProductId: body.productId ?? storeProductId,
+      accountToken: accountTokenOf(body.obfuscatedExternalAccountId),
       storeTransactionId:
         typeof body.orderId === 'string' && body.orderId !== ''
           ? body.orderId
@@ -109,6 +118,7 @@ export class RealGooglePlayClient implements GooglePlayClient {
       subscriptionState?: string;
       acknowledgementState?: string;
       testPurchase?: object;
+      externalAccountIdentifiers?: { obfuscatedExternalAccountId?: string };
       lineItems?: Array<{
         productId?: string;
         expiryTime?: string;
@@ -138,6 +148,9 @@ export class RealGooglePlayClient implements GooglePlayClient {
       platform: 'android',
       environment: body.testPurchase ? 'sandbox' : 'production',
       storeProductId: line.productId,
+      accountToken: accountTokenOf(
+        body.externalAccountIdentifiers?.obfuscatedExternalAccountId,
+      ),
       storeTransactionId: body.latestOrderId,
       subscriptionKey: purchaseToken,
       purchasedAt: body.startTime ? new Date(body.startTime) : new Date(),
@@ -301,6 +314,11 @@ export class RealGooglePlayClient implements GooglePlayClient {
     }
     return { status: res.status, body };
   }
+}
+
+/** The account id a purchase was bound to, or null when it carries none. */
+function accountTokenOf(v: string | undefined): string | null {
+  return typeof v === 'string' && v !== '' ? v : null;
 }
 
 function enc(v: string): string {

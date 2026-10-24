@@ -15,6 +15,7 @@ import {
   resolveGrants,
 } from './store-grants';
 import { STORE_CONFIG, type StoreConfig } from './store-config';
+import { StoreAccountService } from './store-account.service';
 import { StoreError } from './store-error';
 import type {
   CreateStoreProductDto,
@@ -54,6 +55,7 @@ export class StoreCatalogService {
     private readonly prisma: PrismaService,
     @Inject(STORE_CONFIG) private readonly config: StoreConfig,
     @Inject(PLANS_CONFIG) private readonly plans: PlansConfig,
+    private readonly accounts: StoreAccountService,
   ) {}
 
   /** True when the Hub holds everything it needs to ask this store. */
@@ -89,10 +91,14 @@ export class StoreCatalogService {
   // -------------------------------------------------------------------------
 
   /** `GET /store/products`. */
-  async listForApp(platform: StorePlatform): Promise<StoreProductListView> {
+  async listForApp(
+    platform: StorePlatform,
+    wawuUserId: string,
+  ): Promise<StoreProductListView> {
+    const accountToken = await this.accounts.tokenFor(wawuUserId);
     const reason = this.unavailableReason(await this.availability(platform));
     if (reason !== null)
-      return { platform, available: false, reason, products: [] };
+      return { platform, accountToken, available: false, reason, products: [] };
     const rows = await this.prisma.storeProduct.findMany({
       where: { platform, active: true },
       orderBy: [{ sortOrder: 'asc' }, { storeProductId: 'asc' }],
@@ -113,7 +119,7 @@ export class StoreCatalogService {
         return [];
       return [this.appView(r, grants)];
     });
-    return { platform, available: true, reason: null, products };
+    return { platform, accountToken, available: true, reason: null, products };
   }
 
   private appView(

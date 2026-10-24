@@ -126,5 +126,7 @@ export function adminPurchaseView(r: StorePurchase): AdminStorePurchaseView {
       !Array.isArray(r.takenBack)
         ? r.takenBack
         : null,
+    flag: r.flag,
+    flaggedAt: r.flaggedAt?.toISOString() ?? null,
   };
 }

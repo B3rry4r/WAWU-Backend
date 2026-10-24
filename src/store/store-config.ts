@@ -3,6 +3,9 @@ import type { StorePlatform } from '../../generated/prisma/enums';
 /** The Nest token the parsed store settings are provided under. */
 export const STORE_CONFIG = 'STORE_CONFIG';
 
+/** The account token cutover when nothing is set: the day after the fix that introduced it. */
+export const DEFAULT_ACCOUNT_TOKEN_REQUIRED_FROM = '2026-10-25T00:00:00.000Z';
+
 /** The store's cut when nothing is set: 15%, in basis points (R-86, Default (lead), owner may override). */
 export const DEFAULT_STORE_FEE_BPS = 1500;
 
@@ -49,6 +52,14 @@ export interface StoreConfig {
   apple: AppStoreConfig | null;
   /** The store's cut per platform, in basis points. */
   feeBps: Record<StorePlatform, number>;
+  /**
+   * The dated cutover for the account token (IAP-01 round 1, Default (lead),
+   * owner may override). A subscription must carry the buyer's account token
+   * from the first release that serves it; a pack bought before this date may
+   * carry none, one bought on or after it must. `STORE_ACCOUNT_TOKEN_REQUIRED_FROM`,
+   * an ISO date; 25 Oct 2026 when unset (the day after this fix).
+   */
+  accountTokenRequiredFrom: Date;
 }
 
 const GOOGLE_API = 'https://androidpublisher.googleapis.com';
@@ -168,9 +179,16 @@ export function loadStoreConfig(
         }
       : null;
 
+  const cutover = new Date(
+    text(env, 'STORE_ACCOUNT_TOKEN_REQUIRED_FROM') ??
+      DEFAULT_ACCOUNT_TOKEN_REQUIRED_FROM,
+  );
+  if (Number.isNaN(cutover.getTime()))
+    throw new Error('STORE_ACCOUNT_TOKEN_REQUIRED_FROM must be an ISO date.');
   return {
     google,
     apple,
+    accountTokenRequiredFrom: cutover,
     feeBps: {
       android: feeOf(env, 'STORE_FEE_BPS_ANDROID'),
       ios: feeOf(env, 'STORE_FEE_BPS_IOS'),

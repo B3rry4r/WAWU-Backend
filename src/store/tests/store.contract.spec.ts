@@ -12,16 +12,12 @@ import { ChildProcess, spawn } from 'child_process';
 import { randomUUID } from 'node:crypto';
 import type { Server } from 'http';
 import * as path from 'path';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
-import { Test, TestingModule } from '@nestjs/testing';
+import type { INestApplication } from '@nestjs/common';
+import type { TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { AdminRole } from '../../../generated/prisma/enums';
 import { AdminTokenService } from '../../admin/auth/admin-token.service';
 import { CommunityPassRemoval } from '../../community/pass/community-pass-removal.service';
-import { AllExceptionsFilter } from '../../common/filters/all-exceptions.filter';
-import { ResponseInterceptor } from '../../common/interceptors/response.interceptor';
-import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   PLANS_CONFIG,
@@ -30,117 +26,31 @@ import {
 } from '../../plans/plans-config';
 import { PointsService } from '../../points/points.service';
 import { purgePersonPoints } from '../../points/points-purge';
-import { APP_STORE_CLIENT, GOOGLE_PLAY_CLIENT } from '../clients/store-clients';
-import {
-  loadStoreConfig,
-  STORE_CONFIG,
-  type StoreConfig,
-} from '../store-config';
-import { StoreModule } from '../store.module';
+import { loadStoreConfig } from '../store-config';
 import {
   StandInAppStore,
   StandInGooglePlay,
   inDays,
   verified,
-} from './store-standins';
+} from '../../../test/store/store-standins';
 
 jest.setTimeout(120_000);
 
-type Env<T> = { statusCode: number; data: T; reason?: { code: string } };
-const dataOf = <T>(res: { body: unknown }): T => (res.body as Env<T>).data;
-const codeOf = (res: { body: unknown }): string | undefined =>
-  (res.body as Env<unknown>).reason?.code;
-
-const BUYER = '00000000-0000-4000-8000-000000000001';
-const OTHER = '00000000-0000-4000-8000-000000000002';
-const HOST = '00000000-0000-4000-8000-000000000003';
-const PEOPLE = [BUYER, OTHER, HOST];
-
-const PORT = process.env.WAWU_ID_JWKS_URL
-  ? new URL(process.env.WAWU_ID_JWKS_URL).port
-  : '8520';
-const MOCK = `http://localhost:${PORT}`;
-const API = '/api/hub';
-
-async function healthy(url: string, ms = 15000): Promise<boolean> {
-  const start = Date.now();
-  while (Date.now() - start < ms) {
-    try {
-      if ((await fetch(url)).ok) return true;
-    } catch {
-      // not up yet
-    }
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  return false;
-}
-async function login(identifier: string): Promise<string> {
-  const res = await fetch(`${MOCK}/auth/login`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ identifier }),
-  });
-  if (!res.ok) throw new Error(`mock-wawu-id login failed for ${identifier}`);
-  return ((await res.json()) as { accessToken: string }).accessToken;
-}
-
-const FAKE_CONFIG: StoreConfig = {
-  // Non-null means "the Hub holds this store's credentials"; the clients are stand-ins.
-  google: {
-    packageName: 'africa.wawu.test',
-    serviceAccount: { client_email: 'x', private_key: 'x', token_uri: 'x' },
-    apiBase: 'x',
-    pubsubAudience: 'x',
-    pubsubServiceAccountEmail: 'x',
-    jwksUrl: 'x',
-  },
-  apple: {
-    bundleId: 'africa.wawu.test',
-    issuerId: 'x',
-    keyId: 'x',
-    privateKey: 'x',
-    environment: 'Sandbox',
-    rootCertificates: [],
-    appAppleId: null,
-  },
-  feeBps: { android: 1500, ios: 3000 },
-};
-
-async function build(
-  config: StoreConfig,
-  google: StandInGooglePlay | null,
-  apple: StandInAppStore | null,
-): Promise<{ app: INestApplication; moduleRef: TestingModule }> {
-  const moduleRef = await Test.createTestingModule({
-    imports: [
-      ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
-      PrismaModule,
-      StoreModule,
-    ],
-  })
-    .overrideProvider(STORE_CONFIG)
-    .useValue(config)
-    .overrideProvider(GOOGLE_PLAY_CLIENT)
-    .useValue(google)
-    .overrideProvider(APP_STORE_CLIENT)
-    .useValue(apple)
-    .compile();
-  const app = moduleRef.createNestApplication({
-    logger: process.env.IAP_LOG ? ['error'] : false,
-  });
-  app.setGlobalPrefix('api/hub');
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
-  app.useGlobalFilters(new AllExceptionsFilter());
-  app.useGlobalInterceptors(new ResponseInterceptor());
-  await app.init();
-  return { app, moduleRef };
-}
+import {
+  API,
+  BUYER,
+  build,
+  codeOf,
+  dataOf,
+  STAND_IN_CONFIG,
+  healthy,
+  HOST,
+  login,
+  MOCK,
+  OTHER,
+  PEOPLE,
+  PORT,
+} from '../../../test/store/store-test-kit';
 
 describe('IAP-01: nothing is asked of a store the Hub has no keys for', () => {
   let app: INestApplication;
@@ -174,6 +84,7 @@ describe('IAP-01: nothing is asked of a store the Hub has no keys for', () => {
         .expect(200);
       expect(dataOf(res)).toEqual({
         platform,
+        accountToken: expect.any(String) as string,
         available: false,
         reason: 'store_not_configured',
         products: [],
@@ -215,7 +126,17 @@ describe('IAP-01: nothing is asked of a store the Hub has no keys for', () => {
       google: null,
       apple: null,
       feeBps: { android: 1500, ios: 1500 },
+      // The dated cutover for the account token (IAP-01 round 1).
+      accountTokenRequiredFrom: new Date('2026-10-25T00:00:00.000Z'),
     });
+    expect(
+      loadStoreConfig({
+        STORE_ACCOUNT_TOKEN_REQUIRED_FROM: '2026-12-01',
+      }).accountTokenRequiredFrom.toISOString(),
+    ).toBe('2026-12-01T00:00:00.000Z');
+    expect(() =>
+      loadStoreConfig({ STORE_ACCOUNT_TOKEN_REQUIRED_FROM: 'next week' }),
+    ).toThrow();
     expect(
       loadStoreConfig({ GOOGLE_PLAY_PACKAGE_NAME: 'a' }).google,
     ).toBeNull();
@@ -266,6 +187,10 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
   let host: string;
   let google: StandInGooglePlay;
   let apple: StandInAppStore;
+  /** The buyer's account token (what the app binds a purchase to). */
+  let buyerToken: string;
+  const vb = (over: Parameters<typeof verified>[0]) =>
+    verified({ accountToken: buyerToken, ...over });
   const adminIds: string[] = [];
   const adminToken: Partial<Record<AdminRole, string>> = {};
   const communityIds: string[] = [];
@@ -419,6 +344,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
       where: { wawuUserId: { in: PEOPLE } },
     });
     await prisma.storePurchase.deleteMany({});
+    await prisma.storeSubscription.deleteMany({});
   }
 
   beforeAll(async () => {
@@ -441,10 +367,13 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
     host = await login('creator-pro@test.wawu.dev');
     google = new StandInGooglePlay();
     apple = new StandInAppStore();
-    ({ app, moduleRef } = await build(FAKE_CONFIG, google, apple));
+    ({ app, moduleRef } = await build(STAND_IN_CONFIG, google, apple));
     prisma = moduleRef.get(PrismaService);
     plans = moduleRef.get<PlansConfig>(PLANS_CONFIG);
     points = moduleRef.get(PointsService);
+    buyerToken = dataOf<{ accountToken: string }>(
+      await as(buyer).get('/store/products?platform=android').expect(200),
+    ).accountToken;
     packId = plans.packs[0].id;
     tierId = plans.tiers[0].id;
     const issuer = moduleRef.get(AdminTokenService);
@@ -580,7 +509,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
   const packTokens = (token: string, orderId = `GPA.${uid()}`) => {
     google.oneTime.set(
       token,
-      verified({
+      vb({
         platform: 'android',
         storeProductId: P.android.points,
         storeTransactionId: orderId,
@@ -715,7 +644,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
     // the store says it is pending
     google.oneTime.set(
       'tok-pending',
-      verified({
+      vb({
         platform: 'android',
         storeProductId: P.android.points,
         storeTransactionId: 'O1',
@@ -731,7 +660,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
     // cancelled or refunded in the store
     google.oneTime.set(
       'tok-cancelled',
-      verified({
+      vb({
         platform: 'android',
         storeProductId: P.android.points,
         storeTransactionId: 'O2',
@@ -747,7 +676,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
     // the token is for another product than the one named
     google.oneTime.set(
       'tok-other',
-      verified({
+      vb({
         platform: 'android',
         storeProductId: P.android.points,
         storeTransactionId: 'O3',
@@ -822,7 +751,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
   it("a credits pack adds the credits and opens a lot whose gross is WAWU's net after the store's share", async () => {
     google.oneTime.set(
       'tok-cr',
-      verified({
+      vb({
         platform: 'android',
         storeProductId: P.android.credits,
         storeTransactionId: 'GPA.cr1',
@@ -875,7 +804,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
   it("the cut is per store: the App Store's 30% leaves 70000, and an admin cut overrides the config", async () => {
     apple.transactions.set(
       '7001',
-      verified({
+      vb({
         platform: 'ios',
         storeProductId: P.ios.credits,
         storeTransactionId: '7001',
@@ -909,7 +838,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
     });
     apple.transactions.set(
       '7002',
-      verified({
+      vb({
         platform: 'ios',
         storeProductId: P.ios.credits,
         storeTransactionId: '7002',
@@ -943,7 +872,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
   const sub = (token: string, productId: string, order: string, days = 30) =>
     google.subscriptions.set(
       token,
-      verified({
+      vb({
         platform: 'android',
         storeProductId: productId,
         storeTransactionId: order,
@@ -1108,7 +1037,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
   it('an App Store transaction is read from Apple by id, never from the app', async () => {
     apple.transactions.set(
       '9001',
-      verified({
+      vb({
         platform: 'ios',
         storeProductId: P.ios.points,
         storeTransactionId: '9001',
@@ -1300,7 +1229,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
   it('a refunded credits pack takes the credits left, not the ones spent', async () => {
     google.oneTime.set(
       'tok-crr',
-      verified({
+      vb({
         platform: 'android',
         storeProductId: P.android.credits,
         storeTransactionId: 'GPA.crr',
@@ -1519,7 +1448,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
 
   it("Apple's notices: a renewal grants, a refund takes back, an expiry lapses; one that does not verify is refused", async () => {
     const iosSub = (order: string) =>
-      verified({
+      vb({
         platform: 'ios',
         storeProductId: P.ios.tier,
         storeTransactionId: order,

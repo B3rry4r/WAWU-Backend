@@ -8075,6 +8075,11 @@ model StorePurchase {
   endReason          String?
   /// What the take-back actually took (a spent point is not taken back).
   takenBack          Json?
+  /// Set when the Hub recorded the purchase but did not give what it sold and
+  /// an admin has to look (IAP-01 round 1): `member_removed`, a pass renewal for
+  /// a member the host removed. The store keeps billing until they cancel.
+  flag               String?
+  flaggedAt          DateTime?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
@@ -8098,4 +8103,36 @@ model StoreNotification {
 
   @@unique([platform, externalId])
   @@index([receivedAt])
+}
+
+/// Who holds a store subscription (IAP-01 round 1): written once, by the first
+/// purchase of the subscription (Google's purchase token, Apple's
+/// originalTransactionId), and never moved. Unique with the platform, so two
+/// people posting the same new subscription at once cannot both hold it, and a
+/// later order of it is refused to anyone else whatever its order id. The
+/// store's notices follow this row, never the newest purchase.
+model StoreSubscription {
+  id              String        @id @default(uuid())
+  platform        StorePlatform
+  subscriptionKey String
+  wawuUserId      String
+  /// The room a pass subscription is for.
+  communityId     String?
+  /// Set when the store says the subscription ended (expired, on hold, paused, revoked).
+  lapsedAt        DateTime?
+  createdAt       DateTime      @default(now())
+
+  @@unique([platform, subscriptionKey])
+  @@index([wawuUserId, communityId])
+}
+
+/// The id a person's store purchases are bound to (IAP-01 round 1): a stable
+/// random UUID per person, never their user id. The app hands it to Google
+/// (`obfuscatedAccountIdAndroid`) and Apple (`appAccountToken`) at purchase, the
+/// store returns it on every answer about that purchase, and the Hub refuses a
+/// purchase that carries another person's. Unique, so no two people share one.
+model StoreAccountToken {
+  wawuUserId String   @id
+  token      String   @unique
+  createdAt  DateTime @default(now())
 }

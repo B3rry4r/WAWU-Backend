@@ -3,12 +3,12 @@ import type {
   AppStoreNotification,
   GooglePlayClient,
   VerifiedStorePurchase,
-} from '../clients/store-clients';
+} from '../../src/store/clients/store-clients';
 import {
   GooglePushRefused,
   StorePurchaseNotFound,
   StoreUnreachable,
-} from '../clients/store-clients';
+} from '../../src/store/clients/store-clients';
 
 /**
  * Stand-ins for the two stores' servers (task IAP-01): in-memory, answering from
@@ -110,6 +110,7 @@ export function verified(
     priceMicros: 4_990_000n,
     state: 'purchased',
     needsAcknowledge: false,
+    accountToken: null,
     ...over,
   };
 }

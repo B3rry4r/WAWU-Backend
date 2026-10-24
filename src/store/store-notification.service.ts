@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpException,
   Inject,
   Injectable,
   Logger,
@@ -9,6 +10,7 @@ import {
 import type {
   StorePlatform,
   StorePurchase,
+  StoreSubscription,
 } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { isUniqueViolation } from '../money/prisma-unique';
@@ -22,9 +24,11 @@ import {
   type GooglePlayClient,
   type VerifiedStorePurchase,
 } from './clients/store-clients';
+import { StoreAccountService } from './store-account.service';
 import { StoreCatalogService } from './store-catalog.service';
 import { STORE_CONFIG, type StoreConfig } from './store-config';
 import {
+  GRANT_FAILED_MESSAGE,
   NOT_CONFIGURED_MESSAGE,
   StoreError,
   UNREACHABLE_MESSAGE,
@@ -98,6 +102,7 @@ export class StoreNotificationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly catalog: StoreCatalogService,
+    private readonly accounts: StoreAccountService,
     private readonly purchases: StorePurchaseService,
     private readonly grants: StoreGrantService,
     @Inject(STORE_CONFIG) private readonly config: StoreConfig,
@@ -203,8 +208,8 @@ export class StoreNotificationService {
 
   /** A subscription period renewed (or came back): ask Google, then grant the new period to the person who holds the subscription. */
   private async renewGoogle(token: string): Promise<Outcome> {
-    const prior = await this.latestOf('android', token);
-    if (prior === null) return 'unknown';
+    const holder = await this.holderOf('android', token);
+    if (holder === null) return 'unknown';
     if (this.google === null)
       throw new StoreError('store_not_configured', NOT_CONFIGURED_MESSAGE);
     let verified: VerifiedStorePurchase;
@@ -214,7 +219,7 @@ export class StoreNotificationService {
       if (e instanceof StorePurchaseNotFound) return 'unknown';
       throw e;
     }
-    return this.grantRenewal(prior, verified);
+    return this.grantRenewal(holder, verified);
   }
 
   // -------------------------------------------------------------------------
@@ -249,8 +254,8 @@ export class StoreNotificationService {
         case 'DID_RENEW':
         case 'OFFER_REDEEMED': {
           if (t.subscriptionKey === null) return 'ignored';
-          const prior = await this.latestOf('ios', t.subscriptionKey);
-          return prior === null ? 'unknown' : this.grantRenewal(prior, t);
+          const holder = await this.holderOf('ios', t.subscriptionKey);
+          return holder === null ? 'unknown' : this.grantRenewal(holder, t);
         }
         case 'REFUND':
         case 'REVOKE': {
@@ -289,35 +294,47 @@ export class StoreNotificationService {
   // Shared steps
   // -------------------------------------------------------------------------
 
-  /** The newest purchase of a subscription, with its product. */
-  private latestOf(
+  /**
+   * Who holds a subscription: the person who first bought it, never the newest
+   * purchase's buyer (IAP-01 fix round 1). A notice about a subscription goes to
+   * its holder or to nobody.
+   */
+  private holderOf(
     platform: StorePlatform,
     subscriptionKey: string,
-  ): Promise<StorePurchase | null> {
-    return this.prisma.storePurchase.findFirst({
-      where: { platform, subscriptionKey },
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+  ): Promise<StoreSubscription | null> {
+    return this.prisma.storeSubscription.findUnique({
+      where: { platform_subscriptionKey: { platform, subscriptionKey } },
     });
   }
 
-  /** A new period of a subscription the person already holds: granted to them, once per store transaction. */
+  /** A new period of a subscription its holder has: granted to them, once per store transaction. */
   private async grantRenewal(
-    prior: StorePurchase,
+    holder: StoreSubscription,
     verified: VerifiedStorePurchase,
   ): Promise<Outcome> {
     if (verified.state !== 'purchased') return 'ignored';
+    // The store says the period was bought for somebody else's account: not the holder's.
+    if (!(await this.accounts.agrees(holder.wawuUserId, verified)))
+      return 'ignored';
     const product = await this.catalog.productBy(
-      prior.platform,
+      holder.platform,
       verified.storeProductId,
     );
     if (product === null) return 'unknown';
     const settled = await this.purchases.settle({
-      userId: prior.wawuUserId,
+      userId: holder.wawuUserId,
       product,
       verified,
-      communityId: prior.communityId,
+      communityId: holder.communityId,
     });
     if (settled.alreadyGranted) return 'duplicate';
+    // A resubscribe after a lapse puts the subscription back in force.
+    if (holder.lapsedAt !== null)
+      await this.prisma.storeSubscription.updateMany({
+        where: { id: holder.id },
+        data: { lapsedAt: null },
+      });
     return 'granted';
   }
 
@@ -333,9 +350,13 @@ export class StoreNotificationService {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
     if (latest === null) return 'unknown';
-    return (await this.takeBackPurchase(latest, status, reason))
-      ? 'taken_back'
-      : 'duplicate';
+    const done = await this.takeBackPurchase(latest, status, reason);
+    // A revoked subscription is over: nothing more is coming from it.
+    await this.prisma.storeSubscription.updateMany({
+      where: { platform, subscriptionKey: key, lapsedAt: null },
+      data: { lapsedAt: new Date() },
+    });
+    return done ? 'taken_back' : 'duplicate';
   }
 
   /**
@@ -371,6 +392,7 @@ export class StoreNotificationService {
 
   /** A subscription ended (expired, on hold, paused): it will not renew, so its purchases are marked ended. What was granted runs to its own end. */
   private async lapse(platform: StorePlatform, key: string): Promise<Outcome> {
+    const now = new Date();
     const { count } = await this.prisma.storePurchase.updateMany({
       where: {
         platform,
@@ -378,9 +400,13 @@ export class StoreNotificationService {
         status: 'granted',
         endedAt: null,
       },
-      data: { endedAt: new Date(), endReason: 'lapsed' },
+      data: { endedAt: now, endReason: 'lapsed' },
     });
-    return count > 0 ? 'lapsed' : 'unknown';
+    const held = await this.prisma.storeSubscription.updateMany({
+      where: { platform, subscriptionKey: key, lapsedAt: null },
+      data: { lapsedAt: now },
+    });
+    return count > 0 || held.count > 0 ? 'lapsed' : 'unknown';
   }
 
   /** Runs a step; a store that cannot be reached is a 503 so the store sends the notification again. */
@@ -390,7 +416,13 @@ export class StoreNotificationService {
     } catch (e) {
       if (e instanceof StoreUnreachable)
         throw new StoreError('store_unreachable', UNREACHABLE_MESSAGE);
-      throw e;
+      if (e instanceof HttpException) throw e;
+      // A fault on our side: named, logged by kind, and answered 500 so the
+      // store sends the notice again (nothing is recorded as seen).
+      this.logger.error(
+        `store notification: it could not be applied (${e instanceof Error ? e.name : 'error'}); the store sends it again`,
+      );
+      throw new StoreError('store_grant_failed', GRANT_FAILED_MESSAGE);
     }
   }
 

@@ -155,6 +155,65 @@ describe('IAP-01: the real Google Play adapter (stand-in server)', () => {
     ).toBe(true);
   });
 
+  it('carries the account token the app bound the purchase to, and refuses a token bought for another product', async () => {
+    answers[`GET ${base}/purchases/products/wawu_points_s/tokens/tok-b`] = {
+      status: 200,
+      body: {
+        purchaseTimeMillis: '1',
+        purchaseState: 0,
+        orderId: 'O-b',
+        productId: 'wawu_points_s',
+        obfuscatedExternalAccountId: 'acct-token-1',
+      },
+    };
+    const client = new RealGooglePlayClient(config);
+    expect(
+      (await client.verifyOneTime('wawu_points_s', 'tok-b')).accountToken,
+    ).toBe('acct-token-1');
+    // Google's answer names another product than the one the Hub asked about: not this purchase.
+    answers[`GET ${base}/purchases/products/wawu_points_l/tokens/tok-b`] = {
+      status: 200,
+      body: {
+        purchaseTimeMillis: '1',
+        purchaseState: 0,
+        orderId: 'O-b',
+        productId: 'wawu_points_s',
+      },
+    };
+    await expect(
+      client.verifyOneTime('wawu_points_l', 'tok-b'),
+    ).rejects.toBeInstanceOf(StorePurchaseNotFound);
+    // No token on the purchase: null.
+    answers[`GET ${base}/purchases/products/p/tokens/tok-n`] = {
+      status: 200,
+      body: { purchaseTimeMillis: '1', purchaseState: 0, orderId: 'O-n' },
+    };
+    expect((await client.verifyOneTime('p', 'tok-n')).accountToken).toBeNull();
+  });
+
+  it('reads the account token of a subscription from its external account identifiers', async () => {
+    answers[`GET ${base}/purchases/subscriptionsv2/tokens/sub-tok`] = {
+      status: 200,
+      body: {
+        latestOrderId: 'GPA.s..0',
+        subscriptionState: 'SUBSCRIPTION_STATE_ACTIVE',
+        externalAccountIdentifiers: {
+          obfuscatedExternalAccountId: 'acct-token-2',
+        },
+        lineItems: [
+          {
+            productId: 'wawu_tier_x',
+            expiryTime: new Date(Date.now() + 86_400_000).toISOString(),
+          },
+        ],
+      },
+    };
+    expect(
+      (await new RealGooglePlayClient(config).verifySubscription('sub-tok'))
+        .accountToken,
+    ).toBe('acct-token-2');
+  });
+
   it('maps a pending one-time purchase and a test purchase', async () => {
     answers[`GET ${base}/purchases/products/p/tokens/t2`] = {
       status: 200,

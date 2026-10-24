@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
-import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import {
+  HttpException,
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import type {
   StorePlatform,
@@ -25,9 +31,11 @@ import {
   type StoreGrantSnapshot,
 } from './store-grant.service';
 import { isSubscriptionKind } from './store-grants';
+import { StoreAccountService } from './store-account.service';
 import { StoreCatalogService } from './store-catalog.service';
 import {
   DISABLED_MESSAGE,
+  GRANT_FAILED_MESSAGE,
   NOT_CONFIGURED_MESSAGE,
   StoreError,
   UNREACHABLE_MESSAGE,
@@ -73,6 +81,7 @@ export class StorePurchaseService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly catalog: StoreCatalogService,
+    private readonly accounts: StoreAccountService,
     private readonly grants: StoreGrantService,
     private readonly blocked: BlockedAccountService,
     @Optional()
@@ -104,6 +113,9 @@ export class StorePurchaseService {
       );
     if (verified.state !== 'purchased')
       throw invalid('The store says this purchase is not in force.');
+    // The purchase must be this person's: the store's answer carries the account
+    // token the app bound it to (a purchase token alone proves nothing).
+    await this.accounts.assertBound(userId, product.kind, verified);
 
     const settled = await this.settle({
       userId,
@@ -151,6 +163,19 @@ export class StorePurchaseService {
         storeTransactionId: verified.storeTransactionId,
       },
     };
+    const subscriptionKey = verified.subscriptionKey;
+    const holderKey =
+      subscriptionKey === null
+        ? null
+        : { platform_subscriptionKey: { platform, subscriptionKey } };
+    // A subscription is held by the person who first bought it, whatever the
+    // order id: a later order of it is refused to anyone else.
+    if (holderKey !== null) {
+      const holder = await this.prisma.storeSubscription.findUnique({
+        where: holderKey,
+      });
+      if (holder !== null && holder.wawuUserId !== userId) throw taken();
+    }
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const existing = await this.prisma.storePurchase.findUnique({
         where: key,
@@ -174,9 +199,27 @@ export class StorePurchaseService {
           : null;
       try {
         return await this.prisma.$transaction(async (tx) => {
+          if (holderKey !== null) {
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-subscription:${platform}:${subscriptionKey}`}, 0))`;
+            const holder = await tx.storeSubscription.findUnique({
+              where: holderKey,
+            });
+            if (holder !== null && holder.wawuUserId !== userId) throw taken();
+          }
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-purchase:${platform}:${verified.storeTransactionId}`}, 0))`;
           const again = await tx.storePurchase.findUnique({ where: key });
           if (again !== null) return { purchase: again, alreadyGranted: true };
+          if (holderKey !== null && subscriptionKey !== null)
+            await tx.storeSubscription.upsert({
+              where: holderKey,
+              create: {
+                platform,
+                subscriptionKey,
+                wawuUserId: userId,
+                communityId: product.kind === 'pass' ? communityId : null,
+              },
+              update: {},
+            });
           const now = new Date();
           const row = await tx.storePurchase.create({
             data: {
@@ -204,14 +247,27 @@ export class StorePurchaseService {
           const snap = await this.grants.give(tx, row, product, now);
           const done = await tx.storePurchase.update({
             where: { id: row.id },
-            data: { grant: snap as unknown as Prisma.InputJsonValue },
+            data: {
+              grant: snap as unknown as Prisma.InputJsonValue,
+              // Paid but not given (a pass renewal for a removed member): an admin looks.
+              ...(snap.skipped === undefined
+                ? {}
+                : { flag: snap.skipped, flaggedAt: now }),
+            },
           });
           return { purchase: done, alreadyGranted: false };
         });
       } catch (e) {
         // A racing grant of the same store transaction won; read it next time round.
         if (isUniqueViolation(e) && attempt === 0) continue;
-        throw e;
+        // A refusal is the caller's answer; anything else is a fault on our side
+        // after the store took the payment. Named, logged by kind only, and
+        // retried by the next post or the store's next notice (nothing was kept).
+        if (e instanceof HttpException) throw e;
+        this.logger.error(
+          `store purchase ${platform} ${hashOf(verified.storeTransactionId)}: the grant failed (${e instanceof Error ? e.name : 'error'}: ${e instanceof Error ? e.message.slice(0, 160) : ''}); nothing was kept, the next ask tries again`,
+        );
+        throw new StoreError('store_grant_failed', GRANT_FAILED_MESSAGE);
       }
     }
     throw new Error('unreachable');
@@ -259,6 +315,7 @@ export class StorePurchaseService {
       grant: this.grants.grantedView(snap, purchase.communityId),
       purchasedAt: purchase.purchasedAt.toISOString(),
       expiresAt: purchase.expiresAt?.toISOString() ?? null,
+      flag: purchase.flag,
     };
   }
 
@@ -337,6 +394,13 @@ export class StorePurchaseService {
       throw e;
     }
   }
+}
+
+function taken(): StoreError {
+  return new StoreError(
+    'store_purchase_taken',
+    'That purchase was already used on another account.',
+  );
 }
 
 function invalid(message: string): StoreError {
