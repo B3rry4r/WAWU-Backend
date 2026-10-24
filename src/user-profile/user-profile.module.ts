@@ -14,6 +14,11 @@ import { ProfileWorksController } from './profile-works.controller';
 import { ProfileWorkService } from './profile-work.service';
 import { ProfileEducationService } from './profile-education.service';
 import { SignupProfileService } from './signup-profile.service';
+import { SignupIdentityService } from './signup-identity.service';
+import {
+  HandleAvailabilityController,
+  SignupIdentityController,
+} from './signup-identity.controller';
 import { ProfileAudienceService } from './profile-audience.service';
 import { VisitorProfileService } from './visitor-profile.service';
 
@@ -49,6 +54,8 @@ import { VisitorProfileService } from './visitor-profile.service';
     UserProfileController,
     ProfileWorksController,
     PublicUserProfileController,
+    HandleAvailabilityController,
+    SignupIdentityController,
   ],
   providers: [
     UserProfileService,
@@ -58,6 +65,7 @@ import { VisitorProfileService } from './visitor-profile.service';
     ProfileEducationService,
     ProfileAudienceService,
     SignupProfileService,
+    SignupIdentityService,
     VisitorProfileService,
   ],
 })
