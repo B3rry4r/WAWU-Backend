@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- Rollback of 20261107120000_capital_orders (NUV-12). Run it only after the Hub build that reads these tables is gone.
+-- Rollback of 20261110120000_capital_orders (NUV-12). Run it only after the Hub build that reads these tables is gone.
 -- Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while any order is past its reservation: a confirmed order is money invested at the
 -- provider, and dropping the row loses the link between the person and the holding (and the ledger rows that name it).
