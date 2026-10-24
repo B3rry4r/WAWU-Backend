@@ -176,6 +176,14 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     files: ['fileKey'],
     why: "a person's own recording sent to the Clean audio tool (AITOOLS-04), uploaded to ai/input-audio through the presign; audio only, nothing is published",
   },
+  'POST ai-tools/dubbing/quote': {
+    files: ['fileKey'],
+    why: "prices a person's own recording or video for the Dubbing tool (AITOOLS-05), uploaded to ai/input-audio or ai/input-video through the presign; priced before the job, same file, nothing is published",
+  },
+  'POST ai-tools/dubbing/jobs': {
+    files: ['fileKey'],
+    why: "a person's own recording or video sent to the Dubbing tool (AITOOLS-05), uploaded to ai/input-audio or ai/input-video through the presign; nothing is published",
+  },
   // Not a person's own product.
   'POST communities/:id/messages': {
     files: ['imageUrl', 'videoUrl', 'voiceUrl'],
