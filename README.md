@@ -49,6 +49,28 @@ fixture UUIDs — and that pattern is what any newly isolated spec should copy.
 Until the rest follow, `--runInBand` is the only way to get a comparable
 number, and a parallel run's failures should not be read as regressions.
 
+### Branch checks, and the deploy's tests (DEPLOY-FAST)
+
+GitHub runs the whole suite on every `wmt/**` push, in 3 shards of
+`npx jest --runInBand --forceExit --shard=N/3` (about 20 minutes), plus the
+`netns` job. The deploy (`.github/workflows/deploy.yml`) runs those same two
+jobs, `suite` and `netns`, after a merge to main, and only then deploys.
+`scripts/ci/check_deploy_in_sync.py` (job `deploy-test-in-sync`) fails when a
+test step differs between the two files, and proves on every run that it would
+catch a dropped or changed step, a missing shard or a removed guard.
+
+The deploy skips its tests only for a tree a branch has already passed. Its
+first job, `decide` (`scripts/ci/decide_skip_tests.py`), looks at the commit
+being deployed and at its second parent when it is a merge with the same tree
+(the branch already contained main). If, on that exact commit, the newest push
+run of Branch checks (every job), Gates and Protected routes all succeeded, the
+tests are skipped; if anything else is true or cannot be read, they run. The
+migrate, build, restart and smoke test steps always run. The job log and
+summary name the decision and the run ids. To prove it without deploying, run
+the workflow by hand from a branch with `dry_run` on (`force_tests` runs the
+tests even when the decision is to skip them): the deploy job never runs for a
+dry run, or for any ref but main.
+
 ### Test hygiene rules
 
 A spec must leave `wawu_hub_test` exactly as it found it. Two ways to comply,
