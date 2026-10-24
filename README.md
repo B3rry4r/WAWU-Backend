@@ -178,6 +178,23 @@ set `STACK_STORAGE_ENDPOINT=http://127.0.0.1:<port>` with
 `STACK_STORAGE_PATH_STYLE=true`. Keep both ports outside the stack's range.
 Without these the tool is listed `enabled: false` and a job is refused.
 
+Since AITOOLS-03 it also answers `POST /v1/sound-generation` (Sound effect) and
+`POST /v1/music` (Music track) with silent MP3 frames of the asked length
+(`GET /__standin/state` lists each call's `sfx` and `music` options), with the
+same four markers in the prompt. A track call has its own timeout,
+`AI_VOICE_MUSIC_TIMEOUT_MS` (default 600000). It is made with `node:http(s)`,
+not `fetch`, because Node's `fetch` ends a call that has sent no answer in 300
+seconds whatever the setting says; here the setting is the real wait, headers
+and body. Sound effect and Music track need only `AI_VOICE_BASE_URL` and
+`AI_VOICE_API_KEY` to be listed (they use no voice); VoiceOver and Quick voice
+also need `AI_VOICE_VOICES`. The track call sends the same
+`user-agent` as `fetch` and follows up to 3 redirects as `fetch` does (307 and
+308 repeat the POST; 301, 302 and 303 become a GET); a fourth fails like any
+other 3xx answer. A job the provider refuses keeps the provider's HTTP status
+in the server log only (`ai job <id> ... answered 402`), never on the job (its
+`providerRef` holds a provider job id and is never written by a failure) and
+never shown to the person.
+
 Since AITOOLS-02 the stand-in answers from one route table (a later tool adds its
 route and its markers there) and keeps the `model_id` of each speech call in
 `GET /__standin/state` (`models`, `lastModel`), so a spec can see that Quick voice

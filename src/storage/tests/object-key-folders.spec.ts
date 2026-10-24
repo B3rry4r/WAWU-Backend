@@ -5,7 +5,7 @@ import {
 } from '../storage.service';
 import { UPLOAD_FOLDERS } from '../dto/presign-upload.dto';
 import { CHAT_UPLOAD_FOLDERS } from '../../chat/chat-limits';
-import { AI_AUDIO_FOLDER } from '../../ai-tools/audio/ai-audio-store';
+import { AI_AUDIO_FOLDERS } from '../../ai-tools/audio/ai-audio-store';
 
 /**
  * FIX-71. `objectKeyFrom` recovers the key from a stored link by matching it
@@ -20,7 +20,7 @@ describe('objectKeyFrom folders (FIX-71)', () => {
     for (const folder of [
       ...UPLOAD_FOLDERS,
       ...CHAT_UPLOAD_FOLDERS,
-      AI_AUDIO_FOLDER,
+      ...AI_AUDIO_FOLDERS,
     ]) {
       expect(KEY_FOLDERS).toContain(folder);
       const key = `${folder}/user-1/x.bin`;
@@ -29,8 +29,8 @@ describe('objectKeyFrom folders (FIX-71)', () => {
     }
   });
 
-  it('keeps the Hub-written folder list equal to the AI audio folder', () => {
-    expect([...GENERATED_KEY_FOLDERS]).toEqual([AI_AUDIO_FOLDER]);
+  it('keeps the Hub-written folder list equal to the AI audio folders (VoiceOver, then AITOOLS-03: Sound effect and Music track)', () => {
+    expect([...GENERATED_KEY_FOLDERS]).toEqual([...AI_AUDIO_FOLDERS]);
   });
 
   it('recovers a chat photo, a chat file and an AI voice-over link', () => {

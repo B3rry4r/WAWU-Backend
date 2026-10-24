@@ -35117,6 +35117,102 @@
         "x-wawu-built-by": "AITOOLS-02"
       }
     },
+    "/api/hub/ai-tools/sound-effect/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createSoundEffect",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSoundEffectJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Sound effect job (PT1 \"Sound effect\", AITOOLS-03): a `prompt`\ndescribing the sound, an optional `durationSeconds` and the `quoteToken`\nof the `POST /points/quote` for the action `sfx`. Priced flat, one use,\nwhatever the length. The request, the answer, the `Idempotency-Key` rule\nand the refusals are those of `POST /ai-tools/voiceover/jobs`, plus\n`422 ai_prompt_too_long` and `422 ai_length_too_long`, each naming its\nlimit, and `400 ai_prompt_empty`. Nothing is held when a job is refused.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-03"
+      }
+    },
+    "/api/hub/ai-tools/music/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createMusic",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMusicJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Music track job (PT1 \"Music track\", AITOOLS-03): a `prompt`\ndescribing the track, an optional `lengthSeconds`, an optional\n`instrumental` switch and the `quoteToken` of the `POST /points/quote`\nfor the action `music_per_track`. Priced flat, one track, whatever the\nlength. A track can take minutes to make, so the app polls `GET\n/ai-tools/jobs/{id}`. The request, the answer, the `Idempotency-Key` rule\nand the refusals are those of `POST /ai-tools/sound-effect/jobs`.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-03"
+      }
+    },
     "/api/hub/ai-tools/jobs": {
       "get": {
         "operationId": "AiToolsController_listJobs",
@@ -42762,6 +42858,64 @@
         "required": [
           "text",
           "voiceId",
+          "quoteToken"
+        ]
+      },
+      "CreateSoundEffectJobDto": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "What the sound is, in words.",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "durationSeconds": {
+            "type": "number",
+            "description": "How long the sound is, in seconds, from 0.5 up to the longest `GET /ai-tools` lists. Left out: the tool chooses. The price is the same whatever the length.",
+            "minimum": 0.5,
+            "maximum": 3600
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw. A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "prompt",
+          "quoteToken"
+        ]
+      },
+      "CreateMusicJobDto": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "What the track is like, in words.",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "lengthSeconds": {
+            "type": "integer",
+            "description": "How long the track is, in whole seconds, from 3 up to the longest `GET /ai-tools` lists. Left out: the tool chooses. The price is the same whatever the length.",
+            "minimum": 3,
+            "maximum": 3600
+          },
+          "instrumental": {
+            "type": "boolean",
+            "description": "True for a track without singing."
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw. A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "prompt",
           "quoteToken"
         ]
       },
@@ -63545,8 +63699,10 @@
           "id": {
             "type": "string",
             "enum": [
+              "music",
               "voiceover",
-              "quick-voice"
+              "quick-voice",
+              "sound-effect"
             ]
           },
           "action": {
@@ -63561,7 +63717,9 @@
           "unit": {
             "type": "string",
             "enum": [
-              "minute"
+              "use",
+              "minute",
+              "track"
             ]
           },
           "costPointsPerUnit": {
@@ -63576,7 +63734,8 @@
               "kind": {
                 "type": "string",
                 "enum": [
-                  "text"
+                  "text",
+                  "prompt"
                 ]
               },
               "maxCharacters": {
@@ -63584,6 +63743,10 @@
               },
               "charactersPerUnit": {
                 "type": "number"
+              },
+              "instrumental": {
+                "type": "boolean",
+                "nullable": true
               }
             },
             "required": [
@@ -63681,8 +63844,10 @@
           "tool": {
             "type": "string",
             "enum": [
+              "music",
               "voiceover",
-              "quick-voice"
+              "quick-voice",
+              "sound-effect"
             ]
           },
           "state": {

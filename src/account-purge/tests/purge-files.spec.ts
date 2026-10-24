@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { UPLOAD_FOLDERS } from '../../storage/dto/presign-upload.dto';
 import { CHAT_UPLOAD_FOLDERS } from '../../chat/chat-limits';
-import { AI_AUDIO_FOLDER } from '../../ai-tools/audio/ai-audio-store';
+import { AI_AUDIO_FOLDERS } from '../../ai-tools/audio/ai-audio-store';
 import {
   EVENT_FOLDERS,
   FILE_KINDS,
@@ -48,7 +48,7 @@ describe('FIX-65: what the purge does with each kind of upload', () => {
   const written = [
     ...UPLOAD_FOLDERS,
     ...CHAT_UPLOAD_FOLDERS,
-    AI_AUDIO_FOLDER,
+    ...AI_AUDIO_FOLDERS,
   ] as string[];
 
   it('decides every folder the Hub writes to, and names no folder it does not write to', () => {

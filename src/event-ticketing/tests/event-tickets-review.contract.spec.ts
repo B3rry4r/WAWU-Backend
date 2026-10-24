@@ -443,7 +443,7 @@ describe('PUT /events/:id/tickets: the hosting gate and re-review (EVENTS-11, R-
 
     const res = await put(hostToken, EV_LIVE).expect(409);
     expect((res.body as ErrorBody).message).toBe(
-      'Tickets have already sold for "Regular". Add a new tier instead of editing one people have bought.',
+      'Tickets have already sold for "Regular". Ticket types cannot change once a ticket is sold.',
     );
     expect(await snapshot(EV_LIVE)).toEqual(before);
 

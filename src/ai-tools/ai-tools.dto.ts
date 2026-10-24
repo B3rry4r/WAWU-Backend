@@ -1,13 +1,17 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   Length,
   Matches,
   Max,
+  MaxLength,
   Min,
+  MinLength,
 } from 'class-validator';
 
 /**
@@ -45,6 +49,80 @@ export class CreateVoiceoverJobDto {
  * quote as VoiceOver; the quote is for the action `quick_voice_per_min`.
  */
 export class CreateQuickVoiceJobDto extends CreateVoiceoverJobDto {}
+
+/** The longest description this route will read: a request bound, not a product figure (the limit a person is held to is a setting). */
+const MOST_PROMPT_CHARACTERS = 20_000;
+/** The longest length this route will read, in seconds: a request bound (the real limit is a setting, named when it refuses). */
+const MOST_SECONDS = 3600;
+
+/**
+ * `POST /ai-tools/sound-effect/jobs` (AITOOLS-03). The Idempotency-Key is a
+ * header. The description is never stored: the job keeps only how long it was.
+ */
+export class CreateSoundEffectJobDto {
+  /** What the sound is, in words. */
+  @ApiProperty({ minLength: 1, maxLength: MOST_PROMPT_CHARACTERS })
+  @MinLength(1, { message: 'Describe what you want to hear.' })
+  @MaxLength(MOST_PROMPT_CHARACTERS, {
+    message: 'That description is too long.',
+  })
+  // Last, so it is the first to answer: words that are not text say so.
+  @IsString({ message: 'prompt must be text.' })
+  prompt!: string;
+
+  /** How long the sound is, in seconds, from 0.5 up to the longest `GET /ai-tools` lists. Left out: the tool chooses. The price is the same whatever the length. */
+  @ApiPropertyOptional({ type: 'number', minimum: 0.5, maximum: MOST_SECONDS })
+  @IsOptional()
+  @Max(MOST_SECONDS, { message: 'That length is too long.' })
+  @Min(0.5, { message: 'The shortest sound is half a second.' })
+  // Last, so it is the first to answer: a value that is not a number says so
+  // (the first message is the one a person sees).
+  @IsNumber(
+    { allowNaN: false, allowInfinity: false },
+    { message: 'durationSeconds must be a number of seconds.' },
+  )
+  durationSeconds?: number;
+
+  /** `quoteToken` from the `POST /points/quote` the person saw. A different cost now is `409 quote_changed`. */
+  @ApiProperty()
+  @IsString({ message: 'quoteToken must be text.' })
+  @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
+  quoteToken!: string;
+}
+
+/** `POST /ai-tools/music/jobs` (AITOOLS-03). The Idempotency-Key is a header. */
+export class CreateMusicJobDto {
+  /** What the track is like, in words. */
+  @ApiProperty({ minLength: 1, maxLength: MOST_PROMPT_CHARACTERS })
+  @MinLength(1, { message: 'Describe what you want to hear.' })
+  @MaxLength(MOST_PROMPT_CHARACTERS, {
+    message: 'That description is too long.',
+  })
+  // Last, so it is the first to answer: words that are not text say so.
+  @IsString({ message: 'prompt must be text.' })
+  prompt!: string;
+
+  /** How long the track is, in whole seconds, from 3 up to the longest `GET /ai-tools` lists. Left out: the tool chooses. The price is the same whatever the length. */
+  @ApiPropertyOptional({ type: 'integer', minimum: 3, maximum: MOST_SECONDS })
+  @IsOptional()
+  @Max(MOST_SECONDS, { message: 'That length is too long.' })
+  @Min(3, { message: 'The shortest track is 3 seconds.' })
+  // Last, so it is the first to answer (see durationSeconds).
+  @IsInt({ message: 'lengthSeconds must be a whole number of seconds.' })
+  lengthSeconds?: number;
+
+  /** True for a track without singing. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean({ message: 'instrumental must be true or false.' })
+  instrumental?: boolean;
+
+  /** `quoteToken` from the `POST /points/quote` the person saw. A different cost now is `409 quote_changed`. */
+  @ApiProperty()
+  @IsString({ message: 'quoteToken must be text.' })
+  @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
+  quoteToken!: string;
+}
 
 /** `GET /ai-tools/jobs`: a cursor page (docs/contract/CONVENTIONS.md section 6). */
 export class AiJobListQueryDto {
