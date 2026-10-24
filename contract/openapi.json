@@ -8198,6 +8198,18 @@
                 "rejected"
               ]
             }
+          },
+          {
+            "name": "contentType",
+            "required": false,
+            "in": "query",
+            "description": "Only the creator's own courses. Left out, every kind.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "course"
+              ]
+            }
           }
         ],
         "responses": {
@@ -9343,6 +9355,97 @@
         },
         "tags": [
           "ContentMedia"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/lessons/{lessonId}/play": {
+      "get": {
+        "operationId": "CourseLessonsController_play",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lessonId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LessonPlay"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A fresh link to play one lesson: free lessons for anyone who may open the piece, the rest for buyers and the creator.",
+        "tags": [
+          "CourseLessons"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/lessons": {
+      "put": {
+        "operationId": "CourseLessonsController_set",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetLessonsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "lessons": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LessonView"
+                      }
+                    }
+                  },
+                  "required": [
+                    "lessons"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "The creator states the lessons: the list, the order and each lesson's file.",
+        "tags": [
+          "CourseLessons"
         ]
       }
     },
@@ -27366,6 +27469,108 @@
         ]
       }
     },
+    "/api/hub/users/handle-available": {
+      "get": {
+        "operationId": "HandleAvailabilityController_available",
+        "parameters": [
+          {
+            "name": "handle",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandleAvailabilityView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "HandleAvailability"
+        ]
+      }
+    },
+    "/api/hub/users/me/identity": {
+      "put": {
+        "operationId": "SignupIdentityController_complete",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteIdentityDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "SignupIdentity"
+        ]
+      }
+    },
+    "/api/hub/users/me/handle": {
+      "put": {
+        "operationId": "SignupIdentityController_changeHandle",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeHandleDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "handle": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "handle"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "The app's Edit profile changing a username it already has (round 3, M2). The same rules and lock as the route\nabove; `PATCH /users/me` is untouched because the web calls it (BACKEND_GAPS G-SIGNUP-NAMES-1).",
+        "tags": [
+          "SignupIdentity"
+        ]
+      }
+    },
     "/api/hub/learn/courses/{id}/enrol": {
       "post": {
         "operationId": "CourseEnrollmentController_enrol",
@@ -31060,14 +31265,15 @@
             "name": "kind",
             "required": false,
             "in": "query",
-            "description": "Only rows of this kind (the Paid DMs, Communities and Money chips; the\nMoney chip is `money_request`). All kinds when left out.",
+            "description": "Only rows of this kind (the Paid DMs, Communities and Money chips). The\nMoney chip is `money`: requests and sends between two WAWU people\ntogether (FIX-114). `money_request` stays what it was, requests only.\nSends are served only under `money`; the unfiltered list never holds\nthem. All kinds when left out.",
             "schema": {
               "type": "string",
               "enum": [
                 "chat",
                 "paid_dm",
                 "community",
-                "money_request"
+                "money_request",
+                "money"
               ]
             }
           }
@@ -31162,7 +31368,8 @@
                 "all",
                 "content",
                 "events",
-                "creators"
+                "creators",
+                "courses"
               ]
             }
           },
@@ -31251,6 +31458,95 @@
           }
         },
         "summary": "Remove a saved creator. Idempotent.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
+    "/api/hub/me/saved/courses/{courseId}": {
+      "get": {
+        "operationId": "MeController_courseSaved",
+        "parameters": [
+          {
+            "name": "courseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedCourseState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Whether a school course is saved (SC3's bookmark).",
+        "tags": [
+          "Me"
+        ]
+      },
+      "put": {
+        "operationId": "MeController_saveCourse",
+        "parameters": [
+          {
+            "name": "courseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedCourseState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Save a school course (SC3's bookmark). Idempotent.",
+        "tags": [
+          "Me"
+        ]
+      },
+      "delete": {
+        "operationId": "MeController_unsaveCourse",
+        "parameters": [
+          {
+            "name": "courseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedCourseState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Remove a saved school course. Idempotent.",
         "tags": [
           "Me"
         ]
@@ -35268,6 +35564,178 @@
         "x-wawu-built-by": "AITOOLS-03"
       }
     },
+    "/api/hub/ai-tools/captions/quote": {
+      "post": {
+        "operationId": "AiToolsController_quoteCaptions",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteFileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFileQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The points quote for a Captions file (AITOOLS-04): the `fileKey` of a file\nthe person uploaded. The Hub reads the file's length itself and prices the\nminutes from that, so the phone sends no length. Answers the same quote\n`POST /points/quote` does (with its `quoteToken`, to send to the job route\nwith the same `fileKey`), plus `file.seconds` and `file.minutes`. Nothing\nis held. `404 not_found` (not the caller's own file), `422 ai_file_too_large`,\n`422 ai_file_unreadable`; over the longest job the quote's `cap` names\n`minutes_per_job` and `canRun` is false.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-04"
+      }
+    },
+    "/api/hub/ai-tools/clean-audio/quote": {
+      "post": {
+        "operationId": "AiToolsController_quoteCleanAudio",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteFileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFileQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The points quote for a Clean audio file (AITOOLS-04): exactly `POST /ai-tools/captions/quote`, for the action `clean_audio_per_min`.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-04"
+      }
+    },
+    "/api/hub/ai-tools/captions/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createCaptions",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCaptionsJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Captions job (PT1 \"Captions\", AITOOLS-04): the `fileKey` of a\nrecording or video the person uploaded (`POST /uploads/presign`, folder\n`ai/input-audio` or `ai/input-video`, then `POST /uploads/confirm`), an\noptional `languageCode` and the `quoteToken` of the `POST /points/quote`\n(sent with the same `fileKey`) for the action `captions_per_min`. Priced by\nthe minute of the file, as the Hub reads it from the file itself (rounded\nup, at least 1). The done job's `outputs` hold the words (`text`) and a\nsubtitle file (`subtitles`, SRT). The request, the answer and the\n`Idempotency-Key` rule are those of `POST /ai-tools/voiceover/jobs`, plus\n`404 not_found` (not the caller's own file), `422 ai_file_too_large` and\n`422 ai_file_unreadable`, each with nothing held; over the longest job the\nanswer is `422 points_cap_reached` naming `minutes_per_job`. The uploaded\nfile is deleted when the job ends, either way.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-04"
+      }
+    },
+    "/api/hub/ai-tools/clean-audio/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createCleanAudio",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCleanAudioJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Clean audio job (PT1 \"Clean audio\", AITOOLS-04): the `fileKey` of\na recording or video the person uploaded and the `quoteToken` for the\naction `clean_audio_per_min`. The done job's `audioUrl` (and its `audio`\noutput) is the same recording with the noise taken out. The request, the\nanswer and every refusal are those of `POST /ai-tools/captions/jobs`.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-04"
+      }
+    },
     "/api/hub/ai-tools/jobs": {
       "get": {
         "operationId": "AiToolsController_listJobs",
@@ -37284,7 +37752,9 @@
               "event/speaker",
               "event/banner",
               "profile/work",
-              "voice/sample"
+              "voice/sample",
+              "ai/input-audio",
+              "ai/input-video"
             ]
           },
           "contentType": {
@@ -38217,6 +38687,11 @@
           "fullAsset": {
             "type": "string",
             "format": "uri"
+          },
+          "parentCourseId": {
+            "type": "string",
+            "description": "FIX-111 (H24): the creator's own course this piece comes from (\"From the course VFX for Beginners\"). Optional, and only for a\npiece that is not itself a course; the course must be the creator's, live or in review. Stored on the piece's side row.",
+            "format": "uuid"
           }
         },
         "required": [
@@ -38382,6 +38857,48 @@
             "maximum": 5000
           }
         }
+      },
+      "LessonInputDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "An existing lesson of this course to keep (its progress and place stay); left out, a new lesson is made.",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "durationLabel": {
+            "type": "string",
+            "description": "The lesson's length as a player writes it: `4:12` or `1:20:05`."
+          },
+          "assetKey": {
+            "type": "string",
+            "nullable": true,
+            "description": "The lesson's file: the key (or link) of an upload this person made under `content/full`. A new lesson with none has no file yet.\nA lesson kept by `id` keeps the file it has when this is left out (FIX-111: the editor does not know the key of a file it did not\nupload), takes a new one when a key is sent, and loses its file only when this is `null`."
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "SetLessonsDto": {
+        "type": "object",
+        "properties": {
+          "lessons": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LessonInputDto"
+            }
+          }
+        },
+        "required": [
+          "lessons"
+        ]
       },
       "CreateProductDraftDto": {
         "type": "object",
@@ -41318,6 +41835,39 @@
           }
         }
       },
+      "CompleteIdentityDto": {
+        "type": "object",
+        "properties": {
+          "firstName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "lastName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "handle": {
+            "type": "string",
+            "description": "The username, with or without a leading \"@\". Checked by `checkHandleShape`; its words are the server's.",
+            "maxLength": 60
+          }
+        }
+      },
+      "ChangeHandleDto": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string",
+            "description": "The username, with or without a leading \"@\". Checked by `checkHandleShape`; its words are the server's.",
+            "maxLength": 60
+          }
+        },
+        "required": [
+          "handle"
+        ]
+      },
       "RecordRecentSearchDto": {
         "type": "object",
         "properties": {
@@ -42974,6 +43524,67 @@
           "quoteToken"
         ]
       },
+      "QuoteFileDto": {
+        "type": "object",
+        "properties": {
+          "fileKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "fileKey"
+        ]
+      },
+      "CreateCaptionsJobDto": {
+        "type": "object",
+        "properties": {
+          "fileKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "languageCode": {
+            "type": "string",
+            "description": "The language spoken, as an ISO 639 code (`en`, `yo`, `fra`). Left out: the language is detected.",
+            "pattern": "^[a-z]{2,3}$"
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (sent with the same `fileKey`). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "fileKey",
+          "quoteToken"
+        ]
+      },
+      "CreateCleanAudioJobDto": {
+        "type": "object",
+        "properties": {
+          "fileKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (sent with the same `fileKey`). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "fileKey",
+          "quoteToken"
+        ]
+      },
       "NamePreviewDto": {
         "type": "object",
         "properties": {
@@ -44016,6 +44627,10 @@
           },
           "expiresAt": {
             "type": "string"
+          },
+          "arrivalMinutes": {
+            "type": "number",
+            "nullable": true
           }
         },
         "required": [
@@ -44327,6 +44942,19 @@
           "decidedAt"
         ]
       },
+      "TransferInView": {
+        "type": "object",
+        "properties": {
+          "feeKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "arrivalMinutes": {
+            "type": "number",
+            "nullable": true
+          }
+        }
+      },
       "WalletView": {
         "type": "object",
         "properties": {
@@ -44384,6 +45012,14 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/WalletReviewView"
+              }
+            ],
+            "nullable": true
+          },
+          "transferIn": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TransferInView"
               }
             ],
             "nullable": true
@@ -45437,6 +46073,10 @@
           },
           "completedAt": {
             "type": "string",
+            "nullable": true
+          },
+          "arrivalMinutes": {
+            "type": "number",
             "nullable": true
           }
         },
@@ -49084,6 +49724,9 @@
           },
           "isFree": {
             "type": "boolean"
+          },
+          "hasFile": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -49091,7 +49734,36 @@
           "title",
           "order",
           "durationLabel",
-          "isFree"
+          "isFree",
+          "hasFile"
+        ]
+      },
+      "ParentCourse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "lessonCount": {
+            "type": "number"
+          },
+          "price": {
+            "type": "number"
+          },
+          "previewAssetUrl": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "lessonCount",
+          "price",
+          "previewAssetUrl"
         ]
       },
       "RatingState": {
@@ -49199,6 +49871,10 @@
               "$ref": "#/components/schemas/DetailLesson"
             }
           },
+          "parentCourse": {
+            "$ref": "#/components/schemas/ParentCourse",
+            "nullable": true
+          },
           "rating": {
             "$ref": "#/components/schemas/RatingState"
           },
@@ -49215,8 +49891,65 @@
           "studentCount",
           "freePreview",
           "lessons",
+          "parentCourse",
           "rating",
           "creator"
+        ]
+      },
+      "LessonPlay": {
+        "type": "object",
+        "properties": {
+          "contentId": {
+            "type": "string"
+          },
+          "lessonId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "contentId",
+          "lessonId",
+          "url",
+          "expiresAt",
+          "durationLabel"
+        ]
+      },
+      "LessonView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "order": {
+            "type": "number"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "hasFile": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "order",
+          "durationLabel",
+          "hasFile"
         ]
       },
       "ProductDraftView": {
@@ -58177,6 +58910,48 @@
           "createdAt"
         ]
       },
+      "HandleAvailabilityView": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "handle",
+          "available",
+          "message"
+        ]
+      },
+      "IdentityView": {
+        "type": "object",
+        "properties": {
+          "firstName": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "firstName",
+          "lastName",
+          "handle"
+        ]
+      },
       "EnrolResponse": {
         "type": "object",
         "properties": {
@@ -60561,6 +61336,55 @@
           "canMessage"
         ]
       },
+      "InboxMoneyMove": {
+        "type": "object",
+        "properties": {
+          "transferId": {
+            "type": "string"
+          },
+          "chatId": {
+            "type": "string"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "outgoing",
+              "incoming"
+            ]
+          },
+          "other": {
+            "$ref": "#/components/schemas/InboxPerson"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "reversed"
+            ]
+          },
+          "canMessage": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "transferId",
+          "chatId",
+          "direction",
+          "other",
+          "amountKobo",
+          "note",
+          "status",
+          "canMessage"
+        ]
+      },
       "InboxItem": {
         "type": "object",
         "properties": {
@@ -60573,7 +61397,8 @@
               "paid_dm",
               "community",
               "chat",
-              "money_request"
+              "money_request",
+              "money_move"
             ]
           },
           "lastActivityAt": {
@@ -60619,6 +61444,14 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/InboxMoneyRequest"
+              }
+            ],
+            "nullable": true
+          },
+          "moneyMove": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InboxMoneyMove"
               }
             ],
             "nullable": true
@@ -61002,6 +61835,38 @@
           "status"
         ]
       },
+      "SavedCourseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "schoolName": {
+            "type": "string"
+          },
+          "schoolLogo": {
+            "type": "string",
+            "nullable": true
+          },
+          "weeks": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "schoolName",
+          "schoolLogo",
+          "weeks",
+          "priceKobo"
+        ]
+      },
       "SavedEntryView": {
         "type": "object",
         "properties": {
@@ -61012,6 +61877,7 @@
             "type": "string",
             "enum": [
               "creator",
+              "course",
               "event",
               "content"
             ]
@@ -61042,6 +61908,14 @@
               }
             ],
             "nullable": true
+          },
+          "course": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedCourseView"
+              }
+            ],
+            "nullable": true
           }
         },
         "required": [
@@ -61050,7 +61924,8 @@
           "savedAt",
           "content",
           "event",
-          "creator"
+          "creator",
+          "course"
         ]
       },
       "SavedPage": {
@@ -61084,6 +61959,21 @@
         },
         "required": [
           "creatorWawuId",
+          "saved"
+        ]
+      },
+      "SavedCourseState": {
+        "type": "object",
+        "properties": {
+          "courseId": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "courseId",
           "saved"
         ]
       },
@@ -63814,6 +64704,63 @@
           "useWallet"
         ]
       },
+      "AiToolFileView": {
+        "type": "object",
+        "properties": {
+          "folders": {
+            "type": "object",
+            "properties": {
+              "audio": {
+                "type": "string"
+              },
+              "video": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "audio",
+              "video"
+            ]
+          },
+          "accepts": {
+            "type": "object",
+            "properties": {
+              "audio": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "video": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "audio",
+              "video"
+            ]
+          },
+          "maxBytes": {
+            "type": "number"
+          },
+          "maxMinutes": {
+            "type": "number"
+          },
+          "languageCode": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "folders",
+          "accepts",
+          "maxBytes",
+          "maxMinutes",
+          "languageCode"
+        ]
+      },
       "AiVoiceView": {
         "type": "object",
         "properties": {
@@ -63842,7 +64789,9 @@
               "music",
               "voiceover",
               "quick-voice",
-              "sound-effect"
+              "sound-effect",
+              "captions",
+              "clean-audio"
             ]
           },
           "action": {
@@ -63875,6 +64824,7 @@
                 "type": "string",
                 "enum": [
                   "text",
+                  "file",
                   "prompt"
                 ]
               },
@@ -63886,6 +64836,10 @@
               },
               "instrumental": {
                 "type": "boolean",
+                "nullable": true
+              },
+              "file": {
+                "$ref": "#/components/schemas/AiToolFileView",
                 "nullable": true
               }
             },
@@ -63987,7 +64941,9 @@
               "music",
               "voiceover",
               "quick-voice",
-              "sound-effect"
+              "sound-effect",
+              "captions",
+              "clean-audio"
             ]
           },
           "state": {
@@ -64045,6 +65001,99 @@
           "message",
           "createdAt",
           "finishedAt"
+        ]
+      },
+      "AiFileQuoteView": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "object",
+            "properties": {
+              "seconds": {
+                "type": "number"
+              },
+              "minutes": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "seconds",
+              "minutes"
+            ]
+          },
+          "action": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "per": {
+            "type": "string",
+            "enum": [
+              "use",
+              "minute",
+              "track",
+              "message",
+              "minute_per_language"
+            ]
+          },
+          "units": {
+            "type": "number"
+          },
+          "languages": {
+            "type": "number"
+          },
+          "perUnitPoints": {
+            "type": "number"
+          },
+          "costPoints": {
+            "type": "number"
+          },
+          "balancePoints": {
+            "type": "number"
+          },
+          "shortfallPoints": {
+            "type": "number"
+          },
+          "useWallet": {
+            "type": "boolean"
+          },
+          "quoteToken": {
+            "type": "string"
+          },
+          "canRun": {
+            "type": "boolean"
+          },
+          "cap": {
+            "$ref": "#/components/schemas/PointsCapView",
+            "nullable": true
+          },
+          "wallet": {
+            "$ref": "#/components/schemas/PointsShortfallOfferView",
+            "nullable": true
+          },
+          "walletNote": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "file",
+          "action",
+          "title",
+          "per",
+          "units",
+          "languages",
+          "perUnitPoints",
+          "costPoints",
+          "balancePoints",
+          "shortfallPoints",
+          "useWallet",
+          "quoteToken",
+          "canRun",
+          "cap",
+          "wallet",
+          "walletNote"
         ]
       },
       "AiJobPage": {

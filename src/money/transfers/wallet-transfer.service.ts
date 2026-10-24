@@ -2316,6 +2316,13 @@ export class WalletTransferService implements OnModuleInit {
       transactionId: ledgerRow?.id ?? null,
       createdAt: t.createdAt.toISOString(),
       completedAt: t.completedAt ? t.completedAt.toISOString() : null,
+      // FIX-109 (W19's line under the last step): the usual time of a bank
+      // send, only while it is still on its way and only when it is set.
+      ...(bank &&
+      status === 'pending' &&
+      this.fees.timing.bankOutMinutes !== null
+        ? { arrivalMinutes: this.fees.timing.bankOutMinutes }
+        : {}),
     };
   }
 

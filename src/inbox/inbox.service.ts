@@ -17,7 +17,10 @@ import { isSupportAccount, supportPerson } from '../support/support-account';
 import { feedCtes, utc } from './inbox-feed.sql';
 import type {
   InboxCommunity,
+  InboxFilter,
   InboxItem,
+  InboxMoneyMove,
+  InboxMoneyMoveStatus,
   InboxMoneyRequest,
   InboxKind,
   InboxPage,
@@ -61,6 +64,18 @@ interface RoomRow {
   hostWawuId: string;
 }
 
+interface MoveRow {
+  id: string;
+  /** Never null: the send is listed only when the two people have a chat. */
+  payer: string;
+  recipient: string;
+  amount_kobo: bigint;
+  note: string | null;
+  status: InboxMoneyMoveStatus;
+  created_at: Date;
+  chat_id: string;
+}
+
 interface PaidStatRow {
   other: string;
   questions: bigint;
@@ -91,6 +106,7 @@ const idOf = (key: string): string => key.slice(key.indexOf(':') + 1);
  * exactly as before.
  *
  *   GET /inbox          one cursor-paged list, latest activity first
+ *                       (`?kind=money`: requests and sends, FIX-114)
  *   GET /inbox/unread   the Inbox tab's badge, and what it is made of
  *
  * The list is a pure function of what is stored: nothing is copied into a
@@ -117,7 +133,7 @@ export class InboxService {
     me: string,
     cursor: string | undefined,
     limit = DEFAULT_PAGE_SIZE,
-    kind?: InboxKind,
+    kind?: InboxFilter,
   ): Promise<InboxPage> {
     const after = decodeInboxCursor(cursor);
     const rows = await this.rank(me, after, limit + 1, kind);
@@ -158,16 +174,23 @@ export class InboxService {
     me: string,
     after: InboxCursor | null,
     take: number,
-    kind: InboxKind | undefined,
+    kind: InboxFilter | undefined,
   ): Promise<FeedRow[]> {
     const tail = after
       ? Prisma.sql`(f.at < ${utc(after.at)}
            OR (f.at = ${utc(after.at)} AND f.key COLLATE "C" < ${after.key}::text COLLATE "C"))`
       : Prisma.sql`true`;
+    // The Money chip holds requests and sends; only it reads the sends.
+    const kinds =
+      kind === 'money'
+        ? Prisma.sql`f.kind IN ('money_request', 'money_move')`
+        : kind
+          ? Prisma.sql`f.kind = ${kind}`
+          : Prisma.sql`true`;
     return this.prisma.$queryRaw<FeedRow[]>(Prisma.sql`
-      WITH ${feedCtes(me, new Date())}
+      WITH ${feedCtes(me, new Date(), kind === 'money')}
       SELECT f.kind, f.key, f.at, f.unread FROM feed f
-      WHERE ${kind ? Prisma.sql`f.kind = ${kind}` : Prisma.sql`true`} AND ${tail}
+      WHERE ${kinds} AND ${tail}
       ORDER BY f.at DESC, f.key COLLATE "C" DESC
       LIMIT ${take}`);
   }
@@ -181,12 +204,14 @@ export class InboxService {
     const roomRows = of('community');
     const paidRows = of('paid_dm');
     const moneyRows = of('money_request');
+    const moveRows = of('money_move');
 
-    const [chats, rooms, paid, money, hidden] = await Promise.all([
+    const [chats, rooms, paid, money, moves, hidden] = await Promise.all([
       this.chatParts(me, chatRows),
       this.roomParts(me, roomRows),
       this.paidParts(me, paidRows),
       this.moneyParts(moneyRows),
+      this.moveParts(moveRows),
       this.blocks.hiddenFrom(me),
     ]);
 
@@ -197,6 +222,9 @@ export class InboxService {
       ),
       ...[...rooms.last.values()].map((l) => l.sender),
       ...paid.others,
+      ...[...moves.values()].map((m) =>
+        m.payer === me ? m.recipient : m.payer,
+      ),
     ]);
     const person = (id: string): InboxPerson => {
       // The support side of a support thread has no WAWU ID (SUPPORT-01).
@@ -321,6 +349,34 @@ export class InboxService {
           moneyRequest,
         };
       }
+      if (r.kind === 'money_move') {
+        const m = moves.get(idOf(r.key));
+        if (!m) return null;
+        const outgoing = m.payer === me;
+        const other = outgoing ? m.recipient : m.payer;
+        const moneyMove: InboxMoneyMove = {
+          transferId: m.id,
+          chatId: m.chat_id,
+          direction: outgoing ? 'outgoing' : 'incoming',
+          other: person(other),
+          amountKobo: Number(m.amount_kobo),
+          note: m.note,
+          status: m.status,
+          canMessage: !hiddenSet.has(other),
+        };
+        return {
+          ...base,
+          preview: {
+            text: m.note,
+            attachment: null,
+            mine: outgoing,
+            senderName: null,
+            sentAt: m.created_at.toISOString(),
+            moneyRequest: null,
+          },
+          moneyMove,
+        };
+      }
       const { side, other } = paidParts(r.key);
       const stat = paid.stats.get(r.key);
       const bubble = paid.bubbles.get(r.key);
@@ -361,6 +417,25 @@ export class InboxService {
       where: { id: { in: rows.map((r) => idOf(r.key)) } },
     });
     return new Map(found.map((q) => [q.id, q]));
+  }
+
+  /**
+   * The sends on the page, by id, each with the chat of its two people. The
+   * figures are the send's own row; nothing is added up.
+   */
+  private async moveParts(rows: FeedRow[]): Promise<Map<string, MoveRow>> {
+    if (rows.length === 0) return new Map();
+    const found = await this.prisma.$queryRaw<MoveRow[]>(Prisma.sql`
+      SELECT t."id" AS id, t."payerWawuUserId" AS payer,
+             t."recipientWawuUserId" AS recipient, t."amountKobo" AS amount_kobo,
+             t."note" AS note, t."status" AS status, t."createdAt" AS created_at,
+             c."id" AS chat_id
+      FROM "WalletTransfer" t
+      JOIN "ChatConversation" c
+        ON (c."userAWawuId" = t."payerWawuUserId" AND c."userBWawuId" = t."recipientWawuUserId")
+        OR (c."userAWawuId" = t."recipientWawuUserId" AND c."userBWawuId" = t."payerWawuUserId")
+      WHERE t."id" IN (${Prisma.join(rows.map((r) => idOf(r.key)))})`);
+    return new Map(found.map((m) => [m.id, m]));
   }
 
   /** The other person and the last message of each chat on the page. */

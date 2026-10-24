@@ -8,6 +8,8 @@ import {
 import { ContentEngagementService } from './content-engagement.service';
 import { ContentDetailController } from './content-detail.controller';
 import { ContentDetailService } from './content-detail.service';
+import { CourseLessonsController } from './course-lessons.controller';
+import { CourseLessonsService } from './course-lessons.service';
 import { ContentMediaController } from './content-media.controller';
 import { ContentMediaService } from './content-media.service';
 import { ProductDraftController } from './product-draft.controller';
@@ -58,6 +60,8 @@ import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
     ContentDetailController,
     FeedController,
     ContentMediaController,
+    // FIX-107: a course's lessons, one file each (H25).
+    CourseLessonsController,
     // Draft products (TIER-02): its own first segment, `product-drafts`.
     ProductDraftController,
   ],
@@ -68,6 +72,7 @@ import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
     ContentEngagementService,
     ContentDetailService,
     ContentMediaService,
+    CourseLessonsService,
     FeedCardsService,
     FeedEntriesService,
     CreatorAccountGuard,

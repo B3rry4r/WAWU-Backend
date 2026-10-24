@@ -128,6 +128,18 @@ export const FILE_KINDS: Readonly<Record<string, FileKind>> = {
     decision: 'DELETE',
     what: 'The audio the Hub made for the person: a Music track job (AiToolJob.audioKey, AiToolJob.outputs).',
   },
+  'ai/clean-audio': {
+    decision: 'DELETE',
+    what: 'The audio the Hub made for the person: a Clean audio job (AiToolJob.audioKey, AiToolJob.outputs).',
+  },
+  'ai/input-audio': {
+    decision: 'DELETE',
+    what: 'A recording the person sent to Captions or Clean audio (AiToolJob.inputRef, AITOOLS-04). Deleted when the job ends; any left is deleted with the account.',
+  },
+  'ai/input-video': {
+    decision: 'DELETE',
+    what: 'A video the person sent to Captions or Clean audio (AiToolJob.inputRef, AITOOLS-04). Deleted when the job ends; any left is deleted with the account.',
+  },
   'voice/sample': {
     decision: 'DELETE',
     what: 'The 30 second recording of the person’s own voice (VoiceProfile.sampleKey, VOICE-01).',

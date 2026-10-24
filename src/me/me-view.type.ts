@@ -36,7 +36,7 @@ export interface MeCountsView {
 /* GET /me/saved (M30)                                                  */
 /* ------------------------------------------------------------------ */
 
-export type SavedKind = 'content' | 'event' | 'creator';
+export type SavedKind = 'content' | 'event' | 'creator' | 'course';
 
 /** A saved piece (M30: "Agency breakdown ₦2,500", "Free", "Bought"). */
 export interface SavedContentView {
@@ -66,7 +66,19 @@ export interface SavedEventView {
   status: 'published' | 'cancelled';
 }
 
-/** One row of Saved: exactly one of `content`, `event`, `creator` is set, by `kind`. */
+/** A saved school course (SC3's bookmark): what a row of Saved needs to draw it and open its page. */
+export interface SavedCourseView {
+  id: string;
+  title: string;
+  schoolName: string;
+  /** The school's logo, a fresh link; null when it has none. */
+  schoolLogo: string | null;
+  weeks: number;
+  /** The fee in kobo. */
+  priceKobo: number;
+}
+
+/** One row of Saved: exactly one of `content`, `event`, `creator`, `course` is set, by `kind`. */
 export interface SavedEntryView {
   /** The save's own id (stable for paging), not the thing's. */
   id: string;
@@ -76,11 +88,18 @@ export interface SavedEntryView {
   content: SavedContentView | null;
   event: SavedEventView | null;
   creator: MePerson | null;
+  course: SavedCourseView | null;
 }
 
 export interface SavedPage {
   items: SavedEntryView[];
   nextCursor: string | null;
+}
+
+/** GET, PUT and DELETE /me/saved/courses/:courseId. */
+export interface SavedCourseState {
+  courseId: string;
+  saved: boolean;
 }
 
 /** PUT and DELETE /me/saved/creators/:wawuId. */

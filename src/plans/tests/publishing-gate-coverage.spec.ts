@@ -115,6 +115,11 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     files: ['frames'],
     why: "links to the person's own earlier content/ uploads (made through the gated presign) set as the frames of one of their own pieces that is not removed, whether it is waiting, live or turned down; creator accounts only, no tier asked (U3, PLANS.md section 6)",
   },
+  // FIX-107: the lessons of a course. Same reasoning as the frames: the route signs nothing.
+  'PUT content/:id/lessons': {
+    files: ['lessons.assetKey'],
+    why: "links the person's own earlier content/full uploads (made through the gated presign) as the lessons of one of their own courses that is not removed; creator accounts only, it signs no file and publishes nothing (FIX-107)",
+  },
   // Applications and requests: the documents are links to files uploaded through
   // the identity and document folders of the presign, which no tier is asked for.
   'POST legal/requests': {
@@ -156,6 +161,25 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
   'POST me/voice-intro/sample': {
     files: ['fileUrl'],
     why: 'a person records their own voice for their Voice Intro (VOICE-01); not a listing',
+  },
+  // AITOOLS-04: the AI tools work on a person's own recording or video. The
+  // file goes up through the presign into a private input folder and is read
+  // only by the job; nothing is published.
+  'POST ai-tools/captions/quote': {
+    files: ['fileKey'],
+    why: "prices a person's own recording or video for the Captions tool (AITOOLS-04), uploaded to ai/input-audio or ai/input-video through the presign; priced before the job, same file, nothing is published",
+  },
+  'POST ai-tools/captions/jobs': {
+    files: ['fileKey'],
+    why: "a person's own recording or video sent to the Captions tool (AITOOLS-04), uploaded to ai/input-audio or ai/input-video through the presign; nothing is published",
+  },
+  'POST ai-tools/clean-audio/quote': {
+    files: ['fileKey'],
+    why: "prices a person's own recording for the Clean audio tool (AITOOLS-04), uploaded to ai/input-audio through the presign; priced before the job, same file, nothing is published",
+  },
+  'POST ai-tools/clean-audio/jobs': {
+    files: ['fileKey'],
+    why: "a person's own recording sent to the Clean audio tool (AITOOLS-04), uploaded to ai/input-audio through the presign; audio only, nothing is published",
   },
   // Not a person's own product.
   'POST communities/:id/messages': {

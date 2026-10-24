@@ -170,6 +170,25 @@ export interface WalletView {
    * and once approved, until the account number arrives (NUV-04).
    */
   review?: WalletReviewView | null;
+  /**
+   * FIX-109, additive: what a bank transfer into the wallet account costs and
+   * how long it takes (W15's "Free" and its arrival line, W45's wait line).
+   * Absent when the Hub knows neither; each field is absent when unknown, so
+   * the screen draws a line only for what the Hub says. `feeKobo` 0 is free.
+   */
+  transferIn?: TransferInView;
+}
+
+/** `WalletView.transferIn`: what a transfer into the wallet account costs and how long it takes. */
+export interface TransferInView {
+  /**
+   * What the provider charges on money arriving by bank transfer, in kobo
+   * (0 is free). Absent when the provider names none, or when the charge
+   * depends on the amount: no single figure says it.
+   */
+  feeKobo?: number;
+  /** Minutes a transfer in usually takes to land (MONEY_ARRIVAL_BANK_IN_MINUTES). Absent when unset. */
+  arrivalMinutes?: number;
 }
 
 /** Which Open your wallet a server runs (NUV-02). */
@@ -438,6 +457,13 @@ export interface FeeQuoteView {
   quoteToken: string;
   /** After this the quote is no longer honoured; ask for a new one. */
   expiresAt: string;
+  /**
+   * FIX-109, additive: how many minutes a send to a bank account usually takes
+   * (W17's "Arrives" row), from MONEY_ARRIVAL_BANK_OUT_MINUTES. Only on a
+   * `bank_transfer` quote, and only when the setting is set; absent means the
+   * Hub makes no promise and the screen draws no line.
+   */
+  arrivalMinutes?: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -509,6 +535,13 @@ export interface TransferView {
   transactionId: string | null;
   createdAt: string;
   completedAt: string | null;
+  /**
+   * FIX-109, additive: how many minutes a send to a bank account usually takes
+   * to reach it (W19's line under the last step), from
+   * MONEY_ARRIVAL_BANK_OUT_MINUTES. Only on a bank send that is still
+   * `pending`, and only when the setting is set.
+   */
+  arrivalMinutes?: number;
 }
 
 /* ------------------------------------------------------------------ */

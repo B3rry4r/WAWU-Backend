@@ -3,10 +3,14 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
   PayloadTooLargeException,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import {
+  AI_INPUT_FOLDERS,
+  AI_INPUT_MAX_BYTES,
+  AI_INPUT_MAX_BYTES_SETTING,
   FOLDER_CONTENT_TYPES,
   FOLDER_MAX_BYTES,
   EXTENSION_FOR_CONTENT_TYPE,
@@ -27,6 +31,7 @@ import {
 } from './unsent-chat-sweep';
 import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'node:crypto';
+import { Transform, pipeline, type Readable } from 'node:stream';
 import {
   S3Client,
   PutObjectCommand,
@@ -47,6 +52,7 @@ import {
   type AllowanceDb,
 } from '../plans/publishing-allowance.service';
 import { PublishingGate } from '../plans/publishing-gate.service';
+import { PlanSettingsService } from '../plan-settings/plan-settings.service';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 /**
@@ -233,13 +239,14 @@ export function storedKeyProblem(stored: unknown): string | null {
 /**
  * Folders the Hub itself writes to with `putGenerated` (not offered to a
  * client). `ai/voiceover` is AITOOLS-01's audio, `ai/sound-effect` and
- * `ai/music` are AITOOLS-03's (AI_AUDIO_FOLDERS in
+ * `ai/music` are AITOOLS-03's, `ai/clean-audio` is AITOOLS-04's (AI_AUDIO_FOLDERS in
  * src/ai-tools/audio/ai-audio-store.ts, which a spec keeps equal to this).
  */
 export const GENERATED_KEY_FOLDERS = [
   'ai/voiceover',
   'ai/sound-effect',
   'ai/music',
+  'ai/clean-audio',
 ] as const;
 
 /**
@@ -434,6 +441,9 @@ export class StorageService {
     private readonly prisma: PrismaService,
     private readonly allowance: PublishingAllowanceService,
     private readonly gate: PublishingGate,
+    // AITOOLS-04: the live cap on a file for an AI tool. Absent in a spec that
+    // builds the service by hand, where the folder's own ceiling applies.
+    @Optional() private readonly settings?: PlanSettingsService,
   ) {
     const margin = Number(
       this.config.get<string>('UPLOAD_SWEEP_MARGIN_SECONDS'),
@@ -534,7 +544,17 @@ export class StorageService {
       );
     }
 
-    const folderCap = FOLDER_MAX_BYTES[folder];
+    let folderCap = FOLDER_MAX_BYTES[folder];
+    // The Studio tools' file cap is a setting an admin changes at any time
+    // (R-65), never above the folder's own ceiling.
+    if (
+      (AI_INPUT_FOLDERS as readonly string[]).includes(folder) &&
+      this.settings
+    )
+      folderCap = Math.min(
+        folderCap ?? AI_INPUT_MAX_BYTES,
+        this.settings.number(AI_INPUT_MAX_BYTES_SETTING),
+      );
     if (folderCap !== undefined && contentLength > folderCap) {
       throw new PayloadTooLargeException(
         `A file in ${folder} can be at most ${formatBytes(folderCap)}.`,
@@ -775,6 +795,11 @@ export class StorageService {
    * issued for. A network call: the caller holds no transaction and no lock.
    * Throws when there is no bucket, no such object, or it is empty or over
    * `maxBytes`.
+   *
+   * The body is read as a stream into ONE buffer of the object's own length
+   * and stopped the moment it passes `maxBytes` (or the length it declared),
+   * so a file larger than the cap is never held, and the bytes are never held
+   * twice (AITOOLS-04 round 3; this used to read the whole body and copy it).
    */
   async readStored(
     key: string,
@@ -788,10 +813,127 @@ export class StorageService {
     const out = await this.client.send(
       new GetObjectCommand({ Bucket: this.bucket, Key: key }),
     );
-    const bytes = await out.Body?.transformToByteArray();
-    if (!bytes || bytes.length === 0 || bytes.length > maxBytes)
+    const body = out.Body as Readable | undefined;
+    const declared = out.ContentLength;
+    if (
+      !body ||
+      (declared !== undefined && (declared <= 0 || declared > maxBytes))
+    ) {
+      body?.destroy?.();
       throw new Error('readStored: the file is empty or too large');
-    return { audio: Buffer.from(bytes), contentType: serveAs(key).contentType };
+    }
+    // Stopped at the cap whatever the store says its length is; into one
+    // buffer of the declared length when it said one.
+    const limit = declared ?? maxBytes;
+    const whole = declared !== undefined ? Buffer.allocUnsafe(declared) : null;
+    const parts: Uint8Array[] = [];
+    let at = 0;
+    try {
+      for await (const chunk of body) {
+        const part = chunk as Uint8Array;
+        if (at + part.length > limit)
+          throw new Error('readStored: the file is longer than allowed');
+        if (whole) whole.set(part, at);
+        else parts.push(part);
+        at += part.length;
+      }
+    } catch (e) {
+      body.destroy?.();
+      throw e;
+    }
+    if (at === 0 || (whole && at !== declared))
+      throw new Error('readStored: the file is empty or ended early');
+    const audio = whole ?? Buffer.concat(parts, at);
+    return { audio, contentType: serveAs(key).contentType };
+  }
+
+  /**
+   * The object's real length in bytes, from the store (not the row's
+   * declared `bytes`). Throws when there is no bucket or no such object.
+   */
+  async storedLength(key: string): Promise<number> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const out = await this.client.send(
+      new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
+    const length = out.ContentLength;
+    if (length === undefined || length <= 0)
+      throw new Error('storedLength: the file is empty');
+    return length;
+  }
+
+  /**
+   * Opens a stored object to be streamed, reading nothing yet (AITOOLS-04
+   * round 4: the provider run sends the file on as it arrives and never holds
+   * it whole). Gives the object's real length, from the store, and a stream
+   * that carries at most that many bytes: it fails the moment it passes the
+   * length or `maxBytes`, or ends early. Throws when there is no bucket, no
+   * such object, or it is empty or over `maxBytes`. The caller must read the
+   * stream to its end or destroy it.
+   */
+  async openStored(
+    key: string,
+    maxBytes: number,
+  ): Promise<{ body: Readable; length: number; contentType: string }> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const out = await this.client.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
+    const source = out.Body as Readable | undefined;
+    const length = out.ContentLength;
+    if (!source || length === undefined || length <= 0 || length > maxBytes) {
+      source?.destroy?.();
+      throw new Error('openStored: the file is empty or too large');
+    }
+    let seen = 0;
+    const body = new Transform({
+      transform(chunk: Buffer, _enc, done) {
+        seen += chunk.length;
+        if (seen > length)
+          return done(new Error('openStored: the file is longer than it said'));
+        done(null, chunk);
+      },
+      flush(done) {
+        done(
+          seen === length
+            ? null
+            : new Error('openStored: the file ended early'),
+        );
+      },
+    });
+    pipeline(source, body, () => undefined);
+    return { body, length, contentType: serveAs(key).contentType };
+  }
+
+  /**
+   * The first `bytes` bytes of a stored object (a ranged read), to tell what
+   * a file is without reading the rest of it. Fewer come back for a shorter
+   * file. Throws when there is no bucket, no such object or it is empty.
+   */
+  async readStoredHead(key: string, bytes: number): Promise<Buffer> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const out = await this.client.send(
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Range: `bytes=0-${Math.max(1, Math.floor(bytes)) - 1}`,
+      }),
+    );
+    const got = await out.Body?.transformToByteArray();
+    if (!got || got.length === 0) throw new Error('readStoredHead: empty');
+    return Buffer.from(got.subarray(0, bytes));
   }
 
   /**

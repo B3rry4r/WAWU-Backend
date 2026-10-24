@@ -857,6 +857,94 @@ provider call, one audio file out, a flat price (the board's figures, PROVISIONA
   provider.** The provider's Music API is for paid plans and its terms say what
   each plan may be used for (G-AITOOLS-03-1, the owner's to read).
 
+### Captions and Clean audio (AITOOLS-04)
+
+Task AITOOLS-04, R-78. Two more tools on the one pipeline, input kind `file`: the
+person's own recording or video goes in, priced by the minute of the file as the
+Hub reads it (rounded up, at least 1). Listed only when the provider can run
+them (R-47). The costs are `points.action.captions_per_min` (15) and
+`points.action.clean_audio_per_min` (400), PROVISIONAL `DV2-BOARD-FIGURE`.
+
+| Route | Does |
+|---|---|
+| `POST /uploads/presign` | Two new folders: `ai/input-audio` (`audio/mpeg`, `audio/wav`, `audio/mp4`, `audio/aac`) and `ai/input-video` (`video/mp4`, `video/quicktime`, `video/webm`). Private, never counted in the 5 item or storage allowance, cap `ai.input_max_bytes`. The `key` it answers is the file's name for the routes below; the app then PUTs the file and calls `POST /uploads/confirm`. |
+| `POST /ai-tools/captions/quote`, `POST /ai-tools/clean-audio/quote` | Body `{ fileKey }`. The Hub opens the file, reads its length itself and answers the `POST /points/quote` shape (with `quoteToken`, `canRun`, `cap`) plus `file: { seconds, minutes }`. The phone sends no length. Holds nothing. |
+| `POST /ai-tools/captions/jobs` | Body `{ fileKey, languageCode?, quoteToken }` and a required `Idempotency-Key`. `202`, then poll `GET /ai-tools/jobs/{id}`. A done job's `outputs` hold `{ kind: 'text', text }` (the words) and `{ kind: 'subtitles', text }` (an SRT the Hub builds from the word times); `audioUrl` is null. |
+| `POST /ai-tools/clean-audio/jobs` | Body `{ fileKey, quoteToken }` and a required `Idempotency-Key`. A done job's `audioUrl` (and its `audio` output) is the cleaned recording, kept under the person's own folder `ai/clean-audio`. |
+
+- **The catalogue.** `unit` is `minute`, `input.kind` is `file`, `maxCharacters`
+  and `charactersPerUnit` are 0 (no text), `voices` is empty, and `input.file` is
+  `{ folders: { audio, video }, accepts: { audio[], video[] }, maxBytes,
+  maxMinutes, languageCode }` (`maxBytes` is the setting, `maxMinutes` is
+  `points.max_audio_min_per_job`). A job's `voiceId` is empty and `characters` 0.
+- **Refusals, each with nothing held.** `404 not_found` ("We couldn't find that
+  file.") for a key that is not the caller's own landed file in an input folder;
+  `422 ai_file_unreadable` ("We couldn't read that file. No points were taken.")
+  when the length cannot be read; `422 ai_file_too_large` (`reason.cap`
+  `file_bytes`, `capLimit` bytes) over `ai.input_max_bytes`; `422
+  points_cap_reached` naming `minutes_per_job` over `points.max_audio_min_per_job`.
+  The daily cap is POINTS-03's. A refused request leaves the file where it is.
+- **The file is read once, and deleted.** The Hub reads it from storage for the
+  one provider run and deletes it when the job ends, done or failed, and when the
+  sweep gives a stale job's points back; account deletion removes any that is
+  left (the purge table decides all three folders). `AiToolJob.inputRef` keeps
+  the key. No log line holds a file's name, bytes or text.
+- **The provider keeps nothing.** After a Captions result is kept the Hub deletes
+  the provider's transcript; after Clean audio it deletes the provider's history
+  item, whose id comes in the `audio-isolation-id` response header (seen on the
+  real provider, 24 Oct 2026: it sends no `history-item-id`; the delete route is
+  `DELETE /v1/audio-isolation/history/{id}`, 204). Both deletes are tried however
+  the job ends. The real provider answers 404 for a copy it has not stored yet
+  (transcript: 404 at 89 ms, 200 about 40 s later), so the Hub notes the copy on
+  the job row (`providerRef`: `transcript:<id>` or `isolation:<id>`), tries once,
+  then four more times over about a minute (2, 6, 15 and 40 seconds, outside the
+  job), and leaves the rest to a sweep every minute: a 2xx clears the note; a 404
+  clears it only 10 minutes after the answer (before that it may not be stored
+  yet); any other answer keeps trying for 24 hours, then logs that the copy was
+  never removed.
+- **The length the provider reports** (Captions answers `audio_duration_secs`):
+  more than 1 minute above the priced minutes fails the job (`failureCode`
+  `length_differs`) and every point goes back.
+- **Clean audio's answer type** is read from the real response and kept only if
+  the Hub serves it (`audio/mpeg`, `audio/wav`, `audio/mp4`, `audio/aac`); else the
+  job fails (`output_type`) and releases. What a real run answers is NOT RUN.
+- **The result is written to the job row before the points are kept**, so a
+  server that dies between the two still shows the words (a transcript lives
+  nowhere else).
+- **Length reader.** `music-metadata` 7.14.0 (pure JavaScript, no ffmpeg on the
+  Hub), run in a worker thread so a person's file cannot stop the Hub. First the
+  file's own first bytes must name a container the tools take (WAV, MP3 by frame
+  or ID3, ADTS AAC, MP4/M4A/MOV by an `ftyp` box, WebM/Matroska); anything else,
+  ASF and DSF included, is refused as `ai_file_unreadable` before any parser sees
+  it, and the declared type is never used. The one parser for that container
+  runs in a worker with a 15 second hard limit and a memory watchdog, terminated
+  on overrun (also refused as unreadable); two workers at most run at once.
+  QuickTime is read as MP4. A length that reads 0 (a fragmented MP4) is refused,
+  never priced as 0 minutes. Minutes round up after 0.5 s of container padding is
+  forgiven (a "1:00" clip is 1 minute). The whole file is read into memory for the
+  length (up to `ai.input_max_bytes`); the run does not read it whole: it takes
+  the same place behind the read gate as a quote (one place per account, the
+  global turns and bytes, charged the file's real length from the store) and
+  streams the file to the provider, so a job holds about 64 KB of it, whatever
+  its size. A Hub too busy to take the run ends the job `busy` and gives every
+  point back. The place and the turn are one deadline of 20 seconds.
+- **The provider's copy of a transcript** is deleted on a schedule (a try when
+  the job ends, four more over a minute, then every minute) and the note is
+  cleared only by two reads of 404, each made with no delete just before it: the
+  first at least `ai.copy_confirm_after_minutes` (10) after the job ended, the
+  second at least `ai.copy_confirm_gap_minutes` (5) after the first (both
+  PROVISIONAL `AITOOLS-COPY-CONFIRM`; an admin may change them). The real
+  provider answers a read 404 for about a second after a delete and then shows
+  the transcript again, so a 404 seen sooner proves nothing.
+- **Settings.** `ai.input_max_bytes` (default 500 MB, the smaller of the provider's
+  documented limits; an admin may only lower it; PROVISIONAL `AITOOLS-LIMITS`).
+  `AI_VOICE_FILE_TIMEOUT_MS` (default 600000) is the wait of both file calls;
+  they are made with `node:http(s)` like the Music call. `AI_VOICE_TRANSCRIBE_MODEL`
+  (default `scribe_v2`).
+- The stand-in answers `/v1/speech-to-text`, `/v1/audio-isolation` and both
+  `DELETE` routes, with failure markers read from the file's bytes. **NOT RUN
+  against the real provider.**
+
 ## 13. Hosting an event needs a tier (EVENTS-12)
 
 R-43, E21 "Needs a tier". `POST /events`, `PATCH /events/{id}` and

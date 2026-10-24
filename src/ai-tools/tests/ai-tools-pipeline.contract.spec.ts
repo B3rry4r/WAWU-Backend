@@ -137,18 +137,21 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
   // ---------------------------------------------------------------------------
 
   it('the registry lists VoiceOver first and Quick voice second, each priced by a plan action, and every tool answers for its action', () => {
-    // AITOOLS-03 adds Sound effect and Music track after them.
+    // AITOOLS-03 adds Sound effect and Music track after them, AITOOLS-04
+    // Captions and Clean audio.
     expect(AI_TOOLS.map((t) => t.id)).toEqual([
       'voiceover',
       'quick-voice',
       'sound-effect',
       'music',
+      'captions',
+      'clean-audio',
     ]);
     for (const t of AI_TOOLS) {
       expect(plan.actions.some((a) => a.id === t.action)).toBe(true);
       expect(toolForAction(t.action)).toBe(t);
     }
-    expect(toolForAction('captions_per_min')).toBeNull();
+    expect(toolForAction('dub_standard_per_min_lang')).toBeNull();
     expect(VOICEOVER_TOOL.listedWhenOff).toBe(true);
     expect(QUICK_VOICE_TOOL.listedWhenOff).toBe(false);
   });
@@ -160,6 +163,8 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
       'quick-voice',
       'sound-effect',
       'music',
+      'captions',
+      'clean-audio',
     ]);
     const tool = view.tools[1];
     expect(tool).toMatchObject({
@@ -183,8 +188,8 @@ describe('AITOOLS-02: the job pipeline, the catalogue, Quick voice and the job l
       costPointsPerUnit: voiceover.points,
       input: { kind: 'text', charactersPerUnit: 900 },
     });
-    // Nothing a person could not act on: no unbuilt tool (Captions and the rest).
-    expect(view.tools.some((t) => /caption|dub|clean/i.test(t.id))).toBe(false);
+    // Nothing a person could not act on: no unbuilt tool (Dubbing and the rest; Captions and Clean audio are built by AITOOLS-04).
+    expect(view.tools.some((t) => /dub|receptionist/i.test(t.id))).toBe(false);
     // No provider name, no provider id, no model name and no em-dash (R-68, R-5).
     const text = JSON.stringify(view);
     expect(text).not.toMatch(/eleven|stand-in|xi-api|flash/i);

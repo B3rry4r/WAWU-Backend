@@ -37,6 +37,46 @@
 //     The own-voice calls (VOICE-01); it then speaks with the voice it made.
 //     What the SAMPLE file can ask of it (found in the file's bytes):
 //     [[sample-fail]] answers 500, [[sample-reject]] answers 422.
+//   POST /v1/speech-to-text   (AITOOLS-04)
+//     header xi-api-key, multipart (model_id, file, language_code?,
+//     timestamps_granularity?)  ->  200 JSON { language_code, text, words[],
+//     audio_duration_secs, transcription_id }. The words are made up
+//     (word1 word2 ...), one every half second of the file's length (read
+//     from a WAV header, or from MP3 frames of 417 bytes). What the FILE can
+//     ask of it (found in the file's bytes, as the voice sample markers are):
+//       [[fail]] 500, [[reject]] 422, [[status:402]] (any 400 to 599),
+//       [[html]] 200 with a web page, [[slow:1500]] wait, [[nospeech]] an
+//       empty transcript, [[reported:SECS]] report that length instead,
+//       [[noid]] no transcription_id.
+//   DELETE /v1/speech-to-text/transcripts/<id>      ->  200, 404 when none
+//     or not stored yet (the real provider answered 404 `transcript_not_found`
+//     89 ms after the transcript, and 200 about 40 s later). The file can ask
+//     for [[store-delay:MS]]: the copy is not deletable until MS after the
+//     answer (the transcript, and the cleaned recording's item, alike).
+//     [[ack-then-appear:MS]] (transcripts only): a DELETE sent before MS after
+//     the answer answers 200 and does nothing, and the copy is still there
+//     afterwards (what 4 of 6 real runs showed, 24 Oct 2026): only a DELETE
+//     after MS removes it.
+//     [[get404-after-delete:MS]] (with ack-then-appear): after such a DELETE
+//     that removed nothing, a GET answers 404 for MS and the copy then shows
+//     again (200). What the real provider did for 8 of 9 transcripts.
+//   GET /v1/speech-to-text/transcripts/<id>         ->  200 { transcription_id,
+//     text } while the provider holds the copy (from the answer on, even while
+//     a DELETE still answers 404: the real provider returned 200 with the full
+//     text 89 ms after the answer), 404 once it is deleted or never existed.
+//   POST /v1/audio-isolation   (AITOOLS-04)
+//     header xi-api-key, multipart (audio)  ->  200 audio/mpeg (silent MP3
+//     frames of the file's length) with an `audio-isolation-id` header (the
+//     real provider's name; it sends no `history-item-id`). The file
+//     takes the same [[fail]], [[reject]], [[status:n]], [[html]], [[slow:n]]
+//     markers, plus [[iso-type:audio/ogg]] (answer that type) and
+//     [[iso-nohistory]] (no audio-isolation-id header).
+//   DELETE /v1/audio-isolation/history/<id>         ->  204, 404 when none
+//     or not stored yet (as above)
+//     state.deleteTries lists every delete try ({ kind, id, status }).
+//     state.transcribe and state.isolate list each call (byte count, model,
+//     language; never the file); state.deletedTranscripts and
+//     state.deletedIsolations list the ids deleted.
 //   GET /__standin/state lists the calls so far (never the text).
 // Nothing of a real provider beyond these. The Hub never sees a control route.
 // Nothing here leaves 127.0.0.1.
@@ -73,7 +113,22 @@ function startVoiceStandin({
     sfx: [],
     /** Each Music call: music_length_ms asked (null when none) and force_instrumental. */
     music: [],
+    /** Each speech to text call: the model, the language asked (null when none), the file's bytes and the field names sent. */
+    transcribe: [],
+    /** Each audio isolation call: the file's bytes. */
+    isolate: [],
+    deletedTranscripts: [],
+    deletedIsolations: [],
+    /** Every delete try on a transcript or cleaned item, with the status it was answered. */
+    deleteTries: [],
+    /** Every read of a transcript copy by id, with the status it was answered. */
+    reads: [],
   };
+  // id -> { storedAt: the time (ms) from which a delete finds the copy, ackUntil: before it a delete answers 200 and removes nothing }.
+  const transcripts = new Map();
+  const isolations = new Map();
+  let transcriptSeq = 0;
+  let isolationSeq = 0;
   const clones = new Map();
   // MPEG-1 Layer III, 128 kbps, 44.1 kHz, no padding: 417 bytes of silence per frame.
   const frame = Buffer.alloc(417);
@@ -215,6 +270,231 @@ function startVoiceStandin({
     };
   }
 
+  /** A multipart body as { name -> { filename, type, data } }. */
+  function parseMultipart(contentType, raw) {
+    const m = /boundary=(?:"([^"]+)"|([^;]+))/i.exec(String(contentType ?? ''));
+    if (!m) return null;
+    const boundary = Buffer.from(`--${m[1] ?? m[2]}`);
+    const parts = new Map();
+    let at = raw.indexOf(boundary);
+    while (at >= 0) {
+      const next = raw.indexOf(boundary, at + boundary.length);
+      if (next < 0) break;
+      const part = raw.subarray(at + boundary.length + 2, next - 2);
+      const split = part.indexOf('\r\n\r\n');
+      if (split >= 0) {
+        const head = part.subarray(0, split).toString('latin1');
+        const name = /name="([^"]*)"/.exec(head);
+        if (name)
+          parts.set(name[1], {
+            filename: (/filename="([^"]*)"/.exec(head) ?? [])[1] ?? null,
+            type: (/content-type:\s*([^\r\n]+)/i.exec(head) ?? [])[1] ?? null,
+            data: part.subarray(split + 4),
+          });
+      }
+      at = next;
+    }
+    return parts;
+  }
+
+  /** The length of a file the stand-in is sent, in seconds: a WAV header, MP3 frames, else 10. */
+  function lengthOf(data) {
+    if (data.length > 44 && data.toString('latin1', 0, 4) === 'RIFF') {
+      const byteRate = data.readUInt32LE(28);
+      const size = data.readUInt32LE(40);
+      if (byteRate > 0) return size / byteRate;
+    }
+    if (data.length > 417 && data[0] === 0xff && (data[1] & 0xe0) === 0xe0)
+      return (data.length / 417) * FRAME_SECONDS;
+    return 10;
+  }
+
+  /**
+   * The file routes (AITOOLS-04): speech to text and audio isolation, counted
+   * as calls like the others, with the markers read from the file's bytes.
+   */
+  function fileRoute(kind) {
+    return async (req, res, _m, raw) => {
+      state.calls += 1;
+      state.active += 1;
+      state.maxActive = Math.max(state.maxActive, state.active);
+      const done = (status, type, body, headers = {}) => {
+        state.active -= 1;
+        if (status === 200) state.ok += 1;
+        else state.failed += 1;
+        res.statusCode = status;
+        res.setHeader('content-type', type);
+        for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
+        res.end(body);
+      };
+      try {
+        if (req.headers['xi-api-key'] !== key)
+          return done(401, 'application/json', '{"detail":"bad key"}');
+        const form = parseMultipart(req.headers['content-type'], raw);
+        const stt = kind === 'stt';
+        const file = form?.get(stt ? 'file' : 'audio');
+        if (!form || !file || file.data.length === 0)
+          return done(400, 'application/json', '{"detail":"no file"}');
+        if (stt && !form.has('model_id'))
+          return done(422, 'application/json', '{"detail":"no model"}');
+        const bytes = file.data;
+        const marks = bytes.toString('latin1');
+        const language =
+          form.get('language_code')?.data.toString('utf8') ?? null;
+        if (stt)
+          state.transcribe.push({
+            model: form.get('model_id').data.toString('utf8'),
+            languageCode: language,
+            granularity:
+              form.get('timestamps_granularity')?.data.toString('utf8') ?? null,
+            bytes: bytes.length,
+            fileType: file.type,
+          });
+        else state.isolate.push({ bytes: bytes.length, fileType: file.type });
+        const slow = /\[\[slow:(\d{1,6})\]\]/.exec(marks);
+        const wait = slow ? Number(slow[1]) : delayMs;
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        if (marks.includes('[[fail]]'))
+          return done(500, 'application/json', '{"detail":"down"}');
+        if (marks.includes('[[reject]]'))
+          return done(422, 'application/json', '{"detail":"refused"}');
+        const status = /\[\[status:(4\d\d|5\d\d)\]\]/.exec(marks);
+        if (status)
+          return done(Number(status[1]), 'application/json', '{"detail":"no"}');
+        if (marks.includes('[[html]]'))
+          return done(200, 'text/html', '<html>not what was asked</html>');
+        const seconds = lengthOf(bytes);
+        if (stt) {
+          const reported = /\[\[reported:(\d{1,6})\]\]/.exec(marks);
+          const none = marks.includes('[[nospeech]]');
+          const count = none
+            ? 0
+            : Math.min(400, Math.max(1, Math.round(seconds / 0.5)));
+          const words = Array.from({ length: count }, (_, i) => ({
+            text: `word${i + 1}${(i + 1) % 6 === 0 ? '.' : ''}`,
+            type: 'word',
+            start: i * 0.5,
+            end: i * 0.5 + 0.4,
+            speaker_id: 'speaker_0',
+          }));
+          const id = marks.includes('[[noid]]')
+            ? undefined
+            : `tr-${++transcriptSeq}`;
+          if (id)
+            transcripts.set(id, {
+              storedAt: Date.now() + storeDelayOf(marks),
+              ackUntil: Date.now() + ackDelayOf(marks),
+              hideMs: hideDelayOf(marks),
+              hiddenUntil: 0,
+            });
+          return done(
+            200,
+            'application/json',
+            JSON.stringify({
+              language_code: language ?? 'en',
+              language_probability: 0.99,
+              text: words.map((w) => w.text).join(' '),
+              words,
+              audio_duration_secs: reported ? Number(reported[1]) : seconds,
+              ...(id ? { transcription_id: id } : {}),
+            }),
+          );
+        }
+        const kindOverride = /\[\[iso-type:([a-z]+\/[a-z0-9.+-]+)\]\]/.exec(
+          marks,
+        );
+        const id = `iso-${++isolationSeq}`;
+        const headers = {};
+        if (!marks.includes('[[iso-nohistory]]')) {
+          isolations.set(id, {
+            storedAt: Date.now() + storeDelayOf(marks),
+            ackUntil: 0,
+          });
+          headers['audio-isolation-id'] = id;
+        }
+        return done(
+          200,
+          kindOverride ? kindOverride[1] : 'audio/mpeg',
+          silence(seconds),
+          headers,
+        );
+      } catch {
+        return done(500, 'application/json', '{"detail":"stand-in fault"}');
+      }
+    };
+  }
+
+  /** How long after the answer the file asks the provider to take to store its copy ([[store-delay:MS]]). */
+  function storeDelayOf(marks) {
+    const m = /\[\[store-delay:(\d{1,7})\]\]/.exec(marks);
+    return m ? Number(m[1]) : 0;
+  }
+
+  /** How long after the answer a DELETE is only acknowledged ([[ack-then-appear:MS]]). */
+  function ackDelayOf(marks) {
+    const m = /\[\[ack-then-appear:(\d{1,7})\]\]/.exec(marks);
+    return m ? Number(m[1]) : 0;
+  }
+
+  /** How long a read answers 404 after a DELETE that removed nothing, before the copy shows again ([[get404-after-delete:MS]]). */
+  function hideDelayOf(marks) {
+    const m = /\[\[get404-after-delete:(\d{1,7})\]\]/.exec(marks);
+    return m ? Number(m[1]) : 0;
+  }
+
+  /**
+   * DELETE of a transcript (200) or a cleaned item (204). A copy the provider
+   * has not stored yet answers 404 like one that does not exist, and the try
+   * can be made again.
+   */
+  function removeFrom(items, list, kind, okStatus) {
+    return (req, res, m) => {
+      if (req.headers['xi-api-key'] !== key)
+        return json(res, 401, { detail: 'bad key' });
+      const id = decodeURIComponent(m[1]);
+      const item = items.get(id);
+      if (item === undefined || Date.now() < item.storedAt) {
+        state.deleteTries.push({ kind, id, status: 404 });
+        return json(res, 404, { detail: 'no such item' });
+      }
+      if (Date.now() < item.ackUntil) {
+        // Acknowledged, nothing removed: the copy is still there afterwards
+        // (hidden from a read for the first hideMs, if the file asked).
+        item.hiddenUntil = Date.now() + (item.hideMs || 0);
+        state.deleteTries.push({ kind, id, status: okStatus, kept: true });
+        if (okStatus === 204) {
+          res.statusCode = 204;
+          return res.end();
+        }
+        return json(res, okStatus, { status: 'ok' });
+      }
+      items.delete(id);
+      list.push(id);
+      state.deleteTries.push({ kind, id, status: okStatus });
+      if (okStatus === 204) {
+        res.statusCode = 204;
+        return res.end();
+      }
+      return json(res, okStatus, { status: 'ok' });
+    };
+  }
+
+  /** GET of a transcript by id: 200 while the provider holds the copy, else 404. */
+  function readTranscript(req, res, m) {
+    if (req.headers['xi-api-key'] !== key)
+      return json(res, 401, { detail: 'bad key' });
+    const id = decodeURIComponent(m[1]);
+    const item = transcripts.get(id);
+    // Held but hidden: a read answers 404 for hideMs after a delete that
+    // removed nothing, and the copy then shows again (the real provider,
+    // 24 Oct 2026: 8 of 9 transcripts).
+    const hidden = item !== undefined && Date.now() < item.hiddenUntil;
+    const status = item !== undefined && !hidden ? 200 : 404;
+    state.reads.push({ kind: 'transcript', id, status, ...(hidden ? { hidden: true } : {}) });
+    if (status === 404) return json(res, 404, { detail: 'no such item' });
+    return json(res, 200, { transcription_id: id, text: 'stand-in words' });
+  }
+
   /** The own-voice routes (VOICE-01). */
   function addVoice(req, res, _m, raw) {
     if (req.headers['xi-api-key'] !== key)
@@ -260,6 +540,36 @@ function startVoiceStandin({
       handle: generation('sfx'),
     },
     { method: 'POST', path: /^\/v1\/music$/, handle: generation('music') },
+    {
+      method: 'POST',
+      path: /^\/v1\/speech-to-text$/,
+      handle: fileRoute('stt'),
+    },
+    {
+      method: 'DELETE',
+      path: /^\/v1\/speech-to-text\/transcripts\/([^/]+)$/,
+      handle: removeFrom(
+        transcripts,
+        state.deletedTranscripts,
+        'transcript',
+        200,
+      ),
+    },
+    {
+      method: 'GET',
+      path: /^\/v1\/speech-to-text\/transcripts\/([^/]+)$/,
+      handle: readTranscript,
+    },
+    {
+      method: 'POST',
+      path: /^\/v1\/audio-isolation$/,
+      handle: fileRoute('iso'),
+    },
+    {
+      method: 'DELETE',
+      path: /^\/v1\/audio-isolation\/history\/([^/]+)$/,
+      handle: removeFrom(isolations, state.deletedIsolations, 'isolation', 204),
+    },
     { method: 'POST', path: /^\/v1\/voices\/add$/, handle: addVoice },
     { method: 'DELETE', path: /^\/v1\/voices\/([^/]+)$/, handle: removeVoice },
   ];
@@ -295,6 +605,9 @@ function startVoiceStandin({
         state,
         /** Voices made and not yet removed. */
         openClones: () => clones.size,
+        /** Transcripts and cleaned recordings the provider still holds (AITOOLS-04). */
+        openTranscripts: () => transcripts.size,
+        openIsolations: () => isolations.size,
       }),
     );
   });

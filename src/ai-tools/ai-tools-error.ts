@@ -19,6 +19,10 @@ export type AiToolErrorCode =
   | 'ai_prompt_too_long'
   /** A length longer than the tool's setting allows (AITOOLS-03). Nothing is held. */
   | 'ai_length_too_long'
+  /** A file bigger than `ai.input_max_bytes` (AITOOLS-04). Nothing is held. */
+  | 'ai_file_too_large'
+  /** A file whose length the Hub cannot read (AITOOLS-04). Nothing is held. */
+  | 'ai_file_unreadable'
   | 'ai_tool_unavailable'
   | 'not_found';
 
@@ -31,6 +35,8 @@ export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
   ai_prompt_empty: HttpStatus.BAD_REQUEST,
   ai_prompt_too_long: HttpStatus.UNPROCESSABLE_ENTITY,
   ai_length_too_long: HttpStatus.UNPROCESSABLE_ENTITY,
+  ai_file_too_large: HttpStatus.UNPROCESSABLE_ENTITY,
+  ai_file_unreadable: HttpStatus.UNPROCESSABLE_ENTITY,
   ai_tool_unavailable: HttpStatus.SERVICE_UNAVAILABLE,
   not_found: HttpStatus.NOT_FOUND,
 };
@@ -38,11 +44,11 @@ export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
 export interface AiToolErrorDetail {
   /** `quote_changed`: what the job costs now, in points. */
   costPoints?: number;
-  /** `ai_prompt_too_long`, `ai_length_too_long`: which limit stopped the job (`prompt_characters` or `length_seconds`). */
+  /** `ai_prompt_too_long`, `ai_length_too_long`, `ai_file_too_large`: which limit stopped the job (`prompt_characters`, `length_seconds` or `file_bytes`). */
   cap?: string;
   /** The limit's size, in the unit it counts. */
   capLimit?: number;
-  /** What the limit counts (`characters` or `seconds`). */
+  /** What the limit counts (`characters`, `seconds` or `bytes`). */
   capUnit?: string;
 }
 

@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'child_process';
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import type { Server } from 'http';
 import * as path from 'path';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
@@ -27,9 +28,17 @@ import {
   AI_AUDIO_STORE,
   type AiAudioStore,
 } from '../../src/ai-tools/audio/ai-audio-store';
+import {
+  AI_INPUT_FILES,
+  AiInputService,
+  type AiInputFiles,
+  type InputFileRow,
+} from '../../src/ai-tools/input/ai-input-files';
 import { AI_VOICE_PROVIDER } from '../../src/ai-tools/voice/ai-voice-provider';
 import { startStandin, type StandinHandle } from './voice-standin-for-specs';
+import { AppController } from '../../src/app.controller';
 import { HttpVoiceProvider } from '../../src/ai-tools/voice/http-voice-provider';
+import { ProviderCopyService } from '../../src/ai-tools/voice/provider-copy.service';
 
 /**
  * The shared set-up of the AI tools specs: the real controller, services,
@@ -98,16 +107,124 @@ export class MemoryAudioStore implements AiAudioStore {
     wawuUserId: string,
     jobId: string,
     audio: Buffer,
-    _contentType?: 'audio/mpeg',
+    contentType?: string,
     folder: string = 'ai/voiceover',
   ): Promise<string> {
     if (this.failPut) return Promise.reject(new Error('store down'));
-    const key = `${folder}/${wawuUserId}/${jobId}.mp3`;
+    const ext =
+      contentType === 'audio/wav'
+        ? 'wav'
+        : contentType === 'audio/mp4'
+          ? 'm4a'
+          : contentType === 'audio/aac'
+            ? 'aac'
+            : 'mp3';
+    const key = `${folder}/${wawuUserId}/${jobId}.${ext}`;
     this.files.set(key, audio);
     return Promise.resolve(key);
   }
   urlFor(key: string): Promise<string> {
     return Promise.resolve(`https://audio.example.test/${key}`);
+  }
+  remove(key: string): Promise<void> {
+    this.files.delete(key);
+    this.removed.push(key);
+    return Promise.resolve();
+  }
+}
+
+/**
+ * The person's uploaded files of a spec (AITOOLS-04), kept in memory: it
+ * answers `find` as the storage rows do (own file, input folder, landed) and
+ * remembers what was removed.
+ */
+export class MemoryInputFiles implements AiInputFiles {
+  readonly files = new Map<
+    string,
+    {
+      wawuUserId: string;
+      folder: string;
+      data: Buffer;
+      contentType: string;
+      landed: boolean;
+    }
+  >();
+  readonly removed: string[] = [];
+  failRead = false;
+  add(
+    wawuUserId: string,
+    data: Buffer,
+    contentType: string,
+    folder = 'ai/input-audio',
+    landed = true,
+  ): string {
+    const ext = contentType.split('/')[1] ?? 'bin';
+    const key = `${folder}/${wawuUserId}/${randomUUID()}.${ext}`;
+    this.files.set(key, { wawuUserId, folder, data, contentType, landed });
+    return key;
+  }
+  find(wawuUserId: string, key: string): Promise<InputFileRow | null> {
+    const f = this.files.get(key);
+    if (!f || f.wawuUserId !== wawuUserId || !f.landed)
+      return Promise.resolve(null);
+    return Promise.resolve({
+      key,
+      folder: f.folder,
+      bytes: f.data.length,
+      contentType: f.contentType,
+    });
+  }
+  /** Every read of a file's bytes, whole or its head, in order (the specs count them). */
+  readonly reads: { key: string; kind: 'head' | 'whole' }[] = [];
+  readHead(key: string, bytes: number): Promise<Buffer> {
+    const f = this.files.get(key);
+    this.reads.push({ key, kind: 'head' });
+    if (this.failRead || !f) return Promise.reject(new Error('file gone'));
+    return Promise.resolve(Buffer.from(f.data.subarray(0, bytes)));
+  }
+  read(
+    key: string,
+    maxBytes: number,
+  ): Promise<{ audio: Buffer; contentType: string }> {
+    const f = this.files.get(key);
+    this.reads.push({ key, kind: 'whole' });
+    if (this.failRead || !f || f.data.length > maxBytes)
+      return Promise.reject(new Error('file gone'));
+    // A fresh copy each time, as the storage read gives (the length reader
+    // may take the bytes' memory over).
+    return Promise.resolve({
+      audio: Buffer.from(new Uint8Array(f.data)),
+      contentType: f.contentType,
+    });
+  }
+  length(key: string): Promise<number> {
+    const f = this.files.get(key);
+    if (this.failRead || !f) return Promise.reject(new Error('file gone'));
+    return Promise.resolve(f.data.length);
+  }
+  /** Every provider-run open, in order (the specs count them). */
+  readonly opens: string[] = [];
+  open(
+    key: string,
+    maxBytes: number,
+  ): Promise<{ stream: Readable; bytes: number; contentType: string }> {
+    const f = this.files.get(key);
+    this.opens.push(key);
+    if (this.failRead || !f || f.data.length > maxBytes)
+      return Promise.reject(new Error('file gone'));
+    const data = f.data;
+    // 64 KB pieces, as a store's body arrives; nothing is copied.
+    return Promise.resolve({
+      stream: Readable.from(
+        (function* () {
+          for (let at = 0; at < data.length; at += 65536)
+            yield data.subarray(at, Math.min(data.length, at + 65536));
+        })(),
+        { objectMode: false },
+      ),
+      bytes: data.length,
+      contentType: f.contentType,
+    });
   }
   remove(key: string): Promise<void> {
     this.files.delete(key);
@@ -127,6 +244,7 @@ export interface AiHarness {
   tokens: PointsJobQuoteToken;
   quotes: PointsQuoteService;
   store: MemoryAudioStore;
+  inputs: MemoryInputFiles;
   standin: Standin;
   tokensOf: Record<string, string>;
   get<T>(token: unknown): T;
@@ -175,6 +293,7 @@ export async function bootAiTools(): Promise<AiHarness> {
   process.env.FEE_QUOTE_KEY ??= 'ai01-spec-fee-quote-key-0123456789abcdef';
 
   const store = new MemoryAudioStore();
+  const inputs = new MemoryInputFiles();
   const moduleRef: TestingModule = await Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ isGlobal: true }),
@@ -183,7 +302,8 @@ export async function bootAiTools(): Promise<AiHarness> {
       PlanSettingsModule,
       PointsModule,
     ],
-    controllers: [AiToolsController],
+    // AppController: GET /health, so a spec can show the Hub answers while a hostile file is being read.
+    controllers: [AiToolsController, AppController],
     providers: [
       FeeSettings,
       PointsSpendService,
@@ -205,6 +325,9 @@ export async function bootAiTools(): Promise<AiHarness> {
         inject: [ConfigService],
       },
       { provide: AI_AUDIO_STORE, useValue: store },
+      { provide: AI_INPUT_FILES, useValue: inputs },
+      AiInputService,
+      ProviderCopyService,
     ],
   }).compile();
   const app = moduleRef.createNestApplication();
@@ -232,6 +355,7 @@ export async function bootAiTools(): Promise<AiHarness> {
     tokens,
     quotes: moduleRef.get(PointsQuoteService),
     store,
+    inputs,
     standin,
     tokensOf,
     get: <T>(token: unknown) => moduleRef.get<T>(token as never),

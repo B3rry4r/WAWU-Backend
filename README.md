@@ -217,6 +217,16 @@ in the server log only (`ai job <id> ... answered 402`), never on the job (its
 `providerRef` holds a provider job id and is never written by a failure) and
 never shown to the person.
 
+Captions and Clean audio (AITOOLS-04) take the person's own file and need only
+`AI_VOICE_BASE_URL` and `AI_VOICE_API_KEY`. The two file calls are made with
+`node:http(s)` and wait up to `AI_VOICE_FILE_TIMEOUT_MS` (default 600000, from the
+longest file the plan allows, not from a measured run); `AI_VOICE_TRANSCRIBE_MODEL`
+(default `scribe_v2`) names the speech to text model. The stand-in answers
+`/v1/speech-to-text`, `/v1/audio-isolation` and their `DELETE` routes, and reads
+its failure markers (`[[fail]]`, `[[reject]]`, `[[status:n]]`, `[[html]]`,
+`[[slow:n]]`, `[[reported:secs]]`, `[[iso-type:type]]`) from the file's bytes.
+`docs/contract/PLANS.md` section "Captions and Clean audio" says the rest.
+
 Since AITOOLS-02 the stand-in answers from one route table (a later tool adds its
 route and its markers there) and keeps the `model_id` of each speech call in
 `GET /__standin/state` (`models`, `lastModel`), so a spec can see that Quick voice

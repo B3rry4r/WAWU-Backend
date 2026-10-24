@@ -519,6 +519,17 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // FIX-107: the school courses this person saved (SC3's bookmark).
+    key: 'savedSchoolCourses',
+    models: ['SavedSchoolCourse'],
+    load: (prisma, me) =>
+      prisma.savedSchoolCourse.findMany({
+        where: { userWawuId: me },
+        select: { courseId: true, savedAt: true },
+        orderBy: { savedAt: 'desc' },
+      }),
+  },
+  {
     // ME-10: the course lessons this person marked finished (M29).
     key: 'lessonsFinished',
     models: ['CourseLessonProgress'],

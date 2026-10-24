@@ -38,8 +38,8 @@ export class MeCursorQueryDto {
 export class SavedQueryDto extends MeCursorQueryDto {
   /** M30's tab: everything, or one kind. Default `all`. */
   @IsOptional()
-  @IsIn(['all', 'content', 'events', 'creators'])
-  type?: 'all' | 'content' | 'events' | 'creators' = 'all';
+  @IsIn(['all', 'content', 'events', 'creators', 'courses'])
+  type?: 'all' | 'content' | 'events' | 'creators' | 'courses' = 'all';
 }
 
 /** GET /me/purchases (M29). */
