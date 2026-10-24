@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- Rollback of 20261106100000_fx_accounts (WALLET-21). Drops the five tables the
+-- Rollback of 20261112090000_fx_accounts (WALLET-21). Drops the five tables the
 -- migration made and nothing else. Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while ANY of them holds a row: an account row
 -- is the only link between a person and the account Nuvion holds for them,
