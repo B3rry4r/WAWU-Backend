@@ -36,6 +36,8 @@ import type {
   TransactionCategory,
   TransferStatus,
 } from '../money/money-view.type';
+import type { ProviderForeignAccounts } from './wallet-provider-fx';
+import type { WalletProviderCapital } from './wallet-provider-capital';
 
 /** Nest injection token for the selected `WalletProvider`. */
 export const WALLET_PROVIDER = Symbol('WALLET_PROVIDER');
@@ -774,6 +776,12 @@ export interface WalletProvider {
    * merchant charges), and nothing else is moved.
    */
   readonly wawuFeeLeg?: boolean;
+  /**
+   * The provider's investment products (Capital, NUV-12, R-84). Absent when
+   * the provider has none (the Fintava adapter): the money layer then answers
+   * that Capital is not available, and nothing is sent.
+   */
+  readonly capital?: WalletProviderCapital;
 
   /**
    * The bank code of every wallet at this provider: a party named at a bank
@@ -898,6 +906,15 @@ export interface WalletProvider {
   ): Promise<ProviderWalletState>;
   /** Undoes `freezeWallet`. Optional and idempotent in the same way. */
   unfreezeWallet?(wallet: { walletId: string }): Promise<ProviderWalletState>;
+
+  // Foreign accounts (WALLET-21, R-83, R-84)
+  /**
+   * Dollar, euro, pound, Canadian dollar, dirham and cedi accounts, the
+   * stablecoins, swaps between them and the naira wallet, and crypto sends
+   * (wallet-provider-fx.ts). Optional: a provider without it (Fintava) leaves
+   * it out, and the Hub answers `currency_not_supported`.
+   */
+  readonly fx?: ProviderForeignAccounts;
 }
 
 /** One PIN reset code for one person, as an `OtpSender` sends it (NUV-01). */

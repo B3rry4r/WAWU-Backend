@@ -98,6 +98,13 @@ import {
   AddMoneyReturnController,
   MoneyAddMoneyController,
 } from './add-money/add-money.controller';
+import { FxAccountsService } from './fx/fx-accounts.service';
+import { FxAdminController } from './fx/fx-admin.controller';
+import { FxAdminService } from './fx/fx-admin.service';
+import { FxController } from './fx/fx.controller';
+import { FxOperationsService } from './fx/fx-operations.service';
+import { FxPort } from './fx/fx-provider';
+import { FxSettings } from './fx/fx-settings';
 
 /**
  * The served half of the Naira wallet contract. Routes move here from
@@ -235,6 +242,13 @@ import {
  * the person's "Money in" switch. It adds no route and never calls the
  * provider.
  *
+ * WALLET-21 (R-83, R-84): dollar, euro, pound, Canadian dollar, dirham, cedi and
+ * stablecoin accounts, swaps and crypto sends on Nuvion (`/money/fx`, src/money/fx/),
+ * through WALLET_PROVIDER's optional `fx` port, with the admin reads and the
+ * freeze (`/admin/money/fx`). A sweep every minute settles a swap or send whose
+ * answer was lost from the provider's own record (it runs where
+ * ScheduleModule.forRoot() is loaded).
+ *
  * POINTS-04: points converted to cash (`/points/convert`, PointsConvertModule
  * in `src/points/convert/`). It pays out of WAWU's own account through the
  * exported `MerchantWallet`, the exported fee and Idempotency-Key services and
@@ -283,6 +297,10 @@ import {
     AddMoneyReturnController,
     MoneyAddMoneyController,
     AdminAddMoneyController,
+    // WALLET-21 (R-83, R-84): foreign accounts, swaps and crypto sends, and the
+    // admin reads and the freeze.
+    FxController,
+    FxAdminController,
   ],
   providers: [
     // Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, WALLET-26).
@@ -290,6 +308,11 @@ import {
     AddMoneyService,
     AddMoneyPrecheckGuard,
     NuvionAddMoneyHandler,
+    FxPort,
+    FxSettings,
+    FxAccountsService,
+    FxOperationsService,
+    FxAdminService,
     WalletGate,
     WalletGateGuard,
     TransactionPinService,

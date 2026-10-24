@@ -210,6 +210,9 @@ export class NuvionInflowRecorder {
     sourceEventId: string | null,
   ): Promise<NuvionHandlerResult> {
     if (t.paymentType !== NUVION_BANK_TRANSFER) {
+      if (t.paymentType?.startsWith('capital-') === true) {
+        return done('a Capital payout: recorded by its order (NUV-12)');
+      }
       if (t.paymentType === 'book-transfer') {
         return done(
           'a book transfer between Nuvion accounts: recorded by its sender (NUV-05)',
