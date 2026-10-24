@@ -131,6 +131,33 @@ more routes adds them to `SERVED_MONEY_ROUTES` in
   `availableBalance`). No route sums ledger rows and calls the result a
   balance.
 
+### 1a. Amounts that are not naira (WALLET-21, R-83, R-84)
+
+Default (lead), owner may override. Naira stays kobo, in `...Kobo`. Every other
+currency (dollars, euros, pounds, Canadian dollars, dirhams, cedis, and the
+stablecoins USDT, USDC and RLUSD) is the same idea with its own unit:
+
+- An amount that is not naira is a **JSON integer in the currency's smallest
+  unit**, in a field whose name ends in `Minor` (`amountMinor`,
+  `availableMinor`, `wawuFeeMinor`). $12.34 is `1234`. Never a float, never a
+  string.
+- A `...Minor` field **always sits beside a currency field** that says whose
+  unit it is: `currency` on the object, or `fromCurrency` / `toCurrency` for a
+  quote or a swap (`amountFromMinor` is in `fromCurrency`, `amountToMinor` in
+  `toCurrency`). The currencies are the WAWU codes `USD`, `EUR`, `GBP`, `CAD`,
+  `AED`, `GHS`, `USDT`, `USDC`, `RLUSD`; `NGN` appears only where a swap starts
+  from or ends in the naira wallet, and there the figure is kobo, in a field
+  that still ends `Minor` because the pair of fields is one rule.
+- How many decimals the unit has is `decimals` on the currency (2 for a
+  dollar). It is data: the app formats from it and never hard-codes it. The
+  stablecoins' `decimals` is read from config (BACKEND_GAPS G-WALLET-21-1:
+  Nuvion's docs say six places, its dev server counts cents).
+- A `...Minor` field is `"type": "integer"` in `contract/openapi.json`
+  (`scripts/enrich-contract.js` writes every number under `src/money/fx/` as an
+  integer; `src/money/fx/tests/fx-contract.spec.ts` checks it).
+- A balance of such an account is the provider's, read on every request; no
+  route adds our rows up and calls the result a balance.
+
 ## 2. Phone numbers: `+234`, normalised by the server
 
 - **Out:** every phone a money route returns is E.164, `+2348031234567`. A
@@ -3203,3 +3230,69 @@ balance (MONEY-11): nothing here is added up into one, and the routes say
   called `total` because the response interceptor rewrites any `items` beside a
   numeric `total` as an offset page and would drop the cursor and the start. A sale at
   exactly the start is paid; the millisecond before it is not.
+
+## 27. Foreign accounts, swaps and crypto sends (WALLET-21, R-83, R-84)
+
+Dollar, euro, pound, Canadian dollar, dirham and cedi accounts, and USDT, USDC
+and RLUSD (RLUSD on Ethereum only), on Nuvion, beside the naira wallet. Every
+route is under `/api/hub/money/fx` and needs an open naira wallet (R-6, the
+identity checks happen once). Amounts follow section 1a: an integer in the
+smallest unit in a `...Minor` field, always beside a currency field. Through
+`WALLET_PROVIDER` only: a provider without foreign accounts (Fintava) answers
+`409 currency_not_supported` on every route. The nine currencies and their
+`decimals` come from `GET /money/fx/currencies`, which also says what an admin
+has switched off (draw only what is on, R-47).
+
+| Route | What it does |
+| --- | --- |
+| `GET /money/fx/currencies` | the nine currencies (code, name, `decimals`, chains, `enabled`) and the three product switches (`openAccount`, `swap`, `cryptoSend`) |
+| `GET /money/fx/accounts` | the person's accounts: the provider's balance (`availableMinor`, `bookedMinor`; null if it cannot be asked) and the receiving details |
+| `POST /money/fx/accounts` | opens one (`currency`, and `chain` for a stablecoin); always 201, and asking again for one the person has returns it |
+| `GET /money/fx/accounts/{id}` | one account |
+| `GET /money/fx/accounts/{id}/transactions` | the account's statement lines, newest first, cursor page (section 6) |
+| `POST /money/fx/quotes` | a quote between two of the person's accounts (or the naira wallet): rate, both amounts, WAWU's fee, the provider's real `expiresAt` |
+| `POST /money/fx/swaps` | swaps at a held quote: `Idempotency-Key`, PIN or device approval; `GET /money/fx/swaps/{id}` to poll |
+| `GET /money/fx/sends/quote` | what a crypto send costs before the PIN (`accountId`, `currency`, `chain`, `amountMinor`; the currency must be the account's) |
+| `POST /money/fx/sends` | sends USDT, USDC or RLUSD to an outside address on the account's chain (`accountId`, `currency`, `chain`, `address`, `amountMinor`): `Idempotency-Key`, PIN; `GET /money/fx/sends/{id}` to poll |
+
+Admin (`/api/hub/admin/money/fx`, superadmin and finance only):
+`GET people/{wawuUserId}/accounts`, `GET operations` (swaps and sends, filters
+`wawuUserId`, `kind`, `status`, a cursor page), `GET operations/{id}`, and
+`POST accounts/{id}/freeze` and `/unfreeze` (a reason; one audit row each).
+
+**Errors.** The usual money errors (section 3) plus, for these routes:
+`fx_switched_off` (409: a currency or a product is off), `quote_expired` (409:
+the provider's hold has passed or the quote was used; ask for a new one),
+`account_frozen` (423), `fx_account_not_open` (409), `address_invalid` (422: the
+address is not one a wallet on that chain has), `chain_mismatch` (422: the
+send's chain is not the account's), and `provider_declined` (409: the provider
+refused in words of its own, carried in `message`; nothing moved). Figures in
+an error use `balanceMinor`, `totalMinor`, `shortfallMinor`, `limitMinor`,
+`remainingTodayMinor` and `currency`.
+
+**What the app is told, and not.** A stablecoin account holds one chain's
+wallet address, so USDT on two chains is two accounts (the app groups them by
+`currency`). A quote's hold is the provider's (`expiresAt`), never a fixed
+number. The provider's own fee on a send is named only when it takes the send,
+so `GET /money/fx/sends/quote` has `providerFeeMinor: null` and the receipt
+carries what was charged. WAWU's fee per currency comes from config and is 0
+until the owner names it (R-10).
+
+**Where an account's details stand** (fix round 1, verifier M2). Each account has
+`detailsStatus`: `ready` (issued and active), `pending` (the provider is issuing
+them) or `unavailable` (the provider would not issue them just now), and
+`detailsNote`, the provider's own words when `unavailable` (null otherwise).
+The app says exactly that and promises no arrival: on dev CAD and AED answer
+503 every time. An account whose details were never seen is asked again on
+every read.
+
+**WAWU's fee** (R-10, fix round 1, verifier H1). A swap or a send is charged the
+fee in the source currency, on top, as a second transfer under the operation's
+reference plus `-fee`. Out of naira it is a transfer to WAWU's operational
+account, the way a naira send's fee is collected; out of another currency it is
+a transfer to `FX_FEE_COLLECTOR_<CODE>_BAN`. The leg counts as paid only when the
+provider says it completed. A fee the provider refuses is tried again under a
+new reference (`-fee-2`, `-fee-3`); after three refusals it is given back (the
+operation's `wawuFeeMinor` becomes 0 and the admin view shows `feeLeg:
+uncollected`). A fee whose answer was lost or is unfinished stays `owed` and is
+asked again under the same reference.

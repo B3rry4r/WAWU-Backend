@@ -5,6 +5,7 @@ import { WebhookRetentionModule } from '../../webhook-retention/webhook-retentio
 import { NuvionAccountsHandler } from '../handlers/accounts.handler';
 import { NuvionBookHandler } from '../handlers/book.handler';
 import { NuvionDocumentsHandler } from '../handlers/documents.handler';
+import { NuvionFxHandler } from '../handlers/fx.handler';
 import { NuvionHandlerRegistry } from '../handlers/nuvion-handler-registry';
 import { NuvionOpeningHandler } from '../handlers/opening.handler';
 import { NuvionPayoutsHandler } from '../handlers/payouts.handler';
@@ -44,6 +45,7 @@ import { NuvionWebhookStore } from './nuvion-webhook.service';
     NuvionBookHandler,
     NuvionPayoutsHandler,
     NuvionReconcileHandler,
+    NuvionFxHandler,
   ],
   exports: [NuvionWebhookDispatcher, NuvionHandlerRegistry],
 })

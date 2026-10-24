@@ -18789,6 +18789,1218 @@
         "x-wawu-max-items": 10
       }
     },
+    "/api/hub/money/fx/currencies": {
+      "get": {
+        "operationId": "FxController_currencies",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxCurrenciesView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What can be opened, in what units, and what an admin has switched off:\neach currency's `enabled` and the three products. The app draws only\nwhat is on (R-47). Reads settings only; no provider call.",
+        "tags": [
+          "Fx"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/money/fx/accounts": {
+      "get": {
+        "operationId": "FxController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxAccountListView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The person's foreign accounts, each with the provider's balance (read\nnow, never a sum of our rows) and the details payers use: a US account\nnumber, routing number and SWIFT code, or a wallet address on the\naccount's chain. An account whose details are not issued yet says\n`pending`; its balance is null if the provider cannot be asked.",
+        "tags": [
+          "Fx"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      },
+      "post": {
+        "operationId": "FxController_open",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenFxAccountDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxAccountView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported, fx_switched_off, provider_declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: chain_mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Opens an account in one currency on the person's Nuvion entity. Asking\nagain for an account the person has returns it. A stablecoin needs its\n`chain`. Refused with `fx_switched_off` when an admin switched the\ncurrency or \"open account\" off, and with `provider_declined` (the\nprovider's plain words) when Nuvion will not open it for this person.",
+        "tags": [
+          "Fx"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/money/fx/accounts/{id}": {
+      "get": {
+        "operationId": "FxController_account",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxAccountView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One account, as the list shows it.",
+        "tags": [
+          "Fx"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/money/fx/accounts/{id}/transactions": {
+      "get": {
+        "operationId": "FxController_transactions",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxTransactionPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The account's movements, newest first, read from the provider's\nstatement (the provider is the truth). A swap shows its conversion.",
+        "tags": [
+          "Fx"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/money/fx/quotes": {
+      "post": {
+        "operationId": "FxController_quote",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FxQuoteDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxQuoteView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported, fx_switched_off, fx_account_not_open, provider_declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, account_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "A quote for converting between two of the person's accounts (a foreign\naccount, a stablecoin account or the naira wallet): the provider's rate,\nboth amounts, WAWU's fee from config, and the provider's real expiry\n(`expiresAt`; about three minutes for a currency pair, two for a\nstablecoin pair on dev). The quote is kept for this person and used once.",
+        "tags": [
+          "Fx"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/money/fx/swaps": {
+      "post": {
+        "operationId": "FxController_swap",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FxSwapDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxSwapView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, currency_not_supported, fx_switched_off, quote_expired, fx_account_not_open, provider_declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked, account_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Swaps at a held quote: one book transfer between the person's own\naccounts, carrying the quote's id, so the rate is the one shown. The\nIdempotency-Key and the PIN are required. Answers 201 with the swap\n(`completed`, or `pending` when the provider has not finished it: poll\n`GET /money/fx/swaps/{id}`). An expired or used quote is `409\nquote_expired` (ask for a new one); a frozen account `423\naccount_frozen`. The same key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN.",
+        "tags": [
+          "Fx"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/money/fx/swaps/{id}": {
+      "get": {
+        "operationId": "FxController_swapById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxSwapView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One swap as it stands now: the app reads it while a swap is unfinished. Only the owner reads it.",
+        "tags": [
+          "Fx"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/money/fx/sends/quote": {
+      "get": {
+        "operationId": "FxController_sendQuote",
+        "parameters": [
+          {
+            "name": "accountId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "currency",
+            "required": true,
+            "in": "query",
+            "description": "The account's currency; the amount below is in its smallest unit. Must be the account's.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "USDT",
+                "USDC",
+                "RLUSD"
+              ]
+            }
+          },
+          {
+            "name": "chain",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "eth",
+                "base",
+                "matic",
+                "sol"
+              ]
+            }
+          },
+          {
+            "name": "amountMinor",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxSendQuoteView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported, fx_switched_off, fx_account_not_open",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: chain_mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, account_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What a crypto send costs before the PIN: the chain must be the account's\n(`chain_mismatch`), WAWU's fee from config, and the provider's network\nfee, which the provider names only when it takes the send (null here;\nthe send's receipt carries it).",
+        "tags": [
+          "Fx"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/money/fx/sends": {
+      "post": {
+        "operationId": "FxController_send",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FxSendDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxSendView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, currency_not_supported, fx_switched_off, fx_account_not_open, provider_declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "reason.code: address_invalid, chain_mismatch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked, account_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Sends USDT, USDC or RLUSD from a stablecoin account to an outside\naddress. The chain must match the account's and the address's\n(`chain_mismatch`, `address_invalid`, both before the PIN). The\nIdempotency-Key and the PIN are required; the provider's fee is charged\non top as it charges it. Answers 201 with the send (`pending` until the\nchain confirms; poll `GET /money/fx/sends/{id}`). If the provider will\nnot take the send, `409 provider_declined` carries its reason in plain\nwords and nothing moved.",
+        "tags": [
+          "Fx"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/money/fx/sends/{id}": {
+      "get": {
+        "operationId": "FxController_sendById",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FxSendView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One send as it stands now. Only the owner reads it.",
+        "tags": [
+          "Fx"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/admin/money/fx/people/{wawuUserId}/accounts": {
+      "get": {
+        "operationId": "FxAdminController_personAccounts",
+        "parameters": [
+          {
+            "name": "wawuUserId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminFxAccountListView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A person's foreign accounts with the provider's balances and details.",
+        "tags": [
+          "FxAdmin"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/admin/money/fx/operations": {
+      "get": {
+        "operationId": "FxAdminController_operations",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "wawuUserId",
+            "required": false,
+            "in": "query",
+            "description": "One person's WAWU id.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "swap",
+                "send"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "completed",
+                "failed"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminFxOperationPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Swaps and sends, newest first, for one person or for everyone.",
+        "tags": [
+          "FxAdmin"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/admin/money/fx/operations/{id}": {
+      "get": {
+        "operationId": "FxAdminController_operation",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminFxOperationView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "One swap or send.",
+        "tags": [
+          "FxAdmin"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/admin/money/fx/accounts/{id}/freeze": {
+      "post": {
+        "operationId": "FxAdminController_freeze",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminFxFreezeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminFxFreezeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Freezes one account: from then on nothing leaves it (a swap from it, a\ncrypto send) and nothing is swapped into it; money can still arrive.\nNeeds a reason. Freezing a frozen account changes nothing and writes no\nsecond audit row.",
+        "tags": [
+          "FxAdmin"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/admin/money/fx/accounts/{id}/unfreeze": {
+      "post": {
+        "operationId": "FxAdminController_unfreeze",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminFxFreezeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminFxFreezeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Lets go of a frozen account. Needs a reason; one audit row.",
+        "tags": [
+          "FxAdmin"
+        ],
+        "x-wawu-built-by": "WALLET-21"
+      }
+    },
     "/api/hub/money/identity/documents": {
       "get": {
         "operationId": "NuvionDocumentsController_getDocuments",
@@ -40178,7 +41390,14 @@
               "question_already_waiting",
               "points_cap_reached",
               "points_not_short",
-              "tier_required"
+              "tier_required",
+              "fx_switched_off",
+              "quote_expired",
+              "account_frozen",
+              "address_invalid",
+              "chain_mismatch",
+              "provider_declined",
+              "fx_account_not_open"
             ],
             "type": "string"
           },
@@ -40201,6 +41420,26 @@
           "limitKobo": {
             "type": "integer",
             "description": "limit_reached on the account's daily limit (WALLET-23): the limit itself, in kobo."
+          },
+          "balanceMinor": {
+            "type": "integer",
+            "description": "The same figures for an account that is not naira (WALLET-21): an integer\nin the smallest unit of `currency`. insufficient_funds, limit_reached,\namount_out_of_range on a foreign account, a swap or a crypto send."
+          },
+          "totalMinor": {
+            "type": "integer"
+          },
+          "shortfallMinor": {
+            "type": "integer"
+          },
+          "remainingTodayMinor": {
+            "type": "integer"
+          },
+          "limitMinor": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "description": "The currency the Minor figures above are in (a WAWU code: USD, USDT ...)."
           },
           "minimumKobo": {
             "type": "integer",
@@ -40885,6 +42124,174 @@
           "data",
           "statusCode",
           "message"
+        ]
+      },
+      "OpenFxAccountDto": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ],
+            "type": "string"
+          },
+          "chain": {
+            "description": "A stablecoin account holds one chain's wallet address, so a stablecoin\nneeds its chain (USDT and USDC: eth, base, matic or sol; RLUSD: eth). A\nfiat currency takes none.",
+            "enum": [
+              "eth",
+              "base",
+              "matic",
+              "sol"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "currency"
+        ]
+      },
+      "FxQuoteDto": {
+        "type": "object",
+        "properties": {
+          "fromCurrency": {
+            "enum": [
+              "NGN",
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ],
+            "type": "string",
+            "description": "NGN is the naira wallet."
+          },
+          "toCurrency": {
+            "enum": [
+              "NGN",
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ],
+            "type": "string"
+          },
+          "fromAccountId": {
+            "type": "string",
+            "description": "The account to debit; left out when `fromCurrency` is NGN.",
+            "format": "uuid"
+          },
+          "toAccountId": {
+            "type": "string",
+            "description": "The account to credit; left out when `toCurrency` is NGN.",
+            "format": "uuid"
+          },
+          "amountFromMinor": {
+            "type": "integer",
+            "description": "What to convert, in the smallest unit of `fromCurrency` (kobo for NGN). Send this or `amountToMinor`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "amountToMinor": {
+            "type": "integer",
+            "description": "What to receive, in the smallest unit of `toCurrency` (kobo for NGN). Send this or `amountFromMinor`.",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "fromCurrency",
+          "toCurrency"
+        ]
+      },
+      "FxSwapDto": {
+        "type": "object",
+        "properties": {
+          "quoteId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The id of a quote still held."
+          }
+        },
+        "required": [
+          "quoteId"
+        ]
+      },
+      "FxSendDto": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The stablecoin account to send from."
+          },
+          "currency": {
+            "description": "The account's currency; `amountMinor` is in its smallest unit. Must be the account's.",
+            "enum": [
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ],
+            "type": "string"
+          },
+          "chain": {
+            "description": "Must be the chain of the account and of the address.",
+            "enum": [
+              "eth",
+              "base",
+              "matic",
+              "sol"
+            ],
+            "type": "string"
+          },
+          "address": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9]+$"
+          },
+          "amountMinor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "accountId",
+          "currency",
+          "chain",
+          "address",
+          "amountMinor"
+        ]
+      },
+      "AdminFxFreezeDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Why, in a few plain words; kept on the audit row.",
+            "minLength": 3,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "reason"
         ]
       },
       "DocumentErrorEnvelope": {
@@ -47095,6 +48502,1131 @@
           "canStart"
         ]
       },
+      "FxBalanceView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ]
+          },
+          "availableMinor": {
+            "type": "integer"
+          },
+          "bookedMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "currency",
+          "availableMinor",
+          "bookedMinor"
+        ]
+      },
+      "FxReceivingDetailsView": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "active"
+            ]
+          },
+          "beneficiaryName": {
+            "type": "string",
+            "nullable": true
+          },
+          "accountNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "routingNumber": {
+            "type": "string",
+            "nullable": true
+          },
+          "swiftCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "iban": {
+            "type": "string",
+            "nullable": true
+          },
+          "sortCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "bankName": {
+            "type": "string",
+            "nullable": true
+          },
+          "bankAddress": {
+            "type": "string",
+            "nullable": true
+          },
+          "chain": {
+            "type": "string",
+            "enum": [
+              "eth",
+              "base",
+              "matic",
+              "sol"
+            ],
+            "nullable": true
+          },
+          "address": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "status",
+          "beneficiaryName",
+          "accountNumber",
+          "routingNumber",
+          "swiftCode",
+          "iban",
+          "sortCode",
+          "bankName",
+          "bankAddress",
+          "chain",
+          "address"
+        ]
+      },
+      "AdminFxAccountView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "frozenAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "frozenReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "id": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "fiat",
+              "stablecoin"
+            ]
+          },
+          "decimals": {
+            "type": "integer"
+          },
+          "chain": {
+            "type": "string",
+            "enum": [
+              "eth",
+              "base",
+              "matic",
+              "sol"
+            ],
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "opening",
+              "open",
+              "frozen"
+            ]
+          },
+          "balance": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FxBalanceView"
+              }
+            ],
+            "nullable": true
+          },
+          "details": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FxReceivingDetailsView"
+              }
+            ],
+            "nullable": true
+          },
+          "detailsStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "unavailable"
+            ]
+          },
+          "detailsNote": {
+            "type": "string",
+            "nullable": true
+          },
+          "openedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "frozenAt",
+          "frozenReason",
+          "id",
+          "currency",
+          "kind",
+          "decimals",
+          "chain",
+          "status",
+          "balance",
+          "details",
+          "detailsStatus",
+          "detailsNote",
+          "openedAt"
+        ]
+      },
+      "AdminFxAccountListView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminFxAccountView"
+            }
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "accounts"
+        ]
+      },
+      "AdminFxOperationView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "swap",
+              "send"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed"
+            ]
+          },
+          "wawuUserId": {
+            "type": "string"
+          },
+          "fromCurrency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD",
+              "NGN"
+            ]
+          },
+          "toCurrency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD",
+              "NGN"
+            ],
+            "nullable": true
+          },
+          "amountFromMinor": {
+            "type": "integer"
+          },
+          "amountToMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "providerFeeMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "wawuFeeMinor": {
+            "type": "integer"
+          },
+          "feeLeg": {
+            "type": "string",
+            "enum": [
+              "done",
+              "owed",
+              "uncollected"
+            ],
+            "nullable": true
+          },
+          "chain": {
+            "type": "string",
+            "enum": [
+              "eth",
+              "base",
+              "matic",
+              "sol"
+            ],
+            "nullable": true
+          },
+          "address": {
+            "type": "string",
+            "nullable": true
+          },
+          "reference": {
+            "type": "string"
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "wawuUserId",
+          "fromCurrency",
+          "toCurrency",
+          "amountFromMinor",
+          "amountToMinor",
+          "providerFeeMinor",
+          "wawuFeeMinor",
+          "feeLeg",
+          "chain",
+          "address",
+          "reference",
+          "failureReason",
+          "createdAt",
+          "completedAt"
+        ]
+      },
+      "AdminFxOperationPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminFxOperationView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "AdminFxFreezeView": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "wawuUserId": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "frozen"
+            ]
+          },
+          "frozenAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "frozenReason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "accountId",
+          "wawuUserId",
+          "status",
+          "frozenAt",
+          "frozenReason"
+        ]
+      },
+      "FxCurrencyView": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "fiat",
+              "stablecoin"
+            ]
+          },
+          "decimals": {
+            "type": "integer"
+          },
+          "chains": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "eth",
+                "base",
+                "matic",
+                "sol"
+              ]
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "kind",
+          "decimals",
+          "chains",
+          "enabled"
+        ]
+      },
+      "FxProductsView": {
+        "type": "object",
+        "properties": {
+          "openAccount": {
+            "type": "boolean"
+          },
+          "swap": {
+            "type": "boolean"
+          },
+          "cryptoSend": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "openAccount",
+          "swap",
+          "cryptoSend"
+        ]
+      },
+      "FxCurrenciesView": {
+        "type": "object",
+        "properties": {
+          "currencies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FxCurrencyView"
+            }
+          },
+          "products": {
+            "$ref": "#/components/schemas/FxProductsView"
+          },
+          "naira": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "NGN"
+                ]
+              },
+              "decimals": {
+                "type": "integer",
+                "enum": [
+                  2
+                ]
+              }
+            },
+            "required": [
+              "code",
+              "decimals"
+            ]
+          }
+        },
+        "required": [
+          "currencies",
+          "products",
+          "naira"
+        ]
+      },
+      "FxAccountView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "fiat",
+              "stablecoin"
+            ]
+          },
+          "decimals": {
+            "type": "integer"
+          },
+          "chain": {
+            "type": "string",
+            "enum": [
+              "eth",
+              "base",
+              "matic",
+              "sol"
+            ],
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "opening",
+              "open",
+              "frozen"
+            ]
+          },
+          "balance": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FxBalanceView"
+              }
+            ],
+            "nullable": true
+          },
+          "details": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FxReceivingDetailsView"
+              }
+            ],
+            "nullable": true
+          },
+          "detailsStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "unavailable"
+            ]
+          },
+          "detailsNote": {
+            "type": "string",
+            "nullable": true
+          },
+          "openedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "currency",
+          "kind",
+          "decimals",
+          "chain",
+          "status",
+          "balance",
+          "details",
+          "detailsStatus",
+          "detailsNote",
+          "openedAt"
+        ]
+      },
+      "FxAccountListView": {
+        "type": "object",
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FxAccountView"
+            }
+          }
+        },
+        "required": [
+          "accounts"
+        ]
+      },
+      "FxConversionView": {
+        "type": "object",
+        "properties": {
+          "fromCurrency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD",
+              "NGN"
+            ]
+          },
+          "toCurrency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD",
+              "NGN"
+            ]
+          },
+          "rate": {
+            "type": "string"
+          },
+          "fromMinor": {
+            "type": "integer"
+          },
+          "toMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "fromCurrency",
+          "toCurrency",
+          "rate",
+          "fromMinor",
+          "toMinor"
+        ]
+      },
+      "FxTransactionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "accountId": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ]
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "in",
+              "out"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed",
+              "reversed"
+            ]
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "feeMinor": {
+            "type": "integer"
+          },
+          "balanceAfterMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "description": {
+            "type": "string"
+          },
+          "counterpartyName": {
+            "type": "string",
+            "nullable": true
+          },
+          "reference": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "type": "string"
+          },
+          "conversion": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FxConversionView"
+              }
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "accountId",
+          "currency",
+          "direction",
+          "status",
+          "amountMinor",
+          "feeMinor",
+          "balanceAfterMinor",
+          "description",
+          "counterpartyName",
+          "reference",
+          "occurredAt",
+          "conversion"
+        ]
+      },
+      "FxTransactionPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FxTransactionView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "FxQuoteView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "fromCurrency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD",
+              "NGN"
+            ]
+          },
+          "toCurrency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD",
+              "NGN"
+            ]
+          },
+          "fromAccountId": {
+            "type": "string",
+            "nullable": true
+          },
+          "toAccountId": {
+            "type": "string",
+            "nullable": true
+          },
+          "amountFromMinor": {
+            "type": "integer"
+          },
+          "amountToMinor": {
+            "type": "integer"
+          },
+          "fromDecimals": {
+            "type": "integer"
+          },
+          "toDecimals": {
+            "type": "integer"
+          },
+          "rate": {
+            "type": "string"
+          },
+          "providerFeeMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "wawuFeeMinor": {
+            "type": "integer"
+          },
+          "totalFromMinor": {
+            "type": "integer"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "validForSeconds": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "fromCurrency",
+          "toCurrency",
+          "fromAccountId",
+          "toAccountId",
+          "amountFromMinor",
+          "amountToMinor",
+          "fromDecimals",
+          "toDecimals",
+          "rate",
+          "providerFeeMinor",
+          "wawuFeeMinor",
+          "totalFromMinor",
+          "expiresAt",
+          "validForSeconds"
+        ]
+      },
+      "FxSwapView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed"
+            ]
+          },
+          "fromCurrency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD",
+              "NGN"
+            ]
+          },
+          "toCurrency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD",
+              "NGN"
+            ]
+          },
+          "fromAccountId": {
+            "type": "string",
+            "nullable": true
+          },
+          "toAccountId": {
+            "type": "string",
+            "nullable": true
+          },
+          "amountFromMinor": {
+            "type": "integer"
+          },
+          "amountToMinor": {
+            "type": "integer"
+          },
+          "fromDecimals": {
+            "type": "integer"
+          },
+          "toDecimals": {
+            "type": "integer"
+          },
+          "rate": {
+            "type": "string"
+          },
+          "providerFeeMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "wawuFeeMinor": {
+            "type": "integer"
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "fromCurrency",
+          "toCurrency",
+          "fromAccountId",
+          "toAccountId",
+          "amountFromMinor",
+          "amountToMinor",
+          "fromDecimals",
+          "toDecimals",
+          "rate",
+          "providerFeeMinor",
+          "wawuFeeMinor",
+          "failureReason",
+          "createdAt",
+          "completedAt"
+        ]
+      },
+      "FxSendQuoteView": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ]
+          },
+          "chain": {
+            "type": "string",
+            "enum": [
+              "eth",
+              "base",
+              "matic",
+              "sol"
+            ]
+          },
+          "decimals": {
+            "type": "integer"
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "providerFeeMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "wawuFeeMinor": {
+            "type": "integer"
+          },
+          "availableMinor": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accountId",
+          "currency",
+          "chain",
+          "decimals",
+          "amountMinor",
+          "providerFeeMinor",
+          "wawuFeeMinor",
+          "availableMinor"
+        ]
+      },
+      "FxSendView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "completed",
+              "failed"
+            ]
+          },
+          "accountId": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ]
+          },
+          "chain": {
+            "type": "string",
+            "enum": [
+              "eth",
+              "base",
+              "matic",
+              "sol"
+            ]
+          },
+          "decimals": {
+            "type": "integer"
+          },
+          "address": {
+            "type": "string"
+          },
+          "amountMinor": {
+            "type": "integer"
+          },
+          "providerFeeMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "wawuFeeMinor": {
+            "type": "integer"
+          },
+          "failureReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "accountId",
+          "currency",
+          "chain",
+          "decimals",
+          "address",
+          "amountMinor",
+          "providerFeeMinor",
+          "wawuFeeMinor",
+          "failureReason",
+          "createdAt",
+          "completedAt"
+        ]
+      },
       "PointNextExpiryView": {
         "type": "object",
         "properties": {
@@ -47518,8 +50050,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "currencyFixed": {
@@ -50794,8 +53326,8 @@
             "type": "string",
             "enum": [
               "failed",
-              "not_owed",
               "owed",
+              "not_owed",
               "submitted",
               "settled"
             ]
@@ -56810,9 +59342,9 @@
           "status": {
             "type": "string",
             "enum": [
+              "ready",
               "sent",
-              "sending",
-              "ready"
+              "sending"
             ]
           },
           "totalCount": {
@@ -63324,8 +65856,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "planMinor": {
@@ -63376,8 +65908,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "packMinor": {
@@ -63434,8 +65966,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "extraMinor": {
@@ -63559,8 +66091,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "amountMinor": {
@@ -63698,8 +66230,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "amountMinor": {
@@ -63816,8 +66348,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "amountMinor": {
@@ -63935,8 +66467,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "amountMinor": {

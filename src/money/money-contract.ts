@@ -132,6 +132,20 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // TIER-04. 402, as the publishing gate answers the same code (TIER-02,
   // CONVENTIONS section 23): the person has to pay for a tier first.
   tier_required: 402,
+  // WALLET-21 (R-83, R-84). Default (lead), owner may override: 409 for a
+  // switch that is off (the request is understood, the service is not on, as
+  // fees_not_set but not a fault); 409 for an expired or used quote (ask for
+  // a new one, as quote_changed); 423 for a frozen account (as wallet_frozen);
+  // 422 for an address or chain that does not suit (as name_check_failed);
+  // 409 when the provider declines in its own words (nothing moved); 409 for
+  // an account the person has not opened.
+  fx_switched_off: 409,
+  quote_expired: 409,
+  account_frozen: 423,
+  address_invalid: 422,
+  chain_mismatch: 422,
+  provider_declined: 409,
+  fx_account_not_open: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

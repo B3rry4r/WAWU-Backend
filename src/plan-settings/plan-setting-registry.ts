@@ -1,3 +1,4 @@
+import { FX_CURRENCIES } from '../money/fx/fx-currencies';
 import { INT4_MAX, type PlansConfig } from '../plans/plans-config';
 import {
   SettingInvalid,
@@ -1037,6 +1038,42 @@ export function buildRegistry(
     ['M25 (Usually takes), GET /content/sale-terms (FIX-110)'],
     hours,
     'CONTENT-REVIEW-HOURS',
+  );
+
+  // ---- Foreign accounts, swaps and crypto sends (WALLET-21, R-83, R-84) ----
+  // One switch per currency and one per product: 1 is on, 0 is off. On by
+  // default (the dev launch); an admin turns one off without a deploy. Read
+  // live by GET /money/fx/currencies and by every foreign-account route.
+  const onOff = whole(0, 1);
+  for (const c of FX_CURRENCIES) {
+    other(
+      `fx.currency.${c.code}.on`,
+      `${c.name} (${c.code}) accounts, swaps and sends: 1 is on, 0 is off`,
+      'count',
+      ['GET /money/fx/currencies', 'POST /money/fx/accounts (WALLET-21, R-84)'],
+      onOff,
+    );
+  }
+  other(
+    'fx.product.open_account.on',
+    'Opening a foreign or stablecoin account: 1 is on, 0 is off',
+    'count',
+    ['POST /money/fx/accounts (WALLET-21, R-84)'],
+    onOff,
+  );
+  other(
+    'fx.product.swap.on',
+    'Swapping between currencies: 1 is on, 0 is off',
+    'count',
+    ['POST /money/fx/quotes, POST /money/fx/swaps (WALLET-21, R-84)'],
+    onOff,
+  );
+  other(
+    'fx.product.crypto_send.on',
+    'Sending USDT, USDC or RLUSD to an outside address: 1 is on, 0 is off',
+    'count',
+    ['POST /money/fx/sends (WALLET-21, R-84)'],
+    onOff,
   );
 
   return out;
