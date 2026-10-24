@@ -207,7 +207,8 @@ export class PointsSpendService {
    *
    * `longer` (AITOOLS-05): a tool that legitimately runs longer than the rest
    * has its own longest run. A `working` job of that action keeps its hold
-   * until it is that old; past it the hold is swept like any other.
+   * until it is that old (counted as skipped, and it takes a place in the
+   * page); past it the hold is swept like any other.
    */
   async releaseStale(
     maxRunMinutes: number,
@@ -216,37 +217,23 @@ export class PointsSpendService {
     longer: readonly { action: string; maxRunMinutes: number }[] = [],
   ): Promise<{ released: number; skipped: number; failed: number }> {
     const cutoff = new Date(now.getTime() - maxRunMinutes * 60_000);
-    const keep: string[] = [];
-    for (const l of longer) {
-      const jobs = await this.prisma.aiToolJob.findMany({
-        where: {
-          tool: l.action,
-          state: 'working',
-          holdId: { not: null },
-          createdAt: {
-            gte: new Date(now.getTime() - l.maxRunMinutes * 60_000),
-          },
-        },
-        select: { holdId: true },
-      });
-      for (const j of jobs) if (j.holdId) keep.push(j.holdId);
-    }
     const due = await this.prisma.pointHold.findMany({
-      where: {
-        purpose: 'ai_job',
-        state: 'held',
-        createdAt: { lt: cutoff },
-        ...(keep.length > 0 ? { id: { notIn: keep } } : {}),
-      },
-      select: { id: true },
+      where: { purpose: 'ai_job', state: 'held', createdAt: { lt: cutoff } },
+      select: { id: true, wawuUserId: true },
       orderBy: { createdAt: 'asc' },
       take: limit,
     });
     const out = { released: 0, skipped: 0, failed: 0 };
-    for (const { id } of due) {
+    for (const { id, wawuUserId } of due) {
       try {
-        const done = await this.points.release({ holdId: id }, { now });
-        if (done.replayed) out.skipped += 1;
+        const done = await this.releaseUnlessWaiting(
+          id,
+          wawuUserId,
+          now,
+          longer,
+        );
+        // A dub still inside its own longest run keeps its hold.
+        if (done === null || done.replayed) out.skipped += 1;
         else out.released += 1;
       } catch (e) {
         if (
@@ -293,6 +280,45 @@ export class PointsSpendService {
   }
 
   // -------------------------------------------------------------------------
+
+  /**
+   * One stale hold given back, or `null` when it belongs to a `working` job of
+   * a slower tool that is not yet as old as that tool's own longest run.
+   *
+   * An ordinary hold is released exactly as before AITOOLS-05: nothing is read
+   * ahead of it. The wait is looked up only for a sweep that has slower tools,
+   * inside the release's own transaction and under the person's lock, so it
+   * costs the sweep no round trip before it takes the lock. (A first read of
+   * the working jobs, ahead of the holds, put every release a round trip later
+   * and the sweep lost, every time, the race against a job that commits late:
+   * the POINTS-03 contract test saw a person's points pinned.)
+   */
+  private async releaseUnlessWaiting(
+    holdId: string,
+    wawuUserId: string,
+    now: Date,
+    longer: readonly { action: string; maxRunMinutes: number }[],
+  ): Promise<PointHoldOutcome | null> {
+    if (longer.length === 0) return this.points.release({ holdId }, { now });
+    return this.prisma.$transaction(async (tx) => {
+      await lockPersonPoints(tx, wawuUserId);
+      const waiting = await tx.aiToolJob.findFirst({
+        where: {
+          holdId,
+          state: 'working',
+          OR: longer.map((l) => ({
+            tool: l.action,
+            createdAt: {
+              gte: new Date(now.getTime() - l.maxRunMinutes * 60_000),
+            },
+          })),
+        },
+        select: { id: true },
+      });
+      if (waiting) return null;
+      return this.points.release({ holdId }, { now, tx });
+    });
+  }
 
   /** An AI job's hold, or the same answer as one that never existed (a conversion's hold is not this service's). */
   private async requireAiHold(holdId: string): Promise<void> {
