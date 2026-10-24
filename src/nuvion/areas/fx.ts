@@ -96,6 +96,19 @@ export class NuvionFxArea implements ProviderForeignAccounts {
     const op: NuvionOp = { name: 'open foreign account', call: 'write' };
     const def = this.def(op, input.currency);
     const entityId = this.entity(op, input.person);
+    // A stablecoin account's wallet is bound to one chain for good, so the
+    // chain is checked before an account is made that could not be given it.
+    if (def.kind === 'stablecoin') {
+      if (!input.chain || !def.chains.includes(input.chain)) {
+        throw this.fail(
+          op,
+          'validation',
+          'a stablecoin account needs a chain it can be held on',
+        );
+      }
+    } else if (input.chain) {
+      throw this.fail(op, 'validation', 'a bank currency has no chain');
+    }
     const answer = await this.client.post<unknown>(op, '/accounts', {
       entity_id: entityId,
       type: 'checking',

@@ -19444,6 +19444,20 @@
             }
           },
           {
+            "name": "currency",
+            "required": true,
+            "in": "query",
+            "description": "The account's currency; the amount below is in its smallest unit. Must be the account's.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "USDT",
+                "USDC",
+                "RLUSD"
+              ]
+            }
+          },
+          {
             "name": "chain",
             "required": true,
             "in": "query",
@@ -42227,6 +42241,15 @@
             "format": "uuid",
             "description": "The stablecoin account to send from."
           },
+          "currency": {
+            "description": "The account's currency; `amountMinor` is in its smallest unit. Must be the account's.",
+            "enum": [
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ],
+            "type": "string"
+          },
           "chain": {
             "description": "Must be the chain of the account and of the address.",
             "enum": [
@@ -42251,6 +42274,7 @@
         },
         "required": [
           "accountId",
+          "currency",
           "chain",
           "address",
           "amountMinor"

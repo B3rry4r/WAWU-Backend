@@ -232,7 +232,7 @@ export class FxController {
     return this.operations.swap(wallet, scope, dto);
   }
 
-  /** One swap as it stands now; what the app polls after `pending`. Only the owner reads it. */
+  /** One swap as it stands now: the app reads it while a swap is unfinished. Only the owner reads it. */
   @Get('swaps/:id')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-21')

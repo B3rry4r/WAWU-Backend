@@ -85,7 +85,7 @@ export interface ProviderFxQuote {
   rate: string;
   /** The provider's real expiry. */
   expiresAt: Date;
-  /** The provider's charge when it names it before the swap; null when it does not. */
+  /** The provider's charge, if its quote names one; null when it names none. */
   feeMinor: bigint | null;
 }
 

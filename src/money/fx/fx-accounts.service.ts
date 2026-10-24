@@ -29,20 +29,20 @@ const PAGE_LINES = 100;
 export const OPENING_MESSAGE =
   'This account is still being opened. Check again in a moment.';
 
-interface HistoryCursor {
+interface FxHistoryCursor {
   y: number;
   m: number;
   o: number;
 }
 
-function encodeCursor(c: HistoryCursor): string {
+function encodeCursor(c: FxHistoryCursor): string {
   return Buffer.from(JSON.stringify(c)).toString('base64url');
 }
-function decodeCursor(raw: string): HistoryCursor {
+function decodeCursor(raw: string): FxHistoryCursor {
   try {
     const c = JSON.parse(
       Buffer.from(raw, 'base64url').toString('utf8'),
-    ) as Partial<HistoryCursor>;
+    ) as Partial<FxHistoryCursor>;
     if (
       Number.isInteger(c.y) &&
       Number.isInteger(c.m) &&
@@ -53,7 +53,7 @@ function decodeCursor(raw: string): HistoryCursor {
       c.y! >= 2000 &&
       c.y! <= 2200
     ) {
-      return c as HistoryCursor;
+      return c as FxHistoryCursor;
     }
   } catch {
     // falls through
@@ -284,7 +284,7 @@ export class FxAccountsService {
     if (!row.providerAccountId) return { items: [], nextCursor: null };
     const limit = query.limit ?? 20;
     const now = new Date();
-    let at: HistoryCursor = query.cursor
+    let at: FxHistoryCursor = query.cursor
       ? decodeCursor(query.cursor)
       : { y: now.getUTCFullYear(), m: now.getUTCMonth() + 1, o: 0 };
     const earliest =
@@ -327,7 +327,7 @@ export class FxAccountsService {
     fx: ReturnType<FxPort['get']>,
     person: ReturnType<FxPort['person']>,
     row: FxAccount,
-    at: HistoryCursor,
+    at: FxHistoryCursor,
   ): Promise<FxTransactionView[]> {
     const out: FxTransactionView[] = [];
     let cursor: string | null = null;

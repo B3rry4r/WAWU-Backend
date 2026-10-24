@@ -13,9 +13,11 @@ import {
 } from 'class-validator';
 import {
   FX_CHAINS,
+  FX_COIN_CODES,
   FX_CURRENCY_CODES,
   FX_QUOTE_CODES,
   type FxChain,
+  type FxCoinCode,
   type FxCurrencyCode,
   type FxQuoteCode,
 } from '../fx-currencies';
@@ -98,6 +100,11 @@ export class FxSendQuoteQueryDto {
   @IsUUID()
   accountId!: string;
 
+  /** The account's currency; the amount below is in its smallest unit. Must be the account's. */
+  @ApiProperty({ enum: FX_COIN_CODES })
+  @IsIn(FX_COIN_CODES)
+  currency!: FxCoinCode;
+
   @ApiProperty({ enum: FX_CHAINS })
   @IsIn(FX_CHAINS)
   chain!: FxChain;
@@ -117,6 +124,11 @@ export class FxSendDto {
   })
   @IsUUID()
   accountId!: string;
+
+  /** The account's currency; `amountMinor` is in its smallest unit. Must be the account's. */
+  @ApiProperty({ enum: FX_COIN_CODES })
+  @IsIn(FX_COIN_CODES)
+  currency!: FxCoinCode;
 
   /** Must be the chain of the account and of the address. */
   @ApiProperty({ enum: FX_CHAINS })

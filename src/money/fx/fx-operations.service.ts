@@ -218,7 +218,12 @@ export class FxOperationsService {
     q: FxSendQuoteQueryDto,
   ): Promise<FxSendQuoteView> {
     const fx = this.port.get();
-    const row = await this.sendAccount(wallet, q.accountId, q.chain);
+    const row = await this.sendAccount(
+      wallet,
+      q.accountId,
+      q.chain,
+      q.currency,
+    );
     this.requireOn('crypto_send', row.currency as FxQuoteCode);
     let available: bigint;
     try {
@@ -237,7 +242,12 @@ export class FxOperationsService {
     dto: FxSendDto,
   ): Promise<FxSendView> {
     const fx = this.port.get();
-    const row = await this.sendAccount(wallet, dto.accountId, dto.chain);
+    const row = await this.sendAccount(
+      wallet,
+      dto.accountId,
+      dto.chain,
+      dto.currency,
+    );
     const code = row.currency as FxQuoteCode;
     this.requireOn('crypto_send', code);
     if (!addressSuitsChain(dto.chain, dto.address)) {
@@ -803,8 +813,14 @@ export class FxOperationsService {
     wallet: OpenWallet,
     accountId: string,
     chain: string,
+    currency: string,
   ): Promise<FxAccount> {
     const row = await this.accounts.rowFor(wallet.wawuUserId, accountId);
+    if (row.currency !== currency) {
+      throw new BadRequestException(
+        `that account is ${row.currency}, not ${currency}`,
+      );
+    }
     const def = fxCurrency(row.currency);
     if (!def || def.kind !== 'stablecoin') {
       throw new MoneyError(
