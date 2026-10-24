@@ -436,6 +436,52 @@ export class PointsService {
   }
 
   /**
+   * Ends a lot at once because what bought it was paid back (IAP-01: a store
+   * refund or revocation). Takes what the lot still has, written to the ledger
+   * as an expiry, and moves the lot's end to now so points that come back
+   * from a job in flight (a release) are not spendable from it. Points already
+   * spent are not taken back. Under the person's lock; idempotent (a lot with
+   * nothing left, or none, takes 0). Returns what was taken and what the lot
+   * granted.
+   */
+  async revokeLot(
+    source: PointLotSource,
+    sourceRef: string,
+    opts: PointsCallOptions = {},
+  ): Promise<{ taken: number; granted: number }> {
+    const now = opts.now ?? new Date();
+    const candidate = await (opts.tx ?? this.prisma).pointLot.findUnique({
+      where: { source_sourceRef: { source, sourceRef } },
+      select: { id: true, wawuUserId: true },
+    });
+    if (candidate === null) return { taken: 0, granted: 0 };
+    return this.inTx(opts.tx, async (tx) => {
+      await lockPersonPoints(tx, candidate.wawuUserId);
+      const lot = await tx.pointLot.findUnique({
+        where: { id: candidate.id },
+      });
+      if (lot === null) return { taken: 0, granted: 0 };
+      if (lot.remaining > 0) {
+        await takeFromLot(tx, lot.id, lot.remaining, now);
+        await tx.pointLedger.create({
+          data: {
+            wawuUserId: lot.wawuUserId,
+            lotId: lot.id,
+            delta: -lot.remaining,
+            reason: 'expire',
+          },
+        });
+      }
+      if (lot.expiresAt.getTime() > now.getTime())
+        await tx.pointLot.update({
+          where: { id: lot.id },
+          data: { expiresAt: now },
+        });
+      return { taken: lot.remaining, granted: lot.quantity };
+    });
+  }
+
+  /**
    * The points a person can spend now: every live lot that has points and
    * has not ended, summed. The same figure `view` calls `balance`, read
    * alone for the routes that only need the number (POINTS-04's quote and

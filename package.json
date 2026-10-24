@@ -39,6 +39,7 @@
     "contract:build": "npm run build && npm run contract:emit && npm run contract:enrich"
   },
   "dependencies": {
+    "@apple/app-store-server-library": "^3.1.0",
     "@aws-sdk/client-s3": "^3.1111.0",
     "@aws-sdk/s3-request-presigner": "^3.1111.0",
     "@nestjs/common": "^11.0.1",

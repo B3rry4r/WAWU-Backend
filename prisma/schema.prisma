@@ -1501,6 +1501,10 @@ model CreditPurchase {
   /// `flutterwaveTxRef` carries `wallet:<payment id>` on these rows (it is
   /// required and unique, and no Flutterwave charge exists to name).
   walletPaymentId  String?           @unique
+  /// The app-store purchase that bought this pack (IAP-01, R-86); null for a
+  /// Flutterwave or wallet purchase. Unique: one store purchase settles at
+  /// most one pack. `flutterwaveTxRef` carries `store:<id>` on these rows.
+  storePurchaseId  String?           @unique
   /// The cost-basis lot this purchase opens. Created ONLY when the charge is
   /// verified `completed` — see CreditLot.
   lot              CreditLot?
@@ -7957,4 +7961,141 @@ model MoviePartnerConsent {
 
   @@unique([provider, wawuUserId])
   @@index([wawuUserId])
+}
+
+/// Which store a purchase was made in (IAP-01, R-86).
+enum StorePlatform {
+  android
+  ios
+}
+
+/// What a store product grants (IAP-01): points (a points pack), credits (a
+/// WAWU Credits pack), tier (a maker tier, a subscription in the store) or
+/// pass (a community pass, a subscription in the store).
+enum StoreProductKind {
+  points
+  credits
+  tier
+  pass
+}
+
+/// granted: the purchase gave what it sold. refunded: the store paid the
+/// buyer back, and what it gave was taken back. revoked: the store withdrew
+/// it (family sharing ended, a chargeback), taken back the same way.
+enum StorePurchaseStatus {
+  granted
+  refunded
+  revoked
+}
+
+/// The store product map (IAP-01, R-86): one row per product id in a store,
+/// edited by an admin. `grants` says what ONE purchase gives, by kind:
+/// points `{ packId }` (a pack of the live plan), credits `{ pack }`
+/// (starter, popular or pro), tier `{ tierId }`, pass `{ days }`. Nothing is
+/// granted for a product id that has no active row here. Rows are never
+/// deleted once a purchase names them (`StorePurchase.productId` restricts).
+model StoreProduct {
+  id             String           @id @default(uuid())
+  platform       StorePlatform
+  storeProductId String
+  kind           StoreProductKind
+  title          String
+  grants         Json
+  /// What one purchase is worth in kobo BEFORE the store's share (Default
+  /// (lead), owner may override): the 85/15 split on credits and passes works
+  /// from this less the platform's store fee. Null for points and tiers,
+  /// which pay no creator.
+  referenceKobo  Int?
+  active         Boolean          @default(true)
+  sortOrder      Int              @default(0)
+  /// The admin who last wrote the row (their id).
+  updatedBy      String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  purchases StorePurchase[]
+
+  @@unique([platform, storeProductId])
+  @@index([platform, active, sortOrder])
+}
+
+/// A store's switch (IAP-01): whether the Hub takes purchases from that store
+/// at all, and the store's cut in basis points (1500 = 15%) a purchase
+/// records when it is made. A missing row means on, with the config's cut.
+model StorePlatformSetting {
+  platform    StorePlatform @id
+  enabled     Boolean       @default(true)
+  /// Null means the config's `STORE_FEE_BPS_*` (default 1500).
+  storeFeeBps Int?
+  updatedBy   String?
+  updatedAt   DateTime      @updatedAt
+}
+
+/// One store transaction, granted once (IAP-01, R-86). `storeTransactionId` is
+/// the store's own id for it (Apple's transactionId; Google's orderId, which a
+/// renewal changes; the purchase token for a one-time product with no order
+/// id): unique with the platform, so a replay, a restore and a webhook that
+/// races the app can each ask and only the first grants. `subscriptionKey`
+/// ties the renewals of one subscription together (Apple's
+/// originalTransactionId; Google's first purchase token).
+model StorePurchase {
+  id                 String              @id @default(uuid())
+  wawuUserId         String
+  platform           StorePlatform
+  storeTransactionId String
+  subscriptionKey    String?
+  productId          String
+  product            StoreProduct        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  storeProductId     String
+  kind               StoreProductKind
+  status             StorePurchaseStatus @default(granted)
+  /// `production` or `sandbox`, as the store said.
+  environment        String
+  /// The room a pass was bought for.
+  communityId        String?
+  /// What was granted, as written when it was: the take-back reads this and
+  /// never the product map, which may have changed since.
+  grant              Json
+  /// What the product was worth before the store's share, the store's cut in
+  /// basis points as it stood then, and what is left (the 85/15 split base).
+  referenceKobo      Int?
+  storeFeeBps        Int
+  netKobo            Int?
+  /// The room's host and their 85% of `netKobo`, for a pass. Recorded here;
+  /// paying it needs WAWU's store proceeds in the merchant account (BACKEND_GAPS).
+  creatorWawuUserId  String?
+  creatorShareKobo   Int?
+  /// What the store charged, in the buyer's own currency (display only).
+  currency           String?
+  priceMicros        BigInt?
+  purchasedAt        DateTime
+  /// When a subscription period ends, as the store last said.
+  expiresAt          DateTime?
+  endedAt            DateTime?
+  endReason          String?
+  /// What the take-back actually took (a spent point is not taken back).
+  takenBack          Json?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@unique([platform, storeTransactionId])
+  @@index([wawuUserId, createdAt])
+  @@index([platform, subscriptionKey])
+  @@index([status, createdAt])
+  @@index([productId])
+}
+
+/// A store notification, kept once (IAP-01): Google's Pub/Sub message id or
+/// Apple's notificationUUID, unique with the platform, so a redelivery is
+/// answered and not acted on twice. `outcome` says what the Hub did.
+model StoreNotification {
+  id         String        @id @default(uuid())
+  platform   StorePlatform
+  externalId String
+  kind       String
+  outcome    String
+  receivedAt DateTime      @default(now())
+
+  @@unique([platform, externalId])
+  @@index([receivedAt])
 }
