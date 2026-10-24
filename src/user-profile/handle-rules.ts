@@ -10,10 +10,7 @@
 export const HANDLE_MAX = 30;
 export const HANDLE_PATTERN = /^[a-zA-Z0-9_.]+$/;
 
-/**
- * Words nobody may take as a username. PROVISIONAL (SIGNUP-NAMES): the owner has not ruled a list; these
- * are the words that would read as the company or as an official account. Compared ignoring case.
- */
+/** PROVISIONAL(SIGNUP-RESERVED-HANDLES, owner=YOU, why=no ruling lists the words kept back; these would read as the company or an official account). Words nobody may take as a username, compared ignoring case. */
 export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   'admin',
   'administrator',
