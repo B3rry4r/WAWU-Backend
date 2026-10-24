@@ -1,3 +1,4 @@
+import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsBoolean,
@@ -75,6 +76,7 @@ export class CapitalReserveDto {
   productId!: string;
 
   /** Kobo to invest: the principal of a fixed return, or the spend on a share offering. */
+  @ApiProperty({ type: 'integer' })
   @IsInt()
   @Min(1)
   @Max(1_000_000_000_000)

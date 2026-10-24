@@ -937,7 +937,8 @@ export function buildRegistry(
   add({
     key: 'capital.enabled',
     group: 'Other rulings',
-    label: 'Capital: 1 shows it in the app and takes orders, 0 switches it off',
+    label:
+      'Capital: 1 takes new orders, 0 closes them (what a person holds can still be read and withdrawn)',
     unit: 'count',
     usedBy: [
       'GET /capital/availability, the Wallet tab row (NUV-12)',

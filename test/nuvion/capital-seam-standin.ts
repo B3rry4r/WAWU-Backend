@@ -55,7 +55,6 @@ function product(
   return {
     type: 'FIXED_RETURN',
     name: 'Product',
-    description: 'A product.',
     currency: 'NGN',
     startsAt: null,
     endsAt: null,

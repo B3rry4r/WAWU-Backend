@@ -31,7 +31,7 @@ export class CapitalSweepService {
   @Cron(CronExpression.EVERY_MINUTE, { name: 'capital-sweep' })
   async tick(now = new Date()): Promise<Record<string, number>> {
     const done = { expired: 0, confirming: 0, holdings: 0, fees: 0 };
-    if (this.running || !this.capital.available()) return done;
+    if (this.running || !this.capital.served()) return done;
     this.running = true;
     try {
       done.expired = await this.expire(now);

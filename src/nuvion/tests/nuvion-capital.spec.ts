@@ -7,7 +7,6 @@ import { WalletProviderCapitalError } from '../../wallet-provider/wallet-provide
 import { nuvionWalletId } from '../areas/accounts';
 import {
   NuvionCapitalArea,
-  plainDescription,
   readCapitalOrder,
   readCapitalProduct,
 } from '../areas/capital';
@@ -35,7 +34,7 @@ const frProduct = {
   is_external: false,
   name: '90 Days Treasury Bills',
   description:
-    '<p>A government issued &amp; backed instrument</p><ul><li>90 days</li></ul>',
+    '<p>Earn a guaranteed fixed return. Grow your money with confidence.</p>',
   currency: 'NGN',
   start_date: null,
   end_date: null,
@@ -196,7 +195,7 @@ describe('NUV-12: the Capital area', () => {
     expect(guard.violations).toEqual([]);
   });
 
-  it('reads a product with its terms, strips the markup, and leaves out a kind it does not serve', () => {
+  it('reads a product with its terms, carries none of its marketing text, and leaves out a kind it does not serve', () => {
     const p = readCapitalProduct(frProduct)!;
     expect(p).toMatchObject({
       type: 'FIXED_RETURN',
@@ -206,9 +205,9 @@ describe('NUV-12: the Capital area', () => {
       annualRate: 0.3,
       allowEarlyWithdrawal: true,
     });
-    expect(p.description).toBe(
-      'A government issued & backed instrument\n- 90 days',
-    );
+    // The provider's own marketing text is not carried: it promises what we do not.
+    expect(p).not.toHaveProperty('description');
+    expect(JSON.stringify(p)).not.toMatch(/guaranteed|confidence/i);
     expect(p.documents).toEqual([
       {
         name: 'Terms & Conditions.pdf',
@@ -229,7 +228,6 @@ describe('NUV-12: the Capital area', () => {
       orderable: false,
       reason: 'sale_window_closed',
     });
-    expect(plainDescription(null)).toBe('');
   });
 
   it('lists only naira products and passes the filters on', async () => {

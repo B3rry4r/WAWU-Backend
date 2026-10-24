@@ -55,9 +55,6 @@ const AREA = 'capital (NUV-12)';
  * - on dev a payout settled within seconds.
  */
 
-/** Longest description kept: the app shows it, never the provider's markup. */
-const DESCRIPTION_MAX = 2000;
-
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
@@ -92,33 +89,6 @@ function when(o: Record<string, unknown>, key: string): string | null {
   if (typeof v !== 'number' || !Number.isFinite(v) || v <= 0) return null;
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
-}
-
-const ENTITIES: Record<string, string> = {
-  '&amp;': '&',
-  '&lt;': '<',
-  '&gt;': '>',
-  '&quot;': '"',
-  '&#39;': "'",
-  '&apos;': "'",
-  '&nbsp;': ' ',
-};
-
-/** The provider's description as plain lines: tags out, a few entities read. */
-export function plainDescription(html: unknown): string {
-  if (typeof html !== 'string') return '';
-  const lines = html
-    .replace(/<\s*(br|\/p|\/li|\/h[1-6]|\/div)\s*\/?>/gi, '\n')
-    .replace(/<\s*li[^>]*>/gi, '- ')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&(amp|lt|gt|quot|#39|apos|nbsp);/g, (m) => ENTITIES[m] ?? m)
-    .split('\n')
-    .map((l) => l.replace(/\s+/g, ' ').trim())
-    .filter((l) => l !== '');
-  const out = lines.join('\n');
-  return out.length > DESCRIPTION_MAX
-    ? `${out.slice(0, DESCRIPTION_MAX - 1)}…`
-    : out;
 }
 
 function productType(v: unknown): CapitalProductType | null {
@@ -200,7 +170,6 @@ export function readCapitalProduct(raw: unknown): CapitalProduct | null {
     id,
     type,
     name,
-    description: plainDescription(raw.description),
     currency,
     startsAt: when(raw, 'start_date'),
     endsAt: when(raw, 'end_date'),

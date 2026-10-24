@@ -119,7 +119,7 @@ export class CapitalLedger {
       amountKobo: fee,
       feeKobo: 0,
       totalKobo: fee,
-      counterparty: { ...this.party(row), name: 'Who Made This' },
+      counterparty: { ...this.party(row), name: "WAWU's fee" },
       narration: 'Capital fee',
       references: {
         customerReference: reference,

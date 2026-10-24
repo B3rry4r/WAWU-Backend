@@ -41,12 +41,15 @@ export interface CapitalDocument {
   url: string;
 }
 
+/**
+ * The provider's free text (a product's own description, a status reason) is NOT carried: it is marketing or
+ * the provider's voice, and it can promise ("guaranteed", "grow your money with confidence") what WAWU does not.
+ * A product is shown as its terms, in our words; only its name, its issuer and its documents' names pass.
+ */
 export interface CapitalProduct {
   id: string;
   type: CapitalProductType;
   name: string;
-  /** The provider's description with its markup taken out. */
-  description: string;
   currency: string;
   /** The sale window, when the provider sets one. */
   startsAt: string | null;

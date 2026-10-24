@@ -350,11 +350,10 @@ describe('NUV-12: Capital from the wallet', () => {
   it('a person sees only the products they can buy in naira, with the terms Nuvion states', async () => {
     const p = await person();
     expect(
-      body<{ available: boolean }>(await get(p, '/availability').expect(200))
-        .data,
-    ).toEqual({
-      available: true,
-    });
+      body<{ available: boolean; holding: boolean }>(
+        await get(p, '/availability').expect(200),
+      ).data,
+    ).toEqual({ available: true, holding: false });
     const list = body<{
       items: Array<{
         id: string;
@@ -698,7 +697,9 @@ describe('NUV-12: Capital from the wallet', () => {
   // The owner's controls
   // -----------------------------------------------------------------------
 
-  it('switched off in the plan settings, Capital is not offered and takes nothing', async () => {
+  it('switched off in the plan settings, new orders close and nothing is taken, but a holder still reads and withdraws what they hold', async () => {
+    const holder = await person();
+    const held = await invested(holder);
     const p = await person();
     const o = await reserved(p);
     const spy = jest.spyOn(plan, 'number').mockImplementation((key: string) => {
@@ -706,20 +707,46 @@ describe('NUV-12: Capital from the wallet', () => {
       throw new Error('unexpected setting');
     });
     try {
+      // Nothing to hold: no way in. A holder keeps the way in.
       expect(
-        body<{ available: boolean }>(await get(p, '/availability').expect(200))
-          .data,
-      ).toEqual({ available: false });
+        body<{ available: boolean; holding: boolean }>(
+          await get(p, '/availability').expect(200),
+        ).data,
+      ).toEqual({ available: false, holding: false });
+      expect(
+        body<{ available: boolean; holding: boolean }>(
+          await get(holder, '/availability').expect(200),
+        ).data,
+      ).toEqual({ available: false, holding: true });
+      // New orders are closed: the list, a reservation, a held reservation.
       const list = await get(p, '/products');
       expect(list.status).toBe(409);
       expect(body(list).reason?.code).toBe('capital_unavailable');
+      expect((await reserve(p)).status).toBe(409);
       const res = await confirm(p, o.id);
       expect(res.status).toBe(409);
       expect(body(res).reason?.code).toBe('capital_unavailable');
       expect(balance(p)).toBe(100_000_000);
+      // What is held can be read and taken out.
+      expect(
+        body<{ investedKobo: number }>(
+          await get(holder, '/portfolio').expect(200),
+        ).data!.investedKobo,
+      ).toBe(1_000_000);
+      expect(
+        body<{ items: Order[] }>(await get(holder, '/orders').expect(200)).data!
+          .items,
+      ).toHaveLength(1);
+      await get(holder, `/orders/${held.id}`).expect(200);
+      await get(holder, `/orders/${held.id}/transactions`).expect(200);
+      await get(holder, `/orders/${held.id}/withdrawal`).expect(200);
+      const out = await withdraw(holder, held.id);
+      expect(out.status).toBe(201);
+      expect(body<Order>(out).data!.status).toBe('paying_out');
     } finally {
       spy.mockRestore();
     }
+    cap.settlePayouts();
     expect(plan.number('capital.enabled')).toBe(1);
   });
 
@@ -728,9 +755,10 @@ describe('NUV-12: Capital from the wallet', () => {
     provider.capital = undefined;
     try {
       expect(
-        body<{ available: boolean }>(await get(p, '/availability').expect(200))
-          .data,
-      ).toEqual({ available: false });
+        body<{ available: boolean; holding: boolean }>(
+          await get(p, '/availability').expect(200),
+        ).data,
+      ).toEqual({ available: false, holding: false });
       expect((await get(p, '/products')).status).toBe(409);
     } finally {
       provider.capital = cap;
@@ -762,6 +790,7 @@ describe('NUV-12: Capital from the wallet', () => {
       const feeRows = await ledgerRows(`wawu-capfee-${o.id}`);
       expect(feeRows).toHaveLength(1);
       expect(Number(feeRows[0].amountKobo)).toBe(15_000);
+      expect(feeRows[0].counterpartyName).toBe("WAWU's fee");
       await sweep.tick(new Date(Date.now() + 300_000));
       expect(balance(p)).toBe(100_000_000 - 1_000_000 - 15_000);
 
@@ -850,6 +879,9 @@ describe('NUV-12: Capital from the wallet', () => {
     const res = await confirm(p, open.id);
     expect(res.status).toBe(409);
     expect(body(res).reason?.code).toBe('capital_unavailable');
+    // A cancelled reservation says so; it is not an investment "on hold".
+    expect(body(res).message).toMatch(/cancelled/);
+    expect(body(res).message).not.toMatch(/on hold/);
     expect(balance(p)).toBe(100_000_000 - 1_000_000);
 
     const audit = await prisma.capitalAdminAudit.findMany({

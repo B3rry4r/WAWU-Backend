@@ -12,6 +12,8 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
+import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
+import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import {
   CurrentWallet,
@@ -57,7 +59,10 @@ const KEY_FORMAT = /^[A-Za-z0-9_-]{8,128}$/;
 
 /** Whether the Wallet tab shows its Capital row. */
 export interface CapitalAvailabilityView {
+  /** Capital is on and served: new orders can be made. */
   available: boolean;
+  /** The person holds an order that is not over: they keep the way in to read it and take it out, even when `available` is false. */
+  holding: boolean;
 }
 
 /**
@@ -76,14 +81,22 @@ export class CapitalController {
 
   /**
    * Whether Capital is on (the admin's plan setting) and the running wallet
-   * provider serves it. The Wallet tab shows its row only when this is true.
-   * Needs no wallet and moves no money.
+   * provider serves it: `available`, when new orders can be made. `holding`
+   * says the person holds an order that is not over: switching Capital off
+   * closes new orders only, so the Wallet tab keeps its row for a person who
+   * holds something, and the portfolio, the orders, their movements and a
+   * withdrawal keep answering. Needs no wallet and moves no money.
    */
   @Get('availability')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('NUV-12')
-  availability(): CapitalAvailabilityView {
-    return { available: this.capital.available() };
+  async availability(
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<CapitalAvailabilityView> {
+    return {
+      available: this.capital.available(),
+      holding: await this.capital.holdsAny(user.sub),
+    };
   }
 
   /** The products the provider offers this person in naira, with their terms. */

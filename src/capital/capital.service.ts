@@ -60,6 +60,8 @@ export const WITHDRAW_ROUTE = 'POST /capital/orders/:id/withdrawal';
 
 export const UNAVAILABLE_MESSAGE = 'Capital is not available right now.';
 const HELD_MESSAGE = 'This investment is on hold. Contact support to continue.';
+const CANCELLED_MESSAGE =
+  'This reservation was cancelled. Nothing was taken from your wallet.';
 const EXPIRED_MESSAGE = 'This reservation has run out. Start again to invest.';
 const NOT_PAYABLE_MESSAGE = 'That product cannot be ordered right now.';
 const TERMS_MESSAGE = 'Open and agree to the documents before you invest.';
@@ -114,18 +116,49 @@ export class CapitalService {
     }
   }
 
-  /** The provider's capital calls, or the plain refusal when Capital is off or not offered. */
+  /**
+   * The provider's capital calls, or the plain refusal when the running provider has none. Reads, a holding's
+   * movements and a withdrawal use this: switching Capital off closes new orders only, so a person who holds
+   * something can still see it and take it out (NUV-12 round 1).
+   */
   private capital(): WalletProviderCapital {
     const cap = this.provider.capital;
-    if (!this.isOn() || !cap || !this.provider.configured) {
+    if (!cap || !this.provider.configured) {
       throw new MoneyError('capital_unavailable', UNAVAILABLE_MESSAGE);
     }
     return cap;
   }
 
-  /** Whether Capital is on and the running provider serves it (for the Wallet tab's row). */
+  /** The same, and Capital is on: for what starts a new order (the product list, a reservation, a confirmation). */
+  private capitalOpen(): WalletProviderCapital {
+    const cap = this.capital();
+    if (!this.isOn()) {
+      throw new MoneyError('capital_unavailable', UNAVAILABLE_MESSAGE);
+    }
+    return cap;
+  }
+
+  /** Whether the running provider serves Capital at all (the sweep and the exits do not wait for the switch). */
+  served(): boolean {
+    return !!this.provider.capital && this.provider.configured;
+  }
+
+  /** Whether Capital is on and served: new orders can be made (the Wallet tab's row, the Invest tab). */
   available(): boolean {
-    return this.isOn() && !!this.provider.capital && this.provider.configured;
+    return this.isOn() && this.served();
+  }
+
+  /** Whether the person holds an order that is not over: it keeps the Wallet row (and its exit) when Capital is off. */
+  async holdsAny(wawuUserId: string): Promise<boolean> {
+    if (!this.served()) return false;
+    const n = await this.prisma.capitalOrder.count({
+      where: {
+        wawuUserId,
+        state: { in: ['confirming', 'confirmed', 'review'] },
+        NOT: { lifecycle: { in: ['WITHDRAWN', 'CLOSED', 'REFUNDED'] } },
+      },
+    });
+    return n > 0;
   }
 
   private fail(e: unknown): never {
@@ -162,7 +195,7 @@ export class CapitalService {
       limit?: number;
     },
   ): Promise<CapitalProductPageView> {
-    const cap = this.capital();
+    const cap = this.capitalOpen();
     const now = new Date();
     try {
       const page = await cap.listProducts(
@@ -190,7 +223,7 @@ export class CapitalService {
     wallet: OpenWallet,
     id: string,
   ): Promise<CapitalProductDetailView> {
-    const cap = this.capital();
+    const cap = this.capitalOpen();
     try {
       const p = await cap.getProduct({ walletId: wallet.walletId }, id);
       if (!p)
@@ -401,7 +434,7 @@ export class CapitalService {
     dto: CapitalReserveDto,
     key: string,
   ): Promise<CapitalOrderView> {
-    const cap = this.capital();
+    const cap = this.capitalOpen();
     if (dto.agreedToDocuments !== true) {
       throw new MoneyError('target_not_payable', TERMS_MESSAGE);
     }
@@ -545,10 +578,17 @@ export class CapitalService {
       throw new MoneyError('not_found', 'We could not find that order.');
     const now = new Date();
     if (row.state === 'confirmed' || row.state === 'review') return;
-    if (row.frozenAt !== null || row.state === 'cancelled') {
+    if (row.state === 'cancelled') {
+      throw new MoneyError('capital_unavailable', CANCELLED_MESSAGE);
+    }
+    if (row.frozenAt !== null) {
       throw new MoneyError('capital_unavailable', HELD_MESSAGE);
     }
     if (row.state === 'confirming') return;
+    // Switched off: a reservation already held is a new order and is not taken.
+    if (!this.isOn()) {
+      throw new MoneyError('capital_unavailable', UNAVAILABLE_MESSAGE);
+    }
     const status = statusOf(row, now);
     if (row.state !== 'reserved' || status === 'expired') {
       throw new MoneyError('reservation_expired', EXPIRED_MESSAGE);
@@ -574,6 +614,9 @@ export class CapitalService {
   ): Promise<CapitalOrderView> {
     const cap = this.capital();
     let row = await this.mine(wallet.wawuUserId, id);
+    if (row.state === 'reserved' && !this.isOn()) {
+      throw new MoneyError('capital_unavailable', UNAVAILABLE_MESSAGE);
+    }
     if (row.state === 'confirmed' || row.state === 'review') {
       // Already through (a second device, a lost answer): the order as it stands.
       const view = orderView(await this.refresh(wallet, row), new Date());
@@ -593,7 +636,14 @@ export class CapitalService {
         data: { state: 'confirming' },
       });
       if (count !== 1) {
-        throw new MoneyError('capital_unavailable', HELD_MESSAGE);
+        const now = await tx.capitalOrder.findUnique({
+          where: { id: row.id },
+          select: { state: true },
+        });
+        throw new MoneyError(
+          'capital_unavailable',
+          now?.state === 'cancelled' ? CANCELLED_MESSAGE : HELD_MESSAGE,
+        );
       }
       await this.keys.attach(tx, scope, row.id);
     });

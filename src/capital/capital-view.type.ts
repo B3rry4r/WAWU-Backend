@@ -34,8 +34,6 @@ export interface CapitalProductView {
   id: string;
   kind: CapitalProductKind;
   name: string;
-  /** Plain lines, the provider's markup taken out. */
-  description: string;
   /** The smallest and largest amount the product takes (the provider's terms). */
   minKobo: number | null;
   maxKobo: number | null;

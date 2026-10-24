@@ -260,7 +260,6 @@ export function productView(
     id: p.id,
     kind: p.type === 'SHARE_OFFERING' ? 'share_offering' : 'fixed_return',
     name: p.name,
-    description: p.description,
     minKobo: p.minMinor,
     maxKobo: p.maxMinor,
     tenorDays: p.tenorDays,
