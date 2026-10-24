@@ -288,3 +288,30 @@ export interface AdminFxFreezeView {
   frozenAt: string | null;
   frozenReason: string | null;
 }
+
+/**
+ * One currency as the dashboard reads it (task OPS-27, R-83, R-84): the
+ * catalogue line with its places in the smallest unit as the Hub counts them
+ * (a coin's can be set by config), the switch, and the figures WAWU sets in
+ * config (R-10). Read only: nothing here changes a figure.
+ */
+export interface AdminFxCurrencyView extends FxCurrencyView {
+  /** WAWU's fee on a swap out of this currency, in its smallest unit; 0 until the owner names it. */
+  swapFeeMinor: number;
+  /** WAWU's fee on a crypto send, in its smallest unit; 0 for a fiat currency and until named. */
+  sendFeeMinor: number;
+  /** The most one person may move out of this currency in a Lagos day; null is no limit of WAWU's own. */
+  dailyLimitMinor: number | null;
+}
+
+export interface AdminFxCurrenciesView {
+  currencies: AdminFxCurrencyView[];
+  products: FxProductsView;
+  /** The naira side of a swap, in kobo. */
+  naira: {
+    code: 'NGN';
+    decimals: 2;
+    swapFeeKobo: number;
+    dailyLimitKobo: number | null;
+  };
+}

@@ -9,6 +9,9 @@ import type {
 } from '../../generated/prisma/client';
 import type { AdminUserView } from '../admin/auth/admin-user-view.type';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { PlanSettingsService } from '../plan-settings/plan-settings.service';
+import { CapitalSettings } from './capital-config';
+import { CAPITAL_ENABLED_SETTING } from './capital.service';
 import { statusOf } from './capital-mapping';
 import type { CapitalOrderStatus } from './capital-view.type';
 
@@ -38,6 +41,19 @@ export interface AdminCapitalPage {
   nextCursor: string | null;
 }
 
+/** What is in force for Capital, for the dashboard (task OPS-27, R-10). Read only. */
+export interface AdminCapitalSettingsView {
+  /** The switch (plan setting `capital.enabled`): off closes new orders; what a person holds can still be read and withdrawn. */
+  enabled: boolean;
+  /** The smallest and largest order and the most one person confirms in a Lagos day, in kobo; null is no limit of WAWU's own. */
+  minKobo: number | null;
+  maxKobo: number | null;
+  dailyMaxKobo: number | null;
+  /** WAWU's fee on an order: a flat amount in kobo plus a share in basis points of the amount; 0 and 0 until the owner names it. */
+  feeFlatKobo: number;
+  feeBasisPoints: number;
+}
+
 export type AdminCapitalAction = 'freeze' | 'unfreeze' | 'cancel';
 
 /**
@@ -50,7 +66,30 @@ export type AdminCapitalAction = 'freeze' | 'unfreeze' | 'cancel';
  */
 @Injectable()
 export class AdminCapitalService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly plan: PlanSettingsService,
+    private readonly settings: CapitalSettings,
+  ) {}
+
+  /** The switch, the limits and WAWU's fee in force (task OPS-27). Read only. */
+  capitalSettings(): AdminCapitalSettingsView {
+    let enabled = true;
+    try {
+      enabled = this.plan.number(CAPITAL_ENABLED_SETTING) !== 0;
+    } catch {
+      // Read the way the Capital routes read it: a switch that cannot be read counts as on.
+    }
+    const { limits, fee } = this.settings;
+    return {
+      enabled,
+      minKobo: limits.minKobo,
+      maxKobo: limits.maxKobo,
+      dailyMaxKobo: limits.dailyMaxKobo,
+      feeFlatKobo: fee.flatKobo,
+      feeBasisPoints: fee.basisPoints,
+    };
+  }
 
   private view(
     row: OrderRow,

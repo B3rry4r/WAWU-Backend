@@ -19315,6 +19315,28 @@
         "x-wawu-built-by": "WALLET-31"
       }
     },
+    "/api/hub/admin/money/cards/settings": {
+      "get": {
+        "operationId": "AdminCardsController_settings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCardSettingsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The card switch, the two fees and the two counts in force. Read only (task OPS-27).",
+        "tags": [
+          "AdminCards"
+        ]
+      }
+    },
     "/api/hub/admin/money/cards": {
       "get": {
         "operationId": "AdminCardsController_list",
@@ -20845,6 +20867,29 @@
           "Fx"
         ],
         "x-wawu-built-by": "WALLET-21"
+      }
+    },
+    "/api/hub/admin/money/fx/currencies": {
+      "get": {
+        "operationId": "FxAdminController_currencies",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminFxCurrenciesView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The currencies and the three product switches as they stand, with WAWU's\nfee and daily limit for each and the places a coin counts (task OPS-27).\nRead only.",
+        "tags": [
+          "FxAdmin"
+        ],
+        "x-wawu-built-by": "OPS-27"
       }
     },
     "/api/hub/admin/money/fx/people/{wawuUserId}/accounts": {
@@ -40736,6 +40781,28 @@
         "x-wawu-built-by": "NUV-12"
       }
     },
+    "/api/hub/admin/capital/orders/settings": {
+      "get": {
+        "operationId": "AdminCapitalController_settings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCapitalSettingsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The Capital switch, the limits and WAWU's fee in force. Read only (task OPS-27).",
+        "tags": [
+          "AdminCapital"
+        ]
+      }
+    },
     "/api/hub/admin/capital/orders": {
       "get": {
         "operationId": "AdminCapitalController_list",
@@ -50823,6 +50890,142 @@
           "canStart"
         ]
       },
+      "AdminFxCurrencyView": {
+        "type": "object",
+        "properties": {
+          "swapFeeMinor": {
+            "type": "integer"
+          },
+          "sendFeeMinor": {
+            "type": "integer"
+          },
+          "dailyLimitMinor": {
+            "type": "integer",
+            "nullable": true
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "CAD",
+              "AED",
+              "GHS",
+              "USDT",
+              "USDC",
+              "RLUSD"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "fiat",
+              "stablecoin"
+            ]
+          },
+          "decimals": {
+            "type": "integer"
+          },
+          "chains": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "eth",
+                "base",
+                "matic",
+                "sol"
+              ]
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "swapFeeMinor",
+          "sendFeeMinor",
+          "dailyLimitMinor",
+          "code",
+          "name",
+          "kind",
+          "decimals",
+          "chains",
+          "enabled"
+        ]
+      },
+      "FxProductsView": {
+        "type": "object",
+        "properties": {
+          "openAccount": {
+            "type": "boolean"
+          },
+          "swap": {
+            "type": "boolean"
+          },
+          "cryptoSend": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "openAccount",
+          "swap",
+          "cryptoSend"
+        ]
+      },
+      "AdminFxCurrenciesView": {
+        "type": "object",
+        "properties": {
+          "currencies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminFxCurrencyView"
+            }
+          },
+          "products": {
+            "$ref": "#/components/schemas/FxProductsView"
+          },
+          "naira": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "NGN"
+                ]
+              },
+              "decimals": {
+                "type": "integer",
+                "enum": [
+                  2
+                ]
+              },
+              "swapFeeKobo": {
+                "type": "integer"
+              },
+              "dailyLimitKobo": {
+                "type": "integer",
+                "nullable": true
+              }
+            },
+            "required": [
+              "code",
+              "decimals",
+              "swapFeeKobo",
+              "dailyLimitKobo"
+            ]
+          }
+        },
+        "required": [
+          "currencies",
+          "products",
+          "naira"
+        ]
+      },
       "FxBalanceView": {
         "type": "object",
         "properties": {
@@ -51282,25 +51485,6 @@
           "decimals",
           "chains",
           "enabled"
-        ]
-      },
-      "FxProductsView": {
-        "type": "object",
-        "properties": {
-          "openAccount": {
-            "type": "boolean"
-          },
-          "swap": {
-            "type": "boolean"
-          },
-          "cryptoSend": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "openAccount",
-          "swap",
-          "cryptoSend"
         ]
       },
       "FxCurrenciesView": {
@@ -51946,6 +52130,34 @@
           "failureReason",
           "createdAt",
           "completedAt"
+        ]
+      },
+      "AdminCardSettingsView": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "providerFeeKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "wawuFeeKobo": {
+            "type": "integer"
+          },
+          "maxActive": {
+            "type": "number"
+          },
+          "maxPerDay": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "enabled",
+          "providerFeeKobo",
+          "wawuFeeKobo",
+          "maxActive",
+          "maxPerDay"
         ]
       },
       "AdminCardView": {
@@ -72547,6 +72759,40 @@
         "required": [
           "outcome",
           "event"
+        ]
+      },
+      "AdminCapitalSettingsView": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "minKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "maxKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "dailyMaxKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "feeFlatKobo": {
+            "type": "integer"
+          },
+          "feeBasisPoints": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "enabled",
+          "minKobo",
+          "maxKobo",
+          "dailyMaxKobo",
+          "feeFlatKobo",
+          "feeBasisPoints"
         ]
       },
       "AdminCapitalOrderView": {

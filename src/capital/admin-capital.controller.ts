@@ -21,6 +21,7 @@ import {
   AdminCapitalService,
   type AdminCapitalOrderView,
   type AdminCapitalPage,
+  type AdminCapitalSettingsView,
 } from './admin-capital.service';
 import { CapitalAdminActDto, CapitalAdminListQueryDto } from './capital.dto';
 
@@ -40,6 +41,14 @@ import { CapitalAdminActDto, CapitalAdminListQueryDto } from './capital.dto';
 @Controller('admin/capital/orders')
 export class AdminCapitalController {
   constructor(private readonly admin: AdminCapitalService) {}
+
+  /** The Capital switch, the limits and WAWU's fee in force. Read only (task OPS-27). */
+  @AdminRoles(AdminRole.superadmin, AdminRole.finance)
+  @Get('settings')
+  @Header('Cache-Control', 'no-store')
+  settings(): AdminCapitalSettingsView {
+    return this.admin.capitalSettings();
+  }
 
   /** Orders newest first; `state` and `wawuUserId` narrow them. A reservation that never reached the provider is not listed. */
   @AdminRoles(AdminRole.superadmin, AdminRole.finance)
