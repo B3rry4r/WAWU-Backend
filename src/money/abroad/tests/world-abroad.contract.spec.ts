@@ -37,7 +37,9 @@ jest.setTimeout(60_000);
 
 const prisma = new PrismaService();
 const W = `w42-${randomUUID()}`;
+const N = `n42-${randomUUID()}`;
 const ENTITY = '01M5WORLD42TESTENTITY0000AB';
+const NAIRA_ENTITY = '01M5NAIRA42TESTENTITY0000CD';
 const COLLECTOR = '0011824002';
 const world: OpenWallet = {
   wawuUserId: W,
@@ -59,6 +61,12 @@ class Settings {
   countriesOff = () => new Set<string>();
 }
 const settings = new Settings();
+const nairaPerson: OpenWallet = {
+  wawuUserId: N,
+  customerId: NAIRA_ENTITY,
+  walletId: `${NAIRA_ENTITY}:01M5NAIRA42TESTACCOUNT00EF`,
+  accountNumber: '0099001122',
+};
 
 function transfer(over: Partial<AbroadTransfer> = {}): AbroadTransfer {
   return {
@@ -89,23 +97,30 @@ const sendCalls: Array<{
 /** Anything that touches the naira wallet lands here. */
 const nairaCalls: string[] = [];
 
+const FOREIGN_SOURCES = [
+  {
+    currency: 'EUR',
+    accountRef: 'ACC-EUR',
+    displayName: null,
+    availableMinor: 50_000,
+  },
+  {
+    currency: 'GBP',
+    accountRef: 'ACC-GBP',
+    displayName: null,
+    availableMinor: 100_000,
+  },
+];
+/** The accounts the Hub lists for whoever is asking: a world person's, or (below) a person with a naira wallet's. */
+let sourceList = FOREIGN_SOURCES;
+/** A person with a naira wallet can have the naira legs made; for a world person they must never be. */
+let nairaOk = false;
+const nairaLegs: Array<{ reference: string; amountKobo: bigint }> = [];
+const nairaRecords = new Set<string>();
+
 const abroadSide: AbroadProvider = {
   banks: () => Promise.resolve([]),
-  sources: () =>
-    Promise.resolve([
-      {
-        currency: 'EUR',
-        accountRef: 'ACC-EUR',
-        displayName: null,
-        availableMinor: 50_000,
-      },
-      {
-        currency: 'GBP',
-        accountRef: 'ACC-GBP',
-        displayName: null,
-        availableMinor: 100_000,
-      },
-    ]),
+  sources: () => Promise.resolve(sourceList),
   saveRecipient: () =>
     Promise.resolve({
       counterpartyId: 'CP1',
@@ -165,14 +180,42 @@ const provider = {
   label: 'Nuvion',
   abroad: abroadSide,
   getPlatformAccount: () => {
+    if (nairaOk) return Promise.resolve({ accountNumber: 'PLATFORM' });
     nairaCalls.push('getPlatformAccount');
     return Promise.reject(new Error('the naira wallet must not be touched'));
   },
-  findTransactionByReference: () => {
+  findTransactionByReference: (reference: string) => {
+    if (nairaOk) {
+      return Promise.resolve(
+        nairaRecords.has(reference)
+          ? {
+              state: 'found' as const,
+              transaction: {
+                id: `T-${reference}`,
+                outcome: 'completed' as const,
+                amountKobo: nairaLegs.find((l) => l.reference === reference)!
+                  .amountKobo,
+                feeKobo: 0n,
+                createdAt: new Date().toISOString(),
+              },
+            }
+          : { state: 'absent' as const },
+      );
+    }
     nairaCalls.push('findTransactionByReference');
     return Promise.reject(new Error('the naira wallet must not be touched'));
   },
-  walletToWallet: () => {
+  walletToWallet: (i: { reference: string; amountKobo: bigint }) => {
+    if (nairaOk) {
+      nairaLegs.push({ reference: i.reference, amountKobo: i.amountKobo });
+      nairaRecords.add(i.reference);
+      return Promise.resolve({
+        amountKobo: i.amountKobo,
+        totalKobo: i.amountKobo,
+        feeKobo: 0n,
+        pending: false,
+      });
+    }
     nairaCalls.push('walletToWallet');
     return Promise.reject(new Error('the naira wallet must not be touched'));
   },
@@ -255,13 +298,24 @@ beforeAll(async () => {
   await prisma.nuvionEntity.create({
     data: { wawuUserId: W, entityId: ENTITY, status: 'approved' },
   });
+  await prisma.fintavaWallet.create({
+    data: {
+      wawuUserId: N,
+      customerId: nairaPerson.customerId,
+      walletId: nairaPerson.walletId,
+      accountNumber: nairaPerson.accountNumber,
+      provider: 'nuvion',
+    },
+  });
 });
 
 afterAll(async () => {
-  await prisma.abroadAdminAudit.deleteMany({ where: { subjectWawuId: W } });
-  await prisma.abroadSend.deleteMany({ where: { wawuUserId: W } });
-  await prisma.abroadQuote.deleteMany({ where: { wawuUserId: W } });
-  await prisma.abroadRecipient.deleteMany({ where: { wawuUserId: W } });
+  const both = { in: [W, N] };
+  await prisma.abroadAdminAudit.deleteMany({ where: { subjectWawuId: both } });
+  await prisma.abroadSend.deleteMany({ where: { wawuUserId: both } });
+  await prisma.abroadQuote.deleteMany({ where: { wawuUserId: both } });
+  await prisma.abroadRecipient.deleteMany({ where: { wawuUserId: both } });
+  await prisma.fintavaWallet.deleteMany({ where: { wawuUserId: N } });
   await prisma.nuvionEntity.deleteMany({ where: { wawuUserId: W } });
   await prisma.fintavaWalletOpening.deleteMany({ where: { wawuUserId: W } });
   await prisma.$disconnect();
@@ -276,6 +330,10 @@ beforeEach(() => {
   legRecords.clear();
   legPlan.clear();
   legHook = null;
+  sourceList = FOREIGN_SOURCES;
+  nairaOk = false;
+  nairaLegs.length = 0;
+  nairaRecords.clear();
   sendCalls.length = 0;
   nairaCalls.length = 0;
 });
@@ -570,5 +628,93 @@ describe('deletion and the record', () => {
     }
     await sends.sweep(new Date(Date.now() + 5 * 60_000));
     expect(await blockers()).not.toContain('payment_in_progress');
+  });
+});
+
+describe('WAWU fee follows the account the money leaves, for a person with a naira wallet too (lead ruling, WALLET-42)', () => {
+  const REMIT = { ...GH_MOMO, fields: { phone_number: '+233241230000' } };
+
+  async function asNaira(fromCurrency: string) {
+    sourceList = [
+      {
+        currency: 'NGN',
+        accountRef: 'ACC-NGN',
+        displayName: null,
+        availableMinor: 9_000_000,
+      },
+      ...FOREIGN_SOURCES,
+    ];
+    nairaOk = true;
+    settings.foreignFees = { 'EUR|mobile_money': 120 };
+    settings.collectors = { EUR: '0011902002' };
+    const r = (await abroad.saveRecipient(nairaPerson, REMIT)).view;
+    const q = await abroad.quote(nairaPerson, {
+      recipientId: r.id,
+      fromCurrency,
+      amountMinor: fromCurrency === 'NGN' ? 100_000 : 10_000,
+    });
+    const sc = { ...scope(), wawuUserId: N };
+    const view = await sends.send(nairaPerson, sc, { quoteId: q.id });
+    const row = await prisma.abroadSend.findUniqueOrThrow({
+      where: { id: view.id },
+    });
+    return { q, view, row, transferId: row.providerTransferId! };
+  }
+
+  it('a send from a foreign account is charged the foreign fee, in that currency, from that account, not the naira fee', async () => {
+    const { q, view, row } = await asNaira('EUR');
+    expect(q).toMatchObject({ wawuFeeMinor: 120, wawuFeeKobo: 0 });
+    expect(view).toMatchObject({ fromCurrency: 'EUR', wawuFeeMinor: 120 });
+    expect(legCalls).toEqual([
+      {
+        holder: { customerId: NAIRA_ENTITY, walletId: nairaPerson.walletId },
+        currency: 'EUR',
+        accountRef: 'ACC-EUR',
+        collectorBan: '0011902002',
+        direction: 'take',
+        amountMinor: 120n,
+        reference: `${row.reference}-fee`,
+        narration: 'WAWU fee',
+      },
+    ]);
+    expect(nairaLegs).toEqual([]);
+    expect(row.wawuFeeTaken).toBe(true);
+  });
+
+  it('gives that fee back to the foreign account once when the send does not stand, and never moves naira', async () => {
+    const { view, row, transferId } = await asNaira('EUR');
+    const word = transfer({
+      id: transferId,
+      state: 'reversed',
+      providerStatus: 'reversed',
+    });
+    await sends.apply(view.id, word);
+    await sends.sweep();
+    await sends.giveBack(view.id);
+    expect(legCalls.filter((c) => c.direction === 'give_back')).toMatchObject([
+      {
+        accountRef: 'ACC-EUR',
+        amountMinor: 120n,
+        reference: `${row.reference}-fee-back`,
+      },
+    ]);
+    expect(nairaLegs).toEqual([]);
+  });
+
+  it('a send from the naira wallet keeps the naira fee, taken and given back as NUV-11 built it', async () => {
+    const { q, view, row, transferId } = await asNaira('NGN');
+    expect(q).toMatchObject({ wawuFeeKobo: 2_500, wawuFeeMinor: 0 });
+    expect(nairaLegs).toEqual([
+      { reference: `${row.reference}-fee`, amountKobo: 2_500n },
+    ]);
+    expect(legCalls).toEqual([]);
+    await sends.apply(
+      view.id,
+      transfer({ id: transferId, state: 'failed', providerStatus: 'failed' }),
+    );
+    expect(nairaLegs.map((l) => l.reference)).toEqual([
+      `${row.reference}-fee`,
+      `${row.reference}-fee-back`,
+    ]);
   });
 });

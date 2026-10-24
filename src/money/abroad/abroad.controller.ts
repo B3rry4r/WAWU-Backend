@@ -225,8 +225,8 @@ export class AbroadController {
    * quote is `409 quote_expired`; a frozen person `423 account_frozen`. The
    * same key and body answer the first result again
    * (`Idempotent-Replayed: true`) without checking the PIN. WAWU's fee, when
-   * set, is taken after the provider takes the send: from the naira wallet, or
-   * (a world wallet, which has none) from the foreign account the money left.
+   * set, is taken after the provider takes the send, from the account the money
+   * leaves: the naira fee from the naira wallet, a foreign account's fee from it.
    */
   @Post('sends')
   @HttpCode(201)

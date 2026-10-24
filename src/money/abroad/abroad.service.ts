@@ -264,7 +264,7 @@ export class AbroadService {
 
   /**
    * True for a world wallet (WALLET-42, R-87): the person has no naira wallet, so the gate hands the seam an empty `walletId` and the
-   * only money they can send from is a foreign account.
+   * only money they can send from is a foreign account. (The fee does not depend on it: it follows the account the money leaves.)
    */
   static isWorld(wallet: Pick<OpenWallet, 'walletId'>): boolean {
     return wallet.walletId === '';
@@ -656,11 +656,11 @@ export class AbroadService {
       amountFrom,
     );
 
-    // WALLET-42: a person with no naira wallet pays WAWU's fee from the foreign account the money leaves, in its own currency, from
-    // config per currency and way (R-10); everyone else keeps the naira fee, taken from the naira wallet.
-    const world = AbroadService.isWorld(wallet);
-    const feeKobo = world ? 0 : this.settings.wawuFeeKobo;
-    const feeMinor = world
+    // WAWU's fee follows the account the money leaves, for everyone (WALLET-42, lead ruling): from the naira wallet it is the naira
+    // fee (NUV-11); from a foreign account it is that currency's fee, from config per currency and way (R-10), taken from that account.
+    const foreignSource = dto.fromCurrency !== 'NGN';
+    const feeKobo = foreignSource ? 0 : this.settings.wawuFeeKobo;
+    const feeMinor = foreignSource
       ? this.settings.wawuFeeMinor(
           dto.fromCurrency,
           recipient.method as AbroadMethod,
@@ -737,9 +737,9 @@ export class AbroadService {
   }
 
   /**
-   * The account holds the amount (and, from the naira wallet, WAWU's fee on
-   * top; from a foreign account the fee is taken from the naira wallet, so
-   * that must hold it). The provider's balance, read just now, is the truth.
+   * The account holds the amount and the fees on top: the partner's, and WAWU's
+   * (naira from the naira wallet, the sending currency from a foreign account:
+   * the fee follows the account). The provider's balance, read just now, is the truth.
    */
   private assertFunds(
     sources: { currency: string; availableMinor: number | null }[],
@@ -768,24 +768,6 @@ export class AbroadService {
           currency,
         },
       );
-    }
-    if (currency !== 'NGN' && feeKobo > 0) {
-      const naira = sources.find((s) => s.currency === 'NGN');
-      if (
-        naira &&
-        naira.availableMinor !== null &&
-        naira.availableMinor < feeKobo
-      ) {
-        throw new MoneyError(
-          'insufficient_funds',
-          "There is not enough in your naira wallet for WAWU's fee on this send.",
-          {
-            balanceKobo: naira.availableMinor,
-            totalKobo: feeKobo,
-            shortfallKobo: feeKobo - naira.availableMinor,
-          },
-        );
-      }
     }
   }
 }

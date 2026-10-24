@@ -948,7 +948,7 @@ export function buildRegistry(
     key: 'abroad.wawu_fee_kobo',
     group: 'Send abroad',
     label:
-      "WAWU's fee for one send abroad, in kobo, taken from the naira wallet",
+      "WAWU's fee for one send abroad from the naira wallet, in kobo, taken from the naira wallet",
     unit: 'kobo',
     usedBy: ['POST /money/abroad/quotes and sends'],
     provisional: 'ABROAD-FEE',
@@ -959,7 +959,7 @@ export function buildRegistry(
     key: 'abroad.wawu_fee_foreign',
     group: 'Send abroad',
     label:
-      'WAWU\'s fee for a send from a foreign account of a person with no naira wallet, taken from that account (lines like "GBP BANK 100" or "USD MOBILE_MONEY 150")',
+      'WAWU\'s fee for a send from a foreign account, taken from that account in its own currency (lines like "GBP BANK 100" or "USD MOBILE_MONEY 150")',
     unit: 'lines',
     usedBy: ['POST /money/abroad/quotes and sends'],
     provisional: 'ABROAD-FOREIGN-FEE',

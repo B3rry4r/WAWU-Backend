@@ -147,7 +147,7 @@ export interface AbroadQuoteView {
   /** WAWU's fee in kobo, taken from the naira wallet. 0 when the fee is `wawuFeeMinor`. */
   wawuFeeKobo: number;
   /**
-   * WAWU's fee taken from the foreign account the money leaves (a person with no naira wallet, WALLET-42), in that account's
+   * WAWU's fee taken from the foreign account the money leaves (a send from a foreign account, WALLET-42), in that account's
    * currency's smallest unit; 0 otherwise. It comes on top of the amount and the partner's fee.
    */
   wawuFeeMinor: number;

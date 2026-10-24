@@ -21258,7 +21258,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Sends at a held quote: the Idempotency-Key and the PIN (or the device\napproval) are required, the quote is used once, and the recipient and the\namounts are the quote's. Answers 201 with the send: `sending` or `pending`\nuntil the provider delivers (poll `GET /money/abroad/sends/{id}`),\n`failed` when the provider refused and nothing moved. An expired or used\nquote is `409 quote_expired`; a frozen person `423 account_frozen`. The\nsame key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN. WAWU's fee, when\nset, is taken after the provider takes the send: from the naira wallet, or\n(a world wallet, which has none) from the foreign account the money left.",
+        "summary": "Sends at a held quote: the Idempotency-Key and the PIN (or the device\napproval) are required, the quote is used once, and the recipient and the\namounts are the quote's. Answers 201 with the send: `sending` or `pending`\nuntil the provider delivers (poll `GET /money/abroad/sends/{id}`),\n`failed` when the provider refused and nothing moved. An expired or used\nquote is `409 quote_expired`; a frozen person `423 account_frozen`. The\nsame key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN. WAWU's fee, when\nset, is taken after the provider takes the send, from the account the money\nleaves: the naira fee from the naira wallet, a foreign account's fee from it.",
         "tags": [
           "Abroad"
         ],

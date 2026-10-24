@@ -46,6 +46,9 @@ class Settings {
   perDay: Record<string, number> = {};
   off = new Set<string>();
   partnerFees: Record<string, number> = {};
+  /** WALLET-42: WAWU's fee from a foreign account, and where it is collected (fixture only; the NUV-11 assertions use the naira fee). */
+  wawuFeeMinor = () => 0;
+  feeCollectorBan = () => null;
   providerFeeMinor = (src: string, dest: string, method: string) =>
     this.partnerFees[`${src}|${dest}|${method}`] ?? null;
   maxPerSend = (c: string) => this.perSend[c] ?? null;
@@ -362,7 +365,9 @@ async function quoteFor(
 ) {
   return abroad.quote(me, {
     recipientId,
-    fromCurrency: over.fromCurrency ?? 'USD',
+    // WALLET-42: WAWU's fee follows the account the money leaves, so a test that sets the naira fee sends from the naira wallet.
+    fromCurrency:
+      over.fromCurrency ?? (settings.wawuFeeKobo > 0 ? 'NGN' : 'USD'),
     amountMinor: over.amountMinor ?? 10_000,
     side: over.side,
   });
@@ -1127,7 +1132,7 @@ describe('the send', () => {
       const r = await recipient(other);
       const q = await abroad.quote(other, {
         recipientId: r.id,
-        fromCurrency: 'USD',
+        fromCurrency: 'NGN',
         amountMinor: 10_000,
       });
       const view = await sends.send(other, scope(), { quoteId: q.id });
@@ -1287,7 +1292,7 @@ describe('the send', () => {
       const r = await recipient(w);
       const q = await abroad.quote(w, {
         recipientId: r.id,
-        fromCurrency: 'USD',
+        fromCurrency: 'NGN',
         amountMinor: 10_000,
       });
       const view = await sends.send(w, scope(), { quoteId: q.id });
@@ -1452,7 +1457,7 @@ describe('the send', () => {
       const r = await recipient(w);
       const q = await abroad.quote(w, {
         recipientId: r.id,
-        fromCurrency: 'USD',
+        fromCurrency: 'NGN',
         amountMinor: 10_000,
       });
       const view = await sends.send(w, scope(), { quoteId: q.id });

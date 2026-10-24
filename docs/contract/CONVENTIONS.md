@@ -3546,7 +3546,215 @@ Admin (`/api/hub/admin/money/abroad`, superadmin and finance only): `GET sends` 
 
 **Errors.** The usual money errors (section 3) plus `fx_switched_off` (the product is off), `account_frozen` (423, the person is frozen), `quote_expired`, `fx_account_not_open`, `provider_declined`, and four of this task: `corridor_not_supported` (422), `recipient_details_invalid` (422, the refused fields by key in `reason.fields`), `rate_unavailable` (409, the provider has no rate for the pair now) and `send_not_cancellable` (409). `amount_out_of_range` carries `minimumMinor` or `maximumMinor` and the `currency` they are in.
 
-**Settings** (admin, group "Send abroad"): `abroad.enabled` (1, on), `abroad.wawu_fee_kobo` (0, R-10), `abroad.wawu_fee_foreign` (lines like `GBP BANK 100` or `USD MOBILE_MONEY 150`: WAWU's fee for a send from a foreign account of a person with no naira wallet, in that currency's smallest unit; none until named, WALLET-42), `abroad.max_per_send` and `abroad.max_per_day` (lines like `USD 500000`, none until named), `abroad.corridors_off` (two-letter codes; Uganda, Mexico, Singapore and Hong Kong while the provider's dev server refuses them).
+**Settings** (admin, group "Send abroad"): `abroad.enabled` (1, on), `abroad.wawu_fee_kobo` (0, R-10), `abroad.wawu_fee_foreign` (lines like `GBP BANK 100` or `USD MOBILE_MONEY 150`: WAWU's fee for a send from a foreign account, in that currency's smallest unit; none until named, WALLET-42), `abroad.max_per_send` and `abroad.max_per_day` (lines like `USD 500000`, none until named), `abroad.corridors_off` (two-letter codes; Uganda, Mexico, Singapore and Hong Kong while the provider's dev server refuses them).
+
+**The partner's fee (round 1, R-10: the person pays it on top, shown before the PIN).** The provider's quote has no fee and names its own only on the transfer it takes, so the quote's `providerFeeMinor` is the figure configured for the corridor (`ABROAD_PROVIDER_FEE_<CURRENCY>_<BANK or MOBILE_MONEY>`, `.env.example`), in the sending currency's smallest unit, or null when none is configured. The funds check counts the amount, that fee and, from the naira wallet, WAWU's fee. The receipt carries what the provider really charged (`applicable_fee`); when it is not the configured figure the send is flagged `feeDiffers` for the admin list so the figure can be corrected.
+
+**WAWU's fee when a send does not stand.** A send that fails or is reversed after WAWU's fee was taken gives it back, once: `<reference>-fee-back` from WAWU's account to the person's wallet, the amount the fee leg's own completed record moved. A leg is done only when the provider's record says it completed; a reference the provider failed is replaced (`-2`, then `-3`) in a later pass; three failed references, or a day, hold it for a person with the fee still owed (`wawuFeeBackOwed` on the admin list).
+
+**Fees not set, funds, and deleting an account (round 1).** The quote and the send run `FeesSetGuard` first, like every other quote and money-moving route (NUV-07): `503 fees_not_set` before the wallet gate, the key or the PIN while the running provider's fees are unset. The quote moves nothing, so its documented codes are the gate's, `fees_not_set` and the corridor's; its funds check still answers `402 insufficient_funds` (the amount, the partner's fee and WAWU's fee against the account), which the money-moving coverage spec does not let a quote list. The send documents the full debit set. A send the provider has not finished, or whose WAWU fee is still to be taken or given back, holds an account deletion as `payment_in_progress`; the account data map classes the sends, quotes, recipients and the freeze as the person's own (deleted with them, after an empty wallet) and the admin audit rows as kept, and the data export names them as left out until statements (G-130).
+
+**A fee question always ends (round 2).** WAWU's fee on a send is open until it is taken (and, on a send that did not stand, given back) or closed. The sweep reads, and never makes, the fee leg of a send that failed or was reversed while the leg was still on its way: a leg that completed is marked taken and given back once, one that never completed closes the question quietly (`nothing_taken`), one still on its way a day on is held for a person. A fee that could not be taken from a send that went through is written off after the last try (`not_taken`, a `fee_not_taken` row in `AbroadAdminAudit` by `system`). A give-back or a fee the sweep gives up on is held for a person (`fee_held` row, `feeBackHeld` in the admin list) and stops holding an account deletion, which counts only what the sweep is still trying. Finance finds open ones with `GET /admin/money/abroad/sends?feeOpen=true` and closes one with `POST /admin/money/abroad/sends/{id}/settle-fee` (`outcome` `not_taken` or `paid_back`, a reason; superadmin and finance; one audit row; a repeat changes nothing; `409` for a fee the partner's record shows was taken, a give-back still on its way, a send not decided yet, or nothing owed). The provider's status word is applied with a compare-and-set on the status read, so a cancel that commits in between is never undone, and a fee is not taken from a send already reversed. The quote lists `402 insufficient_funds` again (it reads the balance and moves nothing; `money-moving-coverage.spec.ts` names it).
+
+**From a foreign account (WALLET-42, R-87).** A person with a world wallet has no naira account, so every `/money/abroad` route takes their wallet (the gate hands the seam an empty wallet id and the entity as the customer) and they can send only from a foreign account they hold, in the send's source currency: a quote from the naira wallet is `409 fx_account_not_open` ("You have no naira account. Send from one of your other currency accounts.") and one from a currency they do not hold is the same code ("You do not have a USD account to send from."). A person with a naira wallet may send from a foreign account of theirs too. **WAWU's fee follows the account the money leaves, for everyone** (lead ruling, owner may override): from the naira wallet it is the naira fee (`wawuFeeKobo`, `abroad.wawu_fee_kobo`, section above); from a foreign account it is that currency's fee, `wawuFeeMinor` on the quote and the send (`wawuFeeKobo` is then 0), from `abroad.wawu_fee_foreign` per currency and way, charged on top with the partner's fee and counted before the PIN (`insufficient_funds`). A fee in a currency whose collecting account is not configured (`FX_FEE_COLLECTOR_<CODE>_BAN`, the one the swap fee uses) is not offered (`409 currency_not_supported`), never taken from naira. It is the same fee legs as the naira fee (`<reference>-fee` to WAWU's collecting account in that currency, `<reference>-fee-back` to the account when the send does not stand, the same reference generations, once each), made through the abroad side's `feeLeg` and found by `findFeeLeg`. The naira wallet is never read or moved for a world person. Nuvion's partner fee is charged on top of the amount in the source currency (dev, GBP: 112 pence to Ghana mobile money, 200 pence to a UK bank), and a transfer Nuvion fails returns amount and fee to the account (docs/nuvion/DEV-RESULTS.md in the mobile repo).
+
+**What the app is told, and not.** A stablecoin account holds one chain's
+wallet address, so USDT on two chains is two accounts (the app groups them by
+`currency`). A quote's hold is the provider's (`expiresAt`), never a fixed
+number. The provider's own fee on a send is named only when it takes the send,
+so `GET /money/fx/sends/quote` has `providerFeeMinor: null` and the receipt
+carries what was charged. WAWU's fee per currency comes from config and is 0
+until the owner names it (R-10).
+
+**Where an account's details stand** (fix round 1, verifier M2). Each account has
+`detailsStatus`: `ready` (issued and active), `pending` (the provider is issuing
+them) or `unavailable` (the provider would not issue them just now), and
+`detailsNote`, the provider's own words when `unavailable` (null otherwise).
+The app says exactly that and promises no arrival: on dev CAD and AED answer
+503 every time. An account whose details were never seen is asked again on
+every read.
+
+**WAWU's fee** (R-10, fix round 1, verifier H1). A swap or a send is charged the
+fee in the source currency, on top, as a second transfer under the operation's
+reference plus `-fee`. Out of naira it is a transfer to WAWU's operational
+account, the way a naira send's fee is collected; out of another currency it is
+a transfer to `FX_FEE_COLLECTOR_<CODE>_BAN`. The leg counts as paid only when the
+provider says it completed. A fee the provider refuses is tried again under a
+new reference (`-fee-2`, `-fee-3`); after three refusals it is given back (the
+operation's `wawuFeeMinor` becomes 0 and the admin view shows `feeLeg:
+uncollected`). A fee whose answer was lost or is unfinished stays `owed` and is
+asked again under the same reference.
+
+---
+
+## 28. Capital (NUV-12, R-84)
+
+The provider's investment products, from the wallet, in naira: a fixed return
+(a principal, a rate the provider locks at purchase, a term of 7 to 180 days)
+or a share offering (whole shares at a fixed price, held for a lock period).
+Routes under `/capital` (the app) and `/admin/capital/orders` (the
+dashboard). `WalletProvider.capital` is the only way in; a provider without it
+(Fintava) leaves every route answering `409 capital_unavailable`.
+
+| Route | What it does |
+|---|---|
+| `GET /capital/availability` | `{ available, holding }`: `available` is Capital on (plan setting `capital.enabled`, default on) and the provider serves it, so new orders can be made; `holding` is the person holds an order that is not over. The Wallet tab shows its row when either is true. No wallet needed. |
+| `GET /capital/products?kind=&cursor=` | The products in naira with their terms (rate, term, early exit, deductions, sale window, minimum and maximum). Each says `orderable` and, when it is not, why (`sold_out`, `sale_closed`, `not_open_yet`, `unavailable`). A kind the provider has that is not served here (private equity) is left out. The provider's own description of a product is **not** served (it is marketing and can promise what WAWU does not): a product is its terms, plus its name, its issuer's name and its documents. |
+| `GET /capital/products/{id}` | The same, with `documents` (every one is agreed to when ordering) and `terms`: WAWU's own limits and fee rule. |
+| `POST /capital/orders` | Reserves for 15 minutes at the provider's quote. **No money moves, no PIN.** `Idempotency-Key` makes a double tap reserve once. Body `{ productId, amountKobo, lockInvestment?, agreedToDocuments: true }`. `201` with the order (`reserved`). |
+| `POST /capital/orders/{id}/confirm` | The only step that takes the money. `Idempotency-Key`, the PIN or a device approval. Before the PIN and with no try used: not the caller's order, `reservation_expired`, `capital_unavailable` (held), the daily limit, `insufficient_funds`. `201` with the order: `invested`, or `confirming` when the provider has not finished (read it again; it is never charged twice). |
+| `GET /capital/orders?show=holding|ended` | The person's orders, newest first. |
+| `GET /capital/orders/{id}` | One order, the holding read from the provider now. |
+| `GET /capital/orders/{id}/transactions` | The holding's movements (purchase, each day's interest, payout). |
+| `GET /capital/orders/{id}/withdrawal` | What leaving now pays: interest so far, the penalty on an early exit, deductions, net payout. Read only. |
+| `POST /capital/orders/{id}/withdrawal` | Starts the payout (early exit, or the full payout once matured; the provider picks). `Idempotency-Key` and the PIN. `201` with the order, `paying_out`. |
+| `GET /capital/portfolio` | Invested, return so far and value now, as the provider totals them. Never a sum of our rows. |
+
+Words and figures: a rate, a term, a penalty and a payout are the provider's
+own, shown as stated; a figure the provider does not give is `null`, never
+zero; nothing is promised. Amounts are kobo (naira only until the other
+currency accounts are built: a product in another currency is not listed).
+
+**Controls (owner-asked).** On or off: the plan setting `capital.enabled`
+(default 1). Off closes new orders only (`products`, `POST /capital/orders`, and the confirmation of a reservation still held answer `409 capital_unavailable`); the portfolio, the orders, a holding's movements, the withdrawal preview and `POST .../withdrawal` keep answering, so a person who holds something can still take it out. Limits and WAWU's fee are settings read at boot:
+`CAPITAL_MIN_KOBO`, `CAPITAL_MAX_KOBO`, `CAPITAL_DAILY_MAX_KOBO` (unset: none
+of ours) and `CAPITAL_WAWU_FEE_KOBO` plus `CAPITAL_WAWU_FEE_BPS` (default 0,
+R-10). A fee is quoted on the reservation (`feeKobo`, `totalKobo`), checked
+against the balance, and taken once after the purchase as its own transfer to
+WAWU's account (a fixed reference; the sweep retries a fee that could not be
+taken, and the investment never waits for it). The admin routes (superadmin and
+finance; each act writes an audit row) list orders and `freeze` (the person
+cannot confirm or withdraw), `unfreeze` and `cancel` (only a reservation: the
+provider has no call to undo an investment that is made).
+`GET /admin/capital/orders/settings` (OPS-27, read only) answers the switch
+(`enabled`), the three limits (`minKobo`, `maxKobo`, `dailyMaxKobo`, null for
+none) and WAWU's fee (`feeFlatKobo`, `feeBasisPoints`).
+
+**The ledger.** The purchase is one `out` row (reference `wawu-cap-<order>`),
+the payout one `in` row (`wawu-cap-payout-<order>`), the fee one `out` row
+(`wawu-capfee-<order>`, counterparty "WAWU's fee"), each other counterparty "Capital · <product>". A delivery
+of the provider's `capital-*` transfer adds its transfer id to the same row.
+A reservation that expires writes nothing.
+
+**What dev showed that the docs do not say** (mobile `docs/nuvion/DEV-RESULTS.md`,
+"Capital"): a second confirm of an approved order is `400` invalid for state
+(not the first result), so the order is read before anything is said; a
+payout settles in seconds on dev; `capital-transactions` filters by the
+capital account's id; share offerings carry `availability.orderable` and
+`reason`.
+
+## 29. The WAWU card (WALLET-31, R-84)
+
+Virtual and single-use dollar cards that Nuvion issues, funded from the
+person's own account, Nuvion converting at use. Routes under `/money/cards`
+(the controller is `MoneyCardsController`, `src/money/cards/`), every one
+behind the wallet gate (`wallet_not_open`, `wallet_opening`, `wallet_frozen`).
+There is no physical card (Nuvion issues none), no card PIN, no channel
+switches and no spending limits (Nuvion serves none): those are not routes.
+
+- **Nothing of the card's secrets is stored or logged.** The answer to a
+  card being made, and every list or status read, carries no number, expiry
+  or CVV. `POST /money/cards/{id}/reveal` reads them from Nuvion, each time,
+  behind the PIN or a fingerprint approval, answers `Cache-Control:
+  no-store`, and keeps nothing.
+- **`POST /money/cards`** takes `Idempotency-Key`, the PIN or a biometric
+  approval, and `{ kind: "virtual" | "single_use", name? }`. Nuvion takes its
+  fee from the person's account when it makes the card (dev, 24 Oct 2026:
+  65,772 kobo for either kind), WAWU's fee is 0 (R-10; a value above 0 is not
+  collected as a send's fee is, see "Round 1" below). Answers `201` with
+  a `CardView`: `active`, or `pending` when Nuvion has not confirmed it (it
+  is found again by its reference, never made twice; `pending` rows are
+  looked for when the list is read). The same key and body answer the first
+  result again (`Idempotent-Replayed: true`) without checking the PIN. A
+  refusal gives the key back. Cards switched off, a limit and
+  `fees_not_set` are answered before the PIN is looked at. A funding account
+  that cannot pay Nuvion's fee is `402 insufficient_funds` with the fee in
+  the message.
+- **`GET /money/cards/quote`**: `{ enabled, currency, kinds, fee, limits,
+  canCreate }`, the fee as `FeeBreakdown` (Nuvion's plus WAWU's, both from
+  settings: `NUVION_FEE_CARD_CREATE` has no default and `WAWU_FEE_CARD_KOBO`
+  defaults to 0). `fees_not_set` as every fee quote.
+- **`GET /money/cards`**: `{ enabled, cards }`, newest first. `enabled` is the
+  plan setting `cards.enabled` (1 or 0, default 1, admin-editable): while 0
+  nothing new is made and the app draws nothing for cards, but a card held can
+  still be frozen or blocked. **`GET /money/cards/{id}`** and
+  **`GET /money/cards/{id}/transactions`** (cursor page of payments,
+  reversals and refunds; empty for a blocked card, which Nuvion no longer
+  lists).
+- **`POST /money/cards/{id}/freeze`** and **`DELETE /money/cards/{id}`**
+  (block for good: Nuvion soft-deletes the card, so block and delete are one
+  action) need no PIN, so a lost card is stopped at once; both are safe to
+  repeat. **`POST /money/cards/{id}/unfreeze`** needs the PIN or a fingerprint.
+  A card support froze answers `409 card_blocked` to the person's unfreeze.
+- A card is the person's own: another person's id is `404 not_found`.
+- New money error codes: `cards_unavailable` (503: switched off, not built
+  for the running provider, or Nuvion refused the request and nothing was
+  taken), `card_limit_reached` (409: `WALLET_CARD_MAX_ACTIVE`, default 5, or
+  `WALLET_CARD_MAX_PER_DAY`, default 10; Default (lead), owner may override),
+  `card_blocked` (409: the card is blocked for good, still being made, or
+  frozen by support).
+- **Support** (`admin/money/cards`, superadmin and finance, audited in
+  `AdminOpsAudit` as `wallet_card_frozen`, `_unfrozen`, `_cancelled`):
+  `GET` (filter by `state` or `wawuUserId`, cursor page), `POST {id}/freeze`,
+  `POST {id}/unfreeze`, `POST {id}/cancel`. By account id only: no number,
+  name or phone is read or returned.
+  `GET settings` (OPS-27, read only) answers the switch (`enabled`, the plan
+  setting `cards.enabled`), Nuvion's fee and WAWU's fee in kobo
+  (`providerFeeKobo`, null while unset; `wawuFeeKobo`) and the two counts
+  (`maxActive`, `maxPerDay`).
+- Nuvion's own events (`cards.created`, `.frozen`, `.unfrozen`, `.deleted`)
+  keep the Hub's row in step (`src/nuvion/handlers/cards.handler.ts`); a
+  frozen or unfrozen event is followed by reading the card's status, so a late
+  one cannot undo a newer change.
+
+### Round 1 changes to section 29 (WALLET-31, 24 Oct 2026)
+
+- **WAWU's own fee on a card is collected** like WAWU's fee on a send (FIX-52):
+  after the card exists, one transfer under the card's reference plus `-fee`
+  from the person's account to WAWU's, its ledger side (money in on WAWU's
+  account) written once, the provider answering a repeat with the original.
+  Before anything is claimed the wallet's balance is read and a wallet that
+  cannot cover both fees is `402 insufficient_funds` (the key is free). A fee
+  transfer that is not confirmed never undoes the card: it is tried again each
+  time the card is read (`WalletCard.feeCollectedAt` null means owed).
+  `WAWU_FEE_CARD_KOBO` above 0 is therefore a working setting (a provider that
+  cannot move a fee as its own transfer answers `fees_not_set`).
+- **A single-use card Nuvion blocked after its payment is `used`**
+  (`CardStatus` gains `used`): it cannot be frozen, unfrozen or shown (`409
+  card_blocked`), its payments are still listed, and it no longer counts as
+  held. A card Nuvion blocked that is not single-use is `frozen`.
+- **`POST /money/cards/{id}/reveal` has its own count**: 5 a minute per person,
+  then `429 card_reveal_rate_limited` with `retryAfterSeconds`, after the wallet
+  gate and before the PIN.
+- While cards are off (`enabled: false`) a person's existing cards are still
+  listed and can be frozen, blocked and read; only making a card is refused.
+- A repeated admin unfreeze or cancel changes nothing and writes no second
+  audit row.
+- A `cards.*` delivery is stored without any key that could hold a number, CVV
+  or expiry. Deleting an account blocks every card the person still holds first
+  (the row is OWNED and goes with the account).
+
+---
+
+## 30. Send abroad (NUV-11, R-84)
+
+A person pays a foreign bank account or a mobile money wallet from any of their accounts. Every route is under `/api/hub/money/abroad`, needs an open wallet (R-6): a naira wallet, or (WALLET-42, R-87) a world wallet, whose person can send only from a foreign account they hold (see "From a foreign account" below). It reaches the provider only through `WALLET_PROVIDER` (its `abroad` side; a provider without one, Fintava, answers `409 currency_not_supported`), and follows section 1a for amounts (`...Minor` beside a currency field; WAWU's fee is naira, `wawuFeeKobo`).
+
+| Route | What it does |
+| --- | --- |
+| `GET /money/abroad/corridors` | the product switch (`enabled`), WAWU's fee, and the countries: each with its currency, whether it is `available` (and why not), and its ways (`bank`, `mobile_money`), schemes and the exact fields to ask for each (key, label, kind, pattern, hint, options) |
+| `GET /money/abroad/banks/{country}` | the provider's bank directory for one country (a `bank` field's picker) |
+| `GET /money/abroad/sources` | the accounts to send from, with the provider's balance read now |
+| `GET`, `POST /money/abroad/recipients`, `DELETE /money/abroad/recipients/{id}` | saved recipients; saving takes the country, the way, the scheme when there is a choice, the name on the account and exactly the corridor's fields; only the last four characters are kept here; 201 first, 200 for one already saved |
+| `POST /money/abroad/quotes` | what a send delivers and costs: the provider's rate and real hold when the currencies differ (a WAWU hold of 10 minutes when they are the same), both amounts, WAWU's fee; `side` says which amount was typed |
+| `POST /money/abroad/sends` | sends at a held quote, once: `Idempotency-Key` and PIN or device approval; answers 201 with the send (`sending` or `pending` until the provider decides; poll `GET /money/abroad/sends/{id}`); the same key and body answer the first result again |
+| `GET /money/abroad/sends`, `GET /money/abroad/sends/{id}` | the person's sends, newest first (cursor page, section 6), and one send |
+
+Admin (`/api/hub/admin/money/abroad`, superadmin and finance only): `GET sends` (filters `wawuUserId`, `status`, a cursor page), `GET sends/{id}`, `POST sends/{id}/cancel`, `POST people/{wawuUserId}/freeze` and `/unfreeze` (a reason; one `AbroadAdminAudit` row each; a repeat changes nothing and writes no second row). Cancel stands only for a send the provider never received, found by a complete search of its records; the provider has no cancel call, so a send it holds is `409 send_not_cancellable`.
+
+**Errors.** The usual money errors (section 3) plus `fx_switched_off` (the product is off), `account_frozen` (423, the person is frozen), `quote_expired`, `fx_account_not_open`, `provider_declined`, and four of this task: `corridor_not_supported` (422), `recipient_details_invalid` (422, the refused fields by key in `reason.fields`), `rate_unavailable` (409, the provider has no rate for the pair now) and `send_not_cancellable` (409). `amount_out_of_range` carries `minimumMinor` or `maximumMinor` and the `currency` they are in.
+
+**Settings** (admin, group "Send abroad"): `abroad.enabled` (1, on), `abroad.wawu_fee_kobo` (0, R-10), `abroad.wawu_fee_foreign` (lines like `GBP BANK 100` or `USD MOBILE_MONEY 150`: WAWU's fee for a send from a foreign account, in that currency's smallest unit; none until named, WALLET-42), `abroad.max_per_send` and `abroad.max_per_day` (lines like `USD 500000`, none until named), `abroad.corridors_off` (two-letter codes; Uganda, Mexico, Singapore and Hong Kong while the provider's dev server refuses them).
 
 **The partner's fee (round 1, R-10: the person pays it on top, shown before the PIN).** The provider's quote has no fee and names its own only on the transfer it takes, so the quote's `providerFeeMinor` is the figure configured for the corridor (`ABROAD_PROVIDER_FEE_<CURRENCY>_<BANK or MOBILE_MONEY>`, `.env.example`), in the sending currency's smallest unit, or null when none is configured. The funds check counts the amount, that fee and, from the naira wallet, WAWU's fee. The receipt carries what the provider really charged (`applicable_fee`); when it is not the configured figure the send is flagged `feeDiffers` for the admin list so the figure can be corrected.
 
