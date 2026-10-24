@@ -15,6 +15,10 @@ export interface StandinHandle {
     lastModel: string | null;
     cloned: number;
     deleted: number;
+    /** Each Sound effect call: the `duration_seconds` asked (null when none). */
+    sfx: (number | null)[];
+    /** Each Music call: the `music_length_ms` asked (null when none) and whether it was instrumental. */
+    music: { lengthMs: number | null; instrumental: boolean }[];
   };
   /** Voices the stand-in made for a person's own sample and has not yet had removed. */
   openClones: () => number;

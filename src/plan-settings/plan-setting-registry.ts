@@ -579,8 +579,8 @@ export function buildRegistry(
     quick_voice_per_min: 'POST /ai-tools/quick-voice/jobs (AITOOLS-02)',
     captions_per_min: 'the Captions job route (AITOOLS-04)',
     clean_audio_per_min: 'the Clean audio job route (AITOOLS-04)',
-    music_per_track: 'the Music track job route (AITOOLS-03)',
-    sfx: 'the Sound effect job route (AITOOLS-03)',
+    music_per_track: 'POST /ai-tools/music/jobs (AITOOLS-03)',
+    sfx: 'POST /ai-tools/sound-effect/jobs (AITOOLS-03)',
     dub_standard_per_min_lang: 'the Dubbing job route (AITOOLS-05)',
     dub_premium_per_min_lang: 'the Dubbing job route (AITOOLS-05)',
     receptionist_message: 'the Receptionist route (AITOOLS-06)',
@@ -756,6 +756,56 @@ export function buildRegistry(
     count,
     'AITOOLS-CHARS-PER-MINUTE',
   );
+  // AITOOLS-03: the limits of the two prompt tools. The description's length
+  // starts at the plan's own per-job character cap (not a new figure); the
+  // longest sound and track are the provider's own maximums.
+  for (const [key, label, usedBy] of [
+    [
+      'ai.sfx_max_prompt_chars',
+      'Characters a Sound effect description can have',
+      'GET /ai-tools (input.maxCharacters), POST /ai-tools/sound-effect/jobs',
+    ],
+    [
+      'ai.music_max_prompt_chars',
+      'Characters a Music track description can have',
+      'GET /ai-tools (input.maxCharacters), POST /ai-tools/music/jobs',
+    ],
+  ] as const) {
+    add({
+      key,
+      group: 'Other rulings',
+      label,
+      unit: 'count',
+      usedBy: ['PT1 (the description box)', usedBy],
+      provisional: 'AITOOLS-LIMITS',
+      default: plans.caps.maxCharsPerJob,
+      parse: count,
+    });
+  }
+  add({
+    key: 'ai.sfx_max_seconds',
+    group: 'Other rulings',
+    label: 'Longest Sound effect, in seconds',
+    unit: 'count',
+    usedBy: [
+      'PT1 (the length), GET /ai-tools (input.length), POST /ai-tools/sound-effect/jobs',
+    ],
+    provisional: 'AITOOLS-LIMITS',
+    default: extra('ai.sfx_max_seconds', 30),
+    parse: whole(1, 30),
+  });
+  add({
+    key: 'ai.music_max_seconds',
+    group: 'Other rulings',
+    label: 'Longest Music track, in seconds',
+    unit: 'count',
+    usedBy: [
+      'PT1 (the length), GET /ai-tools (input.length), POST /ai-tools/music/jobs',
+    ],
+    provisional: 'AITOOLS-LIMITS',
+    default: extra('ai.music_max_seconds', 300),
+    parse: whole(3, 600),
+  });
   other(
     'voice.intro_max_chars',
     'Characters a Voice Intro script can have',

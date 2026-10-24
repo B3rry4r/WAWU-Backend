@@ -24,6 +24,21 @@ export interface SpeakRequest {
   text: string;
 }
 
+/** A sound effect to make (AITOOLS-03): a description and, optionally, how long. */
+export interface SoundEffectRequest {
+  prompt: string;
+  /** 0.5 to 30 seconds; null lets the provider choose. */
+  durationSeconds: number | null;
+}
+
+/** A music track to make (AITOOLS-03): a description, optionally how long, and whether it is without singing. */
+export interface MusicRequest {
+  prompt: string;
+  /** Whole seconds; null lets the provider choose. */
+  lengthSeconds: number | null;
+  instrumental: boolean;
+}
+
 export interface SpokenAudio {
   audio: Buffer;
   /** Always an audio type the Hub stores and serves (`audio/mpeg`). */
@@ -40,6 +55,8 @@ export class AiVoiceProviderError extends Error {
   constructor(
     readonly kind: 'rejected' | 'unavailable',
     message: string,
+    /** The provider's HTTP status, when it answered one (a key or plan refusal reads 401 or 402). Never shown to a person. */
+    readonly status?: number,
   ) {
     super(message);
     this.name = 'AiVoiceProviderError';
@@ -62,6 +79,8 @@ export interface OwnVoiceRequest {
 export interface AiVoiceProvider {
   /** True when a key, a host and at least one voice are set. */
   readonly configured: boolean;
+  /** True when a key and a host are set: Sound effect and Music track use no voice, so they do not need one. */
+  readonly promptToolsConfigured: boolean;
   /** The voices on offer, in the order a person sees them. */
   voices(): readonly AiVoice[];
   /**
@@ -81,6 +100,27 @@ export interface AiVoiceProvider {
    */
   speakQuick(
     req: SpeakRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<SpokenAudio>;
+
+  /**
+   * Makes a sound effect from a description (Sound effect, AITOOLS-03). One
+   * request, the audio in the answer. A network call, with the same rules as
+   * `speak`. Throws `AiVoiceProviderError`.
+   */
+  makeSoundEffect(
+    req: SoundEffectRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<SpokenAudio>;
+
+  /**
+   * Makes a music track from a description (Music track, AITOOLS-03). One
+   * request with no provider job id, which can run for a long time: it has its
+   * own, longer timeout (`AI_VOICE_MUSIC_TIMEOUT_MS`). A network call, with
+   * the same rules as `speak`. Throws `AiVoiceProviderError`.
+   */
+  makeMusic(
+    req: MusicRequest,
     opts?: { signal?: AbortSignal },
   ): Promise<SpokenAudio>;
 

@@ -21,12 +21,16 @@ import { BuiltBy } from '../money/money-contract';
 import { AiJobService } from './ai-job.service';
 import {
   AiJobListQueryDto,
+  CreateMusicJobDto,
   CreateQuickVoiceJobDto,
+  CreateSoundEffectJobDto,
   CreateVoiceoverJobDto,
 } from './ai-tools.dto';
 import { AiToolsService } from './ai-tools.service';
 import type { AiJobPage, AiJobView, AiToolsView } from './ai-tools-view.type';
+import { MUSIC_TOOL } from './tools/music.tool';
 import { QUICK_VOICE_TOOL } from './tools/quick-voice.tool';
+import { SOUND_EFFECT_TOOL } from './tools/sound-effect.tool';
 
 /**
  * The AI tools (AITOOLS-01, AITOOLS-02, R-43, R-61, R-78, PT1 and PT2). Every
@@ -122,6 +126,80 @@ export class AiToolsController {
   ): Promise<AiJobView> {
     const { job, replayed } = await this.jobs.createJob(
       QUICK_VOICE_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * Starts a Sound effect job (PT1 "Sound effect", AITOOLS-03): a `prompt`
+   * describing the sound, an optional `durationSeconds` and the `quoteToken`
+   * of the `POST /points/quote` for the action `sfx`. Priced flat, one use,
+   * whatever the length. The request, the answer, the `Idempotency-Key` rule
+   * and the refusals are those of `POST /ai-tools/voiceover/jobs`, plus
+   * `422 ai_prompt_too_long` and `422 ai_length_too_long`, each naming its
+   * limit, and `400 ai_prompt_empty`. Nothing is held when a job is refused.
+   */
+  @Post('sound-effect/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-03')
+  async createSoundEffect(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateSoundEffectJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      SOUND_EFFECT_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * Starts a Music track job (PT1 "Music track", AITOOLS-03): a `prompt`
+   * describing the track, an optional `lengthSeconds`, an optional
+   * `instrumental` switch and the `quoteToken` of the `POST /points/quote`
+   * for the action `music_per_track`. Priced flat, one track, whatever the
+   * length. A track can take minutes to make, so the app polls `GET
+   * /ai-tools/jobs/{id}`. The request, the answer, the `Idempotency-Key` rule
+   * and the refusals are those of `POST /ai-tools/sound-effect/jobs`.
+   */
+  @Post('music/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-03')
+  async createMusic(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateMusicJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      MUSIC_TOOL,
       user.sub,
       key,
       dto,

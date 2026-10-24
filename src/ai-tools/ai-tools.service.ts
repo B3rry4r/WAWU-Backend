@@ -39,6 +39,15 @@ export class AiToolsService {
       if (!action) continue;
       const enabled = tool.enabled(this.voice);
       if (!enabled && !tool.listedWhenOff) continue;
+      const spec = tool.input;
+      const maxCharacters =
+        spec.kind === 'prompt'
+          ? // The tool's own limit, and never above the plan's per-job cap the hold also checks.
+            Math.min(
+              this.settings.number(spec.maxCharactersSetting),
+              plan.caps.maxCharsPerJob,
+            )
+          : plan.caps.maxCharsPerJob;
       tools.push({
         id: tool.id,
         action: action.id,
@@ -47,14 +56,29 @@ export class AiToolsService {
         unit: tool.unit,
         costPointsPerUnit: action.points,
         enabled,
-        input: {
-          kind: tool.input.kind,
-          maxCharacters: plan.caps.maxCharsPerJob,
-          charactersPerUnit: this.settings.number(
-            tool.input.charactersPerUnitSetting,
-          ),
-        },
-        voices,
+        input:
+          spec.kind === 'prompt'
+            ? {
+                kind: 'prompt',
+                // One use or track covers a description of any allowed length.
+                maxCharacters,
+                charactersPerUnit: maxCharacters,
+                length: {
+                  field: spec.length.field,
+                  min: spec.length.minSeconds,
+                  max: this.settings.number(spec.length.maxSecondsSetting),
+                  whole: spec.length.whole,
+                },
+                ...(spec.instrumental ? { instrumental: true } : {}),
+              }
+            : {
+                kind: 'text',
+                maxCharacters,
+                charactersPerUnit: this.settings.number(
+                  spec.charactersPerUnitSetting,
+                ),
+              },
+        voices: spec.kind === 'prompt' ? [] : voices,
       });
     }
     return {

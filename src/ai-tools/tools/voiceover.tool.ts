@@ -1,4 +1,10 @@
-import type { AiTool, AiToolRequest, AiToolSettings } from './ai-tool';
+import { AI_AUDIO_FOLDER } from '../audio/ai-audio-store';
+import {
+  asText,
+  type AiTool,
+  type AiToolRequest,
+  type AiToolSettings,
+} from './ai-tool';
 import type { AiVoiceProvider } from '../voice/ai-voice-provider';
 
 /** The plan's action a VoiceOver job is priced by. */
@@ -29,11 +35,15 @@ export const VOICEOVER_TOOL: AiTool = {
   description: 'Turn your words into spoken audio.',
   unit: 'minute',
   input: { kind: 'text', charactersPerUnitSetting: CHARS_PER_MINUTE_SETTING },
+  audioFolder: AI_AUDIO_FOLDER,
   listedWhenOff: true,
   enabled: (provider) => provider.configured,
   price: (req: AiToolRequest, settings) =>
-    minutesOfText(req.text, settings, CHARS_PER_MINUTE_SETTING),
+    minutesOfText(asText(req).text, settings, CHARS_PER_MINUTE_SETTING),
   run: async (provider: AiVoiceProvider, job, req) => ({
-    audio: await provider.speak({ voiceId: job.voiceId, text: req.text }),
+    audio: await provider.speak({
+      voiceId: job.voiceId,
+      text: asText(req).text,
+    }),
   }),
 };
