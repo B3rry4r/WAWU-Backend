@@ -1,0 +1,39 @@
+import type { AiTool, AiToolRequest, AiToolSettings } from './ai-tool';
+import type { AiVoiceProvider } from '../voice/ai-voice-provider';
+
+/** The plan's action a VoiceOver job is priced by. */
+export const VOICEOVER_ACTION = 'voiceover_per_min';
+/** The setting: characters that make one minute of VoiceOver. */
+export const CHARS_PER_MINUTE_SETTING = 'ai.voiceover_chars_per_minute';
+
+/** Minutes a text is priced in: its characters over the setting, rounded up, at least 1. */
+export function minutesOfText(
+  text: string,
+  settings: AiToolSettings,
+  charsPerMinuteSetting: string,
+): { units: number; characters: number } {
+  const characters = Array.from(text).length;
+  const perMinute = settings.number(charsPerMinuteSetting);
+  return { units: Math.max(1, Math.ceil(characters / perMinute)), characters };
+}
+
+/**
+ * VoiceOver (AITOOLS-01, PT2): words to spoken audio in a listed voice, on
+ * the provider's standard model. The first entry of the registry; its route,
+ * request, answer and behaviour are exactly AITOOLS-01's.
+ */
+export const VOICEOVER_TOOL: AiTool = {
+  id: 'voiceover',
+  action: VOICEOVER_ACTION,
+  name: 'VoiceOver',
+  description: 'Turn your words into spoken audio.',
+  unit: 'minute',
+  input: { kind: 'text', charactersPerUnitSetting: CHARS_PER_MINUTE_SETTING },
+  listedWhenOff: true,
+  enabled: (provider) => provider.configured,
+  price: (req: AiToolRequest, settings) =>
+    minutesOfText(req.text, settings, CHARS_PER_MINUTE_SETTING),
+  run: async (provider: AiVoiceProvider, job, req) => ({
+    audio: await provider.speak({ voiceId: job.voiceId, text: req.text }),
+  }),
+};

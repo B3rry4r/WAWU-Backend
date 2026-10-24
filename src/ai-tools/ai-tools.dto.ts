@@ -1,5 +1,14 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsString, Length, Matches } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  Length,
+  Matches,
+  Max,
+  Min,
+} from 'class-validator';
 
 /**
  * A request bound, not a product figure: the longest body this route will read.
@@ -29,4 +38,34 @@ export class CreateVoiceoverJobDto {
   @IsString({ message: 'quoteToken must be text.' })
   @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
   quoteToken!: string;
+}
+
+/**
+ * `POST /ai-tools/quick-voice/jobs` (AITOOLS-02): the same words, voice and
+ * quote as VoiceOver; the quote is for the action `quick_voice_per_min`.
+ */
+export class CreateQuickVoiceJobDto extends CreateVoiceoverJobDto {}
+
+/** `GET /ai-tools/jobs`: a cursor page (docs/contract/CONVENTIONS.md section 6). */
+export class AiJobListQueryDto {
+  /** `nextCursor` from the previous page. Opaque: send it back as given. Absent for the first page. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @Length(1, 200)
+  cursor?: string;
+
+  /** Jobs per page, 1 to 100. */
+  @ApiPropertyOptional({
+    type: 'integer',
+    minimum: 1,
+    maximum: 100,
+    default: 20,
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number = 20;
 }

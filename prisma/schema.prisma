@@ -7682,6 +7682,12 @@ model AiToolJob {
   failureCode    String?
   /// The stored audio's key (a `StorageObject` row), once the job is done.
   audioKey       String?
+  /// What the job made, once done (AITOOLS-02): a list of `{ kind: audio | text | subtitles, key?, text? }`.
+  outputs        Json?
+  /// The provider's own id for a long job (dubbing), for a later look-up. Never shown to a person.
+  providerRef    String?
+  /// The key of the file the person uploaded for the job (captions, clean audio, dubbing).
+  inputRef       String?
   createdAt      DateTime   @default(now())
   finishedAt     DateTime?
 

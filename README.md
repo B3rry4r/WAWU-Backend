@@ -178,6 +178,13 @@ set `STACK_STORAGE_ENDPOINT=http://127.0.0.1:<port>` with
 `STACK_STORAGE_PATH_STYLE=true`. Keep both ports outside the stack's range.
 Without these the tool is listed `enabled: false` and a job is refused.
 
+Since AITOOLS-02 the stand-in answers from one route table (a later tool adds its
+route and its markers there) and keeps the `model_id` of each speech call in
+`GET /__standin/state` (`models`, `lastModel`), so a spec can see that Quick voice
+ran on the faster model (`AI_VOICE_QUICK_MODEL`, default `eleven_flash_v2_5`)
+while VoiceOver ran on `AI_VOICE_MODEL`. Quick voice is listed only when the
+voice settings above are set.
+
 The same stand-in serves the Voice Intro (VOICE-01): "hear your name" is the
 text-to-speech call with the first listed voice, and a Voice Intro in a
 person's own voice is `POST /v1/voices/add` (the sample as a multipart file,

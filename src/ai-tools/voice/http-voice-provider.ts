@@ -15,10 +15,17 @@ export const AI_VOICE_ENV = {
   apiKey: 'AI_VOICE_API_KEY',
   voices: 'AI_VOICE_VOICES',
   model: 'AI_VOICE_MODEL',
+  quickModel: 'AI_VOICE_QUICK_MODEL',
   timeoutMs: 'AI_VOICE_TIMEOUT_MS',
 } as const;
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+/**
+ * The provider's faster text-to-speech model, for Quick voice (AITOOLS-02):
+ * `eleven_flash_v2_5` in the account's model list (docs/elevenlabs/API-FACTS.md,
+ * "Text to speech"). A builder's name only; no person sees it (R-68).
+ */
+export const DEFAULT_QUICK_MODEL = 'eleven_flash_v2_5';
 /** The most audio one job may bring back: a request bound, not a product figure. */
 const MAX_AUDIO_BYTES = 64 * 1024 * 1024;
 
@@ -92,6 +99,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
   private readonly baseUrl: string | null;
   private readonly apiKey: string | null;
   private readonly model: string | null;
+  private readonly quickModel: string;
   private readonly timeoutMs: number;
   private readonly catalogue: readonly CatalogueEntry[];
 
@@ -103,6 +111,9 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     this.apiKey =
       (config.get<string>(AI_VOICE_ENV.apiKey) ?? '').trim() || null;
     this.model = (config.get<string>(AI_VOICE_ENV.model) ?? '').trim() || null;
+    this.quickModel =
+      (config.get<string>(AI_VOICE_ENV.quickModel) ?? '').trim() ||
+      DEFAULT_QUICK_MODEL;
     const t = Number(config.get<string>(AI_VOICE_ENV.timeoutMs));
     this.timeoutMs = Number.isFinite(t) && t >= 1000 ? t : DEFAULT_TIMEOUT_MS;
     const { voices, problem } = parseVoiceCatalogue(
@@ -143,6 +154,21 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     if (!this.configured || !voice || this.baseUrl === null)
       throw new AiVoiceProviderError('rejected', 'voice is not available');
     return this.synthesize(voice.providerVoiceId, req.text, opts.signal);
+  }
+
+  async speakQuick(
+    req: SpeakRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<SpokenAudio> {
+    const voice = this.catalogue.find((v) => v.id === req.voiceId);
+    if (!this.configured || !voice || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'voice is not available');
+    return this.synthesize(
+      voice.providerVoiceId,
+      req.text,
+      opts.signal,
+      this.quickModel,
+    );
   }
 
   async previewName(
@@ -242,10 +268,12 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     }
   }
 
+  /** One text-to-speech call; `model` is the quick model for Quick voice, else `AI_VOICE_MODEL` when set. */
   private async synthesize(
     providerVoiceId: string,
     text: string,
     outer?: AbortSignal,
+    model: string | null = this.model,
   ): Promise<SpokenAudio> {
     const signal = this.signalFor(outer);
     let res: Response;
@@ -261,7 +289,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
           },
           body: JSON.stringify({
             text,
-            ...(this.model ? { model_id: this.model } : {}),
+            ...(model ? { model_id: model } : {}),
           }),
           signal,
         },

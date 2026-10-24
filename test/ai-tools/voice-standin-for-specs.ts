@@ -10,6 +10,9 @@ export interface StandinHandle {
     failed: number;
     active: number;
     maxActive: number;
+    /** The `model_id` of each speech call, in order (null when none was sent). */
+    models: (string | null)[];
+    lastModel: string | null;
     cloned: number;
     deleted: number;
   };
