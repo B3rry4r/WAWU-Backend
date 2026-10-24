@@ -7,13 +7,14 @@ import {
 } from '../../wallet-provider/wallet-provider.interface';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import { MoneyError } from '../money-error';
-import { readLeg } from './abroad-fee-legs';
 import { AbroadService, providerError } from './abroad.service';
 import {
   AbroadSendService,
   decodeCursor,
   encodeCursor,
   FEE_BACK_QUIET_MS,
+  feeOf,
+  HAS_FEE,
   LOOK_AFTER_MS,
   SEND_CANCELLED_REASON,
   SEND_NOT_FOUND_MESSAGE,
@@ -47,13 +48,13 @@ type Row = Prisma.AbroadSendGetPayload<{ include: { recipient: true } }>;
 const FEE_OPEN: Prisma.AbroadSendWhereInput[] = [
   {
     wawuFeeTaken: false,
-    wawuFeeKobo: { gt: 0n },
+    AND: [HAS_FEE],
     feeSettledAt: null,
     status: { in: ['sending', 'pending', 'needs_review', 'completed'] },
   },
   {
     wawuFeeTaken: true,
-    wawuFeeKobo: { gt: 0n },
+    AND: [HAS_FEE],
     feeGivenBackAt: null,
     status: { in: ['failed', 'reversed'] },
   },
@@ -154,14 +155,15 @@ export class AbroadAdminService {
       providerFeeMinor:
         r.providerFeeMinor === null ? null : Number(r.providerFeeMinor),
       wawuFeeKobo: Number(r.wawuFeeKobo),
+      wawuFeeMinor: Number(r.wawuFeeMinor),
       wawuFeeOwed:
         !r.wawuFeeTaken &&
-        r.wawuFeeKobo > 0n &&
+        feeOf(r).amount > 0n &&
         r.feeSettledAt === null &&
         !['failed', 'reversed', 'cancelled'].includes(r.status),
       wawuFeeBackOwed:
         r.wawuFeeTaken &&
-        r.wawuFeeKobo > 0n &&
+        feeOf(r).amount > 0n &&
         (r.status === 'failed' || r.status === 'reversed') &&
         r.feeGivenBackAt === null,
       feeBackHeld: r.feeBackHeldAt !== null && r.feeSettledAt === null,
@@ -272,7 +274,7 @@ export class AbroadAdminService {
         at: row.feeSettledAt.toISOString(),
       };
     }
-    if (row.wawuFeeKobo === 0n) {
+    if (feeOf(row).amount === 0n) {
       throw new ConflictException('This send has no WAWU fee to settle.');
     }
     if (['sending', 'pending', 'needs_review'].includes(row.status)) {
@@ -287,7 +289,7 @@ export class AbroadAdminService {
           'WAWU took its fee from this send. If it is owed back to the person, settle it as paid back.',
         );
       }
-      const leg = await readLeg(this.walletProvider, `${row.reference}-fee`);
+      const leg = await this.sends.readFeeLeg(row, 'fee');
       if (leg.result === 'done') {
         throw new ConflictException(
           'The payment partner shows the fee was taken. The next sweep marks it, and gives it back if the send did not stand.',
@@ -307,10 +309,7 @@ export class AbroadAdminService {
         'No WAWU fee is owed back to the person on this send.',
       );
     }
-    const back = await readLeg(
-      this.walletProvider,
-      `${row.reference}-fee-back`,
-    );
+    const back = await this.sends.readFeeLeg(row, 'fee_back');
     if (back.result === 'wait') {
       throw new ConflictException(
         'A give-back for this send is still on its way at the payment partner. Look again later.',
@@ -375,6 +374,7 @@ export class AbroadAdminService {
           detail: {
             ...detail,
             feeKobo: row.wawuFeeKobo.toString(),
+            feeMinor: row.wawuFeeMinor.toString(),
             statusBefore: row.status,
           },
           adminId: admin.id,

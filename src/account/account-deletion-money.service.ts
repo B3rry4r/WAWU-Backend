@@ -358,14 +358,22 @@ export class AccountDeletionMoneyService {
           {
             status: 'completed',
             wawuFeeTaken: false,
-            wawuFeeKobo: { gt: 0n },
+            AND: [
+              {
+                OR: [{ wawuFeeKobo: { gt: 0n } }, { wawuFeeMinor: { gt: 0n } }],
+              },
+            ],
             feeSettledAt: null,
             feeBackHeldAt: null,
           },
           {
             status: { in: ['failed', 'reversed'] },
             wawuFeeTaken: true,
-            wawuFeeKobo: { gt: 0n },
+            AND: [
+              {
+                OR: [{ wawuFeeKobo: { gt: 0n } }, { wawuFeeMinor: { gt: 0n } }],
+              },
+            ],
             feeGivenBackAt: null,
             feeSettledAt: null,
             feeBackHeldAt: null,
@@ -373,7 +381,11 @@ export class AccountDeletionMoneyService {
           {
             status: { in: ['failed', 'reversed'] },
             wawuFeeTaken: false,
-            wawuFeeKobo: { gt: 0n },
+            AND: [
+              {
+                OR: [{ wawuFeeKobo: { gt: 0n } }, { wawuFeeMinor: { gt: 0n } }],
+              },
+            ],
             feeAttempts: { gt: 0 },
             feeSettledAt: null,
             feeBackHeldAt: null,

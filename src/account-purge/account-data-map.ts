@@ -928,6 +928,9 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   { model: 'AbroadQuote', column: 'wawuFeeKobo' },
   { model: 'AbroadSend', column: 'wawuFeeKobo' },
   { model: 'AbroadSend', column: 'wawuFeeTaken' },
+  // WAWU's fee in the sending currency's smallest unit, taken from a foreign account, on a quote and on a send abroad (WALLET-42): not a person.
+  { model: 'AbroadQuote', column: 'wawuFeeMinor' },
+  { model: 'AbroadSend', column: 'wawuFeeMinor' },
   // WAWU's fee in the currency's smallest unit on a quote and on an operation (WALLET-21), not a person.
   { model: 'FxQuote', column: 'wawuFeeMinor' },
   { model: 'FxOperation', column: 'wawuFeeMinor' },

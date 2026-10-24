@@ -8632,6 +8632,8 @@ model AbroadQuote {
   rate            String?
   providerQuoteId String?
   wawuFeeKobo     BigInt          @default(0)
+  /// WAWU's fee taken from the foreign account the money leaves, in that currency's smallest unit (WALLET-42; 0 when the fee is `wawuFeeKobo`, taken from the naira wallet). At most one of the two is above 0.
+  wawuFeeMinor    BigInt          @default(0)
   /// What the provider is expected to charge on top, from config (NUV-11 round 1, R-10); null when none is configured.
   providerFeeEstimateMinor BigInt?
   expiresAt       DateTime
@@ -8670,7 +8672,9 @@ model AbroadSend {
   providerStatus     String?
   providerFeeMinor   BigInt?
   wawuFeeKobo        BigInt          @default(0)
-  /// WAWU's fee has been taken from the naira wallet (true also when there was none to take).
+  /// WAWU's fee taken from the foreign account the money leaves, in that currency's smallest unit (WALLET-42); 0 when the fee is `wawuFeeKobo`.
+  wawuFeeMinor       BigInt          @default(0)
+  /// WAWU's fee has been taken from the account the money left (true also when there was none to take).
   wawuFeeTaken       Boolean         @default(true)
   /// When WAWU's fee was given back after the send failed or was reversed (set once); null while it is owed or was never taken.
   feeGivenBackAt     DateTime?

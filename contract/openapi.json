@@ -21258,7 +21258,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Sends at a held quote: the Idempotency-Key and the PIN (or the device\napproval) are required, the quote is used once, and the recipient and the\namounts are the quote's. Answers 201 with the send: `sending` or `pending`\nuntil the provider delivers (poll `GET /money/abroad/sends/{id}`),\n`failed` when the provider refused and nothing moved. An expired or used\nquote is `409 quote_expired`; a frozen person `423 account_frozen`. The\nsame key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN. WAWU's fee, when\nset, is taken from the naira wallet after the provider takes the send.",
+        "summary": "Sends at a held quote: the Idempotency-Key and the PIN (or the device\napproval) are required, the quote is used once, and the recipient and the\namounts are the quote's. Answers 201 with the send: `sending` or `pending`\nuntil the provider delivers (poll `GET /money/abroad/sends/{id}`),\n`failed` when the provider refused and nothing moved. An expired or used\nquote is `409 quote_expired`; a frozen person `423 account_frozen`. The\nsame key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN. WAWU's fee, when\nset, is taken after the provider takes the send, from the account the money\nleaves: the naira fee from the naira wallet, a foreign account's fee from it.",
         "tags": [
           "Abroad"
         ],
@@ -54529,6 +54529,9 @@
           "wawuFeeKobo": {
             "type": "integer"
           },
+          "wawuFeeMinor": {
+            "type": "integer"
+          },
           "wawuFeeOwed": {
             "type": "boolean"
           },
@@ -54587,6 +54590,7 @@
           "amountToMinor",
           "providerFeeMinor",
           "wawuFeeKobo",
+          "wawuFeeMinor",
           "wawuFeeOwed",
           "wawuFeeBackOwed",
           "feeBackHeld",
@@ -55061,6 +55065,9 @@
           "wawuFeeKobo": {
             "type": "integer"
           },
+          "wawuFeeMinor": {
+            "type": "integer"
+          },
           "speed": {
             "type": "string"
           },
@@ -55084,6 +55091,7 @@
           "rate",
           "providerFeeMinor",
           "wawuFeeKobo",
+          "wawuFeeMinor",
           "speed",
           "expiresAt",
           "validForSeconds"
@@ -55139,6 +55147,9 @@
           "wawuFeeKobo": {
             "type": "integer"
           },
+          "wawuFeeMinor": {
+            "type": "integer"
+          },
           "narration": {
             "type": "string",
             "nullable": true
@@ -55171,6 +55182,7 @@
           "rate",
           "providerFeeMinor",
           "wawuFeeKobo",
+          "wawuFeeMinor",
           "narration",
           "failureReason",
           "speed",

@@ -112,6 +112,42 @@ export type AbroadLookup =
   | { state: 'absent' }
   | { state: 'unknown' };
 
+/**
+ * WAWU's fee on a send from a foreign account (WALLET-42, R-87): a book move in that account's own currency, between the person's
+ * account and WAWU's collecting account in the same currency (named by its routing number, from config). `take` moves it to WAWU;
+ * `give_back` moves the same money back when the send did not stand. Idempotent by `reference`.
+ */
+export interface AbroadFeeLegRef {
+  holder: AbroadHolder;
+  currency: string;
+  /** The person's account the fee leaves (take) or returns to (give back). */
+  accountRef: string;
+  /** WAWU's collecting account in the same currency, by its routing number. */
+  collectorBan: string;
+  direction: 'take' | 'give_back';
+}
+
+export interface AbroadFeeLegInput extends AbroadFeeLegRef {
+  /** In the currency's smallest unit. */
+  amountMinor: bigint;
+  /** Ours: the idempotency key at the provider. */
+  reference: string;
+  narration: string;
+}
+
+/** What the provider's own record of a fee leg says. */
+export interface AbroadFeeLeg {
+  state: 'pending' | 'completed' | 'failed';
+  amountMinor: bigint;
+  /** What the provider charged for moving it (the fee leg's fee is given back too). */
+  feeMinor: bigint;
+}
+
+export type AbroadFeeLegLookup =
+  | { state: 'found'; leg: AbroadFeeLeg }
+  | { state: 'absent' }
+  | { state: 'unknown' };
+
 export interface AbroadProvider {
   banks(country: string): Promise<AbroadBank[]>;
   sources(holder: AbroadHolder): Promise<AbroadSource[]>;
@@ -125,6 +161,16 @@ export interface AbroadProvider {
     reference: string,
     since: Date | null,
   ): Promise<AbroadLookup>;
+  /**
+   * WAWU's fee out of (or back into) a foreign account (WALLET-42). Optional: a provider without it cannot take a fee from a
+   * foreign account, and the money layer then does not offer a send that would owe one.
+   */
+  feeLeg?(input: AbroadFeeLegInput): Promise<AbroadFeeLeg>;
+  /** The provider's record of a fee leg, found by reference; `absent` only after a complete search. */
+  findFeeLeg?(
+    ref: AbroadFeeLegRef,
+    reference: string,
+  ): Promise<AbroadFeeLegLookup>;
 }
 
 /** The provider says no, in a way a person can act on. Nothing moved. */

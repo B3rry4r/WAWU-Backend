@@ -158,6 +158,29 @@ function currencyLimits(raw: unknown): string[] {
   return list;
 }
 
+/**
+ * WAWU's fee for a send from a foreign account (WALLET-42): one line per currency and way, like `GBP BANK 100` or
+ * `USD MOBILE_MONEY 150` (the currency, the way, then the fee in that currency's smallest unit). A pair with no line is a fee of 0.
+ */
+function foreignFees(raw: unknown): string[] {
+  const list = lines(raw);
+  const seen = new Set<string>();
+  for (const line of list) {
+    const m = /^([A-Z]{3}) (BANK|MOBILE_MONEY) ([1-9][0-9]{0,14})$/.exec(line);
+    if (!m || m[1] === 'NGN' || !ABROAD_LIMIT_CURRENCIES.includes(m[1])) {
+      throw new SettingInvalid(
+        `needs every line like "GBP BANK 100": one of ${ABROAD_LIMIT_CURRENCIES.filter((c) => c !== 'NGN').join(', ')}, a space, BANK or MOBILE_MONEY, a space, then the fee in that currency's smallest unit`,
+      );
+    }
+    const pair = `${m[1]} ${m[2]}`;
+    if (seen.has(pair)) {
+      throw new SettingInvalid(`names ${pair} more than once`);
+    }
+    seen.add(pair);
+  }
+  return list;
+}
+
 /** Countries switched off for sending abroad: a list of two-letter codes, each once. NUV-11. */
 function countryCodes(raw: unknown): string[] {
   const list = lines(raw);
@@ -925,12 +948,23 @@ export function buildRegistry(
     key: 'abroad.wawu_fee_kobo',
     group: 'Send abroad',
     label:
-      "WAWU's fee for one send abroad, in kobo, taken from the naira wallet",
+      "WAWU's fee for one send abroad from the naira wallet, in kobo, taken from the naira wallet",
     unit: 'kobo',
     usedBy: ['POST /money/abroad/quotes and sends'],
     provisional: 'ABROAD-FEE',
     default: extra('abroad.wawu_fee_kobo', 0),
     parse: whole(0, 100_000_000),
+  });
+  add({
+    key: 'abroad.wawu_fee_foreign',
+    group: 'Send abroad',
+    label:
+      'WAWU\'s fee for a send from a foreign account, taken from that account in its own currency (lines like "GBP BANK 100" or "USD MOBILE_MONEY 150")',
+    unit: 'lines',
+    usedBy: ['POST /money/abroad/quotes and sends'],
+    provisional: 'ABROAD-FOREIGN-FEE',
+    default: extra('abroad.wawu_fee_foreign', []),
+    parse: foreignFees,
   });
   add({
     key: 'abroad.max_per_send',

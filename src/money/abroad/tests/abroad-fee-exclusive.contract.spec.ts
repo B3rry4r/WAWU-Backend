@@ -63,6 +63,13 @@ const abroadSide = {
   banks: () => Promise.resolve([]),
   sources: () =>
     Promise.resolve([
+      // WALLET-42: WAWU's fee follows the account the money leaves, so these naira-leg tests send from the naira wallet.
+      {
+        currency: 'NGN',
+        accountRef: 'ACC-NGN',
+        displayName: null,
+        availableMinor: 5_000_000,
+      },
       {
         currency: 'USD',
         accountRef: 'ACC-USD',
@@ -190,7 +197,7 @@ async function sendWithFee() {
   ).view;
   const q = await abroad.quote(wallet, {
     recipientId: r.id,
-    fromCurrency: 'USD',
+    fromCurrency: 'NGN',
     amountMinor: 10_000,
   });
   const view = await sends.send(wallet, scope(), { quoteId: q.id });

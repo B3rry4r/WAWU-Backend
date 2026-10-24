@@ -144,8 +144,13 @@ export interface AbroadQuoteView {
    * quote has no fee of its own.
    */
   providerFeeMinor: number | null;
-  /** WAWU's fee in kobo, taken from the naira wallet. */
+  /** WAWU's fee in kobo, taken from the naira wallet. 0 when the fee is `wawuFeeMinor`. */
   wawuFeeKobo: number;
+  /**
+   * WAWU's fee taken from the foreign account the money leaves (a send from a foreign account, WALLET-42), in that account's
+   * currency's smallest unit; 0 otherwise. It comes on top of the amount and the partner's fee.
+   */
+  wawuFeeMinor: number;
   /** How long it takes, from the rail. */
   speed: string;
   expiresAt: string;
@@ -175,6 +180,8 @@ export interface AbroadSendView {
   /** What Nuvion charged, once it says; null until then. */
   providerFeeMinor: number | null;
   wawuFeeKobo: number;
+  /** WAWU's fee taken from the foreign account the money left, in its currency's smallest unit (WALLET-42); 0 otherwise. */
+  wawuFeeMinor: number;
   narration: string | null;
   /** In plain words when the send failed, was reversed or was cancelled; else null. */
   failureReason: string | null;
@@ -200,7 +207,9 @@ export interface AdminAbroadSendView {
   amountToMinor: number;
   providerFeeMinor: number | null;
   wawuFeeKobo: number;
-  /** WAWU's fee has not been taken from the naira wallet yet and still may be (the send is not failed, reversed or cancelled, and the question is not closed). */
+  /** WAWU's fee taken from the foreign account the money left, in its currency's smallest unit (WALLET-42); 0 otherwise. */
+  wawuFeeMinor: number;
+  /** WAWU's fee has not been taken from the account the money left yet and still may be (the send is not failed, reversed or cancelled, and the question is not closed). */
   wawuFeeOwed: boolean;
   /** The send did not stand and WAWU's fee has not gone back to the person yet; finance looks at these. */
   wawuFeeBackOwed: boolean;

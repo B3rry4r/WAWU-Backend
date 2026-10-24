@@ -1,3 +1,7 @@
+import type {
+  AbroadFeeLegRef,
+  AbroadProvider,
+} from '../../wallet-provider/abroad-provider';
 import type { WalletProvider } from '../../wallet-provider/wallet-provider.interface';
 
 /**
@@ -38,71 +42,78 @@ export type LegResult =
 export type LegRead =
   { result: 'done'; moved: LegMoved } | { result: 'wait' } | { result: 'none' };
 
+/**
+ * How a leg is looked for and made. The two ports differ only in where the money is: the naira wallet (kobo, by account number) or a
+ * foreign account (its own currency's smallest unit, WALLET-42). The reference generations, what counts as done and what a refusal
+ * means are the same code for both below, so a foreign fee is never a second mechanism.
+ */
+export type LegFound =
+  | {
+      state: 'found';
+      outcome: 'completed' | 'failed' | 'reversed' | 'pending' | null;
+      moved: LegMoved;
+    }
+  | { state: 'absent' }
+  | { state: 'unknown' };
+
+export interface LegPort {
+  /** The provider's record under one reference. */
+  find(reference: string): Promise<LegFound>;
+  /** Asks for the leg under one reference; `pending` when accepted and not finished. */
+  make(reference: string): Promise<{ pending: boolean; moved: LegMoved }>;
+}
+
 /** Reads the leg without making it: the first reference whose record is not a failed one. Never sends. */
-export async function readLeg(
-  provider: WalletProvider,
+export async function readLegWith(
+  port: Pick<LegPort, 'find'>,
   base: string,
 ): Promise<LegRead> {
   for (let generation = 1; generation <= LEG_GENERATIONS; generation += 1) {
-    let found;
+    let found: LegFound;
     try {
-      found = await provider.findTransactionByReference(
-        legReference(base, generation),
-      );
+      found = await port.find(legReference(base, generation));
     } catch {
       return { result: 'wait' };
     }
     if (found.state === 'unknown') return { result: 'wait' };
     if (found.state === 'absent') return { result: 'none' };
-    const t = found.transaction;
-    if (t.outcome === 'completed') {
-      return {
-        result: 'done',
-        moved: { amountKobo: t.amountKobo, feeKobo: t.feeKobo ?? 0n },
-      };
+    if (found.outcome === 'completed') {
+      return { result: 'done', moved: found.moved };
     }
-    if (t.outcome === 'failed' || t.outcome === 'reversed') continue;
+    if (found.outcome === 'failed' || found.outcome === 'reversed') continue;
     return { result: 'wait' };
   }
   return { result: 'none' };
 }
 
 /** Makes the leg once: finds its record first, asks only under a reference the provider holds no record of. */
-export async function settleLeg(
-  provider: WalletProvider,
+export async function settleLegWith(
+  port: LegPort,
   base: string,
-  input: LegInput,
   warn: (message: string) => void,
 ): Promise<LegResult> {
   for (let generation = 1; generation <= LEG_GENERATIONS; generation += 1) {
     const reference = legReference(base, generation);
-    let found;
+    let found: LegFound;
     try {
-      found = await provider.findTransactionByReference(reference);
+      found = await port.find(reference);
     } catch {
       return { result: 'wait' };
     }
     if (found.state === 'unknown') return { result: 'wait' };
     if (found.state === 'found') {
-      const t = found.transaction;
-      if (t.outcome === 'completed') {
-        return {
-          result: 'done',
-          moved: { amountKobo: t.amountKobo, feeKobo: t.feeKobo ?? 0n },
-        };
+      if (found.outcome === 'completed') {
+        return { result: 'done', moved: found.moved };
       }
       // A spent reference: the next one.
-      if (t.outcome === 'failed' || t.outcome === 'reversed') continue;
+      if (found.outcome === 'failed' || found.outcome === 'reversed') continue;
       return { result: 'wait' };
     }
     try {
-      const receipt = await provider.walletToWallet({ ...input, reference });
+      const receipt = await port.make(reference);
       // Accepted and not finished: done only when a later read says completed.
-      if (receipt.pending === true) return { result: 'wait' };
-      return {
-        result: 'done',
-        moved: { amountKobo: receipt.amountKobo, feeKobo: receipt.feeKobo },
-      };
+      if (receipt.pending) return { result: 'wait' };
+      return { result: 'done', moved: receipt.moved };
     } catch (e) {
       warn(
         `${reference}: the provider did not take it (${e instanceof Error ? e.name : 'error'}); asked again in a later pass`,
@@ -112,4 +123,89 @@ export async function settleLeg(
     }
   }
   return { result: 'spent' };
+}
+
+/** The naira wallet's port: the provider's book transfer between two account numbers. */
+function nairaPort(provider: WalletProvider, input?: LegInput): LegPort {
+  return {
+    async find(reference) {
+      const found = await provider.findTransactionByReference(reference);
+      if (found.state !== 'found') return found;
+      const t = found.transaction;
+      return {
+        state: 'found',
+        outcome: t.outcome,
+        moved: { amountKobo: t.amountKobo, feeKobo: t.feeKobo ?? 0n },
+      };
+    },
+    async make(reference) {
+      if (!input) throw new Error('no leg to make');
+      const receipt = await provider.walletToWallet({ ...input, reference });
+      return {
+        pending: receipt.pending === true,
+        moved: { amountKobo: receipt.amountKobo, feeKobo: receipt.feeKobo },
+      };
+    },
+  };
+}
+
+/**
+ * A foreign account's port (WALLET-42): the abroad side's `feeLeg` between the person's account and WAWU's collecting account in
+ * the same currency. `amountMinor` is in that currency's smallest unit (carried in `LegMoved.amountKobo`, whose name is older).
+ */
+export function foreignPort(
+  abroad: AbroadProvider,
+  ref: AbroadFeeLegRef,
+  amountMinor?: bigint,
+  narration = 'WAWU fee',
+): LegPort {
+  return {
+    async find(reference) {
+      if (!abroad.findFeeLeg) return { state: 'unknown' };
+      const found = await abroad.findFeeLeg(ref, reference);
+      if (found.state !== 'found') return found;
+      return {
+        state: 'found',
+        outcome: found.leg.state,
+        moved: {
+          amountKobo: found.leg.amountMinor,
+          feeKobo: found.leg.feeMinor,
+        },
+      };
+    },
+    async make(reference) {
+      if (!abroad.feeLeg || amountMinor === undefined) {
+        throw new Error('this provider cannot move a foreign fee');
+      }
+      const leg = await abroad.feeLeg({
+        ...ref,
+        amountMinor,
+        reference,
+        narration,
+      });
+      if (leg.state === 'failed') throw new Error('the provider failed it');
+      return {
+        pending: leg.state === 'pending',
+        moved: { amountKobo: leg.amountMinor, feeKobo: leg.feeMinor },
+      };
+    },
+  };
+}
+
+/** Reads the naira leg without making it. Never sends. */
+export function readLeg(
+  provider: WalletProvider,
+  base: string,
+): Promise<LegRead> {
+  return readLegWith(nairaPort(provider), base);
+}
+
+/** Makes the naira leg once. */
+export function settleLeg(
+  provider: WalletProvider,
+  base: string,
+  input: LegInput,
+  warn: (message: string) => void,
+): Promise<LegResult> {
+  return settleLegWith(nairaPort(provider, input), base, warn);
 }
