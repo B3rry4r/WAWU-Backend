@@ -9,6 +9,7 @@ import { NuvionDocumentsHandler } from '../handlers/documents.handler';
 import { NuvionFxHandler } from '../handlers/fx.handler';
 import { NuvionHandlerRegistry } from '../handlers/nuvion-handler-registry';
 import { NuvionOpeningHandler } from '../handlers/opening.handler';
+import { NuvionAbroadHandler } from '../handlers/abroad.handler';
 import { NuvionPayoutsHandler } from '../handlers/payouts.handler';
 import { NuvionReconcileHandler } from '../handlers/reconcile.handler';
 import { NuvionCardsHandler } from '../handlers/cards.handler';
@@ -47,6 +48,7 @@ import { NuvionWebhookStore } from './nuvion-webhook.service';
     NuvionBookHandler,
     NuvionPayoutsHandler,
     NuvionReconcileHandler,
+    NuvionAbroadHandler,
     NuvionFxHandler,
     NuvionCapitalHandler,
     NuvionCardsHandler,

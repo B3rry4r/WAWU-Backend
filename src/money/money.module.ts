@@ -98,6 +98,13 @@ import {
   AddMoneyReturnController,
   MoneyAddMoneyController,
 } from './add-money/add-money.controller';
+import { AbroadAdminController } from './abroad/abroad-admin.controller';
+import { AbroadAdminService } from './abroad/abroad-admin.service';
+import { AbroadController } from './abroad/abroad.controller';
+import { AbroadSendGuard } from './abroad/abroad-send.guard';
+import { AbroadSendService } from './abroad/abroad-send.service';
+import { AbroadService } from './abroad/abroad.service';
+import { AbroadSettings } from './abroad/abroad-settings';
 import { FxAccountsService } from './fx/fx-accounts.service';
 import { FxAdminController } from './fx/fx-admin.controller';
 import { FxAdminService } from './fx/fx-admin.service';
@@ -316,6 +323,9 @@ import { WalletCardService } from './cards/wallet-card.service';
     AddMoneyReturnController,
     MoneyAddMoneyController,
     AdminAddMoneyController,
+    // NUV-11: sending money abroad (R-84).
+    AbroadController,
+    AbroadAdminController,
     // WALLET-21 (R-83, R-84): foreign accounts, swaps and crypto sends, and the
     // admin reads and the freeze.
     FxController,
@@ -396,6 +406,11 @@ import { WalletCardService } from './cards/wallet-card.service';
     MoneyCheckMailer,
     MoneyCheckScope,
     MoneyCheckService,
+    AbroadSettings,
+    AbroadService,
+    AbroadSendService,
+    AbroadAdminService,
+    AbroadSendGuard,
   ],
   exports: [
     WalletGate,
@@ -425,6 +440,7 @@ import { WalletCardService } from './cards/wallet-card.service';
     WalletTransferService,
     TransferRecipients,
     EarningSettlementService,
+    AbroadSendService,
   ],
 })
 export class MoneyModule {}

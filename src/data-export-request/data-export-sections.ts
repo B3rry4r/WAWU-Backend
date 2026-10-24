@@ -1437,6 +1437,127 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }));
     },
   },
+  // The people and accounts abroad this person saved to send to (NUV-11,
+  // R-84): where, which way, the name they typed, the bank's name and only the
+  // last four characters of the account, wallet number or IBAN (the rest is
+  // another party's; WAWU keeps no more). Our fingerprint of the account and
+  // the provider's counterparty and payment-detail ids stay out (rule 3).
+  // A recipient the person removed is still their record, with the time.
+  {
+    key: 'abroadRecipients',
+    models: ['AbroadRecipient'],
+    load: async (prisma, me) => {
+      const rows = await prisma.abroadRecipient.findMany({
+        where: { wawuUserId: me },
+        select: {
+          country: true,
+          currency: true,
+          method: true,
+          scheme: true,
+          holderName: true,
+          bankName: true,
+          last4: true,
+          createdAt: true,
+          removedAt: true,
+        },
+        orderBy: NEWEST,
+      });
+      return rows.map(({ last4, ...r }) => ({ ...r, accountEnd: last4 }));
+    },
+  },
+  // The rates and costs this person was shown before a send abroad (NUV-11):
+  // both amounts, the rate, WAWU's fee and the partner's fee that the review
+  // showed. The provider's quote id and the id of the account it debits stay
+  // out (rule 3).
+  {
+    key: 'abroadQuotes',
+    models: ['AbroadQuote'],
+    load: async (prisma, me) => {
+      const rows = await prisma.abroadQuote.findMany({
+        where: { wawuUserId: me },
+        select: {
+          fromCurrency: true,
+          toCurrency: true,
+          amountFromMinor: true,
+          amountToMinor: true,
+          rate: true,
+          wawuFeeKobo: true,
+          providerFeeEstimateMinor: true,
+          expiresAt: true,
+          usedAt: true,
+          createdAt: true,
+        },
+        orderBy: NEWEST,
+      });
+      return rows.map((r) => ({
+        ...r,
+        amountFromMinor: Number(r.amountFromMinor),
+        amountToMinor: Number(r.amountToMinor),
+        wawuFeeKobo: Number(r.wawuFeeKobo),
+        providerFeeEstimateMinor:
+          r.providerFeeEstimateMinor === null
+            ? null
+            : Number(r.providerFeeEstimateMinor),
+      }));
+    },
+  },
+  // Their sends abroad (NUV-11): where it stands, both amounts, the rate, what
+  // the partner and WAWU charged, whether WAWU's fee was given back, their own
+  // note, and who it went to (country, the name they typed, the last four
+  // characters of the account). The provider's transfer id and status word,
+  // our reference, the id of the account it debited and everything finance
+  // keeps about the fee (a difference flagged, a hold, how it was settled) stay
+  // out (rule 3).
+  {
+    key: 'abroadSends',
+    models: ['AbroadSend'],
+    load: async (prisma, me) => {
+      const rows = await prisma.abroadSend.findMany({
+        where: { wawuUserId: me },
+        select: {
+          status: true,
+          fromCurrency: true,
+          toCurrency: true,
+          amountFromMinor: true,
+          amountToMinor: true,
+          rate: true,
+          providerFeeMinor: true,
+          wawuFeeKobo: true,
+          wawuFeeTaken: true,
+          feeGivenBackAt: true,
+          narration: true,
+          failureReason: true,
+          createdAt: true,
+          completedAt: true,
+          recipient: {
+            select: {
+              country: true,
+              method: true,
+              holderName: true,
+              bankName: true,
+              last4: true,
+            },
+          },
+        },
+        orderBy: NEWEST,
+      });
+      return rows.map(({ recipient, ...r }) => ({
+        ...r,
+        amountFromMinor: Number(r.amountFromMinor),
+        amountToMinor: Number(r.amountToMinor),
+        providerFeeMinor:
+          r.providerFeeMinor === null ? null : Number(r.providerFeeMinor),
+        wawuFeeKobo: Number(r.wawuFeeKobo),
+        to: {
+          country: recipient.country,
+          method: recipient.method,
+          holderName: recipient.holderName,
+          bankName: recipient.bankName,
+          accountEnd: recipient.last4,
+        },
+      }));
+    },
+  },
 ];
 
 /**
@@ -1590,6 +1711,14 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     {
       model: 'MoneyBeneficiary',
       reason: 'Other people bank details.',
+    },
+    // NUV-11. The recipients, quotes and sends abroad are in the export
+    // (abroadRecipients, abroadQuotes, abroadSends above), as WALLET-21's money
+    // records are. A freeze is an admin's hold with the admin's own note.
+    {
+      model: 'AbroadFreeze',
+      reason:
+        'An admin hold on the account with the admin note, not data the person gave.',
     },
     { model: 'MoneyPayoutAccount', reason: 'A bank account number.' },
     {

@@ -271,6 +271,14 @@ export const MONEY_ERROR_CODES = [
   'chain_mismatch',
   'provider_declined',
   'fx_account_not_open',
+  // Sending abroad (NUV-11, R-84): the provider does not pay that country or
+  // way; it refused the recipient's details (the fields it names are in
+  // `fields`); it has no rate for the pair right now; an admin cannot cancel a
+  // send the provider already holds.
+  'corridor_not_supported',
+  'recipient_details_invalid',
+  'rate_unavailable',
+  'send_not_cancellable',
   // Capital (NUV-12, R-84): switched off or not offered by the wallet
   // provider, or an order an admin has put on hold; a reservation that ran
   // out of time; a holding the provider will not pay out now.

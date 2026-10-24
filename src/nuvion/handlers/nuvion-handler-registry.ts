@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { NuvionAbroadHandler } from './abroad.handler';
 import { NuvionAccountsHandler } from './accounts.handler';
 import { NuvionBookHandler } from './book.handler';
 import { NuvionCapitalHandler } from './capital.handler';
@@ -29,6 +30,7 @@ export class NuvionHandlerRegistry {
     book: NuvionBookHandler,
     payouts: NuvionPayoutsHandler,
     reconcile: NuvionReconcileHandler,
+    abroad: NuvionAbroadHandler,
     fx: NuvionFxHandler,
     capital: NuvionCapitalHandler,
     cards: NuvionCardsHandler,
@@ -40,6 +42,7 @@ export class NuvionHandlerRegistry {
       book,
       payouts,
       reconcile,
+      abroad,
       fx,
       capital,
       cards,

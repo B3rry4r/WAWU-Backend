@@ -389,6 +389,8 @@ const WHOLE_NUMBER_DIRS = [
   // is an integer in a currency's smallest unit (`...Minor`), a count of
   // places, or seconds.
   path.join(ROOT, 'src', 'money', 'fx') + path.sep,
+  // Send abroad (task NUV-11): the same rule for `...Minor`, seconds and counts.
+  path.join(ROOT, 'src', 'money', 'abroad') + path.sep,
 ];
 
 function numberAsInteger(schema) {
