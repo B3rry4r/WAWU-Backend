@@ -154,9 +154,9 @@ export interface FxQuoteView {
   /** The provider's rate in smallest units: `amountToMinor / amountFromMinor`. */
   rate: string;
   /**
-   * The provider's charge for the swap, when it is known before the swap
-   * (null: it is not, and the receipt shows what it charged). A book transfer
-   * between a person's own accounts has cost 0 on dev.
+   * The provider's charge, if its quote names one (null: it names none, and
+   * the receipt shows what it charged). A book transfer between a person's own
+   * accounts has cost 0 on dev.
    */
   providerFeeMinor: number | null;
   /** WAWU's fee on top, in `fromCurrency`'s smallest unit (config, R-10; 0 until the owner names it). */

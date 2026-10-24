@@ -80,13 +80,14 @@ export class NuvionAbroadHandler implements NuvionEventHandler {
       );
     }
     const row = ours
-      ? await sends.byReference(reference!)
+      ? await sends.byReference(reference)
       : await sends.byProviderId(source!);
     if (!row) return done('no send abroad of ours has this reference');
     const holder = await abroad.holderOf(row.wawuUserId);
     if (!holder) return wait("the person's wallet is not recorded yet");
     const transferId =
-      row.providerTransferId ?? (ours ? String(data.id ?? '') : '');
+      row.providerTransferId ??
+      (ours && typeof data.id === 'string' ? data.id : '');
     try {
       const transfer =
         transferId !== ''

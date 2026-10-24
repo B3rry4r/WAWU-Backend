@@ -3247,13 +3247,13 @@ has switched off (draw only what is on, R-47).
 | --- | --- |
 | `GET /money/fx/currencies` | the nine currencies (code, name, `decimals`, chains, `enabled`) and the three product switches (`openAccount`, `swap`, `cryptoSend`) |
 | `GET /money/fx/accounts` | the person's accounts: the provider's balance (`availableMinor`, `bookedMinor`; null if it cannot be asked) and the receiving details |
-| `POST /money/fx/accounts` | opens one (`currency`, and `chain` for a stablecoin); 201 first, 200 for one already open |
+| `POST /money/fx/accounts` | opens one (`currency`, and `chain` for a stablecoin); always 201, and asking again for one the person has returns it |
 | `GET /money/fx/accounts/{id}` | one account |
 | `GET /money/fx/accounts/{id}/transactions` | the account's statement lines, newest first, cursor page (section 6) |
 | `POST /money/fx/quotes` | a quote between two of the person's accounts (or the naira wallet): rate, both amounts, WAWU's fee, the provider's real `expiresAt` |
 | `POST /money/fx/swaps` | swaps at a held quote: `Idempotency-Key`, PIN or device approval; `GET /money/fx/swaps/{id}` to poll |
-| `GET /money/fx/sends/quote` | what a crypto send costs before the PIN |
-| `POST /money/fx/sends` | sends USDT, USDC or RLUSD to an outside address on the account's chain: `Idempotency-Key`, PIN; `GET /money/fx/sends/{id}` to poll |
+| `GET /money/fx/sends/quote` | what a crypto send costs before the PIN (`accountId`, `currency`, `chain`, `amountMinor`; the currency must be the account's) |
+| `POST /money/fx/sends` | sends USDT, USDC or RLUSD to an outside address on the account's chain (`accountId`, `currency`, `chain`, `address`, `amountMinor`): `Idempotency-Key`, PIN; `GET /money/fx/sends/{id}` to poll |
 
 Admin (`/api/hub/admin/money/fx`, superadmin and finance only):
 `GET people/{wawuUserId}/accounts`, `GET operations` (swaps and sends, filters

@@ -188,6 +188,11 @@ const NON_MONEY_WRITES: Readonly<Record<string, string>> = {
     'renders a receipt of one finished transaction; a read',
   'POST money/statements/email':
     "emails a statement of finished transactions to the person's own confirmed address; a read sent as a POST",
+  // Foreign accounts (WALLET-21): opening one and asking for a rate move nothing
+  'POST money/fx/accounts':
+    'opens an account at the provider for the person; no money is in it yet',
+  'POST money/fx/quotes':
+    'asks the provider for a rate and keeps it for the person, to use once; a read sent as a POST',
 };
 
 /** A controller class, as a module lists it. */
@@ -843,6 +848,8 @@ describe('NUV-07: every route that quotes or moves money answers fees_not_set fi
       'POST dm/send/wallet/pay',
       'POST events/orders/wallet/pay',
       'POST legal/requests/:id/pay/wallet',
+      'POST money/fx/sends',
+      'POST money/fx/swaps',
       'POST money/payments',
       'POST money/transfers/bank',
       'POST money/transfers/wawu',

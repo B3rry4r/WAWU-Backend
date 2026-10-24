@@ -105,7 +105,7 @@ function railView(rail: AbroadRailDef): AbroadRailView {
   const schemes =
     rail.schemes.length > 0
       ? rail.schemes.map((s) => ({
-          id: s.id as string | null,
+          id: s.id,
           label: s.label,
           speed: s.speed,
           fields: fieldKeysFor(rail, s.id).map((k) => fieldView(FIELDS[k])),

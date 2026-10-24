@@ -275,6 +275,11 @@ async function quoteFor(
   });
 }
 
+/** `expect.stringContaining` and `arrayContaining` are typed `any`; these say what they stand for. */
+const contains = (s: string): string => expect.stringContaining(s) as string;
+const containing = (a: string[]): string[] =>
+  expect.arrayContaining(a) as string[];
+
 const code = (e: unknown) => (e instanceof MoneyError ? e.code : String(e));
 const refused = async (p: Promise<unknown>) => p.then(() => 'no error', code);
 
@@ -314,7 +319,7 @@ describe('what can be drawn', () => {
       abroad.corridors().countries.find((c) => c.country === 'GH'),
     ).toMatchObject({
       available: false,
-      unavailableNote: expect.stringContaining('cannot send'),
+      unavailableNote: contains('cannot send'),
     });
     settings.enabled = false;
     expect(abroad.corridors()).toMatchObject({ enabled: false, countries: [] });
@@ -361,7 +366,7 @@ describe('recipients', () => {
     ).rejects.toMatchObject({
       response: {
         reason: {
-          fields: expect.arrayContaining(['routing_number', 'account_type']),
+          fields: containing(['routing_number', 'account_type']),
         },
       },
     });
@@ -758,7 +763,7 @@ describe('the send', () => {
     );
     expect(await sends.read(U, view.id)).toMatchObject({
       status: 'reversed',
-      failureReason: expect.stringContaining('returned'),
+      failureReason: contains('returned'),
     });
     const q2 = await quoteFor(r.id);
     const v2 = await sends.send(me, scope(), { quoteId: q2.id });
@@ -771,7 +776,7 @@ describe('the send', () => {
     );
     expect(await sends.read(U, v2.id)).toMatchObject({
       status: 'failed',
-      failureReason: expect.stringContaining('could not deliver'),
+      failureReason: contains('could not deliver'),
     });
   });
 

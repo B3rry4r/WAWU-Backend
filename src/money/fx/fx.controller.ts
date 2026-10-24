@@ -1,5 +1,4 @@
 import {
-  applyDecorators,
   Body,
   Controller,
   Get,
@@ -9,17 +8,27 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
+import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
+import { RequireFeesSet } from '../fees/fees-set.guard';
 import {
-  ApprovalHeaders,
+  CurrentWallet,
+  type OpenWallet,
+  RequireOpenWallet,
+} from '../gate/wallet-gate';
+import {
   BuiltBy,
   DEBIT_GATE_ERRORS,
-  declaredOnly,
-  IdempotencyKeyHeader,
   MoneyErrors,
   WALLET_GATE_ERRORS,
 } from '../money-contract';
+import {
+  CurrentIdempotencyScope,
+  type IdempotencyScope,
+  RequireIdempotentApproval,
+} from '../payments/idempotency';
 import {
   FxPageQueryDto,
   FxQuoteDto,
@@ -28,6 +37,9 @@ import {
   FxSwapDto,
   OpenFxAccountDto,
 } from './dto/fx-request.dto';
+import { FxAccountsService } from './fx-accounts.service';
+import { FxOperationsService } from './fx-operations.service';
+import { FX_SEND_ROUTE, FX_SWAP_ROUTE } from './fx-routes';
 import type {
   FxAccountListView,
   FxAccountView,
@@ -39,39 +51,23 @@ import type {
   FxTransactionPage,
 } from './fx-view.type';
 
-/** The routes a swap's and a send's Idempotency-Key are scoped to. */
-export const FX_SWAP_ROUTE = 'POST money/fx/swaps';
-export const FX_SEND_ROUTE = 'POST money/fx/sends';
-
-/**
- * A declared route carries the documentation of the guards its server will
- * have (this module has no providers, so a guard cannot sit here): the
- * Idempotency-Key and the two approval headers on a debit. Serving the route
- * puts `@RequireOpenWallet()`, `@RequireIdempotentApproval(route)` and
- * `@RequireFeesSet()` on the handler in their place.
- */
-const RequireOpenWallet = (): MethodDecorator => applyDecorators();
-const RequireIdempotentApproval = (route: string): MethodDecorator => {
-  void route;
-  return applyDecorators(IdempotencyKeyHeader(), ApprovalHeaders());
-};
-const RequireFeesSet = (): MethodDecorator => applyDecorators();
-
 /**
  * Dollar, other-currency and stablecoin accounts, swaps and crypto sends on
- * Nuvion (task WALLET-21, R-83, R-84). Declared by WALLET-21's first
- * milestone, served by its second (docs/contract/CONVENTIONS.md section 0):
- * until a handler is filled in it answers nothing and the contract marks the
- * route `x-wawu-served: false`.
- *
- * Every route needs an open naira wallet (R-6: the identity checks happen
- * once, when it is opened) and goes to the provider only through
- * WALLET_PROVIDER; a provider without foreign accounts (Fintava) answers
- * `currency_not_supported`.
+ * Nuvion (task WALLET-21, R-83, R-84), served. Every route needs an open
+ * naira wallet (R-6: the identity checks happen once, when it is opened) and
+ * reaches the provider only through `WALLET_PROVIDER`; a provider without
+ * foreign accounts (Fintava) answers `409 currency_not_supported`.
+ * docs/contract/CONVENTIONS.md section 27.
  */
 @ApiBearerAuth('wawu-id')
+@UseGuards(WawuAuthGuard)
 @Controller('money/fx')
-export class FxContractController {
+export class FxController {
+  constructor(
+    private readonly accounts: FxAccountsService,
+    private readonly operations: FxOperationsService,
+  ) {}
+
   /**
    * What can be opened, in what units, and what an admin has switched off:
    * each currency's `enabled` and the three products. The app draws only
@@ -83,7 +79,7 @@ export class FxContractController {
   @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS, 'currency_not_supported')
   currencies(): FxCurrenciesView {
-    return declaredOnly('WALLET-21');
+    return this.accounts.currencies();
   }
 
   /**
@@ -102,17 +98,16 @@ export class FxContractController {
     'currency_not_supported',
     'provider_unreachable',
   )
-  accounts(): Promise<FxAccountListView> {
-    return declaredOnly('WALLET-21');
+  list(@CurrentWallet() wallet: OpenWallet): Promise<FxAccountListView> {
+    return this.accounts.list(wallet);
   }
 
   /**
    * Opens an account in one currency on the person's Nuvion entity. Asking
-   * again for an account the person has returns it (201 first, 200 after).
-   * A stablecoin needs its `chain`. Refused with `fx_switched_off` when an
-   * admin switched the currency or "open account" off, and with
-   * `provider_declined` (the provider's plain words) when Nuvion will not
-   * open it for this person.
+   * again for an account the person has returns it. A stablecoin needs its
+   * `chain`. Refused with `fx_switched_off` when an admin switched the
+   * currency or "open account" off, and with `provider_declined` (the
+   * provider's plain words) when Nuvion will not open it for this person.
    */
   @Post('accounts')
   @HttpCode(201)
@@ -126,8 +121,11 @@ export class FxContractController {
     'provider_declined',
     'provider_unreachable',
   )
-  open(@Body() dto: OpenFxAccountDto): Promise<FxAccountView> {
-    return declaredOnly('WALLET-21', dto);
+  open(
+    @CurrentWallet() wallet: OpenWallet,
+    @Body() dto: OpenFxAccountDto,
+  ): Promise<FxAccountView> {
+    return this.accounts.open(wallet, dto);
   }
 
   /** One account, as the list shows it. */
@@ -141,8 +139,11 @@ export class FxContractController {
     'not_found',
     'provider_unreachable',
   )
-  account(@Param('id', ParseUUIDPipe) id: string): Promise<FxAccountView> {
-    return declaredOnly('WALLET-21', id);
+  account(
+    @CurrentWallet() wallet: OpenWallet,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<FxAccountView> {
+    return this.accounts.get(wallet, id);
   }
 
   /**
@@ -160,10 +161,11 @@ export class FxContractController {
     'provider_unreachable',
   )
   transactions(
+    @CurrentWallet() wallet: OpenWallet,
     @Param('id', ParseUUIDPipe) id: string,
     @Query() query: FxPageQueryDto,
   ): Promise<FxTransactionPage> {
-    return declaredOnly('WALLET-21', id, query);
+    return this.accounts.transactions(wallet, id, query);
   }
 
   /**
@@ -183,12 +185,16 @@ export class FxContractController {
     'currency_not_supported',
     'fx_switched_off',
     'fx_account_not_open',
+    'account_frozen',
     'amount_out_of_range',
     'provider_declined',
     'provider_unreachable',
   )
-  quote(@Body() dto: FxQuoteDto): Promise<FxQuoteView> {
-    return declaredOnly('WALLET-21', dto);
+  quote(
+    @CurrentWallet() wallet: OpenWallet,
+    @Body() dto: FxQuoteDto,
+  ): Promise<FxQuoteView> {
+    return this.operations.quote(wallet, dto);
   }
 
   /**
@@ -213,21 +219,30 @@ export class FxContractController {
     'quote_expired',
     'account_frozen',
     'fx_account_not_open',
+    'daily_limit_exceeded',
+    'not_found',
     'provider_declined',
   )
   @RequireFeesSet()
-  swap(@Body() dto: FxSwapDto): Promise<FxSwapView> {
-    return declaredOnly('WALLET-21', dto);
+  swap(
+    @CurrentWallet() wallet: OpenWallet,
+    @CurrentIdempotencyScope() scope: IdempotencyScope,
+    @Body() dto: FxSwapDto,
+  ): Promise<FxSwapView> {
+    return this.operations.swap(wallet, scope, dto);
   }
 
-  /** One swap as it stands now; what the app polls after `pending`. Only the owner reads it. */
+  /** One swap as it stands now: the app reads it while a swap is unfinished. Only the owner reads it. */
   @Get('swaps/:id')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('WALLET-21')
   @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS, 'currency_not_supported', 'not_found')
-  swapById(@Param('id', ParseUUIDPipe) id: string): Promise<FxSwapView> {
-    return declaredOnly('WALLET-21', id);
+  swapById(
+    @CurrentWallet() wallet: OpenWallet,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<FxSwapView> {
+    return this.operations.readSwap(wallet, id);
   }
 
   /**
@@ -245,12 +260,16 @@ export class FxContractController {
     'currency_not_supported',
     'fx_switched_off',
     'fx_account_not_open',
+    'account_frozen',
     'chain_mismatch',
-    'amount_out_of_range',
+    'not_found',
     'provider_unreachable',
   )
-  sendQuote(@Query() query: FxSendQuoteQueryDto): Promise<FxSendQuoteView> {
-    return declaredOnly('WALLET-21', query);
+  sendQuote(
+    @CurrentWallet() wallet: OpenWallet,
+    @Query() query: FxSendQuoteQueryDto,
+  ): Promise<FxSendQuoteView> {
+    return this.operations.sendQuote(wallet, query);
   }
 
   /**
@@ -276,11 +295,17 @@ export class FxContractController {
     'fx_account_not_open',
     'address_invalid',
     'chain_mismatch',
+    'daily_limit_exceeded',
+    'not_found',
     'provider_declined',
   )
   @RequireFeesSet()
-  send(@Body() dto: FxSendDto): Promise<FxSendView> {
-    return declaredOnly('WALLET-21', dto);
+  send(
+    @CurrentWallet() wallet: OpenWallet,
+    @CurrentIdempotencyScope() scope: IdempotencyScope,
+    @Body() dto: FxSendDto,
+  ): Promise<FxSendView> {
+    return this.operations.send(wallet, scope, dto);
   }
 
   /** One send as it stands now. Only the owner reads it. */
@@ -289,7 +314,10 @@ export class FxContractController {
   @BuiltBy('WALLET-21')
   @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS, 'currency_not_supported', 'not_found')
-  sendById(@Param('id', ParseUUIDPipe) id: string): Promise<FxSendView> {
-    return declaredOnly('WALLET-21', id);
+  sendById(
+    @CurrentWallet() wallet: OpenWallet,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<FxSendView> {
+    return this.operations.readSend(wallet, id);
   }
 }

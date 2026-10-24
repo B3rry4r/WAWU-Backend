@@ -250,7 +250,7 @@ export class AbroadSendService {
       ]);
       await this.keys.release(scope);
       if (e instanceof AbroadRefusal) throw refusalError(e, row.fromCurrency);
-      throw (e as WalletProviderError).toHttpException();
+      throw e.toHttpException();
     }
     this.logger.warn(
       `abroad send ${row.id}: the provider's answer is not known (${e instanceof WalletProviderError ? e.kind : 'error'}); it is found again by its reference`,

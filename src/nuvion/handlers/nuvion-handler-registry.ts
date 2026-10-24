@@ -3,6 +3,7 @@ import { NuvionAbroadHandler } from './abroad.handler';
 import { NuvionAccountsHandler } from './accounts.handler';
 import { NuvionBookHandler } from './book.handler';
 import { NuvionDocumentsHandler } from './documents.handler';
+import { NuvionFxHandler } from './fx.handler';
 import type { NuvionEventHandler } from './nuvion-handler.interface';
 import { NuvionOpeningHandler } from './opening.handler';
 import { NuvionPayoutsHandler } from './payouts.handler';
@@ -28,6 +29,7 @@ export class NuvionHandlerRegistry {
     payouts: NuvionPayoutsHandler,
     reconcile: NuvionReconcileHandler,
     abroad: NuvionAbroadHandler,
+    fx: NuvionFxHandler,
   ) {
     for (const h of [
       opening,
@@ -37,6 +39,7 @@ export class NuvionHandlerRegistry {
       payouts,
       reconcile,
       abroad,
+      fx,
     ]) {
       this.add(h);
     }
