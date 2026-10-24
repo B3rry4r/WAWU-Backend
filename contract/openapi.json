@@ -16311,6 +16311,16 @@
               }
             }
           },
+          "400": {
+            "description": "reason.code: passport_country_required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
           "409": {
             "description": "reason.code: bvn_not_checked, selfie_required, identity_has_wallet, phone_held_by_other_identity, identity_under_review, residence_not_set, residence_mismatch",
             "content": {
@@ -45168,6 +45178,7 @@
               "country_not_supported",
               "residence_not_set",
               "residence_mismatch",
+              "passport_country_required",
               "capital_unavailable",
               "reservation_expired",
               "withdrawal_not_available",

@@ -84,6 +84,8 @@ export class MoneyWalletController {
     // WALLET-41: a world opening needs a stored residence that is not Nigeria, and the request must name it.
     'residence_not_set',
     'residence_mismatch',
+    // WALLET-41 round 3: a passport names the country that issued it.
+    'passport_country_required',
   )
   open(
     @CurrentUser() user: WawuJwtClaims,

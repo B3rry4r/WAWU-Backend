@@ -3554,11 +3554,14 @@ with a plain sentence. A person who lives in Nigeria opens with their BVN. A
 claims the ID document: the keyed hash of the document's country and the
 number with letters and digits only, in upper case, whatever kind of document
 is said (held like a BVN's: unique; let go when the opening ends or expires).
-The document's country is the `nationality` sent (the passport's nationality;
-the opening form collects no separate issuing country for a licence or a
-national ID, so the same field), and the country of residence only when no
-`nationality` is sent. Where the account says it lives does not make a second
-wallet from the same passport. The number itself is never stored or logged.
+The document's country is the `nationality` sent (the passport's issuing
+country). A passport without one is `400 passport_country_required` ("Tell us
+which country issued your passport.", `reason.fields` `["nationality"]`),
+refused before anything is claimed, sent or counted. The form collects no
+separate issuing country for a licence or a national ID, so for those the same
+field is used and the country of residence stands in when none is sent. Where
+the account says it lives does not make a second wallet from the same
+passport. The number itself is never stored or logged.
 The refusal for a document someone else holds says "ID", never "BVN".
 
 **What Nuvion asks for is Nuvion's to say.** The app asks for the ID document,
@@ -3568,7 +3571,7 @@ names of the fields Nuvion pointed at (for example `person.ssn`), never a
 value. Dev asks for nothing beyond the document (docs/nuvion/DEV-RESULTS.md,
 WALLET-41); production may ask for a US person's SSN (Nuvion's docs say so).
 
-**Errors.** The usual money errors (section 3) plus `residence_not_set` and `residence_mismatch` (409, above), `world_switched_off` (409:
+**Errors.** The usual money errors (section 3) plus `residence_not_set` and `residence_mismatch` (409, above), `passport_country_required` (400, above), `world_switched_off` (409:
 the admin switch of the whole product is off), `world_limit_reached` (429: the
 day's cap on new openings is reached), `country_not_supported` (422: no
 opening is taken from that country), `fx_switched_off` (a currency is off) and

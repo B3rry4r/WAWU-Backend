@@ -657,6 +657,23 @@ export class ReviewedOpening {
         );
       }
     }
+    // WALLET-41 round 3: a passport is the one document whose country is not
+    // the person's to leave out. Without it the claim on the document would
+    // fall back to where the account lives, and two accounts in two countries
+    // could hold one passport. Nothing is claimed, sent or counted.
+    if (
+      abroad &&
+      input.idType === 'international_passport' &&
+      (input.nationality === undefined ||
+        input.nationality === null ||
+        isStringifiedNull(input.nationality))
+    ) {
+      throw new MoneyError(
+        'passport_country_required',
+        PASSPORT_COUNTRY_REQUIRED_MESSAGE,
+        { fields: ['nationality'] },
+      );
+    }
     return {
       middleName: input.middleName ?? null,
       gender: input.gender!,
@@ -1193,6 +1210,10 @@ export class ReviewedOpening {
 
 class HeldEntity extends Error {}
 
+/** WALLET-41 round 3: a world opening with a passport and no issuing country. */
+export const PASSPORT_COUNTRY_REQUIRED_MESSAGE =
+  'Tell us which country issued your passport.';
+
 /** WALLET-41: the provider asked for something the details did not carry. */
 export const WORLD_FIELDS_MESSAGE = 'Check this and try again.';
 
@@ -1212,11 +1233,12 @@ function worldColumns(send: Send): {
 /**
  * The country of the ID document in a world opening, for the claim on it.
  * The opening form collects no separate issuing country, so it is the
- * `nationality` field (the passport's nationality; for a licence or a
- * national ID the same field, as the form has nothing closer), and the
- * country the person lives in only when no nationality is sent. It is never
- * the account's residence alone: two accounts that say they live in
- * different countries and hold the same passport hold one document.
+ * `nationality` field. A passport must carry it (`details` refuses a
+ * passport without one: `passport_country_required`); a licence or a
+ * national ID, for which the form has nothing closer, falls back to the
+ * country the person lives in when none is sent. A passport's key is never
+ * the account's residence: two accounts that say they live in different
+ * countries and hold the same passport hold one document.
  */
 export function worldDocumentCountry(
   input: Pick<OpenNairaWalletDto, 'countryCode' | 'nationality'>,

@@ -161,6 +161,10 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // or not the one the request names).
   residence_not_set: 409,
   residence_mismatch: 409,
+  // WALLET-41 round 3. Default (lead), owner may override: 400, as pin_mismatch. The
+  // request itself is missing a field it needs (the passport's issuing country); nothing is
+  // claimed, sent or counted.
+  passport_country_required: 400,
   // NUV-12. Default (agent), owner may override: 409, as target_not_payable.
   // The request is understood; the product, the reservation or the holding is
   // not in a state that allows it now.

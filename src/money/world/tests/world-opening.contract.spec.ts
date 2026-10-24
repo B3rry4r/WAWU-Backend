@@ -47,6 +47,8 @@ const US_BODY = {
   idNumber: 'P123456789',
   proofOfAddressType: 'utility_bill',
   countryCode: 'US',
+  // A passport names the country that issued it (round 3).
+  nationality: 'US',
   firstCurrency: 'USD',
 };
 
@@ -337,6 +339,8 @@ describe('WALLET-41: opening a wallet from outside Nigeria', () => {
         dto({
           countryCode: 'GB',
           firstCurrency: 'GBP',
+          idType: 'drivers_license',
+          nationality: undefined,
           idNumber: 'GBR-PASS-4455',
         }),
         null,
@@ -347,6 +351,80 @@ describe('WALLET-41: opening a wallet from outside Nigeria', () => {
       where: { wawuUserId: { in: [b.id, c.id] } },
     });
     expect(rows).toEqual([]);
+  });
+
+  it('a passport needs the country that issued it: without one it is a plain 400, and nothing is claimed or sent', async () => {
+    // Round 3: with the country left out the key would fall back to where the
+    // account lives, and two accounts in two countries could share a passport.
+    const p = who();
+    const refused = await opening
+      .open(
+        p.id,
+        claims(p),
+        dto({ idNumber: 'NOCOUNTRY-1', nationality: undefined }),
+        null,
+      )
+      .then(
+        () => null,
+        (e: MoneyError) => e,
+      );
+    expect(refused).toBeInstanceOf(MoneyError);
+    expect(refused?.code).toBe('passport_country_required');
+    expect(refused?.getStatus()).toBe(400);
+    expect(refused?.getResponse()).toMatchObject({
+      message: 'Tell us which country issued your passport.',
+      reason: {
+        code: 'passport_country_required',
+        message: 'Tell us which country issued your passport.',
+        fields: ['nationality'],
+      },
+    });
+    expect(JSON.stringify(refused?.getResponse())).not.toMatch(/\u2014/);
+    // A null from a client is the same as leaving it out.
+    await expect(
+      opening.open(
+        p.id,
+        claims(p),
+        dto({ idNumber: 'NOCOUNTRY-1', nationality: null }),
+        null,
+      ),
+    ).rejects.toMatchObject({ code: 'passport_country_required' });
+    expect(sent).toEqual([]);
+    expect(
+      await prisma.fintavaWalletOpening.findUnique({
+        where: { wawuUserId: p.id },
+      }),
+    ).toBeNull();
+  });
+
+  it("a licence or a national ID with no nationality still opens: the country they live in is the document's", async () => {
+    const a = who();
+    const b = who();
+    await opening.open(
+      a.id,
+      claims(a),
+      dto({
+        idType: 'drivers_license',
+        nationality: undefined,
+        idNumber: 'DL-NO-NAT-1',
+      }),
+      null,
+    );
+    await opening.open(
+      b.id,
+      claims(b),
+      dto({
+        idType: 'national_id',
+        nationality: undefined,
+        idNumber: 'NID-NO-NAT-1',
+      }),
+      null,
+    );
+    expect(sent).toHaveLength(2);
+    expect(sent[0].review).toMatchObject({
+      nationality: 'US',
+      idDocument: { type: 'drivers_license', issuingCountry: 'US' },
+    });
   });
 
   it('another issuing country is another document, and it opens', async () => {
