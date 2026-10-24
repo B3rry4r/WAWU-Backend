@@ -22,6 +22,7 @@ import {
 } from '../../money/payments/payable-registry';
 import { WalletPaymentService } from '../../money/payments/wallet-payment.service';
 import { CommunityPassAccess } from './community-pass-access.service';
+import { grantPassPeriod } from './community-pass-grant';
 import {
   COMMUNITY_PASS_KIND,
   COMMUNITY_PASS_ROUTE,
@@ -137,6 +138,13 @@ export class CommunityPassService implements OnModuleInit {
     const sellsPass = community.passPrice !== null;
     const removed =
       !isHost && sellsPass && (await this.isRemoved(viewerWawuId, communityId));
+    // A removed member who still holds a store subscription for this room keeps
+    // being billed by the store until they cancel it there (IAP-01).
+    const cancelInStore =
+      removed &&
+      (await this.prisma.storeSubscription.count({
+        where: { wawuUserId: viewerWawuId, communityId, lapsedAt: null },
+      })) > 0;
     return {
       communityId,
       sellsPass,
@@ -149,6 +157,7 @@ export class CommunityPassService implements OnModuleInit {
       canRenew: sellsPass && !isHost && !removed && until !== null,
       canBuy: sellsPass && !isHost && !removed,
       isHost,
+      cancelInStore,
     };
   }
 
@@ -326,50 +335,14 @@ export class CommunityPassService implements OnModuleInit {
           return 'the host removed the person from the room';
         return null;
       },
-      grant: async (tx) => {
-        // Two payments of one person for one room chain, not overlap: the
-        // second waits here for the first to commit, then starts from its end.
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`community-pass:${communityId}:${userId}`}))`;
-        const latest = await tx.communityPass.aggregate({
-          where: { communityId, userWawuId: userId },
-          _max: { endsAt: true },
-        });
-        const now = new Date();
-        const { startsAt, endsAt } = nextPassPeriod(
-          now,
-          latest._max.endsAt,
+      grant: (tx) =>
+        grantPassPeriod(tx, {
+          communityId,
+          userWawuId: userId,
+          reference: payment.paymentId,
+          priceKobo: BigInt(payment.priceKobo),
           days,
-        );
-        const { count } = await tx.communityPass.createMany({
-          data: [
-            {
-              communityId,
-              userWawuId: userId,
-              walletPaymentId: payment.paymentId,
-              startsAt,
-              endsAt,
-              priceKobo: BigInt(payment.priceKobo),
-            },
-          ],
-          skipDuplicates: true,
-        });
-        if (count === 0) return false;
-        // The person is in: a new member, or one already in. A pending row is
-        // a removed member (the refusal above sent that payment back), so the
-        // grant never flips one to joined.
-        await tx.communityMembership.createMany({
-          data: [
-            {
-              userWawuId: userId,
-              communityId,
-              status: 'joined',
-              joinedAt: now,
-            },
-          ],
-          skipDuplicates: true,
-        });
-        return true;
-      },
+        }),
     });
     if (result.outcome === 'refund') {
       this.logger.warn(

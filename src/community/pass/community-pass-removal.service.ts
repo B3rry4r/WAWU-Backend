@@ -69,7 +69,13 @@ export class CommunityPassRemoval {
     now: Date = new Date(),
   ): Promise<CommunityPassRemovalQuoteView> {
     const passes = await this.prisma.communityPass.findMany({
-      where: { communityId, userWawuId, refundId: null },
+      // A pass bought in a store is paid back by the store, never from the wallet (IAP-01).
+      where: {
+        communityId,
+        userWawuId,
+        refundId: null,
+        NOT: { walletPaymentId: { startsWith: 'store:' } },
+      },
       select: { startsAt: true, endsAt: true, priceKobo: true },
     });
     let refund = 0n;
@@ -108,8 +114,37 @@ export class CommunityPassRemoval {
     // The same lock a pass grant takes: a payment landing now waits for this
     // decision, or is decided before it and is paid back with the rest.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`community-pass:${communityId}:${userWawuId}`}))`;
+    // A pass bought in a store is ended with the removal but never paid back
+    // from the wallet: the money is the store's, not WAWU's merchant account's
+    // (IAP-01). The member asks the store for a refund.
+    // (The table needs endsAt after startsAt, so a period that has not
+    // started has its start pulled back, as the refunded passes below do.)
+    await tx.communityPass.updateMany({
+      where: {
+        communityId,
+        userWawuId,
+        startsAt: { lt: now },
+        endsAt: { gt: now },
+        walletPaymentId: { startsWith: 'store:' },
+      },
+      data: { endsAt: now },
+    });
+    await tx.communityPass.updateMany({
+      where: {
+        communityId,
+        userWawuId,
+        startsAt: { gte: now },
+        walletPaymentId: { startsWith: 'store:' },
+      },
+      data: { startsAt: new Date(now.getTime() - 1), endsAt: now },
+    });
     const passes = await tx.communityPass.findMany({
-      where: { communityId, userWawuId, refundId: null },
+      where: {
+        communityId,
+        userWawuId,
+        refundId: null,
+        NOT: { walletPaymentId: { startsWith: 'store:' } },
+      },
       orderBy: [{ endsAt: 'asc' }, { id: 'asc' }],
     });
     const owed = passes

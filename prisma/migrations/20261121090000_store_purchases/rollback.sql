@@ -1,0 +1,41 @@
+\set ON_ERROR_STOP on
+-- Rollback of 20261121090000_store_purchases (IAP-01). Run it only after the Hub build that reads these is gone.
+-- Run with: psql -1 -f rollback.sql
+-- Refuses (and changes nothing) while any store purchase, tier, credit pack bought in a store, platform setting or
+-- notification seen is stored: dropping them
+-- loses what people paid a store for and the record a refund would be matched against. Clear them on purpose first
+-- (after the take-backs are decided by a person):
+--   UPDATE "CreditPurchase" SET "storePurchaseId" = NULL;   -- only for rows already reviewed
+--   DELETE FROM "StoreNotification"; DELETE FROM "StorePurchase";
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM "StorePurchase") THEN
+    RAISE EXCEPTION 'IAP-01 rollback: store purchases are stored and would be lost. Nothing was changed.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "CreditPurchase" WHERE "storePurchaseId" IS NOT NULL) THEN
+    RAISE EXCEPTION 'IAP-01 rollback: credit packs bought in a store are stored and would lose their link. Nothing was changed.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "MakerPurchase" WHERE "method" = 'store') THEN
+    RAISE EXCEPTION 'IAP-01 rollback: tiers bought in a store are recorded in MakerPurchase and would stop passing its check. Nothing was changed.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "StorePlatformSetting") THEN
+    RAISE EXCEPTION 'IAP-01 rollback: a store switch or cut an admin set is stored and would be lost. Nothing was changed.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "StoreNotification") THEN
+    RAISE EXCEPTION 'IAP-01 rollback: store notifications seen are stored and would be lost (a notice would be acted on twice). Nothing was changed.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM "StoreProduct") THEN
+    RAISE EXCEPTION 'IAP-01 rollback: the store product map holds rows (an admin typed them). Nothing was changed.';
+  END IF;
+END $$;
+DROP TABLE "StoreNotification";
+DROP TABLE "StorePurchase";
+DROP TABLE "StorePlatformSetting";
+DROP TABLE "StoreProduct";
+DROP INDEX "CreditPurchase_storePurchaseId_key";
+ALTER TABLE "CreditPurchase" DROP COLUMN "storePurchaseId";
+ALTER TABLE "MakerPurchase" DROP CONSTRAINT "MakerPurchase_method_check";
+ALTER TABLE "MakerPurchase" ADD CONSTRAINT "MakerPurchase_method_check" CHECK ("method" IN ('wallet'));
+DROP TYPE "StorePurchaseStatus";
+DROP TYPE "StoreProductKind";
+DROP TYPE "StorePlatform";

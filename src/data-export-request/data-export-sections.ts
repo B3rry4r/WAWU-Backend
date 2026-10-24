@@ -853,6 +853,34 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // What this person bought through Google Play or the App Store (IAP-01, R-86).
+  // The store's transaction id, the person's own other ids and the room's host
+  // stay out (rule 3); the price is in the store's own currency, as a string.
+  {
+    key: 'storePurchases',
+    models: ['StorePurchase'],
+    load: async (prisma, me) =>
+      (
+        await prisma.storePurchase.findMany({
+          where: { wawuUserId: me },
+          select: {
+            platform: true,
+            kind: true,
+            status: true,
+            storeProductId: true,
+            currency: true,
+            priceMicros: true,
+            purchasedAt: true,
+            expiresAt: true,
+            endedAt: true,
+          },
+          orderBy: { purchasedAt: 'desc' },
+        })
+      ).map((r) => ({
+        ...r,
+        priceMicros: r.priceMicros === null ? null : r.priceMicros.toString(),
+      })),
+  },
   // The products this person added to their tier (TIER-04). The payment
   // reference is a payment id, so it stays out (rule 3).
   {
@@ -1424,6 +1452,20 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'FeaturedCreator',
       reason:
         'An admin choice to show the creator in Explore, with the admin id; the person wrote none of it.',
+    },
+    // The Hub's own bookkeeping for store purchases (IAP-01 fix round 1): a store's
+    // subscription key is a purchase token or transaction id, and the account token
+    // is an id the Hub made; neither is data the person gave, and both are ids (rule 3).
+    // What they bought is in `storePurchases`.
+    {
+      model: 'StoreSubscription',
+      reason:
+        'Which store subscription the person holds, by the store token; the purchases themselves are exported under storePurchases.',
+    },
+    {
+      model: 'StoreAccountToken',
+      reason:
+        'A random id the Hub made to tie the person to their store purchases; not data the person gave.',
     },
     // Secrets and identity records: never in an email.
     {

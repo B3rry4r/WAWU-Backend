@@ -12,6 +12,7 @@ import {
   type PayableTarget,
 } from '../../money/payments/payable-registry';
 import { WalletPaymentService } from '../../money/payments/wallet-payment.service';
+import { addCreditsWithLot } from '../credit-grant';
 import type { CreditPack } from '../../../generated/prisma/enums';
 import {
   KOBO_PER_NAIRA,
@@ -210,28 +211,14 @@ export class CreditWalletService implements OnModuleInit {
         where: { walletPaymentId: payment.paymentId },
         select: { id: true, purchasedAt: true },
       });
-      // The balance and the cost-basis lot are written together: a balance
-      // credited without its lot would be spendable credits with no cost
-      // basis, and the community host would earn nothing on money WAWU banked
-      // (the same rule as the web's verified Flutterwave purchase).
-      await tx.creditsState.upsert({
-        where: { userWawuId },
-        create: { userWawuId, creditBalance: info.credits },
-        update: { creditBalance: { increment: info.credits } },
-      });
-      await tx.creditLot.createMany({
-        data: [
-          {
-            creditPurchaseId: purchase.id,
-            userWawuId,
-            creditsGranted: info.credits,
-            creditsRemaining: info.credits,
-            grossKobo: payment.priceKobo,
-            allocatedKobo: 0,
-            purchasedAt: purchase.purchasedAt,
-          },
-        ],
-        skipDuplicates: true,
+      // The balance and the cost-basis lot are written together, by the one
+      // function the app-store purchase uses too (IAP-01).
+      await addCreditsWithLot(tx, {
+        userWawuId,
+        credits: info.credits,
+        grossKobo: payment.priceKobo,
+        purchaseId: purchase.id,
+        purchasedAt: purchase.purchasedAt,
       });
     });
     this.logger.log(

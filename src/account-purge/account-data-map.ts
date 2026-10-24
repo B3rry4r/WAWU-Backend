@@ -194,6 +194,23 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // (WalletPayment below, anonymised); its id is this row's key and is not a
   // link anyone follows once the account is gone.
   { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
+  // What this account bought through Google Play or the App Store (IAP-01, R-86):
+  // the product, what the store charged, what was granted and what a refund took
+  // back. OWNED, like MakerPurchase above: the row exists only because this account
+  // bought something. The money is the store's and WAWU's own accounting, not a
+  // wallet payment, so there is no payer's record to keep. `creatorWawuUserId` names
+  // a room's host on somebody else's purchase of a pass: their record survives.
+  { model: 'StorePurchase', column: 'wawuUserId', disposition: 'OWNED' },
+  {
+    model: 'StorePurchase',
+    column: 'creatorWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
+  // Who holds a store subscription, and the id this account's store purchases are
+  // bound to (IAP-01 fix round 1). OWNED: both exist only because this account
+  // bought through a store, and name no counterparty.
+  { model: 'StoreSubscription', column: 'wawuUserId', disposition: 'OWNED' },
+  { model: 'StoreAccountToken', column: 'wawuUserId', disposition: 'OWNED' },
   // More products this account bought on its tier (TIER-04): how many and what
   // it cost. OWNED, like MakerPurchase above: the row exists only because this
   // account bought something and names no counterparty. The money's record is

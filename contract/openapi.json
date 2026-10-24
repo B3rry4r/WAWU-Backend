@@ -41137,6 +41137,480 @@
           "AdsEvents"
         ]
       }
+    },
+    "/api/hub/store/products": {
+      "get": {
+        "operationId": "StoreController_products",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": true,
+            "in": "query",
+            "description": "The store the app runs on: `android` (Google Play) or `ios` (App Store).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "android",
+                "ios"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreProductListView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The products on sale in one store, from the product map an admin keeps.\n`available` is false (with a `reason`) when the Hub has no credentials for\nthat store yet or an admin has switched it off, and then no product is\nlisted. A price is never here: the app shows the store's own, in the\nperson's own currency. `accountToken` is the signed-in person's own id\nfor the stores: the app MUST pass it to Google Play Billing as\n`obfuscatedAccountIdAndroid` and to StoreKit as `appAccountToken` when it\nstarts a purchase; a purchase that carries another person's token, or none,\nis refused.",
+        "tags": [
+          "Store"
+        ]
+      }
+    },
+    "/api/hub/store/purchases": {
+      "post": {
+        "operationId": "StoreController_buy",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorePurchaseDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorePurchaseView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Hands the Hub a purchase the store has just completed. The Hub asks the\nstore's own server about it (the app's word is never taken), then gives\nwhat was bought, once per store transaction: the same call again, a\nrestore, or the store's own notice arriving first all answer the same\npurchase with `alreadyGranted: true`. Send `purchaseToken` on `android`,\n`transactionId` on `ios`, and `communityId` for a pass.\n\nRefusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,\n`store_product_unknown` (404), `store_receipt_missing` (400),\n`store_purchase_invalid` (422), `store_purchase_pending`,\n`store_purchase_taken` (that purchase, or that subscription, was already used on another account, or was made with another account's token), `store_account_token_missing` (422, the purchase carries no account token),\n`store_pass_not_available`, `store_unreachable` (503, safe to repeat) and `store_grant_failed` (500, the store has the payment but the Hub could not finish; ask again).",
+        "tags": [
+          "Store"
+        ]
+      }
+    },
+    "/api/hub/webhooks/google-play": {
+      "post": {
+        "operationId": "StoreWebhookController_googlePlay",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreWebhookAck"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Google Play's real-time developer notifications, pushed by Pub/Sub. The body is Pub/Sub's envelope; the bearer token is checked first.",
+        "tags": [
+          "PaymentWebhook"
+        ]
+      }
+    },
+    "/api/hub/webhooks/app-store": {
+      "post": {
+        "operationId": "StoreWebhookController_appStore",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreWebhookAck"
+                }
+              }
+            }
+          }
+        },
+        "summary": "App Store Server Notifications V2: `{ signedPayload }`, a JWS Apple signed.",
+        "tags": [
+          "PaymentWebhook"
+        ]
+      }
+    },
+    "/api/hub/admin/store/products": {
+      "get": {
+        "operationId": "AdminStoreController_products",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStoreProductListView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every product in the map, both stores, with what each gives now.",
+        "tags": [
+          "AdminStore"
+        ]
+      },
+      "post": {
+        "operationId": "AdminStoreController_createProduct",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateStoreProductDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStoreProductView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Adds a product to the map. The store product id and the kind cannot be changed afterwards.",
+        "tags": [
+          "AdminStore"
+        ]
+      }
+    },
+    "/api/hub/admin/store/products/{id}": {
+      "patch": {
+        "operationId": "AdminStoreController_updateProduct",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStoreProductDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStoreProductView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Changes a product's title, grant, reference kobo, order or on/off. Only what is sent changes.",
+        "tags": [
+          "AdminStore"
+        ]
+      }
+    },
+    "/api/hub/admin/store/platforms": {
+      "get": {
+        "operationId": "AdminStoreController_platforms",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStorePlatformListView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Both stores: the switch, whether the Hub holds the store's credentials, and the cut a new purchase records.",
+        "tags": [
+          "AdminStore"
+        ]
+      }
+    },
+    "/api/hub/admin/store/platforms/{platform}": {
+      "patch": {
+        "operationId": "AdminStoreController_updatePlatform",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "android",
+                "ios"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateStorePlatformDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStorePlatformView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Switches one store's purchases on or off, and sets its cut in basis points (`-1` goes back to the config's).",
+        "tags": [
+          "AdminStore"
+        ]
+      }
+    },
+    "/api/hub/admin/store/purchases": {
+      "get": {
+        "operationId": "AdminStoreController_purchases",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "android",
+                "ios"
+              ]
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "points",
+                "credits",
+                "tier",
+                "pass"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Purchases only (the refunds route always lists refunded and revoked).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "granted",
+                "refunded",
+                "revoked"
+              ]
+            }
+          },
+          {
+            "name": "wawuUserId",
+            "required": false,
+            "in": "query",
+            "description": "One person's purchases.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "From the `nextCursor` of the page before.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 300,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, default 20.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStorePurchasePageView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Every store purchase, newest first.",
+        "tags": [
+          "AdminStore"
+        ]
+      }
+    },
+    "/api/hub/admin/store/refunds": {
+      "get": {
+        "operationId": "AdminStoreController_refunds",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "android",
+                "ios"
+              ]
+            }
+          },
+          {
+            "name": "kind",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "points",
+                "credits",
+                "tier",
+                "pass"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "Purchases only (the refunds route always lists refunded and revoked).",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "granted",
+                "refunded",
+                "revoked"
+              ]
+            }
+          },
+          {
+            "name": "wawuUserId",
+            "required": false,
+            "in": "query",
+            "description": "One person's purchases.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "From the `nextCursor` of the page before.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 300,
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "1 to 100, default 20.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminStorePurchasePageView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The purchases a store paid back or withdrew, newest first, with what was taken back.",
+        "tags": [
+          "AdminStore"
+        ]
+      }
     }
   },
   "info": {
@@ -48023,6 +48497,179 @@
         "required": [
           "type"
         ]
+      },
+      "StorePurchaseDto": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "description": "The store the purchase was made in.",
+            "enum": [
+              "android",
+              "ios"
+            ],
+            "type": "string"
+          },
+          "productId": {
+            "type": "string",
+            "description": "The id the store sold it under (`storeProductId` from `GET /store/products`).",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "purchaseToken": {
+            "type": "string",
+            "description": "Google Play: the purchase token the billing library returned. Required on `android`.",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "transactionId": {
+            "type": "string",
+            "description": "App Store: the StoreKit transaction id. Required on `ios`.",
+            "minLength": 1,
+            "maxLength": 100,
+            "pattern": "^[0-9]+$"
+          },
+          "communityId": {
+            "type": "string",
+            "description": "The room a community pass is bought for. Required for a pass product, refused for any other.",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "platform",
+          "productId"
+        ]
+      },
+      "StoreProductGrantsDto": {
+        "type": "object",
+        "properties": {
+          "packId": {
+            "type": "string",
+            "description": "points: a pack of the live plan, by id.",
+            "minLength": 1,
+            "maxLength": 40,
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "pack": {
+            "description": "credits: starter, popular or pro.",
+            "enum": [
+              "starter",
+              "popular",
+              "pro"
+            ],
+            "type": "string"
+          },
+          "tierId": {
+            "type": "string",
+            "description": "tier: a tier of the live plan, by id.",
+            "minLength": 1,
+            "maxLength": 40,
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "days": {
+            "type": "integer",
+            "description": "pass: the days one period runs.",
+            "minimum": 1,
+            "maximum": 366
+          }
+        }
+      },
+      "CreateStoreProductDto": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "enum": [
+              "android",
+              "ios"
+            ],
+            "type": "string"
+          },
+          "storeProductId": {
+            "type": "string",
+            "description": "The id the store sells it under. Fixed once created.",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "kind": {
+            "description": "Fixed once created.",
+            "enum": [
+              "points",
+              "credits",
+              "tier",
+              "pass"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "grants": {
+            "$ref": "#/components/schemas/StoreProductGrantsDto"
+          },
+          "referenceKobo": {
+            "type": "integer",
+            "description": "Kobo one purchase is worth before the store's share. Needed for credits and pass products.",
+            "minimum": 1,
+            "maximum": 2000000000
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "platform",
+          "storeProductId",
+          "kind",
+          "title",
+          "grants"
+        ]
+      },
+      "UpdateStoreProductDto": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "grants": {
+            "$ref": "#/components/schemas/StoreProductGrantsDto"
+          },
+          "referenceKobo": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2000000000
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        }
+      },
+      "UpdateStorePlatformDto": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Switch purchases from this store on or off."
+          },
+          "storeFeeBps": {
+            "type": "integer",
+            "description": "The store's cut in basis points (1500 = 15%), 0 to 10000. Send `-1` to go back to the config's.",
+            "minimum": -1,
+            "maximum": 10000
+          }
+        }
       },
       "FintavaWebhookAck": {
         "type": "object",
@@ -69410,6 +70057,10 @@
           },
           "isHost": {
             "type": "boolean"
+          },
+          "cancelInStore": {
+            "type": "boolean",
+            "nullable": true
           }
         },
         "required": [
@@ -73056,6 +73707,538 @@
           "deductionsKobo",
           "netPayoutKobo",
           "daysHeld"
+        ]
+      },
+      "StoreProductGrantsConfig": {
+        "type": "object",
+        "properties": {
+          "packId": {
+            "type": "string",
+            "nullable": true
+          },
+          "pack": {
+            "type": "string",
+            "enum": [
+              "starter",
+              "popular",
+              "pro"
+            ],
+            "nullable": true
+          },
+          "tierId": {
+            "type": "string",
+            "nullable": true
+          },
+          "days": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "packId",
+          "pack",
+          "tierId",
+          "days"
+        ]
+      },
+      "StoreGrantsView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "number",
+            "nullable": true
+          },
+          "credits": {
+            "type": "number",
+            "nullable": true
+          },
+          "tierId": {
+            "type": "string",
+            "nullable": true
+          },
+          "days": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "points",
+          "credits",
+          "tierId",
+          "days"
+        ]
+      },
+      "AdminStoreProductView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "storeProductId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tier",
+              "credits",
+              "points",
+              "pass"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "grants": {
+            "$ref": "#/components/schemas/StoreProductGrantsConfig"
+          },
+          "resolved": {
+            "$ref": "#/components/schemas/StoreGrantsView"
+          },
+          "referenceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "sortOrder": {
+            "type": "number"
+          },
+          "updatedBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "platform",
+          "storeProductId",
+          "kind",
+          "title",
+          "grants",
+          "resolved",
+          "referenceKobo",
+          "active",
+          "sortOrder",
+          "updatedBy",
+          "updatedAt"
+        ]
+      },
+      "AdminStoreProductListView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminStoreProductView"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "AdminStorePlatformView": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "storeFeeBps": {
+            "type": "number"
+          },
+          "storeFeeOverridden": {
+            "type": "boolean"
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "platform",
+          "enabled",
+          "configured",
+          "storeFeeBps",
+          "storeFeeOverridden",
+          "updatedAt"
+        ]
+      },
+      "AdminStorePlatformListView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminStorePlatformView"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "AdminStorePurchaseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "wawuUserId": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "storeProductId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tier",
+              "credits",
+              "points",
+              "pass"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "refunded",
+              "granted",
+              "revoked"
+            ]
+          },
+          "environment": {
+            "type": "string"
+          },
+          "storeTransactionId": {
+            "type": "string"
+          },
+          "communityId": {
+            "type": "string",
+            "nullable": true
+          },
+          "currency": {
+            "type": "string",
+            "nullable": true
+          },
+          "priceMicros": {
+            "type": "string",
+            "nullable": true
+          },
+          "referenceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "storeFeeBps": {
+            "type": "number"
+          },
+          "netKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "creatorWawuUserId": {
+            "type": "string",
+            "nullable": true
+          },
+          "creatorShareKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "purchasedAt": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "endedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "endReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "takenBack": {
+            "type": "object",
+            "additionalProperties": {},
+            "nullable": true
+          },
+          "flag": {
+            "type": "string",
+            "nullable": true
+          },
+          "flaggedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "wawuUserId",
+          "platform",
+          "storeProductId",
+          "kind",
+          "status",
+          "environment",
+          "storeTransactionId",
+          "communityId",
+          "currency",
+          "priceMicros",
+          "referenceKobo",
+          "storeFeeBps",
+          "netKobo",
+          "creatorWawuUserId",
+          "creatorShareKobo",
+          "purchasedAt",
+          "expiresAt",
+          "endedAt",
+          "endReason",
+          "takenBack",
+          "flag",
+          "flaggedAt"
+        ]
+      },
+      "AdminStorePurchasePageView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminStorePurchaseView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "StoreProductView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "storeProductId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tier",
+              "credits",
+              "points",
+              "pass"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "subscription": {
+            "type": "boolean"
+          },
+          "grants": {
+            "$ref": "#/components/schemas/StoreGrantsView"
+          }
+        },
+        "required": [
+          "id",
+          "platform",
+          "storeProductId",
+          "kind",
+          "title",
+          "subscription",
+          "grants"
+        ]
+      },
+      "StoreProductListView": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "accountToken": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "store_not_configured",
+              "store_disabled"
+            ],
+            "nullable": true
+          },
+          "products": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoreProductView"
+            }
+          }
+        },
+        "required": [
+          "platform",
+          "accountToken",
+          "available",
+          "reason",
+          "products"
+        ]
+      },
+      "StoreGrantedView": {
+        "type": "object",
+        "properties": {
+          "points": {
+            "type": "number",
+            "nullable": true
+          },
+          "credits": {
+            "type": "number",
+            "nullable": true
+          },
+          "tierId": {
+            "type": "string",
+            "nullable": true
+          },
+          "until": {
+            "type": "string",
+            "nullable": true
+          },
+          "communityId": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "points",
+          "credits",
+          "tierId",
+          "until",
+          "communityId"
+        ]
+      },
+      "StorePurchaseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "storeProductId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tier",
+              "credits",
+              "points",
+              "pass"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "refunded",
+              "granted",
+              "revoked"
+            ]
+          },
+          "alreadyGranted": {
+            "type": "boolean"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/StoreGrantedView"
+          },
+          "purchasedAt": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "flag": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "platform",
+          "storeProductId",
+          "kind",
+          "status",
+          "alreadyGranted",
+          "grant",
+          "purchasedAt",
+          "expiresAt",
+          "flag"
+        ]
+      },
+      "StoreWebhookAck": {
+        "type": "object",
+        "properties": {
+          "received": {
+            "type": "boolean"
+          },
+          "outcome": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "received",
+          "outcome"
         ]
       },
       "AdCreativeView": {
