@@ -141,6 +141,9 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   cards_unavailable: 503,
   card_limit_reached: 409,
   card_blocked: 409,
+  // WALLET-31 round 1, L1. Default (agent), owner may override: 429, as
+  // statement_rate_limited, with retryAfterSeconds.
+  card_reveal_rate_limited: 429,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

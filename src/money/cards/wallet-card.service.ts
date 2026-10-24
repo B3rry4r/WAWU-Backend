@@ -13,6 +13,9 @@ import {
   type ProviderCards,
   type WalletProvider,
 } from '../../wallet-provider/wallet-provider.interface';
+import { FEE_LEG_SUFFIX } from '../../nuvion/fee-legs';
+import { FeeQuoteService } from '../fees/fee-quote.service';
+import { LedgerService } from '../ledger/ledger.service';
 import { lagosDayStart } from '../limits/lagos-window';
 import type { OpenWallet } from '../gate/wallet-gate';
 import { MoneyError } from '../money-error';
@@ -60,6 +63,10 @@ const LIMIT_ACTIVE_MESSAGE =
 const LIMIT_DAY_MESSAGE =
   'You have asked for the most cards one person can in a day. Try again tomorrow.';
 const BLOCKED_MESSAGE = 'This card is blocked and cannot be used again.';
+const USED_MESSAGE =
+  'This single-use card was used once and cannot be used again.';
+/** What the card's fee transfer is called at the provider, as a send's fee leg is. */
+const CARD_FEE_NARRATION = 'WAWU card fee';
 const PENDING_ACTION_MESSAGE =
   'This card is still being made. Try again in a moment.';
 const SUPPORT_FROZEN_MESSAGE =
@@ -84,6 +91,8 @@ function statusOf(row: Pick<WalletCard, 'state'>): CardStatus {
       return 'frozen';
     case 'cancelled':
       return 'blocked';
+    case 'used':
+      return 'used';
     default:
       return 'pending';
   }
@@ -134,6 +143,8 @@ export class WalletCardService implements OnModuleInit {
     private readonly plan: PlanSettingsService,
     private readonly settings: CardSettings,
     private readonly keys: IdempotencyService,
+    private readonly fees: FeeQuoteService,
+    private readonly ledger: LedgerService,
   ) {}
 
   /**
@@ -174,10 +185,12 @@ export class WalletCardService implements OnModuleInit {
       throw new MoneyError('cards_unavailable', UNAVAILABLE_MESSAGE);
     }
     this.cards();
-    if (
-      this.settings.providerFeeKobo === null ||
-      this.settings.wawuFeeKobo > 0
-    ) {
+    if (this.settings.providerFeeKobo === null) {
+      throw new MoneyError('fees_not_set', FEE_MESSAGE);
+    }
+    // WAWU's own fee moves as a send's fee does: from the person's account to
+    // WAWU's, which only a provider with a fee transfer of its own can do.
+    if (this.settings.wawuFeeKobo > 0 && this.provider.wawuFeeLeg !== true) {
       throw new MoneyError('fees_not_set', FEE_MESSAGE);
     }
   }
@@ -250,9 +263,148 @@ export class WalletCardService implements OnModuleInit {
       canCreate:
         enabled &&
         !!this.provider.cards &&
-        this.settings.wawuFeeKobo === 0 &&
+        (this.settings.wawuFeeKobo === 0 ||
+          this.provider.wawuFeeLeg === true) &&
         underLimits,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // The fees: Nuvion's is taken by Nuvion; WAWU's moves as a send's fee does
+  // -------------------------------------------------------------------------
+
+  /**
+   * Refuses a request the person's balance cannot cover, before anything is
+   * claimed or sent: Nuvion's fee and WAWU's both come out of the wallet. The
+   * balance is the provider's, read now; a read that fails is the provider's
+   * refusal, nothing is taken. The key is given back (nothing was attached).
+   */
+  private async assertCanAfford(wallet: OpenWallet): Promise<void> {
+    const need =
+      (this.settings.providerFeeKobo ?? 0) + this.settings.wawuFeeKobo;
+    if (need <= 0) return;
+    let available: bigint;
+    try {
+      available = (
+        await this.provider.getBalance({ walletId: wallet.walletId })
+      ).availableKobo;
+    } catch (e) {
+      throw e instanceof WalletProviderError ? e.toHttpException() : e;
+    }
+    if (available < BigInt(need)) {
+      throw new MoneyError(
+        'insufficient_funds',
+        `Your wallet needs ${koboText(need)} for the card fee.`,
+      );
+    }
+  }
+
+  /** What the fee's transfer moves: the fee less the provider's own charge for moving it, as a send's fee leg is worked out. */
+  private feeLegKobo(wawuFee: number): number {
+    if (!this.fees.feesSet) return wawuFee;
+    const charge = (kobo: number) =>
+      this.fees.providerFees.walletToWalletKobo(kobo);
+    let leg = wawuFee - charge(wawuFee);
+    for (let i = 0; i < 6 && leg > 0; i += 1) {
+      const next = wawuFee - charge(leg);
+      if (next === leg) break;
+      leg = next;
+    }
+    return Math.max(0, Math.min(leg, wawuFee));
+  }
+
+  /**
+   * WAWU's fee on a card, taken from the person to WAWU's own account at the
+   * provider once the card exists (round 1, M1; the way a send's fee leg is,
+   * FIX-52): one transfer under the card's reference plus `-fee`, which the
+   * provider answers with the original when it is asked again, so a repeat
+   * never moves it twice. Never throws and never undoes the card: a transfer
+   * that is not confirmed is tried again the next time the card is read. The
+   * ledger's side (money in on WAWU's account) is written once it moved.
+   */
+  async collectFee(wallet: OpenWallet, row: WalletCard): Promise<void> {
+    if (
+      row.wawuFeeKobo <= 0n ||
+      row.feeCollectedAt !== null ||
+      !['active', 'frozen', 'used'].includes(row.state) ||
+      this.provider.wawuFeeLeg !== true
+    ) {
+      return;
+    }
+    const fee = Number(row.wawuFeeKobo);
+    const leg = this.feeLegKobo(fee);
+    try {
+      if (leg > 0) {
+        const platform = await this.provider.getPlatformAccount();
+        const reference = `${row.reference}${FEE_LEG_SUFFIX}`;
+        const receipt = await this.provider.walletToWallet({
+          fromAccountNumber: wallet.accountNumber,
+          toAccountNumber: platform.accountNumber,
+          amountKobo: BigInt(leg),
+          reference,
+          narration: CARD_FEE_NARRATION,
+        });
+        await this.recordFee(
+          row,
+          wallet,
+          platform.accountNumber,
+          reference,
+          Number(receipt.amountKobo),
+        );
+      } else {
+        this.logger.warn(
+          `card ${row.id}: WAWU's fee (${fee} kobo) is not more than the provider's charge for moving it; not collected`,
+        );
+      }
+      await this.prisma.walletCard.updateMany({
+        where: { id: row.id, feeCollectedAt: null },
+        data: { feeCollectedAt: new Date() },
+      });
+      row.feeCollectedAt = new Date();
+    } catch (e) {
+      this.logger.warn(
+        `card ${row.id}: WAWU's fee is not collected yet (${e instanceof WalletProviderError ? e.kind : 'error'}); tried again when the card is read`,
+      );
+    }
+  }
+
+  /** The ledger's side of the fee's transfer: money IN on WAWU's own account, written once. A failure is logged and the next look writes it. */
+  private async recordFee(
+    row: WalletCard,
+    wallet: OpenWallet,
+    platformNumber: string,
+    reference: string,
+    movedKobo: number,
+  ): Promise<void> {
+    if (movedKobo <= 0) return;
+    try {
+      await this.ledger.record(
+        {
+          wallet: { kind: 'merchant', accountNumber: platformNumber },
+          direction: 'in',
+          status: 'completed',
+          category: 'transfer',
+          amountKobo: movedKobo,
+          feeKobo: 0,
+          totalKobo: movedKobo,
+          narration: CARD_FEE_NARRATION,
+          references: { customerReference: reference },
+          counterparty: {
+            kind: 'wawu_user',
+            name: null,
+            wawuUserId: row.wawuUserId,
+            accountNumber: wallet.accountNumber,
+          },
+          source: 'send',
+        },
+        undefined,
+        { quiet: true },
+      );
+    } catch (e) {
+      this.logger.error(
+        `card ${row.id}: the ledger could not record WAWU's fee transfer (${e instanceof Error ? e.name : 'error'})`,
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -270,6 +422,7 @@ export class WalletCardService implements OnModuleInit {
     const cards: CardView[] = [];
     for (const row of rows) {
       const settled = await this.settlePending(wallet, row);
+      await this.collectFee(wallet, settled);
       if (settled.state !== 'failed') cards.push(cardView(settled));
     }
     return { enabled, cards };
@@ -280,6 +433,7 @@ export class WalletCardService implements OnModuleInit {
     const row = await this.own(wallet, id);
     const settled = await this.settlePending(wallet, row);
     if (settled.state === 'failed') throw this.notFound();
+    await this.collectFee(wallet, settled);
     return cardView(settled);
   }
 
@@ -290,7 +444,10 @@ export class WalletCardService implements OnModuleInit {
   ): Promise<CardTransactionPage> {
     const cards = this.cards();
     const row = await this.own(wallet, id);
-    if (!row.providerCardId || !['active', 'frozen'].includes(row.state)) {
+    if (
+      !row.providerCardId ||
+      !['active', 'frozen', 'used'].includes(row.state)
+    ) {
       return { items: [], nextCursor: null };
     }
     try {
@@ -329,6 +486,7 @@ export class WalletCardService implements OnModuleInit {
   ): Promise<CardView> {
     this.assertCreatable();
     const cards = this.cards();
+    await this.assertCanAfford(wallet);
     const kind: CardKind = dto.kind;
     const name = cleanCardName(dto.name) ?? DEFAULT_NAMES[kind];
     const reference = `wawu-card-${randomBytes(6).toString('hex')}`;
@@ -369,6 +527,7 @@ export class WalletCardService implements OnModuleInit {
 
     // 3. Record it.
     const saved = await this.adopt(row, card);
+    await this.collectFee(wallet, saved);
     const view = cardView(saved, card.last4);
     await this.keys.finish(scope, 201, successBody(view));
     return view;
@@ -393,6 +552,7 @@ export class WalletCardService implements OnModuleInit {
       }
       if (found) {
         const saved = await this.adopt(row, found);
+        await this.collectFee(wallet, saved);
         const view = cardView(saved, found.last4);
         await this.keys.finish(scope, 201, successBody(view));
         return view;
@@ -530,9 +690,12 @@ export class WalletCardService implements OnModuleInit {
   ): Promise<CardView> {
     const cards = this.cards();
     const row = await this.own(wallet, id);
-    if (row.state === 'cancelled') {
+    if (row.state === 'cancelled' || row.state === 'used') {
       if (action === 'block') return cardView(row);
-      throw new MoneyError('card_blocked', BLOCKED_MESSAGE);
+      throw new MoneyError(
+        'card_blocked',
+        row.state === 'used' ? USED_MESSAGE : BLOCKED_MESSAGE,
+      );
     }
     const live = this.needLive(row);
     const w = { walletId: wallet.walletId };
@@ -599,6 +762,9 @@ export class WalletCardService implements OnModuleInit {
   private needLive(row: WalletCard): string {
     if (row.state === 'cancelled') {
       throw new MoneyError('card_blocked', BLOCKED_MESSAGE);
+    }
+    if (row.state === 'used') {
+      throw new MoneyError('card_blocked', USED_MESSAGE);
     }
     if (!row.providerCardId || PENDING_STATES.includes(row.state)) {
       throw new MoneyError('card_blocked', PENDING_ACTION_MESSAGE);

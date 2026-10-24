@@ -94,6 +94,12 @@ import { AdminCardsController } from './cards/admin-cards.controller';
 import { AdminCardsService } from './cards/admin-cards.service';
 import { CardCreatableGuard } from './cards/card-creatable.guard';
 import { CardSettings } from './cards/card-config';
+import { WalletCardPurge } from './cards/card-purge.service';
+import {
+  CardRevealLimitGuard,
+  CardRevealLimiter,
+} from './cards/card-reveal-limit';
+import { AccountPurgeModule } from '../account-purge/account-purge.module';
 import { MoneyCardsController } from './cards/money-cards.controller';
 import { WalletCardService } from './cards/wallet-card.service';
 
@@ -259,6 +265,8 @@ import { WalletCardService } from './cards/wallet-card.service';
     PlanSettingsModule,
     // The audit row of support freezing or blocking a card (task WALLET-31).
     AdminOpsAuditModule,
+    // The before-erase hook that blocks a person's cards (WALLET-31 round 1).
+    AccountPurgeModule,
   ],
   controllers: [
     MoneyPinController,
@@ -288,6 +296,9 @@ import { WalletCardService } from './cards/wallet-card.service';
     CardSettings,
     WalletCardService,
     CardCreatableGuard,
+    CardRevealLimiter,
+    CardRevealLimitGuard,
+    WalletCardPurge,
     AdminCardsService,
     WalletGate,
     WalletGateGuard,

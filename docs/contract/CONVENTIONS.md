@@ -3222,7 +3222,7 @@ switches and no spending limits (Nuvion serves none): those are not routes.
   approval, and `{ kind: "virtual" | "single_use", name? }`. Nuvion takes its
   fee from the person's account when it makes the card (dev, 24 Oct 2026:
   65,772 kobo for either kind), WAWU's fee is 0 (R-10; a value above 0 is not
-  collected yet, so the route answers `503 fees_not_set`). Answers `201` with
+  collected as a send's fee is, see "Round 1" below). Answers `201` with
   a `CardView`: `active`, or `pending` when Nuvion has not confirmed it (it
   is found again by its reference, never made twice; `pending` rows are
   looked for when the list is read). The same key and body answer the first
@@ -3263,3 +3263,30 @@ switches and no spending limits (Nuvion serves none): those are not routes.
   keep the Hub's row in step (`src/nuvion/handlers/cards.handler.ts`); a
   frozen or unfrozen event is followed by reading the card's status, so a late
   one cannot undo a newer change.
+
+### Round 1 changes to section 27 (WALLET-31, 24 Oct 2026)
+
+- **WAWU's own fee on a card is collected** like WAWU's fee on a send (FIX-52):
+  after the card exists, one transfer under the card's reference plus `-fee`
+  from the person's account to WAWU's, its ledger side (money in on WAWU's
+  account) written once, the provider answering a repeat with the original.
+  Before anything is claimed the wallet's balance is read and a wallet that
+  cannot cover both fees is `402 insufficient_funds` (the key is free). A fee
+  transfer that is not confirmed never undoes the card: it is tried again each
+  time the card is read (`WalletCard.feeCollectedAt` null means owed).
+  `WAWU_FEE_CARD_KOBO` above 0 is therefore a working setting (a provider that
+  cannot move a fee as its own transfer answers `fees_not_set`).
+- **A single-use card Nuvion blocked after its payment is `used`**
+  (`CardStatus` gains `used`): it cannot be frozen, unfrozen or shown (`409
+  card_blocked`), its payments are still listed, and it no longer counts as
+  held. A card Nuvion blocked that is not single-use is `frozen`.
+- **`POST /money/cards/{id}/reveal` has its own count**: 5 a minute per person,
+  then `429 card_reveal_rate_limited` with `retryAfterSeconds`, after the wallet
+  gate and before the PIN.
+- While cards are off (`enabled: false`) a person's existing cards are still
+  listed and can be frozen, blocked and read; only making a card is refused.
+- A repeated admin unfreeze or cancel changes nothing and writes no second
+  audit row.
+- A `cards.*` delivery is stored without any key that could hold a number, CVV
+  or expiry. Deleting an account blocks every card the person still holds first
+  (the row is OWNED and goes with the account).

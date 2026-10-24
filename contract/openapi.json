@@ -18872,6 +18872,16 @@
               }
             }
           },
+          "429": {
+            "description": "reason.code: card_reveal_rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
           "503": {
             "description": "reason.code: cards_unavailable, provider_unreachable",
             "content": {
@@ -41120,7 +41130,8 @@
               "tier_required",
               "cards_unavailable",
               "card_limit_reached",
-              "card_blocked"
+              "card_blocked",
+              "card_reveal_rate_limited"
             ],
             "type": "string"
           },
@@ -48145,7 +48156,8 @@
               "pending",
               "frozen",
               "active",
-              "blocked"
+              "blocked",
+              "used"
             ]
           },
           "currency": {

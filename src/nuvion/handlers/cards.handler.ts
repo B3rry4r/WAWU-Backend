@@ -128,9 +128,16 @@ export class NuvionCardsHandler implements NuvionEventHandler {
           data: { state: 'active', frozenBy: null },
         });
       } else if (card.status !== 'active' && row.state === 'active') {
+        // Nuvion blocked a card the Hub had not frozen. A single-use card is
+        // blocked after its one payment: it is used, not frozen (round 1, L2);
+        // any other card was frozen elsewhere. The Hub's own freeze writes
+        // `frozen` right after Nuvion answers, over this if it came first.
         await this.prisma.walletCard.updateMany({
           where: { id: row.id, state: 'active' },
-          data: { state: 'frozen', frozenBy: row.frozenBy ?? 'person' },
+          data:
+            row.type === 'single_use'
+              ? { state: 'used', frozenBy: null }
+              : { state: 'frozen', frozenBy: row.frozenBy ?? 'person' },
         });
       }
       return { outcome: 'done', note: 'card state followed Nuvion' };

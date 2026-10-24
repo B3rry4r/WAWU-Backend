@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { withoutCardSecrets } from '../webhook/card-scrub';
+import { NuvionWebhookStore } from '../webhook/nuvion-webhook.service';
 import {
   cardExpiry,
   e164,
@@ -108,5 +111,58 @@ describe('WALLET-31: reading Nuvion card objects', () => {
     expect(e164('080 1234 5678')).toBe('+2348012345678');
     expect(e164('12345')).toBeNull();
     expect(e164(null)).toBeNull();
+  });
+
+  it('a cards.* delivery is stored without any key that could hold a number, CVV or expiry, and its dedup hash is of what arrived (round 1, L3)', async () => {
+    const body = {
+      event: 'cards.created',
+      data: {
+        id: '01HXYZ9012ABCDEFGHJKMNPQRS',
+        name: 'wawu-card-ab12cd34ef56',
+        number: '4111111111111234',
+        cvv: '123',
+        nested: { Expiration_Month: '09', expiration_year: '28', keep: 'yes' },
+        cards: [{ pan: '4111111111111234', id: 'x' }],
+      },
+    };
+    const raw = Buffer.from(JSON.stringify(body));
+    let stored: Record<string, unknown> | null = null;
+    const store = new NuvionWebhookStore({
+      nuvionWebhookEvent: {
+        createMany: jest.fn(({ data }: { data: Record<string, unknown>[] }) => {
+          stored = data[0];
+          return Promise.resolve({ count: 1 });
+        }),
+      },
+    } as never);
+    await store.record({ eventId: 'evt-1', signedAt: '1', rawBody: raw, body });
+    const everything =
+      JSON.stringify(stored!.payload) +
+      Buffer.from(stored!.rawBody as Uint8Array).toString('utf8');
+    for (const secret of [
+      '4111111111111234',
+      '"123"',
+      'cvv',
+      'expiration',
+      'pan',
+    ]) {
+      expect(everything.toLowerCase()).not.toContain(secret.toLowerCase());
+    }
+    expect(everything).toContain('wawu-card-ab12cd34ef56');
+    expect(everything).toContain('keep');
+    expect(stored!.bodySha256).toBe(
+      createHash('sha256').update(raw).digest('hex'),
+    );
+    // Other events are stored as they came.
+    await store.record({
+      eventId: 'evt-2',
+      signedAt: '1',
+      rawBody: Buffer.from(
+        '{"event":"inflows.completed","data":{"number":"5"}}',
+      ),
+      body: { event: 'inflows.completed', data: { number: '5' } },
+    });
+    expect(JSON.stringify(stored!.payload)).toContain('"number":"5"');
+    expect(withoutCardSecrets(null)).toBeNull();
   });
 });

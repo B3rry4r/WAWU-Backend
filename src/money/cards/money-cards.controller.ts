@@ -31,6 +31,8 @@ import {
   RequireIdempotentApproval,
 } from '../payments/idempotency';
 import { RequireApproval } from '../pin/transaction-pin.guard';
+import { WalletGateGuard } from '../gate/wallet-gate';
+import { CardRevealLimitGuard } from './card-reveal-limit';
 import { CardCreatableGuard } from './card-creatable.guard';
 import { CardTransactionsQueryDto, CreateCardDto } from './card-request.dto';
 import type {
@@ -142,7 +144,11 @@ export class MoneyCardsController {
     'card_blocked',
     'cards_unavailable',
     'provider_unreachable',
+    'card_reveal_rate_limited',
   )
+  // The last decorator runs its guards first: the wallet gate, then the
+  // reveal count (5 a minute per person), then the PIN.
+  @UseGuards(WalletGateGuard, CardRevealLimitGuard)
   reveal(
     @CurrentWallet() wallet: OpenWallet,
     @Param('id', ParseUUIDPipe) id: string,

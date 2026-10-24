@@ -33,11 +33,18 @@ import { HUB_APP_OPTIONS } from '../../../hub-app-options';
 import { nuvionWalletId } from '../../../nuvion/areas/accounts';
 import { NuvionCardsHandler } from '../../../nuvion/handlers/cards.handler';
 import { NuvionClient } from '../../../nuvion/nuvion-client';
-import { NuvionWalletProvider } from '../../../nuvion/nuvion-wallet-provider';
+import { NuvionBookArea } from '../../../nuvion/areas/book';
+import { PrismaNuvionBookStore } from '../../../nuvion/areas/book-store';
+import {
+  NuvionWalletProvider,
+  nuvionAreas,
+} from '../../../nuvion/nuvion-wallet-provider';
 import { PlanSettingsService } from '../../../plan-settings/plan-settings.service';
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
 import { MoneyModule } from '../../money.module';
 import { AdminCardsController } from '../admin-cards.controller';
+import { CardSettings } from '../card-config';
+import { WalletCardPurge } from '../card-purge.service';
 import { AdminCardsService } from '../admin-cards.service';
 import type {
   CardDetailsView,
@@ -95,6 +102,8 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
   let prisma: PrismaService;
   let admin: AdminCardsService;
   let plan: PlanSettingsService;
+  let settings: CardSettings;
+  let purge: WalletCardPurge;
   let handler: NuvionCardsHandler;
   const users: string[] = [];
   const previous: Record<string, string | undefined> = {};
@@ -110,6 +119,7 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
     auth: string;
     entity: string;
     account: string;
+    accountNumber: string;
   }
 
   const seen = (path: RegExp, method?: string): StandinRequest[] =>
@@ -330,18 +340,30 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
     }));
   }
 
-  async function person(): Promise<Person> {
+  async function person(kobo = 5_000_000): Promise<Person> {
     const id = randomUUID();
     users.push(id);
-    const account = book.openPerson(500_000, '0123456789');
+    const accountNumber = `7${String(Date.now()).slice(-6)}${String(users.length).padStart(3, '0')}`;
+    const account = book.openPerson(kobo, accountNumber);
     await prisma.fintavaWallet.create({
       data: {
         wawuUserId: id,
         customerId: account.entity_id,
         walletId: nuvionWalletId(account.entity_id, account.id),
-        accountNumber: `7${String(Date.now()).slice(-6)}${String(users.length).padStart(3, '0')}`,
+        accountNumber,
         accountName: 'Cards Tester',
         provider: 'nuvion',
+      },
+    });
+    await prisma.nuvionEntity.create({
+      data: {
+        wawuUserId: id,
+        entityId: account.entity_id,
+        accountId: account.id,
+        nuvionBan: account.nuvion_ban,
+        accountNumber,
+        status: 'approved',
+        currency: 'NGN',
       },
     });
     await prisma.userProfile.create({
@@ -357,7 +379,13 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
       .set('Authorization', auth)
       .send({ pin: PIN, pinConfirmation: PIN });
     expect(set.status).toBe(201);
-    return { id, auth, entity: account.entity_id, account: account.id };
+    return {
+      id,
+      auth,
+      entity: account.entity_id,
+      account: account.id,
+      accountNumber,
+    };
   }
 
   const http = () => request(app.getHttpServer());
@@ -384,6 +412,9 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
     book.install();
     fakeNuvionCards();
     book.fundOperational(5_000_000);
+    // A fee's book transfer is confirmed at once; asked again under its reference it answers with the original.
+    book.mode = 'successful';
+    book.duplicateAs = 'original';
     const env: Record<string, string> = {
       FINTAVA_BASE_URL: 'http://127.0.0.1:1',
       FINTAVA_API_KEY: 'live_test_w31_cards_0123456789FAKEKEY',
@@ -403,7 +434,11 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
       process.env[k] = v;
     }
     const client = new NuvionClient(
-      standin.settings({ moneyTimeoutMs: 2_000, readTimeoutMs: 2_000 }),
+      standin.settings({
+        moneyTimeoutMs: 2_000,
+        readTimeoutMs: 2_000,
+        operationalAccountId: book.operational.id,
+      }),
       'nv_test_sk_W31cardsKEY00000000000000000',
     );
     const moduleRef = await Test.createTestingModule({
@@ -416,7 +451,20 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
       providers: [WawuJwtStrategy, WawuIdClient],
     })
       .overrideProvider(WALLET_PROVIDER)
-      .useValue(new NuvionWalletProvider(client))
+      .useFactory({
+        inject: [PrismaService],
+        factory: (db: PrismaService) =>
+          new NuvionWalletProvider(client, {
+            ...nuvionAreas(client),
+            // No wait inside the request (the book transfers are walked in nuvion-book.contract.spec.ts).
+            book: new NuvionBookArea(
+              client,
+              client.settings,
+              new PrismaNuvionBookStore(db),
+              { settleStepsMs: [] },
+            ),
+          }),
+      })
       .setLogger(logger)
       .compile();
     app = moduleRef.createNestApplication({ ...HUB_APP_OPTIONS, logger });
@@ -436,6 +484,8 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
     prisma = moduleRef.get(PrismaService);
     admin = moduleRef.get(AdminCardsService);
     plan = moduleRef.get(PlanSettingsService);
+    settings = moduleRef.get(CardSettings);
+    purge = moduleRef.get(WalletCardPurge);
     handler = new NuvionCardsHandler(prisma, {
       get: () => moduleRef.get<NuvionWalletProvider>(WALLET_PROVIDER),
     } as never);
@@ -443,6 +493,20 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
 
   afterAll(async () => {
     if (prisma) {
+      await prisma.fintavaLedgerEntry.deleteMany({
+        where: {
+          OR: [
+            { wawuUserId: { in: users } },
+            { customerReference: { startsWith: 'wawu-card-' } },
+          ],
+        },
+      });
+      await prisma.nuvionBookTransfer.deleteMany({
+        where: { reference: { startsWith: 'wawu-card-' } },
+      });
+      await prisma.nuvionEntity.deleteMany({
+        where: { wawuUserId: { in: users } },
+      });
       await prisma.walletCard.deleteMany({
         where: { wawuUserId: { in: users } },
       });
@@ -799,6 +863,8 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
         await http().get(BASE).set('Authorization', p.auth),
       ).data!;
       expect(list.enabled).toBe(false);
+      // The card she holds is still listed, so she can still freeze or block it (round 1, L5).
+      expect(list.cards.map((c) => c.id)).toEqual([card.id]);
       const block = await http()
         .delete(`${BASE}/${card.id}`)
         .set('Authorization', p.auth);
@@ -831,6 +897,10 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
     expect(await admin.unfreeze(actor, card.id)).toMatchObject({
       status: 'active',
     });
+    expect(await admin.cancel(actor, card.id)).toMatchObject({
+      status: 'blocked',
+    });
+    // A repeat is a no-op with no second audit row (round 1, L6).
     expect(await admin.cancel(actor, card.id)).toMatchObject({
       status: 'blocked',
     });
@@ -910,5 +980,172 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
         data: { id: '01NOTOURS0000000000000000A' },
       }),
     ).toMatchObject({ outcome: 'done' });
+  });
+
+  // -------------------------------------------------------------------------
+  // Fix round 1
+  // -------------------------------------------------------------------------
+
+  describe('WAWU fee on a card (M1)', () => {
+    const FEE_WAWU = 1_000;
+    beforeEach(() => {
+      (settings as { wawuFeeKobo: number }).wawuFeeKobo = FEE_WAWU;
+    });
+    afterEach(() => {
+      (settings as { wawuFeeKobo: number }).wawuFeeKobo = 0;
+    });
+
+    it("collects WAWU's fee once the card exists, as a send's fee is: one transfer under <card>-fee into WAWU's account, its ledger side written, never twice", async () => {
+      const p = await person();
+      const operationalBefore = book.availableOf(book.operational.id);
+      const quote = asEnvelope<CardQuoteView>(
+        await http().get(`${BASE}/quote`).set('Authorization', p.auth),
+      ).data!;
+      expect(quote).toMatchObject({
+        canCreate: true,
+        fee: {
+          providerFeeKobo: FEE,
+          wawuFeeKobo: FEE_WAWU,
+          totalFeeKobo: FEE + FEE_WAWU,
+        },
+      });
+      const res = await makeCard(p);
+      expect(res.status).toBe(201);
+      const card = asEnvelope<CardView>(res).data!;
+      expect(card.status).toBe('active');
+      const row = await prisma.walletCard.findUniqueOrThrow({
+        where: { id: card.id },
+      });
+      expect(row.feeCollectedAt).not.toBeNull();
+      expect(row.wawuFeeKobo).toBe(BigInt(FEE_WAWU));
+      expect(book.availableOf(p.account)).toBe(5_000_000 - FEE_WAWU);
+      expect(book.availableOf(book.operational.id)).toBe(
+        operationalBefore + FEE_WAWU,
+      );
+      const ledger = await prisma.fintavaLedgerEntry.findMany({
+        where: { customerReference: `${row.reference}-fee` },
+      });
+      expect(ledger).toHaveLength(1);
+      expect(Number(ledger[0].amountKobo)).toBe(FEE_WAWU);
+      expect(ledger[0].direction).toBe('in');
+      // Owed again (the confirmation was lost): the next read asks the provider under the same reference, which answers with the original.
+      await prisma.walletCard.update({
+        where: { id: card.id },
+        data: { feeCollectedAt: null },
+      });
+      await http().get(BASE).set('Authorization', p.auth).expect(200);
+      expect(
+        (await prisma.walletCard.findUniqueOrThrow({ where: { id: card.id } }))
+          .feeCollectedAt,
+      ).not.toBeNull();
+      expect(book.availableOf(p.account)).toBe(5_000_000 - FEE_WAWU);
+      expect(
+        await prisma.fintavaLedgerEntry.count({
+          where: { customerReference: `${row.reference}-fee` },
+        }),
+      ).toBe(1);
+    });
+
+    it('a wallet that cannot cover both fees is refused before anything is claimed or sent: 402, no card, the key free', async () => {
+      const p = await person(FEE + FEE_WAWU - 1);
+      const key = randomUUID();
+      const before = seen(/^\/virtual-cards$/, 'POST').length;
+      const res = await makeCard(p, 'virtual', key);
+      expect(res.status).toBe(402);
+      expect(asEnvelope(res).reason?.code).toBe('insufficient_funds');
+      expect(asEnvelope(res).reason?.message).toContain('667.72');
+      expect(seen(/^\/virtual-cards$/, 'POST').length).toBe(before);
+      expect(
+        await prisma.walletCard.count({ where: { wawuUserId: p.id } }),
+      ).toBe(0);
+      expect(
+        await prisma.moneyIdempotencyKey.count({ where: { wawuUserId: p.id } }),
+      ).toBe(0);
+    });
+  });
+
+  it('shows the details at most 5 times a minute, then its own 429, before the PIN is looked at', async () => {
+    const p = await person();
+    const card = asEnvelope<CardView>(await makeCard(p)).data!;
+    const open = () =>
+      http()
+        .post(`${BASE}/${card.id}/reveal`)
+        .set('Authorization', p.auth)
+        .set('X-Transaction-Pin', PIN);
+    for (let i = 0; i < 5; i += 1) expect((await open()).status).toBe(200);
+    const sixth = await open();
+    expect(sixth.status).toBe(429);
+    expect(asEnvelope(sixth).reason?.code).toBe('card_reveal_rate_limited');
+    // Someone else's count is their own, and a person with no wallet is answered by the gate first.
+    const other = await person();
+    const otherCard = asEnvelope<CardView>(await makeCard(other)).data!;
+    expect(
+      (
+        await http()
+          .post(`${BASE}/${otherCard.id}/reveal`)
+          .set('Authorization', other.auth)
+          .set('X-Transaction-Pin', PIN)
+      ).status,
+    ).toBe(200);
+  });
+
+  it('a single-use card Nuvion blocked after its payment reads as used: nothing to freeze, unfreeze or show, and it no longer counts as held', async () => {
+    const p = await person();
+    const card = asEnvelope<CardView>(await makeCard(p, 'single_use')).data!;
+    const row = await prisma.walletCard.findUniqueOrThrow({
+      where: { id: card.id },
+    });
+    cards.get(row.providerCardId!)!.status = 'blocked';
+    const result = await handler.handle({
+      id: randomUUID(),
+      eventId: randomUUID(),
+      event: 'cards.frozen',
+      resourceId: row.providerCardId,
+      entityId: p.entity,
+      data: { id: row.providerCardId, name: row.reference },
+      receivedAt: new Date(),
+      attempts: 1,
+    });
+    expect(result.outcome).toBe('done');
+    const used = asEnvelope<CardView>(
+      await http().get(`${BASE}/${card.id}`).set('Authorization', p.auth),
+    ).data!;
+    expect(used).toMatchObject({ status: 'used', frozenBySupport: false });
+    for (const [method, path, pin] of [
+      ['post', `${BASE}/${card.id}/freeze`, false],
+      ['post', `${BASE}/${card.id}/unfreeze`, true],
+      ['post', `${BASE}/${card.id}/reveal`, true],
+    ] as const) {
+      let req = http()[method](path).set('Authorization', p.auth);
+      if (pin) req = req.set('X-Transaction-Pin', PIN);
+      const res = await req;
+      expect(res.status).toBe(409);
+      expect(asEnvelope(res).reason?.code).toBe('card_blocked');
+    }
+    expect(
+      (
+        await http()
+          .get(`${BASE}/${card.id}/transactions`)
+          .set('Authorization', p.auth)
+      ).status,
+    ).toBe(200);
+    const quote = asEnvelope<CardQuoteView>(
+      await http().get(`${BASE}/quote`).set('Authorization', p.auth),
+    ).data!;
+    expect(quote.limits.activeNow).toBe(0);
+  });
+
+  it('erasing the account blocks every card the person still holds at Nuvion first', async () => {
+    const p = await person();
+    const a = asEnvelope<CardView>(await makeCard(p)).data!;
+    const b = asEnvelope<CardView>(await makeCard(p, 'single_use')).data!;
+    await purge.beforeErase(p.id);
+    for (const id of [a.id, b.id]) {
+      const row = await prisma.walletCard.findUniqueOrThrow({ where: { id } });
+      expect(row.state).toBe('cancelled');
+      expect(cards.get(row.providerCardId!)!.deleted).toBe(true);
+    }
+    // Safe to run again.
+    await purge.beforeErase(p.id);
   });
 });

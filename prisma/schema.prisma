@@ -8006,6 +8006,8 @@ model WalletCard {
   /// Our own words for a card that failed; never Nuvion's text.
   failure         String?
   cancelledAt     DateTime?
+  /// When WAWU's fee on the card (`wawuFeeKobo`) was confirmed as moved to WAWU's account; null while it is owed or when it is 0 (round 1, M1).
+  feeCollectedAt  DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

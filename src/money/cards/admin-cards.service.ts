@@ -12,7 +12,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import type { OpenWallet } from '../gate/wallet-gate';
 import type { AdminCardsQueryDto } from './card-request.dto';
 import type { AdminCardPage, AdminCardView, CardView } from './card-view.type';
-import { WalletCardService } from './wallet-card.service';
+import { cardView, WalletCardService } from './wallet-card.service';
 
 type Row = Prisma.WalletCardGetPayload<object>;
 
@@ -124,6 +124,16 @@ export class AdminCardsService {
       );
     }
     const open: OpenWallet = { wawuUserId: row.wawuUserId, ...wallet };
+    // A repeat changes nothing and is not audited a second time (round 1, L6).
+    if (
+      (action === 'admin-freeze' &&
+        row.state === 'frozen' &&
+        row.frozenBy === 'admin') ||
+      (action === 'admin-unfreeze' && row.state === 'active') ||
+      (action === 'block' && row.state === 'cancelled')
+    ) {
+      return cardView(row);
+    }
     const done = await this.cards.control(open, id, action);
     this.logger.log(`card ${id} ${action} by support: admin ${actor.id}`);
     await this.audit.record(actor, {

@@ -7,9 +7,10 @@ export type CardKind = 'virtual' | 'single_use';
  * `pending`: asked for, the issuer has not confirmed it yet (nothing is made
  * twice). `frozen`: no payment goes through until it is unfrozen. `blocked`:
  * stopped for good (the issuer soft-deletes it); it cannot be used or brought
- * back.
+ * back. `used`: a single-use card that Nuvion blocked after its one payment; it
+ * cannot be frozen, unfrozen or shown again.
  */
-export type CardStatus = 'pending' | 'active' | 'frozen' | 'blocked';
+export type CardStatus = 'pending' | 'active' | 'frozen' | 'blocked' | 'used';
 
 /** One card of the person's (W29, W31, W32). Never the number, the expiry or the CVV. */
 export interface CardView {

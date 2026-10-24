@@ -259,5 +259,6 @@ export const MONEY_ERROR_CODES = [
   'cards_unavailable',
   'card_limit_reached',
   'card_blocked',
+  'card_reveal_rate_limited',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];
