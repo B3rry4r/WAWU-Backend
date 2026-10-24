@@ -1,14 +1,22 @@
 import {
-  applyDecorators,
   Body,
   Controller,
   Get,
+  Header,
   HttpCode,
   Param,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
-import { BuiltBy, declaredOnly } from '../money-contract';
+import { AdminRole } from '../../../generated/prisma/enums';
+import { AdminRoles } from '../../admin/auth/decorators/admin-roles.decorator';
+import { CurrentAdmin } from '../../admin/auth/decorators/current-admin.decorator';
+import type { AdminUserView } from '../../admin/auth/admin-user-view.type';
+import { AdminAuthGuard } from '../../admin/auth/guards/admin-auth.guard';
+import { AdminRolesGuard } from '../../admin/auth/guards/admin-roles.guard';
+import { BuiltBy } from '../money-contract';
+import { AbroadAdminService } from './abroad-admin.service';
 import {
   AdminAbroadReasonDto,
   AdminAbroadSendsQueryDto,
@@ -20,12 +28,8 @@ import type {
   AdminAbroadSendView,
 } from './abroad-view.type';
 
-/**
- * Declared without the guards (this module has no providers): the served
- * handler carries `@UseGuards(AdminAuthGuard, AdminRolesGuard)` on its class
- * and `@AdminRoles('superadmin', 'finance')` on each route.
- */
-const SuperadminOrFinance = (): MethodDecorator => applyDecorators();
+const SuperadminOrFinance = () =>
+  AdminRoles(AdminRole.superadmin, AdminRole.finance);
 
 /**
  * What the admin dashboard sees of sends abroad (task NUV-11, R-84): every
@@ -34,24 +38,29 @@ const SuperadminOrFinance = (): MethodDecorator => applyDecorators();
  * reviewer and support are refused on every route. The three writes leave an
  * audit row each (who, what, why, when) and none of them moves money.
  */
+@UseGuards(AdminAuthGuard, AdminRolesGuard)
 @Controller('admin/money/abroad')
-export class AbroadAdminContractController {
+export class AbroadAdminController {
+  constructor(private readonly admin: AbroadAdminService) {}
+
   /** Sends, newest first, for one person or everyone; filter by status. */
   @Get('sends')
+  @Header('Cache-Control', 'no-store')
   @BuiltBy('NUV-11')
   @SuperadminOrFinance()
   sends(
     @Query() query: AdminAbroadSendsQueryDto,
   ): Promise<AdminAbroadSendPage> {
-    return declaredOnly('NUV-11', query);
+    return this.admin.list(query);
   }
 
   /** One send. */
   @Get('sends/:id')
+  @Header('Cache-Control', 'no-store')
   @BuiltBy('NUV-11')
   @SuperadminOrFinance()
   send(@Param('id') id: string): Promise<AdminAbroadSendView> {
-    return declaredOnly('NUV-11', id);
+    return this.admin.get(id);
   }
 
   /**
@@ -66,10 +75,11 @@ export class AbroadAdminContractController {
   @BuiltBy('NUV-11')
   @SuperadminOrFinance()
   cancel(
+    @CurrentAdmin() admin: AdminUserView,
     @Param('id') id: string,
     @Body() dto: AdminAbroadReasonDto,
   ): Promise<AdminAbroadCancelView> {
-    return declaredOnly('NUV-11', id, dto);
+    return this.admin.cancel(admin, id, dto.reason);
   }
 
   /**
@@ -82,10 +92,11 @@ export class AbroadAdminContractController {
   @BuiltBy('NUV-11')
   @SuperadminOrFinance()
   freeze(
+    @CurrentAdmin() admin: AdminUserView,
     @Param('wawuUserId') wawuUserId: string,
     @Body() dto: AdminAbroadReasonDto,
   ): Promise<AdminAbroadFreezeView> {
-    return declaredOnly('NUV-11', wawuUserId, dto);
+    return this.admin.freeze(admin, wawuUserId, dto.reason);
   }
 
   /** Lets go of a frozen person. Needs a reason; one audit row. */
@@ -94,9 +105,10 @@ export class AbroadAdminContractController {
   @BuiltBy('NUV-11')
   @SuperadminOrFinance()
   unfreeze(
+    @CurrentAdmin() admin: AdminUserView,
     @Param('wawuUserId') wawuUserId: string,
     @Body() dto: AdminAbroadReasonDto,
   ): Promise<AdminAbroadFreezeView> {
-    return declaredOnly('NUV-11', wawuUserId, dto);
+    return this.admin.unfreeze(admin, wawuUserId, dto.reason);
   }
 }

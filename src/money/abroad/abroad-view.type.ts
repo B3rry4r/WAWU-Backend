@@ -8,12 +8,7 @@
 export type AbroadMethod = 'bank' | 'mobile_money';
 
 export type AbroadFieldKindView =
-  | 'text'
-  | 'digits'
-  | 'bank'
-  | 'phone'
-  | 'email'
-  | 'choice';
+  'text' | 'digits' | 'bank' | 'phone' | 'email' | 'choice';
 
 export interface AbroadFieldOptionView {
   value: string;
@@ -201,6 +196,8 @@ export interface AdminAbroadSendView {
   amountToMinor: number;
   providerFeeMinor: number | null;
   wawuFeeKobo: number;
+  /** WAWU's fee could not be taken from the naira wallet yet; finance looks at these. */
+  wawuFeeOwed: boolean;
   /** Our reference at the provider. */
   reference: string;
   /** The provider's own word for its state, as last read; null before it answered. */

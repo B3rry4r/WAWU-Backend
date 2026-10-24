@@ -89,6 +89,13 @@ import { MoneyCheckService } from './check/money-check.service';
 import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
 import { MoneyLimitsModule } from './limits/money-limits.module';
 import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
+import { AbroadAdminController } from './abroad/abroad-admin.controller';
+import { AbroadAdminService } from './abroad/abroad-admin.service';
+import { AbroadController } from './abroad/abroad.controller';
+import { AbroadSendGuard } from './abroad/abroad-send.guard';
+import { AbroadSendService } from './abroad/abroad-send.service';
+import { AbroadService } from './abroad/abroad.service';
+import { AbroadSettings } from './abroad/abroad-settings';
 
 /**
  * The served half of the Naira wallet contract. Routes move here from
@@ -271,6 +278,9 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyReceiptController,
     PublicReceiptController,
     MoneyRecipientController,
+    // NUV-11: sending money abroad (R-84).
+    AbroadController,
+    AbroadAdminController,
   ],
   providers: [
     WalletGate,
@@ -329,6 +339,11 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyCheckMailer,
     MoneyCheckScope,
     MoneyCheckService,
+    AbroadSettings,
+    AbroadService,
+    AbroadSendService,
+    AbroadAdminService,
+    AbroadSendGuard,
   ],
   exports: [
     WalletGate,
@@ -358,6 +373,7 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     WalletTransferService,
     TransferRecipients,
     EarningSettlementService,
+    AbroadSendService,
   ],
 })
 export class MoneyModule {}

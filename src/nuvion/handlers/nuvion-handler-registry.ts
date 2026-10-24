@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { NuvionAbroadHandler } from './abroad.handler';
 import { NuvionAccountsHandler } from './accounts.handler';
 import { NuvionBookHandler } from './book.handler';
 import { NuvionDocumentsHandler } from './documents.handler';
@@ -26,8 +27,17 @@ export class NuvionHandlerRegistry {
     book: NuvionBookHandler,
     payouts: NuvionPayoutsHandler,
     reconcile: NuvionReconcileHandler,
+    abroad: NuvionAbroadHandler,
   ) {
-    for (const h of [opening, documents, accounts, book, payouts, reconcile]) {
+    for (const h of [
+      opening,
+      documents,
+      accounts,
+      book,
+      payouts,
+      reconcile,
+      abroad,
+    ]) {
       this.add(h);
     }
   }

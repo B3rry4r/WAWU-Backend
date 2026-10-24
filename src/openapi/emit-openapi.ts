@@ -10,7 +10,6 @@ import {
   type PathItemObject,
 } from '@nestjs/swagger';
 import { AppModule } from '../app.module';
-import { AbroadContractModule } from '../money/abroad/abroad-contract.module';
 import { FxContractModule } from '../money/fx/fx-contract.module';
 import { MoneyContractModule } from '../money/money-contract.module';
 
@@ -63,10 +62,7 @@ async function emit(): Promise<void> {
     (await addDeclaredRoutes(document, config, MoneyContractModule)) +
     // WALLET-21: the foreign-currency routes, declared until its second
     // milestone serves them (src/money/fx/fx-contract.module.ts).
-    (await addDeclaredRoutes(document, config, FxContractModule)) +
-    // NUV-11: the send-abroad routes, declared until its second milestone
-    // serves them (src/money/abroad/abroad-contract.module.ts).
-    (await addDeclaredRoutes(document, config, AbroadContractModule));
+    (await addDeclaredRoutes(document, config, FxContractModule));
 
   // cwd, not __dirname: `nest build` nests output under dist/src, so a path
   // relative to this file lands the contract inside dist/ and gets wiped by

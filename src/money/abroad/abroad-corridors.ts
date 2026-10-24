@@ -16,12 +16,7 @@
 
 /** A field's kind tells the app which input to draw. */
 export type AbroadFieldKind =
-  | 'text'
-  | 'digits'
-  | 'bank'
-  | 'phone'
-  | 'email'
-  | 'choice';
+  'text' | 'digits' | 'bank' | 'phone' | 'email' | 'choice';
 
 export interface AbroadFieldDef {
   /** The key Nuvion calls it (`account_number`), or `bank_address_line1`. */
@@ -69,7 +64,11 @@ export interface AbroadCountryDef {
   rails: AbroadRailDef[];
 }
 
-const text = (key: string, label: string, hint: string | null = null): AbroadFieldDef => ({
+const text = (
+  key: string,
+  label: string,
+  hint: string | null = null,
+): AbroadFieldDef => ({
   key,
   label,
   kind: 'text',
@@ -173,7 +172,10 @@ export const FIELDS: Record<string, AbroadFieldDef> = {
   bank_address_line1: text('bank_address_line1', "Bank's street address"),
   bank_address_city: text('bank_address_city', "Bank's city"),
   bank_address_state: text('bank_address_state', "Bank's state or province"),
-  bank_address_postal_code: text('bank_address_postal_code', "Bank's postal code"),
+  bank_address_postal_code: text(
+    'bank_address_postal_code',
+    "Bank's postal code",
+  ),
 };
 
 const BANK_ADDRESS = [
@@ -214,7 +216,13 @@ const sepa = (country: string, name: string): AbroadCountryDef => ({
   country,
   name,
   currency: 'EUR',
-  rails: [bank({ speed: 'Same day', inferred: 'sepa', fields: ['bank_name', 'iban'] })],
+  rails: [
+    bank({
+      speed: 'Same day',
+      inferred: 'sepa',
+      fields: ['bank_name', 'iban'],
+    }),
+  ],
 });
 
 /** The countries, in the order the app lists them (Africa and the usual homes first). */
@@ -351,7 +359,11 @@ export const ABROAD_COUNTRIES: readonly AbroadCountryDef[] = [
       bank({
         speed: 'Same or next day',
         schemes: [
-          { id: 'eft', label: 'Bank transfer (EFT)', speed: 'Same or next day' },
+          {
+            id: 'eft',
+            label: 'Bank transfer (EFT)',
+            speed: 'Same or next day',
+          },
           {
             id: 'interac_account',
             label: 'Interac to an account',
@@ -481,7 +493,12 @@ export const ABROAD_COUNTRIES: readonly AbroadCountryDef[] = [
  * "The value 'UGX' is not supported for currency yet". They are listed as
  * not available until an admin empties `abroad.corridors_off`.
  */
-export const DEV_REFUSED_COUNTRIES: readonly string[] = ['UG', 'MX', 'SG', 'HK'];
+export const DEV_REFUSED_COUNTRIES: readonly string[] = [
+  'UG',
+  'MX',
+  'SG',
+  'HK',
+];
 
 export function countryOf(code: string): AbroadCountryDef | null {
   return ABROAD_COUNTRIES.find((c) => c.country === code) ?? null;
@@ -498,7 +515,10 @@ export function railOf(
  * The field keys asked for a rail and scheme: the scheme's own list when it
  * has one, else the rail's.
  */
-export function fieldKeysFor(rail: AbroadRailDef, scheme: string | null): string[] {
+export function fieldKeysFor(
+  rail: AbroadRailDef,
+  scheme: string | null,
+): string[] {
   const s = rail.schemes.find((x) => x.id === scheme);
   return s?.fields ?? rail.fields;
 }

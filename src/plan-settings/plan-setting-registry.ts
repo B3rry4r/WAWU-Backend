@@ -129,6 +129,50 @@ function lines(raw: unknown): string[] {
   });
 }
 
+/** One limit per currency, each a line like `USD 500000` (the currency, a space, the most in its smallest unit). NUV-11. */
+const ABROAD_LIMIT_CURRENCIES = [
+  'NGN',
+  'USD',
+  'EUR',
+  'GBP',
+  'CAD',
+  'AED',
+  'GHS',
+];
+function currencyLimits(raw: unknown): string[] {
+  const list = lines(raw);
+  const seen = new Set<string>();
+  for (const line of list) {
+    const m = /^([A-Z]{3}) ([1-9][0-9]{0,14})$/.exec(line);
+    if (!m || !ABROAD_LIMIT_CURRENCIES.includes(m[1])) {
+      throw new SettingInvalid(
+        `needs every line like "USD 500000": one of ${ABROAD_LIMIT_CURRENCIES.join(', ')}, a space, then the most in that currency's smallest unit`,
+      );
+    }
+    if (seen.has(m[1])) {
+      throw new SettingInvalid(`names ${m[1]} more than once`);
+    }
+    seen.add(m[1]);
+  }
+  return list;
+}
+
+/** Countries switched off for sending abroad: a list of two-letter codes, each once. NUV-11. */
+function countryCodes(raw: unknown): string[] {
+  const list = lines(raw);
+  if (new Set(list).size !== list.length) {
+    throw new SettingInvalid('names a country more than once');
+  }
+  for (const line of list) {
+    if (!/^[A-Z]{2}$/.test(line)) {
+      throw new SettingInvalid(
+        'needs every line to be a two-letter country code like "UG"',
+      );
+    }
+  }
+  return list;
+}
+
 /**
  * The languages Dubbing offers (AITOOLS-05): a list of lines, each a language
  * code, one space and the name a person reads ("yo Yoruba"). 1 to 200 lines,
@@ -836,6 +880,65 @@ export function buildRegistry(
       parse: count,
     });
   }
+  // NUV-11 (R-84): sending money abroad. An admin switch, the lead's launch
+  // limits (none until named) and WAWU's fee (R-10: 0 until the owner names it).
+  add({
+    key: 'abroad.enabled',
+    group: 'Send abroad',
+    label: 'Sending money abroad is on (1 is on, 0 is off)',
+    unit: 'count',
+    usedBy: [
+      'GET /money/abroad/corridors',
+      'POST /money/abroad/recipients, quotes and sends',
+    ],
+    provisional: null,
+    default: extra('abroad.enabled', 1),
+    parse: whole(0, 1),
+  });
+  add({
+    key: 'abroad.wawu_fee_kobo',
+    group: 'Send abroad',
+    label:
+      "WAWU's fee for one send abroad, in kobo, taken from the naira wallet",
+    unit: 'kobo',
+    usedBy: ['POST /money/abroad/quotes and sends'],
+    provisional: 'ABROAD-FEE',
+    default: extra('abroad.wawu_fee_kobo', 0),
+    parse: whole(0, 100_000_000),
+  });
+  add({
+    key: 'abroad.max_per_send',
+    group: 'Send abroad',
+    label:
+      'The most in one send abroad, per currency (lines like "USD 500000")',
+    unit: 'lines',
+    usedBy: ['POST /money/abroad/quotes'],
+    provisional: 'ABROAD-LIMITS',
+    default: extra('abroad.max_per_send', []),
+    parse: currencyLimits,
+  });
+  add({
+    key: 'abroad.max_per_day',
+    group: 'Send abroad',
+    label:
+      'The most one person sends abroad in a day, per currency (lines like "USD 1000000")',
+    unit: 'lines',
+    usedBy: ['POST /money/abroad/quotes and sends'],
+    provisional: 'ABROAD-LIMITS',
+    default: extra('abroad.max_per_day', []),
+    parse: currencyLimits,
+  });
+  add({
+    key: 'abroad.corridors_off',
+    group: 'Send abroad',
+    label:
+      'Countries not offered for sending abroad (two-letter codes, one per line)',
+    unit: 'lines',
+    usedBy: ['GET /money/abroad/corridors', 'POST /money/abroad/recipients'],
+    provisional: 'ABROAD-CORRIDORS',
+    default: extra('abroad.corridors_off', ['UG', 'MX', 'SG', 'HK']),
+    parse: countryCodes,
+  });
   add({
     key: 'ai.sfx_max_seconds',
     group: 'Other rulings',

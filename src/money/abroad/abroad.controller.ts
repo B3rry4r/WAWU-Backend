@@ -1,5 +1,4 @@
 import {
-  applyDecorators,
   Body,
   Controller,
   Delete,
@@ -10,17 +9,31 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  Res,
+  UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
+import type { Response } from 'express';
+import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import {
-  ApprovalHeaders,
+  CurrentWallet,
+  type OpenWallet,
+  RequireOpenWallet,
+} from '../gate/wallet-gate';
+import {
   BuiltBy,
   DEBIT_GATE_ERRORS,
-  declaredOnly,
-  IdempotencyKeyHeader,
   MoneyErrors,
   WALLET_GATE_ERRORS,
 } from '../money-contract';
+import {
+  CurrentIdempotencyScope,
+  type IdempotencyScope,
+  RequireIdempotentApproval,
+} from '../payments/idempotency';
+import { AbroadSendGuard } from './abroad-send.guard';
+import { ABROAD_SEND_ROUTE, AbroadSendService } from './abroad-send.service';
+import { AbroadService } from './abroad.service';
 import {
   AbroadPageQueryDto,
   AbroadQuoteDto,
@@ -38,32 +51,22 @@ import type {
   AbroadSourcesView,
 } from './abroad-view.type';
 
-/** The route a send's Idempotency-Key is scoped to. */
-export const ABROAD_SEND_ROUTE = 'POST money/abroad/sends';
-
-/**
- * Declares the documentation of the guards the served route has (this module
- * has no providers): serving puts `@RequireOpenWallet()`,
- * `@RequireIdempotentApproval(route)` and `@RequireFeesSet()` on the handler.
- */
-const RequireOpenWallet = (): MethodDecorator => applyDecorators();
-const RequireIdempotentApproval = (route: string): MethodDecorator => {
-  void route;
-  return applyDecorators(IdempotencyKeyHeader(), ApprovalHeaders());
-};
-
 /**
  * Sending money abroad (task NUV-11, R-84): to a bank account or a mobile
  * money wallet in another country, from any of the person's accounts, with a
- * conversion quote when the currencies differ. Declared by NUV-11's first
- * milestone, served by its second (docs/contract/CONVENTIONS.md section 0).
- * Every route needs an open naira wallet (R-6) and reaches the provider only
+ * conversion quote when the currencies differ. * Every route needs an open naira wallet (R-6) and reaches the provider only
  * through WALLET_PROVIDER; a provider that cannot pay abroad (Fintava)
  * answers `409 currency_not_supported`.
  */
 @ApiBearerAuth('wawu-id')
+@UseGuards(WawuAuthGuard)
 @Controller('money/abroad')
-export class AbroadContractController {
+export class AbroadController {
+  constructor(
+    private readonly abroad: AbroadService,
+    private readonly sendService: AbroadSendService,
+  ) {}
+
   /**
    * The product switch and the countries the app can draw: for each, the ways
    * to arrive and the exact fields Nuvion asks for that country and way, and
@@ -75,7 +78,7 @@ export class AbroadContractController {
   @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS, 'currency_not_supported')
   corridors(): AbroadCorridorsView {
-    return declaredOnly('NUV-11');
+    return this.abroad.corridors();
   }
 
   /** Nuvion's bank directory for one country, for a `bank` picker; asked once an hour. */
@@ -90,7 +93,7 @@ export class AbroadContractController {
     'provider_unreachable',
   )
   banks(@Param('country') country: string): Promise<AbroadBankListView> {
-    return declaredOnly('NUV-11', country);
+    return this.abroad.banks(country.toUpperCase());
   }
 
   /** The accounts the person can send from, each with the provider's balance read now. */
@@ -103,8 +106,8 @@ export class AbroadContractController {
     'currency_not_supported',
     'provider_unreachable',
   )
-  sources(): Promise<AbroadSourcesView> {
-    return declaredOnly('NUV-11');
+  sources(@CurrentWallet() wallet: OpenWallet): Promise<AbroadSourcesView> {
+    return this.abroad.sources(wallet);
   }
 
   /** The person's saved recipients abroad, newest first. */
@@ -113,8 +116,10 @@ export class AbroadContractController {
   @BuiltBy('NUV-11')
   @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS)
-  recipients(): Promise<AbroadRecipientListView> {
-    return declaredOnly('NUV-11');
+  recipients(
+    @CurrentWallet() wallet: OpenWallet,
+  ): Promise<AbroadRecipientListView> {
+    return this.abroad.listRecipients(wallet.wawuUserId);
   }
 
   /**
@@ -141,8 +146,14 @@ export class AbroadContractController {
     'provider_declined',
     'provider_unreachable',
   )
-  saveRecipient(@Body() dto: AbroadRecipientDto): Promise<AbroadRecipientView> {
-    return declaredOnly('NUV-11', dto);
+  async saveRecipient(
+    @CurrentWallet() wallet: OpenWallet,
+    @Body() dto: AbroadRecipientDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AbroadRecipientView> {
+    const { view, created } = await this.abroad.saveRecipient(wallet, dto);
+    res.status(created ? 201 : 200);
+    return view;
   }
 
   /** Removes a saved recipient from the list. Sends already made keep their record. */
@@ -151,8 +162,11 @@ export class AbroadContractController {
   @BuiltBy('NUV-11')
   @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS, 'not_found')
-  removeRecipient(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
-    return declaredOnly('NUV-11', id);
+  removeRecipient(
+    @CurrentWallet() wallet: OpenWallet,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<void> {
+    return this.abroad.removeRecipient(wallet.wawuUserId, id);
   }
 
   /**
@@ -183,8 +197,11 @@ export class AbroadContractController {
     'provider_declined',
     'provider_unreachable',
   )
-  quote(@Body() dto: AbroadQuoteDto): Promise<AbroadQuoteView> {
-    return declaredOnly('NUV-11', dto);
+  quote(
+    @CurrentWallet() wallet: OpenWallet,
+    @Body() dto: AbroadQuoteDto,
+  ): Promise<AbroadQuoteView> {
+    return this.abroad.quote(wallet, dto);
   }
 
   /**
@@ -201,7 +218,7 @@ export class AbroadContractController {
   @Post('sends')
   @HttpCode(201)
   @BuiltBy('NUV-11')
-  @RequireIdempotentApproval(ABROAD_SEND_ROUTE)
+  @RequireIdempotentApproval(ABROAD_SEND_ROUTE, AbroadSendGuard)
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',
@@ -216,8 +233,12 @@ export class AbroadContractController {
     'daily_limit_exceeded',
     'provider_declined',
   )
-  send(@Body() dto: AbroadSendDto): Promise<AbroadSendView> {
-    return declaredOnly('NUV-11', dto);
+  send(
+    @CurrentWallet() wallet: OpenWallet,
+    @CurrentIdempotencyScope() scope: IdempotencyScope,
+    @Body() dto: AbroadSendDto,
+  ): Promise<AbroadSendView> {
+    return this.sendService.send(wallet, scope, dto);
   }
 
   /** The person's sends abroad, newest first (cursor page). */
@@ -226,8 +247,11 @@ export class AbroadContractController {
   @BuiltBy('NUV-11')
   @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS)
-  sends(@Query() query: AbroadPageQueryDto): Promise<AbroadSendPage> {
-    return declaredOnly('NUV-11', query);
+  sends(
+    @CurrentWallet() wallet: OpenWallet,
+    @Query() query: AbroadPageQueryDto,
+  ): Promise<AbroadSendPage> {
+    return this.sendService.list(wallet.wawuUserId, query.cursor, query.limit);
   }
 
   /** One send as it stands now; what the app polls after `sending` or `pending`. Only its sender reads it. */
@@ -236,7 +260,10 @@ export class AbroadContractController {
   @BuiltBy('NUV-11')
   @RequireOpenWallet()
   @MoneyErrors(...WALLET_GATE_ERRORS, 'not_found')
-  sendById(@Param('id', ParseUUIDPipe) id: string): Promise<AbroadSendView> {
-    return declaredOnly('NUV-11', id);
+  sendById(
+    @CurrentWallet() wallet: OpenWallet,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<AbroadSendView> {
+    return this.sendService.read(wallet.wawuUserId, id);
   }
 }

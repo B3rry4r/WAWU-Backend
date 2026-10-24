@@ -16,6 +16,7 @@ import type {
   WalletProviderCapabilities,
   WalletProviderTimings,
 } from '../wallet-provider/wallet-provider.interface';
+import { NuvionAbroadArea } from './areas/abroad';
 import {
   NuvionAccountsArea,
   type NuvionAccountsMethods,
@@ -129,6 +130,7 @@ export class NuvionWalletProvider implements WalletProvider {
   readonly walletBankCode = '';
   readonly timings: WalletProviderTimings;
   private readonly areas: NuvionAreas;
+  private abroadArea: NuvionAbroadArea | null = null;
 
   constructor(
     readonly client: NuvionClient,
@@ -174,6 +176,18 @@ export class NuvionWalletProvider implements WalletProvider {
       throw new Error("The reconcile area of this adapter is not Nuvion's.");
     }
     return area;
+  }
+
+  /** Sending abroad (NUV-11, R-84): the money layer reaches it through `abroadOf(provider)`. */
+  get abroad(): NuvionAbroadArea {
+    this.abroadArea ??= new NuvionAbroadArea(
+      this.client,
+      Date.now,
+      this.areas.payouts instanceof NuvionPayoutsArea
+        ? this.areas.payouts
+        : undefined,
+    );
+    return this.abroadArea;
   }
 
   /** The payouts area (NUV-06): the bank list, the name check, NIP sends and the transfers read back. */

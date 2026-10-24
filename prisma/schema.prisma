@@ -7958,3 +7958,133 @@ model MoviePartnerConsent {
   @@unique([provider, wawuUserId])
   @@index([wawuUserId])
 }
+
+// -----------------------------------------------------------------------------
+// Sending money abroad (NUV-11, R-84). A person pays a foreign bank account or
+// mobile money wallet from any of their accounts. Additive: four new tables.
+// None of them is a balance; the provider's is the truth (CLAUDE.md, Money).
+// -----------------------------------------------------------------------------
+
+/// A saved recipient abroad. The account itself lives at the provider; only its
+/// last four characters and a fingerprint (to tell a repeat) are kept here.
+model AbroadRecipient {
+  id                      String    @id @default(uuid())
+  wawuUserId              String
+  /// ISO 3166-1 alpha-2.
+  country                 String
+  /// The currency the recipient is paid in.
+  currency                String
+  /// `bank` or `mobile_money`.
+  method                  String
+  /// The scheme the person picked, or null when the rail has one the provider infers.
+  scheme                  String?
+  holderName              String
+  bankName                String?
+  /// Last four characters of the account, wallet number or IBAN.
+  last4                   String?
+  /// sha256 over the person, country, way and account: tells a repeat without keeping the account.
+  fingerprint             String
+  providerCounterpartyId  String
+  providerPaymentDetailId String
+  createdAt               DateTime  @default(now())
+  /// Set when the person removes it from their list; a repeat save brings it back.
+  removedAt               DateTime?
+
+  quotes AbroadQuote[]
+  sends  AbroadSend[]
+
+  @@unique([wawuUserId, fingerprint])
+  @@index([wawuUserId, removedAt, createdAt])
+}
+
+/// A quote held for one person and used once. When the currencies are the same
+/// there is no provider quote (`providerQuoteId` null) and WAWU holds it.
+model AbroadQuote {
+  id              String          @id @default(uuid())
+  wawuUserId      String
+  recipientId     String
+  recipient       AbroadRecipient @relation(fields: [recipientId], references: [id], onDelete: Restrict)
+  fromCurrency    String
+  toCurrency      String
+  /// The provider's account the send debits (opaque).
+  fromAccountRef  String
+  amountFromMinor BigInt
+  amountToMinor   BigInt
+  /// Units of `toCurrency` per unit of `fromCurrency`, as text.
+  rate            String?
+  providerQuoteId String?
+  wawuFeeKobo     BigInt          @default(0)
+  expiresAt       DateTime
+  usedAt          DateTime?
+  createdAt       DateTime        @default(now())
+
+  send AbroadSend?
+
+  @@index([wawuUserId, createdAt])
+}
+
+/// One send abroad. `sending` is written before the provider is asked and
+/// settled by its answer, a delivery, or the sweep that asks the provider for
+/// our reference; it is never sent a second time under a new reference.
+model AbroadSend {
+  id                 String          @id @default(uuid())
+  wawuUserId         String
+  recipientId        String
+  recipient          AbroadRecipient @relation(fields: [recipientId], references: [id], onDelete: Restrict)
+  quoteId            String          @unique
+  quote              AbroadQuote     @relation(fields: [quoteId], references: [id], onDelete: Restrict)
+  fromCurrency       String
+  toCurrency         String
+  fromAccountRef     String
+  amountFromMinor    BigInt
+  amountToMinor      BigInt
+  rate               String?
+  /// sending, pending, completed, failed, reversed, cancelled or needs_review.
+  status             String
+  failureReason      String?
+  narration          String?
+  /// Ours: the provider's idempotency key (`unique_reference`).
+  reference          String          @unique
+  providerTransferId String?         @unique
+  /// The provider's own word as last read.
+  providerStatus     String?
+  providerFeeMinor   BigInt?
+  wawuFeeKobo        BigInt          @default(0)
+  /// WAWU's fee has been taken from the naira wallet (true also when there was none to take).
+  wawuFeeTaken       Boolean         @default(true)
+  feeAttempts        Int             @default(0)
+  attemptedAt        DateTime?
+  checkedAt          DateTime?
+  checks             Int             @default(0)
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  completedAt        DateTime?
+
+  @@index([wawuUserId, createdAt])
+  @@index([status, updatedAt])
+}
+
+/// A person whose sending abroad an admin stopped, and the audit of every admin act on this product.
+model AbroadFreeze {
+  wawuUserId String   @id
+  reason     String
+  byAdminId  String
+  frozenAt   DateTime @default(now())
+}
+
+model AbroadAdminAudit {
+  id            String   @id @default(uuid())
+  /// `person_frozen`, `person_unfrozen` or `send_cancelled`.
+  action        String
+  subjectWawuId String
+  sendId        String?
+  reason        String
+  detail        Json?
+  adminId       String
+  adminEmail    String
+  adminRole     String
+  at            DateTime @default(now())
+
+  @@index([subjectWawuId, at])
+  @@index([sendId])
+}
