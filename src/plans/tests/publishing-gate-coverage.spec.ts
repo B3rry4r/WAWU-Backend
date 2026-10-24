@@ -284,6 +284,11 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     files: ['redirectUrl'],
     why: 'the address the identity check returns the person to',
   },
+  // NUV-12: not a file at all, a yes that the person opened the product's documents.
+  'POST capital/orders': {
+    files: ['agreedToDocuments'],
+    why: 'a flag that the person agreed to the product documents before investing, not a file',
+  },
 };
 
 /**

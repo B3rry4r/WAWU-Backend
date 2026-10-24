@@ -268,5 +268,11 @@ export const MONEY_ERROR_CODES = [
   'chain_mismatch',
   'provider_declined',
   'fx_account_not_open',
+  // Capital (NUV-12, R-84): switched off or not offered by the wallet
+  // provider, or an order an admin has put on hold; a reservation that ran
+  // out of time; a holding the provider will not pay out now.
+  'capital_unavailable',
+  'reservation_expired',
+  'withdrawal_not_available',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];
