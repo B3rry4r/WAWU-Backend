@@ -255,5 +255,9 @@ export const MONEY_ERROR_CODES = [
   // has none, or it ended. Also the code of the publishing gate (TIER-02), in
   // its own richer body on the routes that publish.
   'tier_required',
+  // WALLET-31 (R-84): the WAWU card.
+  'cards_unavailable',
+  'card_limit_reached',
+  'card_blocked',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

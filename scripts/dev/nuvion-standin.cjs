@@ -50,6 +50,9 @@
 //   PATCH /individual-entities/<id> { meta: { liveness_check_id } } saves the link. No image is ever received or kept.
 //   The Hub asks for it only when the stack is started with STACK_NUVION_LIVENESS=on (scripts/dev/stack.sh).
 //
+//   POST card-spend                { card_id, amount_cents, merchant?, reverse? }: a card payment (or its reversal) on a card
+//                                  made through POST /virtual-cards or /disposable-cards (WALLET-31); a single-use card is
+//                                  blocked after its first payment, as Nuvion does it
 // Settings (environment): PORT (NUVION_STANDIN_PORT), HUB_WEBHOOK_URL, NUVION_WEBHOOK_SECRET,
 // NUVION_OPERATIONAL_ACCOUNT_ID, STANDIN_PARENT_ENTITY_ID, STANDIN_OPERATIONAL_KOBO (opening balance),
 // NUVION_FEE_BOOK_TRANSFER / NUVION_FEE_BANK_PAYOUT / NUVION_FEE_INFLOW (kobo, as the Hub's settings;
@@ -1184,6 +1187,126 @@ function decideSession(s, result) {
   else return null;
   return s;
 }
+
+// ---- cards (WALLET-31, R-84), as Nuvion's dev answered them on 24 Oct 2026 (docs/nuvion/DEV-RESULTS.md):
+// POST /virtual-cards and /disposable-cards take the fee (NUVION_FEE_CARD_CREATE, default 65,772 kobo) from the
+// funding account at once, or answer 400 error_card_creation_fee_required; only USD cards; entity_id is a QUERY on the
+// reads and a BODY field on PATCH freeze/unfreeze and DELETE (a query there is 404); a deleted card is 404 everywhere.
+// The stand-in keeps the number and CVV so the Hub's reveal can be walked; they are fake and random.
+const CARD_FEE = Number(env('NUVION_FEE_CARD_CREATE', '65772'));
+const CENT_KOBO = Number(env('STANDIN_CARD_CENT_KOBO', '1500')); // the stand-in's rate: 1 cent = 15 naira
+const cards = new Map();
+const cardJson = (c) => ({ id: c.id, name: c.name, type: c.type, status: c.status, currency: c.currency, nuvion_account_name: (accounts.get(c.account_id) || {}).display_name || null, last4: null, expiration_month: null, expiration_year: null, created: new Date(c.created).toISOString().slice(0, 10) });
+const cardEvent = (c) => ({ id: c.id, name: c.name, type: c.type, status: c.status, currency: c.currency, account_id: c.account_id, nuvion_account_name: (accounts.get(c.account_id) || {}).display_name || null, created: new Date(c.created).toISOString().slice(0, 10) });
+const cardEntity = (c) => (accounts.get(c.account_id) || {}).entity_id;
+const cardNotFound = () => ({ status: 404, body: errorBody('error_resource_not_found', "We couldn't find that card. It may have been deleted or the ID might be incorrect.") });
+const cardScoped = (c, entity) => c && !c.deleted && cardEntity(c) === (entity || PARENT_ENTITY);
+const makeCard = (type) => (req) => {
+  const b = req.body || {};
+  const a = accounts.get(String(b.account_id));
+  if (!a || a.entity_id !== (b.entity_id || PARENT_ENTITY)) return notFound();
+  const h = b.cardholder || {};
+  if (!b.card_name || !h.first_name || !h.last_name || !h.email || !/^\+\d{8,15}$/.test(String(h.phone_number || ''))) {
+    return invalid('card_name and a cardholder with first_name, last_name, email and an E.164 phone_number');
+  }
+  if (b.currency !== 'USD') return { status: 400, body: errorBody('error_operation_invalid_for_state', "You can't perform this action right now due to the current status. Please try again later or contact support.") };
+  if (!/^\d{2}$/.test(String(b.expiration_month)) || !/^\d{2}$/.test(String(b.expiration_year))) return invalid('expiration_month MM and expiration_year YY');
+  if (a.balance.available < CARD_FEE) {
+    return { status: 400, body: errorBody('error_card_creation_fee_required', `Card creation requires at least ${(CARD_FEE / 100).toFixed(2)} NGN to be available for the card creation fee`) };
+  }
+  bump(a, -CARD_FEE);
+  const c = { id: ulid('01CARD'), name: String(b.card_name), type, status: 'active', currency: 'USD', account_id: a.id, number: `4${digits(15)}`, cvv: digits(3), month: b.expiration_month, year: b.expiration_year, first: h.first_name, last: h.last_name, created: now(), deleted: false, txns: [] };
+  cards.set(c.id, c);
+  deliver('cards.created', cardEvent(c));
+  return {
+    status: 201,
+    body: envelope({
+      status: 'active', name: c.name, number: c.number, expiration_month: c.month, expiration_year: c.year, cvv: c.cvv,
+      individual_controls: type === 'virtual' ? { life_time_transaction_count: 5000, daily_transaction_count: 100 } : { life_time_transaction_count: 1, daily_transaction_count: 1 },
+      individual_mcc_controls: [], mcc_group_controls: [], created: c.created, id: c.id,
+    }),
+  };
+};
+on('POST', '/virtual-cards', makeCard('virtual'));
+on('POST', '/disposable-cards', makeCard('disposable'));
+on('GET', '/cards', (req) => {
+  const entity = req.query.entity_id || PARENT_ENTITY;
+  const rows = [...cards.values()].filter((c) => !c.deleted && cardEntity(c) === entity && (!req.query.account_id || c.account_id === req.query.account_id));
+  rows.sort((x, y) => y.created - x.created);
+  const limit = Math.min(Number(req.query.limit) || 20, 100);
+  const start = req.query.cursor ? Number(req.query.cursor) || 0 : 0;
+  const slice = rows.slice(start, start + limit);
+  const more = start + limit < rows.length;
+  return { status: 200, body: { status: 'success', data: { cards: slice.map(cardJson), pagination: { order: 'desc', has_next: more, limit, has_previous: start > 0, next_cursor: more ? String(start + limit) : null, previous_cursor: null } } } };
+});
+on('GET', /^\/card-details\/[A-Za-z0-9]+$/, (req) => {
+  const c = cards.get(m(req, 2));
+  if (!cardScoped(c, req.query.entity_id)) return cardNotFound();
+  return {
+    status: 200,
+    body: envelope({
+      id: c.id, status: c.status, name: c.name, type: c.type, number: c.number, expiration_month: c.month, expiration_year: c.year, cvv: c.cvv,
+      first_name: c.first, last_name: c.last, amount: 1000000, currency: 'USD',
+      individual_controls: c.type === 'virtual' ? { life_time_transaction_count: 5000, daily_transaction_count: 100 } : { life_time_transaction_count: 1, daily_transaction_count: 1 },
+      individual_mcc_controls: [], mcc_group_controls: [], retrieved: now(),
+      billing: { address_line_1: '390 NE 191ST ST STE 8972', address_line_2: '', city: 'MIAMI', state: 'FL', postal_code: '33179' },
+    }),
+  };
+});
+const cardChange = (to, event, message) => (req) => {
+  const c = cards.get(m(req, 2));
+  // entity_id in the BODY, as Nuvion reads it (a query is 404).
+  if (!cardScoped(c, (req.body || {}).entity_id)) return cardNotFound();
+  c.status = to;
+  deliver(event, cardEvent(c));
+  return { status: 200, body: envelope({ message, status: to, updated: now() }) };
+};
+on('PATCH', /^\/card-details\/[A-Za-z0-9]+\/freeze$/, cardChange('blocked', 'cards.frozen', 'Card frozen successfully'));
+on('PATCH', /^\/card-details\/[A-Za-z0-9]+\/unfreeze$/, cardChange('active', 'cards.unfrozen', 'Card unfrozen successfully'));
+on('DELETE', /^\/card-details\/[A-Za-z0-9]+$/, (req) => {
+  const c = cards.get(m(req, 2));
+  if (!cardScoped(c, (req.body || {}).entity_id)) return cardNotFound();
+  c.deleted = true;
+  c.status = 'blocked';
+  deliver('cards.deleted', cardEvent(c));
+  return { status: 200, body: envelope({ message: 'Card soft-deleted successfully', status: 'blocked', deleted: now() }) };
+});
+on('GET', /^\/card-transactions\/[A-Za-z0-9]+$/, (req) => {
+  const c = cards.get(m(req, 2));
+  if (!cardScoped(c, req.query.entity_id)) return { status: 404, body: errorBody('error_resource_not_found', 'Card not accessible by this entity') };
+  const limit = Math.min(Number(req.query.limit) || 20, 100);
+  const start = req.query.cursor ? Number(req.query.cursor) || 0 : 0;
+  const rows = [...c.txns].sort((x, y) => y.created - x.created);
+  const more = start + limit < rows.length;
+  return { status: 200, body: { status: 'success', data: { payments: rows.slice(start, start + limit), pagination: { order: 'desc', has_next: more, limit, has_previous: start > 0, next_cursor: more ? String(start + limit) : null, previous_cursor: null } } } };
+});
+// A verifier's: spend on a card (debits the funding account at the stand-in's rate) or give a payment back.
+on('POST', '/__standin/card-spend', (req) => {
+  const b = req.body || {};
+  const c = cards.get(String(b.card_id));
+  const cents = Number(b.amount_cents);
+  if (!c || c.deleted || !Number.isSafeInteger(cents) || cents < 1) return invalid('card_id and amount_cents (a whole number above zero)');
+  if (c.status !== 'active') return { status: 400, body: errorBody('error_operation_invalid_for_state', 'The card is not active.') };
+  const a = accounts.get(c.account_id);
+  const kobo = cents * CENT_KOBO;
+  const reverse = b.reverse === true;
+  if (!reverse && a.balance.available < kobo) return { status: 400, body: errorBody('error_transfer_insufficient_funds', 'Not enough in the account.') };
+  bump(a, reverse ? kobo : -kobo);
+  const t = {
+    _id: ulid('01CTX'), amount: cents, currency: 'USD', unique_reference: ulid('TXN'), account_id: a.id, entity_id: a.entity_id,
+    status: 'successful', type: reverse ? 'inflow' : 'outflow', payment_type: reverse ? 'card-debit-reversal' : 'card-debit',
+    narration: `${reverse ? 'REVERSAL | ' : ''}Payment to ${b.merchant || 'Acme Corp'}`,
+    initiator: { type: 'account', id: a.id, name: a.display_name, card_id: c.id },
+    recipient: { name: String(b.merchant || 'Acme Corp'), address: { city: 'San Francisco', state: 'CA', postal_code: '94105', country: 'US' } },
+    applicable_fee: 0, created: now(), updated: now(), deleted: 0, version: 0,
+  };
+  c.txns.push(t);
+  if (c.type === 'disposable' && !reverse) {
+    c.status = 'blocked';
+    deliver('cards.frozen', cardEvent(c));
+  }
+  return { status: 201, body: { transaction: t, balance: a.balance } };
+});
 
 // ---- control routes (a verifier's, local only)
 const accountByRef = (ref) =>

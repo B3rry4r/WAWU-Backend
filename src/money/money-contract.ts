@@ -132,6 +132,15 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // TIER-04. 402, as the publishing gate answers the same code (TIER-02,
   // CONVENTIONS section 23): the person has to pay for a tier first.
   tier_required: 402,
+  // WALLET-31 (R-84). Default (agent), owner may override: 503 when cards are
+  // switched off, not built for this provider, or the fee is not set (nothing
+  // was sent, trying later is right); 409 when this person holds or has asked
+  // for the most cards one may (they have to block one or wait), and 409 when
+  // the card cannot take that action (blocked for good, still being made, or
+  // frozen by support), as target_not_payable.
+  cards_unavailable: 503,
+  card_limit_reached: 409,
+  card_blocked: 409,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

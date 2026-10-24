@@ -89,6 +89,13 @@ import { MoneyCheckService } from './check/money-check.service';
 import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
 import { MoneyLimitsModule } from './limits/money-limits.module';
 import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
+import { AdminOpsAuditModule } from '../common/audit/admin-ops-audit.module';
+import { AdminCardsController } from './cards/admin-cards.controller';
+import { AdminCardsService } from './cards/admin-cards.service';
+import { CardCreatableGuard } from './cards/card-creatable.guard';
+import { CardSettings } from './cards/card-config';
+import { MoneyCardsController } from './cards/money-cards.controller';
+import { WalletCardService } from './cards/wallet-card.service';
 
 /**
  * The served half of the Naira wallet contract. Routes move here from
@@ -250,6 +257,8 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyInNoticeModule,
     // The admin settings (task HOME-17): the name checks an hour are read live.
     PlanSettingsModule,
+    // The audit row of support freezing or blocking a card (task WALLET-31).
+    AdminOpsAuditModule,
   ],
   controllers: [
     MoneyPinController,
@@ -268,11 +277,18 @@ import { NuvionDocumentsModule } from '../nuvion/documents/documents.module';
     MoneyHoldsController,
     MoneyEarningsController,
     AdminEarningsController,
+    MoneyCardsController,
+    AdminCardsController,
     MoneyReceiptController,
     PublicReceiptController,
     MoneyRecipientController,
   ],
   providers: [
+    // The WAWU card (task WALLET-31).
+    CardSettings,
+    WalletCardService,
+    CardCreatableGuard,
+    AdminCardsService,
     WalletGate,
     WalletGateGuard,
     TransactionPinService,

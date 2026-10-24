@@ -757,6 +757,13 @@ export function buildRegistry(
     whole(1, LIMIT.maxNameChecks),
   );
   other(
+    'cards.enabled',
+    'The WAWU card: 1 is on, 0 is off (cards a person holds can still be frozen or blocked)',
+    'count',
+    ['GET /money/cards, POST /money/cards (R-84, WALLET-31)'],
+    whole(0, 1),
+  );
+  other(
     'popular_community_min_members',
     'Members a community needs to be called popular',
     'count',

@@ -123,6 +123,7 @@
     "referral.claim_days": 7,
     "plan.event_date": null,
     "name_check_per_hour": 30,
+    "cards.enabled": 1,
     "popular_community_min_members": 10,
     "community_credit_cost_photo": 1,
     "community_credit_cost_video": 3,

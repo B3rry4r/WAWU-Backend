@@ -21,6 +21,7 @@ import {
   type NuvionAccountsMethods,
 } from './areas/accounts';
 import { NuvionBookArea, type NuvionBookMethods } from './areas/book';
+import { NuvionCardsArea, type NuvionCardsMethods } from './areas/cards';
 import { type NuvionBookStore } from './areas/book-store';
 import {
   NuvionDocumentsArea,
@@ -63,6 +64,8 @@ export interface NuvionAreas {
   book: NuvionBookMethods;
   payouts: NuvionPayoutsMethods;
   reconcile: NuvionReconcileMethods;
+  /** The WAWU card (WALLET-31, R-84). */
+  cards: NuvionCardsMethods;
 }
 
 /**
@@ -82,6 +85,7 @@ export function nuvionAreas(
     book: new NuvionBookArea(client, client.settings, deps.bookStore),
     payouts: new NuvionPayoutsArea(client),
     reconcile: new NuvionReconcileArea(client),
+    cards: new NuvionCardsArea(client),
   };
 }
 
@@ -100,6 +104,7 @@ export function nuvionAreas(
  * | book.ts | NUV-05 | getPlatformAccount, walletToWallet, isSameAccount, and for book transfers findTransactionByReference, findTransactionById, reconcileSend, decideRetry, confirmMovement, secondaryReferenceOf |
  * | payouts.ts | NUV-06 | listBanks, checkAccountName, bankTransfer |
  * | reconcile.ts | NUV-08 | deliveries, listTransactions (the statement); the lookups above are widened to every rail by id (findTransactionById, confirmMovement) |
+ * | cards.ts | WALLET-31 | `cards`: createCard, findCard, getCard, revealCard, freezeCard, unfreezeCard, deleteCard, listCardTransactions |
  *
  * A method whose area has no Nuvion call yet answers `not_supported`:
  * nothing is sent and nothing moves.
@@ -147,6 +152,11 @@ export class NuvionWalletProvider implements WalletProvider {
 
   get deliveries() {
     return this.areas.reconcile.deliveries;
+  }
+
+  /** The WAWU card (WALLET-31, R-84): src/nuvion/areas/cards.ts. */
+  get cards(): NuvionCardsMethods {
+    return this.areas.cards;
   }
 
   /** The book transfer area (NUV-05): the handler reads transfers through it. */

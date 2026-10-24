@@ -18403,6 +18403,945 @@
         ]
       }
     },
+    "/api/hub/money/cards/quote": {
+      "get": {
+        "operationId": "MoneyCardsController_quote",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardQuoteView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: fees_not_set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "What a card costs and whether the person may ask for one now (W29):\nNuvion's fee plus WAWU's (R-10), both from settings, the limits and how\nmany the person holds. `enabled: false` means the product is switched off.",
+        "tags": [
+          "MoneyCards"
+        ],
+        "x-wawu-built-by": "WALLET-31"
+      }
+    },
+    "/api/hub/money/cards": {
+      "get": {
+        "operationId": "MoneyCardsController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardListView"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The person's cards, newest first (W29's list, W31). Failed requests are not listed.",
+        "tags": [
+          "MoneyCards"
+        ],
+        "x-wawu-built-by": "WALLET-31"
+      },
+      "post": {
+        "operationId": "MoneyCardsController_create",
+        "parameters": [
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCardDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardView"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "reason.code: idempotency_key_required, amount_out_of_range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: insufficient_funds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, card_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: provider_unreachable, fees_not_set, cards_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Gets a card (W29): Nuvion makes it and takes its fee from the person's\nwallet. Answers 201 with the card: `active`, or `pending` when the issuer\nhas not confirmed it (it is looked for by its reference, never made\ntwice). The card number, expiry and CVV are not in the answer: they are\nshown behind the PIN (`POST /money/cards/{id}/reveal`). The same\nIdempotency-Key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN. Cards switched\noff, a limit, and `fees_not_set` come before the PIN is looked at.",
+        "tags": [
+          "MoneyCards"
+        ],
+        "x-wawu-built-by": "WALLET-31"
+      }
+    },
+    "/api/hub/money/cards/{id}": {
+      "get": {
+        "operationId": "MoneyCardsController_get",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: cards_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "One card as it stands now (a card still being confirmed is looked for).",
+        "tags": [
+          "MoneyCards"
+        ],
+        "x-wawu-built-by": "WALLET-31"
+      },
+      "delete": {
+        "operationId": "MoneyCardsController_block",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: cards_unavailable, provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Blocks the card for good (W32 \"Block card\"; Nuvion deletes it): it cannot\nbe used or brought back. Needs no PIN. Safe to repeat.",
+        "tags": [
+          "MoneyCards"
+        ],
+        "x-wawu-built-by": "WALLET-31"
+      }
+    },
+    "/api/hub/money/cards/{id}/reveal": {
+      "post": {
+        "operationId": "MoneyCardsController_reveal",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardDetailsView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, device_approval_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set, card_blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: cards_unavailable, provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The card's number, expiry and CVV (W31 \"Details\"), read from Nuvion now,\nbehind the PIN or a fingerprint approval every time. WAWU never stores\nthem and the answer is not cacheable. A POST so no cache or log keeps the\nURL with an answer.",
+        "tags": [
+          "MoneyCards"
+        ],
+        "x-wawu-built-by": "WALLET-31"
+      }
+    },
+    "/api/hub/money/cards/{id}/freeze": {
+      "post": {
+        "operationId": "MoneyCardsController_freeze",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, card_blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: cards_unavailable, provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Freezes the card (W31 \"Freeze\"): no payment goes through until it is unfrozen. Needs no PIN, so a lost card is stopped at once. Safe to repeat.",
+        "tags": [
+          "MoneyCards"
+        ],
+        "x-wawu-built-by": "WALLET-31"
+      }
+    },
+    "/api/hub/money/cards/{id}/unfreeze": {
+      "post": {
+        "operationId": "MoneyCardsController_unfreeze",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Transaction-Pin",
+            "in": "header",
+            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{4}$"
+            }
+          },
+          {
+            "name": "X-Device-Approval",
+            "in": "header",
+            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardView"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: pin_required, pin_incorrect, device_approval_refused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening, pin_not_set, card_blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen, pin_locked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: cards_unavailable, provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Unfreezes the card (W32), behind the PIN or a fingerprint. A card support froze answers `card_blocked`.",
+        "tags": [
+          "MoneyCards"
+        ],
+        "x-wawu-built-by": "WALLET-31"
+      }
+    },
+    "/api/hub/money/cards/{id}/transactions": {
+      "get": {
+        "operationId": "MoneyCardsController_transactions",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 50.",
+            "schema": {
+              "minimum": 1,
+              "maximum": 50,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "`nextCursor` from the previous page. Opaque: send it back as given.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardTransactionPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "reason.code: not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "reason.code: wallet_not_open, wallet_opening",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "reason.code: wallet_frozen",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "reason.code: cards_unavailable, provider_unreachable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Payments, reversals and refunds on the card, newest first, a cursor page. A blocked card has none to show.",
+        "tags": [
+          "MoneyCards"
+        ],
+        "x-wawu-built-by": "WALLET-31"
+      }
+    },
+    "/api/hub/admin/money/cards": {
+      "get": {
+        "operationId": "AdminCardsController_list",
+        "parameters": [
+          {
+            "name": "state",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "creating",
+                "unknown",
+                "active",
+                "frozen",
+                "cancelled",
+                "failed"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "integer"
+            }
+          },
+          {
+            "name": "wawuUserId",
+            "required": false,
+            "in": "query",
+            "description": "One person's cards.",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 200,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCardPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Cards on the system, newest first, a cursor page; filter by state or by one person.",
+        "tags": [
+          "AdminCards"
+        ]
+      }
+    },
+    "/api/hub/admin/money/cards/{id}/freeze": {
+      "post": {
+        "operationId": "AdminCardsController_freeze",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Freezes a person's card; the person cannot unfreeze it. Safe to repeat.",
+        "tags": [
+          "AdminCards"
+        ]
+      }
+    },
+    "/api/hub/admin/money/cards/{id}/unfreeze": {
+      "post": {
+        "operationId": "AdminCardsController_unfreeze",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Lets a card support froze work again.",
+        "tags": [
+          "AdminCards"
+        ]
+      }
+    },
+    "/api/hub/admin/money/cards/{id}/cancel": {
+      "post": {
+        "operationId": "AdminCardsController_cancel",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Blocks a person's card for good (Nuvion deletes it). Safe to repeat.",
+        "tags": [
+          "AdminCards"
+        ]
+      }
+    },
     "/api/hub/money/transactions/{id}/receipt": {
       "post": {
         "operationId": "MoneyReceiptController_issue",
@@ -40178,7 +41117,10 @@
               "question_already_waiting",
               "points_cap_reached",
               "points_not_short",
-              "tier_required"
+              "tier_required",
+              "cards_unavailable",
+              "card_limit_reached",
+              "card_blocked"
             ],
             "type": "string"
           },
@@ -40885,6 +41827,27 @@
           "data",
           "statusCode",
           "message"
+        ]
+      },
+      "CreateCardDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "description": "A reusable card, or one for a single payment (blocked after its first).",
+            "enum": [
+              "virtual",
+              "single_use"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "description": "What the person calls it; a default is used when absent. 30 characters at most.",
+            "maxLength": 30
+          }
+        },
+        "required": [
+          "kind"
         ]
       },
       "DocumentErrorEnvelope": {
@@ -47095,6 +48058,335 @@
           "canStart"
         ]
       },
+      "AdminCardView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "wawuUserId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "virtual",
+              "single_use"
+            ]
+          },
+          "state": {
+            "type": "string"
+          },
+          "frozenBy": {
+            "type": "string",
+            "nullable": true
+          },
+          "providerCardId": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "cancelledAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "wawuUserId",
+          "kind",
+          "state",
+          "frozenBy",
+          "providerCardId",
+          "createdAt",
+          "cancelledAt"
+        ]
+      },
+      "AdminCardPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminCardView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
+      "CardView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "virtual",
+              "single_use"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "frozen",
+              "active",
+              "blocked"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USD"
+            ]
+          },
+          "frozenBySupport": {
+            "type": "boolean"
+          },
+          "last4": {
+            "type": "string",
+            "nullable": true
+          },
+          "statusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "status",
+          "currency",
+          "frozenBySupport",
+          "last4",
+          "statusMessage",
+          "createdAt"
+        ]
+      },
+      "CardQuoteView": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USD"
+            ]
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "virtual",
+                "single_use"
+              ]
+            }
+          },
+          "fee": {
+            "$ref": "#/components/schemas/FeeBreakdown"
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "maxActive": {
+                "type": "number"
+              },
+              "maxPerDay": {
+                "type": "number"
+              },
+              "activeNow": {
+                "type": "number"
+              },
+              "askedToday": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "maxActive",
+              "maxPerDay",
+              "activeNow",
+              "askedToday"
+            ]
+          },
+          "canCreate": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled",
+          "currency",
+          "kinds",
+          "fee",
+          "limits",
+          "canCreate"
+        ]
+      },
+      "CardListView": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CardView"
+            }
+          }
+        },
+        "required": [
+          "enabled",
+          "cards"
+        ]
+      },
+      "CardDetailsView": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "string"
+          },
+          "expiryMonth": {
+            "type": "string"
+          },
+          "expiryYear": {
+            "type": "string"
+          },
+          "cvv": {
+            "type": "string"
+          },
+          "cardholderName": {
+            "type": "string"
+          },
+          "billing": {
+            "type": "object",
+            "properties": {
+              "line1": {
+                "type": "string",
+                "nullable": true
+              },
+              "line2": {
+                "type": "string",
+                "nullable": true
+              },
+              "city": {
+                "type": "string",
+                "nullable": true
+              },
+              "state": {
+                "type": "string",
+                "nullable": true
+              },
+              "postalCode": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "line1",
+              "line2",
+              "city",
+              "state",
+              "postalCode"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "number",
+          "expiryMonth",
+          "expiryYear",
+          "cvv",
+          "cardholderName",
+          "billing"
+        ]
+      },
+      "CardTransactionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "purchase",
+              "refund",
+              "reversal"
+            ]
+          },
+          "amountCents": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "merchant": {
+            "type": "string",
+            "nullable": true
+          },
+          "place": {
+            "type": "string",
+            "nullable": true
+          },
+          "narration": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "amountCents",
+          "currency",
+          "merchant",
+          "place",
+          "narration",
+          "status"
+        ]
+      },
+      "CardTransactionPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CardTransactionView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "items",
+          "nextCursor"
+        ]
+      },
       "PointNextExpiryView": {
         "type": "object",
         "properties": {
@@ -47518,8 +48810,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "currencyFixed": {
@@ -63324,8 +64616,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "planMinor": {
@@ -63376,8 +64668,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "packMinor": {
@@ -63434,8 +64726,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "extraMinor": {
@@ -63559,8 +64851,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "amountMinor": {
@@ -63698,8 +64990,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "amountMinor": {
@@ -63816,8 +65108,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "amountMinor": {
@@ -63935,8 +65227,8 @@
           "currency": {
             "type": "string",
             "enum": [
-              "NGN",
-              "USD"
+              "USD",
+              "NGN"
             ]
           },
           "amountMinor": {

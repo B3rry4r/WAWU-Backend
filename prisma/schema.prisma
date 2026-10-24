@@ -2690,6 +2690,8 @@ enum AdminOpsResource {
   wallet_identity_hold
   /// A launch figure set in admin settings (TIER-06, R-65).
   plan_setting
+  /// A person's WAWU card, frozen or blocked by support (WALLET-31, R-84).
+  wallet_card
 }
 
 /// Every consequential ops action that used to be anonymous behind
@@ -2724,6 +2726,10 @@ enum AdminOpsAction {
   /// One or more launch figures were set, or put back to their default
   /// (TIER-06, R-65). `detail` carries each key with its old and new value.
   plan_setting_set
+  /// WALLET-31 (R-84): support froze a person's card, let it go again, or blocked it for good.
+  wallet_card_frozen
+  wallet_card_unfrozen
+  wallet_card_cancelled
 }
 
 /// Attribution for the operator surfaces that moved from AdminKeyGuard onto
@@ -7957,4 +7963,52 @@ model MoviePartnerConsent {
 
   @@unique([provider, wawuUserId])
   @@index([wawuUserId])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE WAWU CARD (task WALLET-31, R-84)
+///
+/// One row per card a person asked for. The card itself lives at Nuvion: a
+/// virtual or single-use dollar card funded from the person's own account,
+/// Nuvion converting at use. This row keeps only what WAWU needs to list,
+/// control and audit it: whose it is, which kind, its state, and Nuvion's id.
+/// NEVER the card number, the expiry, the CVV or the billing address: those
+/// are read from Nuvion behind the PIN each time they are shown and are not
+/// kept (or logged) here.
+///
+/// `reference` is ours and goes to Nuvion as the card's name, so a card made
+/// while the answer was lost can be found again (`GET /cards`) and adopted
+/// instead of being made twice. `state`: `creating` (claimed, the call is
+/// out), `unknown` (no answer came back: it is looked for before anything is
+/// sent again), `active`, `frozen`, `cancelled` (blocked for good: Nuvion
+/// soft-deletes it) and `failed` (Nuvion refused it; nothing was made).
+/// `frozenBy`: `person` or `admin`; a card support froze is not unfrozen by
+/// the person.
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletCard {
+  id              String    @id @default(uuid())
+  wawuUserId      String
+  /// The wallet provider that issued it: `nuvion`.
+  provider        String
+  /// Nuvion's card id, once Nuvion answered or the card was found.
+  providerCardId  String?   @unique
+  reference       String    @unique
+  /// `virtual` or `single_use`.
+  type            String
+  /// What the person calls it (30 characters at most).
+  name            String
+  currency        String    @default("USD")
+  state           String
+  frozenBy        String?
+  /// Nuvion's fee for making it and WAWU's, in kobo, as quoted when it was asked for.
+  providerFeeKobo BigInt?
+  wawuFeeKobo     BigInt    @default(0)
+  /// Our own words for a card that failed; never Nuvion's text.
+  failure         String?
+  cancelledAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([wawuUserId, state])
+  @@index([state, createdAt])
 }
