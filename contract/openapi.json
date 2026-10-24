@@ -14994,6 +14994,93 @@
         ]
       }
     },
+    "/api/hub/admin/identity-holds": {
+      "get": {
+        "operationId": "AdminIdentityHoldsListController_list",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100 (20 when absent, CONVENTIONS section 6).",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the page before; opaque, sent back as given.",
+            "schema": {
+              "maxLength": 300,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityHoldsPage"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "AdminIdentityHoldsList"
+        ]
+      }
+    },
+    "/api/hub/admin/wallet-openings/stuck": {
+      "get": {
+        "operationId": "AdminWalletOpeningsController_stuck",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100 (20 when absent, CONVENTIONS section 6).",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the page before; opaque, sent back as given.",
+            "schema": {
+              "maxLength": 300,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StuckOpeningsPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Openings with no wallet that are waiting on the provider or on a person, oldest first.",
+        "tags": [
+          "AdminWalletOpenings"
+        ]
+      }
+    },
     "/api/hub/money/pin": {
       "get": {
         "operationId": "MoneyPinController_state",
@@ -18267,6 +18354,50 @@
           }
         },
         "summary": "Finished sales with a payee made before the sweep's start, oldest first.",
+        "tags": [
+          "AdminEarnings"
+        ]
+      }
+    },
+    "/api/hub/admin/money/earnings/in-review": {
+      "get": {
+        "operationId": "AdminEarningsController_inReview",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Rows per page, 1 to 100 (20 when absent, CONVENTIONS section 6).",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "The `nextCursor` of the page before; opaque, sent back as given.",
+            "schema": {
+              "maxLength": 300,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EarningsInReviewPage"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Moves and earnings a person has to look at, oldest first, a cursor page.",
         "tags": [
           "AdminEarnings"
         ]
@@ -45779,6 +45910,88 @@
           "nextCursor"
         ]
       },
+      "EarningInReviewView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "earning",
+              "daily_move"
+            ]
+          },
+          "payeeWawuUserId": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "earnings": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string",
+            "nullable": true
+          },
+          "dayKey": {
+            "type": "string",
+            "nullable": true
+          },
+          "provider": {
+            "type": "string"
+          },
+          "firstRefusedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "reviewSince": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "payeeWawuUserId",
+          "amountKobo",
+          "earnings",
+          "title",
+          "dayKey",
+          "provider",
+          "firstRefusedAt",
+          "reviewSince",
+          "reason"
+        ]
+      },
+      "EarningsInReviewPage": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EarningInReviewView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "count",
+          "items",
+          "nextCursor"
+        ]
+      },
       "EarningStreamView": {
         "type": "object",
         "properties": {
@@ -54756,6 +54969,154 @@
           "wawuUserId",
           "outcome",
           "state"
+        ]
+      },
+      "IdentityHoldView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "review",
+              "stopped"
+            ]
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "needs_documents",
+              "checking",
+              "approved",
+              "rejected",
+              "stopped"
+            ],
+            "nullable": true
+          },
+          "failureCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "provider": {
+            "type": "string"
+          },
+          "heldSince": {
+            "type": "string"
+          },
+          "changedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "state",
+          "stage",
+          "failureCode",
+          "provider",
+          "heldSince",
+          "changedAt"
+        ]
+      },
+      "IdentityHoldsPage": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IdentityHoldView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "count",
+          "items",
+          "nextCursor"
+        ]
+      },
+      "StuckOpeningView": {
+        "type": "object",
+        "properties": {
+          "wawuUserId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "opening",
+              "open",
+              "unknown",
+              "conflict"
+            ]
+          },
+          "failureCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "provider": {
+            "type": "string"
+          },
+          "attempts": {
+            "type": "number"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "needs_documents",
+              "checking",
+              "approved",
+              "rejected",
+              "stopped"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "wawuUserId",
+          "state",
+          "failureCode",
+          "provider",
+          "attempts",
+          "startedAt",
+          "stage"
+        ]
+      },
+      "StuckOpeningsPage": {
+        "type": "object",
+        "properties": {
+          "stuckAfterMinutes": {
+            "type": "number"
+          },
+          "count": {
+            "type": "number"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StuckOpeningView"
+            }
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "stuckAfterMinutes",
+          "count",
+          "items",
+          "nextCursor"
         ]
       },
       "ChatPerson": {
