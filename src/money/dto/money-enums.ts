@@ -255,5 +255,18 @@ export const MONEY_ERROR_CODES = [
   // has none, or it ended. Also the code of the publishing gate (TIER-02), in
   // its own richer body on the routes that publish.
   'tier_required',
+  // Foreign-currency accounts, swaps and crypto sends (WALLET-21, R-83, R-84):
+  // an admin switch is off for the currency or the product; a quote's real
+  // expiry has passed (or it was used); the account is frozen by an admin; an
+  // outside address does not suit its chain; the account's chain is not the
+  // send's; the provider refused the move in its own words; the person has no
+  // such account.
+  'fx_switched_off',
+  'quote_expired',
+  'account_frozen',
+  'address_invalid',
+  'chain_mismatch',
+  'provider_declined',
+  'fx_account_not_open',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

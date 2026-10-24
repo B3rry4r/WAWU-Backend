@@ -1,5 +1,6 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import type { Type } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
   DocumentBuilder,
@@ -9,6 +10,7 @@ import {
   type PathItemObject,
 } from '@nestjs/swagger';
 import { AppModule } from '../app.module';
+import { FxContractModule } from '../money/fx/fx-contract.module';
 import { MoneyContractModule } from '../money/money-contract.module';
 
 /**
@@ -56,7 +58,11 @@ async function emit(): Promise<void> {
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
-  const declared = await addDeclaredRoutes(document, config);
+  const declared =
+    (await addDeclaredRoutes(document, config, MoneyContractModule)) +
+    // WALLET-21: the foreign-currency routes, declared until its second
+    // milestone serves them (src/money/fx/fx-contract.module.ts).
+    (await addDeclaredRoutes(document, config, FxContractModule));
 
   // cwd, not __dirname: `nest build` nests output under dist/src, so a path
   // relative to this file lands the contract inside dist/ and gets wiped by
@@ -94,8 +100,9 @@ async function emit(): Promise<void> {
 async function addDeclaredRoutes(
   document: OpenAPIObject,
   config: Omit<OpenAPIObject, 'paths'>,
+  declaredModule: Type<unknown>,
 ): Promise<number> {
-  const declaredApp = await NestFactory.create(MoneyContractModule, {
+  const declaredApp = await NestFactory.create(declaredModule, {
     preview: true,
     logger: false,
   });
@@ -111,13 +118,13 @@ async function addDeclaredRoutes(
       const key = method as keyof PathItemObject;
       if (target[key]) {
         throw new Error(
-          `${method.toUpperCase()} ${path} is served and also declared in MoneyContractModule. Delete the declaration.`,
+          `${method.toUpperCase()} ${path} is served and also declared (MoneyContractModule or FxContractModule). Delete the declaration.`,
         );
       }
       const builtBy: unknown = (op as unknown as Record<string, unknown>)[
         'x-wawu-built-by'
       ];
-      const note = `Declared by MONEY-04, not served yet${typeof builtBy === 'string' ? `: ${builtBy} serves it` : ''}.`;
+      const note = `Declared before it is served${typeof builtBy === 'string' ? `: ${builtBy} serves it` : ''}.`;
       Object.assign(target, {
         [key]: {
           ...op,
@@ -141,7 +148,7 @@ async function addDeclaredRoutes(
       // different schema under the same name is still a collision.
       if (JSON.stringify(served) === JSON.stringify(schema)) continue;
       throw new Error(
-        `Schema ${name} is defined by a served route and by MoneyContractModule, differently. Rename one of them.`,
+        `Schema ${name} is defined by a served route and by a declared module, differently. Rename one of them.`,
       );
     }
     document.components.schemas[name] = schema;

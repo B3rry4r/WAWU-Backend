@@ -62,6 +62,30 @@ export class MoneyErrorReason {
   @ApiPropertyOptional({ type: 'integer' })
   limitKobo?: number;
 
+  /**
+   * The same figures for an account that is not naira (WALLET-21): an integer
+   * in the smallest unit of `currency`. insufficient_funds, limit_reached,
+   * amount_out_of_range on a foreign account, a swap or a crypto send.
+   */
+  @ApiPropertyOptional({ type: 'integer' })
+  balanceMinor?: number;
+
+  @ApiPropertyOptional({ type: 'integer' })
+  totalMinor?: number;
+
+  @ApiPropertyOptional({ type: 'integer' })
+  shortfallMinor?: number;
+
+  @ApiPropertyOptional({ type: 'integer' })
+  remainingTodayMinor?: number;
+
+  @ApiPropertyOptional({ type: 'integer' })
+  limitMinor?: number;
+
+  /** The currency the Minor figures above are in (a WAWU code: USD, USDT ...). */
+  @ApiPropertyOptional()
+  currency?: string;
+
   /** amount_out_of_range: the smallest amount accepted. */
   @ApiPropertyOptional({ type: 'integer' })
   minimumKobo?: number;
