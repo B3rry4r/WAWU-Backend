@@ -9,11 +9,12 @@ name: Branch checks
 # would stop the deploy is red before it merges. Agents run only the specs they
 # touched and read this result; they do not run the full suite on their machine.
 #
-# The steps of `suite` and `netns` are COPIES of deploy.yml's `test` job (a
-# workflow cannot call another workflow's job). deploy.yml is untouched. The
-# first job, deploy-test-in-sync, fails when the copy and the original differ
-# (scripts/ci/check_deploy_in_sync.py lists exactly what it ignores), and the
-# other test jobs wait for it.
+# `suite` and `netns` are COPIES of the jobs of the same names in deploy.yml (a
+# workflow cannot call another workflow's job; DEPLOY-FAST made deploy.yml run
+# its tests as these same two jobs, and skip them only for a tree this workflow
+# already passed). The first job, deploy-test-in-sync, fails when a copy and
+# its original differ (scripts/ci/check_deploy_in_sync.py lists exactly what it
+# ignores), and the other test jobs wait for it.
 #
 #   deploy-test-in-sync  the copy still matches deploy.yml
 #   suite                the deploy's test steps, jest split into 3 shards
