@@ -38,6 +38,25 @@ import type {
   FxSwapView,
 } from './fx-view.type';
 
+/** WAWU's fee is tried this many times, each under its own reference, before it is given back. */
+const FEE_ATTEMPTS = 3;
+
+type FeeResult =
+  | { state: 'completed'; platformAccount?: string }
+  | { state: 'pending' }
+  | { state: 'failed' };
+
+/** Which try a fee leg is on: `owed` is the first, `owed:2` the second. */
+function feeAttempt(feeLeg: string | null): number {
+  const m = /^owed:(\d+)$/.exec(feeLeg ?? '');
+  return m ? Number(m[1]) : 1;
+}
+
+/** True while WAWU's fee is still to be collected. */
+function feeOwed(feeLeg: string | null): boolean {
+  return feeLeg === 'owed' || (feeLeg ?? '').startsWith('owed:');
+}
+
 /** A pending operation is looked at by the sweep after this long. */
 const SWEEP_AFTER_MS = 20_000;
 /** The sweep gives up on an operation the provider never shows after this long. */
@@ -522,46 +541,188 @@ export class FxOperationsService {
     });
   }
 
-  /** WAWU's fee on top (R-10): a second transfer, in the source currency, under our reference plus `-fee`. */
+  /**
+   * WAWU's fee on top (R-10): a second transfer, in the source currency, under
+   * our reference plus `-fee`. A naira fee goes the way a naira send's does
+   * (the provider's own platform account, WALLET-07); any other currency pays
+   * the collector account in that currency. The leg is marked `done` ONLY when
+   * the provider says the transfer completed (verifier H1: it was marked done
+   * on a failed record). What it answers decides the next step:
+   * - completed: `done`;
+   * - unfinished, or an answer that was lost: `owed`, asked again under the
+   *   SAME reference (the provider answers a repeat with the original);
+   * - refused for good (a failed record, a refusal): the reference is spent at
+   *   the provider, so the next try uses a new one (`-fee-2`, `-fee-3`:
+   *   `owed:2`, `owed:3`); after the third the fee is given back (`uncollected`,
+   *   WAWU's fee on the operation set to 0), never shown as paid.
+   */
   private async feeLeg(
-    wallet: Pick<OpenWallet, 'customerId' | 'walletId'>,
+    wallet: Pick<
+      OpenWallet,
+      'wawuUserId' | 'customerId' | 'walletId' | 'accountNumber'
+    >,
     op: FxOperation,
   ): Promise<void> {
-    if (op.wawuFeeMinor <= 0n || op.feeLeg === 'done') return;
+    if (
+      op.wawuFeeMinor <= 0n ||
+      op.feeLeg === 'done' ||
+      op.feeLeg === 'uncollected'
+    ) {
+      return;
+    }
+    const attempt = feeAttempt(op.feeLeg);
+    const reference =
+      attempt === 1 ? `${op.reference}-fee` : `${op.reference}-fee-${attempt}`;
     const code = op.fromCurrency as FxQuoteCode;
-    const ban = this.settings.feeCollector(code);
-    if (!ban) {
+    let result: FeeResult;
+    try {
+      result =
+        code === 'NGN'
+          ? await this.nairaFee(wallet, op, reference)
+          : await this.foreignFee(wallet, op, code, reference);
+    } catch (e) {
+      if (e instanceof WalletProviderError && !e.recordMayExist) {
+        result = { state: 'failed' };
+      } else {
+        this.logger.warn(
+          `fx ${op.id}: WAWU's fee is not confirmed yet (${e instanceof WalletProviderError ? e.kind : 'error'}); asked again under the same reference`,
+        );
+        result = { state: 'pending' };
+      }
+    }
+    if (result.state === 'completed') {
       await this.prisma.fxOperation.update({
         where: { id: op.id },
-        data: { feeLeg: 'owed' },
+        data: { feeLeg: 'done' },
       });
+      if (result.platformAccount) {
+        await this.ledgerFee(wallet, op, reference, result.platformAccount);
+      }
       return;
+    }
+    if (result.state === 'failed') {
+      if (attempt >= FEE_ATTEMPTS) {
+        this.logger.error(
+          `fx ${op.id}: WAWU's fee was refused ${FEE_ATTEMPTS} times; given back, not collected`,
+        );
+        await this.prisma.fxOperation.update({
+          where: { id: op.id },
+          data: { feeLeg: 'uncollected', wawuFeeMinor: 0n },
+        });
+      } else {
+        await this.prisma.fxOperation.update({
+          where: { id: op.id },
+          data: { feeLeg: `owed:${attempt + 1}` },
+        });
+      }
+      return;
+    }
+    await this.prisma.fxOperation.update({
+      where: { id: op.id },
+      data: { feeLeg: attempt === 1 ? 'owed' : `owed:${attempt}` },
+    });
+  }
+
+  /** The naira fee: the naira send's own path, a book transfer to WAWU's account. */
+  private async nairaFee(
+    wallet: Pick<OpenWallet, 'accountNumber'>,
+    op: FxOperation,
+    reference: string,
+  ): Promise<FeeResult> {
+    const provider = this.port.provider;
+    const platform = await provider.getPlatformAccount();
+    const receipt = await provider.walletToWallet({
+      fromAccountNumber: wallet.accountNumber,
+      toAccountNumber: platform.accountNumber,
+      amountKobo: op.wawuFeeMinor,
+      reference,
+      narration: 'WAWU fee',
+    });
+    return receipt.pending === true
+      ? { state: 'pending' }
+      : { state: 'completed', platformAccount: platform.accountNumber };
+  }
+
+  /** A fee in another currency: a transfer to the collector's routing number. */
+  private async foreignFee(
+    wallet: Pick<OpenWallet, 'customerId' | 'walletId'>,
+    op: FxOperation,
+    code: FxQuoteCode,
+    reference: string,
+  ): Promise<FeeResult> {
+    const ban = this.settings.feeCollector(code);
+    if (!ban) {
+      this.logger.error(
+        `fx ${op.id}: no collector account is set for ${code}; the fee stays owed`,
+      );
+      return { state: 'pending' };
     }
     const fromRow = op.fromAccountId
       ? await this.prisma.fxAccount.findUnique({
           where: { id: op.fromAccountId },
         })
       : null;
+    const receipt = await this.port.get().swap({
+      person: this.port.person(wallet),
+      reference,
+      quoteId: null,
+      from: { currency: code, accountId: fromRow?.providerAccountId ?? null },
+      to: { currency: code, accountId: null, ban },
+      amountFromMinor: op.wawuFeeMinor,
+      narration: 'WAWU fee',
+    });
+    return { state: receipt.status };
+  }
+
+  /** The naira ledger of a collected naira fee: the payer's debit and WAWU's credit, once each. */
+  private async ledgerFee(
+    wallet: Pick<OpenWallet, 'wawuUserId' | 'accountNumber'>,
+    op: FxOperation,
+    reference: string,
+    platformAccount: string,
+  ): Promise<void> {
     try {
-      await this.port.get().swap({
-        person: this.port.person(wallet),
-        reference: `${op.reference}-fee`,
-        quoteId: null,
-        from: { currency: code, accountId: fromRow?.providerAccountId ?? null },
-        to: { currency: code, accountId: null, ban },
-        amountFromMinor: op.wawuFeeMinor,
+      const amountKobo = num(op.wawuFeeMinor);
+      const base = {
+        status: 'completed' as const,
+        category: 'transfer' as const,
+        amountKobo,
+        feeKobo: 0,
         narration: 'WAWU fee',
+        references: { customerReference: reference },
+        source: 'send' as const,
+      };
+      await this.ledger.record({
+        ...base,
+        wallet: {
+          kind: 'user',
+          wawuUserId: wallet.wawuUserId,
+          accountNumber: wallet.accountNumber,
+        },
+        direction: 'out',
+        counterparty: { kind: 'wawu', name: 'WAWU fee' },
+        note: 'WAWU fee',
       });
-      await this.prisma.fxOperation.update({
-        where: { id: op.id },
-        data: { feeLeg: 'done' },
-      });
+      await this.ledger.record(
+        {
+          ...base,
+          wallet: { kind: 'merchant', accountNumber: platformAccount },
+          direction: 'in',
+          totalKobo: amountKobo,
+          counterparty: {
+            kind: 'wawu_user',
+            name: null,
+            wawuUserId: wallet.wawuUserId,
+            accountNumber: wallet.accountNumber,
+          },
+        },
+        undefined,
+        { quiet: true },
+      );
     } catch (e) {
-      await this.prisma.fxOperation.update({
-        where: { id: op.id },
-        data: { feeLeg: 'owed' },
-      });
-      throw e;
+      this.logger.error(
+        `fx ${op.id}: the naira ledger could not record WAWU's fee (${e instanceof Error ? e.name : 'error'})`,
+      );
     }
   }
 
@@ -640,6 +801,7 @@ export class FxOperationsService {
         OR: [
           { status: 'pending', createdAt: { lt: before } },
           { status: 'completed', feeLeg: 'owed' },
+          { status: 'completed', feeLeg: { startsWith: 'owed:' } },
         ],
       },
       orderBy: { createdAt: 'asc' },
@@ -664,7 +826,7 @@ export class FxOperationsService {
   ): Promise<'settled' | 'pending' | 'unknown'> {
     const op = await this.prisma.fxOperation.findUnique({ where: { id } });
     if (!op || op.provider !== this.port.name) return 'unknown';
-    if (op.status === 'completed' && op.feeLeg !== 'owed') return 'settled';
+    if (op.status === 'completed' && !feeOwed(op.feeLeg)) return 'settled';
     return (await this.settleOne(op, new Date())) ? 'settled' : 'pending';
   }
 

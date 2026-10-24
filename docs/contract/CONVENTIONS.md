@@ -3278,6 +3278,25 @@ so `GET /money/fx/sends/quote` has `providerFeeMinor: null` and the receipt
 carries what was charged. WAWU's fee per currency comes from config and is 0
 until the owner names it (R-10).
 
+**Where an account's details stand** (fix round 1, verifier M2). Each account has
+`detailsStatus`: `ready` (issued and active), `pending` (the provider is issuing
+them) or `unavailable` (the provider would not issue them just now), and
+`detailsNote`, the provider's own words when `unavailable` (null otherwise).
+The app says exactly that and promises no arrival: on dev CAD and AED answer
+503 every time. An account whose details were never seen is asked again on
+every read.
+
+**WAWU's fee** (R-10, fix round 1, verifier H1). A swap or a send is charged the
+fee in the source currency, on top, as a second transfer under the operation's
+reference plus `-fee`. Out of naira it is a transfer to WAWU's operational
+account, the way a naira send's fee is collected; out of another currency it is
+a transfer to `FX_FEE_COLLECTOR_<CODE>_BAN`. The leg counts as paid only when the
+provider says it completed. A fee the provider refuses is tried again under a
+new reference (`-fee-2`, `-fee-3`); after three refusals it is given back (the
+operation's `wawuFeeMinor` becomes 0 and the admin view shows `feeLeg:
+uncollected`). A fee whose answer was lost or is unfinished stays `owed` and is
+asked again under the same reference.
+
 ## 28. Send abroad (NUV-11, R-84)
 
 A person pays a foreign bank account or a mobile money wallet from any of their accounts. Every route is under `/api/hub/money/abroad`, needs an open naira wallet (R-6), reaches the provider only through `WALLET_PROVIDER` (its `abroad` side; a provider without one, Fintava, answers `409 currency_not_supported`), and follows section 1a for amounts (`...Minor` beside a currency field; WAWU's fee is naira, `wawuFeeKobo`).

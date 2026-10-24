@@ -52,10 +52,24 @@ export interface ProviderFxDetails {
   address: string | null;
 }
 
+/** What reading (and, when asked, issuing) an account's details answered. */
+export interface ProviderFxDetailsRead {
+  /** Null when the provider holds none. */
+  details: ProviderFxDetails | null;
+  /**
+   * The provider's own words when it would not issue them just now (Nuvion
+   * answered 503 for CAD and AED on dev); null when it held them or was not
+   * asked to issue them.
+   */
+  refusal: string | null;
+}
+
 export interface ProviderFxOpened {
   account: ProviderFxAccount;
   /** Null when the provider could not issue them yet (read them again later). */
   details: ProviderFxDetails | null;
+  /** Why not, in the provider's words, when it said. */
+  detailsRefusal: string | null;
 }
 
 /** A side of a quote or a swap: a foreign account, or the naira wallet (`NGN`). */
@@ -197,7 +211,7 @@ export interface ProviderForeignAccounts {
       chain: ProviderFxChain | null;
     },
     ensure: boolean,
-  ): Promise<ProviderFxDetails | null>;
+  ): Promise<ProviderFxDetailsRead>;
 
   quote(input: ProviderFxQuoteInput): Promise<ProviderFxQuote>;
 

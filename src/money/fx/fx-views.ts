@@ -66,6 +66,7 @@ export function accountView(
   settings: FxSettings,
   balance: ProviderFxAccount | null,
   details: ProviderFxDetails | null,
+  refusal: string | null = null,
 ): FxAccountView {
   const code = row.currency as FxCurrencyCode;
   const def = fxCurrency(code)!;
@@ -83,6 +84,14 @@ export function accountView(
           : 'opening',
     balance: balanceView(code, balance),
     details: detailsView(details),
+    detailsStatus: details
+      ? details.status === 'active'
+        ? 'ready'
+        : 'pending'
+      : row.status === 'opening'
+        ? 'pending'
+        : 'unavailable',
+    detailsNote: details || row.status === 'opening' ? null : refusal,
     openedAt: row.createdAt.toISOString(),
   };
 }

@@ -15,6 +15,7 @@ import { NuvionFxArea } from '../../../nuvion/areas/fx';
 import { NuvionClient } from '../../../nuvion/nuvion-client';
 import { NuvionFxHandler } from '../../../nuvion/handlers/fx.handler';
 import { NuvionWalletProvider } from '../../../nuvion/nuvion-wallet-provider';
+import { WalletProviderError } from '../../../wallet-provider/wallet-provider-error';
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
 import type { PlanSettingsService } from '../../../plan-settings/plan-settings.service';
 import type { WalletProvider } from '../../../wallet-provider/wallet-provider.interface';
@@ -44,6 +45,8 @@ const WALLET: OpenWallet = {
   walletId: `${FX_ENTITY}:${FX_NGN_ACCOUNT}`,
   accountNumber: '0123456789',
 };
+/** WAWU's own (operational) account number, as the provider says it. */
+const PLATFORM = '0099990001';
 const ADMIN = { id: 'adm-1', email: 'fin@wawu.test', role: 'finance' } as never;
 
 const code = async (p: Promise<unknown>) =>
@@ -67,6 +70,8 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
   const ledgerRows: Array<Record<string, unknown>> = [];
   const keys = { calls: [] as string[] };
   let n = 0;
+  const nairaLegs: Array<Record<string, unknown>> = [];
+  let nairaMode: 'ok' | 'pending' | 'refused' | 'unknown' = 'ok';
 
   const scope = (): IdempotencyScope => {
     n += 1;
@@ -92,6 +97,48 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
       label: 'Nuvion',
       configured: true,
       fx: area,
+      getPlatformAccount: () =>
+        Promise.resolve({
+          accountNumber: PLATFORM,
+          accountName: 'WAWU',
+          availableKobo: 0n,
+          bookedKobo: 0n,
+        }),
+      // The naira send's own path for WAWU's fee (WALLET-07): a book
+      // transfer from the payer's wallet to WAWU's account, by reference.
+      walletToWallet: (input: Record<string, unknown>) => {
+        nairaLegs.push(input);
+        if (nairaMode === 'refused') {
+          return Promise.reject(
+            new WalletProviderError({
+              kind: 'insufficient_funds',
+              provider: 'nuvion',
+              operation: 'wallet to wallet',
+              messages: ['not enough'],
+            }),
+          );
+        }
+        if (nairaMode === 'unknown') {
+          return Promise.reject(
+            new WalletProviderError({
+              kind: 'outcome_unknown',
+              provider: 'nuvion',
+              operation: 'wallet to wallet',
+            }),
+          );
+        }
+        return Promise.resolve({
+          ourReference: String(input.reference),
+          providerReference: null,
+          secondaryReference: null,
+          transactionId: 'T1',
+          amountKobo: input.amountKobo,
+          totalKobo: input.amountKobo,
+          feeKobo: 0n,
+          sourceAvailableKobo: null,
+          pending: nairaMode === 'pending',
+        });
+      },
       getBalance: ({ walletId }: { walletId: string }) =>
         Promise.resolve({
           availableKobo: BigInt(fx.balanceOf(walletId.split(':')[1])),
@@ -174,6 +221,8 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
     for (const k of Object.keys(env)) delete env[k];
     off.clear();
     ledgerRows.length = 0;
+    nairaLegs.length = 0;
+    nairaMode = 'ok';
     keys.calls.length = 0;
     fx.detailsMode = 'active';
     fx.refuseSends = true;
@@ -262,6 +311,38 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
       availableMinor: 4_321,
       bookedMinor: 4_321,
     });
+  });
+
+  it("says why an account has no details, in the provider's words, and asks again on the next read (verifier M2: CAD and AED answered 503 on dev)", async () => {
+    fx.detailsMode = 'unavailable';
+    const cad = await accounts.open(WALLET, { currency: 'CAD' });
+    expect(cad.details).toBeNull();
+    expect(cad.detailsStatus).toBe('unavailable');
+    expect(cad.detailsNote).toMatch(
+      /partner services is temporarily unavailable/,
+    );
+    const listed = (await accounts.list(WALLET)).accounts.find(
+      (a) => a.id === cad.id,
+    )!;
+    expect(listed).toMatchObject({ detailsStatus: 'unavailable' });
+    expect(listed.detailsNote).toMatch(/temporarily unavailable/);
+    expect(JSON.stringify(listed)).not.toMatch(/on their way|[\u2013\u2014]/);
+    fx.detailsMode = 'pending';
+    const pending = await accounts.get(WALLET, cad.id);
+    expect(pending).toMatchObject({
+      detailsStatus: 'pending',
+      detailsNote: null,
+    });
+    fx.details.get(
+      (await prisma.fxAccount.findUniqueOrThrow({ where: { id: cad.id } }))
+        .providerAccountId!,
+    )!.status = 'active';
+    expect(await accounts.get(WALLET, cad.id)).toMatchObject({
+      detailsStatus: 'ready',
+      detailsNote: null,
+    });
+    const usd = await openUsd();
+    expect(usd).toMatchObject({ detailsStatus: 'ready', detailsNote: null });
   });
 
   it('refuses to open when an admin switched the currency or the product off', async () => {
@@ -442,19 +523,25 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
     expect(lagosDay(new Date('2026-10-24T23:30:00Z'))).toBe('2026-10-25');
   });
 
-  it("moves WAWU's fee from config as a second transfer to the collector, and refuses a fee with nowhere to pay it", async () => {
-    expect(
-      () =>
-        new FxSettings(
-          {
-            get: (k: string) => ({ FX_SWAP_FEE_NGN_MINOR: '500' })[k],
-          } as unknown as ConfigService,
-          { number: () => 1 } as unknown as PlanSettingsService,
-        ),
-    ).toThrow(/FX_FEE_COLLECTOR_NGN_BAN/);
+  /** The person's naira wallet row, which the sweep reads to act for them. */
+  async function ensureWallet() {
+    await prisma.fintavaWallet.deleteMany({ where: { wawuUserId: USER } });
+    await prisma.fintavaWallet.create({
+      data: {
+        wawuUserId: USER,
+        customerId: FX_ENTITY,
+        walletId: WALLET.walletId,
+        accountNumber: WALLET.accountNumber,
+        provider: 'nuvion',
+      },
+    });
+  }
+
+  /** A naira-source swap of 100,000 kobo with a 500 kobo fee, and its operation. */
+  async function nairaSwapWithFee() {
     env.FX_SWAP_FEE_NGN_MINOR = '500';
-    env.FX_FEE_COLLECTOR_NGN_BAN = '0099990001';
     build();
+    await ensureWallet();
     const usd = await openUsd();
     const q = await ops.quote(WALLET, {
       fromCurrency: 'NGN',
@@ -464,17 +551,147 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
     });
     expect(q).toMatchObject({ wawuFeeMinor: 500, totalFromMinor: 100_500 });
     const s = await ops.swap(WALLET, scope(), { quoteId: q.id });
-    const fee = fx.transfers
-      .filter((t) => String(t.unique_reference).endsWith('-fee'))
-      .pop();
-    expect(fee).toMatchObject({
-      amount: 500,
-      narration: 'WAWU fee',
-      currency: 'NGN',
+    const row = () =>
+      prisma.fxOperation.findUniqueOrThrow({ where: { id: s.id } });
+    return { s, row };
+  }
+
+  it("collects WAWU's fee on a swap out of naira the way a naira send does: to WAWU's account, by reference plus -fee, in the ledger (verifier H1)", async () => {
+    const { s, row } = await nairaSwapWithFee();
+    expect(nairaLegs).toHaveLength(1);
+    expect(nairaLegs[0]).toMatchObject({
+      fromAccountNumber: WALLET.accountNumber,
+      toAccountNumber: PLATFORM,
+      amountKobo: 500n,
+      reference: `${(await row()).reference}-fee`,
     });
+    expect(s.wawuFeeMinor).toBe(500);
+    expect((await row()).feeLeg).toBe('done');
+    // the swap's debit, the fee's debit from the payer, the fee's credit to WAWU
+    expect(ledgerRows).toHaveLength(3);
     expect(
-      (await prisma.fxOperation.findUnique({ where: { id: s.id } }))?.feeLeg,
+      ledgerRows.map(
+        (r) =>
+          `${(r.wallet as { kind: string }).kind}/${String(r.direction)}/${String(r.amountKobo)}`,
+      ),
+    ).toEqual(['user/out/100000', 'user/out/500', 'merchant/in/500']);
+  });
+
+  it('a fee the provider refuses is not marked paid: it is tried again under a new reference, and given back after three refusals', async () => {
+    nairaMode = 'refused';
+    const { s, row } = await nairaSwapWithFee();
+    expect((await row()).feeLeg).toBe('owed:2');
+    expect(ledgerRows).toHaveLength(1);
+    await ops.sweep(new Date(Date.now() + 60_000));
+    expect((await row()).feeLeg).toBe('owed:3');
+    await ops.sweep(new Date(Date.now() + 120_000));
+    const after = await row();
+    expect(after.feeLeg).toBe('uncollected');
+    expect(after.wawuFeeMinor).toBe(0n);
+    expect(
+      nairaLegs.map((l) => String(l.reference).replace(after.reference, '')),
+    ).toEqual(['-fee', '-fee-2', '-fee-3']);
+    expect((await ops.readSwap(WALLET, s.id)).wawuFeeMinor).toBe(0);
+    await ops.sweep(new Date(Date.now() + 180_000));
+    expect(nairaLegs).toHaveLength(3);
+  });
+
+  it('a refused fee that a later try collects is marked paid once, under the new reference', async () => {
+    nairaMode = 'refused';
+    const { row } = await nairaSwapWithFee();
+    nairaMode = 'ok';
+    await ops.sweep(new Date(Date.now() + 60_000));
+    const after = await row();
+    expect(after.feeLeg).toBe('done');
+    expect(String(nairaLegs[nairaLegs.length - 1].reference)).toBe(
+      `${after.reference}-fee-2`,
+    );
+    await ops.sweep(new Date(Date.now() + 120_000));
+    expect(nairaLegs).toHaveLength(2);
+    expect(
+      ledgerRows.filter(
+        (r) => (r.wallet as { kind: string }).kind === 'merchant',
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('a fee whose answer was lost, or is unfinished, stays owed under the SAME reference and is never marked paid until the provider says it completed', async () => {
+    nairaMode = 'unknown';
+    const { row } = await nairaSwapWithFee();
+    expect((await row()).feeLeg).toBe('owed');
+    nairaMode = 'pending';
+    await ops.sweep(new Date(Date.now() + 60_000));
+    expect((await row()).feeLeg).toBe('owed');
+    nairaMode = 'ok';
+    await ops.sweep(new Date(Date.now() + 120_000));
+    const after = await row();
+    expect(after.feeLeg).toBe('done');
+    expect(new Set(nairaLegs.map((l) => l.reference))).toEqual(
+      new Set([`${after.reference}-fee`]),
+    );
+  });
+
+  it('a fee in a foreign currency is paid to the collector account in that currency, and refused at start without one', async () => {
+    expect(
+      () =>
+        new FxSettings(
+          {
+            get: (k: string) => ({ FX_SWAP_FEE_USD_MINOR: '5' })[k],
+          } as unknown as ConfigService,
+          { number: () => 1 } as unknown as PlanSettingsService,
+        ),
+    ).toThrow(/FX_FEE_COLLECTOR_USD_BAN/);
+    const collector = fx.addCollector('0088880001', 'USD');
+    env.FX_SWAP_FEE_USD_MINOR = '5';
+    env.FX_FEE_COLLECTOR_USD_BAN = '0088880001';
+    build();
+    const usd = await openUsd();
+    const prov = [...fx.accounts.values()]
+      .filter((x) => x.currency === 'USD' && x.id !== collector.id)
+      .pop()!;
+    fx.fund(prov.id, 1_000);
+    const q = await ops.quote(WALLET, {
+      fromCurrency: 'USD',
+      toCurrency: 'EUR',
+      fromAccountId: usd.id,
+      toAccountId: (await accounts.open(WALLET, { currency: 'EUR' })).id,
+      amountFromMinor: 200,
+    });
+    const s = await ops.swap(WALLET, scope(), { quoteId: q.id });
+    expect(
+      (await prisma.fxOperation.findUniqueOrThrow({ where: { id: s.id } }))
+        .feeLeg,
     ).toBe('done');
+    expect(fx.balanceOf(collector.id)).toBe(5);
+  });
+
+  it("a foreign fee sent to the payer's own account (a wrong collector) is refused by the provider and never marked paid, however many times it is asked again", async () => {
+    await ensureWallet();
+    const usd = await openUsd();
+    const prov = [...fx.accounts.values()]
+      .filter((x) => x.currency === 'USD' && x.type === 'checking')
+      .pop()!;
+    fx.fund(prov.id, 1_000);
+    env.FX_SWAP_FEE_USD_MINOR = '5';
+    env.FX_FEE_COLLECTOR_USD_BAN = prov.nuvion_ban;
+    build();
+    const eur = await accounts.open(WALLET, { currency: 'EUR' });
+    const q = await ops.quote(WALLET, {
+      fromCurrency: 'USD',
+      toCurrency: 'EUR',
+      fromAccountId: usd.id,
+      toAccountId: eur.id,
+      amountFromMinor: 200,
+    });
+    const s = await ops.swap(WALLET, scope(), { quoteId: q.id });
+    const row = () =>
+      prisma.fxOperation.findUniqueOrThrow({ where: { id: s.id } });
+    expect((await row()).feeLeg).not.toBe('done');
+    await ops.sweep(new Date(Date.now() + 60_000));
+    await ops.sweep(new Date(Date.now() + 120_000));
+    await ops.sweep(new Date(Date.now() + 180_000));
+    expect((await row()).feeLeg).toBe('uncollected');
+    expect((await row()).wawuFeeMinor).toBe(0n);
   });
 
   it('refuses a swap while an admin has the account frozen, and a freeze leaves one audit row', async () => {
@@ -638,15 +855,7 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
   });
 
   it("leaves a swap the provider has not finished pending, and the sweep settles it from the provider's own record", async () => {
-    await prisma.fintavaWallet.create({
-      data: {
-        wawuUserId: USER,
-        customerId: FX_ENTITY,
-        walletId: WALLET.walletId,
-        accountNumber: WALLET.accountNumber,
-        provider: 'nuvion',
-      },
-    });
+    await ensureWallet();
     const usd = await openUsd();
     fx.transferStatus = 'pending';
     const q = await ops.quote(WALLET, {

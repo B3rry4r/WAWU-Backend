@@ -13125,8 +13125,8 @@
                               "pending",
                               "failed",
                               "refunded",
-                              "cancelled",
-                              "paid"
+                              "paid",
+                              "cancelled"
                             ]
                           },
                           "flutterwaveTxRef": {
@@ -13292,8 +13292,8 @@
                         "pending",
                         "failed",
                         "refunded",
-                        "cancelled",
-                        "paid"
+                        "paid",
+                        "cancelled"
                       ]
                     },
                     "flutterwaveTxRef": {
@@ -18787,1006 +18787,6 @@
         ],
         "x-wawu-built-by": "WALLET-08",
         "x-wawu-max-items": 10
-      }
-    },
-    "/api/hub/money/abroad/corridors": {
-      "get": {
-        "operationId": "AbroadController_corridors",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AbroadCorridorsView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The product switch and the countries the app can draw: for each, the ways\nto arrive and the exact fields Nuvion asks for that country and way, and\nwhat an admin has set for the fee. Reads settings only; no provider call.",
-        "tags": [
-          "Abroad"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      }
-    },
-    "/api/hub/money/abroad/banks/{country}": {
-      "get": {
-        "operationId": "AbroadController_banks",
-        "parameters": [
-          {
-            "name": "country",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AbroadBankListView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: corridor_not_supported",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Nuvion's bank directory for one country, for a `bank` picker; asked once an hour.",
-        "tags": [
-          "Abroad"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      }
-    },
-    "/api/hub/money/abroad/sources": {
-      "get": {
-        "operationId": "AbroadController_sources",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AbroadSourcesView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The accounts the person can send from, each with the provider's balance read now.",
-        "tags": [
-          "Abroad"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      }
-    },
-    "/api/hub/money/abroad/recipients": {
-      "get": {
-        "operationId": "AbroadController_recipients",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AbroadRecipientListView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The person's saved recipients abroad, newest first.",
-        "tags": [
-          "Abroad"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      },
-      "post": {
-        "operationId": "AbroadController_saveRecipient",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AbroadRecipientDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AbroadRecipientView"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported, fx_switched_off, provider_declined",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: corridor_not_supported, recipient_details_invalid",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, account_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Saves a recipient: the country, the way it arrives and exactly the\nfields the corridor asks. Only the last four characters of the account\nstay with WAWU; the rest is held by the provider. Saving the same\naccount again returns the saved one (201 first, 200 after). Refused with\n`fx_switched_off` when sending abroad is off, `corridor_not_supported`\nfor a country or way the provider does not pay, and\n`recipient_details_invalid` (the refused fields in `fields`) when the\nprovider will not take the details.",
-        "tags": [
-          "Abroad"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      }
-    },
-    "/api/hub/money/abroad/recipients/{id}": {
-      "delete": {
-        "operationId": "AbroadController_removeRecipient",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": ""
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Removes a saved recipient from the list. Sends already made keep their record.",
-        "tags": [
-          "Abroad"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      }
-    },
-    "/api/hub/money/abroad/quotes": {
-      "post": {
-        "operationId": "AbroadController_quote",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AbroadQuoteDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AbroadQuoteView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: amount_out_of_range",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "402": {
-            "description": "reason.code: insufficient_funds",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: daily_limit_exceeded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, currency_not_supported, fx_switched_off, fx_account_not_open, rate_unavailable, provider_declined",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: corridor_not_supported",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, account_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "What a send would deliver and cost: the provider's rate and real hold\nwhen the currencies differ (about three minutes on dev), both amounts,\nWAWU's fee from config. The quote is kept for this person and used once.\n`amount_out_of_range` carries the least and most the corridor takes,\n`rate_unavailable` says the provider cannot price the pair now,\n`insufficient_funds` that the account holds less.",
-        "tags": [
-          "Abroad"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      }
-    },
-    "/api/hub/money/abroad/sends": {
-      "post": {
-        "operationId": "AbroadController_send",
-        "parameters": [
-          {
-            "name": "X-Transaction-Pin",
-            "in": "header",
-            "description": "The four-digit transaction PIN, unless X-Device-Approval is sent. Only ever in this header: never in a URL, a body or a log.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "pattern": "^[0-9]{4}$"
-            }
-          },
-          {
-            "name": "X-Device-Approval",
-            "in": "header",
-            "description": "Instead of X-Transaction-Pin: `v1.<challengeId>.<signature>`, the registered phone key's P-256 signature (DER, base64url) over the challenge and this exact request. Send this or X-Transaction-Pin, not both.",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "pattern": "^v1\\.[0-9a-f-]{36}\\.[A-Za-z0-9_-]{8,200}$"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "description": "One value per payment intent, made by the app when the person first taps (a UUID). Sent again unchanged on every retry of that intent.",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_-]{8,128}$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AbroadSendDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AbroadSendView"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "reason.code: idempotency_key_required, amount_out_of_range",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "402": {
-            "description": "reason.code: insufficient_funds",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "reason.code: pin_required, pin_incorrect, limit_reached, device_approval_refused, daily_limit_exceeded",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, currency_not_supported, fx_switched_off, quote_expired, rate_unavailable, provider_declined",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "reason.code: corridor_not_supported, recipient_details_invalid",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen, pin_locked, account_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "reason.code: provider_unreachable, fees_not_set",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "Sends at a held quote: the Idempotency-Key and the PIN (or the device\napproval) are required, the quote is used once, and the recipient and the\namounts are the quote's. Answers 201 with the send: `sending` or `pending`\nuntil the provider delivers (poll `GET /money/abroad/sends/{id}`),\n`failed` when the provider refused and nothing moved. An expired or used\nquote is `409 quote_expired`; a frozen person `423 account_frozen`. The\nsame key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN. WAWU's fee, when\nset, is taken from the naira wallet after the provider takes the send.",
-        "tags": [
-          "Abroad"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      },
-      "get": {
-        "operationId": "AbroadController_sends",
-        "parameters": [
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "minLength": 1,
-              "maxLength": 200,
-              "type": "string"
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "minimum": 1,
-              "maximum": 50,
-              "default": 20,
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AbroadSendPage"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "The person's sends abroad, newest first (cursor page).",
-        "tags": [
-          "Abroad"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      }
-    },
-    "/api/hub/money/abroad/sends/{id}": {
-      "get": {
-        "operationId": "AbroadController_sendById",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AbroadSendView"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "reason.code: not_found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          },
-          "423": {
-            "description": "reason.code: wallet_frozen",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MoneyErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "wawu-id": []
-          }
-        ],
-        "summary": "One send as it stands now; what the app polls after `sending` or `pending`. Only its sender reads it.",
-        "tags": [
-          "Abroad"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      }
-    },
-    "/api/hub/admin/money/abroad/sends": {
-      "get": {
-        "operationId": "AbroadAdminController_sends",
-        "parameters": [
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "minLength": 1,
-              "maxLength": 200,
-              "type": "string"
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "minimum": 1,
-              "maximum": 50,
-              "default": 20,
-              "type": "integer"
-            }
-          },
-          {
-            "name": "wawuUserId",
-            "required": false,
-            "in": "query",
-            "description": "One person's WAWU id.",
-            "schema": {
-              "minLength": 1,
-              "maxLength": 100,
-              "type": "string"
-            }
-          },
-          {
-            "name": "status",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "sending",
-                "pending",
-                "completed",
-                "failed",
-                "reversed",
-                "cancelled",
-                "needs_review"
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdminAbroadSendPage"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Sends, newest first, for one person or everyone; filter by status.",
-        "tags": [
-          "AbroadAdmin"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      }
-    },
-    "/api/hub/admin/money/abroad/sends/{id}": {
-      "get": {
-        "operationId": "AbroadAdminController_send",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdminAbroadSendView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "One send.",
-        "tags": [
-          "AbroadAdmin"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      }
-    },
-    "/api/hub/admin/money/abroad/sends/{id}/cancel": {
-      "post": {
-        "operationId": "AbroadAdminController_cancel",
-        "parameters": [
-          {
-            "name": "id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AdminAbroadReasonDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdminAbroadCancelView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Cancels a send the provider never received (`sending` that stayed\n`sending`, or `needs_review` after a search of the provider's records\nfound nothing). The provider has no way to stop a payout it holds, so a\nsend it accepted is `409 send_not_cancellable`. Needs a reason; one audit\nrow; cancelling a cancelled send changes nothing.",
-        "tags": [
-          "AbroadAdmin"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      }
-    },
-    "/api/hub/admin/money/abroad/people/{wawuUserId}/freeze": {
-      "post": {
-        "operationId": "AbroadAdminController_freeze",
-        "parameters": [
-          {
-            "name": "wawuUserId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AdminAbroadReasonDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdminAbroadFreezeView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Freezes one person's sending abroad: from then on no new recipient or send\nleaves, and a send already with the provider carries on. Needs a reason;\nfreezing a frozen person changes nothing and writes no second audit row.",
-        "tags": [
-          "AbroadAdmin"
-        ],
-        "x-wawu-built-by": "NUV-11"
-      }
-    },
-    "/api/hub/admin/money/abroad/people/{wawuUserId}/unfreeze": {
-      "post": {
-        "operationId": "AbroadAdminController_unfreeze",
-        "parameters": [
-          {
-            "name": "wawuUserId",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AdminAbroadReasonDto"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AdminAbroadFreezeView"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Lets go of a frozen person. Needs a reason; one audit row.",
-        "tags": [
-          "AbroadAdmin"
-        ],
-        "x-wawu-built-by": "NUV-11"
       }
     },
     "/api/hub/money/fx/currencies": {
@@ -42397,11 +41397,7 @@
               "address_invalid",
               "chain_mismatch",
               "provider_declined",
-              "fx_account_not_open",
-              "corridor_not_supported",
-              "recipient_details_invalid",
-              "rate_unavailable",
-              "send_not_cancellable"
+              "fx_account_not_open"
             ],
             "type": "string"
           },
@@ -42444,19 +41440,6 @@
           "currency": {
             "type": "string",
             "description": "The currency the Minor figures above are in (a WAWU code: USD, USDT ...)."
-          },
-          "minimumMinor": {
-            "type": "integer"
-          },
-          "maximumMinor": {
-            "type": "integer"
-          },
-          "fields": {
-            "description": "The fields a provider refused, by key (`recipient_details_invalid`).",
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
           },
           "minimumKobo": {
             "type": "integer",
@@ -43141,119 +42124,6 @@
           "data",
           "statusCode",
           "message"
-        ]
-      },
-      "AbroadRecipientDto": {
-        "type": "object",
-        "properties": {
-          "country": {
-            "type": "string",
-            "description": "ISO 3166-1 alpha-2, from `GET /money/abroad/corridors`.",
-            "pattern": "^[A-Z]{2}$",
-            "minLength": 2,
-            "maxLength": 2
-          },
-          "method": {
-            "enum": [
-              "bank",
-              "mobile_money"
-            ],
-            "type": "string"
-          },
-          "scheme": {
-            "type": "string",
-            "description": "The scheme the person picked when the rail has several; omitted when it has one.",
-            "minLength": 1,
-            "maxLength": 30
-          },
-          "holderName": {
-            "type": "string",
-            "description": "The name on the account, as it is written there.",
-            "minLength": 2,
-            "maxLength": 100
-          },
-          "fields": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "string"
-            },
-            "description": "The scheme's fields, by key (`GET /money/abroad/corridors`). Any other key is refused."
-          }
-        },
-        "required": [
-          "country",
-          "method",
-          "holderName",
-          "fields"
-        ]
-      },
-      "AbroadQuoteDto": {
-        "type": "object",
-        "properties": {
-          "recipientId": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "fromCurrency": {
-            "type": "string",
-            "description": "The account to send from: `NGN` or a currency from `GET /money/abroad/sources`.",
-            "pattern": "^[A-Z]{3,4}$",
-            "minLength": 3,
-            "maxLength": 4
-          },
-          "amountMinor": {
-            "type": "integer",
-            "description": "The amount, in the smallest unit of the currency `side` names.",
-            "minimum": 1,
-            "maximum": 9007199254740991
-          },
-          "side": {
-            "description": "`send`: the amount leaves the account; `receive`: the recipient gets exactly it.",
-            "enum": [
-              "send",
-              "receive"
-            ],
-            "type": "string",
-            "default": "send"
-          }
-        },
-        "required": [
-          "recipientId",
-          "fromCurrency",
-          "amountMinor"
-        ]
-      },
-      "AbroadSendDto": {
-        "type": "object",
-        "properties": {
-          "quoteId": {
-            "type": "string",
-            "description": "A quote from `POST /money/abroad/quotes`, used once, before it expires.",
-            "format": "uuid"
-          },
-          "narration": {
-            "type": "string",
-            "description": "What the recipient's statement may show, up to 100 characters.",
-            "minLength": 1,
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "quoteId"
-        ]
-      },
-      "AdminAbroadReasonDto": {
-        "type": "object",
-        "properties": {
-          "reason": {
-            "type": "string",
-            "description": "Why, in a few plain words; kept on the audit row.",
-            "minLength": 3,
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "reason"
         ]
       },
       "OpenFxAccountDto": {
@@ -49632,678 +48502,6 @@
           "canStart"
         ]
       },
-      "AdminAbroadSendView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "wawuUserId": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "completed",
-              "failed",
-              "reversed",
-              "sending",
-              "cancelled",
-              "needs_review"
-            ]
-          },
-          "recipientName": {
-            "type": "string"
-          },
-          "country": {
-            "type": "string"
-          },
-          "fromCurrency": {
-            "type": "string"
-          },
-          "toCurrency": {
-            "type": "string"
-          },
-          "amountFromMinor": {
-            "type": "integer"
-          },
-          "amountToMinor": {
-            "type": "integer"
-          },
-          "providerFeeMinor": {
-            "type": "integer",
-            "nullable": true
-          },
-          "wawuFeeKobo": {
-            "type": "integer"
-          },
-          "wawuFeeOwed": {
-            "type": "boolean"
-          },
-          "reference": {
-            "type": "string"
-          },
-          "providerStatus": {
-            "type": "string",
-            "nullable": true
-          },
-          "failureReason": {
-            "type": "string",
-            "nullable": true
-          },
-          "personFrozen": {
-            "type": "boolean"
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "completedAt": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "wawuUserId",
-          "status",
-          "recipientName",
-          "country",
-          "fromCurrency",
-          "toCurrency",
-          "amountFromMinor",
-          "amountToMinor",
-          "providerFeeMinor",
-          "wawuFeeKobo",
-          "wawuFeeOwed",
-          "reference",
-          "providerStatus",
-          "failureReason",
-          "personFrozen",
-          "createdAt",
-          "completedAt"
-        ]
-      },
-      "AdminAbroadSendPage": {
-        "type": "object",
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AdminAbroadSendView"
-            }
-          },
-          "nextCursor": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "items",
-          "nextCursor"
-        ]
-      },
-      "AdminAbroadCancelView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "completed",
-              "failed",
-              "reversed",
-              "sending",
-              "cancelled",
-              "needs_review"
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "status"
-        ]
-      },
-      "AdminAbroadFreezeView": {
-        "type": "object",
-        "properties": {
-          "wawuUserId": {
-            "type": "string"
-          },
-          "frozen": {
-            "type": "boolean"
-          },
-          "reason": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "wawuUserId",
-          "frozen",
-          "reason"
-        ]
-      },
-      "AbroadFieldOptionView": {
-        "type": "object",
-        "properties": {
-          "value": {
-            "type": "string"
-          },
-          "label": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "value",
-          "label"
-        ]
-      },
-      "AbroadFieldView": {
-        "type": "object",
-        "properties": {
-          "key": {
-            "type": "string"
-          },
-          "label": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": [
-              "email",
-              "bank",
-              "text",
-              "digits",
-              "phone",
-              "choice"
-            ]
-          },
-          "pattern": {
-            "type": "string",
-            "nullable": true
-          },
-          "hint": {
-            "type": "string",
-            "nullable": true
-          },
-          "options": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AbroadFieldOptionView"
-            },
-            "nullable": true
-          }
-        },
-        "required": [
-          "key",
-          "label",
-          "kind",
-          "pattern",
-          "hint",
-          "options"
-        ]
-      },
-      "AbroadSchemeView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "nullable": true
-          },
-          "label": {
-            "type": "string"
-          },
-          "speed": {
-            "type": "string"
-          },
-          "fields": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AbroadFieldView"
-            }
-          }
-        },
-        "required": [
-          "id",
-          "label",
-          "speed",
-          "fields"
-        ]
-      },
-      "AbroadRailView": {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "enum": [
-              "bank",
-              "mobile_money"
-            ]
-          },
-          "label": {
-            "type": "string"
-          },
-          "directory": {
-            "type": "boolean"
-          },
-          "schemes": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AbroadSchemeView"
-            }
-          },
-          "minReceiveMinor": {
-            "type": "integer",
-            "nullable": true
-          },
-          "maxReceiveMinor": {
-            "type": "integer",
-            "nullable": true
-          }
-        },
-        "required": [
-          "method",
-          "label",
-          "directory",
-          "schemes",
-          "minReceiveMinor",
-          "maxReceiveMinor"
-        ]
-      },
-      "AbroadCountryView": {
-        "type": "object",
-        "properties": {
-          "country": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "currency": {
-            "type": "string"
-          },
-          "decimals": {
-            "type": "integer"
-          },
-          "available": {
-            "type": "boolean"
-          },
-          "unavailableNote": {
-            "type": "string",
-            "nullable": true
-          },
-          "rails": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AbroadRailView"
-            }
-          }
-        },
-        "required": [
-          "country",
-          "name",
-          "currency",
-          "decimals",
-          "available",
-          "unavailableNote",
-          "rails"
-        ]
-      },
-      "AbroadCorridorsView": {
-        "type": "object",
-        "properties": {
-          "enabled": {
-            "type": "boolean"
-          },
-          "minReceiveMinor": {
-            "type": "integer"
-          },
-          "wawuFeeKobo": {
-            "type": "integer"
-          },
-          "countries": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AbroadCountryView"
-            }
-          }
-        },
-        "required": [
-          "enabled",
-          "minReceiveMinor",
-          "wawuFeeKobo",
-          "countries"
-        ]
-      },
-      "AbroadBankView": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "swiftBic": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "code",
-          "name",
-          "swiftBic"
-        ]
-      },
-      "AbroadBankListView": {
-        "type": "object",
-        "properties": {
-          "country": {
-            "type": "string"
-          },
-          "banks": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AbroadBankView"
-            }
-          }
-        },
-        "required": [
-          "country",
-          "banks"
-        ]
-      },
-      "AbroadSourceView": {
-        "type": "object",
-        "properties": {
-          "currency": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "decimals": {
-            "type": "integer"
-          },
-          "availableMinor": {
-            "type": "integer",
-            "nullable": true
-          }
-        },
-        "required": [
-          "currency",
-          "name",
-          "decimals",
-          "availableMinor"
-        ]
-      },
-      "AbroadSourcesView": {
-        "type": "object",
-        "properties": {
-          "sources": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AbroadSourceView"
-            }
-          }
-        },
-        "required": [
-          "sources"
-        ]
-      },
-      "AbroadRecipientView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "country": {
-            "type": "string"
-          },
-          "countryName": {
-            "type": "string"
-          },
-          "currency": {
-            "type": "string"
-          },
-          "method": {
-            "type": "string",
-            "enum": [
-              "bank",
-              "mobile_money"
-            ]
-          },
-          "scheme": {
-            "type": "string",
-            "nullable": true
-          },
-          "holderName": {
-            "type": "string"
-          },
-          "bankName": {
-            "type": "string",
-            "nullable": true
-          },
-          "last4": {
-            "type": "string",
-            "nullable": true
-          },
-          "summary": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "country",
-          "countryName",
-          "currency",
-          "method",
-          "scheme",
-          "holderName",
-          "bankName",
-          "last4",
-          "summary",
-          "createdAt"
-        ]
-      },
-      "AbroadRecipientListView": {
-        "type": "object",
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AbroadRecipientView"
-            }
-          }
-        },
-        "required": [
-          "items"
-        ]
-      },
-      "AbroadQuoteView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "recipientId": {
-            "type": "string"
-          },
-          "fromCurrency": {
-            "type": "string"
-          },
-          "toCurrency": {
-            "type": "string"
-          },
-          "fromDecimals": {
-            "type": "integer"
-          },
-          "toDecimals": {
-            "type": "integer"
-          },
-          "amountFromMinor": {
-            "type": "integer"
-          },
-          "amountToMinor": {
-            "type": "integer"
-          },
-          "converted": {
-            "type": "boolean"
-          },
-          "rate": {
-            "type": "string",
-            "nullable": true
-          },
-          "providerFeeMinor": {
-            "type": "integer",
-            "nullable": true
-          },
-          "wawuFeeKobo": {
-            "type": "integer"
-          },
-          "speed": {
-            "type": "string"
-          },
-          "expiresAt": {
-            "type": "string"
-          },
-          "validForSeconds": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "id",
-          "recipientId",
-          "fromCurrency",
-          "toCurrency",
-          "fromDecimals",
-          "toDecimals",
-          "amountFromMinor",
-          "amountToMinor",
-          "converted",
-          "rate",
-          "providerFeeMinor",
-          "wawuFeeKobo",
-          "speed",
-          "expiresAt",
-          "validForSeconds"
-        ]
-      },
-      "AbroadSendView": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "pending",
-              "completed",
-              "failed",
-              "reversed",
-              "sending",
-              "cancelled",
-              "needs_review"
-            ]
-          },
-          "recipient": {
-            "$ref": "#/components/schemas/AbroadRecipientView"
-          },
-          "fromCurrency": {
-            "type": "string"
-          },
-          "toCurrency": {
-            "type": "string"
-          },
-          "fromDecimals": {
-            "type": "integer"
-          },
-          "toDecimals": {
-            "type": "integer"
-          },
-          "amountFromMinor": {
-            "type": "integer"
-          },
-          "amountToMinor": {
-            "type": "integer"
-          },
-          "rate": {
-            "type": "string",
-            "nullable": true
-          },
-          "providerFeeMinor": {
-            "type": "integer",
-            "nullable": true
-          },
-          "wawuFeeKobo": {
-            "type": "integer"
-          },
-          "narration": {
-            "type": "string",
-            "nullable": true
-          },
-          "failureReason": {
-            "type": "string",
-            "nullable": true
-          },
-          "speed": {
-            "type": "string"
-          },
-          "createdAt": {
-            "type": "string"
-          },
-          "completedAt": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "id",
-          "status",
-          "recipient",
-          "fromCurrency",
-          "toCurrency",
-          "fromDecimals",
-          "toDecimals",
-          "amountFromMinor",
-          "amountToMinor",
-          "rate",
-          "providerFeeMinor",
-          "wawuFeeKobo",
-          "narration",
-          "failureReason",
-          "speed",
-          "createdAt",
-          "completedAt"
-        ]
-      },
-      "AbroadSendPage": {
-        "type": "object",
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AbroadSendView"
-            }
-          },
-          "nextCursor": {
-            "type": "string",
-            "nullable": true
-          }
-        },
-        "required": [
-          "items",
-          "nextCursor"
-        ]
-      },
       "FxBalanceView": {
         "type": "object",
         "properties": {
@@ -50480,6 +48678,18 @@
             ],
             "nullable": true
           },
+          "detailsStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "unavailable"
+            ]
+          },
+          "detailsNote": {
+            "type": "string",
+            "nullable": true
+          },
           "openedAt": {
             "type": "string"
           }
@@ -50496,6 +48706,8 @@
           "status",
           "balance",
           "details",
+          "detailsStatus",
+          "detailsNote",
           "openedAt"
         ]
       },
@@ -50586,6 +48798,15 @@
           "wawuFeeMinor": {
             "type": "integer"
           },
+          "feeLeg": {
+            "type": "string",
+            "enum": [
+              "done",
+              "owed",
+              "uncollected"
+            ],
+            "nullable": true
+          },
           "chain": {
             "type": "string",
             "enum": [
@@ -50626,6 +48847,7 @@
           "amountToMinor",
           "providerFeeMinor",
           "wawuFeeMinor",
+          "feeLeg",
           "chain",
           "address",
           "reference",
@@ -50864,6 +49086,18 @@
             ],
             "nullable": true
           },
+          "detailsStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "unavailable"
+            ]
+          },
+          "detailsNote": {
+            "type": "string",
+            "nullable": true
+          },
           "openedAt": {
             "type": "string"
           }
@@ -50877,6 +49111,8 @@
           "status",
           "balance",
           "details",
+          "detailsStatus",
+          "detailsNote",
           "openedAt"
         ]
       },
@@ -55054,13 +53290,13 @@
               "responded"
             ]
           },
-          "text": {
-            "type": "string"
-          },
           "creatorWawuId": {
             "type": "string"
           },
           "senderWawuId": {
+            "type": "string"
+          },
+          "text": {
             "type": "string"
           },
           "sentAt": {
@@ -55090,8 +53326,8 @@
             "type": "string",
             "enum": [
               "failed",
-              "not_owed",
               "owed",
+              "not_owed",
               "submitted",
               "settled"
             ]
@@ -55114,9 +53350,9 @@
           "id",
           "amount",
           "status",
-          "text",
           "creatorWawuId",
           "senderWawuId",
+          "text",
           "sentAt",
           "deadlineAt",
           "respondedAt",
@@ -56158,8 +54394,8 @@
               "pending",
               "failed",
               "refunded",
-              "cancelled",
-              "paid"
+              "paid",
+              "cancelled"
             ]
           },
           "subtotalNaira": {
@@ -57631,9 +55867,9 @@
           "medium": {
             "type": "string",
             "enum": [
-              "phone",
               "zoom",
-              "physical"
+              "physical",
+              "phone"
             ]
           },
           "label": {
@@ -57716,9 +55952,9 @@
           "medium": {
             "type": "string",
             "enum": [
-              "phone",
               "zoom",
-              "physical"
+              "physical",
+              "phone"
             ]
           },
           "label": {
@@ -57761,10 +55997,10 @@
           "medium": {
             "type": "string",
             "enum": [
-              "phone",
               "chat",
               "zoom",
-              "physical"
+              "physical",
+              "phone"
             ],
             "nullable": true
           },
@@ -57871,10 +56107,10 @@
           "medium": {
             "type": "string",
             "enum": [
-              "phone",
               "chat",
               "zoom",
-              "physical"
+              "physical",
+              "phone"
             ]
           },
           "label": {
@@ -59009,8 +57245,8 @@
               "pending",
               "failed",
               "refunded",
-              "cancelled",
-              "settled"
+              "settled",
+              "cancelled"
             ]
           },
           "sourceStatus": {
@@ -59745,8 +57981,8 @@
             "type": "string",
             "enum": [
               "pending",
-              "cancelled",
               "paid",
+              "cancelled",
               "declined"
             ]
           },
@@ -59794,9 +58030,9 @@
           "kind": {
             "type": "string",
             "enum": [
-              "text",
               "video",
               "image",
+              "text",
               "file",
               "money_request"
             ]
@@ -60176,8 +58412,8 @@
             "enum": [
               "pending",
               "rejected",
-              "cancelled",
               "removed",
+              "cancelled",
               "published"
             ]
           },
@@ -60369,8 +58605,8 @@
             "enum": [
               "pending",
               "rejected",
-              "cancelled",
               "removed",
+              "cancelled",
               "published"
             ]
           },
@@ -60454,8 +58690,8 @@
             "enum": [
               "pending",
               "rejected",
-              "cancelled",
               "removed",
+              "cancelled",
               "published"
             ]
           },
@@ -60464,8 +58700,8 @@
             "enum": [
               "pending",
               "rejected",
-              "cancelled",
               "removed",
+              "cancelled",
               "published"
             ]
           },
@@ -60611,8 +58847,8 @@
             "enum": [
               "pending",
               "rejected",
-              "cancelled",
               "removed",
+              "cancelled",
               "published"
             ]
           },
@@ -60767,8 +59003,8 @@
             "enum": [
               "pending",
               "rejected",
-              "cancelled",
               "removed",
+              "cancelled",
               "published"
             ]
           },
@@ -60922,9 +59158,9 @@
             "type": "string",
             "enum": [
               "failed",
-              "sending",
               "draft",
-              "sent"
+              "sent",
+              "sending"
             ]
           },
           "recipientCount": {
@@ -61106,9 +59342,9 @@
           "status": {
             "type": "string",
             "enum": [
-              "sending",
+              "ready",
               "sent",
-              "ready"
+              "sending"
             ]
           },
           "totalCount": {
@@ -62127,14 +60363,14 @@
             "type": "string",
             "format": "date-time"
           },
-          "text": {
-            "type": "string"
-          },
           "contentId": {
             "type": "string"
           },
           "likes": {
             "type": "number"
+          },
+          "text": {
+            "type": "string"
           },
           "authorWawuId": {
             "type": "string"
@@ -62155,9 +60391,9 @@
         "required": [
           "id",
           "createdAt",
-          "text",
           "contentId",
           "likes",
+          "text",
           "authorWawuId",
           "replyToId"
         ]
@@ -65392,12 +63628,12 @@
             "type": "string",
             "nullable": true
           },
+          "senderWawuId": {
+            "type": "string"
+          },
           "text": {
             "type": "string",
             "nullable": true
-          },
-          "senderWawuId": {
-            "type": "string"
           },
           "sentAt": {
             "type": "string",
@@ -65425,8 +63661,8 @@
         "required": [
           "id",
           "imageUrl",
-          "text",
           "senderWawuId",
+          "text",
           "sentAt",
           "communityId",
           "videoUrl",
@@ -65566,8 +63802,8 @@
             "enum": [
               "pending",
               "rejected",
-              "cancelled",
               "removed",
+              "cancelled",
               "published"
             ]
           },
@@ -66285,8 +64521,8 @@
                 "type": "string",
                 "enum": [
                   "pending",
-                  "cancelled",
                   "paid",
+                  "cancelled",
                   "declined"
                 ]
               }
@@ -66457,8 +64693,8 @@
             "type": "string",
             "enum": [
               "pending",
-              "cancelled",
               "paid",
+              "cancelled",
               "declined"
             ]
           },
@@ -70091,8 +68327,8 @@
           "kind": {
             "type": "string",
             "enum": [
-              "text",
               "audio",
+              "text",
               "subtitles"
             ]
           },
@@ -71448,8 +69684,8 @@
             "enum": [
               "pending",
               "rejected",
-              "cancelled",
               "removed",
+              "cancelled",
               "published"
             ]
           },
