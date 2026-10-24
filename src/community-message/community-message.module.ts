@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { CreditSpendModule } from '../credit-spend/credit-spend.module';
 import { CommunityMessageController } from './community-message.controller';
 import { CommunityMessageService } from './community-message.service';
+import { CommunityMessageNoticeService } from './community-message-notice.service';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { NotificationModule } from '../notification/notification.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
@@ -41,8 +42,9 @@ import { StorageModule } from '../storage/storage.module';
     StorageModule,
   ],
   controllers: [CommunityMessageController],
-  providers: [CommunityMessageService],
+  // FIX-105 (R-81): the sweep that turns new messages into grouped notices.
+  providers: [CommunityMessageService, CommunityMessageNoticeService],
   // CommunityModule's "my communities" (INBOX-01) reuses lookupSenders.
-  exports: [CommunityMessageService],
+  exports: [CommunityMessageService, CommunityMessageNoticeService],
 })
 export class CommunityMessageModule {}

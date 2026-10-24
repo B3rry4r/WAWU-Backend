@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { NotificationService } from '../../notification/notification.service';
 import type { Paginated } from '../../common/interceptors/response.interceptor';
 import { CommunityMessageService } from '../../community-message/community-message.service';
 import { CommunityService } from '../community.service';
@@ -74,6 +75,7 @@ export class CommunityRoomsService {
     private readonly messages: CommunityMessageService,
     private readonly blockedAccounts: BlockedAccountService,
     private readonly passAccess: CommunityPassAccess,
+    private readonly notifications: NotificationService,
   ) {}
 
   /**
@@ -212,6 +214,9 @@ export class CommunityRoomsService {
       create: { userWawuId, communityId, lastReadAt },
       update: { lastReadAt },
     });
+    // FIX-105 (R-81): opening the room closes the person's grouped "new
+    // messages" notice; the next message after this starts a new one.
+    await this.notifications.closeCommunityMessages(userWawuId, communityId);
     return { communityId, lastReadAt };
   }
 
