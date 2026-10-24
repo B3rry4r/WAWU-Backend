@@ -3375,7 +3375,8 @@ A person whose country of residence is not Nigeria opens a wallet without a
 BVN. Nuvion checks them with their own country's ID document and a liveness
 check (the same two steps as section 22 of Open your wallet: the documents
 route and the hosted selfie). Their first account is a foreign one; they have
-no naira account, and every naira route answers them `409 wallet_not_open`.
+no naira account, and every naira route answers them `409 wallet_not_open`
+("You have no naira account. Use your other currency accounts.").
 A person in Nigeria keeps the BVN wallet (R-6) and is not touched by any of
 this.
 
@@ -3395,7 +3396,7 @@ document or number), and `POST openings/{wawuUserId}/freeze`, `/unfreeze` and
 stops the person's foreign accounts paying out and stops a new one opening; an
 unfreeze lets go only of the accounts that freeze froze. A cancel stops an
 opening that is not open yet and lets go of its claim on the ID document; an
-open wallet is frozen, not cancelled.
+open wallet is frozen, not cancelled (a cancel of one is `409 wallet_already_open`).
 
 **Residence decides** (round 1; R-87, R-85). The Hub reads the country of
 residence the account carries (WAWU ID's `countryCode` claim now, GEO-02's
@@ -3407,11 +3408,15 @@ with a plain sentence. A person who lives in Nigeria opens with their BVN. A
 +234 number abroad is allowed (Nigerians abroad).
 
 **One document, one wallet.** A world opening has no BVN to claim, so it
-claims the ID document: the keyed hash of the country the person lives in and
-the number with letters and digits only, in upper case, whatever kind of
-document or nationality is said (held like a BVN's: unique; let go when the
-opening ends or expires). The number itself is never stored or logged. The
-refusal for a document someone else holds says "ID", never "BVN".
+claims the ID document: the keyed hash of the document's country and the
+number with letters and digits only, in upper case, whatever kind of document
+is said (held like a BVN's: unique; let go when the opening ends or expires).
+The document's country is the `nationality` sent (the passport's nationality;
+the opening form collects no separate issuing country for a licence or a
+national ID, so the same field), and the country of residence only when no
+`nationality` is sent. Where the account says it lives does not make a second
+wallet from the same passport. The number itself is never stored or logged.
+The refusal for a document someone else holds says "ID", never "BVN".
 
 **What Nuvion asks for is Nuvion's to say.** The app asks for the ID document,
 the proof of address and the selfie, and for whatever else Nuvion's own refusal

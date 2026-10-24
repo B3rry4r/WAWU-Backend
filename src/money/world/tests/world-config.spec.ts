@@ -193,39 +193,52 @@ describe('POST /money/wallet/open: the body for a person outside Nigeria', () =>
 });
 
 describe('the claim a world opening takes in place of a BVN', () => {
-  const claim = (country: string, number: string) =>
-    worldIdentityKey({ countryCode: country, idNumber: number });
+  // The country in the key is the DOCUMENT's: the nationality the form
+  // collects, and the country of residence only when none is given.
+  const claim = (country: string, number: string, nationality?: string) =>
+    worldIdentityKey({
+      countryCode: country,
+      idNumber: number,
+      ...(nationality === undefined ? {} : { nationality }),
+    });
 
   it('one document is one claim, however it is typed', () => {
     expect(claim('US', 'p-123 456 789')).toBe(claim('US', 'P123456789'));
   });
-  it('whatever kind of document or nationality the person says, the same number in the same country is the same claim', () => {
-    // The key is the country they live in (the Hub's, not the person's word) and the number; the type and the
-    // nationality are not in it, so changing either to get a second wallet changes nothing.
-    const a = worldIdentityKey({
+  it('the same passport from accounts that live in different countries is the same claim', () => {
+    // Round 1, re-check: the key followed the person's residence, so a second
+    // account that said it lived elsewhere got a second wallet.
+    const a = claim('US', 'P123456789', 'GB');
+    expect(claim('DE', 'P123456789', 'GB')).toBe(a);
+    expect(claim('GB', 'P123456789', 'GB')).toBe(a);
+    expect(claim('GB', 'P123456789')).toBe(a);
+  });
+  it('whatever kind of document the person says, the same number from the same country is the same claim', () => {
+    const base = {
       countryCode: 'US',
       idNumber: 'P123456789',
+      nationality: 'GB',
+    };
+    const a = worldIdentityKey({
+      ...base,
       idType: 'international_passport',
-      nationality: 'US',
     } as OpenNairaWalletDto);
     const b = worldIdentityKey({
-      countryCode: 'US',
-      idNumber: 'P123456789',
+      ...base,
       idType: 'national_id',
-      nationality: 'GH',
     } as OpenNairaWalletDto);
     const c = worldIdentityKey({
-      countryCode: 'US',
-      idNumber: 'P123456789',
+      ...base,
       idType: 'drivers_license',
     } as OpenNairaWalletDto);
     expect(b).toBe(a);
     expect(c).toBe(a);
   });
-  it('another country or another number is another claim', () => {
-    const a = claim('US', 'P123456789');
-    expect(claim('GB', 'P123456789')).not.toBe(a);
-    expect(claim('US', 'P123456780')).not.toBe(a);
+  it('another issuing country or another number is another claim', () => {
+    const a = claim('US', 'P123456789', 'GB');
+    expect(claim('US', 'P123456789', 'GH')).not.toBe(a);
+    expect(claim('US', 'P123456789')).not.toBe(a);
+    expect(claim('US', 'P123456780', 'GB')).not.toBe(a);
   });
   it('can never equal a BVN, which is 11 digits', () => {
     const key = claim('GH', '12345678901');

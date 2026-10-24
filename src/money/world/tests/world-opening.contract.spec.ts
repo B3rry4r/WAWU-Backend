@@ -271,7 +271,7 @@ describe('WALLET-41: opening a wallet from outside Nigeria', () => {
     expect(sent).toHaveLength(1);
   });
 
-  it('the same number sent as another kind of document, or with another nationality, is the same wallet', async () => {
+  it('the same number sent as another kind of document is the same wallet', async () => {
     const a = who();
     const b = who();
     const c = who();
@@ -293,15 +293,78 @@ describe('WALLET-41: opening a wallet from outside Nigeria', () => {
       opening.open(
         c.id,
         claims(c),
+        dto({ idNumber: 'ONE-NUMBER-77', idType: 'drivers_license' }),
+        null,
+      ),
+    ).rejects.toMatchObject({ code: 'identity_has_wallet' });
+    expect(sent).toHaveLength(1);
+  });
+
+  it('the same passport from two accounts that live in different countries is one wallet: the second gets identity_has_wallet and nothing is sent', async () => {
+    // The key follows the DOCUMENT (the passport's nationality), not where
+    // the account says it lives. A second account in another country, a
+    // different case and dashes, even a licence type: still the first's.
+    const a = who();
+    const b = who();
+    const c = who();
+    await opening.open(
+      a.id,
+      claims(a),
+      dto({
+        countryCode: 'US',
+        nationality: 'GB',
+        idNumber: 'GBR-PASS-4455',
+      }),
+      null,
+    );
+    await expect(
+      opening.open(
+        b.id,
+        claims(b),
         dto({
-          idNumber: 'ONE-NUMBER-77',
-          idType: 'drivers_license',
-          nationality: 'GH',
+          countryCode: 'DE',
+          firstCurrency: 'EUR',
+          nationality: 'GB',
+          idNumber: 'gbr pass 4455',
+        }),
+        null,
+      ),
+    ).rejects.toMatchObject({ code: 'identity_has_wallet' });
+    await expect(
+      opening.open(
+        c.id,
+        claims(c),
+        dto({
+          countryCode: 'GB',
+          firstCurrency: 'GBP',
+          idNumber: 'GBR-PASS-4455',
         }),
         null,
       ),
     ).rejects.toMatchObject({ code: 'identity_has_wallet' });
     expect(sent).toHaveLength(1);
+    const rows = await prisma.fintavaWalletOpening.findMany({
+      where: { wawuUserId: { in: [b.id, c.id] } },
+    });
+    expect(rows).toEqual([]);
+  });
+
+  it('another issuing country is another document, and it opens', async () => {
+    const a = who();
+    const b = who();
+    await opening.open(
+      a.id,
+      claims(a),
+      dto({ nationality: 'GB', idNumber: 'SHARED-NUMBER-5' }),
+      null,
+    );
+    await opening.open(
+      b.id,
+      claims(b),
+      dto({ nationality: 'GH', idNumber: 'SHARED-NUMBER-5' }),
+      null,
+    );
+    expect(sent).toHaveLength(2);
   });
 
   it('the refusal for a document someone else holds does not talk of a BVN', async () => {

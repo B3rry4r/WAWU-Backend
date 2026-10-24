@@ -49,6 +49,13 @@ import { stoppedOnIdentity } from '../opening/opening-stops';
 export const NO_WALLET_MESSAGE =
   "You don't have a wallet yet. Open your wallet to continue.";
 
+/**
+ * WALLET-41: a person who opened from outside Nigeria has a wallet and no
+ * naira account, so a naira route must not send them to open a wallet.
+ */
+export const NO_NAIRA_ACCOUNT_MESSAGE =
+  'You have no naira account. Use your other currency accounts.';
+
 /** The account is still being opened (MONEY-12, A7). */
 export const WALLET_OPENING_MESSAGE =
   'Your account is still being opened. Check again in a moment.';
@@ -196,7 +203,7 @@ export class WalletGate {
     // WALLET-41: a person who opened from outside Nigeria has a wallet, but
     // no naira one: a naira route is not waiting on anything for them.
     if (opening?.worldCountry && opening.worldAccountOpenedAt) {
-      throw walletGateRefusal('not_open');
+      throw new MoneyError('wallet_not_open', NO_NAIRA_ACCOUNT_MESSAGE);
     }
     throw walletGateRefusal(withoutWallet(opening));
   }

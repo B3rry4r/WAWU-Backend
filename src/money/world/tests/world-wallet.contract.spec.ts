@@ -10,7 +10,7 @@ import type { WalletProvider } from '../../../wallet-provider/wallet-provider.in
 import type { FxAccountsService } from '../../fx/fx-accounts.service';
 import type { FxAccountView } from '../../fx/fx-view.type';
 import type { FxSettings } from '../../fx/fx-settings';
-import { WalletGate } from '../../gate/wallet-gate';
+import { NO_NAIRA_ACCOUNT_MESSAGE, WalletGate } from '../../gate/wallet-gate';
 import { MoneyError } from '../../money-error';
 import { releasedBvnHash } from '../../opening/bvn-claim';
 import { WorldAdminService, worldStageOf } from '../world-admin.service';
@@ -364,8 +364,10 @@ describe('WALLET-41: the world wallet', () => {
       expect(open.wawuUserId).toBe(id);
       expect(open.walletId).toBe('');
       expect(open.customerId).toMatch(/^01ENT/);
+      // A naira route does not send them to open a wallet they already have.
       await expect(gate.requireOpen(id)).rejects.toMatchObject({
         code: 'wallet_not_open',
+        message: NO_NAIRA_ACCOUNT_MESSAGE,
       });
     });
 
@@ -518,7 +520,7 @@ describe('WALLET-41: the world wallet', () => {
       const id = await person('FR');
       await world.ensureFirstAccount(id);
       await expect(admin.act(ADMIN, id, 'cancel', 'no')).rejects.toMatchObject({
-        code: 'account_frozen',
+        code: 'wallet_already_open',
       });
       await expect(
         admin.act(ADMIN, randomUUID(), 'freeze', 'no one'),

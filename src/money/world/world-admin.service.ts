@@ -237,7 +237,7 @@ export class WorldAdminService {
         }
         if (row.worldAccountOpenedAt) {
           throw new MoneyError(
-            'account_frozen',
+            'wallet_already_open',
             'This wallet is already open. Freeze it instead.',
           );
         }

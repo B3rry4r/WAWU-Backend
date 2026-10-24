@@ -678,7 +678,7 @@ export class ReviewedOpening {
         // national ID by the country they live in (WALLET-41).
         issuingCountry: abroad
           ? input.idType === 'international_passport'
-            ? (input.nationality ?? input.countryCode!)
+            ? worldDocumentCountry(input)
             : input.countryCode!
           : 'NG',
       },
@@ -1210,18 +1210,34 @@ function worldColumns(send: Send): {
 }
 
 /**
+ * The country of the ID document in a world opening, for the claim on it.
+ * The opening form collects no separate issuing country, so it is the
+ * `nationality` field (the passport's nationality; for a licence or a
+ * national ID the same field, as the form has nothing closer), and the
+ * country the person lives in only when no nationality is sent. It is never
+ * the account's residence alone: two accounts that say they live in
+ * different countries and hold the same passport hold one document.
+ */
+export function worldDocumentCountry(
+  input: Pick<OpenNairaWalletDto, 'countryCode' | 'nationality'>,
+): string {
+  return input.nationality ?? input.countryCode ?? '';
+}
+
+/**
  * The claim a world opening takes in place of a BVN: the keyed identity of
- * the ID document, hashed like a BVN under `FintavaWalletOpening.bvnHash`. It
- * is the country the person lives in (the Hub's own, `world-residence.ts`:
- * the request must equal it) and the number with letters and digits only, in
- * upper case, WHATEVER kind of document the person says it is and whatever
- * nationality they give (round 1: a changed type or nationality is not a
- * second wallet). It can never equal an 11-digit BVN's, so the two kinds of
- * claim never meet.
+ * the ID document, hashed like a BVN under `FintavaWalletOpening.bvnHash`.
+ * It is the document's country (`worldDocumentCountry`) and the number with
+ * letters and digits only, in upper case, WHATEVER kind of document the
+ * person says it is (a changed type is not a second wallet) and wherever the
+ * account says it lives (re-check: the key followed the residence, so a
+ * second account in another country opened a second wallet with the same
+ * passport). It can never equal an 11-digit BVN's, so the two kinds of claim
+ * never meet.
  */
 export function worldIdentityKey(
-  input: Pick<OpenNairaWalletDto, 'countryCode' | 'idNumber'>,
+  input: Pick<OpenNairaWalletDto, 'countryCode' | 'nationality' | 'idNumber'>,
 ): string {
   const number = (input.idNumber ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  return `world:${input.countryCode ?? ''}:${number}`;
+  return `world:${worldDocumentCountry(input)}:${number}`;
 }
