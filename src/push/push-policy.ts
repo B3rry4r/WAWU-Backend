@@ -64,6 +64,12 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   // wallet. It is money in, so the "Money in" switch mutes the push (see
   // PUSH_ONLY_GATE); the list always carries it.
   community_pass_refunded: 'send',
+  // FIX-105 (R-81, owner, 24 Oct 2026: it reaches the phone like the other
+  // kinds). One push per notice, when the notice is first written; later
+  // messages update the notice and do not buzz the phone again until the
+  // person has opened the room. The Z3 "Community messages" switch mutes it
+  // (SETTINGS_GATE), read again at the moment of sending.
+  community_messages: 'send',
   // The state of the person's own account or a marketing send, with no switch
   // that is agreed to cover them. Held until the owner answers (G-265).
   paid_dm_warning: 'hold',

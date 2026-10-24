@@ -155,6 +155,14 @@ const EVENTS: NotificationEvent[] = [
     communityName: 'Lagos Makers',
     amount: 1933.33,
   },
+  // FIX-105 (R-81): new messages in a room the person joined (added with the kind: this list must name every pushed kind).
+  {
+    kind: 'community_messages',
+    userWawuId: 'u',
+    communityId: 'c',
+    communityName: 'Lagos Makers',
+    messageCount: 3,
+  },
 ];
 
 describe('the words of a push', () => {
