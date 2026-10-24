@@ -5,6 +5,7 @@ import { ContentPieceModule } from '../content-piece/content-piece.module';
 import { StorageModule } from '../storage/storage.module';
 import { WalletModule } from '../wallet/wallet.module';
 import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
+import { GeoModule } from '../geo/geo.module';
 import { UserProfileController } from './user-profile.controller';
 import { PublicUserProfileController } from './public-user-profile.controller';
 import { UserProfileService } from './user-profile.service';
@@ -49,6 +50,7 @@ import { VisitorProfileService } from './visitor-profile.service';
     BlockedAccountModule,
     // The tier badge on the profile fields (TIER-07), a leaf with no routes.
     TierBadgeModule,
+    GeoModule,
   ],
   controllers: [
     UserProfileController,

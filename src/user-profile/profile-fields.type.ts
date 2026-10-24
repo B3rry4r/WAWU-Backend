@@ -11,6 +11,19 @@ export interface ProfileFieldsView {
   wawuUserId: string;
   /** Free text, "Lagos, Nigeria". */
   location: string | null;
+  /**
+   * Country of residence, ISO 3166-1 alpha-2 ("NG"), and its English name
+   * (GEO-02, R-85). On your own answer it is the country you chose, else the
+   * one WAWU ID or your phone gives; on somebody else's it is shown only when
+   * they chose it.
+   */
+  countryCode: string | null;
+  countryName: string | null;
+  /** Full ISO 3166-2 code ("NG-LA") and the name saved with it ("Lagos"). Only ever set by the person. */
+  regionCode: string | null;
+  regionName: string | null;
+  /** Free text ("Ikeja"). */
+  city: string | null;
   /** Skills and expertise chips, in the order the person wrote them. */
   skills: string[];
   /** What the person is open to, as chips, in the order they wrote them. */

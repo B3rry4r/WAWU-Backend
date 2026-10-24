@@ -5,6 +5,7 @@ import { ContentPieceModule } from '../content-piece/content-piece.module';
 import { StorageModule } from '../storage/storage.module';
 import { PointsModule } from '../points/points.module';
 import { ReferralsModule } from '../referrals/referrals.module';
+import { GeoModule } from '../geo/geo.module';
 import { MeController } from './me.controller';
 import { MeSavedService } from './me-saved.service';
 import { MePurchasesService } from './me-purchases.service';
@@ -30,6 +31,7 @@ import { MeCoursesService } from './me-courses.service';
     // REF-02: GET /me/referrals, POST /me/referrals/claim and the reward job,
     // mounted here so AppModule is not edited (SHARED-CHANGES REF-02 #2).
     ReferralsModule,
+    GeoModule,
   ],
   controllers: [MeController],
   providers: [

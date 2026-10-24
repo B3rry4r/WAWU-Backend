@@ -11,6 +11,7 @@ import { NuvionHandlerRegistry } from '../handlers/nuvion-handler-registry';
 import { NuvionOpeningHandler } from '../handlers/opening.handler';
 import { NuvionPayoutsHandler } from '../handlers/payouts.handler';
 import { NuvionReconcileHandler } from '../handlers/reconcile.handler';
+import { NuvionCardsHandler } from '../handlers/cards.handler';
 import { NuvionSignatureGuard } from './nuvion-signature.guard';
 import { NuvionWebhookController } from './nuvion-webhook.controller';
 import { NuvionWebhookDispatcher } from './nuvion-webhook-dispatcher.service';
@@ -48,6 +49,7 @@ import { NuvionWebhookStore } from './nuvion-webhook.service';
     NuvionReconcileHandler,
     NuvionFxHandler,
     NuvionCapitalHandler,
+    NuvionCardsHandler,
   ],
   exports: [NuvionWebhookDispatcher, NuvionHandlerRegistry],
 })

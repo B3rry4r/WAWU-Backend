@@ -217,7 +217,7 @@ describe('FIX-20: provider webhook deliveries are not kept for ever', () => {
 
   function nuvionBody(
     id: string,
-    event = 'cards.deleted',
+    event = 'payment_dispute.created',
     over: Record<string, unknown> = {},
   ) {
     return JSON.stringify({
@@ -321,7 +321,7 @@ describe('FIX-20: provider webhook deliveries are not kept for ever', () => {
     return prisma.nuvionWebhookEvent.create({
       data: {
         eventId,
-        event: 'cards.deleted',
+        event: 'payment_dispute.created',
         resourceId: `01HXYZ${eventId}`.slice(0, 40),
         entityId: '01HXYZ5303ABCDEFGHJKMNPQRS',
         signedAt: new Date(Date.now() - o.days * DAY).toISOString(),
@@ -653,7 +653,7 @@ describe('FIX-20: provider webhook deliveries are not kept for ever', () => {
       const seen: NuvionDelivery[] = [];
       registry.add({
         task: 'F20-SPEC',
-        events: ['cards.deleted'],
+        events: ['payment_dispute.created'],
         handle: (d) => {
           if (d.eventId.startsWith(RUN)) seen.push(d);
           return Promise.resolve({ outcome: 'done' as const, note: 'counted' });
@@ -682,7 +682,7 @@ describe('FIX-20: provider webhook deliveries are not kept for ever', () => {
       expect(outcomeOf(a)).toBe('duplicate');
       // (b) The same event id with another body: the event id is the key.
       const b = await sendNuvion(
-        nuvionBody(id, 'cards.deleted', { amount: 1 }),
+        nuvionBody(id, 'payment_dispute.created', { amount: 1 }),
         {
           id,
         },

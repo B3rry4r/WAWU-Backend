@@ -274,5 +274,10 @@ export const MONEY_ERROR_CODES = [
   'capital_unavailable',
   'reservation_expired',
   'withdrawal_not_available',
+  // WALLET-31 (R-84): the WAWU card.
+  'cards_unavailable',
+  'card_limit_reached',
+  'card_blocked',
+  'card_reveal_rate_limited',
 ] as const;
 export type MoneyErrorCode = (typeof MONEY_ERROR_CODES)[number];

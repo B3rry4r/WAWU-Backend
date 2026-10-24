@@ -677,3 +677,20 @@ Listed, not resolved. Each names what the canvas draws, what Fintava does
   Correcting them changes generated client types for live routes, so it goes
   with the G-1 task above. (Round 2: the first count said eight and missed
   the three `AdminFinance*` fields.)
+
+## 7. The WAWU card (WALLET-31, WALLET-22; R-84)
+
+Served from WALLET-31 (CONVENTIONS.md section 29). Boards W29 to W34 against
+what Nuvion serves:
+
+| Artboard | Built | Contract entry |
+|---|---|---|
+| W29 Get a card | virtual and single-use only; the Physical choice is not drawn (Nuvion has none) | `GET /money/cards/quote`, `POST /money/cards` |
+| W30 Delivery | not built (no physical card) | none |
+| W31 Card detail | status, Freeze, Details behind the PIN, card payments; the Limits and Card PIN rows are not drawn | `GET /money/cards`, `GET /money/cards/{id}`, `POST /money/cards/{id}/freeze`, `POST /money/cards/{id}/reveal`, `GET /money/cards/{id}/transactions` |
+| W32 Card frozen | Unfreeze and Block card | `POST /money/cards/{id}/unfreeze`, `DELETE /money/cards/{id}` |
+| W33 Limits and controls | not built (Nuvion has no channel switches or limits to set) | none |
+| W34 Card PIN | not built (Nuvion has no card PIN) | none |
+
+The W1 card summary and the W35 Cards row are drawn only while
+`GET /money/cards` answers `enabled: true`.

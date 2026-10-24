@@ -152,6 +152,18 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   capital_unavailable: 409,
   reservation_expired: 409,
   withdrawal_not_available: 409,
+  // WALLET-31 (R-84). Default (agent), owner may override: 503 when cards are
+  // switched off, not built for this provider, or the fee is not set (nothing
+  // was sent, trying later is right); 409 when this person holds or has asked
+  // for the most cards one may (they have to block one or wait), and 409 when
+  // the card cannot take that action (blocked for good, still being made, or
+  // frozen by support), as target_not_payable.
+  cards_unavailable: 503,
+  card_limit_reached: 409,
+  card_blocked: 409,
+  // WALLET-31 round 1, L1. Default (agent), owner may override: 429, as
+  // statement_rate_limited, with retryAfterSeconds.
+  card_reveal_rate_limited: 429,
 };
 
 /** Every route that reads or moves a wallet can answer these (MONEY-13, MONEY-11). */

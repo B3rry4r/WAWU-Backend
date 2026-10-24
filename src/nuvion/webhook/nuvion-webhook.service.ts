@@ -1,3 +1,4 @@
+import { isCardEvent, withoutCardSecrets } from './card-scrub';
 import { createHash } from 'node:crypto';
 import {
   Injectable,
@@ -40,6 +41,13 @@ export class NuvionWebhookStore {
     body: unknown;
   }): Promise<NuvionWebhookAck> {
     const delivery = readNuvionDelivery(input.body);
+    // A card's delivery is kept without any key that could hold its number,
+    // CVV or expiry (WALLET-31 round 1, L3); its dedup hash is of what arrived.
+    const cardEvent = isCardEvent(delivery.event);
+    const kept = cardEvent ? withoutCardSecrets(input.body) : input.body;
+    const keptBytes = cardEvent
+      ? Buffer.from(JSON.stringify(kept ?? null), 'utf8')
+      : input.rawBody;
     // Only a documented or well-formed name reaches a log line.
     const label =
       delivery.status === 'unrecognised'
@@ -62,11 +70,11 @@ export class NuvionWebhookStore {
             bodySha256: createHash('sha256')
               .update(input.rawBody)
               .digest('hex'),
-            rawBody: new Uint8Array(input.rawBody),
+            rawBody: new Uint8Array(keptBytes),
             payload:
-              input.body === null || input.body === undefined
+              kept === null || kept === undefined
                 ? Prisma.JsonNull
-                : (jsonWithoutNulChars(input.body) as Prisma.InputJsonValue),
+                : (jsonWithoutNulChars(kept) as Prisma.InputJsonValue),
             processingStatus: delivery.status,
           },
         ],

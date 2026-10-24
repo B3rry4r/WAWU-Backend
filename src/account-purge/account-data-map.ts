@@ -378,6 +378,14 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // is not yet a reason to refuse the deletion the way a wallet balance is:
   // that is a gap, named in the task's hand-back (NUV-12), not settled here.
   { model: 'CapitalOrder', column: 'wawuUserId', disposition: 'OWNED' },
+  // The WAWU card (WALLET-31, R-84): one row per card a person asked for, its
+  // kind, state and Nuvion's id; never the number, expiry or CVV. Like
+  // NuvionEntity it is WAWU's pointer, not the card at Nuvion. Before the rows
+  // go, WalletCardPurge (a before-erase hook) blocks every card the person
+  // still holds at Nuvion, so no card outlives its owner's record; a block
+  // that cannot be made stops the purge, which tries again. Default (lead),
+  // owner may override: the record of a card goes with the account.
+  { model: 'WalletCard', column: 'wawuUserId', disposition: 'OWNED' },
   // FIX-20. FintavaWebhookEvent and NuvionWebhookEvent, the stored provider
   // deliveries, have no person column: each keeps the delivery's raw body and
   // a parsed copy, which hold names, account numbers and narrations, and the
@@ -858,6 +866,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   // WAWU's fee in the currency's smallest unit on a quote and on an operation (WALLET-21), not a person.
   { model: 'FxQuote', column: 'wawuFeeMinor' },
   { model: 'FxOperation', column: 'wawuFeeMinor' },
+  // WAWU's fee in kobo on a card (WALLET-31), not a person.
+  { model: 'WalletCard', column: 'wawuFeeKobo' },
 ];
 
 /** The rows a purge keeps with the account's side set to null. */
