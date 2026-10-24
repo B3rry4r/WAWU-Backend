@@ -43799,7 +43799,12 @@
                 "waiting_earnings",
                 "payment_in_progress",
                 "cash_out_in_flight",
-                "wallet_opening"
+                "wallet_opening",
+                "fx_balance",
+                "fx_balance_unreadable",
+                "fx_operation_pending",
+                "capital_holding",
+                "capital_order_pending"
               ]
             }
           },

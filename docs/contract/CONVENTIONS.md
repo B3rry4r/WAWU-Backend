@@ -2979,6 +2979,20 @@ days; signing in during them cancels it (WAWU ID, SETTINGS-08).
   - `payment_in_progress`: a payment of theirs with no final answer.
   - `cash_out_in_flight`: points held for a cash-out.
   - `wallet_opening`: their wallet is being opened right now.
+  - `fx_balance`: a foreign-currency account (WALLET-21) holds money, as the
+    provider reports it (available or booked above 0). The sentence says to
+    swap it to naira and withdraw it, or send it out.
+  - `fx_balance_unreadable`: a foreign-currency account could not be read
+    (the provider did not answer, holds no such accounts on this server, or is
+    not the provider that made the account). It is never taken for empty, and
+    it is its own reason, not `503 provider_unreachable`: try again.
+  - `fx_operation_pending`: a swap or a send of theirs has no final answer yet.
+  - `capital_holding`: a Capital holding (NUV-12) is not closed: it is held,
+    matured and not withdrawn, or paying out. Closed is the provider's
+    `WITHDRAWN`, `CLOSED` or `REFUNDED`. The sentence says to withdraw it or
+    wait for the holding to end.
+  - `capital_order_pending`: a Capital order is reserved (a live reservation,
+    not an expired one), reserving, confirming, or held for review.
 - **`503 provider_unreachable`** when the provider does not answer, never a
   guess that the wallet is empty. A wallet another provider holds (after a
   rollback) answers the same.
