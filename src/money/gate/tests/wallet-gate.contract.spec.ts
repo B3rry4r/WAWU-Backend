@@ -389,10 +389,17 @@ describe('No wallet yet: every wallet route answers the same (MONEY-13) over HTT
     }
   });
 
-  it('tries every gated route: the PIN routes, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08), the payment quote, the payment and the poll of one payment (MONEY-17, MONEY-19), holds (MONEY-18), the send to a WAWU user and the read of one send (WALLET-07)', () => {
+  it('tries every gated route: the PIN routes, the balance, the PIN reset and biometric approval (MONEY-14), the history (MONEY-15), beneficiaries and the payout account (WALLET-14), the fee quote (WALLET-15), receipts (WALLET-18), statements (WALLET-27), recipient search and recent recipients (WALLET-08), the payment quote, the payment and the poll of one payment (MONEY-17, MONEY-19), holds (MONEY-18), the send to a WAWU user and the read of one send (WALLET-07), sending abroad (NUV-11)', () => {
     expect(routes.map((r) => `${r.method} ${r.path}`).sort()).toEqual([
+      'delete /api/hub/money/abroad/recipients/:id',
       'delete /api/hub/money/beneficiaries/:id',
       'delete /api/hub/money/device',
+      'get /api/hub/money/abroad/banks/:country',
+      'get /api/hub/money/abroad/corridors',
+      'get /api/hub/money/abroad/recipients',
+      'get /api/hub/money/abroad/sends',
+      'get /api/hub/money/abroad/sends/:id',
+      'get /api/hub/money/abroad/sources',
       'get /api/hub/money/beneficiaries',
       'get /api/hub/money/device',
       'get /api/hub/money/fees/quote',
@@ -421,6 +428,9 @@ describe('No wallet yet: every wallet route answers the same (MONEY-13) over HTT
       'get /api/hub/money/transfers/:id',
       'get /api/hub/money/transfers/presets',
       'get /api/hub/money/wallet/balance',
+      'post /api/hub/money/abroad/quotes',
+      'post /api/hub/money/abroad/recipients',
+      'post /api/hub/money/abroad/sends',
       'post /api/hub/money/approval/verify',
       'post /api/hub/money/beneficiaries',
       'post /api/hub/money/device/challenge',
