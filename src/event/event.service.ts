@@ -27,6 +27,8 @@ import {
   initialsFor,
   type EventGoingView,
   type EventSaveView,
+  type EventDecisionsView,
+  type EventDecisionView,
   type EventView,
 } from './event-view.type';
 import type {
@@ -216,6 +218,39 @@ export class EventService {
       perPage: query.perPage,
       total,
     };
+  }
+
+  /**
+   * GET /events/mine/decisions (FIX-110): the day an admin last sent back or
+   * took down each of the host's events that is rejected or removed now. Read
+   * from the review trail, which stays authoritative; nothing is copied onto
+   * Event. An event edited back into review is not here: it has no decision
+   * standing.
+   */
+  async decisionsMine(userWawuId: string): Promise<EventDecisionsView> {
+    const events = await this.prisma.event.findMany({
+      where: {
+        hostWawuId: userWawuId,
+        status: { in: ['rejected', 'removed'] },
+      },
+      select: { id: true },
+      take: 200,
+    });
+    if (events.length === 0) return { items: [] };
+    const trail = await this.prisma.adminEventReview.groupBy({
+      by: ['eventId'],
+      where: {
+        eventId: { in: events.map((e) => e.id) },
+        newStatus: { in: ['rejected', 'removed'] },
+      },
+      _max: { reviewedAt: true },
+    });
+    const items: EventDecisionView[] = [];
+    for (const row of trail) {
+      if (row._max.reviewedAt)
+        items.push({ eventId: row.eventId, decidedAt: row._max.reviewedAt });
+    }
+    return { items };
   }
 
   /**
@@ -620,57 +655,32 @@ export class EventService {
     if (rows.length === 0) return [];
     const ids = rows.map((r) => r.id);
 
-    // The day of an admin's last send back or takedown, for the host's own
-    // rows only (FIX-110): the trail in AdminEventReview is authoritative, so
-    // nothing is copied onto Event. One grouped read for the whole page.
-    const decidable = rows
-      .filter(
-        (r) =>
-          r.hostWawuId === userWawuId &&
-          (r.status === 'rejected' || r.status === 'removed'),
-      )
-      .map((r) => r.id);
-
-    const [counts, mine, saved, floors, hostTicks, decisions] =
-      await Promise.all([
-        this.prisma.eventGoing.groupBy({
-          by: ['eventId'],
-          where: { eventId: { in: ids } },
-          _count: { _all: true },
-        }),
-        this.prisma.eventGoing.findMany({
-          where: { eventId: { in: ids }, userWawuId },
-          select: { eventId: true },
-        }),
-        this.prisma.eventSave.findMany({
-          where: { eventId: { in: ids }, userWawuId },
-          select: { eventId: true },
-        }),
-        // The "from" price, DERIVED: the cheapest tier this event offers. One
-        // grouped read for the whole page rather than a price column on Event
-        // that would go stale the moment a tier is added or repriced.
-        // Retired tiers (EVENTS-11 round 5) are not on sale and set no price.
-        this.prisma.eventTicketType.groupBy({
-          by: ['eventId'],
-          where: { eventId: { in: ids }, retiredAt: null },
-          _min: { priceNaira: true },
-        }),
-        // One batched read for the whole page, not one per row.
-        this.verification.forMany(rows.map((r) => r.hostWawuId)),
-        decidable.length === 0
-          ? Promise.resolve([])
-          : this.prisma.adminEventReview.groupBy({
-              by: ['eventId'],
-              where: {
-                eventId: { in: decidable },
-                newStatus: { in: ['rejected', 'removed'] },
-              },
-              _max: { reviewedAt: true },
-            }),
-      ]);
-    const decidedByEvent = new Map(
-      decisions.map((d) => [d.eventId, d._max.reviewedAt]),
-    );
+    const [counts, mine, saved, floors, hostTicks] = await Promise.all([
+      this.prisma.eventGoing.groupBy({
+        by: ['eventId'],
+        where: { eventId: { in: ids } },
+        _count: { _all: true },
+      }),
+      this.prisma.eventGoing.findMany({
+        where: { eventId: { in: ids }, userWawuId },
+        select: { eventId: true },
+      }),
+      this.prisma.eventSave.findMany({
+        where: { eventId: { in: ids }, userWawuId },
+        select: { eventId: true },
+      }),
+      // The "from" price, DERIVED: the cheapest tier this event offers. One
+      // grouped read for the whole page rather than a price column on Event
+      // that would go stale the moment a tier is added or repriced.
+      // Retired tiers (EVENTS-11 round 5) are not on sale and set no price.
+      this.prisma.eventTicketType.groupBy({
+        by: ['eventId'],
+        where: { eventId: { in: ids }, retiredAt: null },
+        _min: { priceNaira: true },
+      }),
+      // One batched read for the whole page, not one per row.
+      this.verification.forMany(rows.map((r) => r.hostWawuId)),
+    ]);
 
     const countByEvent = new Map(counts.map((c) => [c.eventId, c._count._all]));
     const goingIds = new Set(mine.map((m) => m.eventId));
@@ -728,11 +738,6 @@ export class EventService {
       // on it, not for whoever browses the event afterwards.
       lastDecisionReason:
         row.hostWawuId === userWawuId ? row.lastDecisionReason : null,
-      decidedAt:
-        row.hostWawuId === userWawuId &&
-        (row.status === 'rejected' || row.status === 'removed')
-          ? (decidedByEvent.get(row.id) ?? null)
-          : null,
     }));
   }
 }

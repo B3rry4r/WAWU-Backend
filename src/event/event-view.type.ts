@@ -137,13 +137,6 @@ export interface EventView {
   createdAt: Date;
   /** Why the last rejection or takedown happened. Host-only; null for everyone else. */
   lastDecisionReason: string | null;
-  /**
-   * When an admin last sent the event back or took it down (FIX-110, E17's
-   * "Taken down 20 Sep"). Host-only, like the reason; null for everyone else,
-   * and for an event nobody has sent back or taken down (an approved or
-   * pending one, or one edited since: an edit puts it back to review).
-   */
-  decidedAt: Date | null;
 }
 
 /**
@@ -175,4 +168,20 @@ export function initialsFor(name: string): string {
 /** GET /events/from-prices: what a person can pay now, per event asked about. */
 export interface EventFromPricesView {
   prices: { eventId: string; priceFromNaira: number | null }[];
+}
+
+/**
+ * One of the host's events an admin sent back or took down, and the day they
+ * last did (FIX-110, E17's "Taken down 20 Sep"). A separate route and view:
+ * `EventView` is what the web already reads, and a field added to it would
+ * widen every route that answers it.
+ */
+export interface EventDecisionView {
+  eventId: string;
+  decidedAt: Date;
+}
+
+/** GET /events/mine/decisions. */
+export interface EventDecisionsView {
+  items: EventDecisionView[];
 }

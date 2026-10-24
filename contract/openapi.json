@@ -29198,6 +29198,28 @@
         ]
       }
     },
+    "/api/hub/events/mine/decisions": {
+      "get": {
+        "operationId": "EventController_mineDecisions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventDecisionsView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The day an admin last sent back or took down each of the host's events\n(FIX-110, E17's \"Taken down 20 Sep\"). A route of its own, so the shape the\nweb reads from `mine` does not change.",
+        "tags": [
+          "Event"
+        ]
+      }
+    },
     "/api/hub/events/options": {
       "get": {
         "operationId": "EventController_options",
@@ -59647,11 +59669,6 @@
           "lastDecisionReason": {
             "type": "string",
             "nullable": true
-          },
-          "decidedAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
           }
         },
         "required": [
@@ -59690,8 +59707,37 @@
           "priceFromNaira",
           "speakers",
           "createdAt",
-          "lastDecisionReason",
+          "lastDecisionReason"
+        ]
+      },
+      "EventDecisionView": {
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string"
+          },
+          "decidedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "eventId",
           "decidedAt"
+        ]
+      },
+      "EventDecisionsView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EventDecisionView"
+            }
+          }
+        },
+        "required": [
+          "items"
         ]
       },
       "EventTicketRulesView": {
