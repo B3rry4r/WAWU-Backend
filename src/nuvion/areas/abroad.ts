@@ -304,9 +304,13 @@ export class NuvionAbroadArea implements AbroadProvider {
       });
     } catch (e) {
       if (e instanceof WalletProviderError) {
+        // Dev says it inside the field list ("account_number: A record with
+        // this account number already exists") under a general type, and an
+        // account number is unique within a counterparty.
         if (
-          e instanceof NuvionError &&
-          e.nuvionType === 'error_duplicate_resource'
+          (e instanceof NuvionError &&
+            e.nuvionType === 'error_duplicate_resource') ||
+          e.messages.some((m) => /already exists/i.test(m))
         ) {
           const found = await this.findDetail(entityId, input);
           if (found) return { ...found, bankName };

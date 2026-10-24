@@ -498,12 +498,23 @@ describe('the recipient', () => {
   });
 
   it('adopts the payment detail Nuvion already holds when an account number repeats', async () => {
+    // As dev answered it: a 422 whose field list carries the duplicate.
     standin.on('POST', '/payment-details', {
-      status: 409,
-      body: errorBody(
-        'error_duplicate_resource',
-        'A record with this account number already exists.',
-      ),
+      status: 422,
+      body: {
+        status: 'error',
+        type: 'error_validation_error',
+        message: 'Validation failed for one or more fields',
+        validations: [
+          {
+            account_number: {
+              type: 'error_duplicate_resource',
+              message:
+                'A record with this account number already exists. Please use different details or check your existing records.',
+            },
+          },
+        ],
+      },
     });
     standin.on('GET', '/counterparties', {
       status: 200,
