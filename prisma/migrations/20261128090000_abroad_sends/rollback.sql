@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- Rollback of 20261113093000_abroad_sends (NUV-11). Run it only after the Hub build that reads these tables is gone.
+-- Rollback of 20261128090000_abroad_sends (NUV-11). Run it only after the Hub build that reads these tables is gone.
 -- Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while any send abroad is stored: those rows are the only record of money that left
 -- an account for a foreign recipient (the provider holds its own, but the person's receipt and the admin list are
