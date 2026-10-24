@@ -8,6 +8,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { lockStorageQuota } from '../storage/storage-lock';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
 import { deriveVerificationState } from '../common/verification/verification-state';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
@@ -415,8 +416,30 @@ export class ChatService {
     }
 
     let row: MessageRow;
+    const carried = attachment;
     try {
       row = await this.prisma.$transaction(async (tx) => {
+        if (carried) {
+          // The lock a release takes (storage-lock.ts): a release that began
+          // first has marked the file given up, and this send is refused; a
+          // send that commits first makes the file the message's, and a
+          // release then answers 409 and leaves it (FIX-104 round 2).
+          await lockStorageQuota(tx, me);
+          const fresh = await tx.storageObject.findUnique({
+            where: { key: carried.attachmentKey },
+            select: { status: true, releasedAt: true, removingAt: true },
+          });
+          if (
+            !fresh ||
+            fresh.status === 'abandoned' ||
+            fresh.releasedAt ||
+            fresh.removingAt
+          ) {
+            throw new BadRequestException(
+              'That attachment was not uploaded for a chat. Upload it again.',
+            );
+          }
+        }
         const created = await tx.chatMessage.create({
           data: {
             conversationId: chatId,

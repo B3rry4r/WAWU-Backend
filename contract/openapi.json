@@ -1390,7 +1390,7 @@
             }
           }
         },
-        "summary": "POST /uploads/release: takes back an upload the caller reserved and no\nlisting has claimed yet (a file removed or replaced in an unfinished\ndraft). Deletes the object and frees its space in one step. Only the\ncaller's own upload in content/preview or content/full; another person's\nkey, an unknown key and a key in any other folder all get the same 404,\nand a key a listing already uses gets a 409. Calling it again for a key\nalready released answers the same 200.",
+        "summary": "POST /uploads/release: takes back an upload the caller reserved and no\nlisting has claimed yet (a file removed or replaced in an unfinished\ndraft), or a chat upload no message carries (FIX-104 round 2: a failed or\ndeleted bubble). Deletes the object and frees its space in one step. Only\nthe caller's own upload in content/preview, content/full, chat/media or\nchat/file; another person's key, an unknown key and a key in any other\nfolder all get the same 404, and a key a listing or a message already\nuses gets a 409. Calling it again for a key already released answers the\nsame 200.",
         "tags": [
           "Storage"
         ]

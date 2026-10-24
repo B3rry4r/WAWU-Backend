@@ -618,6 +618,38 @@ describe('Free chat (contract, INBOX-06)', () => {
         .expect(201);
     });
 
+    it('a file given back between the check and the send is not sent (round 2)', async () => {
+      const photo = await storeUpload(
+        ada.sub,
+        'chat/media',
+        'image/jpeg',
+        'jpg',
+      );
+      const storage = moduleRef.get(StorageService);
+      // The release lands after the send has looked at the file and before it writes the message.
+      const asked = jest
+        .spyOn(storage, 'confirmUpload')
+        .mockImplementationOnce(async () => {
+          await prisma.storageObject.update({
+            where: { key: photo.key },
+            data: { status: 'abandoned', releasedAt: new Date() },
+          });
+          return true;
+        });
+      const res = await as(ada)
+        .post(`/chats/${chatId}/messages`, { attachment: { key: photo.key } })
+        .expect(400);
+      expect(refusal(res).message).toBe(
+        'That attachment was not uploaded for a chat. Upload it again.',
+      );
+      expect(
+        await prisma.chatMessage.count({
+          where: { conversationId: chatId, attachmentKey: photo.key },
+        }),
+      ).toBe(0);
+      asked.mockRestore();
+    });
+
     it('only the two people in the chat get a link, and it is short-lived', async () => {
       const pdf = await storeUpload(
         ada.sub,
@@ -683,22 +715,36 @@ describe('Free chat (contract, INBOX-06)', () => {
       await http().get(linkPath(sentPdf.id)).expect(401);
     });
 
-    it("what is sent in a chat counts toward the sender's storage, and a file that does not fit is refused", async () => {
+    it("what is sent in a chat counts toward the sender's storage on the chat path only, and a chat file that does not fit is refused", async () => {
+      // Round 2 (lead ruling): GET /uploads/usage and the content presign sum
+      // content only, as on main; the chat upload sums content plus chat.
       const storage = moduleRef.get(StorageService);
       const before = await storage.usageFor(ada.sub);
+      // The chat files this spec has already stored for Ada count on the chat path.
+      const chatHeld =
+        (
+          await prisma.storageObject.aggregate({
+            _sum: { bytes: true },
+            where: {
+              wawuUserId: ada.sub,
+              status: { in: ['pending', 'confirmed'] },
+              folder: { in: ['chat/media', 'chat/file'] },
+            },
+          })
+        )._sum.bytes ?? 0;
       const filler = await prisma.storageObject.create({
         data: {
           wawuUserId: ada.sub,
           key: `chat/media/${ada.sub}/${randomUUID()}.mp4`,
-          bytes: before.limitBytes - before.usedBytes - 1000,
+          bytes: before.limitBytes - before.usedBytes - chatHeld - 1000,
           contentType: 'video/mp4',
           folder: 'chat/media',
           status: 'confirmed',
         },
       });
       try {
-        const full = await storage.usageFor(ada.sub);
-        expect(full.usedBytes).toBe(before.limitBytes - 1000);
+        // The chat file is not in what the web reads.
+        expect(await storage.usageFor(ada.sub)).toEqual(before);
         const refused = await as(ada)
           .post(`/chats/${chatId}/attachments`, {
             contentType: 'application/pdf',
@@ -708,18 +754,23 @@ describe('Free chat (contract, INBOX-06)', () => {
         expect(refusal(refused).reason).toMatchObject({
           code: 'storage_limit_reached',
           neededBytes: 2000,
+          usedBytes: before.limitBytes - 1000,
           limitBytes: before.limitBytes,
         });
-        // What still fits is signed, and counts at once.
+        // What still fits is signed, and counts toward the next chat upload.
         await as(ada)
           .post(`/chats/${chatId}/attachments`, {
             contentType: 'application/pdf',
             contentLength: 900,
           })
           .expect(200);
-        expect((await storage.usageFor(ada.sub)).usedBytes).toBe(
-          before.limitBytes - 100,
-        );
+        await as(ada)
+          .post(`/chats/${chatId}/attachments`, {
+            contentType: 'application/pdf',
+            contentLength: 200,
+          })
+          .expect(413);
+        expect(await storage.usageFor(ada.sub)).toEqual(before);
       } finally {
         await prisma.storageObject.deleteMany({
           where: { wawuUserId: ada.sub, bytes: { in: [900] } },
