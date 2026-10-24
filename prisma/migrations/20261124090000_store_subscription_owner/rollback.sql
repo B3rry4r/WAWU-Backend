@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- Rollback of 20261123090000_store_subscription_owner (IAP-01 fix round 1). Run it only after the Hub build that reads
+-- Rollback of 20261124090000_store_subscription_owner (IAP-01 fix round 1). Run it only after the Hub build that reads
 -- these is gone. Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while any subscription holder, account token or flagged purchase is stored: dropping
 -- them loses who holds a store subscription (the next order of it could then be taken by someone else), the binding of
