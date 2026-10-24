@@ -11,6 +11,7 @@ import type {
   FeeBreakdown,
   FeeQuotePartView,
   FeeQuoteView,
+  TransferInView,
 } from '../money-view.type';
 import { FeeSettings } from './fee-config';
 import { feesNotSet } from './fees-not-set';
@@ -18,6 +19,11 @@ import {
   providerFeeSchedule,
   type ProviderFeeSchedule,
 } from './provider-fee-schedule';
+import {
+  readTransferTiming,
+  transferInOf,
+  type TransferTiming,
+} from './transfer-timing';
 
 /** What is being quoted. `billCategory` only on a bill. */
 export interface FeeQuoteInput {
@@ -98,6 +104,12 @@ export class FeeQuoteService {
   /** The running provider's part of every quote (NUV-07). */
   readonly providerFees: ProviderFeeSchedule;
 
+  /** How long a bank transfer takes, as set (FIX-109): the app writes no figure of its own. */
+  readonly timing: TransferTiming;
+
+  /** What a transfer into the wallet account costs and takes (FIX-109), or null when nothing is set. */
+  readonly transferIn: TransferInView | null;
+
   /**
    * `provider` and `config` are the running provider (WALLET_PROVIDER, whose
    * `name` picks the schedule) and the settings Nuvion's charges are read
@@ -112,10 +124,17 @@ export class FeeQuoteService {
     provider?: Pick<WalletProvider, 'name'>,
     @Optional() config?: ConfigService,
   ) {
+    const get = (key: string) => config?.get<string>(key);
     this.providerFees = providerFeeSchedule(
       provider?.name ?? 'fintava',
       settings,
-      (key) => config?.get<string>(key),
+      get,
+    );
+    this.timing = readTransferTiming(get);
+    this.transferIn = transferInOf(
+      provider?.name ?? 'fintava',
+      this.timing,
+      get,
     );
   }
 
@@ -186,6 +205,11 @@ export class FeeQuoteService {
       remainingTodayKobo: null,
       quoteToken,
       expiresAt: new Date(expires).toISOString(),
+      // FIX-109 (W17's Arrives row): only a send to a bank has an arrival
+      // time, and only when it is set. Absent otherwise, so nothing is drawn.
+      ...(input.kind === 'bank_transfer' && this.timing.bankOutMinutes !== null
+        ? { arrivalMinutes: this.timing.bankOutMinutes }
+        : {}),
     };
   }
 
