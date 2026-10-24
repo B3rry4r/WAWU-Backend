@@ -6,7 +6,6 @@ import {
   SignedDataVerifier,
   VerificationException,
   VerificationStatus,
-  type JWSTransactionDecodedPayload,
 } from '@apple/app-store-server-library';
 import type { AppStoreConfig } from '../store-config';
 import {
@@ -16,6 +15,11 @@ import {
   type AppStoreNotification,
   type VerifiedStorePurchase,
 } from './store-clients';
+
+/** A transaction Apple signed, once the library has verified and decoded it. */
+type AppleTransaction = Awaited<
+  ReturnType<SignedDataVerifier['verifyAndDecodeTransaction']>
+>;
 
 /** The environments the Hub reads, in the order it tries them. */
 function environmentsOf(config: AppStoreConfig): Environment[] {
@@ -152,7 +156,7 @@ export class RealAppStoreClient implements AppStoreClient {
 
 /** A verified transaction as the Hub reads it. */
 export function purchaseOf(
-  t: JWSTransactionDecodedPayload,
+  t: AppleTransaction,
   env: Environment,
 ): VerifiedStorePurchase {
   if (!t.transactionId || !t.productId)

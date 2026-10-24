@@ -726,6 +726,35 @@ of Hub processes make one run a night.
   `docs/contract/CONVENTIONS.md` section 19.
 - Run `npx prisma migrate deploy` so `MoneyCheckRun` exists.
 
+## Buying through the app stores (IAP-01, R-86)
+
+Points packs, WAWU Credits packs, tiers (ticks) and community passes are bought in the
+app with Google Play Billing and Apple In-App Purchase. The wallet routes for the same
+things are unchanged and stay for the website.
+
+| Route | What |
+|---|---|
+| `GET /store/products?platform=android\|ios` | the products on sale in one store, from the admin-edited product map (no price: the app shows the store's own) |
+| `POST /store/purchases` | `{ platform, productId, purchaseToken \| transactionId, communityId? }`: the Hub asks the store's own server, then grants once per store transaction |
+| `POST /webhooks/google-play` | Pub/Sub push, the bearer token is checked (Google-signed, this endpoint's audience, the subscription's service account) |
+| `POST /webhooks/app-store` | App Store Server Notifications V2, the signed payload and its certificate chain checked against `APPLE_ROOT_CERTIFICATES` |
+| `admin/store/products`, `platforms`, `purchases`, `refunds` | superadmin and finance |
+
+Nothing is asked of a store until its settings exist; every store route then answers
+`store_not_configured` (503). Settings (none are committed):
+
+| Setting | For |
+|---|---|
+| `GOOGLE_PLAY_PACKAGE_NAME`, `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` (the JSON, or that JSON in base64) | Google Play: asking about a purchase, consuming and acknowledging |
+| `GOOGLE_PLAY_PUBSUB_AUDIENCE`, `GOOGLE_PLAY_PUBSUB_SERVICE_ACCOUNT_EMAIL` | Google Play notifications: the push endpoint's URL and the push subscription's service account |
+| `APPLE_BUNDLE_ID`, `APPLE_ISSUER_ID`, `APPLE_KEY_ID`, `APPLE_PRIVATE_KEY` (the `.p8` text), `APPLE_ENVIRONMENT` (`Production` or `Sandbox`), `APPLE_ROOT_CERTIFICATES` (Apple's root certificates, PEM), `APPLE_APP_ID` (the app's Apple id, needed in Production) | App Store |
+| `STORE_FEE_BPS_ANDROID`, `STORE_FEE_BPS_IOS` | the store's cut in basis points, 1500 (15%) when unset; an admin can override it per store |
+
+The grant is the wallet paths' own code (`PointsService.grant`, `TierGrantService`,
+`addCreditsWithLot`, `grantPassPeriod`), run in one short transaction keyed by
+`(platform, storeTransactionId)`. A refund or revocation takes back what is unspent. The
+creator's 85/15 on credits and passes is worked on WAWU's net after the store's share.
+
 ## Verification: two ticks, not a ladder
 
 There is no five-rung ladder any more. There are exactly **two** verifications,

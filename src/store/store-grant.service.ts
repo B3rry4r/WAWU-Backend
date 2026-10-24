@@ -215,7 +215,7 @@ export class StoreGrantService {
               fromTierId: upgrade ? held.tierId : null,
               bump: false,
               currency: 'NGN',
-              amountMinor: purchase.referenceKobo ?? 0,
+              amountMinor: purchase.referenceKobo ?? priceIn(tier.price, 'NGN'),
               method: 'store',
             },
           ],
@@ -317,10 +317,6 @@ export class StoreGrantService {
             data: { activeUntil: cut },
           });
         }
-        await tx.makerPurchase.updateMany({
-          where: { paymentRef: ref },
-          data: { status: 'refunded' },
-        });
         return { daysRemoved, bonusPoints: r.taken };
       }
       case 'pass': {

@@ -846,6 +846,34 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         orderBy: NEWEST,
       }),
   },
+  // What this person bought through Google Play or the App Store (IAP-01, R-86).
+  // The store's transaction id, the person's own other ids and the room's host
+  // stay out (rule 3); the price is in the store's own currency, as a string.
+  {
+    key: 'storePurchases',
+    models: ['StorePurchase'],
+    load: async (prisma, me) =>
+      (
+        await prisma.storePurchase.findMany({
+          where: { wawuUserId: me },
+          select: {
+            platform: true,
+            kind: true,
+            status: true,
+            storeProductId: true,
+            currency: true,
+            priceMicros: true,
+            purchasedAt: true,
+            expiresAt: true,
+            endedAt: true,
+          },
+          orderBy: { purchasedAt: 'desc' },
+        })
+      ).map((r) => ({
+        ...r,
+        priceMicros: r.priceMicros === null ? null : r.priceMicros.toString(),
+      })),
+  },
   // The products this person added to their tier (TIER-04). The payment
   // reference is a payment id, so it stays out (rule 3).
   {

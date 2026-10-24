@@ -38130,7 +38130,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Hands the Hub a purchase the store has just completed. The Hub asks the\nstore's own server about it (the app's word is never taken), then gives\nwhat was bought, once per store transaction: the same call again, a\nrestore, or the store's own notice arriving first all answer the same\npurchase with `alreadyGranted: true`. Send `purchaseToken` on `android`,\n`transactionId` on `ios`, and `communityId` for a pass.\n\nRefusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,\n`store_product_unknown` (404), `store_receipt_missing` (400),\n`store_purchase_invalid` (422), `store_purchase_pending`,\n`store_purchase_taken` (the transaction belongs to another account),\n`store_pass_not_available` and `store_unreachable` (503, safe to repeat).",
+        "summary": "Hands the Hub a purchase the store has just completed. The Hub asks the\nstore's own server about it (the app's word is never taken), then gives\nwhat was bought, once per store transaction: the same call again, a\nrestore, or the store's own notice arriving first all answer the same\npurchase with `alreadyGranted: true`. Send `purchaseToken` on `android`,\n`transactionId` on `ios`, and `communityId` for a pass.\n\nRefusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,\n`store_product_unknown` (404), `store_receipt_missing` (400),\n`store_purchase_invalid` (422), `store_purchase_pending`,\n`store_purchase_taken` (that transaction was already used on another account),\n`store_pass_not_available` and `store_unreachable` (503, safe to repeat).",
         "tags": [
           "Store"
         ]

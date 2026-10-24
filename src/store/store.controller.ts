@@ -60,7 +60,7 @@ export class StoreController {
    * Refusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,
    * `store_product_unknown` (404), `store_receipt_missing` (400),
    * `store_purchase_invalid` (422), `store_purchase_pending`,
-   * `store_purchase_taken` (the transaction belongs to another account),
+   * `store_purchase_taken` (that transaction was already used on another account),
    * `store_pass_not_available` and `store_unreachable` (503, safe to repeat).
    */
   @Post('purchases')

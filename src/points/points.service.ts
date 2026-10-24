@@ -438,8 +438,9 @@ export class PointsService {
   /**
    * Ends a lot at once because what bought it was paid back (IAP-01: a store
    * refund or revocation). Takes what the lot still has, written to the ledger
-   * as an expiry, and moves the lot's end to now so points that come back
-   * from a job in flight (a release) are not spendable from it. Points already
+   * as an expiry, and marks the lot lapsed, so points that come back from a job
+   * in flight (a release) are written off at once (a lot with a lapse time is
+   * over, whatever its end date). Points already
    * spent are not taken back. Under the person's lock; idempotent (a lot with
    * nothing left, or none, takes 0). Returns what was taken and what the lot
    * granted.
@@ -462,7 +463,7 @@ export class PointsService {
       });
       if (lot === null) return { taken: 0, granted: 0 };
       if (lot.remaining > 0) {
-        await takeFromLot(tx, lot.id, lot.remaining, now);
+        await takeFromLot(tx, lot.id, lot.remaining, lot.lapsedAt ?? now);
         await tx.pointLedger.create({
           data: {
             wawuUserId: lot.wawuUserId,
@@ -471,12 +472,12 @@ export class PointsService {
             reason: 'expire',
           },
         });
-      }
-      if (lot.expiresAt.getTime() > now.getTime())
+      } else if (lot.lapsedAt === null) {
         await tx.pointLot.update({
           where: { id: lot.id },
-          data: { expiresAt: now },
+          data: { lapsedAt: now },
         });
+      }
       return { taken: lot.remaining, granted: lot.quantity };
     });
   }
@@ -634,8 +635,9 @@ export class PointsService {
               reference: hold.reference,
             },
           });
-          if (lot.expiresAt <= now) {
-            // The lot's first lapse time stands.
+          if (lot.expiresAt <= now || lot.lapsedAt !== null) {
+            // The lot's first lapse time stands. A lot with a lapse time is
+            // over (IAP-01: a refunded pack's lot ends before its date).
             await takeFromLot(tx, lot.id, part.points, lot.lapsedAt ?? now);
             await tx.pointLedger.create({
               data: {

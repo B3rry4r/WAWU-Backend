@@ -1,6 +1,11 @@
 -- IAP-01 (R-86): points, credits, tiers and community passes bought through Google Play and the App Store.
--- Additive only: one nullable column (CreditPurchase.storePurchaseId, unique) and five new tables with three
--- enums. Nothing the web or the dashboard calls reads or writes any of them; every existing row is untouched.
+-- Additive only: one nullable column (CreditPurchase.storePurchaseId, unique), four new tables with three enums,
+-- and one widened check (MakerPurchase.method also allows 'store': a tier bought in a store is recorded like a
+-- wallet one, so the referral and not-new rules that read MakerPurchase see it). Nothing the web or the dashboard
+-- calls reads or writes any of them; every existing row is untouched.
+
+ALTER TABLE "MakerPurchase" DROP CONSTRAINT "MakerPurchase_method_check";
+ALTER TABLE "MakerPurchase" ADD CONSTRAINT "MakerPurchase_method_check" CHECK ("method" IN ('wallet', 'store'));
 
 CREATE TYPE "StorePlatform" AS ENUM ('android', 'ios');
 CREATE TYPE "StoreProductKind" AS ENUM ('points', 'credits', 'tier', 'pass');
