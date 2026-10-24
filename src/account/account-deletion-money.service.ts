@@ -71,6 +71,9 @@ export const DELETION_BLOCKED_MESSAGES = {
   opening: 'Your wallet is still being set up. Try again in a few minutes.',
   fxBalance:
     'Move the money out of your other currency accounts first. Swap it to naira and withdraw it, or send it out, then delete your account.',
+  /** The same, for a person who has no naira account (a wallet outside Nigeria): there is nothing to swap into, so it only says send. */
+  fxBalanceAbroad:
+    'Move the money out of your accounts first. Send it out, then delete your account.',
   fxUnreadable:
     'We could not check your other currency accounts. Your money is safe. Try again in a moment.',
   inFlight:
@@ -86,10 +89,16 @@ export const DELETION_BLOCKED_MESSAGES = {
  * foreign accounts', then Capital's; a set that is only "wait" gets the
  * sentence for waiting.
  */
-function deletionBlockedMessage(blockers: readonly DeletionBlocker[]): string {
+function deletionBlockedMessage(
+  blockers: readonly DeletionBlocker[],
+  hasNairaWallet: boolean,
+): string {
   const m = DELETION_BLOCKED_MESSAGES;
   if (blockers.includes('wallet_balance')) return m.balance;
-  if (blockers.includes('fx_balance')) return m.fxBalance;
+  // Worded by who the person is (SWEEP-MONEY-6, G-WALLET-41-6): a person with no naira account is never told to swap into naira.
+  if (blockers.includes('fx_balance')) {
+    return hasNairaWallet ? m.fxBalance : m.fxBalanceAbroad;
+  }
   if (blockers.includes('capital_holding')) return m.capitalHolding;
   if (blockers.every((b) => b === 'wallet_opening')) return m.opening;
   if (blockers.every((b) => b === 'fx_balance_unreadable'))
@@ -111,7 +120,7 @@ const CAPITAL_CLOSED_LIFECYCLES = ['WITHDRAWN', 'CLOSED', 'REFUNDED'];
 export class AccountDeletionBlockedError extends HttpException {
   constructor(check: DeletionMoneyCheck) {
     const blockers = check.blockers;
-    const message = deletionBlockedMessage(blockers);
+    const message = deletionBlockedMessage(blockers, check.wallet !== null);
     super(
       {
         message,
