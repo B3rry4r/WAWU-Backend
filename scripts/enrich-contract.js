@@ -383,7 +383,13 @@ function koboAsInteger(name, schema) {
  * As with that rule, the wire is unchanged and openapi-typescript generates
  * `number` for both.
  */
-const WHOLE_NUMBER_DIRS = [path.join(ROOT, 'src', 'plans') + path.sep];
+const WHOLE_NUMBER_DIRS = [
+  path.join(ROOT, 'src', 'plans') + path.sep,
+  // Foreign-currency accounts, swaps and sends (task WALLET-21): every figure
+  // is an integer in a currency's smallest unit (`...Minor`), a count of
+  // places, or seconds.
+  path.join(ROOT, 'src', 'money', 'fx') + path.sep,
+];
 
 function numberAsInteger(schema) {
   if (!schema || schema.type !== 'number') return schema;

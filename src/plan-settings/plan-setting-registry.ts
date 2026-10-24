@@ -1,3 +1,4 @@
+import { FX_CURRENCIES } from '../money/fx/fx-currencies';
 import { INT4_MAX, type PlansConfig } from '../plans/plans-config';
 import {
   SettingInvalid,
@@ -934,6 +935,20 @@ export function buildRegistry(
     default: extra('ai.dubbing_max_run_minutes', 60),
     parse: whole(5, LIMIT.maxMinutes),
   });
+  add({
+    key: 'capital.enabled',
+    group: 'Other rulings',
+    label:
+      'Capital: 1 takes new orders, 0 closes them (what a person holds can still be read and withdrawn)',
+    unit: 'count',
+    usedBy: [
+      'GET /capital/availability, the Wallet tab row (NUV-12)',
+      'Every /capital route (NUV-12)',
+    ],
+    provisional: 'CAPITAL-ENABLED',
+    default: extra('capital.enabled', 1),
+    parse: whole(0, 1),
+  });
   other(
     'voice.intro_max_chars',
     'Characters a Voice Intro script can have',
@@ -1037,6 +1052,42 @@ export function buildRegistry(
     ['M25 (Usually takes), GET /content/sale-terms (FIX-110)'],
     hours,
     'CONTENT-REVIEW-HOURS',
+  );
+
+  // ---- Foreign accounts, swaps and crypto sends (WALLET-21, R-83, R-84) ----
+  // One switch per currency and one per product: 1 is on, 0 is off. On by
+  // default (the dev launch); an admin turns one off without a deploy. Read
+  // live by GET /money/fx/currencies and by every foreign-account route.
+  const onOff = whole(0, 1);
+  for (const c of FX_CURRENCIES) {
+    other(
+      `fx.currency.${c.code}.on`,
+      `${c.name} (${c.code}) accounts, swaps and sends: 1 is on, 0 is off`,
+      'count',
+      ['GET /money/fx/currencies', 'POST /money/fx/accounts (WALLET-21, R-84)'],
+      onOff,
+    );
+  }
+  other(
+    'fx.product.open_account.on',
+    'Opening a foreign or stablecoin account: 1 is on, 0 is off',
+    'count',
+    ['POST /money/fx/accounts (WALLET-21, R-84)'],
+    onOff,
+  );
+  other(
+    'fx.product.swap.on',
+    'Swapping between currencies: 1 is on, 0 is off',
+    'count',
+    ['POST /money/fx/quotes, POST /money/fx/swaps (WALLET-21, R-84)'],
+    onOff,
+  );
+  other(
+    'fx.product.crypto_send.on',
+    'Sending USDT, USDC or RLUSD to an outside address: 1 is on, 0 is off',
+    'count',
+    ['POST /money/fx/sends (WALLET-21, R-84)'],
+    onOff,
   );
 
   return out;

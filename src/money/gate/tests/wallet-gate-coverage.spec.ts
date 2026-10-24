@@ -219,6 +219,14 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'DELETE money/beneficiaries/:id',
       'DELETE money/device',
       'GET bills/wallet/:id/quote',
+      // NUV-12: Capital, the provider's investment products, from the wallet.
+      'GET capital/orders',
+      'GET capital/orders/:id',
+      'GET capital/orders/:id/transactions',
+      'GET capital/orders/:id/withdrawal',
+      'GET capital/portfolio',
+      'GET capital/products',
+      'GET capital/products/:productId',
       // INBOX-24: the pay sheet of a community's monthly pass.
       'GET communities/:id/pass/quote',
       // HOME-15: the pay sheet of an unlock.
@@ -233,6 +241,13 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET money/beneficiaries',
       'GET money/device',
       'GET money/fees/quote',
+      'GET money/fx/accounts',
+      'GET money/fx/accounts/:id',
+      'GET money/fx/accounts/:id/transactions',
+      'GET money/fx/currencies',
+      'GET money/fx/sends/:id',
+      'GET money/fx/sends/quote',
+      'GET money/fx/swaps/:id',
       'GET money/holds',
       'GET money/holds/:id',
       'GET money/payments/:id',
@@ -258,6 +273,10 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'GET tips/wallet/quote',
       'POST bills/wallet',
       'POST bills/wallet/pay',
+      // NUV-12: reserve, confirm and withdraw a Capital order.
+      'POST capital/orders',
+      'POST capital/orders/:id/confirm',
+      'POST capital/orders/:id/withdrawal',
       'POST chats/:chatId/money-requests',
       'POST chats/:chatId/money-requests/:requestId/pay',
       // INBOX-24: a community's monthly pass pays from the wallet.
@@ -275,6 +294,10 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST money/approval/verify',
       'POST money/beneficiaries',
       'POST money/device/challenge',
+      'POST money/fx/accounts',
+      'POST money/fx/quotes',
+      'POST money/fx/sends',
+      'POST money/fx/swaps',
       'POST money/payments',
       'POST money/pin',
       'POST money/pin/reset',
@@ -302,6 +325,9 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
     );
     expect(pinRoutes.map((r) => r.key).sort()).toEqual([
       'POST bills/wallet/pay',
+      // NUV-12: confirming a Capital order and withdrawing a holding ask the PIN.
+      'POST capital/orders/:id/confirm',
+      'POST capital/orders/:id/withdrawal',
       'POST chats/:chatId/money-requests/:requestId/pay',
       'POST communities/:id/pass',
       'POST content/:id/unlock/wallet',
@@ -310,6 +336,8 @@ describe('the wallet gate covers every wallet route (MONEY-13)', () => {
       'POST events/orders/wallet/pay',
       'POST legal/requests/:id/pay/wallet',
       'POST money/approval/verify',
+      'POST money/fx/sends',
+      'POST money/fx/swaps',
       'POST money/payments',
       'POST money/pin/verify',
       'POST money/transfers/bank',

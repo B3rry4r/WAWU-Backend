@@ -1,3 +1,4 @@
+import type { WalletProviderCapital } from '../wallet-provider/wallet-provider-capital';
 import type {
   ProviderAccountNameInput,
   ProviderBankTransferInput,
@@ -21,7 +22,9 @@ import {
   type NuvionAccountsMethods,
 } from './areas/accounts';
 import { NuvionBookArea, type NuvionBookMethods } from './areas/book';
+import { NuvionFxArea } from './areas/fx';
 import { type NuvionBookStore } from './areas/book-store';
+import { NuvionCapitalArea } from './areas/capital';
 import {
   NuvionDocumentsArea,
   type NuvionDocumentsMethods,
@@ -63,6 +66,10 @@ export interface NuvionAreas {
   book: NuvionBookMethods;
   payouts: NuvionPayoutsMethods;
   reconcile: NuvionReconcileMethods;
+  /** Foreign-currency accounts, swaps and crypto sends (WALLET-21). Optional so a spec's areas need not give one. */
+  fx?: NuvionFxArea;
+  /** Capital (NUV-12): reached through `WalletProvider.capital`. */
+  capital: WalletProviderCapital;
 }
 
 /**
@@ -82,6 +89,8 @@ export function nuvionAreas(
     book: new NuvionBookArea(client, client.settings, deps.bookStore),
     payouts: new NuvionPayoutsArea(client),
     reconcile: new NuvionReconcileArea(client),
+    fx: new NuvionFxArea(client),
+    capital: new NuvionCapitalArea(client),
   };
 }
 
@@ -99,7 +108,9 @@ export function nuvionAreas(
  * | accounts.ts | NUV-04 | getWalletAccount, getBalance |
  * | book.ts | NUV-05 | getPlatformAccount, walletToWallet, isSameAccount, and for book transfers findTransactionByReference, findTransactionById, reconcileSend, decideRetry, confirmMovement, secondaryReferenceOf |
  * | payouts.ts | NUV-06 | listBanks, checkAccountName, bankTransfer |
+ * | fx.ts | WALLET-21 | the optional `fx` port: foreign-currency accounts, quotes, swaps, crypto sends, statements |
  * | reconcile.ts | NUV-08 | deliveries, listTransactions (the statement); the lookups above are widened to every rail by id (findTransactionById, confirmMovement) |
+ * | capital.ts | NUV-12 | `capital`: products, orders, portfolio, capital transactions, withdrawal (its own member, not one of the methods above) |
  *
  * A method whose area has no Nuvion call yet answers `not_supported`:
  * nothing is sent and nothing moves.
@@ -147,6 +158,16 @@ export class NuvionWalletProvider implements WalletProvider {
 
   get deliveries() {
     return this.areas.reconcile.deliveries;
+  }
+
+  /** Foreign-currency accounts, swaps and crypto sends (WALLET-21, R-83, R-84). */
+  get fx(): NuvionFxArea | undefined {
+    return this.areas.fx;
+  }
+
+  /** Nuvion's investment products (NUV-12, R-84). */
+  get capital(): WalletProviderCapital {
+    return this.areas.capital;
   }
 
   /** The book transfer area (NUV-05): the handler reads transfers through it. */

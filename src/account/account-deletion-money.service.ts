@@ -24,6 +24,16 @@ import { WalletProviderError } from '../wallet-provider/wallet-provider-error';
  *   payment_in_progress  a payment of theirs has no final answer yet
  *   cash_out_in_flight   points are held for a cash-out
  *   wallet_opening       their wallet is being opened right now
+ *
+ * And, because the wallet must be empty before an account is deleted (R-17)
+ * and money in a foreign account or in Capital is as much theirs as the naira
+ * wallet's (WALLET-21, NUV-12):
+ *
+ *   fx_balance             a foreign-currency account holds money (the provider's balance)
+ *   fx_balance_unreadable  a foreign-currency account could not be read: never called empty
+ *   fx_operation_pending   a swap or a send of theirs has no final answer yet
+ *   capital_holding        a Capital holding is not closed (held, matured, or paying out)
+ *   capital_order_pending  a Capital order is reserved, confirming or in review
  */
 export const DELETION_BLOCKERS = [
   'wallet_balance',
@@ -32,6 +42,11 @@ export const DELETION_BLOCKERS = [
   'payment_in_progress',
   'cash_out_in_flight',
   'wallet_opening',
+  'fx_balance',
+  'fx_balance_unreadable',
+  'fx_operation_pending',
+  'capital_holding',
+  'capital_order_pending',
 ] as const;
 export type DeletionBlocker = (typeof DELETION_BLOCKERS)[number];
 
@@ -53,19 +68,49 @@ export const DELETION_BLOCKED_MESSAGES = {
   onItsWay:
     'Some of your money is still on its way. Delete your account once it has reached your wallet and you have withdrawn it.',
   opening: 'Your wallet is still being set up. Try again in a few minutes.',
+  fxBalance:
+    'Move the money out of your other currency accounts first. Swap it to naira and withdraw it, or send it out, then delete your account.',
+  fxUnreadable:
+    'We could not check your other currency accounts. Your money is safe. Try again in a moment.',
+  inFlight:
+    'A swap, a send or a Capital order of yours is still going through. Try again in a few minutes.',
+  capitalHolding:
+    'You still have money in Capital. Withdraw it, or wait for the holding to end, then delete your account.',
   unreachable:
     'We could not reach your account. Your money is safe. Try again in a moment.',
 } as const;
+
+/**
+ * The one sentence for a set of blockers: the wallet's money leads, then the
+ * foreign accounts', then Capital's; a set that is only "wait" gets the
+ * sentence for waiting.
+ */
+function deletionBlockedMessage(blockers: readonly DeletionBlocker[]): string {
+  const m = DELETION_BLOCKED_MESSAGES;
+  if (blockers.includes('wallet_balance')) return m.balance;
+  if (blockers.includes('fx_balance')) return m.fxBalance;
+  if (blockers.includes('capital_holding')) return m.capitalHolding;
+  if (blockers.every((b) => b === 'wallet_opening')) return m.opening;
+  if (blockers.every((b) => b === 'fx_balance_unreadable'))
+    return m.fxUnreadable;
+  if (
+    blockers.every(
+      (b) => b === 'fx_operation_pending' || b === 'capital_order_pending',
+    )
+  ) {
+    return m.inFlight;
+  }
+  return m.onItsWay;
+}
+
+/** The provider's holding states after which nothing more is owed to the person (Capital). */
+const CAPITAL_CLOSED_LIFECYCLES = ['WITHDRAWN', 'CLOSED', 'REFUNDED'];
 
 /** `409 account_deletion_blocked`: the money to settle first, in the one error shape. */
 export class AccountDeletionBlockedError extends HttpException {
   constructor(check: DeletionMoneyCheck) {
     const blockers = check.blockers;
-    const message = blockers.includes('wallet_balance')
-      ? DELETION_BLOCKED_MESSAGES.balance
-      : blockers.every((b) => b === 'wallet_opening')
-        ? DELETION_BLOCKED_MESSAGES.opening
-        : DELETION_BLOCKED_MESSAGES.onItsWay;
+    const message = deletionBlockedMessage(blockers);
     super(
       {
         message,
@@ -170,49 +215,102 @@ export class AccountDeletionMoneyService {
       where: { wawuUserId },
       select: { walletId: true, provider: true },
     });
-    const [openHolds, owedSales, pendingPayments, cashOuts, opening] =
-      await Promise.all([
-        this.prisma.walletHold.count({
-          where: {
-            status: 'held',
-            OR: [
-              { payerWawuUserId: wawuUserId },
-              { payeeWawuUserId: wawuUserId },
-            ],
-          },
-        }),
-        // A completed sale whose share has not landed: no hold, or a hold
-        // that was released as an earning (R-55) and whose move has not
-        // landed (an open hold is counted above, a refunded one is the
-        // payer's), and the payee's share is more than 0.
-        this.prisma.walletPayment.count({
-          where: {
-            status: 'completed',
-            payeeWawuUserId: wawuUserId,
-            payeeShareKobo: { gt: 0 },
-            payeeSettledAt: null,
-            OR: [{ hold: { is: null } }, { hold: { status: 'released' } }],
-          },
-        }),
-        this.prisma.walletPayment.count({
-          where: {
-            status: 'pending',
-            OR: [
-              { payerWawuUserId: wawuUserId },
-              { payeeWawuUserId: wawuUserId },
-            ],
-          },
-        }),
-        this.prisma.pointHold.count({
-          where: { wawuUserId, purpose: 'cash_out', state: 'held' },
-        }),
-        wallet
-          ? Promise.resolve(null)
-          : this.prisma.fintavaWalletOpening.findUnique({
-              where: { wawuUserId },
-              select: { state: true },
-            }),
-      ]);
+    const now = new Date();
+    const [
+      openHolds,
+      owedSales,
+      pendingPayments,
+      cashOuts,
+      opening,
+      pendingFx,
+      pendingCapital,
+      capitalHoldings,
+      foreignAccounts,
+    ] = await Promise.all([
+      this.prisma.walletHold.count({
+        where: {
+          status: 'held',
+          OR: [
+            { payerWawuUserId: wawuUserId },
+            { payeeWawuUserId: wawuUserId },
+          ],
+        },
+      }),
+      // A completed sale whose share has not landed: no hold, or a hold
+      // that was released as an earning (R-55) and whose move has not
+      // landed (an open hold is counted above, a refunded one is the
+      // payer's), and the payee's share is more than 0.
+      this.prisma.walletPayment.count({
+        where: {
+          status: 'completed',
+          payeeWawuUserId: wawuUserId,
+          payeeShareKobo: { gt: 0 },
+          payeeSettledAt: null,
+          OR: [{ hold: { is: null } }, { hold: { status: 'released' } }],
+        },
+      }),
+      this.prisma.walletPayment.count({
+        where: {
+          status: 'pending',
+          OR: [
+            { payerWawuUserId: wawuUserId },
+            { payeeWawuUserId: wawuUserId },
+          ],
+        },
+      }),
+      this.prisma.pointHold.count({
+        where: { wawuUserId, purpose: 'cash_out', state: 'held' },
+      }),
+      wallet
+        ? Promise.resolve(null)
+        : this.prisma.fintavaWalletOpening.findUnique({
+            where: { wawuUserId },
+            select: { state: true },
+          }),
+      // A swap or a send the provider has not given a final answer to.
+      this.prisma.fxOperation.count({
+        where: { wawuUserId, status: 'pending' },
+      }),
+      // A Capital order that moves no money yet (a reservation lasts 15
+      // minutes; one past its time is expired, whatever the sweep has
+      // marked), or whose money is in doubt: confirming, or held for review.
+      this.prisma.capitalOrder.count({
+        where: {
+          wawuUserId,
+          OR: [
+            { state: { in: ['reserving', 'confirming', 'review'] } },
+            {
+              state: 'reserved',
+              OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+            },
+          ],
+        },
+      }),
+      // A Capital holding that is not closed: money is in it, or on its way
+      // back. The holding's own state decides; `payoutStatus` is not used,
+      // because nothing refreshes a row once its holding is closed and it
+      // could stay "pending" for ever. What lands in the wallet is the
+      // wallet's balance, checked above. A holding not yet read (null) is
+      // open: `notIn` alone would drop it, since null is in no list.
+      this.prisma.capitalOrder.count({
+        where: {
+          wawuUserId,
+          state: 'confirmed',
+          OR: [
+            { lifecycle: null },
+            { lifecycle: { notIn: CAPITAL_CLOSED_LIFECYCLES } },
+          ],
+        },
+      }),
+      this.prisma.fxAccount.findMany({
+        where: { wawuUserId, providerAccountId: { not: null } },
+        select: {
+          provider: true,
+          providerAccountId: true,
+          providerCustomerId: true,
+        },
+      }),
+    ]);
 
     // A community host's share of spent credits that has not landed
     // (WALLET-17): an earning with no sale behind it (a sale's earning is
@@ -245,6 +343,10 @@ export class AccountDeletionMoneyService {
     if (waitingEarnings > 0) blockers.push('waiting_earnings');
     if (pendingPayments > 0) blockers.push('payment_in_progress');
     if (cashOuts > 0) blockers.push('cash_out_in_flight');
+    blockers.push(...(await this.foreignBlockers(foreignAccounts, wallet)));
+    if (pendingFx > 0) blockers.push('fx_operation_pending');
+    if (capitalHoldings > 0) blockers.push('capital_holding');
+    if (pendingCapital > 0) blockers.push('capital_order_pending');
 
     return {
       blockers,
@@ -255,6 +357,62 @@ export class AccountDeletionMoneyService {
         ? { walletId: wallet.walletId, provider: this.provider.name }
         : null,
     };
+  }
+
+  /**
+   * What the person's foreign-currency accounts say (R-17): `fx_balance` when
+   * the provider reports money in one (available or booked), and
+   * `fx_balance_unreadable` when one could not be read, which is never taken
+   * for empty. Only the provider this server runs is asked, and only for an
+   * account it has made; an account of another provider (after a rollback), or
+   * a provider that holds none, cannot be read from here, so it is unreadable
+   * too. A failure that is not the provider's is a bug and passes through.
+   */
+  private async foreignBlockers(
+    rows: {
+      provider: string;
+      providerAccountId: string | null;
+      providerCustomerId: string;
+    }[],
+    wallet: { walletId: string } | null,
+  ): Promise<DeletionBlocker[]> {
+    if (rows.length === 0) return [];
+    const fx = this.provider.configured ? this.provider.fx : undefined;
+    const states = await Promise.all(
+      rows.map(async (row): Promise<'money' | 'empty' | 'unreadable'> => {
+        if (!fx || !row.providerAccountId) return 'unreadable';
+        if (!isRowOf(this.provider.name, row.provider)) {
+          this.logger.warn(
+            `deletion: a foreign account is held by another provider than ${this.provider.label}; not asked`,
+          );
+          return 'unreadable';
+        }
+        try {
+          const a = await fx.readAccount(
+            {
+              customerId: row.providerCustomerId,
+              walletId: wallet?.walletId ?? '',
+            },
+            row.providerAccountId,
+          );
+          return a.availableMinor > 0n || a.bookedMinor > 0n
+            ? 'money'
+            : 'empty';
+        } catch (e) {
+          if (e instanceof WalletProviderError) {
+            this.logger.warn(
+              `deletion: a foreign account could not be read (${e.kind})`,
+            );
+            return 'unreadable';
+          }
+          throw e;
+        }
+      }),
+    );
+    const blockers: DeletionBlocker[] = [];
+    if (states.includes('money')) blockers.push('fx_balance');
+    if (states.includes('unreadable')) blockers.push('fx_balance_unreadable');
+    return blockers;
   }
 
   /** The provider's balance in kobo, the larger of available and booked. */
