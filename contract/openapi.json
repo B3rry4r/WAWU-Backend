@@ -27333,6 +27333,108 @@
         ]
       }
     },
+    "/api/hub/users/handle-available": {
+      "get": {
+        "operationId": "HandleAvailabilityController_available",
+        "parameters": [
+          {
+            "name": "handle",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HandleAvailabilityView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "HandleAvailability"
+        ]
+      }
+    },
+    "/api/hub/users/me/identity": {
+      "put": {
+        "operationId": "SignupIdentityController_complete",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteIdentityDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "SignupIdentity"
+        ]
+      }
+    },
+    "/api/hub/users/me/handle": {
+      "put": {
+        "operationId": "SignupIdentityController_changeHandle",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeHandleDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "handle": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "handle"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "The app's Edit profile changing a username it already has (round 3, M2). The same rules and lock as the route\nabove; `PATCH /users/me` is untouched because the web calls it (BACKEND_GAPS G-SIGNUP-NAMES-1).",
+        "tags": [
+          "SignupIdentity"
+        ]
+      }
+    },
     "/api/hub/learn/courses/{id}/enrol": {
       "post": {
         "operationId": "CourseEnrollmentController_enrol",
@@ -41262,6 +41364,39 @@
             "description": "null means still studying there."
           }
         }
+      },
+      "CompleteIdentityDto": {
+        "type": "object",
+        "properties": {
+          "firstName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "lastName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "handle": {
+            "type": "string",
+            "description": "The username, with or without a leading \"@\". Checked by `checkHandleShape`; its words are the server's.",
+            "maxLength": 60
+          }
+        }
+      },
+      "ChangeHandleDto": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string",
+            "description": "The username, with or without a leading \"@\". Checked by `checkHandleShape`; its words are the server's.",
+            "maxLength": 60
+          }
+        },
+        "required": [
+          "handle"
+        ]
       },
       "RecordRecentSearchDto": {
         "type": "object",
@@ -58065,6 +58200,48 @@
           "media",
           "position",
           "createdAt"
+        ]
+      },
+      "HandleAvailabilityView": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "handle",
+          "available",
+          "message"
+        ]
+      },
+      "IdentityView": {
+        "type": "object",
+        "properties": {
+          "firstName": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastName": {
+            "type": "string",
+            "nullable": true
+          },
+          "handle": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "firstName",
+          "lastName",
+          "handle"
         ]
       },
       "EnrolResponse": {
