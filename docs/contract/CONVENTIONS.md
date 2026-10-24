@@ -3277,3 +3277,25 @@ number. The provider's own fee on a send is named only when it takes the send,
 so `GET /money/fx/sends/quote` has `providerFeeMinor: null` and the receipt
 carries what was charged. WAWU's fee per currency comes from config and is 0
 until the owner names it (R-10).
+
+## 28. Send abroad (NUV-11, R-84)
+
+A person pays a foreign bank account or a mobile money wallet from any of their accounts. Every route is under `/api/hub/money/abroad`, needs an open naira wallet (R-6), reaches the provider only through `WALLET_PROVIDER` (its `abroad` side; a provider without one, Fintava, answers `409 currency_not_supported`), and follows section 1a for amounts (`...Minor` beside a currency field; WAWU's fee is naira, `wawuFeeKobo`).
+
+| Route | What it does |
+| --- | --- |
+| `GET /money/abroad/corridors` | the product switch (`enabled`), WAWU's fee, and the countries: each with its currency, whether it is `available` (and why not), and its ways (`bank`, `mobile_money`), schemes and the exact fields to ask for each (key, label, kind, pattern, hint, options) |
+| `GET /money/abroad/banks/{country}` | the provider's bank directory for one country (a `bank` field's picker) |
+| `GET /money/abroad/sources` | the accounts to send from, with the provider's balance read now |
+| `GET`, `POST /money/abroad/recipients`, `DELETE /money/abroad/recipients/{id}` | saved recipients; saving takes the country, the way, the scheme when there is a choice, the name on the account and exactly the corridor's fields; only the last four characters are kept here; 201 first, 200 for one already saved |
+| `POST /money/abroad/quotes` | what a send delivers and costs: the provider's rate and real hold when the currencies differ (a WAWU hold of 10 minutes when they are the same), both amounts, WAWU's fee; `side` says which amount was typed |
+| `POST /money/abroad/sends` | sends at a held quote, once: `Idempotency-Key` and PIN or device approval; answers 201 with the send (`sending` or `pending` until the provider decides; poll `GET /money/abroad/sends/{id}`); the same key and body answer the first result again |
+| `GET /money/abroad/sends`, `GET /money/abroad/sends/{id}` | the person's sends, newest first (cursor page, section 6), and one send |
+
+Admin (`/api/hub/admin/money/abroad`, superadmin and finance only): `GET sends` (filters `wawuUserId`, `status`, a cursor page), `GET sends/{id}`, `POST sends/{id}/cancel`, `POST people/{wawuUserId}/freeze` and `/unfreeze` (a reason; one `AbroadAdminAudit` row each; a repeat changes nothing and writes no second row). Cancel stands only for a send the provider never received, found by a complete search of its records; the provider has no cancel call, so a send it holds is `409 send_not_cancellable`.
+
+**Errors.** The usual money errors (section 3) plus `fx_switched_off` (the product is off), `account_frozen` (423, the person is frozen), `quote_expired`, `fx_account_not_open`, `provider_declined`, and four of this task: `corridor_not_supported` (422), `recipient_details_invalid` (422, the refused fields by key in `reason.fields`), `rate_unavailable` (409, the provider has no rate for the pair now) and `send_not_cancellable` (409). `amount_out_of_range` carries `minimumMinor` or `maximumMinor` and the `currency` they are in.
+
+**Settings** (admin, group "Send abroad"): `abroad.enabled` (1, on), `abroad.wawu_fee_kobo` (0, R-10), `abroad.max_per_send` and `abroad.max_per_day` (lines like `USD 500000`, none until named), `abroad.corridors_off` (two-letter codes; Uganda, Mexico, Singapore and Hong Kong while the provider's dev server refuses them).
+
+**What the app is told, and not.** The provider's own fee is named only when it takes the send, so a quote has `providerFeeMinor: null` and the receipt carries what was charged. A send is a row first (`sending`); a lost answer is found again by its reference (`wawu-abroad-<id>`), never sent a second time; a send nobody can find after 30 minutes is `needs_review` and waits for a person. WAWU's fee is taken from the naira wallet after the provider takes the send; one that cannot be taken is tried again by the sweep, never fails the send, and shows as owed in the admin list.
