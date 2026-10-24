@@ -3332,6 +3332,13 @@ Admin (`/api/hub/admin/money/fx`, superadmin and finance only):
 `GET people/{wawuUserId}/accounts`, `GET operations` (swaps and sends, filters
 `wawuUserId`, `kind`, `status`, a cursor page), `GET operations/{id}`, and
 `POST accounts/{id}/freeze` and `/unfreeze` (a reason; one audit row each).
+`GET currencies` (OPS-27, read only) answers the nine currencies with the places
+each counts (`decimals`, so a coin is shown as the Hub counts it), the switch
+(`enabled`), WAWU's fee on a swap and on a crypto send (`swapFeeMinor`,
+`sendFeeMinor`, 0 until named) and the daily limit (`dailyLimitMinor`, null for
+none), the three product switches, and the naira side (`swapFeeKobo`,
+`dailyLimitKobo`). The switches change in `PATCH /admin/plan-settings`
+(`fx.currency.<CODE>.on`, `fx.product.<product>.on`); fees and limits are config.
 
 **Errors.** The usual money errors (section 3) plus, for these routes:
 `fx_switched_off` (409: a currency or a product is off), `quote_expired` (409:
@@ -3411,6 +3418,9 @@ taken, and the investment never waits for it). The admin routes (superadmin and
 finance; each act writes an audit row) list orders and `freeze` (the person
 cannot confirm or withdraw), `unfreeze` and `cancel` (only a reservation: the
 provider has no call to undo an investment that is made).
+`GET /admin/capital/orders/settings` (OPS-27, read only) answers the switch
+(`enabled`), the three limits (`minKobo`, `maxKobo`, `dailyMaxKobo`, null for
+none) and WAWU's fee (`feeFlatKobo`, `feeBasisPoints`).
 
 **The ledger.** The purchase is one `out` row (reference `wawu-cap-<order>`),
 the payout one `in` row (`wawu-cap-payout-<order>`), the fee one `out` row
@@ -3480,6 +3490,10 @@ switches and no spending limits (Nuvion serves none): those are not routes.
   `GET` (filter by `state` or `wawuUserId`, cursor page), `POST {id}/freeze`,
   `POST {id}/unfreeze`, `POST {id}/cancel`. By account id only: no number,
   name or phone is read or returned.
+  `GET settings` (OPS-27, read only) answers the switch (`enabled`, the plan
+  setting `cards.enabled`), Nuvion's fee and WAWU's fee in kobo
+  (`providerFeeKobo`, null while unset; `wawuFeeKobo`) and the two counts
+  (`maxActive`, `maxPerDay`).
 - Nuvion's own events (`cards.created`, `.frozen`, `.unfrozen`, `.deleted`)
   keep the Hub's row in step (`src/nuvion/handlers/cards.handler.ts`); a
   frozen or unfrozen event is followed by reading the card's status, so a late

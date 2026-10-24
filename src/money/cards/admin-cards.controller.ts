@@ -18,14 +18,18 @@ import { AdminAuthGuard } from '../../admin/auth/guards/admin-auth.guard';
 import { AdminRolesGuard } from '../../admin/auth/guards/admin-roles.guard';
 import { AdminCardsService } from './admin-cards.service';
 import { AdminCardsQueryDto } from './card-request.dto';
-import type { AdminCardPage, CardView } from './card-view.type';
+import type {
+  AdminCardPage,
+  AdminCardSettingsView,
+  CardView,
+} from './card-view.type';
 
 /**
  * The WAWU card for support (task WALLET-31) -- `/api/hub/admin/money/cards/*`
  * once the global prefix is applied.
  *
  * ── ROLE MATRIX ───────────────────────────────────────────────────────────
- *   list, freeze, unfreeze, cancel   superadmin, finance
+ *   settings, list, freeze, unfreeze, cancel   superadmin, finance
  *   reviewer, support                refused entirely
  *
  * AdminRolesGuard does not treat superadmin as implicitly allowed, so each
@@ -36,6 +40,14 @@ import type { AdminCardPage, CardView } from './card-view.type';
 @Controller('admin/money/cards')
 export class AdminCardsController {
   constructor(private readonly cards: AdminCardsService) {}
+
+  /** The card switch, the two fees and the two counts in force. Read only (task OPS-27). */
+  @AdminRoles(AdminRole.superadmin, AdminRole.finance)
+  @Get('settings')
+  @Header('Cache-Control', 'no-store')
+  settings(): AdminCardSettingsView {
+    return this.cards.cardSettings();
+  }
 
   /** Cards on the system, newest first, a cursor page; filter by state or by one person. */
   @AdminRoles(AdminRole.superadmin, AdminRole.finance)

@@ -9,9 +9,16 @@ import {
   AdminOpsAuditService,
 } from '../../common/audit/admin-ops-audit.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import type { OpenWallet } from '../gate/wallet-gate';
 import type { AdminCardsQueryDto } from './card-request.dto';
-import type { AdminCardPage, AdminCardView, CardView } from './card-view.type';
+import { CARDS_ENABLED_SETTING, CardSettings } from './card-config';
+import type {
+  AdminCardPage,
+  AdminCardSettingsView,
+  AdminCardView,
+  CardView,
+} from './card-view.type';
 import { cardView, WalletCardService } from './wallet-card.service';
 
 type Row = Prisma.WalletCardGetPayload<object>;
@@ -51,7 +58,26 @@ export class AdminCardsService {
     private readonly prisma: PrismaService,
     private readonly cards: WalletCardService,
     private readonly audit: AdminOpsAuditService,
+    private readonly settings: CardSettings,
+    private readonly plan: PlanSettingsService,
   ) {}
+
+  /** The switch, the two fees and the two counts in force (task OPS-27). Read only. */
+  cardSettings(): AdminCardSettingsView {
+    let enabled = false;
+    try {
+      enabled = this.plan.number(CARDS_ENABLED_SETTING) === 1;
+    } catch {
+      // A switch that cannot be read is shown off, as the card routes treat it.
+    }
+    return {
+      enabled,
+      providerFeeKobo: this.settings.providerFeeKobo,
+      wawuFeeKobo: this.settings.wawuFeeKobo,
+      maxActive: this.settings.maxActive,
+      maxPerDay: this.settings.maxPerDay,
+    };
+  }
 
   async list(query: AdminCardsQueryDto): Promise<AdminCardPage> {
     const limit = query.limit ?? 20;
