@@ -107,3 +107,21 @@ export interface AdminCardPage {
   items: AdminCardView[];
   nextCursor: string | null;
 }
+
+/**
+ * What is in force for the WAWU card, for the dashboard (task OPS-27, R-10,
+ * R-84). Read only: the switch is the admin setting `cards.enabled`; the fees
+ * and the two counts come from config.
+ */
+export interface AdminCardSettingsView {
+  /** The switch: off closes new cards (a card a person holds can still be frozen or blocked). */
+  enabled: boolean;
+  /** Nuvion's fee for making a card, in kobo; null while it is not set (making a card is then refused). */
+  providerFeeKobo: number | null;
+  /** WAWU's own fee on top, in kobo; 0 when none is set. */
+  wawuFeeKobo: number;
+  /** Cards a person may hold at once. */
+  maxActive: number;
+  /** Cards a person may ask for in a Lagos day. */
+  maxPerDay: number;
+}

@@ -30,6 +30,7 @@ const fx = routes.filter((r) => r.route.includes('/money/fx'));
 describe('the foreign-currency contract (WALLET-21)', () => {
   it('has the customer routes and the admin routes, each served and built by WALLET-21', () => {
     expect(fx.map((r) => r.route).sort()).toEqual([
+      'GET /admin/money/fx/currencies',
       'GET /admin/money/fx/operations',
       'GET /admin/money/fx/operations/{id}',
       'GET /admin/money/fx/people/{wawuUserId}/accounts',
@@ -54,7 +55,9 @@ describe('the foreign-currency contract (WALLET-21)', () => {
       });
       expect({ route, builtBy: op['x-wawu-built-by'] }).toEqual({
         route,
-        builtBy: 'WALLET-21',
+        // The one read the dashboard added on top (OPS-27); every other route is WALLET-21's.
+        builtBy:
+          route === 'GET /admin/money/fx/currencies' ? 'OPS-27' : 'WALLET-21',
       });
     }
   });
