@@ -137,22 +137,23 @@ describe('NuvionFxArea (WALLET-21)', () => {
 
   it('keeps the account when its details are not issued yet (dev: CAD and AED answered 503), and issues them on a later read', async () => {
     fx.detailsMode = 'unavailable';
-    const { account, details } = await open('CAD');
+    const { account, details, detailsRefusal: refusal } = await open('CAD');
     expect(details).toBeNull();
+    expect(refusal).toMatch(/partner services is temporarily unavailable/);
     fx.detailsMode = 'pending';
     const again = await area.readDetails(
       PERSON,
       { accountId: account.accountId, currency: 'CAD', chain: null },
       true,
     );
-    expect(again?.status).toBe('pending');
+    expect(again.details?.status).toBe('pending');
     fx.details.get(account.accountId)!.status = 'active';
     const done = await area.readDetails(
       PERSON,
       { accountId: account.accountId, currency: 'CAD', chain: null },
       false,
     );
-    expect(done?.status).toBe('active');
+    expect(done.details?.status).toBe('active');
   });
 
   it('answers a second chain on one account with the details it has (one account, one wallet)', async () => {
@@ -162,7 +163,7 @@ describe('NuvionFxArea (WALLET-21)', () => {
       { accountId: account.accountId, currency: 'USDC', chain: 'base' },
       true,
     );
-    expect(d?.chain).toBe('eth');
+    expect(d.details?.chain).toBe('eth');
   });
 
   it("quotes with the provider's real expiry and a decimal rate, from the naira wallet's account", async () => {
@@ -292,6 +293,31 @@ describe('NuvionFxArea (WALLET-21)', () => {
       amount: 25,
       currency: 'USD',
     });
+  });
+
+  it("sends WAWU's fee out of the naira wallet to the collector's routing number, never to the payer's own account (verifier H1)", async () => {
+    const collector = fx.addCollector('0099990009', 'NGN');
+    const ref = `wawu-fx-h1-${seq}`;
+    const t = await area.swap({
+      person: PERSON,
+      reference: ref,
+      quoteId: null,
+      from: { currency: 'NGN', accountId: null },
+      to: { currency: 'NGN', accountId: null, ban: '0099990009' },
+      amountFromMinor: 500n,
+      narration: 'WAWU fee',
+    });
+    expect(t.status).toBe('completed');
+    const sent = standin.seen
+      .filter((r) => r.path === '/transfers' && r.method === 'POST')
+      .pop()?.body;
+    expect(sent).toMatchObject({
+      account_id: FX_NGN_ACCOUNT,
+      nuvion_ban: '0099990009',
+      currency: 'NGN',
+      amount: 500,
+    });
+    expect(fx.balanceOf(collector.id)).toBe(500);
   });
 
   it('reads a pending transfer as pending, and finds one again by its reference', async () => {

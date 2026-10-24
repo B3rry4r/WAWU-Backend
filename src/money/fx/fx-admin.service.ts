@@ -57,6 +57,12 @@ export function operationView(o: FxOperation): AdminFxOperationView {
     amountToMinor: numOrNull(o.amountToMinor),
     providerFeeMinor: numOrNull(o.providerFeeMinor),
     wawuFeeMinor: num(o.wawuFeeMinor),
+    feeLeg:
+      o.feeLeg === 'done' || o.feeLeg === 'uncollected'
+        ? o.feeLeg
+        : o.feeLeg
+          ? 'owed'
+          : null,
     chain: (o.chain as FxChain | null) ?? null,
     address: o.address,
     reference: o.reference,
@@ -117,6 +123,7 @@ export class FxAdminService {
               },
               false,
             )
+            .then((read) => read.details)
             .catch(() => null);
         }
         return {

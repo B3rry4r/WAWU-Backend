@@ -92,6 +92,15 @@ export interface FxAccountView {
   /** The provider's balance; null when the provider could not be asked (try again). */
   balance: FxBalanceView | null;
   details: FxReceivingDetailsView | null;
+  /**
+   * Where the receiving details stand: `ready` (issued and active), `pending`
+   * (the provider is issuing them), or `unavailable` (the provider would not
+   * issue them just now: `detailsNote` has its words). The app says exactly
+   * this and promises nothing about when they arrive.
+   */
+  detailsStatus: 'ready' | 'pending' | 'unavailable';
+  /** With `unavailable`: the provider's own words; null otherwise. */
+  detailsNote: string | null;
   openedAt: string;
 }
 
@@ -252,6 +261,12 @@ export interface AdminFxOperationView {
   amountToMinor: number | null;
   providerFeeMinor: number | null;
   wawuFeeMinor: number;
+  /**
+   * WAWU's fee on the operation: `done` (collected, confirmed by the provider),
+   * `owed` (still to be collected), `uncollected` (refused three times and given
+   * back: `wawuFeeMinor` is then 0), or null when there was no fee.
+   */
+  feeLeg: 'done' | 'owed' | 'uncollected' | null;
   /** A send's chain and address; null on a swap. */
   chain: FxChain | null;
   address: string | null;
