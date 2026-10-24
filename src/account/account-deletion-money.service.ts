@@ -71,6 +71,9 @@ export const DELETION_BLOCKED_MESSAGES = {
   opening: 'Your wallet is still being set up. Try again in a few minutes.',
   fxBalance:
     'Move the money out of your other currency accounts first. Swap it to naira and withdraw it, or send it out, then delete your account.',
+  /** The same, for a person who has no naira account (a wallet outside Nigeria): there is nothing to swap into, so it only says send. */
+  fxBalanceAbroad:
+    'Move the money out of your accounts first. Send it out, then delete your account.',
   fxUnreadable:
     'We could not check your other currency accounts. Your money is safe. Try again in a moment.',
   inFlight:
@@ -84,16 +87,34 @@ export const DELETION_BLOCKED_MESSAGES = {
 /**
  * The one sentence for a set of blockers: the wallet's money leads, then the
  * foreign accounts', then Capital's; a set that is only "wait" gets the
- * sentence for waiting.
+ * sentence for waiting. An account that could not be read is "try again", and
+ * it is said beside whatever else applies (SWEEP-MONEY-6, FX-A deletion): a
+ * mixed set never reads as only "your money is on its way".
  */
-function deletionBlockedMessage(blockers: readonly DeletionBlocker[]): string {
+function deletionBlockedMessage(
+  blockers: readonly DeletionBlocker[],
+  hasNairaWallet: boolean,
+): string {
+  const rest = blockers.filter((b) => b !== 'fx_balance_unreadable');
+  if (rest.length === 0) return DELETION_BLOCKED_MESSAGES.fxUnreadable;
+  const lead = leadMessage(rest, hasNairaWallet);
+  return rest.length === blockers.length
+    ? lead
+    : `${lead} ${DELETION_BLOCKED_MESSAGES.fxUnreadable}`;
+}
+
+function leadMessage(
+  blockers: readonly DeletionBlocker[],
+  hasNairaWallet: boolean,
+): string {
   const m = DELETION_BLOCKED_MESSAGES;
   if (blockers.includes('wallet_balance')) return m.balance;
-  if (blockers.includes('fx_balance')) return m.fxBalance;
+  // Worded by who the person is (SWEEP-MONEY-6, G-WALLET-41-6): a person with no naira account is never told to swap into naira.
+  if (blockers.includes('fx_balance')) {
+    return hasNairaWallet ? m.fxBalance : m.fxBalanceAbroad;
+  }
   if (blockers.includes('capital_holding')) return m.capitalHolding;
   if (blockers.every((b) => b === 'wallet_opening')) return m.opening;
-  if (blockers.every((b) => b === 'fx_balance_unreadable'))
-    return m.fxUnreadable;
   if (
     blockers.every(
       (b) => b === 'fx_operation_pending' || b === 'capital_order_pending',
@@ -111,7 +132,7 @@ const CAPITAL_CLOSED_LIFECYCLES = ['WITHDRAWN', 'CLOSED', 'REFUNDED'];
 export class AccountDeletionBlockedError extends HttpException {
   constructor(check: DeletionMoneyCheck) {
     const blockers = check.blockers;
-    const message = deletionBlockedMessage(blockers);
+    const message = deletionBlockedMessage(blockers, check.wallet !== null);
     super(
       {
         message,
@@ -421,10 +442,12 @@ export class AccountDeletionMoneyService {
       rows.map(async (row): Promise<'money' | 'empty' | 'unreadable'> => {
         if (!fx || !row.providerAccountId) return 'unreadable';
         if (!isRowOf(this.provider.name, row.provider)) {
+          // A server acts only on its own provider's rows (R-39): a row left by another provider (after a rollback) is neither read
+          // nor called unreadable, so it does not hold a deletion for as long as it exists (SWEEP-MONEY-6, FX-A deletion).
           this.logger.warn(
-            `deletion: a foreign account is held by another provider than ${this.provider.label}; not asked`,
+            `deletion: a foreign account is held by another provider than ${this.provider.label}; not asked, not counted`,
           );
-          return 'unreadable';
+          return 'empty';
         }
         try {
           const a = await fx.readAccount(
@@ -452,6 +475,26 @@ export class AccountDeletionMoneyService {
     if (states.includes('money')) blockers.push('fx_balance');
     if (states.includes('unreadable')) blockers.push('fx_balance_unreadable');
     return blockers;
+  }
+
+  /**
+   * The foreign accounts looked at once more, for the deletion request after it has taken its claim (SWEEP-MONEY-6, FX-A deletion):
+   * money that landed between the first look and the claim is seen here. Foreign accounts cannot be frozen, so this narrows the
+   * window to the one read and does not close it; a sweep catches the rest.
+   */
+  async foreignCheck(
+    wawuUserId: string,
+    wallet: { walletId: string } | null,
+  ): Promise<DeletionBlocker[]> {
+    const rows = await this.prisma.fxAccount.findMany({
+      where: { wawuUserId, providerAccountId: { not: null } },
+      select: {
+        provider: true,
+        providerAccountId: true,
+        providerCustomerId: true,
+      },
+    });
+    return this.foreignBlockers(rows, wallet);
   }
 
   /** The provider's balance in kobo, the larger of available and booked. */

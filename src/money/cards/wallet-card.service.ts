@@ -63,7 +63,7 @@ const LIMIT_ACTIVE_MESSAGE =
 const LIMIT_DAY_MESSAGE =
   'You have asked for the most cards one person can in a day. Try again tomorrow.';
 const BLOCKED_MESSAGE = 'This card is blocked and cannot be used again.';
-const USED_MESSAGE =
+export const USED_MESSAGE =
   'This single-use card was used once and cannot be used again.';
 /** What the card's fee transfer is called at the provider, as a send's fee leg is. */
 const CARD_FEE_NARRATION = 'WAWU card fee';

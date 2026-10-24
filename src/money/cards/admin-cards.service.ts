@@ -19,7 +19,12 @@ import type {
   AdminCardView,
   CardView,
 } from './card-view.type';
-import { cardView, WalletCardService } from './wallet-card.service';
+import { MoneyError } from '../money-error';
+import {
+  cardView,
+  USED_MESSAGE,
+  WalletCardService,
+} from './wallet-card.service';
 
 type Row = Prisma.WalletCardGetPayload<object>;
 
@@ -150,6 +155,11 @@ export class AdminCardsService {
       );
     }
     const open: OpenWallet = { wawuUserId: row.wawuUserId, ...wallet };
+    // A used single-use card is already unusable: nothing is blocked, so it is refused in the Hub's own shape and no audit row says
+    // otherwise (SWEEP-MONEY-6, WALLET-31 L6, lead ruling).
+    if (row.state === 'used') {
+      throw new MoneyError('card_blocked', USED_MESSAGE);
+    }
     // A repeat changes nothing and is not audited a second time (round 1, L6).
     if (
       (action === 'admin-freeze' &&

@@ -1,4 +1,7 @@
-import type { CapitalOrder as OrderRow } from '../../generated/prisma/client';
+import type {
+  CapitalOrder as OrderRow,
+  Prisma,
+} from '../../generated/prisma/client';
 import type {
   CapitalAccount,
   CapitalProduct,
@@ -43,6 +46,14 @@ export const CAPITAL_ENDED_STATES = [
 /** Provider holding states after which nothing more happens. */
 const PAID_OUT = new Set(['WITHDRAWN', 'CLOSED', 'REFUNDED']);
 const PAYING_OUT = new Set(['EARLY_LIQUIDATING', 'CLOSING']);
+
+/**
+ * The holding is not paid out. An order that has no lifecycle yet (`confirming`, `review`) is not over: `NOT (lifecycle IN (...))`
+ * is unknown for a NULL in SQL and drops the row, so the NULL is named (SWEEP-MONEY-6, NUV-12 N1).
+ */
+export const NOT_PAID_OUT: Prisma.CapitalOrderWhereInput = {
+  OR: [{ lifecycle: null }, { lifecycle: { notIn: [...PAID_OUT] } }],
+};
 
 export function isTerminalLifecycle(lifecycle: string | null): boolean {
   return lifecycle !== null && PAID_OUT.has(lifecycle);

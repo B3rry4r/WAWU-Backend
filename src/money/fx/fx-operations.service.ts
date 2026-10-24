@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import type { FxAccount, FxOperation } from '../../../generated/prisma/client';
+import type {
+  FxAccount,
+  FxOperation,
+  Prisma,
+} from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { type OpenWallet, worldWalletOf } from '../gate/wallet-gate';
 import { LedgerService } from '../ledger/ledger.service';
@@ -591,10 +595,7 @@ export class FxOperationsService {
       }
     }
     if (result.state === 'completed') {
-      await this.prisma.fxOperation.update({
-        where: { id: op.id },
-        data: { feeLeg: 'done' },
-      });
+      await this.moveFeeLeg(op, { feeLeg: 'done' });
       if (result.platformAccount) {
         await this.ledgerFee(wallet, op, reference, result.platformAccount);
       }
@@ -605,22 +606,36 @@ export class FxOperationsService {
         this.logger.error(
           `fx ${op.id}: WAWU's fee was refused ${FEE_ATTEMPTS} times; given back, not collected`,
         );
-        await this.prisma.fxOperation.update({
-          where: { id: op.id },
-          data: { feeLeg: 'uncollected', wawuFeeMinor: 0n },
-        });
+        await this.moveFeeLeg(op, { feeLeg: 'uncollected', wawuFeeMinor: 0n });
       } else {
-        await this.prisma.fxOperation.update({
-          where: { id: op.id },
-          data: { feeLeg: `owed:${attempt + 1}` },
-        });
+        await this.moveFeeLeg(op, { feeLeg: `owed:${attempt + 1}` });
       }
       return;
     }
-    await this.prisma.fxOperation.update({
-      where: { id: op.id },
-      data: { feeLeg: attempt === 1 ? 'owed' : `owed:${attempt}` },
+    await this.moveFeeLeg(op, {
+      feeLeg: attempt === 1 ? 'owed' : `owed:${attempt}`,
     });
+  }
+
+  /**
+   * Moves the fee leg from the state this call READ to the next one (compare-and-set, SWEEP-MONEY-6, WALLET-21 L2): a caller
+   * holding an older copy of the operation (the sweep's list, a webhook's look) writes nothing over a newer state, and the next
+   * pass starts from the row as it now is. False when the row had moved.
+   */
+  private async moveFeeLeg(
+    op: FxOperation,
+    data: Prisma.FxOperationUpdateManyMutationInput,
+  ): Promise<boolean> {
+    const { count } = await this.prisma.fxOperation.updateMany({
+      where: { id: op.id, feeLeg: op.feeLeg },
+      data,
+    });
+    if (count !== 1) {
+      this.logger.warn(
+        `fx ${op.id}: the fee leg moved while it was being looked at (${op.feeLeg ?? 'new'}); the next pass starts from where it is`,
+      );
+    }
+    return count === 1;
   }
 
   /** The naira fee: the naira send's own path, a book transfer to WAWU's account. */
