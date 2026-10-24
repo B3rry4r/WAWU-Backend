@@ -97,6 +97,8 @@ export function withdrawBlock(
   if (row.frozenAt !== null) return 'frozen';
   const l = row.lifecycle;
   if (l === 'MATURED') return null;
+  // The money is already on its way out, or has been paid out.
+  if (isTerminalLifecycle(l)) return 'not_invested';
   if (l !== 'ACTIVE' && l !== null) return 'in_progress';
   if (quote?.locked === true) return 'locked';
   if (quote?.allowEarlyWithdrawal === false) return 'not_allowed';

@@ -902,10 +902,8 @@ export class CapitalService {
       ) {
         const fresh = await this.refresh(wallet, row);
         const view = orderView(fresh, new Date());
-        if (
-          statusOf(fresh, new Date()) === 'paying_out' ||
-          statusOf(fresh, new Date()) === 'paid_out'
-        ) {
+        // Already going out (a lost answer, a second device): that is the answer.
+        if (statusOf(fresh, new Date()) === 'paying_out') {
           await this.keys.finish(scope, 201, capitalBody(view));
           return view;
         }
