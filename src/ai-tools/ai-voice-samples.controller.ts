@@ -38,6 +38,9 @@ export class AiVoiceSamplesController {
       : null;
     if (!sample) throw new NotFoundException('We could not find that sample.');
     // The audio itself, not the Hub's JSON envelope (the player reads it as a file).
+    // The Hub's default is same-origin: a web app on another address would have its player
+    // blocked ("NotSameOrigin"), so this one public preview says any page may play it.
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     res.type(sample.contentType).send(sample.audio);
   }
 }

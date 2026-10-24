@@ -160,6 +160,8 @@ describe('AITOOLS-07: VoiceOver samples, your own voice, Save and Use in a produ
     expect(played.status).toBe(200);
     expect(played.headers['content-type']).toBe('audio/mpeg');
     expect(played.headers['cache-control']).toBe('public, max-age=3600');
+    // Helmet's default (same-origin) would block a web player on another address; the sample says any page may play it.
+    expect(played.headers['cross-origin-resource-policy']).toBe('cross-origin');
     expect(Number(played.headers['content-length'])).toBeGreaterThan(0);
     // A voice that is not listed is a 404.
     expect((await h.http().get('/ai-tools/voices/nobody/sample')).status).toBe(
