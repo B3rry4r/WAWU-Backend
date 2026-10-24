@@ -151,6 +151,12 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // How far this person has read in each community (INBOX-01).
   { model: 'CommunityReadMarker', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'Notification', column: 'userWawuId', disposition: 'OWNED' },
+  // FIX-105 (R-81). The count behind a person's grouped "new messages" notice; goes with the person (and with its notification, by cascade).
+  {
+    model: 'CommunityMessageNotice',
+    column: 'userWawuId',
+    disposition: 'OWNED',
+  },
   { model: 'NotificationSettings', column: 'userWawuId', disposition: 'OWNED' },
   { model: 'PrivacySettings', column: 'userWawuId', disposition: 'OWNED' },
   // Whether this person wants TGIF on Today (HOME-11): theirs alone.

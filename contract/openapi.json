@@ -1390,7 +1390,7 @@
             }
           }
         },
-        "summary": "POST /uploads/release: takes back an upload the caller reserved and no\nlisting has claimed yet (a file removed or replaced in an unfinished\ndraft). Deletes the object and frees its space in one step. Only the\ncaller's own upload in content/preview or content/full; another person's\nkey, an unknown key and a key in any other folder all get the same 404,\nand a key a listing already uses gets a 409. Calling it again for a key\nalready released answers the same 200.",
+        "summary": "POST /uploads/release: takes back an upload the caller reserved and no\nlisting has claimed yet (a file removed or replaced in an unfinished\ndraft), or a chat upload no message carries (FIX-104 round 2: a failed or\ndeleted bubble). Deletes the object and frees its space in one step. Only\nthe caller's own upload in content/preview, content/full, chat/media or\nchat/file; another person's key, an unknown key and a key in any other\nfolder all get the same 404, and a key a listing or a message already\nuses gets a 409. Calling it again for a key already released answers the\nsame 200.",
         "tags": [
           "Storage"
         ]
@@ -18990,6 +18990,28 @@
         ]
       }
     },
+    "/api/hub/chats/attachment-rules": {
+      "get": {
+        "operationId": "ChatController_attachmentRules",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatAttachmentRules"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What a chat takes: types and sizes, from the Hub's own limits.",
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
     "/api/hub/chats/{chatId}": {
       "get": {
         "operationId": "ChatController_get",
@@ -19105,6 +19127,45 @@
             }
           }
         },
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}/messages/{messageId}/attachment": {
+      "get": {
+        "operationId": "ChatController_attachmentLink",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "messageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatAttachmentLink"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A fresh link to one message's photo, video or file. Only the two people in the chat get one.",
         "tags": [
           "Chat"
         ]
@@ -54166,6 +54227,39 @@
           "nextCursor"
         ]
       },
+      "ChatAttachmentRule": {
+        "type": "object",
+        "properties": {
+          "contentTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "maxBytes": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "contentTypes",
+          "maxBytes"
+        ]
+      },
+      "ChatAttachmentRules": {
+        "type": "object",
+        "properties": {
+          "media": {
+            "$ref": "#/components/schemas/ChatAttachmentRule"
+          },
+          "file": {
+            "$ref": "#/components/schemas/ChatAttachmentRule"
+          }
+        },
+        "required": [
+          "media",
+          "file"
+        ]
+      },
       "ChatMessagePage": {
         "type": "object",
         "properties": {
@@ -54183,6 +54277,30 @@
         "required": [
           "items",
           "nextCursor"
+        ]
+      },
+      "ChatAttachmentLink": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "url",
+          "expiresAt",
+          "contentType",
+          "name"
         ]
       },
       "ChatReadMark": {

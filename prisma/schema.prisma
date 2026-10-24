@@ -1438,6 +1438,9 @@ model CommunityMessage {
   /// message and counts the messages after a read mark: both walk one room's
   /// messages in time order, and this index serves them without a sort.
   @@index([communityId, sentAt])
+  /// FIX-105. The community notice sweep reads every message of a short time window across all rooms, so it needs the
+  /// messages in time order without a scan of the whole table.
+  @@index([sentAt])
 }
 
 /// INBOX-05 round 5 (verifier defect 21). The `Idempotency-Key` a sender gave when they posted a community message:
@@ -1703,6 +1706,9 @@ model Notification {
   /// the fields it always did. Rows written before ME-10 have none.
   target NotificationTarget?
 
+  /// FIX-105 (R-81). Set only on a grouped community message notice: its count.
+  communityMessageNotice CommunityMessageNotice?
+
   @@index([userWawuId])
   @@index([userWawuId, read])
   @@index([createdAt])
@@ -1742,6 +1748,46 @@ model NotificationTarget {
   @@index([actorWawuId])
 }
 
+/// FIX-105 (R-81). The count behind one grouped "new messages" notice: a person's notice for one community, kept while
+/// they have not opened the room or read the notice. A side table, not a column on Notification, so GET /notifications
+/// (protected, read by the web) is unchanged. The notice is "open" while its Notification is unread; opening the
+/// room or reading the notice closes it, and the next message after that is a new notice. `countedUpTo` is the end of
+/// the last time window folded into the count, so folding a window twice (a sweep that stopped halfway and ran
+/// again) changes nothing.
+model CommunityMessageNotice {
+  notificationId String       @id
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  userWawuId     String
+  communityId    String
+  messageCount   Int
+  /// When the newest message in the count was sent.
+  lastMessageAt  DateTime
+  countedUpTo    DateTime
+
+  @@index([userWawuId, communityId])
+}
+
+/// FIX-105 (R-81). The one row that says how far the community notice sweep has read: every message sent up to
+/// `countedUpTo` has been counted into notices. `leaseUntil` is the claim one Hub instance holds while it works, so two
+/// instances never fold the same window.
+model CommunityNoticeCursor {
+  id          Int       @id
+  countedUpTo DateTime
+  leaseUntil  DateTime?
+}
+
+/// FIX-105 round 2 (verifier finding H1). A room whose notices could not be written in a pass is listed here and tried
+/// again later by itself, so one room that keeps failing never holds the cursor (and so every other room's notices).
+/// `fromAt` is the start of the stretch not yet folded for the room; folding it again is safe because each person's
+/// notices for the room remember how far they have counted (the largest `countedUpTo` of their `CommunityMessageNotice`
+/// rows for it). No person's data: a room id and times only.
+model CommunityNoticeRetry {
+  communityId String   @id
+  fromAt      DateTime
+  retryAt     DateTime
+  attempts    Int      @default(1)
+}
+
 model NotificationSettings {
   userWawuId        String   @id
   newReplies        Boolean  @default(true)
@@ -1770,8 +1816,9 @@ model NotificationSettings {
   /// NULL means never asked, which behaves as ON.
   contentReviews    Boolean?
   /// "Community messages" in Settings (SETTINGS-07). NULL means never asked,
-  /// which behaves as ON. It gates nothing today: no community message kind
-  /// or sender exists yet, so this only stores the choice.
+  /// which behaves as ON. It gates the grouped "new messages" notice
+  /// (`community_messages`, FIX-105, R-81): off means that notice is neither
+  /// written nor pushed for this person.
   communityMessages Boolean?
 }
 

@@ -113,11 +113,13 @@ export class StorageController {
   /**
    * POST /uploads/release: takes back an upload the caller reserved and no
    * listing has claimed yet (a file removed or replaced in an unfinished
-   * draft). Deletes the object and frees its space in one step. Only the
-   * caller's own upload in content/preview or content/full; another person's
-   * key, an unknown key and a key in any other folder all get the same 404,
-   * and a key a listing already uses gets a 409. Calling it again for a key
-   * already released answers the same 200.
+   * draft), or a chat upload no message carries (FIX-104 round 2: a failed or
+   * deleted bubble). Deletes the object and frees its space in one step. Only
+   * the caller's own upload in content/preview, content/full, chat/media or
+   * chat/file; another person's key, an unknown key and a key in any other
+   * folder all get the same 404, and a key a listing or a message already
+   * uses gets a 409. Calling it again for a key already released answers the
+   * same 200.
    */
   @Post('release')
   @HttpCode(HttpStatus.OK)

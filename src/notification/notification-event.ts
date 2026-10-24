@@ -67,7 +67,10 @@ type CoreNotificationKind =
   | 'community_pass_ending'
   // INBOX-25 (R-71): a removed member's unused pass days were paid back.
   /** The unused days of a pass were paid back to the wallet. Recipient: the removed member. */
-  | 'community_pass_refunded';
+  | 'community_pass_refunded'
+  // FIX-105 (R-81): new messages in a community the person joined.
+  /** Other people posted in a community the person joined. One notice per person and room, counted. */
+  | 'community_messages';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -243,6 +246,24 @@ type NotificationEventCore =
       communityId: string;
       communityName: string;
       amount: number;
+    }
+  /**
+   * FIX-105 (R-81, owner, 24 Oct 2026: "New messages, grouped"). Other people
+   * posted in a community the person joined. Recipient: a member (or the
+   * host), never the person who posted. Several messages are ONE notice: the
+   * notice is updated (its count and its time) until the person opens the
+   * room or reads it, and the next message after that starts a new one.
+   * `messageCount` is how many messages from other people are in the notice.
+   * Written in batches by the community notice sweep
+   * (src/community-message/community-message-notice.service.ts), never one per
+   * message from a request; the tap opens the room (`about` names it).
+   */
+  | {
+      kind: 'community_messages';
+      userWawuId: string;
+      communityId: string;
+      communityName: string;
+      messageCount: number;
     };
 
 /** A pass's last day as the reminder writes it: "12 Nov 2026", Lagos time. */
@@ -720,6 +741,28 @@ export function composeNotification(
         actionLabel: 'Renew',
         imageUrl: null,
         actionHref: `/communities/${event.communityId}/renew`,
+        campaignId: null,
+      };
+
+    /**
+     * FIX-105 (R-81). The words of one grouped notice: how many messages and
+     * in which room. No message text and no sender name: a lock screen shows
+     * this, and the room shows the messages.
+     */
+    case 'community_messages':
+      return {
+        ...base,
+        title: 'New messages',
+        body:
+          event.messageCount === 1
+            ? `There is 1 new message in “${event.communityName}”.`
+            : `There are ${event.messageCount} new messages in “${event.communityName}”.`,
+        tone: 'info',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'Open room',
+        imageUrl: null,
+        actionHref: `/communities/${event.communityId}`,
         campaignId: null,
       };
 
@@ -1248,6 +1291,8 @@ export const NOTIFICATION_CATEGORY: Record<
   // INBOX-24. Default (agent), owner may override: under "Messages", beside
   // the room it belongs to.
   community_pass_ending: 'messages',
+  // FIX-105 (R-81). Under "Messages", beside the room it opens.
+  community_messages: 'messages',
   // WALLET-40. Default (agent), owner may override: under "Money", beside the
   // wallet it opens.
   wallet_ready: 'money',
@@ -1273,7 +1318,8 @@ export function targetFor(
   const target =
     event.about?.target ??
     (event.kind === 'community_join_approved' ||
-    event.kind === 'community_pass_ending'
+    event.kind === 'community_pass_ending' ||
+    event.kind === 'community_messages'
       ? { kind: 'community' as const, id: event.communityId }
       : event.kind === 'tgif_daily'
         ? { kind: 'tgif_day' as const, id: event.day }

@@ -7,6 +7,7 @@ import type {
   NotificationSettings,
   NotificationsResponse,
 } from '../common/types';
+import { NOW_UTC } from '../push/push-clock';
 import {
   composeNotification,
   targetFor,
@@ -21,6 +22,25 @@ import {
  * inside Postgres\' parameter limit and does not hold a write lock for long.
  */
 const CAMPAIGN_CHUNK = 500;
+
+/**
+ * Recipients per set of statements when community message notices are written
+ * (FIX-105). The writes for one chunk are a fixed handful of statements
+ * whatever the chunk holds.
+ */
+export const COMMUNITY_NOTICE_CHUNK = 500;
+
+/**
+ * One person's share of a window of community messages (FIX-105): how many
+ * messages from other people they have not read, the newest one's time, and
+ * when they last opened the room.
+ */
+export interface CommunityMessageEntry {
+  userWawuId: string;
+  add: number;
+  lastMessageAt: Date;
+  lastReadAt: Date | null;
+}
 
 /**
  * Either the shared client or an interactive-transaction client — same idiom
@@ -99,10 +119,11 @@ export const SETTINGS_GATE: Partial<Record<NotificationKind, SwitchName>> = {
   // each morning"): with it off nothing is written, and a notice already
   // written is not pushed.
   tgif_daily: 'tgifDaily',
-  // `communityMessages` is stored (Settings saves it) but gates NOTHING yet:
-  // no community message notification kind or sender exists. The task that
-  // adds that kind (and any other new kind) must add its entry here, or the
-  // switch can never mute it.
+  // FIX-105 (R-81, closes G-21). Z3 "Community messages" mutes the grouped
+  // notice for new messages in a room the person joined: with it off the notice
+  // is not written (a notice already written stays in the list) and is not
+  // pushed. Any other new kind must add its entry here, or no switch can mute it.
+  community_messages: 'communityMessages',
   //
   // INBOX-01's `community_join_approved` and `community_join_declined` are
   // deliberately NOT gated by `communityMessages`: they are not messages in a
@@ -390,6 +411,214 @@ export class NotificationService {
       })),
     });
     return written.count;
+  }
+
+  /**
+   * FIX-105 (R-81). Fold a window of new community messages into the
+   * recipients' grouped notices, in the caller's chunks of at most
+   * COMMUNITY_NOTICE_CHUNK people. Still the single write path, still composed
+   * by `composeNotification`.
+   *
+   * A person with an OPEN notice for this room (an unread one, newer than the
+   * last time they opened the room) has that notice UPDATED: its count goes up
+   * and its time moves to now. A person without one gets a new notice. A
+   * notice the person has read, or that is older than their last visit to the
+   * room, is closed, and the next message starts a new one. Nobody whose
+   * "Community messages" switch is off is written to or changed (an unread
+   * notice of theirs stays as it is). The caller counts only messages newer
+   * than the person's `countedUpTo` mark for the room, and a notice that
+   * already holds this window is left alone, so a window replayed counts once.
+   *
+   * Bounded: per chunk it reads three tables once (the switches, the open
+   * notices) and writes in one transaction with at most six statements, however
+   * many people are in the chunk or how many messages were sent. Errors are
+   * NOT swallowed: the sweep's window stays unfinished and is tried again.
+   * Does no network call.
+   */
+  async emitCommunityMessages(
+    community: { id: string; name: string },
+    entries: readonly CommunityMessageEntry[],
+    countedUpTo: Date,
+  ): Promise<{ created: number; updated: number }> {
+    let created = 0;
+    let updated = 0;
+    const wanted = entries.filter((e) => e.add > 0);
+    for (let i = 0; i < wanted.length; i += COMMUNITY_NOTICE_CHUNK) {
+      const chunk = wanted.slice(i, i + COMMUNITY_NOTICE_CHUNK);
+      const ids = chunk.map((e) => e.userWawuId);
+      const [off, open] = await Promise.all([
+        this.prisma.notificationSettings.findMany({
+          where: { userWawuId: { in: ids }, communityMessages: false },
+          select: { userWawuId: true },
+        }),
+        this.prisma.communityMessageNotice.findMany({
+          where: {
+            communityId: community.id,
+            userWawuId: { in: ids },
+            notification: { read: false, kind: 'community_messages' },
+          },
+          select: {
+            notificationId: true,
+            userWawuId: true,
+            messageCount: true,
+            lastMessageAt: true,
+            countedUpTo: true,
+          },
+          orderBy: { lastMessageAt: 'asc' },
+        }),
+      ]);
+      const muted = new Set(off.map((r) => r.userWawuId));
+      // The newest open notice of each person; any older unread one is stale.
+      const openBy = new Map(open.map((n) => [n.userWawuId, n]));
+      // A muted person's notices are left exactly as they are (not marked read).
+      const staleIds = new Set(
+        open
+          .filter((n) => !muted.has(n.userWawuId))
+          .map((n) => n.notificationId),
+      );
+
+      const toUpdate: Array<{
+        notificationId: string;
+        count: number;
+        lastMessageAt: Date;
+        body: string;
+      }> = [];
+      const toCreate: Array<{
+        id: string;
+        userWawuId: string;
+        count: number;
+        lastMessageAt: Date;
+      }> = [];
+      for (const entry of chunk) {
+        if (muted.has(entry.userWawuId)) continue;
+        const notice = openBy.get(entry.userWawuId);
+        const closed =
+          notice !== undefined &&
+          entry.lastReadAt !== null &&
+          entry.lastReadAt >= notice.lastMessageAt;
+        if (notice && !closed) {
+          staleIds.delete(notice.notificationId);
+          if (notice.countedUpTo >= countedUpTo) continue;
+          const count = notice.messageCount + entry.add;
+          toUpdate.push({
+            notificationId: notice.notificationId,
+            count,
+            lastMessageAt:
+              entry.lastMessageAt > notice.lastMessageAt
+                ? entry.lastMessageAt
+                : notice.lastMessageAt,
+            body: composeNotification({
+              kind: 'community_messages',
+              userWawuId: entry.userWawuId,
+              communityId: community.id,
+              communityName: community.name,
+              messageCount: count,
+            }).body,
+          });
+        } else {
+          toCreate.push({
+            id: randomUUID(),
+            userWawuId: entry.userWawuId,
+            count: entry.add,
+            lastMessageAt: entry.lastMessageAt,
+          });
+        }
+      }
+
+      const statements: Prisma.PrismaPromise<unknown>[] = [];
+      if (staleIds.size > 0) {
+        statements.push(
+          this.prisma.notification.updateMany({
+            where: { id: { in: [...staleIds] }, read: false },
+            data: { read: true },
+          }),
+        );
+      }
+      if (toUpdate.length > 0) {
+        // The notice moves to the top of the list (its time is now) with its
+        // new words; the count beside it moves in the same transaction.
+        statements.push(
+          this.prisma.$executeRaw`
+            UPDATE "Notification" n
+            SET "body" = v."body", "createdAt" = ${NOW_UTC}
+            FROM unnest(${toUpdate.map((u) => u.notificationId)}::text[], ${toUpdate.map((u) => u.body)}::text[]) AS v("id", "body")
+            WHERE n."id" = v."id"`,
+          this.prisma.$executeRaw`
+            UPDATE "CommunityMessageNotice" c
+            SET "messageCount" = v."count",
+                "lastMessageAt" = v."lastMessageAt"::timestamp,
+                "countedUpTo" = ${countedUpTo.toISOString()}::timestamp
+            FROM unnest(${toUpdate.map((u) => u.notificationId)}::text[], ${toUpdate.map((u) => u.count)}::int[], ${toUpdate.map((u) => u.lastMessageAt.toISOString())}::text[]) AS v("id", "count", "lastMessageAt")
+            WHERE c."notificationId" = v."id"`,
+        );
+      }
+      if (toCreate.length > 0) {
+        const drafts = toCreate.map((c) => ({
+          ...c,
+          draft: composeNotification({
+            kind: 'community_messages',
+            userWawuId: c.userWawuId,
+            communityId: community.id,
+            communityName: community.name,
+            messageCount: c.count,
+          }),
+        }));
+        statements.push(
+          this.prisma.notification.createMany({
+            data: drafts.map((d) => ({ id: d.id, ...d.draft })),
+          }),
+          this.prisma.notificationTarget.createMany({
+            data: drafts.map((d) => ({
+              notificationId: d.id,
+              targetKind: 'community',
+              targetId: community.id,
+              actorWawuId: null,
+            })),
+          }),
+          this.prisma.communityMessageNotice.createMany({
+            data: drafts.map((d) => ({
+              notificationId: d.id,
+              userWawuId: d.userWawuId,
+              communityId: community.id,
+              messageCount: d.count,
+              lastMessageAt: d.lastMessageAt,
+              countedUpTo,
+            })),
+          }),
+        );
+      }
+      if (statements.length > 0) await this.prisma.$transaction(statements);
+      created += toCreate.length;
+      updated += toUpdate.length;
+    }
+    return { created, updated };
+  }
+
+  /**
+   * FIX-105 (R-81). The person opened the room: their unread grouped notice
+   * for it is read, and the next message after this starts a new one. Never
+   * throws, so opening a room cannot fail because of a notice.
+   */
+  async closeCommunityMessages(
+    userWawuId: string,
+    communityId: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.notification.updateMany({
+        where: {
+          userWawuId,
+          kind: 'community_messages',
+          read: false,
+          target: { is: { targetKind: 'community', targetId: communityId } },
+        },
+        data: { read: true },
+      });
+    } catch (error) {
+      this.logger.error(
+        `Failed to close the community message notice for ${userWawuId}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+    }
   }
 
   private async isSuppressed(

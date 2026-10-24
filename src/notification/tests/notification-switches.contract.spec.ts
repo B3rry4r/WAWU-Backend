@@ -386,7 +386,7 @@ describe('Notification switches (contract, SETTINGS-07)', () => {
       });
     });
 
-    it('communityMessages=false mutes nothing today: no community message kind exists, and every kind that does exist is still delivered', async () => {
+    it('communityMessages=false mutes only the grouped community message notice: every other kind is still delivered', async () => {
       await patch(basicToken, { communityMessages: false }).expect(200);
       expect(
         await notifications.emit({
