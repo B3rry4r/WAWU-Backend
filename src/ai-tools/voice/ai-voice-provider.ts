@@ -74,6 +74,17 @@ export interface AiVoiceProvider {
   ): Promise<SpokenAudio>;
 
   /**
+   * Makes the audio on the provider's faster model (Quick voice,
+   * AITOOLS-02): the same voices as `speak`, the model set by
+   * `AI_VOICE_QUICK_MODEL`. A network call, with the same rules as `speak`.
+   * Throws `AiVoiceProviderError`.
+   */
+  speakQuick(
+    req: SpeakRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<SpokenAudio>;
+
+  /**
    * Says a name in the studio voice (VF3, VOICE-01): the first voice the Hub
    * lists. Free to the person, so the caller limits how often it runs. A
    * network call, with the same rules as `speak`.

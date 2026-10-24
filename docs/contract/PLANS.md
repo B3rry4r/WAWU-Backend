@@ -786,6 +786,42 @@ minutes it was priced in), `costPoints`, `audioUrl`, `message`, `createdAt`,
   `scripts/dev/voice-standin.cjs`, a local stand-in with the same wire shape.
   The fact that unblocks the real run: a provider key set on the Hub.
 
+### The one job pipeline, Quick voice and the job list (AITOOLS-02)
+
+Task AITOOLS-02, R-78, R-79. Every tool Studio lists runs through
+`AiJobService.createJob(tool, ...)`: price the request into the tool's units,
+check the quote, hold through POINTS-03, record the job, ask the provider after
+the answer with nothing held, store, COMMIT, mark done; any failure RELEASES.
+A tool is one file under `src/ai-tools/tools/` (id, route segment, plan action,
+unit, pricing, input kind, the one provider call, what the job returns) and one
+entry in `src/ai-tools/tools/index.ts`. VoiceOver is the first entry and its
+route, request, answer and behaviour are AITOOLS-01's. Additive fields only:
+
+| Route | Does |
+|---|---|
+| `POST /ai-tools/quick-voice/jobs` | Quick voice (R-79): a fast, cheaper read-aloud, the same voices as VoiceOver on the provider's faster model (`AI_VOICE_QUICK_MODEL`, optional, default `eleven_flash_v2_5`). Body `{ text, voiceId, quoteToken }` (a quote for the action `quick_voice_per_min`) and a required `Idempotency-Key`; every refusal is VoiceOver's. Priced by `points.action.quick_voice_per_min` (125 a minute, PROVISIONAL) over `ai.quick_voice_chars_per_minute` (900, PROVISIONAL `AITOOLS-CHARS-PER-MINUTE`). |
+| `GET /ai-tools/jobs` | The caller's own jobs of every tool, newest first, in cursor pages (CONVENTIONS section 6): `?cursor&limit` (1 to 100, default 20), answered `{ items: AiJobView[], nextCursor }` (`AiJobPage`). A cursor this list did not give is a plain `400`. Another person's job is never listed. |
+
+- **The catalogue.** A tool is listed only when its code is built and the
+  provider can run it (R-47): VoiceOver keeps AITOOLS-01's answer (listed, with
+  `enabled: false`, until the provider is set up); Quick voice is not listed
+  at all until it can run. Each entry's `input` gains `kind` (`text` now;
+  `prompt`, `file` and `chat` come with the tasks that need them), and its
+  `id` may be `quick-voice`. Daily, characters and minutes caps count Quick
+  voice and VoiceOver together.
+- **The result shape.** `AiJobView` gains `outputs`: a list of `{ kind: audio |
+  text | subtitles, url?, text? }`, filled once the job is `done` and empty
+  before. `audioUrl` stays and is the same link as the `audio` output.
+- **The migration** `20261101100000_ai_tool_job_outputs` adds three nullable
+  columns to `AiToolJob`: `outputs` (JSON), `providerRef` (text) and `inputRef`
+  (text). Rows written before it read back with all three empty and still serve
+  their audio by `audioKey`. `rollback.sql` drops the three columns and loses no
+  row; it refuses while a row holds an output that is not the job's own audio, a
+  provider id or an upload, since only these columns keep them.
+- **NOT RUN against the real provider.** Quick voice was built against
+  `scripts/dev/voice-standin.cjs`, whose route table answers `model_id` on the
+  speech route so a spec can see which model ran.
+
 ## 13. Hosting an event needs a tier (EVENTS-12)
 
 R-43, E21 "Needs a tier". `POST /events`, `PATCH /events/{id}` and

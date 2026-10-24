@@ -1,6 +1,11 @@
 import { createHash } from 'node:crypto';
-import { Inject, Injectable, Logger } from '@nestjs/common';
-import type { AiToolJob } from '../../generated/prisma/client';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Logger,
+} from '@nestjs/common';
+import type { AiToolJob, Prisma } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { isUniqueViolation } from '../money/prisma-unique';
 import { PlanSettingsService } from '../plan-settings/plan-settings.service';
@@ -28,22 +33,31 @@ import {
   UNAVAILABLE_MESSAGE,
   VOICE_UNKNOWN_MESSAGE,
 } from './ai-tools-error';
-import type { AiJobView } from './ai-tools-view.type';
-import type { CreateVoiceoverJobDto } from './ai-tools.dto';
+import type {
+  AiJobOutputView,
+  AiJobPage,
+  AiJobView,
+} from './ai-tools-view.type';
+import type { AiJobListQueryDto, CreateVoiceoverJobDto } from './ai-tools.dto';
+import type { AiTool, AiToolRequest, AiToolRunResult } from './tools/ai-tool';
+import { toolForAction } from './tools';
+import { VOICEOVER_TOOL } from './tools/voiceover.tool';
 import {
   AI_VOICE_PROVIDER,
   AiVoiceProviderError,
   type AiVoiceProvider,
 } from './voice/ai-voice-provider';
 
-/** The plan's action a VoiceOver job is priced by. */
-export const VOICEOVER_ACTION = 'voiceover_per_min';
-/** The setting: characters that make one minute of VoiceOver. */
-export const CHARS_PER_MINUTE_SETTING = 'ai.voiceover_chars_per_minute';
+export {
+  CHARS_PER_MINUTE_SETTING,
+  VOICEOVER_ACTION,
+} from './tools/voiceover.tool';
 
 const KEY_FORMAT = /^[A-Za-z0-9_-]{8,128}$/;
 /** The only try a job's hold has: a failed job is never retried, a new job (and key) is. */
 const ATTEMPT = 1;
+const CURSOR_PREFIX = 'j1.';
+export const BAD_CURSOR_MESSAGE = 'cursor is not one this list gave.';
 
 export interface CreatedJob {
   job: AiJobView;
@@ -51,19 +65,27 @@ export interface CreatedJob {
   replayed: boolean;
 }
 
+/** What the job row keeps of a run's outputs (`outputs` column): a stored key for audio, the words for text. */
+interface StoredOutput {
+  kind: AiJobOutputView['kind'];
+  key?: string;
+  text?: string;
+}
+
 /**
- * The runs of the AI tools (AITOOLS-01, R-43, PT2). A job is its points'
- * hold plus a row:
+ * THE ONE JOB PIPELINE of the AI tools (AITOOLS-01, AITOOLS-02, R-43, R-78,
+ * PT2). Every tool in the registry (`src/ai-tools/tools/`) runs through
+ * `createJob`; a job is its points' hold plus a row:
  *
- *   1. price the text (minutes from its length, the cost from the settings) and
+ *   1. price the request into the tool's units (the tool file says how) and
  *      check the quote the person saw still holds;
  *   2. hold the points through POINTS-03, which refuses over a cap (named) or
  *      a short balance and then holds nothing;
  *   3. record the job and answer `working`; the provider is asked after the
  *      answer, holding no transaction, no connection and no lock;
- *   4. audio back: store it, then COMMIT the hold (the deciding step), then
- *      mark the job done. Anything else, or a hold the stale sweep already
- *      gave back: RELEASE and mark it failed.
+ *   4. the tool's result back: store it, then COMMIT the hold (the deciding
+ *      step), then mark the job done. Anything else, or a hold the stale
+ *      sweep already gave back: RELEASE and mark it failed.
  *
  * A late finish and the stale-hold sweep cannot both win: the points service
  * lets one of commit and release settle a hold, and the job follows whichever
@@ -89,12 +111,24 @@ export class AiJobService {
     @Inject(AI_AUDIO_STORE) private readonly audio: AiAudioStore,
   ) {}
 
-  /** Characters that make one minute, from the settings. */
+  /** Characters that make one minute of VoiceOver, from the settings. */
   charsPerMinute(): number {
-    return this.settings.number(CHARS_PER_MINUTE_SETTING);
+    return this.settings.number(VOICEOVER_TOOL.input.charactersPerUnitSetting);
   }
 
-  async createVoiceover(
+  /** `POST /ai-tools/voiceover/jobs` (AITOOLS-01): the first tool of the pipeline, unchanged. */
+  createVoiceover(
+    wawuUserId: string,
+    idempotencyKey: string | undefined,
+    dto: CreateVoiceoverJobDto,
+    now: Date = new Date(),
+  ): Promise<CreatedJob> {
+    return this.createJob(VOICEOVER_TOOL, wawuUserId, idempotencyKey, dto, now);
+  }
+
+  /** Starts a job of `tool` for the person: the pipeline above. */
+  async createJob(
+    tool: AiTool,
     wawuUserId: string,
     idempotencyKey: string | undefined,
     dto: CreateVoiceoverJobDto,
@@ -103,9 +137,11 @@ export class AiJobService {
     if (!idempotencyKey || !KEY_FORMAT.test(idempotencyKey))
       throw new AiToolError('idempotency_key_required', KEY_REQUIRED_MESSAGE);
     const text = dto.text.trim();
+    const req: AiToolRequest = { kind: 'text', text, voiceId: dto.voiceId };
     const requestHash = hashRequest(
       wawuUserId,
       idempotencyKey,
+      tool.action,
       dto.voiceId,
       text,
     );
@@ -115,15 +151,14 @@ export class AiJobService {
     const earlier = await this.prisma.aiToolJob.findUnique({ where: { id } });
     if (earlier) return this.replay(earlier, requestHash);
 
-    if (!this.voice.configured)
+    if (!tool.enabled(this.voice))
       throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
     if (!this.voice.voices().some((v) => v.id === dto.voiceId))
       throw new AiToolError('ai_voice_unknown', VOICE_UNKNOWN_MESSAGE);
     if (text === '') throw new AiToolError('ai_text_empty', TEXT_EMPTY_MESSAGE);
 
-    const characters = Array.from(text).length;
-    const units = Math.max(1, Math.ceil(characters / this.charsPerMinute()));
-    const action = this.plan.actions.find((a) => a.id === VOICEOVER_ACTION);
+    const { units, characters } = tool.price(req, this.settings, this.plan);
+    const action = this.plan.actions.find((a) => a.id === tool.action);
     if (!action)
       throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
     const costPoints = action.points * units;
@@ -132,7 +167,7 @@ export class AiJobService {
     if (
       !claims ||
       claims.u !== wawuUserId ||
-      claims.a !== VOICEOVER_ACTION ||
+      claims.a !== tool.action ||
       claims.e < now.getTime() ||
       claims.c !== costPoints
     )
@@ -146,7 +181,7 @@ export class AiJobService {
     const held = await this.spend.hold(
       {
         wawuUserId,
-        action: VOICEOVER_ACTION,
+        action: tool.action,
         units,
         characters,
         reference: jobHoldReference(id, ATTEMPT),
@@ -158,6 +193,7 @@ export class AiJobService {
       {
         id,
         wawuUserId,
+        tool: tool.action,
         idempotencyKey,
         requestHash,
         voiceId: dto.voiceId,
@@ -171,7 +207,7 @@ export class AiJobService {
     if (row.replayed) return { job: await this.view(row.job), replayed: true };
 
     // Nothing is held open from here: the answer goes out, the run goes on.
-    this.start(row.job, held, text);
+    this.start(tool, row.job, held, req);
     return { job: await this.view(row.job), replayed: false };
   }
 
@@ -181,6 +217,40 @@ export class AiJobService {
     if (!row || row.wawuUserId !== wawuUserId)
       throw new AiToolError('not_found', JOB_NOT_FOUND_MESSAGE);
     return this.view(await this.reconcile(row));
+  }
+
+  /**
+   * The person's own jobs, newest first (`createdAt`, then id), in cursor
+   * pages (CONVENTIONS section 6). A cursor this list did not write is a
+   * plain 400. A `working` job on the page follows its hold like a read does.
+   */
+  async list(wawuUserId: string, query: AiJobListQueryDto): Promise<AiJobPage> {
+    const limit = query.limit ?? 20;
+    const after = query.cursor ? decodeCursor(query.cursor) : null;
+    const rows = await this.prisma.aiToolJob.findMany({
+      where: {
+        wawuUserId,
+        ...(after
+          ? {
+              OR: [
+                { createdAt: { lt: after.createdAt } },
+                { createdAt: after.createdAt, id: { lt: after.id } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+    });
+    const page = rows.slice(0, limit);
+    const items: AiJobView[] = [];
+    for (const row of page)
+      items.push(await this.view(await this.reconcile(row)));
+    const last = page[page.length - 1];
+    return {
+      items,
+      nextCursor: rows.length > limit && last ? encodeCursor(last) : null,
+    };
   }
 
   /** Waits for the jobs this server is running. For specs and a clean stop. */
@@ -204,6 +274,7 @@ export class AiJobService {
     data: {
       id: string;
       wawuUserId: string;
+      tool: string;
       idempotencyKey: string;
       requestHash: string;
       voiceId: string;
@@ -215,9 +286,7 @@ export class AiJobService {
     requestHash: string,
   ): Promise<{ job: AiToolJob; replayed: boolean }> {
     try {
-      const job = await this.prisma.aiToolJob.create({
-        data: { ...data, tool: VOICEOVER_ACTION },
-      });
+      const job = await this.prisma.aiToolJob.create({ data });
       return { job, replayed: false };
     } catch (e) {
       if (!isUniqueViolation(e)) {
@@ -263,8 +332,13 @@ export class AiJobService {
     }
   }
 
-  private start(job: AiToolJob, held: SpendHoldOutcome, text: string): void {
-    const run = this.run(job, held.holdId, text)
+  private start(
+    tool: AiTool,
+    job: AiToolJob,
+    held: SpendHoldOutcome,
+    req: AiToolRequest,
+  ): void {
+    const run = this.run(tool, job, held.holdId, req)
       .catch((e: unknown) => {
         this.logger.error(
           `ai job ${job.id}: the run stopped (${(e as Error).name ?? 'Error'}); the stale-hold sweep will give the points back`,
@@ -274,15 +348,16 @@ export class AiJobService {
     this.inFlight.add(run);
   }
 
-  /** The provider call and what follows. Holds no transaction, connection or lock across the call. */
+  /** The tool's provider call and what follows. Holds no transaction, connection or lock across the call. */
   private async run(
+    tool: AiTool,
     job: AiToolJob,
     holdId: string,
-    text: string,
+    req: AiToolRequest,
   ): Promise<void> {
-    let spoken: Awaited<ReturnType<AiVoiceProvider['speak']>>;
+    let result: AiToolRunResult;
     try {
-      spoken = await this.voice.speak({ voiceId: job.voiceId, text });
+      result = await tool.run(this.voice, job, req);
     } catch (e) {
       const code =
         e instanceof AiVoiceProviderError && e.kind === 'rejected'
@@ -291,31 +366,41 @@ export class AiJobService {
       await this.fail(job, holdId, code);
       return;
     }
-    let key: string;
+    const outputs: StoredOutput[] = [];
+    let key: string | null = null;
     try {
-      key = await this.audio.put(
-        job.wawuUserId,
-        job.id,
-        spoken.audio,
-        spoken.contentType,
-      );
+      if (result.audio) {
+        key = await this.audio.put(
+          job.wawuUserId,
+          job.id,
+          result.audio.audio,
+          result.audio.contentType,
+        );
+        outputs.push({ kind: 'audio', key });
+      }
     } catch {
       await this.fail(job, holdId, 'store_failed');
       return;
     }
+    for (const t of result.texts ?? [])
+      outputs.push({ kind: t.kind, text: t.text });
     try {
       // The deciding step: the sweep that gave the points back first wins, and
       // then this finish is refused.
       await this.spend.commit(holdId);
     } catch (e) {
       if (e instanceof PointsError && e.code === 'points_hold_settled') {
-        await this.audio.remove(key);
+        if (key) await this.audio.remove(key);
         await this.mark(job.id, 'failed', { failureCode: 'timed_out' });
         return;
       }
       throw e;
     }
-    await this.mark(job.id, 'done', { audioKey: key });
+    await this.mark(job.id, 'done', {
+      audioKey: key,
+      outputs: outputs as unknown as Prisma.InputJsonValue,
+      providerRef: result.providerRef ?? null,
+    });
   }
 
   /** The job did not work: every held point goes back, then the job says so. */
@@ -343,7 +428,12 @@ export class AiJobService {
   private async mark(
     id: string,
     state: 'done' | 'failed',
-    data: { failureCode?: string; audioKey?: string },
+    data: {
+      failureCode?: string;
+      audioKey?: string | null;
+      outputs?: Prisma.InputJsonValue;
+      providerRef?: string | null;
+    },
   ): Promise<void> {
     await this.prisma.aiToolJob.updateMany({
       where: { id, state: 'working' },
@@ -374,29 +464,58 @@ export class AiJobService {
   }
 
   private async view(job: AiToolJob): Promise<AiJobView> {
+    const outputs: AiJobOutputView[] = [];
     let audioUrl: string | null = null;
-    if (job.state === 'done' && job.audioKey) {
-      try {
-        audioUrl = await this.audio.urlFor(job.audioKey);
-      } catch {
-        // The job is done and its points are kept; the link comes on the next read.
-        audioUrl = null;
+    if (job.state === 'done') {
+      for (const out of storedOutputsOf(job)) {
+        if (out.key) {
+          try {
+            const url = await this.audio.urlFor(out.key);
+            outputs.push({ kind: out.kind, url });
+            if (out.kind === 'audio' && audioUrl === null) audioUrl = url;
+          } catch {
+            // The job is done and its points are kept; the link comes on the next read.
+          }
+        } else if (typeof out.text === 'string') {
+          outputs.push({ kind: out.kind, text: out.text });
+        }
       }
     }
     return {
       id: job.id,
-      tool: 'voiceover',
+      tool: toolForAction(job.tool)?.id ?? VOICEOVER_TOOL.id,
       state: job.state,
       voiceId: job.voiceId,
       characters: job.characters,
       units: job.units,
       costPoints: job.costPoints,
       audioUrl,
+      outputs,
       message: job.state === 'failed' ? JOB_FAILED_MESSAGE : null,
       createdAt: job.createdAt.toISOString(),
       finishedAt: job.finishedAt ? job.finishedAt.toISOString() : null,
     };
   }
+}
+
+/** The outputs a done job keeps: its `outputs` column, or its audio key for a job written before the column. */
+function storedOutputsOf(job: AiToolJob): StoredOutput[] {
+  const raw = job.outputs;
+  if (Array.isArray(raw)) {
+    const out: StoredOutput[] = [];
+    for (const item of raw as unknown[]) {
+      const o = (item ?? {}) as Record<string, unknown>;
+      if (o.kind !== 'audio' && o.kind !== 'text' && o.kind !== 'subtitles')
+        continue;
+      out.push({
+        kind: o.kind,
+        ...(typeof o.key === 'string' ? { key: o.key } : {}),
+        ...(typeof o.text === 'string' ? { text: o.text } : {}),
+      });
+    }
+    return out;
+  }
+  return job.audioKey ? [{ kind: 'audio', key: job.audioKey }] : [];
 }
 
 /** The job's id from the person and key: a UUID-shaped text, the same for the same pair. */
@@ -412,6 +531,7 @@ export function jobIdFor(wawuUserId: string, idempotencyKey: string): string {
 function hashRequest(
   wawuUserId: string,
   idempotencyKey: string,
+  action: string,
   voiceId: string,
   text: string,
 ): string {
@@ -421,10 +541,30 @@ function hashRequest(
         'wawu-ai-job-request.v1',
         wawuUserId,
         idempotencyKey,
-        VOICEOVER_ACTION,
+        action,
         voiceId,
         text,
       ]),
     )
     .digest('hex');
+}
+
+/** The cursor: the last row's time and id, base64url, so the next page starts after it. */
+function encodeCursor(row: Pick<AiToolJob, 'createdAt' | 'id'>): string {
+  return (
+    CURSOR_PREFIX +
+    Buffer.from(`${row.createdAt.getTime()}.${row.id}`).toString('base64url')
+  );
+}
+
+function decodeCursor(raw: string): { createdAt: Date; id: string } {
+  if (!raw.startsWith(CURSOR_PREFIX))
+    throw new BadRequestException(BAD_CURSOR_MESSAGE);
+  const text = Buffer.from(
+    raw.slice(CURSOR_PREFIX.length),
+    'base64url',
+  ).toString('utf8');
+  const m = /^(\d{1,15})\.([0-9a-f-]{36})$/.exec(text);
+  if (!m) throw new BadRequestException(BAD_CURSOR_MESSAGE);
+  return { createdAt: new Date(Number(m[1])), id: m[2] };
 }

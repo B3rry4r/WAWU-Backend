@@ -8,6 +8,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Query,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -18,13 +19,20 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { BuiltBy } from '../money/money-contract';
 import { AiJobService } from './ai-job.service';
-import { CreateVoiceoverJobDto } from './ai-tools.dto';
+import {
+  AiJobListQueryDto,
+  CreateQuickVoiceJobDto,
+  CreateVoiceoverJobDto,
+} from './ai-tools.dto';
 import { AiToolsService } from './ai-tools.service';
-import type { AiJobView, AiToolsView } from './ai-tools-view.type';
+import type { AiJobPage, AiJobView, AiToolsView } from './ai-tools-view.type';
+import { QUICK_VOICE_TOOL } from './tools/quick-voice.tool';
 
 /**
- * The AI tools (AITOOLS-01, R-43, R-61, PT1 and PT2). The points a job costs
- * are held, kept or given back by POINTS-03; no route here moves naira.
+ * The AI tools (AITOOLS-01, AITOOLS-02, R-43, R-61, R-78, PT1 and PT2). Every
+ * tool runs through the one job pipeline (`AiJobService.createJob`); the
+ * points a job costs are held, kept or given back by POINTS-03; no route here
+ * moves naira.
  */
 @ApiBearerAuth('wawu-id')
 @UseGuards(WawuAuthGuard)
@@ -91,10 +99,62 @@ export class AiToolsController {
   }
 
   /**
-   * One job as it stands now: `working`, `done` with `audioUrl`, or `failed`
-   * with the words "No points were taken" (PT2c). Only the person who ran it
-   * reads it; another person's job and one that is not there are the same
-   * `404 not_found`.
+   * Starts a Quick voice job (PT1 "Quick voice", AITOOLS-02): a fast read of
+   * the words in one of the same voices as VoiceOver, priced by
+   * `quick_voice_per_min`. The request, the answer, the `Idempotency-Key`
+   * rule and every refusal are exactly those of `POST /ai-tools/voiceover/jobs`;
+   * the `quoteToken` is one for the action `quick_voice_per_min`.
+   */
+  @Post('quick-voice/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-02')
+  async createQuickVoice(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateQuickVoiceJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      QUICK_VOICE_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * The caller's own jobs of every tool, newest first, in cursor pages
+   * (`?cursor&limit`, `{ items, nextCursor }`; CONVENTIONS section 6). Each
+   * item is the same shape as `GET /ai-tools/jobs/{id}`: the tool, the state,
+   * the points taken, the times and its outputs. A cursor this list did not
+   * give is a plain `400`.
+   */
+  @Get('jobs')
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-02')
+  listJobs(
+    @CurrentUser() user: WawuJwtClaims,
+    @Query() query: AiJobListQueryDto,
+  ): Promise<AiJobPage> {
+    return this.jobs.list(user.sub, query);
+  }
+
+  /**
+   * One job as it stands now: `working`, `done` with `audioUrl` and its
+   * `outputs`, or `failed` with the words "No points were taken" (PT2c). Only
+   * the person who ran it reads it; another person's job and one that is not
+   * there are the same `404 not_found`.
    */
   @Get('jobs/:id')
   @Header('Cache-Control', 'no-store')

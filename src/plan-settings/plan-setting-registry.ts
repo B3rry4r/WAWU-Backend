@@ -570,13 +570,34 @@ export function buildRegistry(
       d.caps.maxAudioMinPerJob = v as number;
     },
   });
+  // Where each tool's cost is read: the job route that prices by it once the
+  // tool is built on the pipeline (AITOOLS-02), or the task that builds it.
+  const ACTION_ROUTES: Record<string, string> = {
+    say_my_name: 'POST /me/voice/name-preview (VOICE-01)',
+    voice_intro: 'POST /me/voice-intro/generate (VOICE-01)',
+    voiceover_per_min: 'POST /ai-tools/voiceover/jobs (AITOOLS-01)',
+    quick_voice_per_min: 'POST /ai-tools/quick-voice/jobs (AITOOLS-02)',
+    captions_per_min: 'the Captions job route (AITOOLS-04)',
+    clean_audio_per_min: 'the Clean audio job route (AITOOLS-04)',
+    music_per_track: 'the Music track job route (AITOOLS-03)',
+    sfx: 'the Sound effect job route (AITOOLS-03)',
+    dub_standard_per_min_lang: 'the Dubbing job route (AITOOLS-05)',
+    dub_premium_per_min_lang: 'the Dubbing job route (AITOOLS-05)',
+    receptionist_message: 'the Receptionist route (AITOOLS-06)',
+    receptionist_voice_per_min: 'the Receptionist route (AITOOLS-06)',
+  };
   for (const a of plans.actions) {
     add({
       key: `points.action.${a.id}`,
       group: 'AI tool costs',
       label: `${a.id.replace(/_/g, ' ')} (points ${a.per.replace(/_/g, ' ')})`,
       unit: 'points',
-      usedBy: ['PT1 (Studio)', 'PT2 (the tool)', 'GET /plans'],
+      usedBy: [
+        'PT1 (Studio)',
+        'PT2 (the tool)',
+        'GET /ai-tools',
+        ACTION_ROUTES[a.id] ?? 'GET /plans',
+      ],
       provisional: BOARD,
       default: a.points,
       parse: points,
@@ -722,6 +743,16 @@ export function buildRegistry(
     'Characters of text that make one minute of VoiceOver',
     'count',
     ['PT2 (the minutes a script is priced in), POST /ai-tools/voiceover/jobs'],
+    count,
+    'AITOOLS-CHARS-PER-MINUTE',
+  );
+  other(
+    'ai.quick_voice_chars_per_minute',
+    'Characters of text that make one minute of Quick voice',
+    'count',
+    [
+      'PT1 (Quick voice), GET /ai-tools (input.charactersPerUnit), POST /ai-tools/quick-voice/jobs',
+    ],
     count,
     'AITOOLS-CHARS-PER-MINUTE',
   );
