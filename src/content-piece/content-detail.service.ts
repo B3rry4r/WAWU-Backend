@@ -12,6 +12,7 @@ import { NotificationService } from '../notification/notification.service';
 import type { SetPreviewDto } from './dto/set-preview.dto';
 import { readHidden } from './deletion-hid';
 import { FeedCardsService, type FeedCreator } from './feed-cards.service';
+import { freeLessonCount } from './course-lessons.service';
 
 /** The one wording for a piece that is missing, hidden or not the caller's. */
 const NOT_FOUND = 'Content not found';
@@ -30,8 +31,10 @@ export interface DetailLesson {
   title: string;
   order: number;
   durationLabel: string | null;
-  /** Inside the free preview (the first `freePreview.lessons` by order). */
+  /** Open to everyone: the first lesson of a course (always), and the first `freePreview.lessons` when the creator opened more. */
   isFree: boolean;
+  /** The lesson has a file to play (FIX-107). A lesson without one opens nothing. */
+  hasFile: boolean;
 }
 
 export type CannotRateReason = 'own_content' | 'not_purchased';
@@ -234,7 +237,8 @@ export class ContentDetailService {
         title: l.title,
         order: l.order,
         durationLabel: l.durationLabel,
-        isFree: freeLessons !== null && i < freeLessons,
+        isFree: i < freeLessonCount(freeLessons, lessons.length),
+        hasFile: l.assetKey !== null,
       })),
       rating: await this.ratingState(contentId, viewer, piece, !!purchase),
       creator: {

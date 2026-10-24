@@ -33,6 +33,7 @@ import type {
   NotificationFeedPage,
   PaidPurchasePage,
   PurchasePage,
+  SavedCourseState,
   SavedCreatorState,
   SavedPage,
 } from './me-view.type';
@@ -103,6 +104,35 @@ export class MeController {
     @Param('wawuId', new ParseUUIDPipe({ version: '4' })) wawuId: string,
   ): Promise<SavedCreatorState> {
     return this.saved.unsaveCreator(user.sub, wawuId);
+  }
+
+  /** Whether a school course is saved (SC3's bookmark). */
+  @Get('saved/courses/:courseId')
+  courseSaved(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('courseId', ParseUUIDPipe) courseId: string,
+  ): Promise<SavedCourseState> {
+    return this.saved.courseState(user.sub, courseId);
+  }
+
+  /** Save a school course (SC3's bookmark). Idempotent. */
+  @Put('saved/courses/:courseId')
+  @HttpCode(200)
+  saveCourse(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('courseId', ParseUUIDPipe) courseId: string,
+  ): Promise<SavedCourseState> {
+    return this.saved.saveCourse(user.sub, courseId);
+  }
+
+  /** Remove a saved school course. Idempotent. */
+  @Delete('saved/courses/:courseId')
+  @HttpCode(200)
+  unsaveCourse(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('courseId', ParseUUIDPipe) courseId: string,
+  ): Promise<SavedCourseState> {
+    return this.saved.unsaveCourse(user.sub, courseId);
   }
 
   /** My purchases (M29): pieces bought, newest first, searchable, with course progress. */

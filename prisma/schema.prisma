@@ -822,6 +822,9 @@ model CourseLesson {
   title         String
   order         Int
   durationLabel String?
+  /// FIX-107: the lesson's own file, as an object key under the creator's `content/full/` folder (never a link: the
+  /// read path signs a short-lived link per play). Null: the lesson has no file yet and plays nothing.
+  assetKey      String?
 
   /// ME-10: who has finished this lesson (M29 "3 of 12 done").
   progress CourseLessonProgress[]
@@ -5810,8 +5813,24 @@ model SchoolCourse {
   intakes    CourseIntake[]
   clicks     SchoolLinkClick[]
   enrolments SchoolEnrolment[]
+  savedBy    SavedSchoolCourse[]
 
   @@index([schoolId])
+}
+
+/// FIX-107 (G-627): one person's bookmark on one school course (SC3). Mirrors SavedCreator: a join row with a unique
+/// (person, course) pair, so a repeat save is a no-op and "did THIS person save THIS course" has an answer. It goes with
+/// the course (cascade) and with the person's account (account-data-map).
+model SavedSchoolCourse {
+  id         String       @id @default(uuid())
+  userWawuId String
+  courseId   String
+  course     SchoolCourse @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  savedAt    DateTime     @default(now())
+
+  @@unique([userWawuId, courseId])
+  @@index([userWawuId, savedAt])
+  @@index([courseId])
 }
 
 /// One dated class of a course. Seats are claimed by a CONDITIONAL write

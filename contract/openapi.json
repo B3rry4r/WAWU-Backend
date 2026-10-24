@@ -9313,6 +9313,97 @@
         ]
       }
     },
+    "/api/hub/content/{id}/lessons/{lessonId}/play": {
+      "get": {
+        "operationId": "CourseLessonsController_play",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "lessonId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LessonPlay"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A fresh link to play one lesson: free lessons for anyone who may open the piece, the rest for buyers and the creator.",
+        "tags": [
+          "CourseLessons"
+        ]
+      }
+    },
+    "/api/hub/content/{id}/lessons": {
+      "put": {
+        "operationId": "CourseLessonsController_set",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetLessonsDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "lessons": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/LessonView"
+                      }
+                    }
+                  },
+                  "required": [
+                    "lessons"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "The creator states the lessons: the list, the order and each lesson's file.",
+        "tags": [
+          "CourseLessons"
+        ]
+      }
+    },
     "/api/hub/product-drafts": {
       "post": {
         "operationId": "ProductDraftController_create",
@@ -31107,7 +31198,8 @@
                 "all",
                 "content",
                 "events",
-                "creators"
+                "creators",
+                "courses"
               ]
             }
           },
@@ -31196,6 +31288,95 @@
           }
         },
         "summary": "Remove a saved creator. Idempotent.",
+        "tags": [
+          "Me"
+        ]
+      }
+    },
+    "/api/hub/me/saved/courses/{courseId}": {
+      "get": {
+        "operationId": "MeController_courseSaved",
+        "parameters": [
+          {
+            "name": "courseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedCourseState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Whether a school course is saved (SC3's bookmark).",
+        "tags": [
+          "Me"
+        ]
+      },
+      "put": {
+        "operationId": "MeController_saveCourse",
+        "parameters": [
+          {
+            "name": "courseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedCourseState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Save a school course (SC3's bookmark). Idempotent.",
+        "tags": [
+          "Me"
+        ]
+      },
+      "delete": {
+        "operationId": "MeController_unsaveCourse",
+        "parameters": [
+          {
+            "name": "courseId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedCourseState"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Remove a saved school course. Idempotent.",
         "tags": [
           "Me"
         ]
@@ -38327,6 +38508,47 @@
             "maximum": 5000
           }
         }
+      },
+      "LessonInputDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "An existing lesson of this course to keep (its progress and place stay); left out, a new lesson is made.",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "durationLabel": {
+            "type": "string",
+            "description": "The lesson's length as a player writes it: `4:12` or `1:20:05`."
+          },
+          "assetKey": {
+            "type": "string",
+            "description": "The lesson's file: the key (or link) of an upload this person made under `content/full`. Left out, the lesson has no file yet."
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "SetLessonsDto": {
+        "type": "object",
+        "properties": {
+          "lessons": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LessonInputDto"
+            }
+          }
+        },
+        "required": [
+          "lessons"
+        ]
       },
       "CreateProductDraftDto": {
         "type": "object",
@@ -48974,6 +49196,9 @@
           },
           "isFree": {
             "type": "boolean"
+          },
+          "hasFile": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -48981,7 +49206,8 @@
           "title",
           "order",
           "durationLabel",
-          "isFree"
+          "isFree",
+          "hasFile"
         ]
       },
       "RatingState": {
@@ -49107,6 +49333,62 @@
           "lessons",
           "rating",
           "creator"
+        ]
+      },
+      "LessonPlay": {
+        "type": "object",
+        "properties": {
+          "contentId": {
+            "type": "string"
+          },
+          "lessonId": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "contentId",
+          "lessonId",
+          "url",
+          "expiresAt",
+          "durationLabel"
+        ]
+      },
+      "LessonView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "order": {
+            "type": "number"
+          },
+          "durationLabel": {
+            "type": "string",
+            "nullable": true
+          },
+          "hasFile": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "order",
+          "durationLabel",
+          "hasFile"
         ]
       },
       "ProductDraftView": {
@@ -60862,6 +61144,38 @@
           "status"
         ]
       },
+      "SavedCourseView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "schoolName": {
+            "type": "string"
+          },
+          "schoolLogo": {
+            "type": "string",
+            "nullable": true
+          },
+          "weeks": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "schoolName",
+          "schoolLogo",
+          "weeks",
+          "priceKobo"
+        ]
+      },
       "SavedEntryView": {
         "type": "object",
         "properties": {
@@ -60872,6 +61186,7 @@
             "type": "string",
             "enum": [
               "creator",
+              "course",
               "event",
               "content"
             ]
@@ -60902,6 +61217,14 @@
               }
             ],
             "nullable": true
+          },
+          "course": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SavedCourseView"
+              }
+            ],
+            "nullable": true
           }
         },
         "required": [
@@ -60910,7 +61233,8 @@
           "savedAt",
           "content",
           "event",
-          "creator"
+          "creator",
+          "course"
         ]
       },
       "SavedPage": {
@@ -60944,6 +61268,21 @@
         },
         "required": [
           "creatorWawuId",
+          "saved"
+        ]
+      },
+      "SavedCourseState": {
+        "type": "object",
+        "properties": {
+          "courseId": {
+            "type": "string"
+          },
+          "saved": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "courseId",
           "saved"
         ]
       },
