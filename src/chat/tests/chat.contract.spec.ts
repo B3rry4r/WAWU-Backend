@@ -13,6 +13,15 @@ process.env.DATABASE_URL =
   process.env.DATABASE_URL ??
   'postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public';
 
+// Storage is configured with a name nothing resolves (FIX-104): the Hub signs
+// links on this machine, so a link's life can be read, and the rows the spec
+// writes by hand are `confirmed`, so nothing here asks a bucket.
+process.env.STORAGE_ENDPOINT = 'https://storage.chat-spec.invalid';
+process.env.STORAGE_ACCESS_KEY_ID = 'chat-spec-key';
+process.env.STORAGE_SECRET_ACCESS_KEY = 'chat-spec-secret';
+process.env.STORAGE_BUCKET = 'chat-spec-bucket';
+process.env.STORAGE_REGION = 'auto';
+
 import { ChildProcess, spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
@@ -28,6 +37,11 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { BlockedAccountModule } from '../../blocked-account/blocked-account.module';
 import { ChatModule } from '../chat.module';
+import { StorageService } from '../../storage/storage.service';
+import type {
+  ChatAttachmentLink,
+  ChatAttachmentRules,
+} from '../chat-view.type';
 import { CHAT_LIMITS } from '../chat-limits';
 import { MAX_UPLOAD_BYTES } from '../../storage/dto/presign-upload.dto';
 import type {
@@ -434,6 +448,8 @@ describe('Free chat (contract, INBOX-06)', () => {
           bytes: 2048,
           contentType,
           folder,
+          // A file that has landed: a send asks for one (FIX-104).
+          status: 'confirmed',
         },
       });
 
@@ -520,7 +536,9 @@ describe('Free chat (contract, INBOX-06)', () => {
       expect([200, 503]).toContain(ok.status);
     });
 
-    it('upload links: a photo or video keeps the 512 MB limit every upload has', async () => {
+    // FIX-104 moved this from the 512 MB every upload has to the 100 MB the
+    // Hub already puts on a picture or a video in a message (CHAT_LIMITS).
+    it('upload links: a photo or video over 100 MB is 413, over every upload limit is 400', async () => {
       for (const contentLength of [MAX_UPLOAD_BYTES + 1, 600 * 1024 * 1024]) {
         await as(ada)
           .post(`/chats/${chatId}/attachments`, {
@@ -529,11 +547,185 @@ describe('Free chat (contract, INBOX-06)', () => {
           })
           .expect(400);
       }
+      for (const contentType of ['video/mp4', 'image/jpeg']) {
+        const over = await as(ada)
+          .post(`/chats/${chatId}/attachments`, {
+            contentType,
+            contentLength: CHAT_LIMITS.mediaMaxBytes + 1,
+          })
+          .expect(413);
+        expect(refusal(over).message).toBe(
+          'A photo or video in a chat can be up to 100 MB.',
+        );
+      }
       const atLimit = await as(ada).post(`/chats/${chatId}/attachments`, {
         contentType: 'video/mp4',
-        contentLength: MAX_UPLOAD_BYTES,
+        contentLength: CHAT_LIMITS.mediaMaxBytes,
       });
-      expect([200, 503]).toContain(atLimit.status);
+      expect(atLimit.status).toBe(200);
+    });
+
+    it("a type a chat cannot hold is refused in the Hub's own words", async () => {
+      const res = await as(ada)
+        .post(`/chats/${chatId}/attachments`, {
+          contentType: 'application/zip',
+          contentLength: 10,
+        })
+        .expect(400);
+      expect(JSON.stringify(res.body)).toContain(
+        'A chat can hold a photo (PNG, JPEG or WebP), a video (MP4 or MOV) or a PDF.',
+      );
+    });
+
+    it("GET /chats/attachment-rules says what a chat takes, from the Hub's limits", async () => {
+      const res = await as(bola).get('/chats/attachment-rules').expect(200);
+      const rules = (res.body as { data: ChatAttachmentRules }).data;
+      expect(rules.file).toEqual({
+        contentTypes: ['application/pdf'],
+        maxBytes: CHAT_LIMITS.fileMaxBytes,
+      });
+      expect(rules.media.maxBytes).toBe(CHAT_LIMITS.mediaMaxBytes);
+      expect(rules.media.contentTypes).toEqual(
+        expect.arrayContaining(['image/jpeg', 'video/mp4']),
+      );
+      await http().get('/chats/attachment-rules').expect(401);
+    });
+
+    it('a file that never landed in storage is not sent', async () => {
+      const photo = await storeUpload(
+        ada.sub,
+        'chat/media',
+        'image/jpeg',
+        'jpg',
+      );
+      const storage = moduleRef.get(StorageService);
+      const asked = jest.spyOn(storage, 'confirmUpload');
+      asked.mockResolvedValueOnce(false);
+      const res = await as(ada)
+        .post(`/chats/${chatId}/messages`, { attachment: { key: photo.key } })
+        .expect(400);
+      expect(refusal(res).message).toBe(
+        'That file did not finish uploading. Try sending it again.',
+      );
+      expect(
+        await prisma.chatMessage.count({
+          where: { conversationId: chatId, attachmentKey: photo.key },
+        }),
+      ).toBe(0);
+      asked.mockRestore();
+      await as(ada)
+        .post(`/chats/${chatId}/messages`, { attachment: { key: photo.key } })
+        .expect(201);
+    });
+
+    it('only the two people in the chat get a link, and it is short-lived', async () => {
+      const pdf = await storeUpload(
+        ada.sub,
+        'chat/file',
+        'application/pdf',
+        'pdf',
+      );
+      const photo = await storeUpload(
+        ada.sub,
+        'chat/media',
+        'image/jpeg',
+        'jpg',
+      );
+      const sentPdf = message(
+        await as(ada)
+          .post(`/chats/${chatId}/messages`, {
+            attachment: { key: pdf.key, name: 'invoice.pdf' },
+          })
+          .expect(201),
+      );
+      const sentPhoto = message(
+        await as(ada)
+          .post(`/chats/${chatId}/messages`, { attachment: { key: photo.key } })
+          .expect(201),
+      );
+      const text = message(
+        await as(ada)
+          .post(`/chats/${chatId}/messages`, { text: 'No file here' })
+          .expect(201),
+      );
+      const linkPath = (id: string) =>
+        `/chats/${chatId}/messages/${id}/attachment`;
+      for (const who of [ada, bola]) {
+        for (const sent of [sentPdf, sentPhoto]) {
+          const res = await as(who).get(linkPath(sent.id)).expect(200);
+          const link = (res.body as { data: ChatAttachmentLink }).data;
+          expect(link.url).toContain('X-Amz-Expires=900');
+          expect(link.contentType).toBe(sent.attachment?.contentType);
+          expect(link.name).toBe(sent.attachment?.name ?? null);
+          const left = Date.parse(link.expiresAt) - Date.now();
+          expect(left).toBeGreaterThan(0);
+          expect(left).toBeLessThanOrEqual(900_000);
+        }
+      }
+      // The links a message list carries are short-lived too, not the seven days of the long read link.
+      const page = await as(bola).get(`/chats/${chatId}/messages?limit=5`);
+      const withFiles = messages(page).items.filter((m) => m.attachment);
+      expect(withFiles.length).toBeGreaterThan(1);
+      for (const m of withFiles) {
+        expect(m.attachment?.url).toContain('X-Amz-Expires=900');
+      }
+      // Someone outside the chat, a message with no file, and a message that is not there all answer 404.
+      await as(chidi).get(linkPath(sentPdf.id)).expect(404);
+      await as(chidi).get(linkPath(sentPhoto.id)).expect(404);
+      await as(bola).get(linkPath(text.id)).expect(404);
+      await as(bola).get(linkPath(randomUUID())).expect(404);
+      await as(bola)
+        .get(`/chats/${randomUUID()}/messages/${sentPdf.id}/attachment`)
+        .expect(404);
+      await as(bola)
+        .get(`/chats/${chatId}/messages/not-a-uuid/attachment`)
+        .expect(400);
+      await http().get(linkPath(sentPdf.id)).expect(401);
+    });
+
+    it("what is sent in a chat counts toward the sender's storage, and a file that does not fit is refused", async () => {
+      const storage = moduleRef.get(StorageService);
+      const before = await storage.usageFor(ada.sub);
+      const filler = await prisma.storageObject.create({
+        data: {
+          wawuUserId: ada.sub,
+          key: `chat/media/${ada.sub}/${randomUUID()}.mp4`,
+          bytes: before.limitBytes - before.usedBytes - 1000,
+          contentType: 'video/mp4',
+          folder: 'chat/media',
+          status: 'confirmed',
+        },
+      });
+      try {
+        const full = await storage.usageFor(ada.sub);
+        expect(full.usedBytes).toBe(before.limitBytes - 1000);
+        const refused = await as(ada)
+          .post(`/chats/${chatId}/attachments`, {
+            contentType: 'application/pdf',
+            contentLength: 2000,
+          })
+          .expect(413);
+        expect(refusal(refused).reason).toMatchObject({
+          code: 'storage_limit_reached',
+          neededBytes: 2000,
+          limitBytes: before.limitBytes,
+        });
+        // What still fits is signed, and counts at once.
+        await as(ada)
+          .post(`/chats/${chatId}/attachments`, {
+            contentType: 'application/pdf',
+            contentLength: 900,
+          })
+          .expect(200);
+        expect((await storage.usageFor(ada.sub)).usedBytes).toBe(
+          before.limitBytes - 100,
+        );
+      } finally {
+        await prisma.storageObject.deleteMany({
+          where: { wawuUserId: ada.sub, bytes: { in: [900] } },
+        });
+        await prisma.storageObject.delete({ where: { id: filler.id } });
+      }
     });
 
     it('the public upload route still refuses the chat folders', async () => {

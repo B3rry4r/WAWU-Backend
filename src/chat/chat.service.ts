@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
   PayloadTooLargeException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { WawuIdClient } from '../common/auth/wawu-id.client';
@@ -19,6 +20,7 @@ import {
 import { isSupportAccount, supportPerson } from '../support/support-account';
 import type { Prisma } from '../../generated/prisma/client';
 import {
+  CHAT_FOLDER_CONTENT_TYPES,
   CHAT_LIMITS,
   CHAT_UPLOAD_FOLDERS,
   type ChatUploadFolder,
@@ -27,6 +29,8 @@ import type {
   ChatMessage,
   ChatMessageKind,
   ChatMessagePage,
+  ChatAttachmentLink,
+  ChatAttachmentRules,
   ChatPerson,
   ChatReadMark,
   ChatSummary,
@@ -393,6 +397,14 @@ export class ChatService {
           'That attachment was not uploaded for a chat. Upload it again.',
         );
       }
+      // A key that was signed for but never PUT must not become a bubble the
+      // other person cannot open. The bucket is asked once for a pending row;
+      // nothing is held across the call.
+      if (!(await this.storage.confirmUpload(stored))) {
+        throw new BadRequestException(
+          'That file did not finish uploading. Try sending it again.',
+        );
+      }
       kind = kindFor(stored.contentType);
       attachment = {
         attachmentKey: stored.key,
@@ -508,6 +520,14 @@ export class ChatService {
         `A file in a chat can be up to ${CHAT_LIMITS.fileMaxBytes / (1024 * 1024)} MB.`,
       );
     }
+    if (
+      folder === 'chat/media' &&
+      dto.contentLength > CHAT_LIMITS.mediaMaxBytes
+    ) {
+      throw new PayloadTooLargeException(
+        `A photo or video in a chat can be up to ${CHAT_LIMITS.mediaMaxBytes / (1024 * 1024)} MB.`,
+      );
+    }
     const { uploadUrl, key } = await this.storage.presignUpload(
       me,
       folder,
@@ -516,6 +536,57 @@ export class ChatService {
       dto.contentLength,
     );
     return { uploadUrl, key };
+  }
+
+  /**
+   * GET /chats/attachment-rules: what a chat takes, so the app prints the
+   * Hub's numbers and never its own. The same constants the upload check uses.
+   */
+  attachmentRules(): ChatAttachmentRules {
+    return {
+      media: {
+        contentTypes: [...CHAT_FOLDER_CONTENT_TYPES['chat/media']],
+        maxBytes: CHAT_LIMITS.mediaMaxBytes,
+      },
+      file: {
+        contentTypes: [...CHAT_FOLDER_CONTENT_TYPES['chat/file']],
+        maxBytes: CHAT_LIMITS.fileMaxBytes,
+      },
+    };
+  }
+
+  /**
+   * GET /chats/:chatId/messages/:messageId/attachment: a fresh link to one
+   * message's file. Only the two people in the chat get one: anyone else, a
+   * message of another chat and a message with no file all answer 404, so ids
+   * reveal nothing. The link lives CHAT_LIMITS.linkSeconds.
+   */
+  async attachmentLink(
+    me: string,
+    chatId: string,
+    messageId: string,
+  ): Promise<ChatAttachmentLink> {
+    await this.conversationFor(me, chatId);
+    const row = await this.prisma.chatMessage.findFirst({
+      where: { id: messageId, conversationId: chatId },
+    });
+    if (!row || !row.attachmentKey || !row.attachmentContentType) {
+      throw new NotFoundException('Attachment not found.');
+    }
+    const url = await this.signedUrl(row.attachmentKey, row.kind);
+    if (!url) {
+      throw new ServiceUnavailableException(
+        'We could not open that file just now. Try again.',
+      );
+    }
+    return {
+      url,
+      expiresAt: new Date(
+        Date.now() + CHAT_LIMITS.linkSeconds * 1000,
+      ).toISOString(),
+      contentType: row.attachmentContentType,
+      name: row.attachmentName,
+    };
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────
@@ -843,16 +914,17 @@ export class ChatService {
   }
 
   /**
-   * A fresh link on every read. Photos and videos open in place; a PDF is a
-   * short-lived download, never rendered inline (StorageService explains
-   * why). If storage cannot sign one right now the bubble gets null.
+   * A fresh link on every read, good for CHAT_LIMITS.linkSeconds. Photos and
+   * videos open in place; a PDF is a download, never rendered inline
+   * (StorageService explains why). If storage cannot sign one right now the
+   * bubble gets null.
    */
   private async signedUrl(key: string, kind: string): Promise<string | null> {
     if (!this.storage.isConfigured) return null;
     try {
       return kind === 'file'
-        ? await this.storage.signedReadUrl(key)
-        : await this.storage.readUrlFor(key);
+        ? await this.storage.signedReadUrl(key, CHAT_LIMITS.linkSeconds)
+        : await this.storage.readUrlFor(key, CHAT_LIMITS.linkSeconds);
     } catch (e) {
       this.logger.warn(`Could not sign chat attachment ${key}: ${String(e)}`);
       return null;

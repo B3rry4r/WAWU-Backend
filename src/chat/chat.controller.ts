@@ -21,6 +21,8 @@ import {
   ChatSendMessageDto,
 } from './dto/chat.dto';
 import type {
+  ChatAttachmentLink,
+  ChatAttachmentRules,
   ChatMessage,
   ChatMessagePage,
   ChatReadMark,
@@ -59,6 +61,12 @@ export class ChatController {
     return this.chats.list(user.sub, query.cursor, query.limit);
   }
 
+  /** What a chat takes: types and sizes, from the Hub's own limits. */
+  @Get('attachment-rules')
+  attachmentRules(): ChatAttachmentRules {
+    return this.chats.attachmentRules();
+  }
+
   @Get(':chatId')
   get(
     @CurrentUser() user: WawuJwtClaims,
@@ -75,6 +83,16 @@ export class ChatController {
     @Query() query: ChatPageQueryDto,
   ): Promise<ChatMessagePage> {
     return this.chats.messages(user.sub, chatId, query.cursor, query.limit);
+  }
+
+  /** A fresh link to one message's photo, video or file. Only the two people in the chat get one. */
+  @Get(':chatId/messages/:messageId/attachment')
+  attachmentLink(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('chatId', ParseUUIDPipe) chatId: string,
+    @Param('messageId', ParseUUIDPipe) messageId: string,
+  ): Promise<ChatAttachmentLink> {
+    return this.chats.attachmentLink(user.sub, chatId, messageId);
   }
 
   @Post(':chatId/messages')

@@ -18990,6 +18990,28 @@
         ]
       }
     },
+    "/api/hub/chats/attachment-rules": {
+      "get": {
+        "operationId": "ChatController_attachmentRules",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatAttachmentRules"
+                }
+              }
+            }
+          }
+        },
+        "summary": "What a chat takes: types and sizes, from the Hub's own limits.",
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
     "/api/hub/chats/{chatId}": {
       "get": {
         "operationId": "ChatController_get",
@@ -19105,6 +19127,45 @@
             }
           }
         },
+        "tags": [
+          "Chat"
+        ]
+      }
+    },
+    "/api/hub/chats/{chatId}/messages/{messageId}/attachment": {
+      "get": {
+        "operationId": "ChatController_attachmentLink",
+        "parameters": [
+          {
+            "name": "chatId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "messageId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatAttachmentLink"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A fresh link to one message's photo, video or file. Only the two people in the chat get one.",
         "tags": [
           "Chat"
         ]
@@ -53777,6 +53838,39 @@
           "nextCursor"
         ]
       },
+      "ChatAttachmentRule": {
+        "type": "object",
+        "properties": {
+          "contentTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "maxBytes": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "contentTypes",
+          "maxBytes"
+        ]
+      },
+      "ChatAttachmentRules": {
+        "type": "object",
+        "properties": {
+          "media": {
+            "$ref": "#/components/schemas/ChatAttachmentRule"
+          },
+          "file": {
+            "$ref": "#/components/schemas/ChatAttachmentRule"
+          }
+        },
+        "required": [
+          "media",
+          "file"
+        ]
+      },
       "ChatMessagePage": {
         "type": "object",
         "properties": {
@@ -53794,6 +53888,30 @@
         "required": [
           "items",
           "nextCursor"
+        ]
+      },
+      "ChatAttachmentLink": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "url",
+          "expiresAt",
+          "contentType",
+          "name"
         ]
       },
       "ChatReadMark": {

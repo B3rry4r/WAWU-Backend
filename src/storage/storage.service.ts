@@ -68,6 +68,9 @@ const RECONCILE_GRACE_MS = 15 * 60 * 1000;
 /** How long a presigned PUT URL can still start an upload. */
 const UPLOAD_URL_SECONDS = 300;
 
+/** How long the long-lived read link lives (`readUrlFor`): seven days. A caller that wants a shorter one passes its own. */
+const READ_URL_SECONDS = 604800;
+
 /**
  * Extra time after a given-up upload's link has expired before the sweep looks
  * at its file (ME-04 round 3), unless UPLOAD_SWEEP_MARGIN_SECONDS says
@@ -95,9 +98,10 @@ const RECONCILE_BATCH = 50;
 const RECONCILE_MAX_BATCHES = 10;
 
 /**
- * The folders that hold creator content, the only ones R-7's storage
- * allowance counts and limits. Every other folder (KYC and other documents,
- * avatars, covers, community and chat images, speaker photos) is exempt.
+ * The folders that hold creator content: the only ones counted as uploads
+ * (the 5 or 25 pieces) and gated on a tier. R-7's storage allowance also
+ * counts the chat folders (QUOTA_FOLDERS below). Every other folder (KYC and
+ * other documents, avatars, covers, community images, speaker photos) is exempt.
  */
 export const CONTENT_FOLDERS: readonly string[] = [
   'content/preview',
@@ -105,9 +109,20 @@ export const CONTENT_FOLDERS: readonly string[] = [
 ];
 
 /**
- * Creator-content storage only: `usedBytes` sums `content/preview` and
- * `content/full` files (CONTENT_FOLDERS), so identity documents, avatars and
- * the other folders are not in it and not limited by it.
+ * The folders whose bytes count toward a person's storage (R-7's 1 GB, or
+ * 10 GB with a tick): creator content, and what a person sends in a chat
+ * (FIX-104). Only CONTENT_FOLDERS are also counted as uploads (the 5 or 25
+ * pieces) and gated on a tier: a chat message is not a listing.
+ */
+export const QUOTA_FOLDERS: readonly string[] = [
+  ...CONTENT_FOLDERS,
+  ...CHAT_UPLOAD_FOLDERS,
+];
+
+/**
+ * `usedBytes` sums `content/preview` and `content/full` files and the files
+ * sent in chats (QUOTA_FOLDERS), so identity documents, avatars and the other
+ * folders are not in it and not limited by it.
  */
 export interface StorageUsage {
   usedBytes: number;
@@ -515,11 +530,12 @@ export class StorageService {
     // account is above its allowance (R-7 lowered free accounts from 2 GB to
     // 1 GB, and a tick can lapse).
     //
-    // The allowance is for creator content (CONTENT_FOLDERS). Identity
-    // documents, avatars, covers, chat media and the other folders are
-    // neither counted against it nor refused by it: R-7 sets the limit on
-    // uploads, and a person over it must still be able to prove who they are.
-    // Those folders keep their own per-file limit and type allowlist.
+    // The allowance is for creator content (CONTENT_FOLDERS) and for what a
+    // person sends in a chat (QUOTA_FOLDERS, FIX-104). Identity documents,
+    // avatars, covers and the other folders are neither counted against it
+    // nor refused by it: a person over it must still be able to prove who
+    // they are. Those folders keep their own per-file limit and type
+    // allowlist.
     //
     // TIER-02 (R-43): a file for a product needs a tier that is running (or a
     // tick that has not ended), and a place free for one more product. Nothing
@@ -531,7 +547,7 @@ export class StorageService {
       await this.gate.assertRoomForProduct(wawuId);
     const { usage, tickHeld } = await this.usageAndTick(wawuId);
     if (
-      CONTENT_FOLDERS.includes(folder) &&
+      QUOTA_FOLDERS.includes(folder) &&
       usage.usedBytes + contentLength > usage.limitBytes
     ) {
       throw this.storageFullRefusal(contentLength, usage, tickHeld);
@@ -605,7 +621,10 @@ export class StorageService {
    * object URL would not resolve — this is what gets stored as
    * `previewAsset` / `idDocumentUrl` and rendered by the client.
    */
-  async readUrlFor(key: string): Promise<string> {
+  async readUrlFor(
+    key: string,
+    expiresInSeconds = READ_URL_SECONDS,
+  ): Promise<string> {
     if (key.startsWith('http://') || key.startsWith('https://')) return key;
     if (!this.client) {
       throw new ServiceUnavailableException(
@@ -624,7 +643,7 @@ export class StorageService {
         ResponseContentType: contentType,
         ResponseContentDisposition: inline ? 'inline' : 'attachment',
       }),
-      { expiresIn: 604800 },
+      { expiresIn: expiresInSeconds },
     );
   }
 
@@ -884,10 +903,7 @@ export class StorageService {
         // Released while this confirm was under way, or being removed: it
         // stays released.
         if (row.releasedAt || row.removingAt) return 'released' as const;
-        if (
-          row.status === 'abandoned' &&
-          CONTENT_FOLDERS.includes(row.folder)
-        ) {
+        if (row.status === 'abandoned' && QUOTA_FOLDERS.includes(row.folder)) {
           const { usage, tickHeld } = await this.readUsage(wawuId, tx, tx);
           if (usage.usedBytes + row.bytes > usage.limitBytes) {
             return this.storageFullRefusal(row.bytes, usage, tickHeld);
@@ -1008,7 +1024,7 @@ export class StorageService {
         where: {
           wawuUserId: wawuId,
           status: { in: ['pending', 'confirmed'] },
-          folder: { in: [...CONTENT_FOLDERS] },
+          folder: { in: [...QUOTA_FOLDERS] },
         },
       }),
       this.allowance.of(wawuId, new Date(), allowanceDb),

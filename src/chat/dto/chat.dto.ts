@@ -98,7 +98,10 @@ const CHAT_ATTACHMENT_TYPES: string[] = Object.values(
 /** POST /chats/:chatId/attachments: ask where to upload one photo, video or PDF. */
 export class ChatUploadDto {
   /** image/png, image/jpeg, image/webp, video/mp4, video/quicktime or application/pdf. */
-  @IsIn(CHAT_ATTACHMENT_TYPES)
+  @IsIn(CHAT_ATTACHMENT_TYPES, {
+    message:
+      'A chat can hold a photo (PNG, JPEG or WebP), a video (MP4 or MOV) or a PDF.',
+  })
   contentType: string;
 
   /**
