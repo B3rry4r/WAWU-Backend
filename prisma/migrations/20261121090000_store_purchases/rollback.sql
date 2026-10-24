@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- Rollback of 20261118090000_store_purchases (IAP-01). Run it only after the Hub build that reads these is gone.
+-- Rollback of 20261121090000_store_purchases (IAP-01). Run it only after the Hub build that reads these is gone.
 -- Run with: psql -1 -f rollback.sql
 -- Refuses (and changes nothing) while any store purchase or credit pack bought in a store is stored: dropping them
 -- loses what people paid a store for and the record a refund would be matched against. Clear them on purpose first
