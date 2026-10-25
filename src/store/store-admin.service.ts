@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import type { Prisma, StorePurchase } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { storePassReference } from '../community/pass/community-pass-grant';
 import type { AdminStorePurchaseQueryDto } from './store.dto';
 import type {
   AdminStorePurchasePageView,
@@ -63,6 +64,26 @@ export class StoreAdminService {
     return this.page(q, { status: { in: ['refunded', 'revoked'] } });
   }
 
+  /**
+   * The end of the pass period each pass purchase granted: the pass row it
+   * keyed `store:<purchase id>` (a pass bought once has no store period of its
+   * own, so `expiresAt` is null). One read for the whole page. A take-back
+   * shows as the row's end, which it moved to the moment it was taken back.
+   */
+  private async passEnds(rows: StorePurchase[]): Promise<Map<string, Date>> {
+    const refs = rows
+      .filter((r) => r.kind === 'pass')
+      .map((r) => storePassReference(r.id));
+    if (refs.length === 0) return new Map();
+    const periods = await this.prisma.communityPass.findMany({
+      where: { walletPaymentId: { in: refs } },
+      select: { walletPaymentId: true, endsAt: true },
+    });
+    return new Map(
+      periods.map((p) => [p.walletPaymentId.slice('store:'.length), p.endsAt]),
+    );
+  }
+
   private async page(
     q: AdminStorePurchaseQueryDto,
     base: Prisma.StorePurchaseWhereInput,
@@ -90,15 +111,20 @@ export class StoreAdminService {
       take: limit + 1,
     });
     const items = rows.slice(0, limit);
+    const passEnds = await this.passEnds(items);
     return {
-      items: items.map(adminPurchaseView),
+      items: items.map((r) => adminPurchaseView(r, passEnds.get(r.id) ?? null)),
       nextCursor:
         rows.length > limit ? encodeCursor(items[items.length - 1]) : null,
     };
   }
 }
 
-export function adminPurchaseView(r: StorePurchase): AdminStorePurchaseView {
+export function adminPurchaseView(
+  r: StorePurchase,
+  /** The end of the pass period this purchase granted (a pass only). */
+  passEndsAt: Date | null = null,
+): AdminStorePurchaseView {
   return {
     id: r.id,
     wawuUserId: r.wawuUserId,
@@ -118,6 +144,7 @@ export function adminPurchaseView(r: StorePurchase): AdminStorePurchaseView {
     creatorShareKobo: r.creatorShareKobo,
     purchasedAt: r.purchasedAt.toISOString(),
     expiresAt: r.expiresAt?.toISOString() ?? null,
+    passEndsAt: r.kind === 'pass' ? (passEndsAt?.toISOString() ?? null) : null,
     endedAt: r.endedAt?.toISOString() ?? null,
     endReason: r.endReason,
     takenBack:

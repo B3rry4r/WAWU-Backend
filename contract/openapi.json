@@ -78853,6 +78853,10 @@
             "type": "string",
             "nullable": true
           },
+          "passEndsAt": {
+            "type": "string",
+            "nullable": true
+          },
           "endedAt": {
             "type": "string",
             "nullable": true

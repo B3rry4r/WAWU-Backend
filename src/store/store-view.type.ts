@@ -169,6 +169,11 @@ export interface AdminStorePurchaseView {
   creatorShareKobo: number | null;
   purchasedAt: string;
   expiresAt: string | null;
+  /**
+   * A pass: the end of the 30 days this purchase granted (the pass row's end, which a take-back moves to that moment). `expiresAt` is the
+   * store's own period end and is null for a pass bought once. Null for any other kind. Optional: an older client never reads it.
+   */
+  passEndsAt?: string | null;
   endedAt: string | null;
   endReason: string | null;
   /** What the take-back took (a spent point or credit is not taken back). */

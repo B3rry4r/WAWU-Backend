@@ -14,7 +14,10 @@ import type { Server } from 'http';
 import type { INestApplication } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import request from 'supertest';
+import { AdminTokenService } from '../../admin/auth/admin-token.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { AdminRole } from '../../../generated/prisma/enums';
+import { adminPurchaseView } from '../store-admin.service';
 import { CommunityPassReminderService } from '../../community/pass/community-pass-reminder.service';
 import { purgePersonPoints } from '../../points/points-purge';
 import {
@@ -49,6 +52,8 @@ describe('IAP-03 round 2: a community pass is bought once, for one room', () => 
   let google: StandInGooglePlay;
   let apple: StandInAppStore;
   const communityIds: string[] = [];
+  let financeId: string | undefined;
+  let financeToken = '';
   const http = () => request(app.getHttpServer() as Server);
   const asA = {
     get: (url: string) =>
@@ -113,6 +118,11 @@ describe('IAP-03 round 2: a community pass is bought once, for one room', () => 
   }
 
   beforeAll(async () => {
+    for (const [k, v] of Object.entries({
+      ADMIN_JWT_SECRET: 'iap03-admin-access-secret-0123456789abcdef',
+      ADMIN_JWT_REFRESH_SECRET: 'iap03-admin-refresh-secret-0123456789abcd',
+    }))
+      process.env[k] = v;
     mock = await ensureMockWawuId();
     a = mintToken(BUYER);
     google = new StandInGooglePlay();
@@ -122,6 +132,18 @@ describe('IAP-03 round 2: a community pass is bought once, for one room', () => 
     tokenA = dataOf<{ accountToken: string }>(
       await asA.get('/store/products?platform=android').expect(200),
     ).accountToken;
+    financeId = randomUUID();
+    financeToken = moduleRef.get(AdminTokenService).issuePair(
+      await prisma.adminUser.create({
+        data: {
+          id: financeId,
+          email: `iap03c-${financeId}@admin.test.wawu.dev`,
+          passwordHash: 'x',
+          name: 'IAP finance',
+          role: AdminRole.finance,
+        },
+      }),
+    ).accessToken;
     await wipe();
     await prisma.storeProduct.deleteMany({});
     await prisma.storeProduct.createMany({
@@ -155,6 +177,8 @@ describe('IAP-03 round 2: a community pass is bought once, for one room', () => 
       await prisma.community.deleteMany({
         where: { id: { in: communityIds } },
       });
+      if (financeId)
+        await prisma.adminUser.deleteMany({ where: { id: financeId } });
     }
     await app?.close();
     mock?.kill();
@@ -339,6 +363,70 @@ describe('IAP-03 round 2: a community pass is bought once, for one room', () => 
         where: { id: bought.id },
       }),
     ).toMatchObject({ status: 'refunded', endReason: 'refunded_by_store' });
+  });
+
+  it('the admin purchase view carries the end of the pass each purchase granted, so the owner can read how long a pass bought once runs', async () => {
+    const communityId = await room();
+    const adminGet = (url: string) =>
+      http().get(`${API}${url}`).set('Authorization', `Bearer ${financeToken}`);
+    oneTime('tok-u1', PASS_A.android, 'GPA.u..0');
+    oneTime('tok-u2', PASS_A.android, 'GPA.u..1');
+    const buy = async (token: string) =>
+      dataOf<{ id: string }>(
+        await asA
+          .post('/store/purchases', {
+            platform: 'android',
+            productId: PASS_A.android,
+            purchaseToken: token,
+            communityId,
+          })
+          .expect(201),
+      );
+    const first = await buy('tok-u1');
+    const second = await buy('tok-u2');
+    const page = dataOf<{
+      items: Array<{
+        id: string;
+        expiresAt: string | null;
+        passEndsAt?: string | null;
+      }>;
+    }>(
+      await adminGet(`/admin/store/purchases?wawuUserId=${BUYER}`).expect(200),
+    );
+    const end = (id: string) =>
+      page.items.find((i) => i.id === id)?.passEndsAt ?? null;
+    // The store's own period end is null for a purchase made once; the pass end is the Hub's: 30 days, then the next 30 stacked behind it.
+    expect(page.items.map((i) => i.expiresAt)).toEqual([null, null]);
+    const at = (iso: string | null) => (iso === null ? NaN : Date.parse(iso));
+    expect(Math.abs(at(end(first.id)) - Date.now() - 30 * DAY)).toBeLessThan(
+      120_000,
+    );
+    expect(Math.abs(at(end(second.id)) - Date.now() - 60 * DAY)).toBeLessThan(
+      120_000,
+    );
+    // It is the pass row's own end, so a take-back shows (the row ends now).
+    await prisma.communityPass.update({
+      where: { walletPaymentId: `store:${first.id}` },
+      data: {
+        startsAt: new Date(Date.now() - 31 * DAY),
+        endsAt: new Date(Date.now() - DAY),
+      },
+    });
+    const later = dataOf<{
+      items: Array<{ id: string; passEndsAt?: string | null }>;
+    }>(
+      await adminGet(`/admin/store/purchases?wawuUserId=${BUYER}`).expect(200),
+    );
+    expect(
+      Date.parse(later.items.find((i) => i.id === first.id)?.passEndsAt ?? ''),
+    ).toBeLessThan(Date.now());
+    // Anything that is not a pass carries none.
+    const row = await prisma.storePurchase.findUniqueOrThrow({
+      where: { id: first.id },
+    });
+    expect(
+      adminPurchaseView({ ...row, kind: 'points' }, null).passEndsAt,
+    ).toBeNull();
   });
 
   it('the reminder 3 days before the end reaches a pass bought in a store, once, because nothing renews it', async () => {
