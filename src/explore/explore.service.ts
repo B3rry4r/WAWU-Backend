@@ -260,6 +260,12 @@ export class ExploreService {
    * Explore may show this viewer, those who match the most of the picked
    * categories first, then by handle. No picks is the plain list. The viewer
    * is never in their own list.
+   *
+   * R2-AUTHME3: when the picks match fewer creators than the list holds
+   * (`limit`), the rest of it is every other creator Explore may show, the most
+   * followed first (then by handle), so a new person is not left with an empty
+   * screen because no creator has saved one of the same interests. The matches
+   * always come first and are never pushed out by the fill.
    */
   async suggested(query: SuggestedCreatorsQueryDto, viewer: string | null) {
     const limit = query.limit ?? DEFAULT_SUGGESTED;
@@ -273,11 +279,19 @@ export class ExploreService {
                  WHERE regexp_replace(lower(i), '[^a-z0-9]', '', 'g') = ANY(${keys}::text[])) DESC,
                p."handle" ASC, p."wawuUserId" ASC
       LIMIT ${limit}`;
-    return {
-      items: await this.cardsFor(
-        rows.map((r) => r.id),
-        viewer,
-      ),
-    };
+    const ids = rows.map((r) => r.id);
+    if (keys.length > 0 && ids.length < limit) {
+      const everyone = await this.eligibleFrom(viewer);
+      const rest = await this.prisma.$queryRaw<Array<{ id: string }>>`
+        SELECT p."wawuUserId" AS id ${everyone}
+          AND p."wawuUserId" <> ${viewer ?? ''}::text
+          AND p."wawuUserId" <> ALL(${ids}::text[])
+        ORDER BY (SELECT count(*) FROM "FollowRelationship" f
+                   WHERE f."followingWawuId" = p."wawuUserId") DESC,
+                 p."handle" ASC, p."wawuUserId" ASC
+        LIMIT ${limit - ids.length}`;
+      ids.push(...rest.map((r) => r.id));
+    }
+    return { items: await this.cardsFor(ids, viewer) };
   }
 }
