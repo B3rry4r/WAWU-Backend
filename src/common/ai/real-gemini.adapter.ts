@@ -25,10 +25,11 @@ const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
  * The earlier default, gemini-3.7-flash, answered 503 "high demand" or nothing
  * inside the 20 second limit below in most of a day's probes, and the Legal
  * chat stayed silent. Probed with the real structured chat turn on 25 Oct
- * 2026: gemini-3-flash-preview answered 10 of 10 in 1 to 4 seconds;
- * gemini-2.5-flash 8 of 9 in about 2; gemini-3.5-flash answered but took 5 to
- * 17 seconds and sometimes 503; gemini-3.6-flash, 3.7 and 3.8 and
- * gemini-3.1-flash-lite often 503 or ran past the limit. It is a preview name,
+ * 2026: gemini-3-flash-preview answered 9 of 9 direct probes in 1 to 4
+ * seconds (and every Hub turn but one 429); gemini-2.5-flash 7 of 8 in about
+ * 2; gemini-3.5-flash mostly answered but took 5 to 17 seconds and sometimes
+ * 503 or ran past the limit; gemini-3.6-flash, gemini-3.7-flash (1 of 7),
+ * gemini-3.8-flash and gemini-3.1-flash-lite often 503 or ran past the limit. It is a preview name,
  * so if the provider ever retires it the Hub log says "Gemini chat returned
  * HTTP 404": set GEMINI_MODEL to any id the key lists (gemini-2.5-flash is the
  * stable one) and restart. The request adapts to the model's family
