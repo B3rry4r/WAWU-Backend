@@ -192,10 +192,17 @@ export class PointsSpendService {
     return this.points.commit({ holdId });
   }
 
-  /** The job did not work: every held point goes back. Again changes nothing; a spent hold is `points_hold_settled`. */
-  async release(holdId: string): Promise<PointHoldOutcome> {
-    await this.requireAiHold(holdId);
-    return this.points.release({ holdId });
+  /**
+   * The job did not work: every held point goes back. Again changes nothing; a
+   * spent hold is `points_hold_settled`. With `tx`, the points go back inside
+   * the caller's transaction, so the job can end in the same commit.
+   */
+  async release(
+    holdId: string,
+    opts: { tx?: Prisma.TransactionClient } = {},
+  ): Promise<PointHoldOutcome> {
+    await this.requireAiHold(holdId, opts.tx);
+    return this.points.release({ holdId }, opts);
   }
 
   /**
@@ -321,8 +328,11 @@ export class PointsSpendService {
   }
 
   /** An AI job's hold, or the same answer as one that never existed (a conversion's hold is not this service's). */
-  private async requireAiHold(holdId: string): Promise<void> {
-    const hold = await this.prisma.pointHold.findUnique({
+  private async requireAiHold(
+    holdId: string,
+    db: Db = this.prisma,
+  ): Promise<void> {
+    const hold = await db.pointHold.findUnique({
       where: { id: holdId },
       select: { purpose: true },
     });

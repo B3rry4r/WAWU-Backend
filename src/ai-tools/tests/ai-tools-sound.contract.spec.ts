@@ -479,6 +479,67 @@ describe('AITOOLS-03: Sound effect and Music track (contract)', () => {
     ]);
   });
 
+  it('check 2: the points going back and the job ending are one step, so a read in between never ends it as a timeout over the provider reason', async () => {
+    await h.grant(PLAIN, SFX * 2);
+    const spend = h.spend;
+    const release = spend.release.bind(spend);
+    for (const [marker, code] of [
+      ['[[fail]]', 'provider_unavailable'],
+      ['[[reject]]', 'provider_failed'],
+    ] as const) {
+      // The run is held right after it gives the points back, so the read
+      // below lands exactly there: no clock decides the order. (Before the fix
+      // the points were committed back on their own and the job marked after,
+      // and a read in that gap ended the job as `timed_out`.)
+      let pointsBack!: () => void;
+      const back = new Promise<void>((r) => (pointsBack = r));
+      let letRunOn!: () => void;
+      const gate = new Promise<void>((r) => (letRunOn = r));
+      spend.release = async (holdId, opts) => {
+        const out = await release(holdId, opts);
+        pointsBack();
+        await gate;
+        return out;
+      };
+      try {
+        const res = await createSfx(PLAIN, sfxBody(`${SOUND} ${marker}`));
+        expect(res.status).toBe(202);
+        const id = data<AiJobView>(res).id;
+        await Promise.race([
+          back,
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error('the run never gave the points back')),
+              20_000,
+            ),
+          ),
+        ]);
+        // A read now: the job is not ended over the run's head.
+        const seen = data<AiJobView>(
+          await h
+            .http()
+            .get(`/ai-tools/jobs/${id}`)
+            .set('Authorization', `Bearer ${h.tokensOf[PLAIN]}`),
+        );
+        expect(seen.state).toBe('working');
+        letRunOn();
+        await h.jobs.drain();
+        const after = await h.prisma.aiToolJob.findUniqueOrThrow({
+          where: { id },
+        });
+        expect(after.state).toBe('failed');
+        expect(after.failureCode).toBe(code);
+      } finally {
+        letRunOn();
+        spend.release = release;
+      }
+    }
+    expect((await holdsOf(PLAIN)).every((x) => x.state === 'released')).toBe(
+      true,
+    );
+    expect(await h.balance(PLAIN)).toBe(SFX * 2);
+  });
+
   it('check 2: a job whose audio cannot be stored gives the points back', async () => {
     await h.grant(PLAIN, SFX);
     h.store.failPut = true;
