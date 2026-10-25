@@ -44071,7 +44071,8 @@
                 "points",
                 "credits",
                 "tier",
-                "pass"
+                "pass",
+                "extra_products"
               ]
             }
           },
@@ -44167,7 +44168,8 @@
                 "points",
                 "credits",
                 "tier",
-                "pass"
+                "pass",
+                "extra_products"
               ]
             }
           },
@@ -51464,6 +51466,12 @@
             "description": "pass: the days one period runs.",
             "minimum": 1,
             "maximum": 366
+          },
+          "extraProducts": {
+            "type": "integer",
+            "description": "extra_products: the products one purchase adds. Defaults to the plan's count when left out.",
+            "minimum": 1,
+            "maximum": 2147483647
           }
         }
       },
@@ -51489,7 +51497,8 @@
               "points",
               "credits",
               "tier",
-              "pass"
+              "pass",
+              "extra_products"
             ],
             "type": "string"
           },
@@ -78591,6 +78600,10 @@
           "days": {
             "type": "number",
             "nullable": true
+          },
+          "extraProducts": {
+            "type": "number",
+            "nullable": true
           }
         },
         "required": [
@@ -78616,6 +78629,10 @@
             "nullable": true
           },
           "days": {
+            "type": "number",
+            "nullable": true
+          },
+          "extraProducts": {
             "type": "number",
             "nullable": true
           }
@@ -78647,6 +78664,7 @@
             "type": "string",
             "enum": [
               "tier",
+              "extra_products",
               "credits",
               "points",
               "pass"
@@ -78781,6 +78799,7 @@
             "type": "string",
             "enum": [
               "tier",
+              "extra_products",
               "credits",
               "points",
               "pass"
@@ -78925,6 +78944,7 @@
             "type": "string",
             "enum": [
               "tier",
+              "extra_products",
               "credits",
               "points",
               "pass"
@@ -79004,6 +79024,10 @@
             "type": "string",
             "nullable": true
           },
+          "extraProducts": {
+            "type": "number",
+            "nullable": true
+          },
           "until": {
             "type": "string",
             "nullable": true
@@ -79017,6 +79041,7 @@
           "points",
           "credits",
           "tierId",
+          "extraProducts",
           "until",
           "communityId"
         ]
@@ -79041,6 +79066,7 @@
             "type": "string",
             "enum": [
               "tier",
+              "extra_products",
               "credits",
               "points",
               "pass"

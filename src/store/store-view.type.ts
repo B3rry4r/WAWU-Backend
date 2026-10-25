@@ -21,6 +21,12 @@ export interface StoreGrantsView {
   tierId: string | null;
   /** Days a tier or a pass runs for each period; null for points and credits. */
   days: number | null;
+  /**
+   * Products an upload pack adds to the person's tier (IAP-03, "Add 5 more
+   * products"). Present, and a number, only on an `extra_products` product;
+   * absent on the other kinds.
+   */
+  extraProducts?: number | null;
 }
 
 /** One product on sale in a store. */
@@ -31,7 +37,7 @@ export interface StoreProductView {
   storeProductId: string;
   kind: StoreProductKind;
   title: string;
-  /** True for a tier or a pass, which the store renews; false for a points or credits pack. */
+  /** True for a tier or a pass, which the store renews; false for a points, credits or upload pack. */
   subscription: boolean;
   grants: StoreGrantsView;
 }
@@ -61,6 +67,8 @@ export interface StoreGrantedView {
   points: number | null;
   credits: number | null;
   tierId: string | null;
+  /** Products an upload pack added (IAP-03); null for the other kinds. */
+  extraProducts: number | null;
   /** When the tier or pass now ends (ISO 8601). */
   until: string | null;
   communityId: string | null;
@@ -97,6 +105,8 @@ export interface StoreProductGrantsConfig {
   tierId: string | null;
   /** pass: the days one period runs. */
   days: number | null;
+  /** extra_products (IAP-03): the products one purchase adds. Absent on the other kinds. */
+  extraProducts?: number | null;
 }
 
 export interface AdminStoreProductView {
@@ -108,7 +118,7 @@ export interface AdminStoreProductView {
   grants: StoreProductGrantsConfig;
   /** What the grant gives right now, resolved from the plan (display). */
   resolved: StoreGrantsView;
-  /** Kobo one purchase is worth before the store's share; null for points and tiers. */
+  /** Kobo one purchase is worth before the store's share; null for points, tiers and upload packs. */
   referenceKobo: number | null;
   active: boolean;
   sortOrder: number;

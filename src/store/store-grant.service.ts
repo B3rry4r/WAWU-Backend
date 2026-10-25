@@ -14,12 +14,17 @@ import {
 import { PAYEE_SHARE_BPS } from '../money/payments/payment-config';
 import { MakerTierService } from '../plans/maker-tier.service';
 import {
+  INT4_MAX,
   PLANS_CONFIG,
   priceIn,
   tierById,
   type PlansConfig,
 } from '../plans/plans-config';
 import { lockPersonTier, TierGrantService } from '../plans/tier-grant.service';
+import {
+  EXTRA_PRODUCTS_TOO_MANY_MESSAGE,
+  TIER_REQUIRED_MESSAGE,
+} from '../plans/purchases/extra-products-rules';
 import { pricePack } from '../plans/purchases/points-pack-rules';
 import { PurchaseRefusal } from '../plans/purchases/plan-purchase-rules';
 import { PointsService } from '../points/points.service';
@@ -61,6 +66,8 @@ export interface StoreGrantSnapshot {
   days?: number;
   until?: string;
   bonusPoints?: number;
+  /** Products an upload pack added to the tier row (IAP-03). */
+  extraProducts?: number;
   communityId?: string;
   /** Set when the purchase was recorded and nothing was given: `member_removed`. */
   skipped?: string;
@@ -76,7 +83,10 @@ export interface StoreGrantSnapshot {
  *    one that runs), which also gives the tier's bonus points and event pass;
  *  - credits: `addCreditsWithLot` (the balance and the cost-basis lot), the
  *    lot's gross being WAWU's net after the store's share;
- *  - passes: `grantPassPeriod` (the chained period and the membership).
+ *  - passes: `grantPassPeriod` (the chained period and the membership);
+ *  - upload packs (IAP-03): the count is added to the tier row's
+ *    `extraProducts` and written to `MakerExtraProducts` (keyed `store:<id>`),
+ *    as the wallet's `extra_products` payment writes them.
  *
  * Nothing here calls a store or any network; the caller has already verified
  * the purchase and holds no connection across that call.
@@ -232,6 +242,47 @@ export class StoreGrantService {
           bonusPoints: outcome.pointsGranted,
         };
       }
+      case 'extra_products': {
+        const count = grants.extraProducts;
+        if (count === null || count === undefined || count < 1)
+          throw new Error(`Product ${product.id} names no products.`);
+        // What the wallet path does, under the same lock. The store has been
+        // paid, so a tier that has ended still takes the products (they wait
+        // for the next tier, as a late wallet payment's do); a person who has
+        // never held a tier has nowhere to keep them and is refused, which
+        // leaves the purchase unfinished in the store.
+        await lockPersonTier(tx, userId);
+        const held = await tx.makerTier.findUnique({
+          where: { wawuUserId: userId },
+          select: { tierId: true, extraProducts: true },
+        });
+        if (held === null) throw grantFailed(TIER_REQUIRED_MESSAGE);
+        if (held.extraProducts + count > INT4_MAX)
+          throw grantFailed(EXTRA_PRODUCTS_TOO_MANY_MESSAGE);
+        // The store purchase row is the once-only gate; this key makes the
+        // record itself once-only too.
+        const { count: written } = await tx.makerExtraProducts.createMany({
+          data: [
+            {
+              paymentRef: ref,
+              wawuUserId: userId,
+              tierId: held.tierId,
+              products: count,
+              currency: 'NGN',
+              amountMinor:
+                purchase.referenceKobo ??
+                priceIn(this.plans.extraProducts.price, 'NGN'),
+            },
+          ],
+          skipDuplicates: true,
+        });
+        if (written > 0)
+          await tx.makerTier.update({
+            where: { wawuUserId: userId },
+            data: { extraProducts: { increment: count } },
+          });
+        return { kind: 'extra_products', extraProducts: count };
+      }
       case 'pass': {
         const days = grants.days ?? 0;
         const communityId = purchase.communityId;
@@ -336,6 +387,23 @@ export class StoreGrantService {
         }
         return { daysRemoved, bonusPoints: r.taken };
       }
+      case 'extra_products': {
+        // The products come off the tier row, never below none: an admin may
+        // have changed the account since, and what is not there is not taken.
+        await lockPersonTier(tx, userId);
+        const given = snap.extraProducts ?? 0;
+        const held = await tx.makerTier.findUnique({
+          where: { wawuUserId: userId },
+          select: { extraProducts: true },
+        });
+        const taken = held === null ? 0 : Math.min(given, held.extraProducts);
+        if (taken > 0)
+          await tx.makerTier.update({
+            where: { wawuUserId: userId },
+            data: { extraProducts: { decrement: taken } },
+          });
+        return { extraProducts: taken, grantedExtraProducts: given };
+      }
       case 'pass': {
         const reference = storePassReference(purchase.id);
         const pass = await tx.communityPass.findUnique({
@@ -369,6 +437,7 @@ export class StoreGrantService {
       points: snap.points ?? null,
       credits: snap.credits ?? null,
       tierId: snap.tierId ?? null,
+      extraProducts: snap.extraProducts ?? null,
       until: snap.until ?? null,
       communityId: snap.communityId ?? communityId,
     };

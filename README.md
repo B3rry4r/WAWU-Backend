@@ -767,6 +767,16 @@ The grant is the wallet paths' own code (`PointsService.grant`, `TierGrantServic
 `(platform, storeTransactionId)`. A refund or revocation takes back what is unspent. The
 creator's 85/15 on credits and passes is worked on WAWU's net after the store's share.
 
+The upload pack, "Add 5 more products" (IAP-03, R-65), is the fifth product kind,
+`extra_products`: a pack bought and consumed like points and credits, with
+`grants: { extraProducts: n }` (the plan's count, 5, when the admin sends none; stored as
+a number). One purchase adds `n` to the person's tier row (`MakerTier.extraProducts`) and
+writes a `MakerExtraProducts` row keyed `store:<purchase id>`, as the wallet's
+`extra_products` payment does; a refund or revocation takes them back, never below none.
+A tier that has ended still takes the pack (the store has been paid; it counts again with
+the next tier). A person who has never held a tier is refused before the store is asked
+(`store_purchase_invalid`, 422). `grants.extraProducts` is present on this kind only.
+
 ## Verification: two ticks, not a ladder
 
 There is no five-rung ladder any more. There are exactly **two** verifications,

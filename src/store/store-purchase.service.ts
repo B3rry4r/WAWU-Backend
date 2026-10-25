@@ -15,6 +15,7 @@ import type {
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { isUniqueViolation } from '../money/prisma-unique';
+import { TIER_REQUIRED_MESSAGE } from '../plans/purchases/extra-products-rules';
 import {
   APP_STORE_CLIENT,
   GOOGLE_PLAY_CLIENT,
@@ -339,6 +340,17 @@ export class StorePurchaseService {
         'store_receipt_missing',
         'An App Store purchase needs its transaction id.',
       );
+    if (product.kind === 'extra_products') {
+      // Checked before the store is asked: the products are kept on the
+      // person's tier row, and a person who has never held a tier has none.
+      const held = await this.prisma.makerTier.findUnique({
+        where: { wawuUserId: userId },
+        select: { wawuUserId: true },
+      });
+      if (held === null)
+        throw new StoreError('store_purchase_invalid', TIER_REQUIRED_MESSAGE);
+      return null;
+    }
     if (product.kind !== 'pass') return null;
     const communityId = dto.communityId;
     if (!communityId || !UUID.test(communityId))
