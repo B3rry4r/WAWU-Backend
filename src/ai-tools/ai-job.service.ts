@@ -747,7 +747,15 @@ export class AiJobService {
     await this.dropInput(job);
   }
 
-  /** The job did not work: every held point goes back, then the job says so. */
+  /**
+   * The job did not work: every held point goes back and the job says so, in
+   * ONE transaction. Apart, there is a moment when the points are back and the
+   * row still says `working`; a read (`reconcile`) landing in it would end the
+   * job as `timed_out` over the run's own reason (a provider that was down
+   * read as a timeout). Together, a read sees the job working with its points
+   * held, or failed for the reason it failed. The transaction holds nothing
+   * across a network call: the provider has already answered.
+   */
   private async fail(
     job: AiToolJob,
     holdId: string,
@@ -755,8 +763,12 @@ export class AiJobService {
     /** A followed job's note of the provider's project, written with the end state. */
     providerRef?: string,
   ): Promise<void> {
+    const end = { failureCode, ...(providerRef ? { providerRef } : {}) };
     try {
-      await this.spend.release(holdId);
+      await this.prisma.$transaction(async (tx) => {
+        await this.spend.release(holdId, { tx });
+        await this.mark(job.id, 'failed', end, tx);
+      });
     } catch (e) {
       if (!(e instanceof PointsError && e.code === 'points_hold_settled')) {
         // The points stay held; the sweep gives them back and `reconcile`
@@ -766,11 +778,10 @@ export class AiJobService {
         );
         return;
       }
+      // The hold was already settled (the sweep gave it back, or a run
+      // committed it): the job still ends as failed, as it always has.
+      await this.mark(job.id, 'failed', end);
     }
-    await this.mark(job.id, 'failed', {
-      failureCode,
-      ...(providerRef ? { providerRef } : {}),
-    });
     await this.dropInput(job);
   }
 
@@ -796,8 +807,9 @@ export class AiJobService {
       outputs?: Prisma.InputJsonValue | typeof Prisma.JsonNull;
       providerRef?: string | null;
     },
+    db: Pick<Prisma.TransactionClient, 'aiToolJob'> = this.prisma,
   ): Promise<void> {
-    await this.prisma.aiToolJob.updateMany({
+    await db.aiToolJob.updateMany({
       where: { id, state: 'working' },
       data: { state, finishedAt: new Date(), ...data },
     });
