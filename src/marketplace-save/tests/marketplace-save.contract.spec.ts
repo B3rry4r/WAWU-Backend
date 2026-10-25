@@ -29,11 +29,21 @@ const USER_PLAIN_EMAIL = 'user@test.wawu.dev';
 const USER_PLAIN_SUB = '00000000-0000-4000-8000-000000000001';
 const USER_CREATOR_BASIC_EMAIL = 'creator-basic@test.wawu.dev';
 
-// A per-process port for this spec file's own instance of the mock WAWU ID
-// service — avoids colliding with sibling resource agents' contract tests
-// running the same mock concurrently on the shared sandbox (each Jest
-// worker process has a distinct pid).
-const MOCK_WAWU_ID_PORT = 45000 + (process.pid % 4000);
+// The mock WAWU ID is the one CI already started ("Start mock WAWU ID" in
+// deploy.yml and branch-checks.yml), found at the port WAWU_ID_JWKS_URL names,
+// as the other contract specs do (purchase.contract.spec.ts is the model). Only
+// when none is up, on a bare local run, does this spec start one at that same
+// port, and it stops only a mock it started itself.
+//
+// It used to start its own on 45000 + (pid % 4000): one fixed number for a
+// whole `jest --runInBand` shard, inside the range the OS hands out for
+// outgoing connections and listen(0). When anything held it, the new mock died
+// on EADDRINUSE with nobody reading its output and every test failed in
+// beforeAll with "did not become healthy in time" (the shop spec's failure in
+// Deploy Hub API run 40206988479).
+const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
+  ? new URL(process.env.WAWU_ID_JWKS_URL).port
+  : '4001';
 const MOCK_WAWU_ID_URL = `http://127.0.0.1:${MOCK_WAWU_ID_PORT}`;
 
 const TEST_TAG = `contract-test-${process.pid}`;
@@ -41,24 +51,31 @@ const NEW_SAVE_PRODUCT_ID = `${TEST_TAG}-new-save`;
 const EXISTING_SAVE_PRODUCT_ID = `${TEST_TAG}-existing-save`;
 const NOT_FOUND_PRODUCT_ID = `${TEST_TAG}-never-saved`;
 
-let mockWawuId: ChildProcessWithoutNullStreams;
+// Set only when this spec started the mock itself.
+let mockWawuId: ChildProcessWithoutNullStreams | undefined;
+let mockWawuIdOutput = '';
+let mockWawuIdExit: string | undefined;
 let app: INestApplication;
 let prisma: PrismaService;
 let plainUserToken: string;
 let creatorBasicToken: string;
 
-async function waitForMockWawuId(): Promise<void> {
-  const deadline = Date.now() + 15_000;
+async function waitForMockWawuId(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    // A mock this spec started that has already died will never answer.
+    if (mockWawuIdExit) return false;
     try {
-      const res = await fetch(`${MOCK_WAWU_ID_URL}/health`);
-      if (res.ok) return;
+      const res = await fetch(`${MOCK_WAWU_ID_URL}/health`, {
+        signal: AbortSignal.timeout(1_000),
+      });
+      if (res.ok) return true;
     } catch {
       // not up yet
     }
     await new Promise((r) => setTimeout(r, 150));
   }
-  throw new Error('mock-wawu-id did not become healthy in time');
+  return false;
 }
 
 async function loginAs(identifier: string): Promise<string> {
@@ -75,14 +92,35 @@ async function loginAs(identifier: string): Promise<string> {
 }
 
 beforeAll(async () => {
-  // 1. Boot a private instance of the mock WAWU ID service (real Express
-  // process, real RS256 signing, real JWKS endpoint) so WawuAuthGuard does
-  // a genuine HTTP JWKS handshake rather than a minted/injected token.
-  mockWawuId = spawn('node', [path.join(__dirname, '../../../mock-wawu-id/server.js')], {
-    env: { ...process.env, MOCK_WAWU_ID_PORT: String(MOCK_WAWU_ID_PORT) },
-    stdio: 'pipe',
-  });
-  await waitForMockWawuId();
+  // 1. Use the mock WAWU ID service CI started (real Express process, real
+  // RS256 signing, real JWKS endpoint) so WawuAuthGuard does a genuine HTTP
+  // JWKS handshake rather than a minted/injected token. Start one here only
+  // when none is up.
+  if (!(await waitForMockWawuId(1_000))) {
+    mockWawuId = spawn(
+      'node',
+      [path.join(__dirname, '../../../mock-wawu-id/server.js')],
+      {
+        env: { ...process.env, MOCK_WAWU_ID_PORT },
+        stdio: 'pipe',
+      },
+    );
+    // Keep what it says, so a mock that cannot start is named, not guessed at.
+    const keep = (chunk: Buffer) => {
+      mockWawuIdOutput = (mockWawuIdOutput + chunk.toString()).slice(-1_000);
+    };
+    mockWawuId.stdout.on('data', keep);
+    mockWawuId.stderr.on('data', keep);
+    mockWawuId.once('exit', (code, signal) => {
+      mockWawuIdExit = `exited (${code ?? signal})`;
+    });
+    if (!(await waitForMockWawuId(15_000))) {
+      throw new Error(
+        `mock-wawu-id did not become healthy in time on port ${MOCK_WAWU_ID_PORT}` +
+          ` (${mockWawuIdExit ?? 'still running'}): ${mockWawuIdOutput}`,
+      );
+    }
+  }
 
   // Point this test's WawuJwtStrategy at our private mock instance instead
   // of whatever WAWU_ID_JWKS_URL the shared .env carries (dotenv never

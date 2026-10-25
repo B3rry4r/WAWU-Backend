@@ -61,11 +61,29 @@ const BUYER_EMAIL = 'user@test.wawu.dev';
 const BUYER_SUB = '00000000-0000-4000-8000-000000000001';
 const OTHER_EMAIL = 'creator-basic@test.wawu.dev';
 
-const MOCK_WAWU_ID_PORT = 46000 + (process.pid % 3000);
+// The mock WAWU ID is the one CI already started ("Start mock WAWU ID" in
+// deploy.yml and branch-checks.yml), found at the port WAWU_ID_JWKS_URL names,
+// as the other contract specs do (purchase.contract.spec.ts is the model). Only
+// when none is up, on a bare local run, does this spec start one at that same
+// port, and it stops only a mock it started itself.
+//
+// It used to start its own on 46000 + (pid % 3000). Under `jest --runInBand`
+// the pid is one number for the whole shard, so that was one fixed port, inside
+// the range the OS hands out for outgoing connections and listen(0). When
+// anything held it, the new mock died on EADDRINUSE with nobody reading its
+// output, the health check got "connection refused" for 15 s, and all 16 tests
+// failed in beforeAll with "did not become healthy in time" (Deploy Hub API run
+// 40206988479, shard 3 of 3, 25 Oct 2026).
+const MOCK_WAWU_ID_PORT = process.env.WAWU_ID_JWKS_URL
+  ? new URL(process.env.WAWU_ID_JWKS_URL).port
+  : '4001';
 const MOCK_WAWU_ID_URL = `http://127.0.0.1:${MOCK_WAWU_ID_PORT}`;
 const TAG = `shop-retired-${process.pid}`;
 
-let mockWawuId: ChildProcessWithoutNullStreams;
+// Set only when this spec started the mock itself.
+let mockWawuId: ChildProcessWithoutNullStreams | undefined;
+let mockWawuIdOutput = '';
+let mockWawuIdExit: string | undefined;
 let app: INestApplication;
 let prisma: PrismaService;
 let flutterwave: FlutterwaveClient;
@@ -87,18 +105,22 @@ function idsOf(res: request.Response): string[] {
   return dataOf<Array<{ id: string }>>(res).map((o) => o.id);
 }
 
-async function waitForMock(): Promise<void> {
-  const deadline = Date.now() + 15_000;
+async function waitForMock(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    // A mock this spec started that has already died will never answer.
+    if (mockWawuIdExit) return false;
     try {
-      const res = await fetch(`${MOCK_WAWU_ID_URL}/health`);
-      if (res.ok) return;
+      const res = await fetch(`${MOCK_WAWU_ID_URL}/health`, {
+        signal: AbortSignal.timeout(1_000),
+      });
+      if (res.ok) return true;
     } catch {
       /* not up yet */
     }
     await new Promise((r) => setTimeout(r, 150));
   }
-  throw new Error('mock-wawu-id did not become healthy in time');
+  return false;
 }
 
 async function loginAs(identifier: string): Promise<string> {
@@ -156,19 +178,35 @@ async function pendingOrderFor(
 }
 
 beforeAll(async () => {
-  mockWawuId = spawn(
-    'node',
-    [path.join(__dirname, '../../../mock-wawu-id/server.js')],
-    {
-      env: {
-        ...process.env,
-        MOCK_WAWU_ID_PORT: String(MOCK_WAWU_ID_PORT),
-        WAWU_ID_INTERNAL_SERVICE_KEY: resolveInternalServiceKey(),
+  if (!(await waitForMock(1_000))) {
+    mockWawuId = spawn(
+      'node',
+      [path.join(__dirname, '../../../mock-wawu-id/server.js')],
+      {
+        env: {
+          ...process.env,
+          MOCK_WAWU_ID_PORT,
+          WAWU_ID_INTERNAL_SERVICE_KEY: resolveInternalServiceKey(),
+        },
+        stdio: 'pipe',
       },
-      stdio: 'pipe',
-    },
-  );
-  await waitForMock();
+    );
+    // Keep what it says, so a mock that cannot start is named, not guessed at.
+    const keep = (chunk: Buffer) => {
+      mockWawuIdOutput = (mockWawuIdOutput + chunk.toString()).slice(-1_000);
+    };
+    mockWawuId.stdout.on('data', keep);
+    mockWawuId.stderr.on('data', keep);
+    mockWawuId.once('exit', (code, signal) => {
+      mockWawuIdExit = `exited (${code ?? signal})`;
+    });
+    if (!(await waitForMock(15_000))) {
+      throw new Error(
+        `mock-wawu-id did not become healthy in time on port ${MOCK_WAWU_ID_PORT}` +
+          ` (${mockWawuIdExit ?? 'still running'}): ${mockWawuIdOutput}`,
+      );
+    }
+  }
   process.env.WAWU_ID_JWKS_URL = `${MOCK_WAWU_ID_URL}/.well-known/jwks.json`;
   process.env.WAWU_ID_BASE_URL = MOCK_WAWU_ID_URL;
 
