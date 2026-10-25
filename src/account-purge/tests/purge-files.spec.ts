@@ -55,10 +55,13 @@ describe('FIX-65: what the purge does with each kind of upload', () => {
     expect(Object.keys(FILE_KINDS).sort()).toEqual([...written].sort());
   });
 
-  it('has no place that writes to the bucket besides the four this table covers', () => {
+  it('has no place that writes to the bucket besides the five this table covers', () => {
     // A new caller of putGenerated or presignUpload (or a new StorageObject
     // writer) may bring a folder of its own: it fails here until that folder
-    // has a decision in FILE_KINDS and this list names the file.
+    // has a decision in FILE_KINDS and this list names the file. The Legal
+    // chat's matter files (R2-LEGAL3) write to the chat folders, which are
+    // decided already (DELETE); the purge also removes the thread lines that
+    // name them (purge-legal-threads.ts, held by purge-files.contract.spec.ts).
     const src = join(__dirname, '../..');
     const found = spawnSync(
       'grep',
@@ -81,6 +84,7 @@ describe('FIX-65: what the purge does with each kind of upload', () => {
     ).toEqual([
       'ai-tools/audio/ai-audio-store.ts',
       'chat/chat.service.ts',
+      'legal-intake/assistant/legal-matter-files.ts',
       'storage/storage.controller.ts',
       'storage/storage.service.ts',
     ]);
