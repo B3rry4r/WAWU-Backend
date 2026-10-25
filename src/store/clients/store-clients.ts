@@ -45,15 +45,23 @@ export interface VerifiedStorePurchase {
    * none.
    */
   accountToken: string | null;
+  /**
+   * The room a pass was bought for, as the store recorded it when the sheet
+   * opened (Google's `obfuscatedExternalProfileId`, which the app sets to the
+   * room's id). Null or absent when the store keeps none: the App Store has no
+   * such field, an older build sent none, and only a pass has a room. The Hub
+   * refuses a pass named for any other room (IAP-03 round 2, F2b).
+   */
+  roomToken?: string | null;
 }
 
 export interface GooglePlayClient {
-  /** A one-time product (points, credits): Google's `purchases.products.get`. */
+  /** A one-time product (points, credits, an upload pack, a community pass): Google's `purchases.products.get`. */
   verifyOneTime(
     storeProductId: string,
     purchaseToken: string,
   ): Promise<VerifiedStorePurchase>;
-  /** A subscription (tier, pass): Google's `purchases.subscriptionsv2.get`. */
+  /** A subscription (a tier): Google's `purchases.subscriptionsv2.get`. */
   verifySubscription(purchaseToken: string): Promise<VerifiedStorePurchase>;
   /** Consumes a one-time product so it can be bought again (this acknowledges it too). */
   consume(storeProductId: string, purchaseToken: string): Promise<void>;

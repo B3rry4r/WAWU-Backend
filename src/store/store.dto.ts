@@ -96,7 +96,7 @@ export class StoreProductGrantsDto {
   @Matches(/^[a-z][a-z0-9_]*$/, { message: 'tierId is not a tier id' })
   tierId?: string;
 
-  /** pass: the days one period runs. */
+  /** pass: the days one purchase gives the room. */
   @ApiPropertyOptional({ type: 'integer' })
   @IsOptional()
   @IsInt()

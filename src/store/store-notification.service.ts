@@ -326,7 +326,8 @@ export class StoreNotificationService {
       userId: holder.wawuUserId,
       product,
       verified,
-      communityId: holder.communityId,
+      // Only a tier is a subscription; a pass is bought once and has no renewal.
+      communityId: null,
     });
     if (settled.alreadyGranted) return 'duplicate';
     // A resubscribe after a lapse puts the subscription back in force.

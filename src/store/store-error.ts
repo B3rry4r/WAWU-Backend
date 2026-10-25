@@ -22,6 +22,11 @@ export type StoreErrorCode =
   | 'store_purchase_pending'
   /** That store transaction was already used by another WAWU account. */
   | 'store_purchase_taken'
+  /**
+   * That store transaction was first given to another room (a community pass is
+   * bound to the person AND the room it first granted). Buy a pass for this room.
+   */
+  | 'store_purchase_other_room'
   /** The store could not be reached or answered something unusable. Safe to ask again. */
   | 'store_unreachable'
   /** A pass was bought for a room that does not sell one, or that the person hosts or cannot join. */
@@ -41,6 +46,7 @@ export const STORE_ERROR_STATUS: Record<StoreErrorCode, HttpStatus> = {
   store_purchase_invalid: HttpStatus.UNPROCESSABLE_ENTITY,
   store_purchase_pending: HttpStatus.CONFLICT,
   store_purchase_taken: HttpStatus.CONFLICT,
+  store_purchase_other_room: HttpStatus.CONFLICT,
   store_unreachable: HttpStatus.SERVICE_UNAVAILABLE,
   store_pass_not_available: HttpStatus.CONFLICT,
   store_product_invalid: HttpStatus.BAD_REQUEST,
@@ -63,6 +69,9 @@ export const DISABLED_MESSAGE =
   'Buying through this store is paused right now.';
 export const UNREACHABLE_MESSAGE =
   'We could not reach the store to check this purchase. Please try again in a moment.';
+
+export const OTHER_ROOM_MESSAGE =
+  'That payment was already used for another room. Buy a new pass for this room.';
 
 export const GRANT_FAILED_MESSAGE =
   'The store has your payment, but we could not finish giving it yet. Please try again in a moment.';

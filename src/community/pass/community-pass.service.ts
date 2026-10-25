@@ -138,13 +138,6 @@ export class CommunityPassService implements OnModuleInit {
     const sellsPass = community.passPrice !== null;
     const removed =
       !isHost && sellsPass && (await this.isRemoved(viewerWawuId, communityId));
-    // A removed member who still holds a store subscription for this room keeps
-    // being billed by the store until they cancel it there (IAP-01).
-    const cancelInStore =
-      removed &&
-      (await this.prisma.storeSubscription.count({
-        where: { wawuUserId: viewerWawuId, communityId, lapsedAt: null },
-      })) > 0;
     return {
       communityId,
       sellsPass,
@@ -157,7 +150,6 @@ export class CommunityPassService implements OnModuleInit {
       canRenew: sellsPass && !isHost && !removed && until !== null,
       canBuy: sellsPass && !isHost && !removed,
       isHost,
-      cancelInStore,
     };
   }
 

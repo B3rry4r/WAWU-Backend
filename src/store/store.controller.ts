@@ -65,7 +65,7 @@ export class StoreController {
    * Refusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,
    * `store_product_unknown` (404), `store_receipt_missing` (400),
    * `store_purchase_invalid` (422), `store_purchase_pending`,
-   * `store_purchase_taken` (that purchase, or that subscription, was already used on another account, or was made with another account's token), `store_account_token_missing` (422, the purchase carries no account token),
+   * `store_purchase_taken` (that purchase, or that subscription, was already used on another account, or was made with another account's token), `store_purchase_other_room` (409, a pass payment was first given to another room), `store_account_token_missing` (422, the purchase carries no account token),
    * `store_pass_not_available`, `store_unreachable` (503, safe to repeat) and `store_grant_failed` (500, the store has the payment but the Hub could not finish; ask again).
    */
   @Post('purchases')

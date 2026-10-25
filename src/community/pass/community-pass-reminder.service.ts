@@ -13,7 +13,9 @@ export const REMINDERS_PER_RUN = 500;
  * in-app notice, pushed to the phone through INBOX-03 (the kind
  * `community_pass_ending` is sent by the push policy), with the renew tap as
  * its destination. It only tells the person. Nothing is debited, here or
- * anywhere: renewing is a payment the person confirms with their PIN.
+ * anywhere: renewing is a payment the person confirms themselves (the wallet's
+ * PIN, or the store's sheet for a pass bought there, which is bought once and
+ * does not renew itself).
  *
  * **One per pass.** A pass is reminded when it is the person's latest (no later
  * pass of theirs in the room, so a person who already renewed is not told to),
@@ -52,14 +54,13 @@ export class CommunityPassReminderService {
   /** The sweep itself, callable directly. Returns how many reminders it sent. */
   async run(now: Date = new Date()): Promise<number> {
     const windowEnd = reminderWindowEnd(now);
-    // The passes that are due (a store pass is not one: the store renews it, IAP-01): running, inside the window, not reminded, the
-    // person's latest in the room (so not renewed), and the person still in.
+    // The passes that are due (a pass bought in a store is one too: it is bought once and does not renew itself, IAP-03 round 2):
+    // running, inside the window, not reminded, the person's latest in the room (so not renewed), and the person still in.
     const due = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT p."id"
         FROM "CommunityPass" p
        WHERE p."reminderSentAt" IS NULL
          AND p."endsAt" > ${now} AND p."endsAt" <= ${windowEnd}
-         AND p."walletPaymentId" NOT LIKE 'store:%'
          AND NOT EXISTS (SELECT 1 FROM "CommunityPass" q
                           WHERE q."communityId" = p."communityId"
                             AND q."userWawuId" = p."userWawuId"

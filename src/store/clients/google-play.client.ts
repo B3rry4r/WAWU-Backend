@@ -71,6 +71,7 @@ export class RealGooglePlayClient implements GooglePlayClient {
       refundableQuantity?: number;
       productId?: string;
       obfuscatedExternalAccountId?: string;
+      obfuscatedExternalProfileId?: string;
     }>(
       'GET',
       `purchases/products/${enc(storeProductId)}/tokens/${enc(purchaseToken)}`,
@@ -93,6 +94,11 @@ export class RealGooglePlayClient implements GooglePlayClient {
       environment: body.purchaseType === 0 ? 'sandbox' : 'production',
       storeProductId: body.productId ?? storeProductId,
       accountToken: accountTokenOf(body.obfuscatedExternalAccountId),
+      roomToken:
+        typeof body.obfuscatedExternalProfileId === 'string' &&
+        body.obfuscatedExternalProfileId !== ''
+          ? body.obfuscatedExternalProfileId
+          : null,
       storeTransactionId:
         typeof body.orderId === 'string' && body.orderId !== ''
           ? body.orderId

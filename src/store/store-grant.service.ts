@@ -329,7 +329,8 @@ export class StoreGrantService {
    * Takes back what `purchase` gave, inside `tx`, because the store paid it
    * back or withdrew it. Points and credits not yet spent are taken; what was
    * spent stays spent. A tier loses the days this purchase added (never past
-   * now) and its bonus points lot; a pass period ends now. Returns what was
+   * now) and its bonus points lot; a pass period ends now (and the periods
+   * stacked behind it move up by what it had left). Returns what was
    * actually taken, which the row keeps.
    */
   async takeBack(
@@ -411,8 +412,13 @@ export class StoreGrantService {
         });
         if (pass === null) return { passEnded: false };
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`community-pass:${pass.communityId}:${userId}`}))`;
+        let daysRemoved = 0;
         if (pass.endsAt.getTime() > now.getTime()) {
           const startsBefore = pass.startsAt.getTime() < now.getTime();
+          // What this purchase had left to give: the unexpired part of its period.
+          const leftMs =
+            pass.endsAt.getTime() -
+            Math.max(now.getTime(), pass.startsAt.getTime());
           await tx.communityPass.update({
             where: { id: pass.id },
             data: {
@@ -422,8 +428,26 @@ export class StoreGrantService {
                 : { startsAt: new Date(now.getTime() - 1) }),
             },
           });
+          // A pass is bought once, so renewing stacks a later period behind this
+          // one. Those periods move up by what this purchase had left, or the
+          // person would keep its days (access follows the latest end) after the
+          // store paid them back.
+          await tx.$executeRaw`
+            UPDATE "CommunityPass"
+               SET "startsAt" = "startsAt" - (${leftMs}::double precision * interval '1 millisecond'),
+                   "endsAt" = "endsAt" - (${leftMs}::double precision * interval '1 millisecond')
+             WHERE "communityId" = ${pass.communityId}
+               AND "userWawuId" = ${userId}
+               AND "id" <> ${pass.id}
+               AND "refundId" IS NULL
+               AND "startsAt" >= ${pass.endsAt}`;
+          daysRemoved = Math.round(leftMs / DAY_MS);
         }
-        return { passEnded: true, communityId: pass.communityId };
+        return {
+          passEnded: true,
+          communityId: pass.communityId,
+          daysRemoved,
+        };
       }
     }
   }

@@ -19,9 +19,17 @@ import type {
 /** The longest pass period an admin may set, in days. */
 export const MAX_PASS_DAYS = 366;
 
-/** A tier or a pass is a subscription in the store; a points, credits or upload pack is bought and consumed. */
+/**
+ * A tier is an auto-renewing subscription in the store. Points, credits, an
+ * upload pack and a community pass are bought once: a pass is a ONE-TIME
+ * 30-day purchase for one room (Google Play: a consumable in-app product; the
+ * App Store: a non-renewing subscription), because Google and Apple let an
+ * account hold a given subscription product only once, so one subscription per
+ * price point could not cover two rooms (IAP-03 round 2, Default (lead), owner
+ * may override). Renewing a pass is buying it again.
+ */
 export function isSubscriptionKind(kind: StoreProductKind): boolean {
-  return kind === 'tier' || kind === 'pass';
+  return kind === 'tier';
 }
 
 /**
@@ -64,9 +72,10 @@ const bad = (message: string) =>
  *  - credits: `pack` (starter, popular or pro). The reference defaults to the
  *    pack's wallet price (Default (lead), owner may override).
  *  - tier: `tierId` of a tier of the plan. No reference.
- *  - pass: `days`. The reference is required: the room's price is the host's,
- *    but a store sells fixed price points, so the admin states what this
- *    product is worth.
+ *  - pass: `days`, what ONE purchase gives the room named in it (30). The
+ *    reference is required: the room's price is the host's, but a store sells
+ *    fixed price points, so the admin states what this product is worth. One
+ *    product per price point (`wawu.pass.30.a`, `wawu.pass.30.b`, and so on).
  *  - extra_products (IAP-03): `extraProducts`, a whole number of products the
  *    pack adds to the tier. It defaults to the plan's count (R-65, 5) when the
  *    admin sends none, and is stored as a number so a later change to the

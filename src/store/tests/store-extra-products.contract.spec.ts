@@ -19,6 +19,8 @@ import { AdminRole } from '../../../generated/prisma/enums';
 import { AdminTokenService } from '../../admin/auth/admin-token.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PLANS_CONFIG, type PlansConfig } from '../../plans/plans-config';
+import { PublishingGate } from '../../plans/publishing-gate.service';
+import { TierGateError } from '../../plans/tier-gate-error';
 import { loadPlansConfig } from '../../plans/plans-config';
 import { checkProduct, resolveGrants } from '../store-grants';
 import { StoreError } from '../store-error';
@@ -201,6 +203,9 @@ describe('IAP-03: buying more products in a store (stand-in stores)', () => {
       where: { wawuUserId: { in: PEOPLE } },
     });
     await prisma.makerTier.deleteMany({
+      where: { wawuUserId: { in: PEOPLE } },
+    });
+    await prisma.creatorState.deleteMany({
       where: { wawuUserId: { in: PEOPLE } },
     });
     await prisma.storePurchase.deleteMany({});
@@ -706,6 +711,63 @@ describe('IAP-03: buying more products in a store (stand-in stores)', () => {
       extraProducts: 1,
       grantedExtraProducts: COUNT(),
     });
+  });
+
+  it('the real publishing gate (F3): refused at the tier limit, open up to the extra places after the grant, refused again after the refund, and nothing published comes down', async () => {
+    await giveTier(BUYER);
+    const gate = moduleRef.get(PublishingGate, { strict: false });
+    const base = plans.tiers[0].products;
+    const published = (n: number) =>
+      prisma.creatorState.upsert({
+        where: { wawuUserId: BUYER },
+        create: { wawuUserId: BUYER, slotsUsed: n },
+        update: { slotsUsed: n },
+      });
+    const gateSays = async () => {
+      try {
+        await gate.assertRoomForProduct(BUYER);
+        return 'open';
+      } catch (e) {
+        return e instanceof TierGateError ? e.code : 'other';
+      }
+    };
+    const myTier = async () =>
+      dataOf<{ productsAllowed: number; productsUsed: number }>(
+        await as(buyer).get('/me/tier').expect(200),
+      );
+    await prisma.creatorState.deleteMany({ where: { wawuUserId: BUYER } });
+    // Every place the tier gives is used: the next product is refused.
+    await published(base);
+    expect(await gateSays()).toBe('product_limit_reached');
+    expect(await myTier()).toMatchObject({
+      productsAllowed: base,
+      productsUsed: base,
+    });
+    // The pack is bought in the store: the gate opens, one place at a time up to the new limit.
+    const order = googlePack('tok-gate');
+    await buyGoogle(buyer, 'tok-gate').expect(201);
+    expect(await myTier()).toMatchObject({ productsAllowed: base + COUNT() });
+    for (let n = base; n < base + COUNT(); n += 1) {
+      await published(n);
+      expect(await gateSays()).toBe('open');
+    }
+    await published(base + COUNT());
+    expect(await gateSays()).toBe('product_limit_reached');
+    // The store pays the pack back: the limit falls to the tier's, the gate refuses
+    // the next one again, and the products already published are left up.
+    expect(outcomeOf(await push(voided(order)).expect(200))).toBe('taken_back');
+    expect(await myTier()).toMatchObject({
+      productsAllowed: base,
+      productsUsed: base + COUNT(),
+    });
+    expect(await gateSays()).toBe('product_limit_reached');
+    expect(
+      (
+        await prisma.creatorState.findUniqueOrThrow({
+          where: { wawuUserId: BUYER },
+        })
+      ).slotsUsed,
+    ).toBe(base + COUNT());
   });
 
   it("Apple's refund takes the products back too", async () => {

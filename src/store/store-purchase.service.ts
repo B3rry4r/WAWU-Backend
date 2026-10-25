@@ -38,6 +38,7 @@ import {
   DISABLED_MESSAGE,
   GRANT_FAILED_MESSAGE,
   NOT_CONFIGURED_MESSAGE,
+  OTHER_ROOM_MESSAGE,
   StoreError,
   UNREACHABLE_MESSAGE,
 } from './store-error';
@@ -117,6 +118,16 @@ export class StorePurchaseService {
     // The purchase must be this person's: the store's answer carries the account
     // token the app bound it to (a purchase token alone proves nothing).
     await this.accounts.assertBound(userId, product.kind, verified);
+    // A pass is for the room the sheet was opened for: where the store recorded
+    // that room, a different one is refused, so the room on screen can never be
+    // swapped in for a held transaction's own (IAP-03 round 2, F2b).
+    if (
+      product.kind === 'pass' &&
+      verified.roomToken &&
+      communityId !== null &&
+      verified.roomToken.toLowerCase() !== communityId.toLowerCase()
+    )
+      throw new StoreError('store_purchase_other_room', OTHER_ROOM_MESSAGE);
 
     const settled = await this.settle({
       userId,
@@ -181,8 +192,7 @@ export class StorePurchaseService {
       const existing = await this.prisma.storePurchase.findUnique({
         where: key,
       });
-      if (existing !== null)
-        return { purchase: existing, alreadyGranted: true };
+      if (existing !== null) return heldBy(existing, userId, communityId);
       const fee = (await this.catalog.availability(platform)).feeBps;
       const referenceKobo = product.referenceKobo;
       const netKobo = referenceKobo === null ? null : netOf(referenceKobo, fee);
@@ -209,7 +219,7 @@ export class StorePurchaseService {
           }
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-purchase:${platform}:${verified.storeTransactionId}`}, 0))`;
           const again = await tx.storePurchase.findUnique({ where: key });
-          if (again !== null) return { purchase: again, alreadyGranted: true };
+          if (again !== null) return heldBy(again, userId, communityId);
           if (holderKey !== null && subscriptionKey !== null)
             await tx.storeSubscription.upsert({
               where: holderKey,
@@ -217,7 +227,8 @@ export class StorePurchaseService {
                 platform,
                 subscriptionKey,
                 wawuUserId: userId,
-                communityId: product.kind === 'pass' ? communityId : null,
+                // A subscription is a tier's; a pass is bought once and has no holder row.
+                communityId: null,
               },
               update: {},
             });
@@ -406,6 +417,27 @@ export class StorePurchaseService {
       throw e;
     }
   }
+}
+
+/**
+ * A store transaction the Hub already has. It is returned as granted, with one
+ * refusal: a community pass is bound to the person AND the room it first
+ * granted, so the same person naming another room for it gets nothing (the
+ * room on screen is never swapped in for a held transaction's own, IAP-03
+ * round 2, F2b). Another person's is returned and refused by the caller.
+ */
+function heldBy(
+  existing: StorePurchase,
+  userId: string,
+  communityId: string | null,
+): Settled {
+  if (
+    existing.kind === 'pass' &&
+    existing.wawuUserId === userId &&
+    existing.communityId !== communityId
+  )
+    throw new StoreError('store_purchase_other_room', OTHER_ROOM_MESSAGE);
+  return { purchase: existing, alreadyGranted: true };
 }
 
 function taken(): StoreError {
