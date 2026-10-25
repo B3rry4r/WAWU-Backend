@@ -11,7 +11,10 @@ import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { LegalAssistantService } from './legal-assistant.service';
-import { SendAssistantMessageDto } from './dto/legal-assistant.dto';
+import {
+  SendAssistantMessageDto,
+  StartFixedPriceDto,
+} from './dto/legal-assistant.dto';
 import type {
   LegalAssistantThread,
   LegalAssistantTopic,
@@ -35,7 +38,11 @@ import type {
  * (409), `assistant_busy` (409, another paid call for this conversation is
  * running), `assistant_conversation_full` (409), `assistant_rate_limited`
  * (429, `retryAfterSeconds`), `assistant_unavailable` (503; a client message
- * is kept, and `POST {id}/reply` asks again).
+ * is kept, and `POST {id}/reply` asks again), `assistant_at_capacity` (503;
+ * the provider's allowance is spent: the message is kept, the assistant is
+ * busy, and asking again later works), `fixed_price_matter` (409, Send for a
+ * matter that starts from `POST {id}/start`) and `not_fixed_price` (409,
+ * `start` for a matter that needs a consultant first).
  *
  * Limits, per person and checked together with the write so parallel requests
  * cannot beat them: 30 paid calls an hour (a client message, before or after
@@ -107,5 +114,20 @@ export class LegalAssistantController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<LegalAssistantThread> {
     return this.service.sendToConsultant(user.sub, id);
+  }
+
+  /**
+   * "Start this request" (S24, S26): a matter with a fixed price becomes a
+   * request at that price with no consultation (409 `not_fixed_price` when
+   * the matter has none). Nothing is charged: the letter is signed on the
+   * matter, then the fee is paid. Starting twice answers the same thread.
+   */
+  @Post(':id/start')
+  startFixedPrice(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: StartFixedPriceDto,
+  ): Promise<LegalAssistantThread> {
+    return this.service.startFixedPrice(user.sub, id, dto.firstNameChoice);
   }
 }

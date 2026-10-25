@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { LivePublisher } from '../live/live-publisher.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { type AdminActor } from '../common/audit/admin-ops-audit.service';
 import { LegalAssistantAllowance } from '../legal-intake/assistant/legal-assistant-allowance';
@@ -42,6 +43,7 @@ export class LegalDeliverablesService {
     private readonly allowance: LegalAssistantAllowance,
     private readonly storage: StorageService,
     private readonly rule: LegalDeliveryRule,
+    private readonly live: LivePublisher,
   ) {}
 
   /**
@@ -95,6 +97,7 @@ export class LegalDeliverablesService {
         : this.storage.readUrlFor(keys[i]);
 
     let posted: { fileName: string; url: string }[] = [];
+    let lastMessageId: string | null = null;
     try {
       // Under the client's lock (LEGAL-01), so each handover to the consultant
       // is ordered against the client's own messages. The files, the chat
@@ -133,6 +136,7 @@ export class LegalDeliverablesService {
                 createdAt,
               },
             });
+            lastMessageId = message.id;
             await tx.legalDeliverable.create({
               data: {
                 legalRequestId: requestId,
@@ -196,6 +200,15 @@ export class LegalDeliverablesService {
     }
 
     if (posted.length > 0) {
+      // R2-LEGAL2 (CHECK-3 L-4, G-502): the open matter learns of the files
+      // at once, as it does for a consultant's message. Never throws.
+      if (lastMessageId !== null) {
+        await this.live.publish({
+          kind: 'legal.thread',
+          legalRequestId: requestId,
+          messageId: lastMessageId,
+        });
+      }
       await this.notifications.emit({
         kind: 'legal_delivered',
         userWawuId: request.wawuUserId,

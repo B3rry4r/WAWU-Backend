@@ -58,6 +58,12 @@ export interface LegalAssistantBrief {
   rows: LegalAssistantBriefRow[];
   /** True when it can be sent to a consultant. */
   ready: boolean;
+  /**
+   * The line under "Send to a consultant" (S16): "Nothing is charged yet."
+   * Set while the brief can still be sent, and only because it is true:
+   * sending opens a matter with no fee on it. Null once sent (G-500).
+   */
+  note: string | null;
 }
 
 /** The consultant who has joined the conversation (S17). */
@@ -65,6 +71,25 @@ export interface LegalAssistantConsultant {
   /** The consultant's name as WAWU Legal holds it; null if none is recorded. */
   name: string | null;
   joinedAt: Date;
+}
+
+/**
+ * The fixed-price service this conversation's matter starts as (S24, S26;
+ * R2-LEGAL2, BACKEND_GAPS G-LEGAL-06-1): set when the matter maps to a
+ * `simple` catalogue service that WAWU has put a price on in admin (R-14).
+ * The price is that record's, never a number in the app or here.
+ */
+export interface LegalAssistantFixedPrice {
+  /** The catalogue service's code ("cac-registration"). */
+  code: string;
+  name: string;
+  blurb: string;
+  /** Whole naira, as WAWU set it in admin. */
+  priceNaira: number;
+  /** How long it takes ("5 to 7 working days"), or null when WAWU says none. */
+  turnaround: string | null;
+  /** What the person needs to hand over, one short phrase each; empty when none is named. */
+  needs: string[];
 }
 
 /**
@@ -97,6 +122,17 @@ export interface LegalAssistantThread {
   legalRequestId: string | null;
   /** That matter's status (`awaiting_quote` until a consultant prices it). */
   requestStatus: string | null;
+  /**
+   * That matter's path: `consultation` (talk to a consultant, book, quote) or
+   * `simple` (a fixed-price service with no consultation). Null until sent.
+   */
+  requestPath: 'simple' | 'consultation' | null;
+  /**
+   * Set while this conversation can start a fixed-price request in place of
+   * being sent to a consultant (S24). `POST /legal/assistant/{id}/start`
+   * starts it; sending is refused for such a matter.
+   */
+  fixedPrice: LegalAssistantFixedPrice | null;
   /** Set once a consultant has written in the conversation. */
   consultant: LegalAssistantConsultant | null;
   /** True once a consultant has joined: the assistant answers no more. */
