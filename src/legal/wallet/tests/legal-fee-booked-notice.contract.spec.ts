@@ -5,8 +5,10 @@ import {
   type PayPerson,
 } from '../../../../test/payments/wallet-pay-harness';
 import { body } from '../../../../test/payments/poll-helpers';
+import { PayableRegistry } from '../../../money/payments/payable-registry';
 import { NotificationModule } from '../../../notification/notification.module';
 import { LegalFeeWalletModule } from '../legal-fee-wallet.module';
+import { LEGAL_FEE_KIND } from '../legal-fee-wallet.service';
 import type {
   LegalFeeWalletQuoteView,
   LegalFeeWalletView,
@@ -24,6 +26,13 @@ import type {
  * it, so this spec was not red first by reading nothing. It is not vacuous: the
  * "web flow" and "work fee" cases fail if the row is written for them, and the
  * "assistant" case fails if no row is written.
+ *
+ * Round 3 (verifier F5): the "once" case that matters is the delivery run a
+ * second time (the payment sweep does that when the first run was cut off
+ * before it was recorded). The second run does not grant, so only the
+ * `result.granted &&` guard before `consultationBooked` keeps it from writing
+ * a second row; the case "delivered a second time" is red with that guard
+ * removed (checked locally, never committed) and green with it.
  */
 
 jest.setTimeout(180_000);
@@ -158,6 +167,38 @@ describe('A paid consultation reaches the notification list (R2-MONEY2 round 2)'
     await pay(payer, id);
     const again = await h.get(payer, `/legal/requests/${id}/pay/wallet/quote`);
     expect(again.status).toBe(409);
+    expect(await rows(payer, 'legal_consultation_booked')).toHaveLength(1);
+  });
+
+  it('writes the row once when the same payment is delivered a second time (the sweep can run a delivery twice)', async () => {
+    const payer = await h.person(RICH);
+    const id = await consultation(payer, true);
+    const paid = await pay(payer, id);
+    expect(await rows(payer, 'legal_consultation_booked')).toHaveLength(1);
+
+    const p = await h.prisma.walletPayment.findUniqueOrThrow({
+      where: { id: paid.id },
+    });
+    const handler = h.app.get(PayableRegistry).get(LEGAL_FEE_KIND);
+    if (!handler?.onCompleted)
+      throw new Error('The legal fee kind registers no delivery.');
+    // The delivery as the sweep hands it over, run again for the same payment.
+    await handler.onCompleted({
+      paymentId: p.id,
+      payerWawuUserId: payer.id,
+      kind: LEGAL_FEE_KIND,
+      targetId: p.targetId,
+      priceKobo: Number(p.priceKobo),
+      payeeWawuUserId: p.payeeWawuUserId,
+      note: p.note,
+      holdId: null,
+      terms: { stage: 'consultation', feeNaira: CONSULT_NAIRA },
+    });
+
+    const now = await h.prisma.legalRequest.findUniqueOrThrow({
+      where: { id },
+    });
+    expect(now.status).toBe('consultation_scheduled');
     expect(await rows(payer, 'legal_consultation_booked')).toHaveLength(1);
   });
 
