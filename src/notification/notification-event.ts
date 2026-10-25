@@ -59,6 +59,9 @@ type CoreNotificationKind =
   // LEGAL-03: documents WAWU delivered on a legal request.
   /** Documents were delivered on a legal request. Recipient: the client. */
   | 'legal_delivered'
+  // R2-LEGAL2 (CHECK-3 H-1): the consultant's quote is ready to read and sign.
+  /** A consultant priced a legal request. Recipient: the client. */
+  | 'legal_quote_ready'
   // HOME-16 (R-59): TGIF reaches Home as a daily notification.
   /** The day's TGIF is ready. Recipient: each person who keeps "TGIF each morning" on. */
   | 'tgif_daily'
@@ -204,6 +207,17 @@ type NotificationEventCore =
       requestId: string;
       serviceName: string;
       fileCount: number;
+    }
+  /**
+   * R2-LEGAL2 (CHECK-3 H-1, S21). A consultant priced a legal request, so the
+   * quote and the engagement letter are waiting. Recipient: the client. The
+   * tap opens the matter (`/legal/requests/<id>`), where the letter is signed.
+   */
+  | {
+      kind: 'legal_quote_ready';
+      userWawuId: string;
+      requestId: string;
+      serviceName: string;
     }
   /**
    * HOME-16 (R-59). The day's TGIF is ready: the daily notice, made once per
@@ -694,8 +708,8 @@ export function composeNotification(
         // No matter or service name: a lock screen must not show what kind
         // of legal matter someone has.
         body: one
-          ? 'Your consultant has sent you a document. It is in your legal chat.'
-          : `Your consultant has sent you ${event.fileCount} documents. They are in your legal chat.`,
+          ? 'Your consultant has sent you a document. Open your request to see it.'
+          : `Your consultant has sent you ${event.fileCount} documents. Open your request to see them.`,
         tone: 'success',
         amount: null,
         creditsCount: null,
@@ -705,6 +719,26 @@ export function composeNotification(
         campaignId: null,
       };
     }
+
+    /**
+     * R2-LEGAL2 (S21). The quote is ready. The words are true of where the tap
+     * goes: the matter, which asks for the signature. No matter or service
+     * name, as on `legal_delivered`: a lock screen must not show what kind of
+     * legal matter someone has.
+     */
+    case 'legal_quote_ready':
+      return {
+        ...base,
+        title: 'Your quote is ready',
+        body: 'Your consultant has sent you a quote. Open your request to read it and sign.',
+        tone: 'info',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'Open request',
+        imageUrl: null,
+        actionHref: `/legal/requests/${event.requestId}`,
+        campaignId: null,
+      };
 
     /**
      * HOME-16 (R-59). The title is the day's TGIF title (the series, as the
@@ -1284,6 +1318,7 @@ export const NOTIFICATION_CATEGORY: Record<
   campaign: 'other',
   verify_reminder: 'other',
   legal_delivered: 'other',
+  legal_quote_ready: 'other',
   identity_review: 'other',
   money_in: 'money',
   money_in_reversed: 'money',

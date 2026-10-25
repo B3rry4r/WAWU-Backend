@@ -547,10 +547,13 @@ describe('LEGAL-03 fix round 3 (contract)', () => {
   /* ================================================================ */
   describe('U2: the delivery notification does not name the matter', () => {
     it.each([
-      [1, 'Your consultant has sent you a document. It is in your legal chat.'],
+      [
+        1,
+        'Your consultant has sent you a document. Open your request to see it.',
+      ],
       [
         2,
-        'Your consultant has sent you 2 documents. They are in your legal chat.',
+        'Your consultant has sent you 2 documents. Open your request to see them.',
       ],
     ])('reads right for %s file(s)', async (n, text) => {
       const work = await paidWork();

@@ -26,7 +26,8 @@ import {
   validQuestionIds,
   type LegalMatter,
 } from '../legal-intake-questions';
-import { withoutEmDash } from '../ai-text';
+import { cleanAiText, readableOption } from '../ai-text';
+import { FIXED_PRICE_TERMS } from './legal-fixed-terms';
 import {
   ASSISTANT_BRIEF_AFTER_CLIENT_MESSAGES,
   ASSISTANT_CLAIM_MS,
@@ -53,6 +54,7 @@ import {
 } from './legal-assistant-topics';
 import type {
   LegalAssistantBrief,
+  LegalAssistantFixedPrice,
   LegalAssistantMessage,
   LegalAssistantQuickReply,
   LegalAssistantStage,
@@ -76,6 +78,15 @@ export const OPENER_LINE = (firstName: string) =>
 export const NOT_CHARGED_LINE =
   'Nothing is charged, and no price is quoted until a consultant has read it.';
 export const SENT_LINE = "I've sent your brief to a consultant.";
+/** S16's line under the button (G-500). True because sending opens a matter with no fee on it. */
+export const NOT_CHARGED_NOTE = 'Nothing is charged yet.';
+/** Written into the conversation when a fixed-price request starts (S24 to S26): what is asked for next. */
+export const startedLine = (needs: string[]) =>
+  `Your request is open. Sign the agreement and pay to start.${
+    needs.length > 0
+      ? ` To file it we need: ${needs.join(', ')}. Write them here and your consultant will pick them up.`
+      : ''
+  }`;
 
 /** How long a caller that lost a claim waits for the winner to finish. */
 const CLAIM_WAIT_MS = 20_000;
@@ -116,12 +127,19 @@ function readDraft(value: unknown): AssistantDraft | null {
 
 function readQuickReplies(value: unknown): LegalAssistantQuickReply[] {
   if (!Array.isArray(value)) return [];
-  return value.filter(
-    (q): q is LegalAssistantQuickReply =>
-      !!q &&
-      typeof (q as LegalAssistantQuickReply).id === 'string' &&
-      typeof (q as LegalAssistantQuickReply).label === 'string',
-  );
+  return value
+    .filter(
+      (q): q is LegalAssistantQuickReply =>
+        !!q &&
+        typeof (q as LegalAssistantQuickReply).id === 'string' &&
+        typeof (q as LegalAssistantQuickReply).label === 'string',
+    )
+    .map((q) => ({ id: q.id, label: readableOption(cleanAiText(q.label)) }));
+}
+
+/** The assistant could not answer because the provider's allowance is spent (HTTP 429), not because it failed. */
+export function providerAtCapacity(error: unknown): boolean {
+  return error instanceof Error && /\bHTTP 429\b/.test(error.message);
 }
 
 /**
@@ -404,6 +422,15 @@ export class LegalAssistantService {
     if (intake.legalRequestId) return this.thread(intake);
     if (intake.status !== 'in_progress') throw this.notFound();
 
+    // A matter with a fixed price starts from the chat (S24), never as a
+    // request for a consultant to book: that matter cannot be booked.
+    if (await this.fixedPriceOf(intake)) {
+      throw refusal(
+        HttpStatus.CONFLICT,
+        'fixed_price_matter',
+        'This one has a fixed price, so you can start it right here.',
+      );
+    }
     const draft = readDraft(intake.draftBrief);
     if (!draft?.ready || draft.facts.length === 0) {
       throw refusal(
@@ -615,6 +642,15 @@ export class LegalAssistantService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      if (providerAtCapacity(error)) {
+        // R2-LEGAL2 (CHECK-3 M-4): a day's allowance does not clear by asking
+        // again at once, so the person is told the assistant is busy.
+        throw refusal(
+          HttpStatus.SERVICE_UNAVAILABLE,
+          'assistant_at_capacity',
+          'The assistant is busy right now. Your message is saved.',
+        );
+      }
       throw refusal(
         HttpStatus.SERVICE_UNAVAILABLE,
         'assistant_unavailable',
@@ -814,8 +850,12 @@ export class LegalAssistantService {
       return {
         matter: sent.matter,
         matterLabel: sent.matterLabel,
-        rows: sent.facts.map((f) => ({ label: f.question, value: f.answer })),
+        rows: sent.facts.map((f) => ({
+          label: cleanAiText(f.question),
+          value: cleanAiText(f.answer),
+        })),
         ready: true,
+        note: null,
       };
     }
     const draft = readDraft(intake.draftBrief);
@@ -826,11 +866,15 @@ export class LegalAssistantService {
       rows: [
         {
           label: 'Matter',
-          value: draft.headline ?? matterLabel(intake.matter),
+          value: cleanAiText(draft.headline ?? matterLabel(intake.matter)),
         },
-        ...draft.facts.map((f) => ({ label: f.label, value: f.value })),
+        ...draft.facts.map((f) => ({
+          label: cleanAiText(f.label),
+          value: cleanAiText(f.value),
+        })),
       ],
       ready: draft.ready,
+      note: draft.ready ? NOT_CHARGED_NOTE : null,
     };
   }
 
@@ -839,7 +883,7 @@ export class LegalAssistantService {
       id: m.id,
       authorRole: m.authorRole,
       // The assistant's lines carry no em-dash, whatever was stored.
-      body: m.authorRole === 'assistant' ? withoutEmDash(m.body) : m.body,
+      body: m.authorRole === 'assistant' ? cleanAiText(m.body) : m.body,
       createdAt: m.createdAt,
       consultantName: null,
     };
@@ -850,12 +894,13 @@ export class LegalAssistantService {
     const messages = intakeRows.map((m) => this.fromIntakeMessage(m));
 
     let requestStatus: string | null = null;
+    let requestPath: LegalAssistantThread['requestPath'] = null;
     let consultant: LegalAssistantThread['consultant'] = null;
     if (intake.legalRequestId) {
       const [request, rows] = await Promise.all([
         this.prisma.legalRequest.findUnique({
           where: { id: intake.legalRequestId },
-          select: { status: true },
+          select: { status: true, path: true },
         }),
         this.prisma.legalChatMessage.findMany({
           where: { legalRequestId: intake.legalRequestId },
@@ -863,6 +908,7 @@ export class LegalAssistantService {
         }),
       ]);
       requestStatus = request?.status ?? null;
+      requestPath = request?.path ?? null;
       const adminIds = [
         ...new Set(
           rows
@@ -888,7 +934,7 @@ export class LegalAssistantService {
         messages.push({
           id: r.id,
           authorRole: r.authorRole === 'ai' ? 'assistant' : r.authorRole,
-          body: r.authorRole === 'ai' ? withoutEmDash(r.body) : r.body,
+          body: r.authorRole === 'ai' ? cleanAiText(r.body) : r.body,
           createdAt: r.createdAt,
           consultantName,
         });
@@ -913,9 +959,137 @@ export class LegalAssistantService {
       awaitingReply: stage !== 'sent' && lastIntake?.authorRole === 'client',
       legalRequestId: intake.legalRequestId,
       requestStatus,
+      requestPath,
+      fixedPrice: await this.fixedPriceOf(intake),
       consultant,
       assistantStopped: consultant !== null,
     };
+  }
+
+  /**
+   * The fixed-price service this conversation's matter starts as: the matter
+   * maps to a `simple` catalogue service and WAWU has put a price on it in
+   * admin (R-14). Null once the conversation is sent, and for every matter
+   * that needs a consultant first.
+   */
+  private async fixedPriceOf(
+    intake: IntakeRow,
+  ): Promise<LegalAssistantFixedPrice | null> {
+    if (intake.legalRequestId) return null;
+    const code = MATTER_TO_SERVICE_CODE[intake.matter as LegalMatter];
+    const service = code ? legalService(code) : undefined;
+    if (!service || service.path !== 'simple') return null;
+    const row = await this.prisma.legalServicePrice.findUnique({
+      where: { serviceCode: service.code },
+    });
+    if (!row || row.priceKobo < 100) return null;
+    const terms = FIXED_PRICE_TERMS[service.code];
+    return {
+      code: service.code,
+      name: service.name,
+      blurb: service.blurb,
+      priceNaira: row.priceKobo / 100,
+      turnaround: terms?.turnaround ?? null,
+      needs: terms ? [...terms.needs] : [],
+    };
+  }
+
+  /**
+   * "Start this request" (S24, S26): a matter with a fixed price becomes a
+   * request at that price, with no consultation. The request is quoted at the
+   * admin price, the conversation is kept as the matter's chat, and the person
+   * is told what to send. Nothing is charged here: the letter is signed on the
+   * matter (S21) and the fee paid with the PIN (S22). Starting twice answers
+   * the same thread and opens nothing new.
+   */
+  async startFixedPrice(
+    wawuUserId: string,
+    id: string,
+    firstNameChoice: string,
+  ): Promise<LegalAssistantThread> {
+    const intake = await this.owned(wawuUserId, id);
+    if (intake.legalRequestId) return this.thread(intake);
+    if (intake.status !== 'in_progress') throw this.notFound();
+    const fixed = await this.fixedPriceOf(intake);
+    const service = fixed ? legalService(fixed.code) : undefined;
+    if (!fixed || !service) {
+      throw refusal(
+        HttpStatus.CONFLICT,
+        'not_fixed_price',
+        'This one needs a consultant first. Send it to a consultant instead.',
+      );
+    }
+    const choice = cleanAiText(firstNameChoice).replace(/\s+/g, ' ').trim();
+    const draft = readDraft(intake.draftBrief);
+    const brief: LegalBrief = {
+      matter: intake.matter,
+      matterLabel: matterLabel(intake.matter),
+      facts: [
+        {
+          question: 'Matter',
+          answer: draft?.headline ?? matterLabel(intake.matter),
+        },
+        ...(draft?.facts ?? []).map((f) => ({
+          question: f.label,
+          answer: f.value,
+        })),
+        { question: 'First name choice', answer: choice },
+      ],
+      documentCount: 0,
+      analysis: {
+        summary: `Fixed-price request: ${service.name}.`,
+        keyIssues: [],
+        questionsToClarify: fixed.needs,
+        risks: [],
+      },
+      generatedBy: 'fixed-price',
+      generatedAt: new Date().toISOString(),
+    };
+    await this.prisma.$transaction(async (tx) => {
+      const claim = await tx.legalIntake.updateMany({
+        where: { id: intake.id, status: 'in_progress', legalRequestId: null },
+        data: {
+          status: 'converted',
+          completedAt: new Date(),
+          brief: brief as never,
+          assistantBusyUntil: null,
+        },
+      });
+      if (claim.count === 0) return;
+      const request = await tx.legalRequest.create({
+        data: {
+          wawuUserId,
+          serviceCode: service.code,
+          serviceName: service.name,
+          category: service.category,
+          path: service.path,
+          details: {
+            intakeId: intake.id,
+            brief,
+            answers: intake.answers,
+            firstNameChoice: choice,
+          } as never,
+          documents: [],
+          // Priced by WAWU already: the letter is signed, then the fee paid.
+          status: 'quoted',
+          quoteAmount: fixed.priceNaira,
+        },
+      });
+      await tx.legalIntake.update({
+        where: { id: intake.id },
+        data: { legalRequestId: request.id },
+      });
+      await tx.legalIntakeMessage.create({
+        data: {
+          legalIntakeId: intake.id,
+          wawuUserId,
+          authorRole: 'assistant',
+          scripted: true,
+          body: startedLine(fixed.needs),
+        },
+      });
+    }, TX_OPTIONS);
+    return this.thread(await this.owned(wawuUserId, id));
   }
 
   private notFound() {

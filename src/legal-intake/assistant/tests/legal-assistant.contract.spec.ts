@@ -476,6 +476,8 @@ describe('Legal assistant: legal starts as a chat (LEGAL-01, contract)', () => {
           { label: 'Location', value: 'Lekki, Lagos' },
         ],
         ready: true,
+        // R2-LEGAL2 (CHECK-3 M-3, G-500): the line under Send is served now.
+        note: 'Nothing is charged yet.',
       });
       // The brief is written into the intake while the conversation runs.
       const draft = await prisma.legalIntake.findUniqueOrThrow({

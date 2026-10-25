@@ -1,4 +1,10 @@
-import { IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+  MinLength,
+} from 'class-validator';
 import { ASSISTANT_MESSAGE_MAX_CHARS } from '../legal-assistant-config';
 
 /**
@@ -19,4 +25,13 @@ export class SendAssistantMessageDto {
   @MaxLength(64)
   @Matches(/^[a-z0-9_:]+$/)
   quickReplyId?: string;
+}
+
+/** "Start this request" (S26): the first name choice the person typed. */
+export class StartFixedPriceDto {
+  /** The business name the person wants first. 2 to 120 characters. */
+  @IsString()
+  @MinLength(2)
+  @MaxLength(120)
+  firstNameChoice!: string;
 }

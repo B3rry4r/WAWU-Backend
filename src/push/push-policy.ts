@@ -82,6 +82,8 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   // switch covers it, so it is held until the owner answers (G-265), as the
   // round 2 report ruled for whichever of LEGAL-03 and INBOX-03 merged second.
   legal_delivered: 'hold',
+  // R2-LEGAL2. Held with legal_delivered: the same open question (G-265) covers it.
+  legal_quote_ready: 'hold',
   // NUV-02. The outcome of the person's own wallet identity check (approved,
   // refused with what to fix, stopped, closed unfinished). Like kyc_verified
   // it is the state of their account and no Z3 switch is agreed to cover it,

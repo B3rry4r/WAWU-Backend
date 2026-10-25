@@ -3914,6 +3914,47 @@
         ]
       }
     },
+    "/api/hub/legal/assistant/{id}/start": {
+      "post": {
+        "operationId": "LegalAssistantController_startFixedPrice",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartFixedPriceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantThread"
+                }
+              }
+            }
+          }
+        },
+        "summary": "\"Start this request\" (S24, S26): a matter with a fixed price becomes a\nrequest at that price with no consultation (409 `not_fixed_price` when\nthe matter has none). Nothing is charged: the letter is signed on the\nmatter, then the fee is paid. Starting twice answers the same thread.",
+        "tags": [
+          "LegalAssistant"
+        ]
+      }
+    },
     "/api/hub/legal/ops/intakes/{id}/assistant": {
       "get": {
         "operationId": "LegalAssistantOpsController_transcript",
@@ -44869,6 +44910,20 @@
           }
         }
       },
+      "StartFixedPriceDto": {
+        "type": "object",
+        "properties": {
+          "firstNameChoice": {
+            "type": "string",
+            "description": "The business name the person wants first. 2 to 120 characters.",
+            "minLength": 2,
+            "maxLength": 120
+          }
+        },
+        "required": [
+          "firstNameChoice"
+        ]
+      },
       "CreateLegalRequestDto": {
         "type": "object",
         "properties": {
@@ -63317,13 +63372,53 @@
           },
           "ready": {
             "type": "boolean"
+          },
+          "note": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
           "matter",
           "matterLabel",
           "rows",
-          "ready"
+          "ready",
+          "note"
+        ]
+      },
+      "LegalAssistantFixedPrice": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "blurb": {
+            "type": "string"
+          },
+          "priceNaira": {
+            "type": "number"
+          },
+          "turnaround": {
+            "type": "string",
+            "nullable": true
+          },
+          "needs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "code",
+          "name",
+          "blurb",
+          "priceNaira",
+          "turnaround",
+          "needs"
         ]
       },
       "LegalAssistantConsultant": {
@@ -63394,6 +63489,22 @@
             "type": "string",
             "nullable": true
           },
+          "requestPath": {
+            "type": "string",
+            "enum": [
+              "consultation",
+              "simple"
+            ],
+            "nullable": true
+          },
+          "fixedPrice": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalAssistantFixedPrice"
+              }
+            ],
+            "nullable": true
+          },
           "consultant": {
             "allOf": [
               {
@@ -63417,6 +63528,8 @@
           "awaitingReply",
           "legalRequestId",
           "requestStatus",
+          "requestPath",
+          "fixedPrice",
           "consultant",
           "assistantStopped"
         ]

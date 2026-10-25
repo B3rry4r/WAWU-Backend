@@ -5,7 +5,7 @@ import {
   questionsForMatter,
   type IntakeQuestion,
 } from '../legal-intake-questions';
-import { cleanAiText } from '../ai-text';
+import { cleanAiText, readableOption } from '../ai-text';
 import { ASSISTANT_LIMITS } from './legal-assistant-config';
 
 /**
@@ -280,7 +280,8 @@ export function parseTurn(raw: string): AssistantTurn {
   const quickReplies: string[] = [];
   if (Array.isArray(o.quickReplies)) {
     for (const q of o.quickReplies) {
-      const label = cleanText(q, ASSISTANT_LIMITS.quickReplyChars);
+      const raw = cleanText(q, ASSISTANT_LIMITS.quickReplyChars);
+      const label = raw ? readableOption(raw) : null;
       if (label && !quickReplies.includes(label)) quickReplies.push(label);
       if (quickReplies.length === ASSISTANT_LIMITS.quickReplies) break;
     }

@@ -17,6 +17,7 @@ import { AdminRoles } from '../admin/auth/decorators/admin-roles.decorator';
 import { CurrentAdmin } from '../admin/auth/decorators/current-admin.decorator';
 import type { AdminUserView } from '../admin/auth/admin-user-view.type';
 import { LegalRequestsService } from './legal.service';
+import { LegalQuoteNoticeService } from './legal-quote-notice.service';
 import {
   CancelLegalRequestDto,
   CompleteConsultationDto,
@@ -76,7 +77,10 @@ import {
 @UseGuards(AdminAuthGuard, AdminRolesGuard)
 @Controller('legal/ops')
 export class LegalOpsController {
-  constructor(private readonly legal: LegalRequestsService) {}
+  constructor(
+    private readonly legal: LegalRequestsService,
+    private readonly quoteNotice: LegalQuoteNoticeService,
+  ) {}
 
   /** The work queue. Without it an operator cannot find what needs pricing. */
   @AdminRoles(AdminRole.superadmin, AdminRole.support, AdminRole.finance)
@@ -89,12 +93,15 @@ export class LegalOpsController {
   @AdminRoles(AdminRole.superadmin, AdminRole.finance)
   @Post('requests/:id/quote')
   @HttpCode(HttpStatus.OK)
-  quote(
+  async quote(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: QuoteLegalRequestDto,
     @CurrentAdmin() admin: AdminUserView,
   ) {
-    return this.legal.quote(id, dto, admin);
+    const quoted = await this.legal.quote(id, dto, admin);
+    // R2-LEGAL2: the quote reaches the client's chat and notifications.
+    await this.quoteNotice.quoteReady(admin, id);
+    return quoted;
   }
 
   @AdminRoles(AdminRole.superadmin, AdminRole.support)
