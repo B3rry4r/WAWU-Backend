@@ -75200,6 +75200,10 @@
           "bannerUrl": {
             "type": "string",
             "nullable": true
+          },
+          "cancelledAt": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -75211,7 +75215,8 @@
           "timeLabel",
           "location",
           "venueName",
-          "bannerUrl"
+          "bannerUrl",
+          "cancelledAt"
         ]
       },
       "EventOrderLineView": {
