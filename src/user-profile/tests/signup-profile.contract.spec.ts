@@ -346,10 +346,105 @@ describe('After sign-up: account type, interests and people to follow (AUTH-06, 
       ZAINAB,
       CHIDI,
     ]);
-    expect(await ids('?interests=photography')).toEqual([ZAINAB]);
-    expect(await ids('?interests=technology')).toEqual([]);
+    // R2-AUTHME3 (A13): one pick no longer narrows the list to the matches alone. They stay first; the other
+    // creators with live content follow, so the screen is not empty for a person whose picks match few or none.
+    expect(await ids('?interests=photography')).toEqual([ZAINAB, CHIDI]);
+    expect([...(await ids('?interests=technology'))].sort()).toEqual(
+      [CHIDI, ZAINAB].sort(),
+    );
     expect([...(await ids(''))].sort()).toEqual([CHIDI, ZAINAB].sort());
     expect(await ids('?interests=film_video&limit=1')).toHaveLength(1);
+  });
+
+  it('people to follow: when the picks match fewer creators than the list holds, the rest are creators with live content, most followed first, and the matches stay first (R2-AUTHME3, A13)', async () => {
+    const { token, sub } = await newPerson('fallback');
+    made.push(sub);
+    const ids = async (query: string) =>
+      (
+        (await http()
+          .get(`/api/hub/explore/suggested-creators${query}`)
+          .set(bearer(token))
+          .expect(200)) as Data<{ items: Array<{ wawuId: string }> }>
+      ).body.data.items.map((i) => i.wawuId);
+    // Two creators who saved no interest at all: one followed by three people, one by one.
+    const many = await newPerson('fbmany');
+    const few = await newPerson('fbfew');
+    const pieces: string[] = [];
+    const stamp = Date.now();
+    for (const [person, tag] of [
+      [many, 'many'],
+      [few, 'few'],
+    ] as const) {
+      made.push(person.sub);
+      await prisma.userProfile.create({
+        data: {
+          wawuUserId: person.sub,
+          accountType: 'creator',
+          handle: `zz-fb-${tag}-${stamp}`,
+          interests: [],
+        },
+      });
+      const piece = await prisma.contentPiece.create({
+        data: {
+          slug: `fb-${tag}-${stamp}`,
+          creatorWawuId: person.sub,
+          contentType: 'video',
+          title: `Fallback ${tag}`,
+          description: 'Seeded',
+          category: 'business_entrepreneurship',
+          accessType: 'paid',
+          price: 1500,
+          previewAssetUrl: 'https://cdn.example.com/p.jpg',
+          fullAssetUrl: 'https://cdn.example.com/f.mp4',
+          status: 'live',
+        },
+      });
+      pieces.push(piece.id);
+    }
+    // More followers than either seeded creator has, whatever the seed left: three above the most followed, one above.
+    const top = Math.max(
+      ...(await Promise.all(
+        [CHIDI, ZAINAB].map((id) =>
+          prisma.followRelationship.count({ where: { followingWawuId: id } }),
+        ),
+      )),
+    );
+    const followedBy = (target: string, count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        followerWawuId: `fb-${i}-${stamp}`,
+        followingWawuId: target,
+      }));
+    await prisma.followRelationship.createMany({
+      data: [...followedBy(many.sub, top + 3), ...followedBy(few.sub, top + 1)],
+    });
+    try {
+      // Picks that match nobody: every creator with live content, the most followed first, then by handle.
+      const none = await ids('?interests=technology');
+      expect(none.slice(0, 2)).toEqual([many.sub, few.sub]);
+      expect(new Set(none)).toEqual(
+        new Set([many.sub, few.sub, CHIDI, ZAINAB]),
+      );
+      // Picks that match one: that one first, never repeated, then the rest as above.
+      const one = await ids('?interests=photography');
+      expect(one).toEqual([ZAINAB, many.sub, few.sub, CHIDI]);
+      // The list is never longer than the limit, and the matches are not pushed out by the fill.
+      expect(await ids('?interests=photography&limit=2')).toEqual([
+        ZAINAB,
+        many.sub,
+      ]);
+      expect(await ids('?interests=photography&limit=1')).toEqual([ZAINAB]);
+      // The viewer is never in their own list, fill included.
+      expect(none).not.toContain(sub);
+      // No picks is still the plain list (nothing to fill).
+      expect(new Set(await ids(''))).toEqual(
+        new Set([many.sub, few.sub, CHIDI, ZAINAB]),
+      );
+    } finally {
+      await prisma.contentPiece.deleteMany({ where: { id: { in: pieces } } });
+      await prisma.followRelationship.deleteMany({
+        where: { followingWawuId: { in: [many.sub, few.sub] } },
+      });
+    }
   });
 
   it('people to follow shows who the viewer already follows, never the viewer, and refuses hostile values', async () => {
