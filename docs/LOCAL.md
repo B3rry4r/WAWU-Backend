@@ -345,7 +345,7 @@ Know these before trusting a local result:
 - **Admin routes answer 401** until `ADMIN_JWT_SECRET` and
   `ADMIN_JWT_REFRESH_SECRET` are set (README, "Admin surface"), then
   `npm run admin:seed` creates the first admin.
-- **The legal brief** needs `GEMINI_API_KEY`; without one it refuses.
+- **The legal brief and the legal assistant** need `GEMINI_API_KEY`; without one they refuse. `GEMINI_MODEL` names the model they ask (default `gemini-3-flash-preview`; empty or missing means the default).
 
 ## 10. Reset and troubleshooting
 

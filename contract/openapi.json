@@ -20631,6 +20631,40 @@
         ]
       }
     },
+    "/api/hub/admin/money/transfers/lookup": {
+      "get": {
+        "operationId": "AdminTransfersController_find",
+        "parameters": [
+          {
+            "name": "reference",
+            "required": true,
+            "in": "query",
+            "description": "The short reference a person quotes (\"WAW-8F2A-91C3\") or the whole stored reference (\"wawu-send-<id>\", \"wawu-bank-<id>\").",
+            "schema": {
+              "minLength": 4,
+              "maxLength": 120,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminTransferLookupResult"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The send a person quotes: by the short reference on their receipt (\"WAW-8F2A-91C3\") or by the whole stored reference. Answers every\nsend the reference fits, newest first (a short reference is derived from the send's id, so two sends can share one), or an empty list.",
+        "tags": [
+          "AdminTransfers"
+        ]
+      }
+    },
     "/api/hub/money/abroad/corridors": {
       "get": {
         "operationId": "AbroadController_corridors",
@@ -53769,6 +53803,98 @@
           "accountNumber",
           "accountName",
           "nameToken"
+        ]
+      },
+      "AdminTransferLookupView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "shortReference": {
+            "type": "string",
+            "nullable": true
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "providerFeeKobo": {
+            "type": "integer"
+          },
+          "wawuFeeKobo": {
+            "type": "integer"
+          },
+          "totalKobo": {
+            "type": "integer"
+          },
+          "payerWawuUserId": {
+            "type": "string",
+            "nullable": true
+          },
+          "recipientWawuUserId": {
+            "type": "string",
+            "nullable": true
+          },
+          "payerName": {
+            "type": "string",
+            "nullable": true
+          },
+          "recipientName": {
+            "type": "string",
+            "nullable": true
+          },
+          "bankName": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string"
+          },
+          "completedAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "reference",
+          "shortReference",
+          "amountKobo",
+          "providerFeeKobo",
+          "wawuFeeKobo",
+          "totalKobo",
+          "payerWawuUserId",
+          "recipientWawuUserId",
+          "payerName",
+          "recipientName",
+          "bankName",
+          "createdAt",
+          "completedAt"
+        ]
+      },
+      "AdminTransferLookupResult": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminTransferLookupView"
+            }
+          }
+        },
+        "required": [
+          "items"
         ]
       },
       "RecipientView": {

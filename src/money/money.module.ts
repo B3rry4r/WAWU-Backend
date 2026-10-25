@@ -68,6 +68,8 @@ import {
   TransferRecipients,
 } from './transfers/transfer-recipient';
 import { WalletTransferService } from './transfers/wallet-transfer.service';
+import { AdminTransferLookupService } from './transfers/admin-transfer-lookup.service';
+import { AdminTransfersController } from './transfers/admin-transfers.controller';
 import { PayableRegistry } from './payments/payable-registry';
 import { PaymentSettings } from './payments/payment-config';
 import { WalletPaymentService } from './payments/wallet-payment.service';
@@ -328,6 +330,8 @@ import { WalletCardService } from './cards/wallet-card.service';
     AddMoneyReturnController,
     MoneyAddMoneyController,
     AdminAddMoneyController,
+    // R2-MONEY D-03: support finds a send by the reference a person quotes.
+    AdminTransfersController,
     // NUV-11: sending money abroad (R-84).
     AbroadController,
     AbroadAdminController,
@@ -404,6 +408,7 @@ import { WalletCardService } from './cards/wallet-card.service';
     BankSendTargetGuard,
     PayoutOwnNameGuard,
     WalletTransferService,
+    AdminTransferLookupService,
     HoldViewService,
     WalletHoldService,
     EarningSettlementService,
