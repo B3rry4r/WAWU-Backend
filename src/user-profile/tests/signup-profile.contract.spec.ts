@@ -447,6 +447,157 @@ describe('After sign-up: account type, interests and people to follow (AUTH-06, 
     }
   });
 
+  it('people to follow: the fill leaves out anyone blocked either way, a private account, a non-creator, a creator with no live content, and the viewer (SWEEP-R3, A13)', async () => {
+    const viewer = await newPerson('fxview');
+    made.push(viewer.sub);
+    const ids = async (query: string) =>
+      (
+        (await http()
+          .get(`/api/hub/explore/suggested-creators${query}`)
+          .set(bearer(viewer.token))
+          .expect(200)) as Data<{ items: Array<{ wawuId: string }> }>
+      ).body.data.items.map((i) => i.wawuId);
+    const stamp = Date.now();
+    const pieces: string[] = [];
+    const piece = async (
+      owner: string,
+      tag: string,
+      status: 'live' | 'pending',
+    ) => {
+      const row = await prisma.contentPiece.create({
+        data: {
+          slug: `fx-${tag}-${stamp}`,
+          creatorWawuId: owner,
+          contentType: 'video',
+          title: `Exclusion ${tag}`,
+          description: 'Seeded',
+          category: 'business_entrepreneurship',
+          accessType: 'paid',
+          price: 1500,
+          previewAssetUrl: 'https://cdn.example.com/p.jpg',
+          fullAssetUrl: 'https://cdn.example.com/f.mp4',
+          status,
+        },
+      });
+      pieces.push(row.id);
+    };
+    const profile = async (
+      owner: string,
+      tag: string,
+      accountType: 'creator' | 'user',
+    ) => {
+      made.push(owner);
+      await prisma.userProfile.create({
+        data: {
+          wawuUserId: owner,
+          accountType,
+          handle: `zz-fx-${tag}-${stamp}`,
+          interests: [],
+        },
+      });
+    };
+    // Each of these would lead the fill if the rule were missing: all have more followers than the seeded creators.
+    const everyone = {
+      good: await newPerson('fxgood'),
+      blockedByMe: await newPerson('fxbbm'),
+      blocksMe: await newPerson('fxbm'),
+      hidden: await newPerson('fxhid'),
+      fan: await newPerson('fxfan'),
+      empty: await newPerson('fxempty'),
+    };
+    const draftOnly = await newPerson('fxdraft');
+    try {
+      // The viewer is a creator with a live piece too, so only the rule keeps them out of their own list.
+      await profile(viewer.sub, 'self', 'creator');
+      await piece(viewer.sub, 'self', 'live');
+      for (const tag of [
+        'good',
+        'blockedByMe',
+        'blocksMe',
+        'hidden',
+      ] as const) {
+        await profile(everyone[tag].sub, tag, 'creator');
+        await piece(everyone[tag].sub, tag, 'live');
+      }
+      // A non-creator with a live piece on record, a creator whose only piece is not live, a creator with no piece at all.
+      await profile(everyone.fan.sub, 'fan', 'user');
+      await piece(everyone.fan.sub, 'fan', 'live');
+      await profile(draftOnly.sub, 'draft', 'creator');
+      await piece(draftOnly.sub, 'draft', 'pending');
+      await profile(everyone.empty.sub, 'empty', 'creator');
+      const rules = [
+        everyone.blockedByMe.sub,
+        everyone.blocksMe.sub,
+        everyone.hidden.sub,
+        everyone.fan.sub,
+        everyone.empty.sub,
+        draftOnly.sub,
+        viewer.sub,
+      ];
+      await prisma.blockedAccount.createMany({
+        data: [
+          { userWawuId: viewer.sub, blockedWawuId: everyone.blockedByMe.sub },
+          { userWawuId: everyone.blocksMe.sub, blockedWawuId: viewer.sub },
+        ],
+      });
+      await prisma.privacySettings.create({
+        data: { userWawuId: everyone.hidden.sub, showInMemberLists: false },
+      });
+      const top = Math.max(
+        ...(await Promise.all(
+          [CHIDI, ZAINAB].map((id) =>
+            prisma.followRelationship.count({ where: { followingWawuId: id } }),
+          ),
+        )),
+      );
+      await prisma.followRelationship.createMany({
+        data: [everyone.good.sub, ...rules].flatMap((target, at) =>
+          Array.from({ length: top + 3 + at }, (_, i) => ({
+            followerWawuId: `fx-${at}-${i}-${stamp}`,
+            followingWawuId: target,
+          })),
+        ),
+      });
+      // Picks that match nobody, so the whole list is the fill; and picks that match one creator, so the fill follows a match.
+      for (const query of [
+        '?interests=technology&limit=20',
+        '?interests=photography&limit=20',
+        '?interests=technology',
+      ]) {
+        const list = await ids(query);
+        for (const out of rules) expect(list).not.toContain(out);
+        expect(new Set(list).size).toBe(list.length);
+      }
+      // The control: an eligible creator with more followers than the seeded two does lead the fill, so the list above is not simply empty.
+      expect((await ids('?interests=technology&limit=20'))[0]).toBe(
+        everyone.good.sub,
+      );
+      // A pick that matches the excluded creators' interests changes nothing: they are still out.
+      await prisma.userProfile.updateMany({
+        where: { wawuUserId: { in: rules } },
+        data: { interests: ['technology'] },
+      });
+      const matched = await ids('?interests=technology&limit=20');
+      for (const out of rules) expect(matched).not.toContain(out);
+    } finally {
+      await prisma.blockedAccount.deleteMany({
+        where: {
+          OR: [{ userWawuId: viewer.sub }, { blockedWawuId: viewer.sub }],
+        },
+      });
+      await prisma.privacySettings.deleteMany({
+        where: { userWawuId: everyone.hidden.sub },
+      });
+      await prisma.contentPiece.deleteMany({ where: { id: { in: pieces } } });
+      await prisma.followRelationship.deleteMany({
+        where: {
+          followerWawuId: { startsWith: 'fx-' },
+          followingWawuId: { in: made },
+        },
+      });
+    }
+  });
+
   it('people to follow shows who the viewer already follows, never the viewer, and refuses hostile values', async () => {
     const { token, sub } = await newPerson('follow');
     made.push(sub);
