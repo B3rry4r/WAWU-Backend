@@ -84,6 +84,9 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   legal_delivered: 'hold',
   // R2-LEGAL2. Held with legal_delivered: the same open question (G-265) covers it.
   legal_quote_ready: 'hold',
+  // R2-MONEY2. Held with the other legal kinds (G-265): these reach the in-app list only.
+  legal_consultant_joined: 'hold',
+  legal_consultation_booked: 'hold',
   // NUV-02. The outcome of the person's own wallet identity check (approved,
   // refused with what to fix, stopped, closed unfinished). Like kyc_verified
   // it is the state of their account and no Z3 switch is agreed to cover it,

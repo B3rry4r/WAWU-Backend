@@ -62,6 +62,11 @@ type CoreNotificationKind =
   // R2-LEGAL2 (CHECK-3 H-1): the consultant's quote is ready to read and sign.
   /** A consultant priced a legal request. Recipient: the client. */
   | 'legal_quote_ready'
+  // R2-MONEY2 (CHECK-3 money third pass, H-01): the two steps before the quote that a person who left the conversation never heard about.
+  /** A consultant joined a legal request's conversation. Recipient: the client. */
+  | 'legal_consultant_joined'
+  /** A consultation was paid for and booked. Recipient: the client. */
+  | 'legal_consultation_booked'
   // HOME-16 (R-59): TGIF reaches Home as a daily notification.
   /** The day's TGIF is ready. Recipient: each person who keeps "TGIF each morning" on. */
   | 'tgif_daily'
@@ -215,6 +220,27 @@ type NotificationEventCore =
    */
   | {
       kind: 'legal_quote_ready';
+      userWawuId: string;
+      requestId: string;
+      serviceName: string;
+    }
+  /**
+   * R2-MONEY2 (CHECK-3 H-01). A consultant wrote in the person's legal
+   * conversation for the first time. Recipient: the client. The tap opens the
+   * matter (`/legal/requests/<id>`).
+   */
+  | {
+      kind: 'legal_consultant_joined';
+      userWawuId: string;
+      requestId: string;
+      serviceName: string;
+    }
+  /**
+   * R2-MONEY2 (CHECK-3 H-01). The consultation was paid for and booked.
+   * Recipient: the client. The tap opens the matter.
+   */
+  | {
+      kind: 'legal_consultation_booked';
       userWawuId: string;
       requestId: string;
       serviceName: string;
@@ -732,6 +758,39 @@ export function composeNotification(
         title: 'Your quote is ready',
         body: 'Your consultant has sent you a quote. Open your request to read it and sign.',
         tone: 'info',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'Open request',
+        imageUrl: null,
+        actionHref: `/legal/requests/${event.requestId}`,
+        campaignId: null,
+      };
+
+    /**
+     * R2-MONEY2 (CHECK-3 H-01). A consultant joined: the matter is where their
+     * words are. No matter or service name, as on `legal_delivered`.
+     */
+    case 'legal_consultant_joined':
+      return {
+        ...base,
+        title: 'A consultant joined your request',
+        body: 'Your consultant has written to you. Open your request to read it and book a consultation.',
+        tone: 'info',
+        amount: null,
+        creditsCount: null,
+        actionLabel: 'Open request',
+        imageUrl: null,
+        actionHref: `/legal/requests/${event.requestId}`,
+        campaignId: null,
+      };
+
+    /** R2-MONEY2 (CHECK-3 H-01). The consultation is paid for and booked; the matter shows the time. */
+    case 'legal_consultation_booked':
+      return {
+        ...base,
+        title: 'Your consultation is booked',
+        body: 'Your consultation is paid for and booked. Open your request to see the time and what happens next.',
+        tone: 'success',
         amount: null,
         creditsCount: null,
         actionLabel: 'Open request',
@@ -1319,6 +1378,8 @@ export const NOTIFICATION_CATEGORY: Record<
   verify_reminder: 'other',
   legal_delivered: 'other',
   legal_quote_ready: 'other',
+  legal_consultant_joined: 'other',
+  legal_consultation_booked: 'other',
   identity_review: 'other',
   money_in: 'money',
   money_in_reversed: 'money',

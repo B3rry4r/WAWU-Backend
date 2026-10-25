@@ -70,8 +70,9 @@ function creditsOf(row: PaidRow): number | null {
  *   A free order (₦0) took nothing and is not a purchase.
  * - `credit_pack`: a completed `CreditPurchase`; a pack paid back is listed
  *   from its payment as refunded.
- * - `school_fee` and `community_pass`: the completed wallet payment itself
- *   (neither has a card path, and a pass has no table on every server yet).
+ * - `school_fee`, `community_pass` and `legal_fee`: the completed wallet
+ *   payment itself (none has a card path, and a pass has no table on every
+ *   server yet). A legal fee (R2-MONEY2) opens its request.
  *
  * AMOUNTS ARE THE PAYMENT'S OWN. A wallet payment's price and total are
  * columns of that payment; a card charge keeps its whole-naira amount, shown
@@ -245,7 +246,7 @@ export class MePaidPurchasesService {
         LEFT JOIN "SchoolEnrolment" s
           ON w."kind" = 'school_fee' AND s."id" = w."targetId"
        WHERE w."payerWawuUserId" = ${me}
-         AND w."kind" IN ('school_fee', 'community_pass')
+         AND w."kind" IN ('school_fee', 'community_pass', 'legal_fee')
          AND w."status" = 'completed'
          AND (h."id" IS NULL OR h."action" IS DISTINCT FROM 'refund'
               OR h."status" = 'refunded' OR s."status" = 'refunded')

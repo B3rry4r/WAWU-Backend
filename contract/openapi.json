@@ -73517,6 +73517,7 @@
             "enum": [
               "content_unlock",
               "credit_pack",
+              "legal_fee",
               "school_fee",
               "event_ticket",
               "community_pass"

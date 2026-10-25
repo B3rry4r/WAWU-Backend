@@ -152,7 +152,8 @@ export type PaidPurchaseKind =
   | 'event_ticket'
   | 'credit_pack'
   | 'school_fee'
-  | 'community_pass';
+  | 'community_pass'
+  | 'legal_fee';
 
 /**
  * `paid`: the person paid and has what they paid for (or is about to).
@@ -187,7 +188,7 @@ export interface PaidPurchaseView {
   /**
    * The id the app opens, by kind: `content_unlock` the piece, `event_ticket`
    * the ticket order (events/orders/{id}), `school_fee` the enrolment,
-   * `community_pass` the community. Null for `credit_pack` (nothing to open).
+   * `community_pass` the community, `legal_fee` the legal request. Null for `credit_pack` (nothing to open).
    */
   openId: string | null;
   /** Set for `content_unlock` when the piece is still there; null otherwise. */

@@ -53,6 +53,8 @@ describe('which notifications reach a phone', () => {
       'credits_low',
       'identity_review',
       'kyc_verified',
+      'legal_consultant_joined',
+      'legal_consultation_booked',
       'legal_delivered',
       'legal_quote_ready',
       'paid_dm_paused',

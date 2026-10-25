@@ -23,6 +23,7 @@ import {
 } from './assistant/legal-assistant-allowance';
 import { LEGAL_OPENER_WAIT_MS } from './assistant/legal-assistant-config';
 import { LegalMatterFiles } from './assistant/legal-matter-files';
+import { LegalMatterNoticeService } from '../legal/legal-matter-notice.service';
 import type { LegalAssistantAttachment } from './assistant/legal-assistant.types';
 import type { LegalBrief } from './legal-brief';
 
@@ -113,6 +114,7 @@ export class LegalChatService {
     @Inject(LEGAL_OPENER_WAIT_MS) private readonly openerWaitMs: number,
     private readonly live: LivePublisher,
     private readonly files: LegalMatterFiles,
+    private readonly notices: LegalMatterNoticeService,
   ) {}
 
   /**
@@ -270,10 +272,12 @@ export class LegalChatService {
 
     // Under the client's lock, so the handover is ordered against their
     // messages (see `LegalAssistantAllowance.writeAsConsultant`).
+    let first = false;
     const written = await this.allowance.writeAsConsultant(
       request.wawuUserId,
-      (tx, createdAt) =>
-        tx.legalChatMessage.create({
+      async (tx, createdAt) => {
+        first = !(await consultantHasWritten(tx, requestId));
+        return tx.legalChatMessage.create({
           data: {
             legalRequestId: requestId,
             authorRole: 'consultant',
@@ -281,7 +285,8 @@ export class LegalChatService {
             body: body.trim(),
             createdAt,
           },
-        }),
+        });
+      },
     );
     // LEGAL-02: the client's phone learns the conversation changed (no words
     // travel); it reads them from the route. Never throws.
@@ -290,6 +295,8 @@ export class LegalChatService {
       legalRequestId: requestId,
       messageId: written.id,
     });
+    // R2-MONEY2 (CHECK-3 H-01): the first line from a consultant is "a consultant joined"; the notification list says so. Never throws.
+    if (first) await this.notices.consultantJoined(requestId);
     return this.threadFor(request);
   }
 

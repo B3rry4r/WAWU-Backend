@@ -3,6 +3,7 @@ import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
 import { MoneyModule } from '../../money/money.module';
 import { LegalFeeWalletController } from './legal-fee-wallet.controller';
 import { LegalFeeWalletService } from './legal-fee-wallet.service';
+import { LegalMatterNoticeService } from '../legal-matter-notice.service';
 
 /**
  * Paying legal fees from the wallet (task LEGAL-05): the routes under
@@ -17,6 +18,6 @@ import { LegalFeeWalletService } from './legal-fee-wallet.service';
 @Module({
   imports: [WawuAuthModule, MoneyModule],
   controllers: [LegalFeeWalletController],
-  providers: [LegalFeeWalletService],
+  providers: [LegalFeeWalletService, LegalMatterNoticeService],
 })
 export class LegalFeeWalletModule {}

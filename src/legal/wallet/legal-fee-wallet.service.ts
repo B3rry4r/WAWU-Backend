@@ -15,6 +15,7 @@ import {
 } from '../../money/payments/payable-registry';
 import { WalletPaymentService } from '../../money/payments/wallet-payment.service';
 import { UNPAID_HOLD_MINUTES } from '../legal.service';
+import { LegalMatterNoticeService } from '../legal-matter-notice.service';
 import type { LegalFeeWalletDto } from './legal-fee-wallet.dto';
 import type {
   LegalFeeStage,
@@ -135,6 +136,7 @@ export class LegalFeeWalletService implements OnModuleInit {
     private readonly payments: WalletPaymentService,
     private readonly registry: PayableRegistry,
     private readonly holds: WalletHoldService,
+    private readonly notices: LegalMatterNoticeService,
   ) {}
 
   onModuleInit(): void {
@@ -334,6 +336,10 @@ export class LegalFeeWalletService implements OnModuleInit {
           `Payment ${payment.paymentId}: the request moved while the fee was applied; looking again.`,
         );
       }
+    }
+    // R2-MONEY2 (CHECK-3 H-01): the paid consultation is "booked" in the notification list, once (only the application that granted it). Never throws.
+    if (result.granted && stage === 'consultation') {
+      await this.notices.consultationBooked(payment.targetId);
     }
     this.logger.log(`payment ${payment.paymentId}: legal fee applied`);
   }
