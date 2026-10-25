@@ -54,6 +54,7 @@ describe('which notifications reach a phone', () => {
       'identity_review',
       'kyc_verified',
       'legal_delivered',
+      'legal_quote_ready',
       'paid_dm_paused',
       'paid_dm_warning',
       'verify_reminder',
