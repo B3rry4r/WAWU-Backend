@@ -1026,6 +1026,7 @@ export class EventWalletOrderService implements OnModuleInit {
         location: order.event.location,
         venueName: order.event.venueName,
         bannerUrl: order.event.bannerUrl,
+        cancelledAt: order.event.cancelledAt?.toISOString() ?? null,
       },
       free: order.paymentProvider === 'free',
       lines,

@@ -17,6 +17,13 @@ export interface EventOrderEventView {
   location: string;
   venueName: string | null;
   bannerUrl: string | null;
+  /**
+   * When the host called the event off (an ISO time); null while it is on. A
+   * buyer cannot read a called-off event (`GET /events/{id}` answers 404), so
+   * the order carries it for E11: the page of a refunded order says the event
+   * was called off, not that the payment failed.
+   */
+  cancelledAt: string | null;
 }
 
 /** One tier of the basket: "2 x VIP". Money is integer kobo. */
