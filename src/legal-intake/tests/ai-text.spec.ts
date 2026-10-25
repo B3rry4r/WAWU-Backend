@@ -34,6 +34,23 @@ describe('ai-text', () => {
       expect(readableOption('businessOwner')).toBe('Business owner');
     });
 
+    it("uses the question bank's own label for an option id it knows (R2-LEGAL3)", () => {
+      // "Other african" and "Outside africa" were the raw ids read as words;
+      // the bank's labels are what the form shows.
+      expect(readableOption('other_african')).toBe('Another African country');
+      expect(readableOption('outside_africa')).toBe('Outside Africa');
+      expect(readableOption('south_africa')).toBe('South Africa');
+      expect(readableOption('multiple_african')).toBe(
+        'Several African countries',
+      );
+    });
+
+    it('keeps reading an id the bank does not know, or names two ways, as words', () => {
+      expect(readableOption('no_rush')).toBe('No rush');
+      // Same id, different labels in different questions: no single label is true.
+      expect(readableOption('other')).toBe('Other');
+    });
+
     it('leaves a label that is already words alone', () => {
       expect(readableOption("Yes, there's a clause")).toBe(
         "Yes, there's a clause",

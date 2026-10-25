@@ -92,3 +92,13 @@ export const ASSISTANT_LIMITS = {
   headlineChars: 60,
   textAnswerChars: 1000,
 } as const;
+
+/**
+ * The most files one matter's chat holds (R2-LEGAL3): the documents a person
+ * sends for the work (an ID, a PDF). A guard against a chat that fills the
+ * consultant's view, not a product figure; each file still counts toward the
+ * person's storage (R-7).
+ *
+ * PROVISIONAL(LEGAL-MATTER-FILES-MAX, owner=YOU, why=no ruling names how many documents a matter takes; Register a business needs about three)
+ */
+export const LEGAL_MATTER_FILES_MAX = 20;

@@ -32,6 +32,20 @@ export interface LegalAssistantQuickReply {
  */
 export type LegalAssistantAuthor = 'client' | 'assistant' | 'consultant';
 
+/**
+ * A photo, video or PDF on a line of the conversation (R2-LEGAL3): the person
+ * sent it for their matter, or a consultant delivered it. `url` is a fresh
+ * link that lives 15 minutes (a PDF is a download, a picture opens in place),
+ * or null when storage could not make one just now.
+ */
+export interface LegalAssistantAttachment {
+  url: string | null;
+  contentType: string;
+  bytes: number;
+  /** The file's own name, shown on a PDF; null for a picture or video. */
+  name: string | null;
+}
+
 export interface LegalAssistantMessage {
   id: string;
   authorRole: LegalAssistantAuthor;
@@ -39,6 +53,14 @@ export interface LegalAssistantMessage {
   createdAt: Date;
   /** The consultant's name on a consultant's message; null otherwise. */
   consultantName: string | null;
+  /** The file this line carries; absent on a line of words. */
+  attachment?: LegalAssistantAttachment | null;
+}
+
+/** `POST /legal/assistant/{id}/attachments`: where to upload one file, and the `key` the send takes as `attachment.key`. */
+export interface LegalAssistantUpload {
+  uploadUrl: string;
+  key: string;
 }
 
 /** One line of the brief card (S16): "Lease", "Signed, 14 months left". */

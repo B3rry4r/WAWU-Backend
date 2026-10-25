@@ -3,6 +3,7 @@ import { AiModule } from '../common/ai/ai.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
 import { LivePublisherModule } from '../live/live-publisher.module';
+import { StorageModule } from '../storage/storage.module';
 import { LegalIntakeController } from './legal-intake.controller';
 import { LegalIntakeOpsController } from './legal-intake-ops.controller';
 import { LegalIntakeService } from './legal-intake.service';
@@ -12,6 +13,7 @@ import { LegalAssistantController } from './assistant/legal-assistant.controller
 import { LegalAssistantOpsController } from './assistant/legal-assistant-ops.controller';
 import { LegalAssistantService } from './assistant/legal-assistant.service';
 import { LegalAssistantAllowance } from './assistant/legal-assistant-allowance';
+import { LegalMatterFiles } from './assistant/legal-matter-files';
 import {
   ASSISTANT_OPENER_WAIT_MS,
   LEGAL_OPENER_WAIT_MS,
@@ -29,7 +31,14 @@ import {
  * from LegalController.
  */
 @Module({
-  imports: [AiModule, WawuAuthModule, AdminAuthModule, LivePublisherModule],
+  imports: [
+    AiModule,
+    WawuAuthModule,
+    AdminAuthModule,
+    LivePublisherModule,
+    // R2-LEGAL3: the files a person sends on a matter ride the chat upload path.
+    StorageModule,
+  ],
   controllers: [
     LegalIntakeController,
     LegalIntakeOpsController,
@@ -42,6 +51,7 @@ import {
     LegalIntakeOpsService,
     LegalChatService,
     LegalAssistantAllowance,
+    LegalMatterFiles,
     LegalAssistantService,
     // FIX-11: how long a read waits for another read's opener.
     { provide: LEGAL_OPENER_WAIT_MS, useValue: ASSISTANT_OPENER_WAIT_MS },

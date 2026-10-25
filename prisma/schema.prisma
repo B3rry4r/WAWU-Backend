@@ -3471,6 +3471,17 @@ model LegalChatMessage {
   body           String
   createdAt      DateTime        @default(now())
 
+  /// A photo, video or PDF the client sent on the matter (R2-LEGAL3): the
+  /// storage key of a chat upload (`chat/media/...`, `chat/file/...`), its
+  /// type, size and the name a PDF shows. All four are null on a text line.
+  /// The key is also on `LegalRequest.documents`. A key rides on at most one
+  /// message, so sending it twice is one line, and a chat upload that a line
+  /// carries is never given back as unsent.
+  attachmentKey         String? @unique
+  attachmentContentType String?
+  attachmentBytes       Int?
+  attachmentName        String?
+
   @@index([legalRequestId, createdAt])
 }
 

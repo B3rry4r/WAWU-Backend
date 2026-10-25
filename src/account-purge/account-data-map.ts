@@ -263,6 +263,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'HealthSubscription', column: 'wawuUserId', disposition: 'OWNED' },
   // The files WAWU delivered on this person's legal requests (LEGAL-03).
   { model: 'LegalDeliverable', column: 'wawuUserId', disposition: 'OWNED' },
+  // The matter's thread (LegalChatMessage) has no user column: the purge
+  // removes it by the matter's id, and the lines naming the files the person
+  // sent there by their key, before the matter goes (purge-legal-threads.ts,
+  // R2-LEGAL3). Those files are chat uploads and are deleted as chat files are.
   { model: 'LegalRequest', column: 'wawuUserId', disposition: 'OWNED' },
   // The assistant conversation on an intake (LEGAL-01): the client's own
   // words and the assistant's replies to them, removed before the intake.

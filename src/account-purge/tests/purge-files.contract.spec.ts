@@ -43,6 +43,7 @@ describe('FIX-65: a purged account leaves no file of its own in the bucket', () 
     pieces: [] as string[],
     events: [] as string[],
     keys: [] as string[],
+    requests: [] as string[],
   };
 
   const keyOf = (url: string | undefined) =>
@@ -108,6 +109,15 @@ describe('FIX-65: a purged account leaves no file of its own in the bucket', () 
       where: { id: { in: made.pieces } },
     });
     await prisma.event.deleteMany({ where: { id: { in: made.events } } });
+    await prisma.legalChatMessage.deleteMany({
+      where: { legalRequestId: { in: made.requests } },
+    });
+    await prisma.legalRequest.deleteMany({
+      where: { id: { in: made.requests } },
+    });
+    await prisma.legalChatMessage.deleteMany({
+      where: { attachmentKey: { in: made.keys } },
+    });
     await prisma.verificationSubmission.deleteMany({
       where: { wawuUserId: { in: made.people } },
     });
@@ -418,6 +428,117 @@ describe('FIX-65: a purged account leaves no file of its own in the bucket', () 
       [w.t.otherAvatar, w.t.otherChat, w.t.otherKyc].sort(),
     );
     expect(deletes).not.toContain(w.t.otherAvatar);
+  });
+
+  // R2-LEGAL3: a person sends the documents a matter needs in the Legal chat.
+  // The file is a chat upload (chat/media or chat/file) and is named by a line
+  // on the matter's thread and by LegalRequest.documents. The purge treats it
+  // as it treats a file sent in a one-to-one chat: the file is deleted. No money
+  // or legal record is kept past the deletion (LegalRequest is OWNED and goes),
+  // so the thread that names the files goes with the matter.
+  it('R2-LEGAL3: Legal matter files are deleted like chat files, and the thread that names them goes with the matter', async () => {
+    const p = randomUUID();
+    const other = randomUUID();
+    made.people.push(p, other);
+
+    /** A matter with one client line per file, and a consultant reply. */
+    async function matterWith(owner: string, files: string[]) {
+      const request = await prisma.legalRequest.create({
+        data: {
+          wawuUserId: owner,
+          serviceCode: 'register-business',
+          serviceName: 'Register a business',
+          category: 'business',
+          path: 'simple',
+          status: 'in_progress',
+          documents: files,
+        },
+      });
+      made.requests.push(request.id);
+      for (const key of files) {
+        await prisma.legalChatMessage.create({
+          data: {
+            legalRequestId: request.id,
+            authorRole: 'client',
+            body: 'Sent a file: ID.pdf.',
+            attachmentKey: key,
+            attachmentContentType: 'application/pdf',
+            attachmentBytes: 100,
+            attachmentName: 'ID.pdf',
+          },
+        });
+      }
+      await prisma.legalChatMessage.create({
+        data: {
+          legalRequestId: request.id,
+          authorRole: 'consultant',
+          authorAdminId: 'consultant-1',
+          body: 'Thank you, we have your ID.',
+        },
+      });
+      return request;
+    }
+
+    const photo = await upload(p, 'chat/media');
+    const pdf = await upload(p, 'chat/file', 'pdf', 'application/pdf');
+    const otherPdf = await upload(other, 'chat/file', 'pdf', 'application/pdf');
+    const matter = await matterWith(p, [photo, pdf]);
+    const otherMatter = await matterWith(other, [otherPdf]);
+    // A line that landed after its matter was gone: found by the file it names.
+    const late = await upload(p, 'chat/file', 'pdf', 'application/pdf');
+    await prisma.legalChatMessage.create({
+      data: {
+        legalRequestId: randomUUID(),
+        authorRole: 'client',
+        body: 'Sent a file: late.pdf.',
+        attachmentKey: late,
+        attachmentContentType: 'application/pdf',
+        attachmentBytes: 100,
+        attachmentName: 'late.pdf',
+      },
+    });
+
+    await dueDeletion(p);
+    deletes.length = 0;
+    const out = await purge.purge(p);
+    expect(out.failed).toEqual([]);
+
+    // the files leave the bucket, as a chat file does
+    expect(goneFrom(photo, pdf, late)).toBe(true);
+    expect(deletes).toEqual(expect.arrayContaining([photo, pdf, late]));
+    expect(await rowsOf(p)).toEqual([]);
+
+    // the matter and everything on its thread go: no line names a deleted file
+    expect(await prisma.legalRequest.count({ where: { id: matter.id } })).toBe(
+      0,
+    );
+    expect(
+      await prisma.legalChatMessage.count({
+        where: { legalRequestId: matter.id },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.legalChatMessage.count({
+        where: { attachmentKey: { in: [photo, pdf, late] } },
+      }),
+    ).toBe(0);
+
+    // another person's matter, line and file are untouched
+    expect(holds(otherPdf)).toBe(true);
+    expect(deletes).not.toContain(otherPdf);
+    expect(
+      await prisma.legalRequest.count({ where: { id: otherMatter.id } }),
+    ).toBe(1);
+    expect(
+      await prisma.legalChatMessage.count({
+        where: { legalRequestId: otherMatter.id },
+      }),
+    ).toBe(2);
+
+    // a second run finds nothing to do
+    const again = await purge.purge(p);
+    expect(again.failed).toEqual([]);
+    expect(again.files.objectsRemoved).toBe(0);
   });
 
   it('a second run finds nothing to do', async () => {

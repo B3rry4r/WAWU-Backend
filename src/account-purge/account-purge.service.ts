@@ -13,6 +13,7 @@ import {
   countKeptFiles,
   refileIdentityFiles,
 } from './purge-files';
+import { eraseLegalThreads } from './purge-legal-threads';
 import { StorageRemover } from '../storage/storage-remover';
 
 /** What a bought content piece is called once its creator's account is gone. */
@@ -206,8 +207,30 @@ export class AccountPurgeService {
       identityUnknown = true;
     }
 
+    // The thread on each legal matter, with the lines that name the files the
+    // person sent there (R2-LEGAL3), goes before the matters do: it is found by
+    // them. Without it the matters stay and the retry does it right.
+    let legalThreadsUnknown = false;
+    try {
+      const lines = await eraseLegalThreads(this.prisma, wawuUserId);
+      if (lines > 0) {
+        deleted['LegalChatMessage.legalRequestId'] = lines;
+        total += lines;
+      }
+    } catch (e) {
+      this.logger.error(
+        `Purge failed on legal threads of ${wawuUserId}: ${(e as Error).message}`,
+      );
+      failed.push('LegalChatMessage.legalRequestId');
+      legalThreadsUnknown = true;
+    }
+
     for (const rule of rowsToDelete()) {
       if (pointsModels.has(rule.model)) continue;
+      if (legalThreadsUnknown && rule.model === 'LegalRequest') {
+        failed.push(`${rule.model}.${rule.column}`);
+        continue;
+      }
       // The person's files (StorageObject rows) are the list of what is in the
       // bucket, so they go last, after every row that pointed at a file, and
       // only once their objects are gone (FIX-65, below).

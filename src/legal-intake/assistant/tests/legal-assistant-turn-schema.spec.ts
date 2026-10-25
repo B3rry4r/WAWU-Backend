@@ -196,6 +196,7 @@ describe('LegalAssistantService profiling turn (FIX-22)', () => {
       gemini,
       {} as never,
       allowance as never,
+      {} as never,
     );
     const intake = {
       id: 'i1',

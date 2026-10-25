@@ -53,18 +53,29 @@ export interface ReleaseDeps {
 export async function isClaimed(
   prisma: Pick<
     Prisma.TransactionClient,
-    'contentPiece' | 'contentFrame' | 'courseLesson' | 'chatMessage'
+    | 'contentPiece'
+    | 'contentFrame'
+    | 'courseLesson'
+    | 'chatMessage'
+    | 'legalChatMessage'
   >,
   key: string,
 ): Promise<boolean> {
   // A chat file (FIX-104 round 2) is claimed by the message that carries it,
-  // and by nothing else: a listing cannot name a chat key.
+  // and by nothing else: a listing cannot name a chat key. A file sent on a
+  // legal matter's chat (R2-LEGAL3) is claimed by that line the same way.
   if (isChatKey(key)) {
-    const message = await prisma.chatMessage.findFirst({
-      where: { attachmentKey: key },
-      select: { id: true },
-    });
-    return Boolean(message);
+    const [message, legalLine] = await Promise.all([
+      prisma.chatMessage.findFirst({
+        where: { attachmentKey: key },
+        select: { id: true },
+      }),
+      prisma.legalChatMessage.findFirst({
+        where: { attachmentKey: key },
+        select: { id: true },
+      }),
+    ]);
+    return Boolean(message ?? legalLine);
   }
   const [piece, frame, lesson] = await Promise.all([
     prisma.contentPiece.findFirst({

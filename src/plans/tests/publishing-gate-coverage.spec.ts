@@ -210,6 +210,10 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     files: ['attachment', 'attachment.key'],
     why: 'a picture, video or PDF in a private chat, uploaded through the chat attachment link',
   },
+  'POST legal/assistant/:id/messages': {
+    files: ['attachment', 'attachment.key'],
+    why: "a photo, video or PDF a person sends on their own legal matter (an ID, a document), uploaded through the legal chat attachment link; it is the sender's own chat upload and not a product",
+  },
   'POST events': {
     files: ['bannerUrl', 'externalUrl', 'speakers.photoUrl'],
     why: 'an event banner, links and speaker pictures; hosting by tier is E21',

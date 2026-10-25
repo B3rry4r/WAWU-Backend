@@ -28,6 +28,7 @@ import {
 } from '../legal-intake-questions';
 import { cleanAiText, readableOption } from '../ai-text';
 import { FIXED_PRICE_TERMS } from './legal-fixed-terms';
+import { LegalMatterFiles } from './legal-matter-files';
 import {
   ASSISTANT_BRIEF_AFTER_CLIENT_MESSAGES,
   ASSISTANT_CLAIM_MS,
@@ -61,8 +62,10 @@ import type {
   LegalAssistantThread,
   LegalAssistantTopic,
   LegalAssistantTranscript,
+  LegalAssistantUpload,
 } from './legal-assistant.types';
 import type { SendAssistantMessageDto } from './dto/legal-assistant.dto';
+import type { ChatUploadDto } from '../../chat/dto/chat.dto';
 
 /** The `channel` an assistant intake carries (LegalIntake.channel). */
 export const ASSISTANT_CHANNEL = 'assistant';
@@ -168,6 +171,7 @@ export class LegalAssistantService {
     @Inject(GEMINI_CLIENT) private readonly gemini: GeminiClient,
     private readonly chat: LegalChatService,
     private readonly allowance: LegalAssistantAllowance,
+    private readonly files: LegalMatterFiles,
   ) {}
 
   topics(): LegalAssistantTopic[] {
@@ -279,6 +283,26 @@ export class LegalAssistantService {
     }
     const typed = rawBody.trim();
     const tapped = dto.quickReplyId ?? '';
+
+    // A file for the matter (R2-LEGAL3): on its own, once the matter exists.
+    if (dto.attachment) {
+      if (typed !== '' || tapped !== '') {
+        throw refusal(
+          HttpStatus.BAD_REQUEST,
+          'message_empty',
+          'Send a file on its own, then write your message.',
+        );
+      }
+      if (!intake.legalRequestId) {
+        throw refusal(
+          HttpStatus.CONFLICT,
+          'matter_not_open',
+          'You can send files once your request is open.',
+        );
+      }
+      await this.files.send(wawuUserId, intake.legalRequestId, dto.attachment);
+      return this.thread(await this.owned(wawuUserId, id));
+    }
     if ((typed === '') === (tapped === '')) {
       throw refusal(
         HttpStatus.BAD_REQUEST,
@@ -350,6 +374,33 @@ export class LegalAssistantService {
     });
     await this.turn(await this.owned(wawuUserId, id));
     return this.thread(await this.owned(wawuUserId, id));
+  }
+
+  /**
+   * `POST {id}/attachments` (R2-LEGAL3): where to upload one file for this
+   * conversation's matter. Only once the matter exists (`start` or `send` has
+   * made it) and while it is open; the file is then sent with `POST
+   * {id}/messages` and `attachment.key`.
+   */
+  async presignAttachment(
+    wawuUserId: string,
+    id: string,
+    dto: ChatUploadDto,
+  ): Promise<LegalAssistantUpload> {
+    const intake = await this.owned(wawuUserId, id);
+    if (!intake.legalRequestId) {
+      throw refusal(
+        HttpStatus.CONFLICT,
+        'matter_not_open',
+        'You can send files once your request is open.',
+      );
+    }
+    return this.files.presign(
+      wawuUserId,
+      intake.legalRequestId,
+      dto.contentType,
+      dto.contentLength,
+    );
   }
 
   /**
@@ -931,12 +982,14 @@ export class LegalAssistantService {
         if (r.authorRole === 'consultant' && !consultant) {
           consultant = { name: consultantName, joinedAt: r.createdAt };
         }
+        const attachment = await this.files.view(r);
         messages.push({
           id: r.id,
           authorRole: r.authorRole === 'ai' ? 'assistant' : r.authorRole,
           body: r.authorRole === 'ai' ? cleanAiText(r.body) : r.body,
           createdAt: r.createdAt,
           consultantName,
+          ...(attachment ? { attachment } : {}),
         });
       }
     }

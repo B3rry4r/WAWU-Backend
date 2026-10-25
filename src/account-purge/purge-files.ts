@@ -110,11 +110,11 @@ export const FILE_KINDS: Readonly<Record<string, FileKind>> = {
   },
   'chat/media': {
     decision: 'DELETE',
-    what: 'A photo or video sent in a chat (ChatMessage.attachmentKey); the person’s messages go, the other person’s stay.',
+    what: 'A photo or video sent in a chat (ChatMessage.attachmentKey) or on a legal matter in the Legal chat (LegalChatMessage.attachmentKey, R2-LEGAL3). In a chat the person’s messages go and the other person’s stay; a legal matter is the person’s own and goes with its whole thread (eraseLegalThreads), so the file and the line naming it both go.',
   },
   'chat/file': {
     decision: 'DELETE',
-    what: 'A PDF sent in a chat (ChatMessage.attachmentKey).',
+    what: 'A PDF sent in a chat (ChatMessage.attachmentKey) or on a legal matter in the Legal chat (LegalChatMessage.attachmentKey, LegalRequest.documents, R2-LEGAL3). Deleted with the account, as a chat file is; the legal matter and its thread go with it (eraseLegalThreads).',
   },
   'ai/voiceover': {
     decision: 'DELETE',
