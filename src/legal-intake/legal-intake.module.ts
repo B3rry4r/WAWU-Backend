@@ -9,6 +9,7 @@ import { LegalIntakeOpsController } from './legal-intake-ops.controller';
 import { LegalIntakeService } from './legal-intake.service';
 import { LegalIntakeOpsService } from './legal-intake-ops.service';
 import { LegalChatService } from './legal-chat.service';
+import { LegalMatterNoticeService } from '../legal/legal-matter-notice.service';
 import { LegalAssistantController } from './assistant/legal-assistant.controller';
 import { LegalAssistantOpsController } from './assistant/legal-assistant-ops.controller';
 import { LegalAssistantService } from './assistant/legal-assistant.service';
@@ -52,6 +53,7 @@ import {
     LegalChatService,
     LegalAssistantAllowance,
     LegalMatterFiles,
+    LegalMatterNoticeService,
     LegalAssistantService,
     // FIX-11: how long a read waits for another read's opener.
     { provide: LEGAL_OPENER_WAIT_MS, useValue: ASSISTANT_OPENER_WAIT_MS },
