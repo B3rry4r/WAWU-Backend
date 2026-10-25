@@ -810,6 +810,14 @@ export function questionsForMatter(matter: string): IntakeQuestion[] {
   });
 }
 
+/** Every question the bank holds, common and matter-specific (R2-LEGAL3: the labels of its options). */
+export function allQuestions(): IntakeQuestion[] {
+  return [
+    ...COMMON_QUESTIONS,
+    ...Object.values(MATTER_QUESTIONS).flatMap((list) => list ?? []),
+  ];
+}
+
 /** Whether a question should be shown, given what has been answered so far. */
 export function isQuestionVisible(
   question: IntakeQuestion,

@@ -10,6 +10,7 @@ import {
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
+import { ChatUploadDto } from '../../chat/dto/chat.dto';
 import { LegalAssistantService } from './legal-assistant.service';
 import {
   SendAssistantMessageDto,
@@ -18,6 +19,7 @@ import {
 import type {
   LegalAssistantThread,
   LegalAssistantTopic,
+  LegalAssistantUpload,
 } from './legal-assistant.types';
 
 /**
@@ -42,7 +44,11 @@ import type {
  * the provider's allowance is spent: the message is kept, the assistant is
  * busy, and asking again later works), `fixed_price_matter` (409, Send for a
  * matter that starts from `POST {id}/start`) and `not_fixed_price` (409,
- * `start` for a matter that needs a consultant first).
+ * `start` for a matter that needs a consultant first). Files for the matter
+ * (R2-LEGAL3): `matter_not_open` (409, no request exists yet), `matter_closed`
+ * (409, delivered or cancelled) and `matter_files_full` (409, 20 files); the
+ * upload itself is refused as a chat refuses one (413 for a size, 413
+ * `storage_limit_reached` when the person's storage is full).
  *
  * Limits, per person and checked together with the write so parallel requests
  * cannot beat them: 30 paid calls an hour (a client message, before or after
@@ -89,6 +95,21 @@ export class LegalAssistantController {
     @Body() dto: SendAssistantMessageDto,
   ): Promise<LegalAssistantThread> {
     return this.service.send(user.sub, id, dto);
+  }
+
+  /**
+   * A file for the matter (R2-LEGAL3): where to upload one photo, video or PDF.
+   * Upload it there, confirm it with `POST /uploads/confirm`, then send it with
+   * `POST {id}/messages` and `attachment.key`. A file that is signed for and
+   * never sent is given back like any chat upload (`POST /uploads/release`).
+   */
+  @Post(':id/attachments')
+  attachment(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ChatUploadDto,
+  ): Promise<LegalAssistantUpload> {
+    return this.service.presignAttachment(user.sub, id, dto);
   }
 
   /**

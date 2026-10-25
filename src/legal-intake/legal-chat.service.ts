@@ -22,6 +22,8 @@ import {
   openerRunning,
 } from './assistant/legal-assistant-allowance';
 import { LEGAL_OPENER_WAIT_MS } from './assistant/legal-assistant-config';
+import { LegalMatterFiles } from './assistant/legal-matter-files';
+import type { LegalAssistantAttachment } from './assistant/legal-assistant.types';
 import type { LegalBrief } from './legal-brief';
 
 /**
@@ -44,6 +46,12 @@ export interface ChatMessageView {
   authorRole: 'client' | 'ai' | 'consultant';
   body: string;
   createdAt: Date;
+  /**
+   * The file the client sent on this line (R2-LEGAL3), with a fresh link
+   * that lives 15 minutes. Only the consultant's read carries it; a line of
+   * words has none.
+   */
+  attachment?: LegalAssistantAttachment | null;
 }
 
 export interface ChatThreadView {
@@ -104,6 +112,7 @@ export class LegalChatService {
     private readonly allowance: LegalAssistantAllowance,
     @Inject(LEGAL_OPENER_WAIT_MS) private readonly openerWaitMs: number,
     private readonly live: LivePublisher,
+    private readonly files: LegalMatterFiles,
   ) {}
 
   /**
@@ -309,7 +318,14 @@ export class LegalChatService {
       serviceName: request.serviceName,
       status: request.status,
       consultantJoined: messages.some((m) => m.authorRole === 'consultant'),
-      messages: messages.map(toView),
+      // The consultant's read lists the files the client sent, each with a
+      // link to open it (R2-LEGAL3).
+      messages: await Promise.all(
+        messages.map(async (m) => {
+          const attachment = await this.files.view(m);
+          return attachment ? { ...toView(m), attachment } : toView(m);
+        }),
+      ),
     };
   }
 

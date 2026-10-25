@@ -11,7 +11,8 @@ import { releaseOwnUpload, type ReleaseDeps } from './upload-release';
  * never comes back), the file is confirmed and counted, and no message carries
  * it. The app gives it back at once when the person taps Delete
  * (POST /uploads/release), and this sweep gives it back for everyone else:
- * every confirmed file in a chat folder that no message carries is released
+ * every confirmed file in a chat folder that no message carries (a one-to-one
+ * chat's, or a line on a legal matter's chat: R2-LEGAL3) is released
  * (the same steps a release takes, so the file is deleted from the bucket and
  * stops counting) once it is UNSENT_CHAT_UPLOAD_HOURS old.
  *
@@ -83,6 +84,9 @@ export async function sweepUnsentChatUploads(
         ${asked.length > 0 ? Prisma.sql`AND s."id" NOT IN (${Prisma.join(asked)})` : Prisma.empty}
         AND NOT EXISTS (
           SELECT 1 FROM "ChatMessage" m WHERE m."attachmentKey" = s."key"
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM "LegalChatMessage" l WHERE l."attachmentKey" = s."key"
         )
       ORDER BY s."createdAt" ASC
       LIMIT ${batch}

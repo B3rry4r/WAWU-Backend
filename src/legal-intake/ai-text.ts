@@ -1,3 +1,5 @@
+import { allQuestions } from './legal-intake-questions';
+
 /**
  * Text that came from the AI provider and that a person will read or that
  * will be stored (LEGAL-01).
@@ -40,14 +42,43 @@ export function cleanAiText(text: string): string {
 }
 
 /**
+ * The question bank's own label for each option id that names a place or
+ * another proper noun (R2-LEGAL3): `other_african` is "Another African
+ * country" and `outside_africa` is "Outside Africa", where the plain reading
+ * lost the capital ("Other african", "Outside africa"). Only an id of more
+ * than one word whose label has a capital inside it, and that every question
+ * using it labels the same way, is here, so a label is never put on an id
+ * that means two things; every other id ("yes", "no_rush") keeps the plain
+ * reading, because the model may ask its own question with it.
+ */
+const BANK_LABELS: ReadonlyMap<string, string> = (() => {
+  const seen = new Map<string, string | null>();
+  for (const q of allQuestions()) {
+    for (const o of q.options ?? []) {
+      if (!/^[a-z0-9]+(?:[_-][a-z0-9]+)+$/.test(o.value)) continue;
+      if (!/\p{Lu}/u.test(o.label.slice(1))) continue;
+      const known = seen.get(o.value);
+      seen.set(
+        o.value,
+        known === undefined || known === o.label ? o.label : null,
+      );
+    }
+  }
+  return new Map([...seen].filter((e): e is [string, string] => e[1] !== null));
+})();
+
+/**
  * A tap the assistant offers is always words (R2-LEGAL2, CHECK-3 M-1). A
  * model sometimes answers with the option's id instead of its label
  * ("business_owner", "one_only", "businessOwner"): that becomes "Business
- * owner", "One only". A label that is already words ("Yes, there's a clause")
- * is left alone.
+ * owner", "One only", and an id the question bank names ("other_african")
+ * becomes the bank's label. A label that is already words ("Yes, there's a
+ * clause") is left alone.
  */
 export function readableOption(label: string): string {
   const text = label.trim();
+  const named = BANK_LABELS.get(text);
+  if (named !== undefined) return named;
   let words: string | null = null;
   if (/^[a-z0-9]+(?:[_-][a-z0-9]+)*$/.test(text)) {
     words = text.replace(/[_-]+/g, ' ');

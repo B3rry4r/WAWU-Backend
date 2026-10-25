@@ -3852,6 +3852,47 @@
         ]
       }
     },
+    "/api/hub/legal/assistant/{id}/attachments": {
+      "post": {
+        "operationId": "LegalAssistantController_attachment",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatUploadDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LegalAssistantUpload"
+                }
+              }
+            }
+          }
+        },
+        "summary": "A file for the matter (R2-LEGAL3): where to upload one photo, video or PDF.\nUpload it there, confirm it with `POST /uploads/confirm`, then send it with\n`POST {id}/messages` and `attachment.key`. A file that is signed for and\nnever sent is given back like any chat upload (`POST /uploads/release`).",
+        "tags": [
+          "LegalAssistant"
+        ]
+      }
+    },
     "/api/hub/legal/assistant/{id}/reply": {
       "post": {
         "operationId": "LegalAssistantController_reply",
@@ -44894,6 +44935,24 @@
           "body"
         ]
       },
+      "ChatAttachmentDto": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The `key` POST /chats/:chatId/attachments returned, after the upload.",
+            "maxLength": 300
+          },
+          "name": {
+            "type": "string",
+            "description": "The file's own name, shown on a PDF bubble.",
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "key"
+        ]
+      },
       "SendAssistantMessageDto": {
         "type": "object",
         "properties": {
@@ -44907,8 +44966,43 @@
             "description": "The `id` of one of the thread's live `quickReplies`.",
             "maxLength": 64,
             "pattern": "^[a-z0-9_:]+$"
+          },
+          "attachment": {
+            "description": "A photo, video or PDF uploaded through `POST /legal/assistant/{id}/attachments`\nfor this conversation's matter: the `key` that call answered with, and the\nfile's name for a PDF. Only once the matter exists, and not on its own\nwith words.",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChatAttachmentDto"
+              }
+            ]
           }
         }
+      },
+      "ChatUploadDto": {
+        "type": "object",
+        "properties": {
+          "contentType": {
+            "type": "string",
+            "description": "image/png, image/jpeg, image/webp, video/mp4, video/quicktime or application/pdf.",
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "video/mp4",
+              "video/quicktime",
+              "application/pdf"
+            ]
+          },
+          "contentLength": {
+            "type": "number",
+            "description": "Exact size in bytes; the upload link is signed for this length. Up to\n512 MB, the limit every upload already has (MAX_UPLOAD_BYTES).",
+            "minimum": 1,
+            "maximum": 536870912
+          }
+        },
+        "required": [
+          "contentType",
+          "contentLength"
+        ]
       },
       "StartFixedPriceDto": {
         "type": "object",
@@ -47711,24 +47805,6 @@
           "wawuId"
         ]
       },
-      "ChatAttachmentDto": {
-        "type": "object",
-        "properties": {
-          "key": {
-            "type": "string",
-            "description": "The `key` POST /chats/:chatId/attachments returned, after the upload.",
-            "maxLength": 300
-          },
-          "name": {
-            "type": "string",
-            "description": "The file's own name, shown on a PDF bubble.",
-            "maxLength": 200
-          }
-        },
-        "required": [
-          "key"
-        ]
-      },
       "ChatSendMessageDto": {
         "type": "object",
         "properties": {
@@ -47755,33 +47831,6 @@
             "format": "uuid"
           }
         }
-      },
-      "ChatUploadDto": {
-        "type": "object",
-        "properties": {
-          "contentType": {
-            "type": "string",
-            "description": "image/png, image/jpeg, image/webp, video/mp4, video/quicktime or application/pdf.",
-            "enum": [
-              "image/png",
-              "image/jpeg",
-              "image/webp",
-              "video/mp4",
-              "video/quicktime",
-              "application/pdf"
-            ]
-          },
-          "contentLength": {
-            "type": "number",
-            "description": "Exact size in bytes; the upload link is signed for this length. Up to\n512 MB, the limit every upload already has (MAX_UPLOAD_BYTES).",
-            "minimum": 1,
-            "maximum": 536870912
-          }
-        },
-        "required": [
-          "contentType",
-          "contentLength"
-        ]
       },
       "EventDecisionReasonDto": {
         "type": "object",
@@ -63101,6 +63150,31 @@
           "legalRequestId"
         ]
       },
+      "LegalAssistantAttachment": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "nullable": true
+          },
+          "contentType": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "url",
+          "contentType",
+          "bytes",
+          "name"
+        ]
+      },
       "ChatMessageView": {
         "type": "object",
         "properties": {
@@ -63121,6 +63195,10 @@
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "attachment": {
+            "$ref": "#/components/schemas/LegalAssistantAttachment",
+            "nullable": true
           }
         },
         "required": [
@@ -63314,6 +63392,14 @@
           },
           "consultantName": {
             "type": "string",
+            "nullable": true
+          },
+          "attachment": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LegalAssistantAttachment"
+              }
+            ],
             "nullable": true
           }
         },
@@ -63532,6 +63618,21 @@
           "fixedPrice",
           "consultant",
           "assistantStopped"
+        ]
+      },
+      "LegalAssistantUpload": {
+        "type": "object",
+        "properties": {
+          "uploadUrl": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "uploadUrl",
+          "key"
         ]
       },
       "LegalAssistantTranscript": {
