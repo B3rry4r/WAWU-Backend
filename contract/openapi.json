@@ -43876,7 +43876,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Hands the Hub a purchase the store has just completed. The Hub asks the\nstore's own server about it (the app's word is never taken), then gives\nwhat was bought, once per store transaction: the same call again, a\nrestore, or the store's own notice arriving first all answer the same\npurchase with `alreadyGranted: true`. Send `purchaseToken` on `android`,\n`transactionId` on `ios`, and `communityId` for a pass.\n\nRefusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,\n`store_product_unknown` (404), `store_receipt_missing` (400),\n`store_purchase_invalid` (422), `store_purchase_pending`,\n`store_purchase_taken` (that purchase, or that subscription, was already used on another account, or was made with another account's token), `store_account_token_missing` (422, the purchase carries no account token),\n`store_pass_not_available`, `store_unreachable` (503, safe to repeat) and `store_grant_failed` (500, the store has the payment but the Hub could not finish; ask again).",
+        "summary": "Hands the Hub a purchase the store has just completed. The Hub asks the\nstore's own server about it (the app's word is never taken), then gives\nwhat was bought, once per store transaction: the same call again, a\nrestore, or the store's own notice arriving first all answer the same\npurchase with `alreadyGranted: true`. Send `purchaseToken` on `android`,\n`transactionId` on `ios`, and `communityId` for a pass.\n\nRefusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,\n`store_product_unknown` (404), `store_receipt_missing` (400),\n`store_purchase_invalid` (422), `store_purchase_pending`,\n`store_purchase_taken` (that purchase, or that subscription, was already used on another account, or was made with another account's token), `store_purchase_other_room` (409, a pass payment was first given to another room), `store_account_token_missing` (422, the purchase carries no account token),\n`store_pass_not_available`, `store_unreachable` (503, safe to repeat) and `store_grant_failed` (500, the store has the payment but the Hub could not finish; ask again).",
         "tags": [
           "Store"
         ]
@@ -44112,7 +44112,8 @@
                 "points",
                 "credits",
                 "tier",
-                "pass"
+                "pass",
+                "extra_products"
               ]
             }
           },
@@ -44208,7 +44209,8 @@
                 "points",
                 "credits",
                 "tier",
-                "pass"
+                "pass",
+                "extra_products"
               ]
             }
           },
@@ -51510,9 +51512,15 @@
           },
           "days": {
             "type": "integer",
-            "description": "pass: the days one period runs.",
+            "description": "pass: the days one purchase gives the room.",
             "minimum": 1,
             "maximum": 366
+          },
+          "extraProducts": {
+            "type": "integer",
+            "description": "extra_products: the products one purchase adds. Defaults to the plan's count when left out.",
+            "minimum": 1,
+            "maximum": 2147483647
           }
         }
       },
@@ -51538,7 +51546,8 @@
               "points",
               "credits",
               "tier",
-              "pass"
+              "pass",
+              "extra_products"
             ],
             "type": "string"
           },
@@ -74979,10 +74988,6 @@
           },
           "isHost": {
             "type": "boolean"
-          },
-          "cancelInStore": {
-            "type": "boolean",
-            "nullable": true
           }
         },
         "required": [
@@ -78693,6 +78698,10 @@
           "days": {
             "type": "number",
             "nullable": true
+          },
+          "extraProducts": {
+            "type": "number",
+            "nullable": true
           }
         },
         "required": [
@@ -78718,6 +78727,10 @@
             "nullable": true
           },
           "days": {
+            "type": "number",
+            "nullable": true
+          },
+          "extraProducts": {
             "type": "number",
             "nullable": true
           }
@@ -78749,6 +78762,7 @@
             "type": "string",
             "enum": [
               "tier",
+              "extra_products",
               "credits",
               "points",
               "pass"
@@ -78883,6 +78897,7 @@
             "type": "string",
             "enum": [
               "tier",
+              "extra_products",
               "credits",
               "points",
               "pass"
@@ -78937,6 +78952,10 @@
             "type": "string"
           },
           "expiresAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "passEndsAt": {
             "type": "string",
             "nullable": true
           },
@@ -79027,6 +79046,7 @@
             "type": "string",
             "enum": [
               "tier",
+              "extra_products",
               "credits",
               "points",
               "pass"
@@ -79106,6 +79126,10 @@
             "type": "string",
             "nullable": true
           },
+          "extraProducts": {
+            "type": "number",
+            "nullable": true
+          },
           "until": {
             "type": "string",
             "nullable": true
@@ -79119,6 +79143,7 @@
           "points",
           "credits",
           "tierId",
+          "extraProducts",
           "until",
           "communityId"
         ]
@@ -79143,6 +79168,7 @@
             "type": "string",
             "enum": [
               "tier",
+              "extra_products",
               "credits",
               "points",
               "pass"

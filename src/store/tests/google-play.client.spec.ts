@@ -191,6 +191,37 @@ describe('IAP-01: the real Google Play adapter (stand-in server)', () => {
     expect((await client.verifyOneTime('p', 'tok-n')).accountToken).toBeNull();
   });
 
+  it('reads the room a pass was bought for from the purchase profile id, or null (IAP-03 round 2)', async () => {
+    answers[`GET ${base}/purchases/products/wawu_pass_30_a/tokens/tok-room`] = {
+      status: 200,
+      body: {
+        purchaseTimeMillis: '1',
+        purchaseState: 0,
+        orderId: 'O-room',
+        productId: 'wawu_pass_30_a',
+        obfuscatedExternalAccountId: 'acct-token-1',
+        obfuscatedExternalProfileId: '3f2b1c9e-7a44-4d0e-9a55-0c6d9f1b2a77',
+      },
+    };
+    const client = new RealGooglePlayClient(config);
+    expect(
+      (await client.verifyOneTime('wawu_pass_30_a', 'tok-room')).roomToken,
+    ).toBe('3f2b1c9e-7a44-4d0e-9a55-0c6d9f1b2a77');
+    answers[`GET ${base}/purchases/products/wawu_pass_30_a/tokens/tok-noroom`] =
+      {
+        status: 200,
+        body: {
+          purchaseTimeMillis: '1',
+          purchaseState: 0,
+          orderId: 'O-noroom',
+          productId: 'wawu_pass_30_a',
+        },
+      };
+    expect(
+      (await client.verifyOneTime('wawu_pass_30_a', 'tok-noroom')).roomToken,
+    ).toBeNull();
+  });
+
   it('reads the account token of a subscription from its external account identifiers', async () => {
     answers[`GET ${base}/purchases/subscriptionsv2/tokens/sub-tok`] = {
       status: 200,

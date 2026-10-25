@@ -3,7 +3,12 @@ import type {
   StoreProductKind,
 } from '../../generated/prisma/enums';
 import { KOBO_PER_NAIRA, PACK_TABLE } from '../credit-purchase/credit-packs';
-import { countIn, tierById, type PlansConfig } from '../plans/plans-config';
+import {
+  INT4_MAX,
+  countIn,
+  tierById,
+  type PlansConfig,
+} from '../plans/plans-config';
 import { packById } from '../plans/purchases/points-pack-rules';
 import { StoreError } from './store-error';
 import type {
@@ -14,11 +19,24 @@ import type {
 /** The longest pass period an admin may set, in days. */
 export const MAX_PASS_DAYS = 366;
 
-/** A tier or a pass is a subscription in the store; a points or credits pack is bought and consumed. */
+/**
+ * A tier is an auto-renewing subscription in the store. Points, credits, an
+ * upload pack and a community pass are bought once: a pass is a ONE-TIME
+ * 30-day purchase for one room (Google Play: a consumable in-app product; the
+ * App Store: a non-renewing subscription), because Google and Apple let an
+ * account hold a given subscription product only once, so one subscription per
+ * price point could not cover two rooms (IAP-03 round 2, Default (lead), owner
+ * may override). Renewing a pass is buying it again.
+ */
 export function isSubscriptionKind(kind: StoreProductKind): boolean {
-  return kind === 'tier' || kind === 'pass';
+  return kind === 'tier';
 }
 
+/**
+ * The grants every kind but `extra_products` uses. `extraProducts` is left out
+ * on purpose: it is only there on an `extra_products` product, so the stored
+ * and answered shapes of the older kinds do not change (IAP-03, additive).
+ */
 const EMPTY: StoreProductGrantsConfig = {
   packId: null,
   pack: null,
@@ -35,6 +53,9 @@ export function grantsConfigOf(raw: unknown): StoreProductGrantsConfig {
     pack: typeof o.pack === 'string' ? (o.pack as CreditPack) : null,
     tierId: typeof o.tierId === 'string' ? o.tierId : null,
     days: typeof o.days === 'number' ? o.days : null,
+    ...(typeof o.extraProducts === 'number'
+      ? { extraProducts: o.extraProducts }
+      : {}),
   };
 }
 
@@ -51,9 +72,15 @@ const bad = (message: string) =>
  *  - credits: `pack` (starter, popular or pro). The reference defaults to the
  *    pack's wallet price (Default (lead), owner may override).
  *  - tier: `tierId` of a tier of the plan. No reference.
- *  - pass: `days`. The reference is required: the room's price is the host's,
- *    but a store sells fixed price points, so the admin states what this
- *    product is worth.
+ *  - pass: `days`, what ONE purchase gives the room named in it (30). The
+ *    reference is required: the room's price is the host's, but a store sells
+ *    fixed price points, so the admin states what this product is worth. One
+ *    product per price point (`wawu.pass.30.a`, `wawu.pass.30.b`, and so on).
+ *  - extra_products (IAP-03): `extraProducts`, a whole number of products the
+ *    pack adds to the tier. It defaults to the plan's count (R-65, 5) when the
+ *    admin sends none, and is stored as a number so a later change to the
+ *    plan's setting never changes what a store listing already sells. No
+ *    reference (WAWU's own sale, no creator is paid).
  */
 export function checkProduct(
   kind: StoreProductKind,
@@ -65,6 +92,8 @@ export function checkProduct(
     for (const k of Object.keys(EMPTY) as (keyof StoreProductGrantsConfig)[])
       if (k !== used && grants[k] !== null)
         throw bad(`A ${kind} product takes only "${used}" under grants.`);
+    if (used !== 'extraProducts' && (grants.extraProducts ?? null) !== null)
+      throw bad(`A ${kind} product takes only "${used}" under grants.`);
   };
   switch (kind) {
     case 'points': {
@@ -108,6 +137,16 @@ export function checkProduct(
         throw bad('A pass product needs the kobo one period is worth.');
       return { grants: { ...EMPTY, days: grants.days }, referenceKobo };
     }
+    case 'extra_products': {
+      only('extraProducts');
+      const count = grants.extraProducts ?? plans.extraProducts.count;
+      if (!Number.isInteger(count) || count < 1 || count > INT4_MAX)
+        throw bad('An upload pack adds a whole number of products, 1 or more.');
+      return {
+        grants: { ...EMPTY, extraProducts: count },
+        referenceKobo: null,
+      };
+    }
   }
 }
 
@@ -147,5 +186,7 @@ export function resolveGrants(
     }
     case 'pass':
       return { ...none, days: grants.days };
+    case 'extra_products':
+      return { ...none, extraProducts: grants.extraProducts ?? null };
   }
 }

@@ -38,6 +38,7 @@ import {
   StandInGooglePlay,
   verified,
 } from '../../../test/store/store-standins';
+import type { VerifiedStorePurchase } from '../clients/store-clients';
 
 jest.setTimeout(120_000);
 
@@ -90,6 +91,34 @@ describe('IAP-01 round 1: another person cannot take a subscription, a renewal o
         accountToken: tokenA,
         subscriptionKey: key,
         expiresAt: inDays(30),
+      }),
+    );
+  /** A pass bought once on Google (a consumable) and on the App Store (a non-renewing subscription): no subscription key. */
+  const androidPass = (
+    token: string,
+    order: string,
+    over: Partial<VerifiedStorePurchase> = {},
+  ) =>
+    google.oneTime.set(
+      token,
+      verified({
+        platform: 'android',
+        storeProductId: PASS.android,
+        storeTransactionId: order,
+        accountToken: tokenA,
+        needsAcknowledge: true,
+        ...over,
+      }),
+    );
+  const iosPass = (id: string, over: Partial<VerifiedStorePurchase> = {}) =>
+    apple.transactions.set(
+      id,
+      verified({
+        platform: 'ios',
+        storeProductId: PASS.ios,
+        storeTransactionId: id,
+        accountToken: tokenA,
+        ...over,
       }),
     );
   const push = (note: object, messageId = `m-${randomUUID()}`) =>
@@ -218,6 +247,9 @@ describe('IAP-01 round 1: another person cannot take a subscription, a renewal o
   beforeEach(async () => {
     await wipe();
     google.subscriptions.clear();
+    google.oneTime.clear();
+    google.consumed.length = 0;
+    google.acknowledged.length = 0;
     apple.transactions.clear();
     apple.notifications.clear();
   });
@@ -315,28 +347,27 @@ describe('IAP-01 round 1: another person cannot take a subscription, a renewal o
       expiresAt: inDays(30),
     });
 
-  it("a pass subscription is the same: B cannot take A's pass, on either store", async () => {
+  it("a pass is bought once, and B cannot take A's pass purchase, on either store", async () => {
     const communityId = await room();
-    androidSub(PASS.android, 'GPA.pass..0', 'sub-P');
+    androidPass('tok-P', 'GPA.pass..0');
     await as(a)
       .post('/store/purchases', {
         platform: 'android',
         productId: PASS.android,
-        purchaseToken: 'sub-P',
+        purchaseToken: 'tok-P',
         communityId,
       })
       .expect(201);
-    androidSub(PASS.android, 'GPA.pass..1', 'sub-P');
     const g = await as(b)
       .post('/store/purchases', {
         platform: 'android',
         productId: PASS.android,
-        purchaseToken: 'sub-P',
+        purchaseToken: 'tok-P',
         communityId,
       })
       .expect(409);
     expect(codeOf(g)).toBe('store_purchase_taken');
-    iosSub(PASS.ios, '6000', '6000');
+    iosPass('6000');
     await as(a)
       .post('/store/purchases', {
         platform: 'ios',
@@ -345,12 +376,11 @@ describe('IAP-01 round 1: another person cannot take a subscription, a renewal o
         communityId,
       })
       .expect(201);
-    iosSub(PASS.ios, '6001', '6000');
     const i = await as(b)
       .post('/store/purchases', {
         platform: 'ios',
         productId: PASS.ios,
-        transactionId: '6001',
+        transactionId: '6000',
         communityId,
       })
       .expect(409);
@@ -361,6 +391,104 @@ describe('IAP-01 round 1: another person cannot take a subscription, a renewal o
     expect(
       await prisma.communityMembership.count({ where: { userWawuId: OTHER } }),
     ).toBe(0);
+    // Nothing is held as a subscription, so there is nothing for a notice to follow.
+    expect(await prisma.storeSubscription.count()).toBe(0);
+  });
+
+  it('a store transaction is bound to the person AND the room it first granted (IAP-03 round 2, F2b): the same payment named for another room gives that room nothing', async () => {
+    const roomA = await room();
+    const roomB = await room();
+    const body = (communityId: string) => ({
+      platform: 'android',
+      productId: PASS.android,
+      purchaseToken: 'tok-RB',
+      communityId,
+    });
+    androidPass('tok-RB', 'GPA.rb..0');
+    await as(a).post('/store/purchases', body(roomA)).expect(201);
+    // The app, showing room B, hands the same held transaction with room B.
+    const swapped = await as(a)
+      .post('/store/purchases', body(roomB))
+      .expect(409);
+    expect(codeOf(swapped)).toBe('store_purchase_other_room');
+    expect(
+      (swapped.body as { message: string }).message.includes('\u2014'),
+    ).toBe(false);
+    expect(
+      await prisma.communityPass.count({
+        where: { communityId: roomB, userWawuId: BUYER },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.communityMembership.count({
+        where: { communityId: roomB, userWawuId: BUYER },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.storePurchase.count({
+        where: { storeTransactionId: 'GPA.rb..0' },
+      }),
+    ).toBe(1);
+    // Its own room still answers it, as a replay.
+    const again = await as(a).post('/store/purchases', body(roomA)).expect(201);
+    expect(dataOf<{ alreadyGranted: boolean }>(again).alreadyGranted).toBe(
+      true,
+    );
+    // The App Store is the same.
+    iosPass('6100');
+    const ios = (communityId: string) => ({
+      platform: 'ios',
+      productId: PASS.ios,
+      transactionId: '6100',
+      communityId,
+    });
+    await as(a).post('/store/purchases', ios(roomA)).expect(201);
+    const iosSwapped = await as(a)
+      .post('/store/purchases', ios(roomB))
+      .expect(409);
+    expect(codeOf(iosSwapped)).toBe('store_purchase_other_room');
+    expect(
+      await prisma.communityPass.count({
+        where: { communityId: roomB, userWawuId: BUYER },
+      }),
+    ).toBe(0);
+    // A second payment for room B is a new transaction and is granted to B.
+    androidPass('tok-RB2', 'GPA.rb..1');
+    await as(a)
+      .post('/store/purchases', { ...body(roomB), purchaseToken: 'tok-RB2' })
+      .expect(201);
+    expect(
+      await prisma.communityPass.count({
+        where: { communityId: roomB, userWawuId: BUYER },
+      }),
+    ).toBe(1);
+  });
+
+  it('Google records the room the sheet was opened for: a pass named for another room is refused before anything is granted, even on its first post', async () => {
+    const roomA = await room();
+    const roomB = await room();
+    androidPass('tok-RT', 'GPA.rt..0', { roomToken: roomA.toUpperCase() });
+    const wrong = await as(a)
+      .post('/store/purchases', {
+        platform: 'android',
+        productId: PASS.android,
+        purchaseToken: 'tok-RT',
+        communityId: roomB,
+      })
+      .expect(409);
+    expect(codeOf(wrong)).toBe('store_purchase_other_room');
+    expect(await prisma.storePurchase.count()).toBe(0);
+    expect(google.consumed).toEqual([]);
+    // The room it was bought for (the store may write its id in any case) grants it.
+    await as(a)
+      .post('/store/purchases', {
+        platform: 'android',
+        productId: PASS.android,
+        purchaseToken: 'tok-RT',
+        communityId: roomA,
+      })
+      .expect(201);
+    expect(google.consumed).toEqual(['tok-RT']);
   });
 
   it('two people posting the same new subscription at once: exactly one holds it', async () => {
@@ -689,57 +817,47 @@ describe('IAP-01 round 1: another person cannot take a subscription, a renewal o
     ).toBeNull();
   });
 
-  // ----------------------------------------------- a removed member's renewal
+  // ------------------------------------------- a member removed in that moment
 
-  it('a pass renewal for a member the host removed is recorded and flagged, gives no new period, and the pass screen says to cancel in the store', async () => {
+  it('a pass paid for by a member the host removed in that moment is recorded and flagged, gives no period, and the same payment again changes nothing', async () => {
     const communityId = await room();
-    androidSub(PASS.android, 'GPA.rm..0', 'sub-RM');
-    await as(a)
-      .post('/store/purchases', {
-        platform: 'android',
-        productId: PASS.android,
-        purchaseToken: 'sub-RM',
-        communityId,
-      })
-      .expect(201);
-    const view = async () => {
-      const svc = Object.create(
-        CommunityPassService.prototype,
-      ) as CommunityPassService;
-      Object.assign(svc, {
-        prisma,
-        blocked: { assertRoomVisible: () => Promise.resolve() },
-        access: { passUntil: () => Promise.resolve(null) },
-      });
-      return svc.pass(communityId, BUYER);
-    };
-    expect((await view()).cancelInStore).toBe(false);
-    // The host removes the member (a pending row).
-    await prisma.communityMembership.update({
-      where: { userWawuId_communityId: { userWawuId: BUYER, communityId } },
-      data: { status: 'pending' },
+    // The member is removed (a pending row) after the Hub checked the request and before it granted.
+    await prisma.communityMembership.create({
+      data: { userWawuId: BUYER, communityId, status: 'pending' },
     });
-    expect(await view()).toMatchObject({ canBuy: false, cancelInStore: true });
-    androidSub(PASS.android, 'GPA.rm..1', 'sub-RM');
-    expect(
-      dataOf<{ outcome: string }>(
-        await push(renewed('sub-RM', PASS.android)).expect(200),
-      ).outcome,
-    ).toBe('granted');
-    const row = await prisma.storePurchase.findFirstOrThrow({
-      where: { storeTransactionId: 'GPA.rm..1' },
+    const product = await prisma.storeProduct.findUniqueOrThrow({
+      where: {
+        platform_storeProductId: {
+          platform: 'android',
+          storeProductId: PASS.android,
+        },
+      },
     });
-    expect(row).toMatchObject({
+    const purchases = moduleRef.get(StorePurchaseService);
+    const paid = verified({
+      platform: 'android',
+      storeProductId: PASS.android,
+      storeTransactionId: 'GPA.rm..0',
+      accountToken: tokenA,
+    });
+    const settled = await purchases.settle({
+      userId: BUYER,
+      product,
+      verified: paid,
+      communityId,
+    });
+    expect(settled.alreadyGranted).toBe(false);
+    expect(settled.purchase).toMatchObject({
       wawuUserId: BUYER,
       flag: 'member_removed',
       status: 'granted',
     });
-    expect(row.flaggedAt).not.toBeNull();
+    expect(settled.purchase.flaggedAt).not.toBeNull();
     expect(
       await prisma.communityPass.count({
         where: { communityId, userWawuId: BUYER },
       }),
-    ).toBe(1);
+    ).toBe(0);
     expect(
       (
         await prisma.communityMembership.findUniqueOrThrow({
@@ -747,21 +865,27 @@ describe('IAP-01 round 1: another person cannot take a subscription, a renewal o
         })
       ).status,
     ).toBe('pending');
-    // The same notice again changes nothing; the admin list shows the flag; a lapse stops the "cancel" message.
-    androidSub(PASS.android, 'GPA.rm..1', 'sub-RM');
-    expect(
-      dataOf<{ outcome: string }>(
-        await push(renewed('sub-RM', PASS.android)).expect(200),
-      ).outcome,
-    ).toBe('duplicate');
-    await push({
-      subscriptionNotification: {
-        notificationType: 13,
-        purchaseToken: 'sub-RM',
-        subscriptionId: PASS.android,
-      },
-    }).expect(200);
-    expect((await view()).cancelInStore).toBe(false);
+    // The same payment again is a replay: nothing more is written.
+    const again = await purchases.settle({
+      userId: BUYER,
+      product,
+      verified: paid,
+      communityId,
+    });
+    expect(again.alreadyGranted).toBe(true);
+    expect(await prisma.storePurchase.count()).toBe(1);
+    // And the pass screen has nothing to ask the person to cancel: nothing renews.
+    const svc = Object.create(
+      CommunityPassService.prototype,
+    ) as CommunityPassService;
+    Object.assign(svc, {
+      prisma,
+      blocked: { assertRoomVisible: () => Promise.resolve() },
+      access: { passUntil: () => Promise.resolve(null) },
+    });
+    const view = await svc.pass(communityId, BUYER);
+    expect(view).toMatchObject({ canBuy: false });
+    expect('cancelInStore' in view).toBe(false);
   });
 
   // ----------------------------------------------------------- a failed grant

@@ -8223,12 +8223,16 @@ enum StorePlatform {
 
 /// What a store product grants (IAP-01): points (a points pack), credits (a
 /// WAWU Credits pack), tier (a maker tier, a subscription in the store) or
-/// pass (a community pass, a subscription in the store).
+/// pass (a community pass, a subscription in the store). `extra_products`
+/// (IAP-03, G-IAP-02-1) is the upload pack, "Add 5 more products": a pack
+/// bought and consumed like points and credits, adding to the tier row's
+/// `extraProducts`.
 enum StoreProductKind {
   points
   credits
   tier
   pass
+  extra_products
 }
 
 /// granted: the purchase gave what it sold. refunded: the store paid the

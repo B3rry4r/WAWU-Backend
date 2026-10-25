@@ -161,11 +161,15 @@ export function purchaseOf(
 ): VerifiedStorePurchase {
   if (!t.transactionId || !t.productId)
     throw new StorePurchaseNotFound('The transaction names no product.');
-  const subscription =
-    t.type === 'Auto-Renewable Subscription' ||
-    t.type === 'Non-Renewing Subscription';
+  // Only an auto-renewing subscription (a tier) has a holder and an end the
+  // store keeps. A non-renewing subscription (a community pass, IAP-03 round 2)
+  // is bought once like a pack: its days are the Hub's, so it has no key and no
+  // expiry of its own, whatever date Apple puts on it.
+  const subscription = t.type === 'Auto-Renewable Subscription';
   const expiresAt =
-    typeof t.expiresDate === 'number' ? new Date(t.expiresDate) : null;
+    subscription && typeof t.expiresDate === 'number'
+      ? new Date(t.expiresDate)
+      : null;
   const revoked = typeof t.revocationDate === 'number';
   return {
     platform: 'ios',

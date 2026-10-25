@@ -756,16 +756,40 @@ The app hands it to Google Play Billing as `obfuscatedAccountIdAndroid` and to S
 `appAccountToken` when it starts a purchase; the store returns it on every answer about that
 purchase, and the Hub refuses (`store_purchase_taken`, 409) a purchase that carries another
 person's token. A purchase that carries none is refused (`store_account_token_missing`, 422):
-always for a subscription, and for a pack bought on or after `STORE_ACCOUNT_TOKEN_REQUIRED_FROM`
-(an ISO date, 25 Oct 2026 when unset); a pack bought before that date may carry none. A
-subscription also belongs to whoever bought it first, whatever the order id
-(`StoreSubscription`, unique per platform and Google purchase token or Apple
+always for a tier (the one subscription), and for anything bought once (a pack, a pass) on or
+after `STORE_ACCOUNT_TOKEN_REQUIRED_FROM` (an ISO date, 25 Oct 2026 when unset); a purchase
+before that date may carry none. A tier also belongs to whoever bought it first, whatever the
+order id (`StoreSubscription`, unique per platform and Google purchase token or Apple
 `originalTransactionId`), and the stores' notices follow that holder.
 
 The grant is the wallet paths' own code (`PointsService.grant`, `TierGrantService`,
 `addCreditsWithLot`, `grantPassPeriod`), run in one short transaction keyed by
 `(platform, storeTransactionId)`. A refund or revocation takes back what is unspent. The
 creator's 85/15 on credits and passes is worked on WAWU's net after the store's share.
+
+The upload pack, "Add 5 more products" (IAP-03, R-65), is the fifth product kind,
+`extra_products`: a pack bought and consumed like points and credits, with
+`grants: { extraProducts: n }` (the plan's count, 5, when the admin sends none; stored as
+a number). One purchase adds `n` to the person's tier row (`MakerTier.extraProducts`) and
+writes a `MakerExtraProducts` row keyed `store:<purchase id>`, as the wallet's
+`extra_products` payment does; a refund or revocation takes them back, never below none.
+A tier that has ended still takes the pack (the store has been paid; it counts again with
+the next tier). A person who has never held a tier is refused before the store is asked
+(`store_purchase_invalid`, 422). `grants.extraProducts` is present on this kind only.
+
+A community pass is a ONE-TIME 30-day purchase for one room, not a subscription (IAP-03
+round 2, Default (lead), owner may override): Google and Apple let an account hold a given
+subscription product only once, so one subscription per price point could not cover two rooms.
+The store type is a Google Play consumable in-app product and an App Store non-renewing
+subscription, one product per price point (suggested ids `wawu.pass.30.a`, `wawu.pass.30.b`,
+and so on, each with its `referenceKobo` in `admin/store/products` and `grants: { days: 30 }`).
+Each verified purchase grants its days to the room named in it, stacking from the later of now
+and the room's current end (`grantPassPeriod`); the host is credited per purchase (85% of the
+net); renewing is buying again; a refund or revocation takes back that purchase's period and
+its host credit. The store transaction is bound to the person AND the room it first granted:
+the same person naming another room for it is refused (`store_purchase_other_room`, 409), and
+the pass reminder (3 days before the end) reaches store passes too. `GET /communities/{id}/pass`
+no longer answers `cancelInStore` (nothing renews).
 
 ## Verification: two ticks, not a ladder
 

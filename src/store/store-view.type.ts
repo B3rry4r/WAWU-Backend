@@ -19,8 +19,14 @@ export interface StoreGrantsView {
   credits: number | null;
   /** The maker tier a tier product gives; null for the other kinds. */
   tierId: string | null;
-  /** Days a tier or a pass runs for each period; null for points and credits. */
+  /** Days a tier runs for each period, or a pass gives for each purchase; null for points and credits. */
   days: number | null;
+  /**
+   * Products an upload pack adds to the person's tier (IAP-03, "Add 5 more
+   * products"). Present, and a number, only on an `extra_products` product;
+   * absent on the other kinds.
+   */
+  extraProducts?: number | null;
 }
 
 /** One product on sale in a store. */
@@ -31,7 +37,7 @@ export interface StoreProductView {
   storeProductId: string;
   kind: StoreProductKind;
   title: string;
-  /** True for a tier or a pass, which the store renews; false for a points or credits pack. */
+  /** True for a tier, which the store renews; false for a points, credits, upload pack or pass (a pass is bought once). */
   subscription: boolean;
   grants: StoreGrantsView;
 }
@@ -61,6 +67,8 @@ export interface StoreGrantedView {
   points: number | null;
   credits: number | null;
   tierId: string | null;
+  /** Products an upload pack added (IAP-03); null for the other kinds. */
+  extraProducts: number | null;
   /** When the tier or pass now ends (ISO 8601). */
   until: string | null;
   communityId: string | null;
@@ -77,9 +85,9 @@ export interface StorePurchaseView {
   alreadyGranted: boolean;
   grant: StoreGrantedView;
   purchasedAt: string;
-  /** When the subscription period ends as the store said; null for a points or credits pack. */
+  /** When the subscription period ends as the store said; null for anything bought once (points, credits, an upload pack, a pass). */
   expiresAt: string | null;
-  /** `member_removed` when the purchase was recorded but the pass was not given because the host removed the person; they cancel in the store. Null otherwise. */
+  /** `member_removed` when the purchase was recorded but the pass was not given because the host removed the person. Null otherwise. */
   flag: string | null;
 }
 
@@ -95,8 +103,10 @@ export interface StoreProductGrantsConfig {
   pack: CreditPack | null;
   /** tier: a tier of the live plan, by id. */
   tierId: string | null;
-  /** pass: the days one period runs. */
+  /** pass: the days one purchase gives the room. */
   days: number | null;
+  /** extra_products (IAP-03): the products one purchase adds. Absent on the other kinds. */
+  extraProducts?: number | null;
 }
 
 export interface AdminStoreProductView {
@@ -108,7 +118,7 @@ export interface AdminStoreProductView {
   grants: StoreProductGrantsConfig;
   /** What the grant gives right now, resolved from the plan (display). */
   resolved: StoreGrantsView;
-  /** Kobo one purchase is worth before the store's share; null for points and tiers. */
+  /** Kobo one purchase is worth before the store's share; null for points, tiers and upload packs. */
   referenceKobo: number | null;
   active: boolean;
   sortOrder: number;
@@ -159,11 +169,16 @@ export interface AdminStorePurchaseView {
   creatorShareKobo: number | null;
   purchasedAt: string;
   expiresAt: string | null;
+  /**
+   * A pass: the end of the 30 days this purchase granted (the pass row's end, which a take-back moves to that moment). `expiresAt` is the
+   * store's own period end and is null for a pass bought once. Null for any other kind. Optional: an older client never reads it.
+   */
+  passEndsAt?: string | null;
   endedAt: string | null;
   endReason: string | null;
   /** What the take-back took (a spent point or credit is not taken back). */
   takenBack: Record<string, unknown> | null;
-  /** `member_removed` when a pass renewal was paid for a member the host removed and nothing was given; an admin looks. Null otherwise. */
+  /** `member_removed` when a pass was paid for by a member the host removed in that moment and nothing was given; an admin looks. Null otherwise. */
   flag: string | null;
   flaggedAt: string | null;
 }

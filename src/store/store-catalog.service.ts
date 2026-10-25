@@ -114,7 +114,8 @@ export class StoreCatalogService {
         grants.points === null &&
         grants.credits === null &&
         grants.tierId === null &&
-        grants.days === null
+        grants.days === null &&
+        (grants.extraProducts ?? null) === null
       )
         return [];
       return [this.appView(r, grants)];

@@ -885,6 +885,18 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
       }),
     );
 
+  /** A Google one-time product the stand-in vouches for: a pack, or a pass (bought once, IAP-03 round 2). */
+  const once = (token: string, productId: string, order: string) =>
+    google.oneTime.set(
+      token,
+      vb({
+        platform: 'android',
+        storeProductId: productId,
+        storeTransactionId: order,
+        needsAcknowledge: true,
+      }),
+    );
+
   it('a tier is granted through the tier grant code: the tier, its bonus points, a purchase record, and acknowledged', async () => {
     const tier = plans.tiers[0];
     sub('sub-tier', P.android.tier, 'GPA.t..0');
@@ -941,12 +953,12 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
   // ------------------------------------------------------------------- passes
 
   it('a pass needs its room; refuses your own room, a room with no pass, and a removed member', async () => {
-    sub('sub-pass', P.android.pass, 'GPA.p..0');
+    once('tok-pass', P.android.pass, 'GPA.p..0');
     const buy = (b: object) =>
       as(buyer).post('/store/purchases', {
         platform: 'android',
         productId: P.android.pass,
-        purchaseToken: 'sub-pass',
+        purchaseToken: 'tok-pass',
         ...b,
       });
     let res = await buy({}).expect(400);
@@ -955,7 +967,7 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
       .post('/store/purchases', {
         platform: 'android',
         productId: P.android.pass,
-        purchaseToken: 'sub-pass',
+        purchaseToken: 'tok-pass',
         communityId: await room(HOST),
       })
       .expect(409);
@@ -976,11 +988,11 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
 
   it("a pass gives the chained period and membership through the pass grant code, and records the host's 85% of the net", async () => {
     const communityId = await room(HOST);
-    sub('sub-pass2', P.android.pass, 'GPA.p2..0');
+    once('tok-pass2', P.android.pass, 'GPA.p2..0');
     const body = {
       platform: 'android',
       productId: P.android.pass,
-      purchaseToken: 'sub-pass2',
+      purchaseToken: 'tok-pass2',
       communityId,
     };
     const res = await as(buyer).post('/store/purchases', body).expect(201);
@@ -988,6 +1000,10 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
       id: string;
       grant: { until: string; communityId: string };
     }>(res);
+    // A pass is bought once: the store is told to consume it (so it can be bought again), nothing is held as a subscription.
+    expect(google.consumed).toEqual(['tok-pass2']);
+    expect(google.acknowledged).toEqual([]);
+    expect(await prisma.storeSubscription.count()).toBe(0);
     const pass = await prisma.communityPass.findUniqueOrThrow({
       where: { walletPaymentId: `store:${view.id}` },
     });
@@ -1364,49 +1380,74 @@ describe('IAP-01: buying through the stores (stand-in stores)', () => {
     ).toBe('ignored');
   });
 
-  it('a revoked pass ends its period now', async () => {
+  it('a refunded pass takes back the 30 days of that purchase: the period ends now, a later one moves up, and the host credit is no longer in force', async () => {
     const communityId = await room(HOST);
-    sub('sub-pass3', P.android.pass, 'GPA.p3..0');
-    const bought = dataOf<{ id: string }>(
-      await as(buyer)
+    once('tok-pass3a', P.android.pass, 'GPA.p3..0');
+    once('tok-pass3b', P.android.pass, 'GPA.p3..1');
+    const buy = (token: string) =>
+      as(buyer)
         .post('/store/purchases', {
           platform: 'android',
           productId: P.android.pass,
-          purchaseToken: 'sub-pass3',
+          purchaseToken: token,
           communityId,
         })
-        .expect(201),
+        .expect(201);
+    const first = dataOf<{ id: string }>(await buy('tok-pass3a'));
+    // Renewing is buying again: the second period stacks behind the first.
+    const second = dataOf<{ id: string }>(await buy('tok-pass3b'));
+    const rowOf = (id: string) =>
+      prisma.communityPass.findUniqueOrThrow({
+        where: { walletPaymentId: `store:${id}` },
+      });
+    const before1 = await rowOf(first.id);
+    const before2 = await rowOf(second.id);
+    expect(before2.startsAt.getTime()).toBe(before1.endsAt.getTime());
+    // The store pays the FIRST purchase back.
+    expect(outcomeOf(await push(voided('GPA.p3..0')).expect(200))).toBe(
+      'taken_back',
     );
-    // A renewal reaches the same room (the room comes from the first purchase).
-    sub('sub-pass3', P.android.pass, 'GPA.p3..1');
+    const after1 = await rowOf(first.id);
+    const after2 = await rowOf(second.id);
+    expect(after1.endsAt.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(after1.endsAt.getTime()).toBeGreaterThan(after1.startsAt.getTime());
+    // The second period moved up by what the first had left (about 30 days), so
+    // the person's access now ends about 30 days from now, not 60.
+    const shifted = before2.startsAt.getTime() - after2.startsAt.getTime();
+    expect(Math.abs(shifted - 30 * 86_400_000)).toBeLessThan(60_000);
+    expect(after2.endsAt.getTime() - after2.startsAt.getTime()).toBe(
+      before2.endsAt.getTime() - before2.startsAt.getTime(),
+    );
+    expect(after2.endsAt.getTime()).toBeGreaterThan(Date.now());
+    expect(after2.endsAt.getTime()).toBeLessThan(Date.now() + 31 * 86_400_000);
     expect(
-      outcomeOf(
-        await push(subNote(2, 'sub-pass3', P.android.pass)).expect(200),
-      ),
-    ).toBe('granted');
-    expect(
-      await prisma.communityPass.count({
-        where: { communityId, userWawuId: BUYER },
+      await prisma.storePurchase.findUniqueOrThrow({
+        where: { id: first.id },
       }),
-    ).toBe(2);
+    ).toMatchObject({
+      status: 'refunded',
+      endReason: 'voided_by_store',
+      takenBack: { passEnded: true },
+    });
+    expect(
+      await prisma.storePurchase.findUniqueOrThrow({
+        where: { id: second.id },
+      }),
+    ).toMatchObject({ status: 'granted', creatorWawuUserId: HOST });
+    // The same notice twice takes back once.
+    expect(outcomeOf(await push(voided('GPA.p3..0')).expect(200))).toBe(
+      'duplicate',
+    );
+    expect((await rowOf(second.id)).startsAt.getTime()).toBe(
+      after2.startsAt.getTime(),
+    );
+    // The second purchase refunded too: the person is out.
     expect(outcomeOf(await push(voided('GPA.p3..1')).expect(200))).toBe(
       'taken_back',
     );
-    const second = await prisma.storePurchase.findFirstOrThrow({
-      where: { storeTransactionId: 'GPA.p3..1' },
-    });
-    const row = await prisma.communityPass.findUniqueOrThrow({
-      where: { walletPaymentId: `store:${second.id}` },
-    });
-    expect(row.endsAt.getTime()).toBeLessThanOrEqual(Date.now());
-    expect(row.endsAt.getTime()).toBeGreaterThan(row.startsAt.getTime());
-    expect(
-      (
-        await prisma.communityPass.findUniqueOrThrow({
-          where: { walletPaymentId: `store:${bought.id}` },
-        })
-      ).endsAt.getTime(),
-    ).toBeGreaterThan(Date.now());
+    expect((await rowOf(second.id)).endsAt.getTime()).toBeLessThanOrEqual(
+      Date.now(),
+    );
   });
 
   it('a store that cannot be reached to check a notice is a 503 so it is sent again, and nothing is recorded as seen', async () => {

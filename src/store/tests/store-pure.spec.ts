@@ -4,7 +4,11 @@
 import { Environment } from '@apple/app-store-server-library';
 import { purchaseOf, RealAppStoreClient } from '../clients/app-store.client';
 import { creatorShareOf, netOf } from '../store-grant.service';
-import { checkProduct, resolveGrants } from '../store-grants';
+import {
+  checkProduct,
+  isSubscriptionKind,
+  resolveGrants,
+} from '../store-grants';
 import { StoreError } from '../store-error';
 import { loadPlansConfig } from '../../plans/plans-config';
 
@@ -71,6 +75,12 @@ describe('IAP-01: the product map checks a grant against its kind and the plan',
     expect(() => checkProduct('credits', none, null, plans)).toThrow(
       StoreError,
     );
+  });
+
+  it('a tier is the only subscription; a pass, like a pack, is bought once', () => {
+    expect(isSubscriptionKind('tier')).toBe(true);
+    for (const kind of ['points', 'credits', 'extra_products', 'pass'] as const)
+      expect(isSubscriptionKind(kind)).toBe(false);
   });
 
   it('a tier needs a tier of the plan; a pass needs days and a reference', () => {
@@ -151,6 +161,35 @@ describe('IAP-01: the App Store adapter reads a verified transaction', () => {
       priceMicros: 4_500_500_000n,
     });
     expect(p.expiresAt?.getTime()).toBe(expiry);
+  });
+
+  it('a non-renewing subscription (a community pass, bought once) has no subscription key and no expiry of its own, whatever date Apple puts on it', () => {
+    const p = purchaseOf(
+      {
+        ...base,
+        productId: 'wawu.pass.30.a',
+        type: 'Non-Renewing Subscription',
+        // A past date must not read as "lapsed": its 30 days are the Hub's.
+        expiresDate: Date.now() - 86_400_000,
+      },
+      Environment.PRODUCTION,
+    );
+    expect(p).toMatchObject({
+      subscriptionKey: null,
+      expiresAt: null,
+      state: 'purchased',
+      storeTransactionId: '2000000123',
+    });
+    expect(
+      purchaseOf(
+        {
+          ...base,
+          type: 'Non-Renewing Subscription',
+          revocationDate: Date.now(),
+        },
+        Environment.PRODUCTION,
+      ).state,
+    ).toBe('refunded');
   });
 
   it('carries the appAccountToken the app bound the purchase to, or null', () => {

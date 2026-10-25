@@ -96,13 +96,21 @@ export class StoreProductGrantsDto {
   @Matches(/^[a-z][a-z0-9_]*$/, { message: 'tierId is not a tier id' })
   tierId?: string;
 
-  /** pass: the days one period runs. */
+  /** pass: the days one purchase gives the room. */
   @ApiPropertyOptional({ type: 'integer' })
   @IsOptional()
   @IsInt()
   @Min(1)
   @Max(366)
   days?: number;
+
+  /** extra_products: the products one purchase adds. Defaults to the plan's count when left out. */
+  @ApiPropertyOptional({ type: 'integer' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(2_147_483_647)
+  extraProducts?: number;
 }
 
 /** POST /admin/store/products. */
