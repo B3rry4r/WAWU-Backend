@@ -44,6 +44,7 @@ import { resolveCta, type CtaFields } from './ad-destination';
 import { checkArtworkUrl, parseUtcInstant } from './ad-text';
 import {
   toAdAuditEntryView,
+  type AdArtworkUploadView,
   type AdAuditEntryView,
   type AdCampaignChangeView,
   type AdCampaignDeletedView,
@@ -410,7 +411,7 @@ export class AdminAdsService {
   async uploadArtwork(
     declaredType: string | undefined,
     body: Buffer,
-  ): Promise<{ artworkUrl: string; previewUrl: string; bytes: number }> {
+  ): Promise<AdArtworkUploadView> {
     if (body.length === 0) throw refuse('bad_artwork', 'The picture is empty.');
     if (body.length > AD_ARTWORK_MAX_BYTES) {
       throw new PayloadTooLargeException(

@@ -141,6 +141,19 @@ export interface AdCampaignChangeView {
   audit: AdAuditEntryView;
 }
 
+/**
+ * What `POST /admin/ads/artwork` returns (ADS-LINK): the picture is stored and
+ * nothing is attached to a campaign yet.
+ */
+export interface AdArtworkUploadView {
+  /** Save this as the card's `artworkUrl`. The bare address of the stored picture: serving signs it afresh. */
+  artworkUrl: string;
+  /** A signed link that shows the picture now. It expires; do not save it. */
+  previewUrl: string;
+  /** The size of the stored file in bytes. */
+  bytes: number;
+}
+
 /** What deleting a draft returns. The campaign is gone; its history is not. */
 export interface AdCampaignDeletedView {
   campaignId: string;
