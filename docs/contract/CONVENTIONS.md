@@ -3390,7 +3390,7 @@ dashboard). `WalletProvider.capital` is the only way in; a provider without it
 
 | Route | What it does |
 |---|---|
-| `GET /capital/availability` | `{ available, holding }`: `available` is Capital on (plan setting `capital.enabled`, default on) and the provider serves it, so new orders can be made; `holding` is the person holds an order that is not over. The Wallet tab shows its row when either is true. No wallet needed. |
+| `GET /capital/availability` | `{ available, holding }`: `available` is Capital on (plan setting `capital.enabled`, default off since R-97) and the provider serves it, so new orders can be made; `holding` is the person holds an order that is not over. The app draws the Wallet tab row, and any other way into Capital, only when `holding` is true (R-97: WAWU offers no investments). No wallet needed. |
 | `GET /capital/products?kind=&cursor=` | The products in naira with their terms (rate, term, early exit, deductions, sale window, minimum and maximum). Each says `orderable` and, when it is not, why (`sold_out`, `sale_closed`, `not_open_yet`, `unavailable`). A kind the provider has that is not served here (private equity) is left out. The provider's own description of a product is **not** served (it is marketing and can promise what WAWU does not): a product is its terms, plus its name, its issuer's name and its documents. |
 | `GET /capital/products/{id}` | The same, with `documents` (every one is agreed to when ordering) and `terms`: WAWU's own limits and fee rule. |
 | `POST /capital/orders` | Reserves for 15 minutes at the provider's quote. **No money moves, no PIN.** `Idempotency-Key` makes a double tap reserve once. Body `{ productId, amountKobo, lockInvestment?, agreedToDocuments: true }`. `201` with the order (`reserved`). |
@@ -3408,7 +3408,7 @@ zero; nothing is promised. Amounts are kobo (naira only until the other
 currency accounts are built: a product in another currency is not listed).
 
 **Controls (owner-asked).** On or off: the plan setting `capital.enabled`
-(default 1). Off closes new orders only (`products`, `POST /capital/orders`, and the confirmation of a reservation still held answer `409 capital_unavailable`); the portfolio, the orders, a holding's movements, the withdrawal preview and `POST .../withdrawal` keep answering, so a person who holds something can still take it out. Limits and WAWU's fee are settings read at boot:
+(default 0 since R-97: WAWU offers no investments, so Capital is closed unless an admin switches it on). Off closes new orders only (`products`, `POST /capital/orders`, and the confirmation of a reservation still held answer `409 capital_unavailable`); the portfolio, the orders, a holding's movements, the withdrawal preview and `POST .../withdrawal` keep answering, so a person who holds something can still take it out. Limits and WAWU's fee are settings read at boot:
 `CAPITAL_MIN_KOBO`, `CAPITAL_MAX_KOBO`, `CAPITAL_DAILY_MAX_KOBO` (unset: none
 of ours) and `CAPITAL_WAWU_FEE_KOBO` plus `CAPITAL_WAWU_FEE_BPS` (default 0,
 R-10). A fee is quoted on the reservation (`feeKobo`, `totalKobo`), checked
@@ -3598,7 +3598,7 @@ dashboard). `WalletProvider.capital` is the only way in; a provider without it
 
 | Route | What it does |
 |---|---|
-| `GET /capital/availability` | `{ available, holding }`: `available` is Capital on (plan setting `capital.enabled`, default on) and the provider serves it, so new orders can be made; `holding` is the person holds an order that is not over. The Wallet tab shows its row when either is true. No wallet needed. |
+| `GET /capital/availability` | `{ available, holding }`: `available` is Capital on (plan setting `capital.enabled`, default off since R-97) and the provider serves it, so new orders can be made; `holding` is the person holds an order that is not over. The app draws the Wallet tab row, and any other way into Capital, only when `holding` is true (R-97: WAWU offers no investments). No wallet needed. |
 | `GET /capital/products?kind=&cursor=` | The products in naira with their terms (rate, term, early exit, deductions, sale window, minimum and maximum). Each says `orderable` and, when it is not, why (`sold_out`, `sale_closed`, `not_open_yet`, `unavailable`). A kind the provider has that is not served here (private equity) is left out. The provider's own description of a product is **not** served (it is marketing and can promise what WAWU does not): a product is its terms, plus its name, its issuer's name and its documents. |
 | `GET /capital/products/{id}` | The same, with `documents` (every one is agreed to when ordering) and `terms`: WAWU's own limits and fee rule. |
 | `POST /capital/orders` | Reserves for 15 minutes at the provider's quote. **No money moves, no PIN.** `Idempotency-Key` makes a double tap reserve once. Body `{ productId, amountKobo, lockInvestment?, agreedToDocuments: true }`. `201` with the order (`reserved`). |
@@ -3616,7 +3616,7 @@ zero; nothing is promised. Amounts are kobo (naira only until the other
 currency accounts are built: a product in another currency is not listed).
 
 **Controls (owner-asked).** On or off: the plan setting `capital.enabled`
-(default 1). Off closes new orders only (`products`, `POST /capital/orders`, and the confirmation of a reservation still held answer `409 capital_unavailable`); the portfolio, the orders, a holding's movements, the withdrawal preview and `POST .../withdrawal` keep answering, so a person who holds something can still take it out. Limits and WAWU's fee are settings read at boot:
+(default 0 since R-97: WAWU offers no investments, so Capital is closed unless an admin switches it on). Off closes new orders only (`products`, `POST /capital/orders`, and the confirmation of a reservation still held answer `409 capital_unavailable`); the portfolio, the orders, a holding's movements, the withdrawal preview and `POST .../withdrawal` keep answering, so a person who holds something can still take it out. Limits and WAWU's fee are settings read at boot:
 `CAPITAL_MIN_KOBO`, `CAPITAL_MAX_KOBO`, `CAPITAL_DAILY_MAX_KOBO` (unset: none
 of ours) and `CAPITAL_WAWU_FEE_KOBO` plus `CAPITAL_WAWU_FEE_BPS` (default 0,
 R-10). A fee is quoted on the reservation (`feeKobo`, `totalKobo`), checked

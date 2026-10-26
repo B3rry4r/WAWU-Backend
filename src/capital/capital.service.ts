@@ -53,7 +53,7 @@ import type {
   CapitalWithdrawalPreviewView,
 } from './capital-view.type';
 
-/** The plan setting that switches Capital on or off (default on). */
+/** The plan setting that switches Capital on or off (default off since R-97: WAWU offers no investments). */
 export const CAPITAL_ENABLED_SETTING = 'capital.enabled';
 
 export const CONFIRM_ROUTE = 'POST /capital/orders/:id/confirm';
@@ -108,12 +108,12 @@ export class CapitalService {
   // The switch and the provider
   // -------------------------------------------------------------------------
 
-  /** Whether the plan setting has Capital on. */
+  /** Whether the plan setting has Capital on. A switch that cannot be read counts as off (R-97). */
   isOn(): boolean {
     try {
       return this.plan.number(CAPITAL_ENABLED_SETTING) !== 0;
     } catch {
-      return true;
+      return false;
     }
   }
 

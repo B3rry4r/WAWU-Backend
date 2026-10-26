@@ -223,8 +223,9 @@ export class UserProfileService {
     }
 
     let saved: UserProfile;
-    try {
-      saved = await this.prisma.userProfile.upsert({
+    // Held as a function so a lost first write can run it again (see below).
+    const write = () =>
+      this.prisma.userProfile.upsert({
         where: { wawuUserId },
         update: {
           // `accountType` is deliberately self-selectable (CLAUDE.md: creator
@@ -284,6 +285,27 @@ export class UserProfileService {
           coverUrl: dto.coverUrl ?? null,
         },
       });
+    try {
+      try {
+        saved = await write();
+      } catch (error) {
+        // TIER-OFFER round 2 (F1): with nothing to update the upsert runs as a look and an insert, and the sign-up's other first
+        // writes make the same row at the same moment. When the row exists now, this write lost that race, not a handle: it runs
+        // again once and updates the row the winner made. A handle another person holds fails the second time exactly as before.
+        if (
+          !(
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === 'P2002'
+          ) ||
+          !(await this.prisma.userProfile.findUnique({
+            where: { wawuUserId },
+            select: { wawuUserId: true },
+          }))
+        ) {
+          throw error;
+        }
+        saved = await write();
+      }
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&

@@ -31,6 +31,13 @@ const CONFIGURABLE: readonly string[] = [
  * - `FX_FEE_COLLECTOR_<CODE>_BAN`: where the fee is paid (a Nuvion account in
  *   that currency). Required for a nonzero fee outside naira; a naira fee goes
  *   to WAWU's operational account, as a naira send's does.
+ * - `PAYMENT_FX_FEE_<CODE>_MINOR`: WAWU's conversion fee when a buyer pays a
+ *   naira price from that currency (PAY-FX, R-91), charged on top in that
+ *   currency and paid to `FX_FEE_COLLECTOR_<CODE>_BAN`. Default 0 (Default
+ *   (lead), owner may override).
+ * - `PAYMENT_FX_PROVIDER_FEE_<CODE>_MINOR`: the provider's charge on that move
+ *   as the quote shows it and the balance check counts it. Default 0: Nuvion
+ *   names none on dev (applicable_fee 0, 26 Oct 2026).
  * - `FX_DAILY_LIMIT_<CODE>_MINOR`: the most one person may move out of that
  *   currency in a Lagos day, swaps and sends together. Unset is no limit of
  *   WAWU's own (the provider's limits stand).
@@ -44,6 +51,8 @@ export class FxSettings {
   private readonly logger = new Logger(FxSettings.name);
   private readonly swapFee = new Map<string, bigint>();
   private readonly sendFee = new Map<string, bigint>();
+  private readonly paymentFee = new Map<string, bigint>();
+  private readonly paymentProviderFee = new Map<string, bigint>();
   private readonly collector = new Map<string, string>();
   private readonly dailyLimit = new Map<string, bigint>();
   private readonly decimals = new Map<string, number>();
@@ -67,6 +76,16 @@ export class FxSettings {
     for (const code of CONFIGURABLE) {
       const sw = int(`FX_SWAP_FEE_${code}_MINOR`, 0, Number.MAX_SAFE_INTEGER);
       const sd = int(`FX_SEND_FEE_${code}_MINOR`, 0, Number.MAX_SAFE_INTEGER);
+      const pf = int(
+        `PAYMENT_FX_FEE_${code}_MINOR`,
+        0,
+        Number.MAX_SAFE_INTEGER,
+      );
+      const ppf = int(
+        `PAYMENT_FX_PROVIDER_FEE_${code}_MINOR`,
+        0,
+        Number.MAX_SAFE_INTEGER,
+      );
       const ban = get(`FX_FEE_COLLECTOR_${code}_BAN`);
       const lim = int(
         `FX_DAILY_LIMIT_${code}_MINOR`,
@@ -76,6 +95,8 @@ export class FxSettings {
       const dec = int(`FX_DECIMALS_${code}`, 0, 12);
       if (sw) this.swapFee.set(code, BigInt(sw));
       if (sd) this.sendFee.set(code, BigInt(sd));
+      if (pf) this.paymentFee.set(code, BigInt(pf));
+      if (ppf) this.paymentProviderFee.set(code, BigInt(ppf));
       if (ban) {
         if (!/^[A-Za-z0-9_-]{1,64}$/.test(ban)) {
           throw new Error(
@@ -88,7 +109,7 @@ export class FxSettings {
       if (dec !== null) this.decimals.set(code, dec);
       // The naira fee is paid to WAWU's operational account, as a naira send's
       // is (the provider says which); every other currency needs a collector.
-      if ((sw || sd) && !ban && code !== 'NGN') {
+      if ((sw || sd || pf) && !ban && code !== 'NGN') {
         throw new Error(
           `A WAWU fee is set for ${code} but FX_FEE_COLLECTOR_${code}_BAN is not: there is nowhere to pay it`,
         );
@@ -104,6 +125,16 @@ export class FxSettings {
 
   swapFeeMinor(code: FxQuoteCode): bigint {
     return this.swapFee.get(code) ?? 0n;
+  }
+
+  /** WAWU's conversion fee on a naira price paid from this currency (PAY-FX); 0 unless set. */
+  paymentFeeMinor(code: FxQuoteCode): bigint {
+    return this.paymentFee.get(code) ?? 0n;
+  }
+
+  /** The provider's charge on a naira price paid from this currency (PAY-FX), from config; 0 unless set. */
+  paymentProviderFeeMinor(code: FxQuoteCode): bigint {
+    return this.paymentProviderFee.get(code) ?? 0n;
   }
 
   sendFeeMinor(code: FxCurrencyCode): bigint {

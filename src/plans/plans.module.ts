@@ -12,6 +12,8 @@ import { PublishingAllowanceService } from './publishing-allowance.service';
 import { PublishingGate } from './publishing-gate.service';
 import { PublishingOffersInterceptor } from './publishing-offers.interceptor';
 import { TierGrantService } from './tier-grant.service';
+import { TierOfferController } from './tier-offer.controller';
+import { TierOfferService } from './tier-offer.service';
 
 /**
  * The maker plan (TIER-01, R-43): its figures from `plans.config.json`,
@@ -41,11 +43,16 @@ import { TierGrantService } from './tier-grant.service';
  * The gate also refuses while the person's identity check is paused (S7
  * round 2, F3): `IdentityPauseModule` gives it the reader.
  *
+ * The tier offer (TIER-OFFER, R-94): `GET /me/tier-offer` says whether the
+ * full-screen offer of the three tiers is to be drawn for the caller and how it
+ * closes (an admin setting), and `POST /me/tier-offer/seen` records, once per
+ * person, that it was drawn.
+ *
  * PrismaService comes from the global PrismaModule, as for every module.
  */
 @Module({
   imports: [PointsModule, PlanSettingsModule, IdentityPauseModule],
-  controllers: [PlansController, MeTierController],
+  controllers: [PlansController, MeTierController, TierOfferController],
   providers: [
     BillingCurrencyService,
     HostTierOffersInterceptor,
@@ -55,6 +62,7 @@ import { TierGrantService } from './tier-grant.service';
     PublishingGate,
     PublishingOffersInterceptor,
     TierGrantService,
+    TierOfferService,
   ],
   exports: [
     // Re-exports PLANS_CONFIG (the live plan) and PlanSettingsService.

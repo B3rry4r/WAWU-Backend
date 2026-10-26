@@ -277,6 +277,14 @@ describe('NUV-12: Capital from the wallet', () => {
     prisma = moduleRef.get(PrismaService);
     sweep = moduleRef.get(CapitalSweepService);
     plan = moduleRef.get(PlanSettingsService);
+    // CAPITAL-OFF (R-97): Capital is off by default, so every test below but the default test runs with an admin's
+    // saved "on" (a row the way the admin screen writes it). The default test removes the row and puts it back.
+    await prisma.planSetting.upsert({
+      where: { key: 'capital.enabled' },
+      create: { key: 'capital.enabled', value: 1 },
+      update: { value: 1 },
+    });
+    await plan.refresh();
     settings = moduleRef.get(CapitalSettings);
     const issuer = moduleRef.get(AdminTokenService, { strict: false });
     for (const role of [
@@ -301,6 +309,9 @@ describe('NUV-12: Capital from the wallet', () => {
 
   afterAll(async () => {
     if (prisma) {
+      await prisma.planSetting.deleteMany({
+        where: { key: 'capital.enabled' },
+      });
       const orders = await prisma.capitalOrder.findMany({
         where: { wawuUserId: { in: users } },
         select: { id: true },
@@ -747,6 +758,55 @@ describe('NUV-12: Capital from the wallet', () => {
       spy.mockRestore();
     }
     cap.settlePayouts();
+    expect(plan.number('capital.enabled')).toBe(1);
+  });
+
+  it('R-97: with no saved setting Capital is off (the default), a switch that cannot be read counts as off, and a holder keeps the way in', async () => {
+    const holder = await person();
+    const held = await invested(holder);
+    const p = await person();
+    await prisma.planSetting.deleteMany({ where: { key: 'capital.enabled' } });
+    await plan.refresh();
+    try {
+      expect(plan.number('capital.enabled')).toBe(0);
+      expect(
+        body<{ available: boolean; holding: boolean }>(
+          await get(p, '/availability').expect(200),
+        ).data,
+      ).toEqual({ available: false, holding: false });
+      expect(
+        body<{ available: boolean; holding: boolean }>(
+          await get(holder, '/availability').expect(200),
+        ).data,
+      ).toEqual({ available: false, holding: true });
+      const list = await get(p, '/products');
+      expect(list.status).toBe(409);
+      expect(body(list).reason?.code).toBe('capital_unavailable');
+      expect((await reserve(p)).status).toBe(409);
+      // What the holder holds can still be read and taken out.
+      await get(holder, `/orders/${held.id}`).expect(200);
+      await get(holder, `/orders/${held.id}/withdrawal`).expect(200);
+      // A setting that cannot be read counts as off, never on.
+      const spy = jest.spyOn(plan, 'number').mockImplementation(() => {
+        throw new Error('cannot read');
+      });
+      try {
+        expect(
+          body<{ available: boolean; holding: boolean }>(
+            await get(p, '/availability').expect(200),
+          ).data,
+        ).toEqual({ available: false, holding: false });
+      } finally {
+        spy.mockRestore();
+      }
+    } finally {
+      await prisma.planSetting.upsert({
+        where: { key: 'capital.enabled' },
+        create: { key: 'capital.enabled', value: 1 },
+        update: { value: 1 },
+      });
+      await plan.refresh();
+    }
     expect(plan.number('capital.enabled')).toBe(1);
   });
 

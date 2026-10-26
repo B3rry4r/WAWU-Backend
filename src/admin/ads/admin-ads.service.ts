@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  PayloadTooLargeException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
@@ -17,6 +18,13 @@ import {
   type AdminAdAction,
 } from '../../../generated/prisma/enums';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  AD_ARTWORK_KEY,
+  AD_ARTWORK_MAX_BYTES,
+  AD_ARTWORK_TYPES,
+  sniffAdArtwork,
+} from '../../storage/ad-artwork';
+import { StorageService, objectKeyFrom } from '../../storage/storage.service';
 import { AdsCountsService } from '../../ads/ads-counts.service';
 import type { AdCounts, AdDayRange } from '../../ads/ads-counts.type';
 import { utcDay } from '../../ads/ads-day';
@@ -32,9 +40,19 @@ import {
   type AdAction,
   type AdPhase,
 } from './ad-campaign-state';
-import { parseUtcInstant } from './ad-text';
+import { resolveCta, type CtaFields } from './ad-destination';
+import { resolvePictures, type PictureColumns } from './ad-pictures-input';
+import {
+  hasAnyPicture,
+  holdsShapes,
+  picturesOf,
+  showsIn,
+  showsInWhere,
+} from '../../ads/ads-pictures';
+import { checkArtworkUrl, parseUtcInstant } from './ad-text';
 import {
   toAdAuditEntryView,
+  type AdArtworkUploadView,
   type AdAuditEntryView,
   type AdCampaignChangeView,
   type AdCampaignDeletedView,
@@ -107,21 +125,20 @@ function artworkRequired(): UnprocessableEntityException {
  * A campaign that still has to be given artwork: it has a card with no picture
  * (saved before R-59) and is not ended (an ended one is final).
  */
-function needsArtwork(row: {
-  status: AdCampaignStatus;
-  creative: { artworkUrl: string | null } | null;
-}): boolean {
-  return (
-    row.status !== 'ended' &&
-    row.creative !== null &&
-    row.creative.artworkUrl === null
-  );
+function needsArtwork(row: CampaignRow): boolean {
+  return row.status !== 'ended' && row.creative !== null && !hasAnyPicture(row);
 }
 
 /** The same test as a database filter, for the list and the report. */
 const NEEDS_ARTWORK_WHERE: Prisma.AdCampaignWhereInput = {
   status: { not: 'ended' },
-  creative: { is: { artworkUrl: null } },
+  creative: {
+    is: {
+      artworkUrl: null,
+      artworkLandscapeUrl: null,
+      artworkPortraitUrl: null,
+    },
+  },
 };
 
 function snapshotOf(
@@ -130,7 +147,11 @@ function snapshotOf(
 ): Snapshot {
   return {
     advertiser: campaign.advertiser,
-    placement: campaign.placement,
+    // A booking with the two shapes has only a derived placement (R-92): its
+    // places follow from its pictures, so the history does not record it.
+    placement: holdsShapes({ placement: campaign.placement, creative })
+      ? null
+      : campaign.placement,
     startsAt: campaign.startsAt.toISOString(),
     endsAt: campaign.endsAt.toISOString(),
     weight: campaign.weight,
@@ -139,7 +160,10 @@ function snapshotOf(
     ctaLabel: creative.ctaLabel,
     ctaDestination: creative.ctaDestination,
     ctaDestinationId: creative.ctaDestinationId,
+    ctaUrl: creative.ctaUrl,
     artworkUrl: creative.artworkUrl,
+    landscapeUrl: creative.artworkLandscapeUrl,
+    portraitUrl: creative.artworkPortraitUrl,
   };
 }
 
@@ -196,6 +220,7 @@ export class AdminAdsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly counts: AdsCountsService,
+    private readonly storage: StorageService,
   ) {}
 
   // ── reads ─────────────────────────────────────────────────────────────────
@@ -303,7 +328,9 @@ export class AdminAdsService {
       ),
       ...placements.map((placement) =>
         this.prisma.adCampaign.count({
-          where: { AND: [where, { placement }] },
+          where: {
+            AND: [where, showsInWhere(placement, { requirePicture: false })],
+          },
         }),
       ),
       ...phases.map((p) =>
@@ -336,7 +363,18 @@ export class AdminAdsService {
     const days = this.dayRange(this.range(query));
     const matching = await this.prisma.adCampaign.findMany({
       where,
-      select: { id: true, status: true, placement: true },
+      select: {
+        id: true,
+        status: true,
+        placement: true,
+        creative: {
+          select: {
+            artworkUrl: true,
+            artworkLandscapeUrl: true,
+            artworkPortraitUrl: true,
+          },
+        },
+      },
     });
     const ids = matching.map((m) => m.id);
     const [overall, perCampaign] = await Promise.all([
@@ -346,13 +384,18 @@ export class AdminAdsService {
     const byStatusDelivery = this.groupDelivery(
       statuses,
       matching,
-      (m) => m.status,
+      (m) => [m.status],
       perCampaign,
     );
+    // A booking that shows in several places is added under each of them. One
+    // with no picture is counted under its stored place, as it always was.
     const byPlacementDelivery = this.groupDelivery(
       placements,
       matching,
-      (m) => m.placement,
+      (m) => {
+        const shows = showsIn(m);
+        return shows.length > 0 ? shows : [m.placement];
+      },
       perCampaign,
     );
 
@@ -382,11 +425,106 @@ export class AdminAdsService {
       servingNow: Object.fromEntries(
         placements.map((p) => [
           p,
-          servableViews.filter((v) => v.placement === p && v.servingNow).length,
+          servableViews.filter((v) => v.shows.includes(p) && v.servingNow)
+            .length,
         ]),
       ) as AdSummaryReportView['servingNow'],
       needingArtwork,
     };
+  }
+
+  /**
+   * POST /admin/ads/artwork: stores one picture for a card and returns the
+   * address to save as `artworkUrl` and a link to show it now. The bytes must
+   * be a JPEG, PNG or WebP (read from the file itself; the declared type must
+   * agree) and at most AD_ARTWORK_MAX_BYTES. Nothing is attached to a campaign
+   * yet: the dashboard saves the returned address with the campaign.
+   */
+  async uploadArtwork(
+    declaredType: string | undefined,
+    body: Buffer,
+  ): Promise<AdArtworkUploadView> {
+    if (body.length === 0) throw refuse('bad_artwork', 'The picture is empty.');
+    if (body.length > AD_ARTWORK_MAX_BYTES) {
+      throw new PayloadTooLargeException(
+        `The picture is too big. Keep it under ${AD_ARTWORK_MAX_BYTES / (1024 * 1024)} MB.`,
+      );
+    }
+    const kind = sniffAdArtwork(body);
+    if (!kind || !AD_ARTWORK_TYPES[kind] || declaredType !== kind) {
+      throw refuse(
+        'bad_artwork',
+        'The picture must be a JPEG, PNG or WebP file.',
+      );
+    }
+    const stored = await this.storage.putAdArtwork(body, kind);
+    return {
+      artworkUrl: stored.artworkUrl,
+      previewUrl: stored.previewUrl,
+      bytes: body.length,
+    };
+  }
+
+  /**
+   * A typed artwork link was checked by the DTO. An address that only has the
+   * shape of one of the Hub's own pictures (plain http on the local test
+   * stack) is accepted only when it really is on the Hub's own bucket.
+   */
+  private async assertArtwork(url: string): Promise<void> {
+    if (checkArtworkUrl(url).ok) return;
+    if (await this.storage.ownsAdArtworkUrl(url)) return;
+    throw refuse(
+      'bad_artwork',
+      'artworkUrl must be an https link to a public host, without a password or spaces.',
+    );
+  }
+
+  /**
+   * The pictures and stored place a booking will have once `sent` is applied
+   * to `prev` (R-92), or the refusal: 422 when there would be no picture at
+   * all (R-59), 400 for a mix that does not make sense.
+   */
+  private pictureCols(
+    prev: PictureColumns | null,
+    sent: Parameters<typeof resolvePictures>[1],
+  ): PictureColumns {
+    const result = resolvePictures(prev, sent);
+    if (result.ok) return result.value;
+    if (result.code === 'artwork_required') throw artworkRequired();
+    throw refuse(result.code, result.message);
+  }
+
+  /** Checks each typed picture address (all of a new booking's, or only those a change sent). */
+  private async assertPictures(
+    pictures: PictureColumns,
+    only?: {
+      artworkUrl?: string | null;
+      artworkLandscapeUrl?: string | null;
+      artworkPortraitUrl?: string | null;
+    },
+  ): Promise<void> {
+    const wanted = only ?? pictures;
+    for (const key of [
+      'artworkUrl',
+      'artworkLandscapeUrl',
+      'artworkPortraitUrl',
+    ] as const) {
+      const url = wanted[key];
+      if (url) await this.assertArtwork(url);
+    }
+  }
+
+  /**
+   * A link that shows a picture the Hub stored (the bare address is not
+   * readable: the bucket is private), or undefined for a typed link, which
+   * the dashboard shows as it is.
+   */
+  private async previewOf(
+    artworkUrl: string | null | undefined,
+  ): Promise<string | undefined> {
+    if (!artworkUrl) return undefined;
+    if (!AD_ARTWORK_KEY.test(objectKeyFrom(artworkUrl))) return undefined;
+    return (await this.storage.freshUrlFor(artworkUrl)) ?? undefined;
   }
 
   // ── writes ────────────────────────────────────────────────────────────────
@@ -396,24 +534,33 @@ export class AdminAdsService {
     dto: CreateAdCampaignDto,
     admin: AdminUserView,
   ): Promise<AdCampaignChangeView> {
-    if (!dto.creative.artworkUrl) throw artworkRequired();
+    // R-92: the pictures decide where the ad shows. At least one is required.
+    const pictures = this.pictureCols(null, {
+      placement: dto.placement,
+      artworkUrl: dto.creative.artworkUrl,
+      landscapeUrl: dto.creative.landscapeUrl,
+      portraitUrl: dto.creative.portraitUrl,
+    });
+    await this.assertPictures(pictures);
     const now = new Date();
     const startsAt = this.instant(dto.startsAt, 'startsAt');
     const endsAt = this.instant(dto.endsAt, 'endsAt');
     this.assertWindow(startsAt, endsAt, now);
-    await this.assertEventOpen(
-      this.prisma,
-      dto.creative.ctaDestination,
-      dto.creative.ctaDestinationId,
-      now,
-      'bad_input',
-    );
+    const cta = this.ctaOf(null, dto.creative);
+    if (cta.ctaDestination === 'event') {
+      await this.assertEventOpen(
+        this.prisma,
+        cta.ctaDestinationId as string,
+        now,
+        'bad_input',
+      );
+    }
 
     const audit = await this.prisma.$transaction(async (tx) => {
       const created = await tx.adCampaign.create({
         data: {
           advertiser: dto.advertiser,
-          placement: dto.placement,
+          placement: pictures.placement,
           status: 'draft',
           startsAt,
           endsAt,
@@ -422,10 +569,13 @@ export class AdminAdsService {
             create: {
               headline: dto.creative.headline,
               subline: dto.creative.subline ?? null,
-              ctaLabel: dto.creative.ctaLabel,
-              ctaDestination: dto.creative.ctaDestination,
-              ctaDestinationId: dto.creative.ctaDestinationId,
-              artworkUrl: dto.creative.artworkUrl,
+              ctaLabel: cta.ctaLabel,
+              ctaDestination: cta.ctaDestination,
+              ctaDestinationId: cta.ctaDestinationId,
+              ctaUrl: cta.ctaUrl,
+              artworkUrl: pictures.artworkUrl,
+              artworkLandscapeUrl: pictures.artworkLandscapeUrl,
+              artworkPortraitUrl: pictures.artworkPortraitUrl,
             },
           },
         },
@@ -476,12 +626,34 @@ export class AdminAdsService {
         ? this.instant(dto.endsAt, 'endsAt')
         : row.endsAt;
       const c = dto.creative ?? {};
+      // R-92: the saved booking must hold a picture, whether it keeps the ones
+      // it has, gets new ones, or (a campaign saved before R-59) still has none.
+      // An old single-picture booking moves to the two shapes when one is sent.
+      const pictures = this.pictureCols(
+        {
+          placement: row.placement,
+          artworkUrl: creative.artworkUrl,
+          artworkLandscapeUrl: creative.artworkLandscapeUrl,
+          artworkPortraitUrl: creative.artworkPortraitUrl,
+        },
+        {
+          placement: dto.placement,
+          artworkUrl: c.artworkUrl,
+          landscapeUrl: c.landscapeUrl,
+          portraitUrl: c.portraitUrl,
+        },
+      );
+      await this.assertPictures(pictures, {
+        artworkUrl: c.artworkUrl,
+        artworkLandscapeUrl: c.landscapeUrl,
+        artworkPortraitUrl: c.portraitUrl,
+      });
 
       const before = snapshotOf(row, creative);
       const nextCampaign: AdCampaignModel = {
         ...row,
         advertiser: dto.advertiser ?? row.advertiser,
-        placement: dto.placement ?? row.placement,
+        placement: pictures.placement,
         startsAt,
         endsAt,
         weight: dto.weight ?? row.weight,
@@ -490,15 +662,11 @@ export class AdminAdsService {
         ...creative,
         headline: c.headline ?? creative.headline,
         subline: c.subline === undefined ? creative.subline : c.subline,
-        ctaLabel: c.ctaLabel ?? creative.ctaLabel,
-        ctaDestination: c.ctaDestination ?? creative.ctaDestination,
-        ctaDestinationId: c.ctaDestinationId ?? creative.ctaDestinationId,
-        artworkUrl:
-          c.artworkUrl === undefined ? creative.artworkUrl : c.artworkUrl,
+        ...this.ctaOf(creative, c),
+        artworkUrl: pictures.artworkUrl,
+        artworkLandscapeUrl: pictures.artworkLandscapeUrl,
+        artworkPortraitUrl: pictures.artworkPortraitUrl,
       };
-      // R-59: the saved campaign must have a picture, whether it keeps the one
-      // it has, gets a new one, or (a campaign saved before R-59) still has none.
-      if (nextCreative.artworkUrl === null) throw artworkRequired();
       const after = snapshotOf(nextCampaign, nextCreative);
       const changes = diff(before, after);
       if (Object.keys(changes).length === 0) {
@@ -511,11 +679,13 @@ export class AdminAdsService {
       if (changes.startsAt || changes.endsAt) {
         this.assertWindow(startsAt, endsAt, now);
       }
-      if (changes.ctaDestination || changes.ctaDestinationId) {
+      if (
+        nextCreative.ctaDestination === 'event' &&
+        (changes.ctaDestination || changes.ctaDestinationId)
+      ) {
         await this.assertEventOpen(
           tx,
-          nextCreative.ctaDestination,
-          nextCreative.ctaDestinationId,
+          nextCreative.ctaDestinationId as string,
           now,
           'bad_input',
         );
@@ -541,7 +711,10 @@ export class AdminAdsService {
           ctaLabel: nextCreative.ctaLabel,
           ctaDestination: nextCreative.ctaDestination,
           ctaDestinationId: nextCreative.ctaDestinationId,
+          ctaUrl: nextCreative.ctaUrl,
           artworkUrl: nextCreative.artworkUrl,
+          artworkLandscapeUrl: nextCreative.artworkLandscapeUrl,
+          artworkPortraitUrl: nextCreative.artworkPortraitUrl,
         },
       });
       return this.writeAudit(tx, admin, {
@@ -639,7 +812,7 @@ export class AdminAdsService {
         }
         // R-59 (G-761): a campaign saved before the rule, with no picture,
         // does not go on air either. Pausing and ending are never refused.
-        if (!row.creative.artworkUrl) throw artworkRequired();
+        if (!hasAnyPicture(row)) throw artworkRequired();
         if (row.endsAt.getTime() <= now.getTime()) {
           throw conflict(
             'window_over',
@@ -647,13 +820,14 @@ export class AdminAdsService {
             { endsAt: row.endsAt },
           );
         }
-        await this.assertEventOpen(
-          tx,
-          row.creative.ctaDestination,
-          row.creative.ctaDestinationId,
-          now,
-          'conflict',
-        );
+        if (row.creative.ctaDestination === 'event') {
+          await this.assertEventOpen(
+            tx,
+            row.creative.ctaDestinationId as string,
+            now,
+            'conflict',
+          );
+        }
         to = onAirStatus(row.startsAt, now);
       }
 
@@ -754,7 +928,20 @@ export class AdminAdsService {
   }
 
   /**
-   * The card's button opens an Event: it must exist, be published, not be
+   * The kind-specific fields a card will have after `sent` is applied to `prev`
+   * (R-92: link, none or event), or a 400 that names what is wrong.
+   */
+  private ctaOf(
+    prev: CtaFields | null,
+    sent: Parameters<typeof resolveCta>[1],
+  ): CtaFields {
+    const result = resolveCta(prev, sent);
+    if (!result.ok) throw refuse('bad_destination', result.message);
+    return result.value;
+  }
+
+  /**
+   * An `event` card's button opens an Event: it must exist, be published, not be
    * called off and not be over (the test serving applies). Checked when a
    * campaign is created, when its event is changed, when it is scheduled and
    * when it is resumed. If the event closes after that, the campaign is left alone
@@ -766,14 +953,10 @@ export class AdminAdsService {
    */
   private async assertEventOpen(
     db: Pick<Tx, 'event'>,
-    destination: string,
     eventId: string,
     now: Date,
     kind: 'bad_input' | 'conflict',
   ): Promise<void> {
-    if (destination !== 'event') {
-      throw refuse('bad_destination', 'ctaDestination is not one we can open.');
-    }
     const event = await db.event.findUnique({
       where: { id: eventId },
       select: {
@@ -828,11 +1011,11 @@ export class AdminAdsService {
     return out;
   }
 
-  /** Counts summed per key (status or placement), every key present. */
+  /** Counts summed per key (status or place), every key present. A row may count under several keys. */
   private groupDelivery<K extends string, T extends { id: string }>(
     keys: K[],
     rows: T[],
-    keyOf: (row: T) => K,
+    keysOf: (row: T) => K[],
     perCampaign: Record<string, AdCounts>,
   ): Record<K, AdCounts> {
     const sums = Object.fromEntries(
@@ -840,10 +1023,12 @@ export class AdminAdsService {
     ) as Record<K, { views: number; taps: number; skips: number }>;
     for (const row of rows) {
       const c = perCampaign[row.id];
-      const t = sums[keyOf(row)];
-      t.views += c.views;
-      t.taps += c.taps;
-      t.skips += c.skips;
+      for (const key of keysOf(row)) {
+        const t = sums[key];
+        t.views += c.views;
+        t.taps += c.taps;
+        t.skips += c.skips;
+      }
     }
     return Object.fromEntries(
       keys.map((k) => [
@@ -863,7 +1048,10 @@ export class AdminAdsService {
     const { from, to } = this.range(f);
     const and: Prisma.AdCampaignWhereInput[] = [];
     if (f.status) and.push({ status: f.status });
-    if (f.placement) and.push({ placement: f.placement });
+    // R-92: "in this placement" is "shows there", which the pictures decide.
+    if (f.placement) {
+      and.push(showsInWhere(f.placement, { requirePicture: false }));
+    }
     if (f.phase) and.push(this.phaseWhere(f.phase, now));
     if (f.artwork === 'missing') and.push(NEEDS_ARTWORK_WHERE);
     if (from) and.push({ endsAt: { gt: from } });
@@ -893,7 +1081,10 @@ export class AdminAdsService {
       db.adCampaign.findMany({
         where: {
           id: { not: id },
-          placement: row.placement,
+          // R-92: the bookings that share any place this one shows in.
+          OR: (showsIn(row).length > 0 ? showsIn(row) : [row.placement]).map(
+            (place) => showsInWhere(place, { requirePicture: false }),
+          ),
           status: { in: ['scheduled', 'live', 'paused'] },
           startsAt: { lt: row.endsAt },
           endsAt: { gt: row.startsAt },
@@ -934,7 +1125,7 @@ export class AdminAdsService {
     const eventIds = [
       ...new Set(
         rows.flatMap((r) =>
-          r.creative?.ctaDestination === 'event'
+          r.creative?.ctaDestination === 'event' && r.creative.ctaDestinationId
             ? [r.creative.ctaDestinationId]
             : [],
         ),
@@ -955,10 +1146,22 @@ export class AdminAdsService {
             },
           });
     const byId = new Map(events.map((e) => [e.id, e]));
+    const previews = await Promise.all(
+      rows.map(async (r) => {
+        const own = picturesOf(r);
+        const [artwork, landscape, portrait] = await Promise.all([
+          this.previewOf(r.creative?.artworkUrl),
+          this.previewOf(own.landscape),
+          this.previewOf(own.portrait),
+        ]);
+        return { artwork, landscape, portrait };
+      }),
+    );
 
-    return rows.map((row) => {
+    return rows.map((row, at) => {
       const event =
-        row.creative?.ctaDestination === 'event'
+        row.creative?.ctaDestination === 'event' &&
+        row.creative.ctaDestinationId
           ? byId.get(row.creative.ctaDestinationId)
           : undefined;
       const eventView: AdEventView | null = event
@@ -976,6 +1179,7 @@ export class AdminAdsService {
         id: row.id,
         advertiser: row.advertiser,
         placement: row.placement,
+        shows: showsIn(row),
         status: row.status,
         phase,
         startsAt: row.startsAt,
@@ -988,7 +1192,24 @@ export class AdminAdsService {
               ctaLabel: row.creative.ctaLabel,
               ctaDestination: row.creative.ctaDestination,
               ctaDestinationId: row.creative.ctaDestinationId,
+              // Only a link card has an address, so an event card's view is
+              // exactly the shape it had before R-92.
+              ...(row.creative.ctaUrl ? { ctaUrl: row.creative.ctaUrl } : {}),
               artworkUrl: row.creative.artworkUrl,
+              // Only a picture the Hub stored has one: a typed link needs none.
+              ...(previews[at].artwork
+                ? { artworkPreviewUrl: previews[at].artwork }
+                : {}),
+              // The two shapes (R-92); an old booking's single picture shows
+              // as the shape of its own place.
+              landscapeUrl: picturesOf(row).landscape,
+              ...(previews[at].landscape
+                ? { landscapePreviewUrl: previews[at].landscape }
+                : {}),
+              portraitUrl: picturesOf(row).portrait,
+              ...(previews[at].portrait
+                ? { portraitPreviewUrl: previews[at].portrait }
+                : {}),
             }
           : null,
         event: eventView,
@@ -998,8 +1219,9 @@ export class AdminAdsService {
           SERVED_STATUSES.includes(row.status) &&
           phase === 'running' &&
           row.creative !== null &&
-          row.creative.artworkUrl !== null &&
-          eventView?.open === true,
+          hasAnyPicture(row) &&
+          // A link or none card has no event to wait for.
+          (row.creative.ctaDestination !== 'event' || eventView?.open === true),
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       };

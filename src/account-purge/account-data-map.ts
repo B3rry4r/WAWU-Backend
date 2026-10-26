@@ -580,6 +580,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // LEGAL-DOCS: what the person agreed to at sign-up (which of the owner's
   // documents, which version, when). Theirs, and it goes with them.
   { model: 'LegalAcceptance', column: 'userWawuId', disposition: 'OWNED' },
+  // TIER-OFFER (R-94): that the person was shown the tier offer, and when. Theirs, and it goes with them.
+  { model: 'TierOfferSeen', column: 'wawuUserId', disposition: 'OWNED' },
   // Points turned into cash (POINTS-04): each row is WAWU's own movement of
   // cash from its account to this person's wallet, and the provider's record
   // of it (our reference, the amount, whether it was confirmed) must outlive
@@ -941,6 +943,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   // WAWU's fee in the currency's smallest unit on a quote and on an operation (WALLET-21), not a person.
   { model: 'FxQuote', column: 'wawuFeeMinor' },
   { model: 'FxOperation', column: 'wawuFeeMinor' },
+  // WAWU's fee in the currency's smallest unit on a payment made in foreign currency (PAY-FX), not a person.
+  { model: 'WalletPaymentFx', column: 'wawuFeeMinor' },
   // WAWU's fee in kobo on a card (WALLET-31), not a person.
   { model: 'WalletCard', column: 'wawuFeeKobo' },
 ];

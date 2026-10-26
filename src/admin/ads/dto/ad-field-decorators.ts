@@ -8,6 +8,8 @@ import {
 import {
   checkAdText,
   checkArtworkUrl,
+  checkCtaUrl,
+  isHubArtworkShape,
   normaliseAdText,
   parseUtcInstant,
 } from '../ad-text';
@@ -59,11 +61,46 @@ export function IsArtworkUrl(validation?: ValidationOptions) {
       options: validation,
       validator: {
         validate(value: unknown): boolean {
-          return typeof value !== 'string' || checkArtworkUrl(value).ok;
+          return (
+            typeof value !== 'string' ||
+            checkArtworkUrl(value).ok ||
+            isHubArtworkShape(value)
+          );
         },
         defaultMessage(args: ValidationArguments): string {
           const result = checkArtworkUrl(String(args.value));
           return result.ok ? 'artworkUrl is not valid.' : result.message;
+        },
+      },
+    });
+  };
+}
+
+/**
+ * The https address a `link` card opens (ADS-LINK, R-92). Trimmed, checked as
+ * `checkCtaUrl` says, and rewritten to its normal form before it is stored.
+ * Whether the card's kind wants an address at all is the service's rule.
+ */
+export function IsCtaUrl(validation?: ValidationOptions) {
+  return function decorate(target: object, propertyKey: string): void {
+    IsString(validation)(target, propertyKey);
+    Transform(({ value }: { value: unknown }) => {
+      if (typeof value !== 'string') return value;
+      const checked = checkCtaUrl(value);
+      return checked.ok ? checked.value : value.trim();
+    })(target, propertyKey);
+    registerDecorator({
+      name: 'isCtaUrl',
+      target: target.constructor,
+      propertyName: propertyKey,
+      options: validation,
+      validator: {
+        validate(value: unknown): boolean {
+          return typeof value !== 'string' || checkCtaUrl(value).ok;
+        },
+        defaultMessage(args: ValidationArguments): string {
+          const result = checkCtaUrl(String(args.value));
+          return result.ok ? 'ctaUrl is not valid.' : result.message;
         },
       },
     });

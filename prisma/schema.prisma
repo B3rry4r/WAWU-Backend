@@ -5412,6 +5412,11 @@ model WalletPayment {
   hold                  WalletHold?
   /// The payee's 85% of an ordinary sale, owed to their wallet until it lands (WALLET-16).
   earning               EarningSettlement?
+  /// PAY-FX (R-91): the currency of the account the buyer paid from, when it was
+  /// not their naira wallet. Null is a naira payment, exactly as before.
+  sourceCurrency        String?
+  /// The conversion's details, present exactly when `sourceCurrency` is.
+  fx                    WalletPaymentFx?
 
   @@index([payerWawuUserId, createdAt])
   @@index([status, createdAt])
@@ -6445,13 +6450,19 @@ enum AdCampaignStatus {
   ended
 }
 
-/// What the card's button opens. THE ALLOW-LIST: a card can only open one of
-/// these, so a destination outside it cannot be stored. `event` opens the event
-/// detail screen for `AdCreative.ctaDestinationId` (H33 "Get tickets", H36
-/// "Tickets"). The only destination the design draws is the event; a new kind
-/// is an additive `ALTER TYPE ... ADD VALUE` that the task needing it names.
+/// What a tap on the card does. THE ALLOW-LIST: a card can only do one of
+/// these, so a destination outside it cannot be stored. `link` opens the web
+/// address in `AdCreative.ctaUrl` in the phone's browser (ADS-LINK, R-92).
+/// `none` is a card that is only shown: no button, nothing to tap. `event`
+/// opened the event detail screen for `AdCreative.ctaDestinationId` (H33 "Get
+/// tickets", H36 "Tickets"); R-92 ruled that ads are not tied to events, so the
+/// dashboard no longer offers it, but a campaign that already uses it is served
+/// exactly as before. A new kind is an additive `ALTER TYPE ... ADD VALUE`
+/// that the task needing it names.
 enum AdCtaDestination {
   event
+  link
+  none
 }
 
 /// One booking: who it is for, where it shows, when, and how it ranks against
@@ -6463,6 +6474,10 @@ model AdCampaign {
   /// A name, not an account: advertisers have no accounts (R-15).
   advertiser String
 
+  /// Where a booking saved before the two shapes shows (R-92). For a booking
+  /// with a landscape or portrait picture it is only derived (explore_slider
+  /// when it has a landscape picture, else tgif_card) and decides nothing: its
+  /// places follow from its pictures (src/ads/ads-pictures.ts).
   placement AdPlacement
   status    AdCampaignStatus @default(draft)
 
@@ -6507,22 +6522,38 @@ model AdCreative {
   /// Optional: a card with only a headline is allowed.
   subline  String?
 
-  /// The button's words ("Get tickets", "Tickets").
-  ctaLabel         String
-  /// What the button opens: a kind from the allow-list (AdCtaDestination) and
-  /// the id of the thing of that kind. For `event`, an Event id. No foreign
-  /// key: the id's table depends on the kind, and an FK onto Event would stop
-  /// an event being deleted. Serving checks the target is still open.
+  /// The button's words ("Get tickets", "Visit us"). Set for `event` and
+  /// `link`; null for `none`, which draws no button (R-47: no do-nothing button).
+  ctaLabel         String?
+  /// What a tap does: a kind from the allow-list (AdCtaDestination).
   ctaDestination   AdCtaDestination
-  ctaDestinationId String
+  /// For `event`, an Event id; null for the other two kinds. No foreign key:
+  /// an FK onto Event would stop an event being deleted. Serving checks the
+  /// target is still open.
+  ctaDestinationId String?
+  /// For `link`, the https address the button opens, normalised (ADS-LINK,
+  /// R-92); null for the other two kinds. A CHECK ties the three columns to
+  /// the kind (see the ads_link_destinations migration).
+  ctaUrl           String?
 
-  /// The picture. An http(s) URL from POST /uploads/presign, the same as
-  /// Event.bannerUrl and NotificationCampaign.imageUrl. REQUIRED for every
-  /// campaign saved from ADS-07 on (R-59): POST and PATCH /admin/ads refuse a
-  /// campaign without it. The column stays nullable for the campaigns saved
-  /// before that; serving skips a campaign whose artwork is null, so no card
-  /// is ever drawn without a picture, and the admin list shows those for fixing.
+  /// The single picture of a booking saved before the two shapes (ADS-LINK
+  /// round 2, R-92). An http(s) URL from POST /uploads/presign, the same as
+  /// Event.bannerUrl and NotificationCampaign.imageUrl. Such a booking is
+  /// served in its own `AdCampaign.placement` only, exactly as before: an
+  /// explore_slider or today_slot booking's picture is a landscape one for that
+  /// place, a tgif_card booking's is a portrait one. A booking saved with the
+  /// two shapes has this null (a CHECK keeps the two ways apart).
   artworkUrl String?
+
+  /// The two shapes (owner, 26 Oct 2026, R-92). One booking holds a landscape
+  /// picture (16:9, 1920 x 1080), a portrait one (1080 x 2340, phone screen
+  /// shape), or both; each is optional and at least one is required (the
+  /// admin routes refuse a booking with none: 422). Where the ad shows follows
+  /// from the pictures it has: landscape shows in the Explore slider AND on
+  /// the Today strip, portrait shows in the TGIF full screen. An http(s) URL,
+  /// as `artworkUrl`.
+  artworkLandscapeUrl String?
+  artworkPortraitUrl  String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -8766,4 +8797,57 @@ model AbroadAdminAudit {
 
   @@index([subjectWawuId, at])
   @@index([sendId])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// PAYING FROM ANOTHER CURRENCY (task PAY-FX, R-91)
+///
+/// A buyer whose money is in a foreign account pays a naira price: WAWU
+/// converts at the provider's firm quote at the moment of payment, the naira
+/// lands in WAWU's own account, and everything after is as for a naira payment.
+/// One row per such payment (the payment's `sourceCurrency` is set with it).
+/// Amounts in the SOURCE currency's smallest unit. A refund goes back to the
+/// same account, the same amount, by a conversion the other way (`refund*`).
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletPaymentFx {
+  id                  String        @id @default(uuid())
+  paymentId           String        @unique
+  payment             WalletPayment @relation(fields: [paymentId], references: [id])
+  sourceCurrency      String
+  /// The FxAccount debited, and the provider's id for it.
+  fxAccountId         String
+  providerAccountId   String
+  /// Our FxQuote row, the provider's quote id and its rate as sent.
+  fxQuoteId           String
+  providerQuoteId     String
+  rate                String
+  /// What the quote debits for exactly the naira price.
+  sourceAmountMinor   BigInt
+  /// The provider's charge on the transfer (as its record says), and WAWU's conversion fee (config, 0 by default).
+  providerFeeMinor    BigInt?
+  wawuFeeMinor        BigInt        @default(0)
+  /// done, owed (to be asked again) or null when there is none to collect.
+  feeLeg              String?
+  providerTransferId  String?
+  /// The refund: what goes back (source currency), what it cost in kobo, the quote and the transfer.
+  refundMinor         BigInt?
+  refundCostKobo      BigInt?
+  refundQuoteId       String?
+  refundRate          String?
+  refundTransferId    String?
+  refundedAt          DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+}
+
+/// TIER-OFFER (R-94): that a person has been shown the full-screen offer of the
+/// three tiers, and when. One row per person, written once by the app when the
+/// screen is drawn (POST /me/tier-offer/seen); a second write changes nothing,
+/// so "shown once" holds across phones. It is a table of its own, not a column on
+/// UserProfile, because GET /users/me returns the whole UserProfile row and a
+/// column there would widen a live response. OWNED in the purge map; part of the
+/// person's data export.
+model TierOfferSeen {
+  wawuUserId String   @id
+  seenAt     DateTime @default(now())
 }

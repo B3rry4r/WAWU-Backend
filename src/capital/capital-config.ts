@@ -5,7 +5,7 @@ import { ConfigService } from '@nestjs/config';
  * Capital's settings (task NUV-12, R-84, R-10). Read once at boot; a value
  * that is set and wrong stops the server there, naming the setting.
  *
- * On or off is an admin plan setting (`capital.enabled`, default on), not
+ * On or off is an admin plan setting (`capital.enabled`, default off since R-97), not
  * here. These are the limits and WAWU's own fee, from the environment:
  *
  * - `CAPITAL_MIN_KOBO`, `CAPITAL_MAX_KOBO`: the smallest and largest amount
