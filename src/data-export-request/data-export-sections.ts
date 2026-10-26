@@ -333,6 +333,17 @@ export const EXPORT_SECTIONS: ExportSection[] = [
     }),
   },
   {
+    // TIER-OFFER (R-94): when the person was shown the offer of the three tiers.
+    key: 'tierOffer',
+    models: ['TierOfferSeen'],
+    load: async (prisma, me) => ({
+      seen: await prisma.tierOfferSeen.findUnique({
+        where: { wawuUserId: me },
+        select: { seenAt: true },
+      }),
+    }),
+  },
+  {
     // FLIX-01: that the person agreed to the terms that name the movie partner
     // (and when and how), and when they first and last opened the partner's
     // site from the app. Never a link: none is stored.

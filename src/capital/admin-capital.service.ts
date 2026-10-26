@@ -74,11 +74,11 @@ export class AdminCapitalService {
 
   /** The switch, the limits and WAWU's fee in force (task OPS-27). Read only. */
   capitalSettings(): AdminCapitalSettingsView {
-    let enabled = true;
+    let enabled = false;
     try {
       enabled = this.plan.number(CAPITAL_ENABLED_SETTING) !== 0;
     } catch {
-      // Read the way the Capital routes read it: a switch that cannot be read counts as on.
+      // Read the way the Capital routes read it: a switch that cannot be read counts as off (R-97).
     }
     const { limits, fee } = this.settings;
     return {

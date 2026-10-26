@@ -149,3 +149,26 @@ export interface MyTierView {
   /** The best event pass the person holds, or null. */
   eventPass: PlanEventPassView | null;
 }
+
+/**
+ * GET /me/tier-offer (TIER-OFFER, R-94): whether the full-screen offer of the
+ * three tiers is to be drawn for this person now, and how it closes.
+ */
+export interface TierOfferView {
+  /**
+   * True once per person: a creator account (professionals are creator
+   * accounts) who has not been shown the offer and holds no running tier.
+   */
+  show: boolean;
+  /**
+   * The admin setting `tier_offer.close_button_on`: true draws the close X
+   * (top right), false draws a "Not now" text button at the bottom instead.
+   * The screen always has one of the two.
+   */
+  closeButton: boolean;
+}
+
+/** POST /me/tier-offer/seen: when the Hub first heard the offer was drawn. */
+export interface TierOfferSeenView {
+  seenAt: string;
+}
