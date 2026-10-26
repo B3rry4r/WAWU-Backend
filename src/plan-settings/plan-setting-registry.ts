@@ -1100,14 +1100,14 @@ export function buildRegistry(
     key: 'capital.enabled',
     group: 'Other rulings',
     label:
-      'Capital: 1 takes new orders, 0 closes them (what a person holds can still be read and withdrawn)',
+      'Capital: 1 takes new orders, 0 closes them (off by default, R-97; what a person holds can still be read and withdrawn)',
     unit: 'count',
     usedBy: [
       'GET /capital/availability, the Wallet tab row (NUV-12)',
       'Every /capital route (NUV-12)',
     ],
     provisional: 'CAPITAL-ENABLED',
-    default: extra('capital.enabled', 1),
+    default: extra('capital.enabled', 0),
     parse: whole(0, 1),
   });
   // TIER-OFFER (R-94): the full-screen offer of the three tiers right after
