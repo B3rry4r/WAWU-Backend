@@ -101,6 +101,7 @@ const CAMPAIGN_KEYS = [
   'phase',
   'placement',
   'servingNow',
+  'shows',
   'startsAt',
   'status',
   'updatedAt',
@@ -113,6 +114,8 @@ const CREATIVE_KEYS = [
   'ctaDestinationId',
   'ctaLabel',
   'headline',
+  'landscapeUrl',
+  'portraitUrl',
   'subline',
 ];
 const EVENT_KEYS = ['endsAt', 'id', 'name', 'open', 'startsAt', 'status'];

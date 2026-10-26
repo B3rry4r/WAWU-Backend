@@ -30,8 +30,11 @@ export interface AdCardView {
   /** The https address, in its normal form. Present for `link` only. */
   ctaUrl?: string;
   /**
-   * http(s) URL of the picture. Always present: a campaign without artwork is
-   * not served (R-59), so no card is ever drawn without a picture.
+   * http(s) URL of the picture for the place asked for: the landscape one
+   * (16:9) for `explore_slider` and `today_slot`, the portrait one (a phone
+   * screen) for `tgif_card` (R-92, the two shapes). A booking is served in a
+   * place only if it has a picture for it. Always present: a campaign without
+   * artwork is not served (R-59), so no card is ever drawn without a picture.
    */
   artworkUrl: string;
 }

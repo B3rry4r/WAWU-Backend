@@ -1,17 +1,27 @@
 import type { PrismaService } from '../common/prisma/prisma.service';
 import type { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import type { AdPlacementName } from './dto/ads.dto';
+import {
+  anyPicture,
+  pictureFor,
+  servableAnywhereWhere,
+  showsInWhere,
+} from './ads-pictures';
 
 /**
  * How a sponsored card is picked (task ADS-04, R-15). One place, so the
  * service, the tests and ADS-05 and ADS-06 read the same rule.
  *
  * A campaign is served when ALL of these hold at the server's clock:
- *   1. its placement is the one asked for;
+ *   1. it shows in the place asked for (R-92, the two shapes: a booking with a
+ *      landscape picture shows in `explore_slider` and `today_slot`, one with a
+ *      portrait picture in `tgif_card`; a booking saved before the two shapes
+ *      shows in its own `placement` only; see ads-pictures.ts);
  *   2. its status is `scheduled` or `live` (never `draft`, `paused`, `ended`);
  *   3. startsAt <= now < endsAt (the start instant is in, the end instant is out);
- *   4. it has a creative with artwork (R-59: a card is never drawn without a
- *      picture; campaigns saved before ADS-07 without one are skipped);
+ *   4. it has a creative with a picture for that place (R-59: a card is never
+ *      drawn without a picture; campaigns saved before ADS-07 without one are
+ *      skipped), and the card carries that picture as `artworkUrl`;
  *   5. what a tap opens is still open. A `link` card opens a web address and a
  *      `none` card opens nothing, so neither has anything to check (R-92: ads
  *      are not tied to events). For `event` (campaigns saved before R-92), the
@@ -58,6 +68,7 @@ export interface ServableCampaign {
     ctaDestinationId: string | null;
     /** The https address, for `link` only. */
     ctaUrl: string | null;
+    /** The picture for the place asked for (the landscape one for Explore and Today, the portrait one for TGIF). */
     artworkUrl: string;
   };
 }
@@ -77,17 +88,21 @@ export async function servableCampaigns(
 ): Promise<ServableCampaign[]> {
   const candidates = await deps.prisma.adCampaign.findMany({
     where: {
-      ...(narrow.placement ? { placement: narrow.placement } : {}),
       ...(narrow.campaignId ? { id: narrow.campaignId } : {}),
       status: { in: [...SERVED_STATUSES] },
       startsAt: { lte: now },
       endsAt: { gt: now },
-      creative: { is: { artworkUrl: { not: null } } },
+      // A place asked for: the bookings that show there. No place (counting a
+      // view): the bookings that could be served somewhere.
+      ...(narrow.placement
+        ? showsInWhere(narrow.placement, { requirePicture: true })
+        : servableAnywhereWhere()),
     },
     orderBy: [...AD_TIE_BREAK],
     select: {
       id: true,
       advertiser: true,
+      placement: true,
       creative: {
         select: {
           headline: true,
@@ -97,6 +112,8 @@ export async function servableCampaigns(
           ctaDestinationId: true,
           ctaUrl: true,
           artworkUrl: true,
+          artworkLandscapeUrl: true,
+          artworkPortraitUrl: true,
         },
       },
     },
@@ -117,13 +134,23 @@ export async function servableCampaigns(
   const out: ServableCampaign[] = [];
   for (const c of candidates) {
     const creative = c.creative;
-    if (!creative || !creative.artworkUrl) continue;
+    if (!creative) continue;
+    // The picture this place draws; a booking with none for it is not served here.
+    const artworkUrl = narrow.placement
+      ? pictureFor(c, narrow.placement)
+      : anyPicture(c);
+    if (!artworkUrl) continue;
     // Anything this code cannot check is not served: the fields a kind needs
     // are checked here as well as by the database, so a card is never drawn
     // half built.
     const served = {
-      ...creative,
-      artworkUrl: creative.artworkUrl,
+      headline: creative.headline,
+      subline: creative.subline,
+      ctaDestination: creative.ctaDestination,
+      ctaLabel: creative.ctaLabel,
+      ctaDestinationId: creative.ctaDestinationId,
+      ctaUrl: creative.ctaUrl,
+      artworkUrl,
     };
     if (creative.ctaDestination === 'event') {
       if (!creative.ctaLabel || !creative.ctaDestinationId) continue;

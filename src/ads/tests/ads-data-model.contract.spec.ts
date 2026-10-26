@@ -759,6 +759,9 @@ describe('Ads data model (ADS-03)', () => {
           // ADS-LINK (R-92): the web address a `link` card opens.
           'ctaUrl',
           'artworkUrl',
+          // ADS-LINK round 2 (R-92): the two shapes, a landscape and a portrait picture.
+          'artworkLandscapeUrl',
+          'artworkPortraitUrl',
           'createdAt',
           'updatedAt',
         ].sort(),

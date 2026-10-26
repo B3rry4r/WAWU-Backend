@@ -108,6 +108,24 @@ export class CreateAdCreativeDto {
   @IsOptional()
   @IsArtworkUrl()
   artworkUrl?: string | null;
+
+  /**
+   * The landscape picture (R-92): 16:9, 1920 x 1080, an https link (the one an
+   * upload to `POST /admin/ads/artwork` returns, or one that is hosted already).
+   * It shows in the Explore slider AND on the Today strip. Optional; a booking
+   * needs this, `portraitUrl` or both (422 "Add artwork ..." otherwise).
+   */
+  @IsOptional()
+  @IsArtworkUrl()
+  landscapeUrl?: string | null;
+
+  /**
+   * The portrait picture (R-92): 1080 x 2340, the shape of a phone screen. It
+   * shows in the TGIF full screen. Optional, as `landscapeUrl`.
+   */
+  @IsOptional()
+  @IsArtworkUrl()
+  portraitUrl?: string | null;
 }
 
 /** POST /admin/ads. Creates a draft: nothing is served until it is scheduled. */
@@ -115,8 +133,16 @@ export class CreateAdCampaignDto {
   @AdText('advertiser', AD_TEXT_LIMITS.advertiser)
   advertiser!: string;
 
+  /**
+   * Only for a booking made with the single `creative.artworkUrl` (the body the
+   * dashboard sent until R-92's two shapes), where it is required: 400 without
+   * it. A booking made with `creative.landscapeUrl` or `portraitUrl` takes none,
+   * and is refused with 400 if one is sent: where it shows follows from its
+   * pictures.
+   */
+  @Optional()
   @IsIn(PLACEMENTS)
-  placement!: AdPlacement;
+  placement?: AdPlacement;
 
   /** UTC, ISO 8601 ending in Z. It may be in the past: the card then starts when scheduled. */
   @IsUtcInstant('startsAt')
@@ -169,10 +195,25 @@ export class UpdateAdCreativeDto {
   @IsCtaUrl()
   ctaUrl?: string;
 
-  /** A new https link to the picture. Sending null, or leaving a campaign that has none without one, is refused with 422 (R-59). */
+  /** A new https link to the picture. Sending null, or leaving a campaign that has none without one, is refused with 422 (R-59). Only for a booking saved before the two shapes. */
   @IsOptional()
   @IsArtworkUrl()
   artworkUrl?: string | null;
+
+  /**
+   * A new landscape picture (16:9, 1920 x 1080), or null to take it away. Sending
+   * it for a booking that has the single `artworkUrl` moves the booking to the
+   * two shapes: its own picture stays where it showed (as the landscape or the
+   * portrait picture) unless this request names that shape.
+   */
+  @IsOptional()
+  @IsArtworkUrl()
+  landscapeUrl?: string | null;
+
+  /** A new portrait picture (1080 x 2340), or null to take it away. */
+  @IsOptional()
+  @IsArtworkUrl()
+  portraitUrl?: string | null;
 }
 
 /** PATCH /admin/ads/:id. Only a draft or a paused campaign can be edited. */

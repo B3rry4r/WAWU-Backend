@@ -51415,6 +51415,16 @@
             "type": "string",
             "nullable": true,
             "description": "An https link to the picture. REQUIRED (R-59): a campaign without artwork\nis refused with 422 \"Add artwork before you save this campaign\". It is\nchecked in the service, after the rest of the body has passed, so the\nrefusal is a 422 and not the validation pipe's 400."
+          },
+          "landscapeUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "The landscape picture (R-92): 16:9, 1920 x 1080, an https link (the one an\nupload to `POST /admin/ads/artwork` returns, or one that is hosted already).\nIt shows in the Explore slider AND on the Today strip. Optional; a booking\nneeds this, `portraitUrl` or both (422 \"Add artwork ...\" otherwise)."
+          },
+          "portraitUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "The portrait picture (R-92): 1080 x 2340, the shape of a phone screen. It\nshows in the TGIF full screen. Optional, as `landscapeUrl`."
           }
         },
         "required": [
@@ -51430,6 +51440,7 @@
           },
           "placement": {
             "type": "string",
+            "description": "Only for a booking made with the single `creative.artworkUrl` (the body the\ndashboard sent until R-92's two shapes), where it is required: 400 without\nit. A booking made with `creative.landscapeUrl` or `portraitUrl` takes none,\nand is refused with 400 if one is sent: where it shows follows from its\npictures.",
             "enum": [
               "tgif_card",
               "today_slot",
@@ -51456,7 +51467,6 @@
         },
         "required": [
           "advertiser",
-          "placement",
           "startsAt",
           "endsAt",
           "creative"
@@ -51493,7 +51503,17 @@
           "artworkUrl": {
             "type": "string",
             "nullable": true,
-            "description": "A new https link to the picture. Sending null, or leaving a campaign that has none without one, is refused with 422 (R-59)."
+            "description": "A new https link to the picture. Sending null, or leaving a campaign that has none without one, is refused with 422 (R-59). Only for a booking saved before the two shapes."
+          },
+          "landscapeUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "A new landscape picture (16:9, 1920 x 1080), or null to take it away. Sending\nit for a booking that has the single `artworkUrl` moves the booking to the\ntwo shapes: its own picture stays where it showed (as the landscape or the\nportrait picture) unless this request names that shape."
+          },
+          "portraitUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "A new portrait picture (1080 x 2340), or null to take it away."
           }
         }
       },
@@ -79466,6 +79486,22 @@
           "artworkPreviewUrl": {
             "type": "string",
             "nullable": true
+          },
+          "landscapeUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "landscapePreviewUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "portraitUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "portraitPreviewUrl": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -79474,7 +79510,9 @@
           "ctaLabel",
           "ctaDestination",
           "ctaDestinationId",
-          "artworkUrl"
+          "artworkUrl",
+          "landscapeUrl",
+          "portraitUrl"
         ]
       },
       "AdEventView": {
@@ -79559,6 +79597,17 @@
               "explore_slider"
             ]
           },
+          "shows": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "tgif_card",
+                "today_slot",
+                "explore_slider"
+              ]
+            }
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -79618,6 +79667,7 @@
           "id",
           "advertiser",
           "placement",
+          "shows",
           "status",
           "phase",
           "startsAt",
@@ -79964,6 +80014,17 @@
               "explore_slider"
             ]
           },
+          "shows": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "tgif_card",
+                "today_slot",
+                "explore_slider"
+              ]
+            }
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -80025,6 +80086,7 @@
           "id",
           "advertiser",
           "placement",
+          "shows",
           "status",
           "phase",
           "startsAt",

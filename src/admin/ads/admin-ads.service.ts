@@ -41,6 +41,13 @@ import {
   type AdPhase,
 } from './ad-campaign-state';
 import { resolveCta, type CtaFields } from './ad-destination';
+import { resolvePictures, type PictureColumns } from './ad-pictures-input';
+import {
+  hasAnyPicture,
+  picturesOf,
+  showsIn,
+  showsInWhere,
+} from '../../ads/ads-pictures';
 import { checkArtworkUrl, parseUtcInstant } from './ad-text';
 import {
   toAdAuditEntryView,
@@ -117,21 +124,20 @@ function artworkRequired(): UnprocessableEntityException {
  * A campaign that still has to be given artwork: it has a card with no picture
  * (saved before R-59) and is not ended (an ended one is final).
  */
-function needsArtwork(row: {
-  status: AdCampaignStatus;
-  creative: { artworkUrl: string | null } | null;
-}): boolean {
-  return (
-    row.status !== 'ended' &&
-    row.creative !== null &&
-    row.creative.artworkUrl === null
-  );
+function needsArtwork(row: CampaignRow): boolean {
+  return row.status !== 'ended' && row.creative !== null && !hasAnyPicture(row);
 }
 
 /** The same test as a database filter, for the list and the report. */
 const NEEDS_ARTWORK_WHERE: Prisma.AdCampaignWhereInput = {
   status: { not: 'ended' },
-  creative: { is: { artworkUrl: null } },
+  creative: {
+    is: {
+      artworkUrl: null,
+      artworkLandscapeUrl: null,
+      artworkPortraitUrl: null,
+    },
+  },
 };
 
 function snapshotOf(
@@ -151,6 +157,8 @@ function snapshotOf(
     ctaDestinationId: creative.ctaDestinationId,
     ctaUrl: creative.ctaUrl,
     artworkUrl: creative.artworkUrl,
+    landscapeUrl: creative.artworkLandscapeUrl,
+    portraitUrl: creative.artworkPortraitUrl,
   };
 }
 
@@ -315,7 +323,9 @@ export class AdminAdsService {
       ),
       ...placements.map((placement) =>
         this.prisma.adCampaign.count({
-          where: { AND: [where, { placement }] },
+          where: {
+            AND: [where, showsInWhere(placement, { requirePicture: false })],
+          },
         }),
       ),
       ...phases.map((p) =>
@@ -348,7 +358,18 @@ export class AdminAdsService {
     const days = this.dayRange(this.range(query));
     const matching = await this.prisma.adCampaign.findMany({
       where,
-      select: { id: true, status: true, placement: true },
+      select: {
+        id: true,
+        status: true,
+        placement: true,
+        creative: {
+          select: {
+            artworkUrl: true,
+            artworkLandscapeUrl: true,
+            artworkPortraitUrl: true,
+          },
+        },
+      },
     });
     const ids = matching.map((m) => m.id);
     const [overall, perCampaign] = await Promise.all([
@@ -358,13 +379,18 @@ export class AdminAdsService {
     const byStatusDelivery = this.groupDelivery(
       statuses,
       matching,
-      (m) => m.status,
+      (m) => [m.status],
       perCampaign,
     );
+    // A booking that shows in several places is added under each of them. One
+    // with no picture is counted under its stored place, as it always was.
     const byPlacementDelivery = this.groupDelivery(
       placements,
       matching,
-      (m) => m.placement,
+      (m) => {
+        const shows = showsIn(m);
+        return shows.length > 0 ? shows : [m.placement];
+      },
       perCampaign,
     );
 
@@ -394,7 +420,8 @@ export class AdminAdsService {
       servingNow: Object.fromEntries(
         placements.map((p) => [
           p,
-          servableViews.filter((v) => v.placement === p && v.servingNow).length,
+          servableViews.filter((v) => v.shows.includes(p) && v.servingNow)
+            .length,
         ]),
       ) as AdSummaryReportView['servingNow'],
       needingArtwork,
@@ -448,6 +475,41 @@ export class AdminAdsService {
   }
 
   /**
+   * The pictures and stored place a booking will have once `sent` is applied
+   * to `prev` (R-92), or the refusal: 422 when there would be no picture at
+   * all (R-59), 400 for a mix that does not make sense.
+   */
+  private pictureCols(
+    prev: PictureColumns | null,
+    sent: Parameters<typeof resolvePictures>[1],
+  ): PictureColumns {
+    const result = resolvePictures(prev, sent);
+    if (result.ok) return result.value;
+    if (result.code === 'artwork_required') throw artworkRequired();
+    throw refuse(result.code, result.message);
+  }
+
+  /** Checks each typed picture address (all of a new booking's, or only those a change sent). */
+  private async assertPictures(
+    pictures: PictureColumns,
+    only?: {
+      artworkUrl?: string | null;
+      artworkLandscapeUrl?: string | null;
+      artworkPortraitUrl?: string | null;
+    },
+  ): Promise<void> {
+    const wanted = only ?? pictures;
+    for (const key of [
+      'artworkUrl',
+      'artworkLandscapeUrl',
+      'artworkPortraitUrl',
+    ] as const) {
+      const url = wanted[key];
+      if (url) await this.assertArtwork(url);
+    }
+  }
+
+  /**
    * A link that shows a picture the Hub stored (the bare address is not
    * readable: the bucket is private), or undefined for a typed link, which
    * the dashboard shows as it is.
@@ -467,8 +529,14 @@ export class AdminAdsService {
     dto: CreateAdCampaignDto,
     admin: AdminUserView,
   ): Promise<AdCampaignChangeView> {
-    if (!dto.creative.artworkUrl) throw artworkRequired();
-    await this.assertArtwork(dto.creative.artworkUrl);
+    // R-92: the pictures decide where the ad shows. At least one is required.
+    const pictures = this.pictureCols(null, {
+      placement: dto.placement,
+      artworkUrl: dto.creative.artworkUrl,
+      landscapeUrl: dto.creative.landscapeUrl,
+      portraitUrl: dto.creative.portraitUrl,
+    });
+    await this.assertPictures(pictures);
     const now = new Date();
     const startsAt = this.instant(dto.startsAt, 'startsAt');
     const endsAt = this.instant(dto.endsAt, 'endsAt');
@@ -487,7 +555,7 @@ export class AdminAdsService {
       const created = await tx.adCampaign.create({
         data: {
           advertiser: dto.advertiser,
-          placement: dto.placement,
+          placement: pictures.placement,
           status: 'draft',
           startsAt,
           endsAt,
@@ -500,7 +568,9 @@ export class AdminAdsService {
               ctaDestination: cta.ctaDestination,
               ctaDestinationId: cta.ctaDestinationId,
               ctaUrl: cta.ctaUrl,
-              artworkUrl: dto.creative.artworkUrl,
+              artworkUrl: pictures.artworkUrl,
+              artworkLandscapeUrl: pictures.artworkLandscapeUrl,
+              artworkPortraitUrl: pictures.artworkPortraitUrl,
             },
           },
         },
@@ -551,13 +621,34 @@ export class AdminAdsService {
         ? this.instant(dto.endsAt, 'endsAt')
         : row.endsAt;
       const c = dto.creative ?? {};
-      if (c.artworkUrl) await this.assertArtwork(c.artworkUrl);
+      // R-92: the saved booking must hold a picture, whether it keeps the ones
+      // it has, gets new ones, or (a campaign saved before R-59) still has none.
+      // An old single-picture booking moves to the two shapes when one is sent.
+      const pictures = this.pictureCols(
+        {
+          placement: row.placement,
+          artworkUrl: creative.artworkUrl,
+          artworkLandscapeUrl: creative.artworkLandscapeUrl,
+          artworkPortraitUrl: creative.artworkPortraitUrl,
+        },
+        {
+          placement: dto.placement,
+          artworkUrl: c.artworkUrl,
+          landscapeUrl: c.landscapeUrl,
+          portraitUrl: c.portraitUrl,
+        },
+      );
+      await this.assertPictures(pictures, {
+        artworkUrl: c.artworkUrl,
+        artworkLandscapeUrl: c.landscapeUrl,
+        artworkPortraitUrl: c.portraitUrl,
+      });
 
       const before = snapshotOf(row, creative);
       const nextCampaign: AdCampaignModel = {
         ...row,
         advertiser: dto.advertiser ?? row.advertiser,
-        placement: dto.placement ?? row.placement,
+        placement: pictures.placement,
         startsAt,
         endsAt,
         weight: dto.weight ?? row.weight,
@@ -567,12 +658,10 @@ export class AdminAdsService {
         headline: c.headline ?? creative.headline,
         subline: c.subline === undefined ? creative.subline : c.subline,
         ...this.ctaOf(creative, c),
-        artworkUrl:
-          c.artworkUrl === undefined ? creative.artworkUrl : c.artworkUrl,
+        artworkUrl: pictures.artworkUrl,
+        artworkLandscapeUrl: pictures.artworkLandscapeUrl,
+        artworkPortraitUrl: pictures.artworkPortraitUrl,
       };
-      // R-59: the saved campaign must have a picture, whether it keeps the one
-      // it has, gets a new one, or (a campaign saved before R-59) still has none.
-      if (nextCreative.artworkUrl === null) throw artworkRequired();
       const after = snapshotOf(nextCampaign, nextCreative);
       const changes = diff(before, after);
       if (Object.keys(changes).length === 0) {
@@ -619,6 +708,8 @@ export class AdminAdsService {
           ctaDestinationId: nextCreative.ctaDestinationId,
           ctaUrl: nextCreative.ctaUrl,
           artworkUrl: nextCreative.artworkUrl,
+          artworkLandscapeUrl: nextCreative.artworkLandscapeUrl,
+          artworkPortraitUrl: nextCreative.artworkPortraitUrl,
         },
       });
       return this.writeAudit(tx, admin, {
@@ -716,7 +807,7 @@ export class AdminAdsService {
         }
         // R-59 (G-761): a campaign saved before the rule, with no picture,
         // does not go on air either. Pausing and ending are never refused.
-        if (!row.creative.artworkUrl) throw artworkRequired();
+        if (!hasAnyPicture(row)) throw artworkRequired();
         if (row.endsAt.getTime() <= now.getTime()) {
           throw conflict(
             'window_over',
@@ -915,11 +1006,11 @@ export class AdminAdsService {
     return out;
   }
 
-  /** Counts summed per key (status or placement), every key present. */
+  /** Counts summed per key (status or place), every key present. A row may count under several keys. */
   private groupDelivery<K extends string, T extends { id: string }>(
     keys: K[],
     rows: T[],
-    keyOf: (row: T) => K,
+    keysOf: (row: T) => K[],
     perCampaign: Record<string, AdCounts>,
   ): Record<K, AdCounts> {
     const sums = Object.fromEntries(
@@ -927,10 +1018,12 @@ export class AdminAdsService {
     ) as Record<K, { views: number; taps: number; skips: number }>;
     for (const row of rows) {
       const c = perCampaign[row.id];
-      const t = sums[keyOf(row)];
-      t.views += c.views;
-      t.taps += c.taps;
-      t.skips += c.skips;
+      for (const key of keysOf(row)) {
+        const t = sums[key];
+        t.views += c.views;
+        t.taps += c.taps;
+        t.skips += c.skips;
+      }
     }
     return Object.fromEntries(
       keys.map((k) => [
@@ -950,7 +1043,10 @@ export class AdminAdsService {
     const { from, to } = this.range(f);
     const and: Prisma.AdCampaignWhereInput[] = [];
     if (f.status) and.push({ status: f.status });
-    if (f.placement) and.push({ placement: f.placement });
+    // R-92: "in this placement" is "shows there", which the pictures decide.
+    if (f.placement) {
+      and.push(showsInWhere(f.placement, { requirePicture: false }));
+    }
     if (f.phase) and.push(this.phaseWhere(f.phase, now));
     if (f.artwork === 'missing') and.push(NEEDS_ARTWORK_WHERE);
     if (from) and.push({ endsAt: { gt: from } });
@@ -980,7 +1076,10 @@ export class AdminAdsService {
       db.adCampaign.findMany({
         where: {
           id: { not: id },
-          placement: row.placement,
+          // R-92: the bookings that share any place this one shows in.
+          OR: (showsIn(row).length > 0 ? showsIn(row) : [row.placement]).map(
+            (place) => showsInWhere(place, { requirePicture: false }),
+          ),
           status: { in: ['scheduled', 'live', 'paused'] },
           startsAt: { lt: row.endsAt },
           endsAt: { gt: row.startsAt },
@@ -1043,7 +1142,15 @@ export class AdminAdsService {
           });
     const byId = new Map(events.map((e) => [e.id, e]));
     const previews = await Promise.all(
-      rows.map((r) => this.previewOf(r.creative?.artworkUrl)),
+      rows.map(async (r) => {
+        const own = picturesOf(r);
+        const [artwork, landscape, portrait] = await Promise.all([
+          this.previewOf(r.creative?.artworkUrl),
+          this.previewOf(own.landscape),
+          this.previewOf(own.portrait),
+        ]);
+        return { artwork, landscape, portrait };
+      }),
     );
 
     return rows.map((row, at) => {
@@ -1067,6 +1174,7 @@ export class AdminAdsService {
         id: row.id,
         advertiser: row.advertiser,
         placement: row.placement,
+        shows: showsIn(row),
         status: row.status,
         phase,
         startsAt: row.startsAt,
@@ -1084,7 +1192,19 @@ export class AdminAdsService {
               ...(row.creative.ctaUrl ? { ctaUrl: row.creative.ctaUrl } : {}),
               artworkUrl: row.creative.artworkUrl,
               // Only a picture the Hub stored has one: a typed link needs none.
-              ...(previews[at] ? { artworkPreviewUrl: previews[at] } : {}),
+              ...(previews[at].artwork
+                ? { artworkPreviewUrl: previews[at].artwork }
+                : {}),
+              // The two shapes (R-92); an old booking's single picture shows
+              // as the shape of its own place.
+              landscapeUrl: picturesOf(row).landscape,
+              ...(previews[at].landscape
+                ? { landscapePreviewUrl: previews[at].landscape }
+                : {}),
+              portraitUrl: picturesOf(row).portrait,
+              ...(previews[at].portrait
+                ? { portraitPreviewUrl: previews[at].portrait }
+                : {}),
             }
           : null,
         event: eventView,
@@ -1094,7 +1214,7 @@ export class AdminAdsService {
           SERVED_STATUSES.includes(row.status) &&
           phase === 'running' &&
           row.creative !== null &&
-          row.creative.artworkUrl !== null &&
+          hasAnyPicture(row) &&
           // A link or none card has no event to wait for.
           (row.creative.ctaDestination !== 'event' || eventView?.open === true),
         createdAt: row.createdAt,

@@ -6469,6 +6469,10 @@ model AdCampaign {
   /// A name, not an account: advertisers have no accounts (R-15).
   advertiser String
 
+  /// Where a booking saved before the two shapes shows (R-92). For a booking
+  /// with a landscape or portrait picture it is only derived (explore_slider
+  /// when it has a landscape picture, else tgif_card) and decides nothing: its
+  /// places follow from its pictures (src/ads/ads-pictures.ts).
   placement AdPlacement
   status    AdCampaignStatus @default(draft)
 
@@ -6527,13 +6531,24 @@ model AdCreative {
   /// the kind (see the ads_link_destinations migration).
   ctaUrl           String?
 
-  /// The picture. An http(s) URL from POST /uploads/presign, the same as
-  /// Event.bannerUrl and NotificationCampaign.imageUrl. REQUIRED for every
-  /// campaign saved from ADS-07 on (R-59): POST and PATCH /admin/ads refuse a
-  /// campaign without it. The column stays nullable for the campaigns saved
-  /// before that; serving skips a campaign whose artwork is null, so no card
-  /// is ever drawn without a picture, and the admin list shows those for fixing.
+  /// The single picture of a booking saved before the two shapes (ADS-LINK
+  /// round 2, R-92). An http(s) URL from POST /uploads/presign, the same as
+  /// Event.bannerUrl and NotificationCampaign.imageUrl. Such a booking is
+  /// served in its own `AdCampaign.placement` only, exactly as before: an
+  /// explore_slider or today_slot booking's picture is a landscape one for that
+  /// place, a tgif_card booking's is a portrait one. A booking saved with the
+  /// two shapes has this null (a CHECK keeps the two ways apart).
   artworkUrl String?
+
+  /// The two shapes (owner, 26 Oct 2026, R-92). One booking holds a landscape
+  /// picture (16:9, 1920 x 1080), a portrait one (1080 x 2340, phone screen
+  /// shape), or both; each is optional and at least one is required (the
+  /// admin routes refuse a booking with none: 422). Where the ad shows follows
+  /// from the pictures it has: landscape shows in the Explore slider AND on
+  /// the Today strip, portrait shows in the TGIF full screen. An http(s) URL,
+  /// as `artworkUrl`.
+  artworkLandscapeUrl String?
+  artworkPortraitUrl  String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
