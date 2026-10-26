@@ -1,4 +1,4 @@
-import { AD_ARTWORK_URL_MAX } from '../../ads/ads-text-limits';
+import { AD_ARTWORK_URL_MAX, AD_LINK_URL_MAX } from '../../ads/ads-text-limits';
 
 /**
  * What text may appear on a sponsored card, decided by Unicode category rather
@@ -159,27 +159,33 @@ const HOST =
 const UNSAFE_URL_CHARS = /[\s<>"'`\\^{}|]/u;
 
 /**
- * An artwork link: https, a real host name (no address, no localhost), no
- * credentials, no space or markup character, within the length bound. The
- * admin supplies the link, as for Event.bannerUrl and a notification
- * campaign's picture: this backend has no admin-side upload route.
+ * A web link that goes on a card: https, a real host name (no address, no
+ * localhost), no credentials, no space or markup character, within the length
+ * bound. `http`, `javascript:`, `data:`, `file:`, a bare host and a
+ * protocol-relative `//host` are all refused, because each is either not
+ * https or not a URL at all. With `normalise`, the value that comes back is the
+ * NORMAL FORM (`URL.href`: scheme and host in lower case, a default port dropped, an
+ * internationalised host in punycode, anything not ASCII percent-encoded), so
+ * one address has one spelling and the length bound applies to what is stored.
  */
-export function checkArtworkUrl(raw: string): AdTextResult {
+function checkWebLink(
+  raw: string,
+  field: string,
+  max: number,
+  normalise: boolean,
+): AdTextResult {
   const value = raw.trim();
   if (value.length === 0) {
-    return { ok: false, message: 'artworkUrl is required when it is sent.' };
+    return { ok: false, message: `${field} is required when it is sent.` };
   }
-  if (value.length > AD_ARTWORK_URL_MAX) {
-    return {
-      ok: false,
-      message: MAX_MESSAGE('artworkUrl', AD_ARTWORK_URL_MAX),
-    };
+  if (value.length > max) {
+    return { ok: false, message: MAX_MESSAGE(field, max) };
   }
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    return { ok: false, message: 'artworkUrl must be a web link.' };
+    return { ok: false, message: `${field} must be a web link.` };
   }
   if (
     url.protocol !== 'https:' ||
@@ -191,11 +197,50 @@ export function checkArtworkUrl(raw: string): AdTextResult {
   ) {
     return {
       ok: false,
-      message:
-        'artworkUrl must be an https link to a public host, without a password or spaces.',
+      message: `${field} must be an https link to a public host, without a password or spaces.`,
     };
   }
-  return { ok: true, value };
+  if (!normalise) return { ok: true, value };
+  const normal = url.href;
+  if (normal.length > max) {
+    return { ok: false, message: MAX_MESSAGE(field, max) };
+  }
+  return { ok: true, value: normal };
+}
+
+/**
+ * An artwork link: a web link as above. The admin supplies the link, as for
+ * Event.bannerUrl and a notification campaign's picture: this backend has no
+ * admin-side upload route. (Stored as typed, trimmed; only a card's own
+ * address, below, is rewritten to its normal form.)
+ */
+export function checkArtworkUrl(raw: string): AdTextResult {
+  return checkWebLink(raw, 'artworkUrl', AD_ARTWORK_URL_MAX, false);
+}
+
+/**
+ * The address of a picture the Hub stored itself (`POST /admin/ads/artwork`):
+ * `http` or `https`, any host, no query, ending in
+ * `/ads/artwork/<uuid>.<jpg|png|webp>`. The shape only. A host that is not a
+ * public https one (the local test stack's plain-http storage) passes this
+ * and is then accepted only if the Hub's own bucket is that host
+ * (`StorageService.ownsAdArtworkUrl`); an ordinary public https link needs
+ * neither.
+ */
+const HUB_ARTWORK_URL =
+  /^https?:\/\/[^\s?#<>"'`\\^{}|@]+\/ads\/artwork\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(?:jpg|png|webp)$/;
+
+export function isHubArtworkShape(raw: string): boolean {
+  const value = raw.trim();
+  return value.length <= AD_ARTWORK_URL_MAX && HUB_ARTWORK_URL.test(value);
+}
+
+/**
+ * The address a `link` card opens (ADS-LINK, R-92): the same rule as the
+ * artwork link, and the value returned is its normal form.
+ */
+export function checkCtaUrl(raw: string): AdTextResult {
+  return checkWebLink(raw, 'ctaUrl', AD_LINK_URL_MAX, true);
 }
 
 const INSTANT =

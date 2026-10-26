@@ -8,16 +8,20 @@ import {
   Param,
   ParseUUIDPipe,
   Patch,
+  PayloadTooLargeException,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { AdminRole } from '../../../generated/prisma/enums';
 import { AdminAuthGuard } from '../auth/guards/admin-auth.guard';
 import { AdminRolesGuard } from '../auth/guards/admin-roles.guard';
 import { AdminRoles } from '../auth/decorators/admin-roles.decorator';
 import { CurrentAdmin } from '../auth/decorators/current-admin.decorator';
 import type { AdminUserView } from '../auth/admin-user-view.type';
+import { AD_ARTWORK_MAX_BYTES } from '../../storage/ad-artwork';
 import { AdminAdsService } from './admin-ads.service';
 import {
   AdCampaignFilterDto,
@@ -91,6 +95,25 @@ export class AdminAdsController {
     @CurrentAdmin() admin: AdminUserView,
   ) {
     return this.service.create(dto, admin);
+  }
+
+  /**
+   * Upload the picture for a card (ADS-LINK): the file itself is the request
+   * body, with its type (`image/jpeg`, `image/png` or `image/webp`) as the
+   * Content-Type. Up to 5 MB, and the bytes must really be that kind of
+   * picture. Answers the address to save as `artworkUrl` and a link that shows
+   * the picture now. A typed https link still works as the artwork.
+   */
+  @AdminRoles(AdminRole.superadmin, AdminRole.reviewer)
+  @Post('artwork')
+  @HttpCode(HttpStatus.OK)
+  async uploadArtwork(@Req() req: Request) {
+    const declared = (req.headers['content-type'] ?? '')
+      .split(';')[0]
+      .trim()
+      .toLowerCase();
+    const body = await readCapped(req, AD_ARTWORK_MAX_BYTES);
+    return this.service.uploadArtwork(declared, body);
   }
 
   /** One campaign in full: card, event, overlaps and history. */
@@ -186,3 +209,26 @@ export class AdminAdsController {
     return this.service.end(id, admin);
   }
 }
+
+/**
+ * The request body as one buffer, read as a stream and stopped the moment it
+ * passes `max` bytes, so a file larger than the cap is never held. The body
+ * parser leaves a picture's content type alone, so the stream is unread.
+ */
+async function readCapped(req: Request, max: number): Promise<Buffer> {
+  const declared = Number(req.headers['content-length']);
+  if (Number.isFinite(declared) && declared > max) {
+    throw new PayloadTooLargeException(tooBig(max));
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    total += chunk.length;
+    if (total > max) throw new PayloadTooLargeException(tooBig(max));
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+const tooBig = (max: number) =>
+  `The picture is too big. Keep it under ${max / (1024 * 1024)} MB.`;

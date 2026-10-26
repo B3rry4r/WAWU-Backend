@@ -43725,6 +43725,28 @@
         ]
       }
     },
+    "/api/hub/admin/ads/artwork": {
+      "post": {
+        "operationId": "AdminAdsController_uploadArtwork",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdArtworkUploadView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Upload the picture for a card (ADS-LINK): the file itself is the request\nbody, with its type (`image/jpeg`, `image/png` or `image/webp`) as the\nContent-Type. Up to 5 MB, and the bytes must really be that kind of\npicture. Answers the address to save as `artworkUrl` and a link that shows\nthe picture now. A typed https link still works as the artwork.",
+        "tags": [
+          "AdminAds"
+        ]
+      }
+    },
     "/api/hub/admin/ads/{id}": {
       "get": {
         "operationId": "AdminAdsController_detail",
@@ -51562,30 +51584,45 @@
             "description": "Place, date and price as the team types them. Leave it out for no second line."
           },
           "ctaLabel": {
-            "type": "string"
+            "type": "string",
+            "description": "The button's words. Required for `event` and `link`; a `none` card has no\nbutton, so it must not carry one. Which of the two applies is checked in\nthe service, with the rest of the destination's rules."
           },
           "ctaDestination": {
             "type": "string",
-            "description": "What the button opens. The allow-list is the AdCtaDestination enum: `event` today.",
+            "description": "What a tap does (R-92): `link` opens `ctaUrl` in the phone's browser,\n`none` does nothing, `event` opens an event (kept for the campaigns that\nalready use it; the dashboard no longer offers it).",
             "enum": [
-              "event"
+              "event",
+              "link",
+              "none"
             ]
           },
           "ctaDestinationId": {
             "type": "string",
-            "description": "For `event`, an Event id. The event must be published and not over."
+            "description": "For `event` only, an Event id. The event must be published and not over."
+          },
+          "ctaUrl": {
+            "type": "string",
+            "description": "For `link` only: the https address the card opens, as the artwork link is\nchecked (public host, no password, no spaces, at most AD_LINK_URL_MAX),\nstored in its normal form."
           },
           "artworkUrl": {
             "type": "string",
             "nullable": true,
             "description": "An https link to the picture. REQUIRED (R-59): a campaign without artwork\nis refused with 422 \"Add artwork before you save this campaign\". It is\nchecked in the service, after the rest of the body has passed, so the\nrefusal is a 422 and not the validation pipe's 400."
+          },
+          "landscapeUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "The landscape picture (R-92): 16:9, 1920 x 1080, an https link (the one an\nupload to `POST /admin/ads/artwork` returns, or one that is hosted already).\nIt shows in the Explore slider AND on the Today strip. Optional; a booking\nneeds this, `portraitUrl` or both (422 \"Add artwork ...\" otherwise)."
+          },
+          "portraitUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "The portrait picture (R-92): 1080 x 2340, the shape of a phone screen. It\nshows in the TGIF full screen. Optional, as `landscapeUrl`."
           }
         },
         "required": [
           "headline",
-          "ctaLabel",
-          "ctaDestination",
-          "ctaDestinationId"
+          "ctaDestination"
         ]
       },
       "CreateAdCampaignDto": {
@@ -51596,6 +51633,7 @@
           },
           "placement": {
             "type": "string",
+            "description": "Only for a booking made with the single `creative.artworkUrl` (the body the\ndashboard sent until R-92's two shapes), where it is required: 400 without\nit. A booking made with `creative.landscapeUrl` or `portraitUrl` takes none,\nand is refused with 400 if one is sent: where it shows follows from its\npictures.",
             "enum": [
               "tgif_card",
               "today_slot",
@@ -51622,7 +51660,6 @@
         },
         "required": [
           "advertiser",
-          "placement",
           "startsAt",
           "endsAt",
           "creative"
@@ -51644,16 +51681,32 @@
           "ctaDestination": {
             "type": "string",
             "enum": [
-              "event"
+              "event",
+              "link",
+              "none"
             ]
           },
           "ctaDestinationId": {
             "type": "string"
           },
+          "ctaUrl": {
+            "type": "string",
+            "description": "A new address for a `link` card. Only a card that opens a link has one."
+          },
           "artworkUrl": {
             "type": "string",
             "nullable": true,
-            "description": "A new https link to the picture. Sending null, or leaving a campaign that has none without one, is refused with 422 (R-59)."
+            "description": "A new https link to the picture. Sending null, or leaving a campaign that has none without one, is refused with 422 (R-59). Only for a booking saved before the two shapes."
+          },
+          "landscapeUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "A new landscape picture (16:9, 1920 x 1080), or null to take it away. Sending\nit for a booking that has the single `artworkUrl` moves the booking to the\ntwo shapes: its own picture stays where it showed (as the landscape or the\nportrait picture) unless this request names that shape."
+          },
+          "portraitUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "A new portrait picture (1080 x 2340), or null to take it away."
           }
         }
       },
@@ -68707,16 +68760,24 @@
             "nullable": true
           },
           "ctaLabel": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "ctaDestination": {
             "type": "string",
             "enum": [
-              "event"
+              "none",
+              "event",
+              "link"
             ]
           },
           "ctaDestinationId": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
+          },
+          "ctaUrl": {
+            "type": "string",
+            "nullable": true
           },
           "artworkUrl": {
             "type": "string"
@@ -68727,9 +68788,7 @@
           "advertiser",
           "headline",
           "subline",
-          "ctaLabel",
           "ctaDestination",
-          "ctaDestinationId",
           "artworkUrl"
         ]
       },
@@ -79699,18 +79758,46 @@
             "nullable": true
           },
           "ctaLabel": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "ctaDestination": {
             "type": "string",
             "enum": [
-              "event"
+              "none",
+              "event",
+              "link"
             ]
           },
           "ctaDestinationId": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
+          },
+          "ctaUrl": {
+            "type": "string",
+            "nullable": true
           },
           "artworkUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "artworkPreviewUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "landscapeUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "landscapePreviewUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "portraitUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "portraitPreviewUrl": {
             "type": "string",
             "nullable": true
           }
@@ -79721,7 +79808,9 @@
           "ctaLabel",
           "ctaDestination",
           "ctaDestinationId",
-          "artworkUrl"
+          "artworkUrl",
+          "landscapeUrl",
+          "portraitUrl"
         ]
       },
       "AdEventView": {
@@ -79806,6 +79895,17 @@
               "explore_slider"
             ]
           },
+          "shows": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "tgif_card",
+                "today_slot",
+                "explore_slider"
+              ]
+            }
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -79865,6 +79965,7 @@
           "id",
           "advertiser",
           "placement",
+          "shows",
           "status",
           "phase",
           "startsAt",
@@ -80211,6 +80312,17 @@
               "explore_slider"
             ]
           },
+          "shows": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "tgif_card",
+                "today_slot",
+                "explore_slider"
+              ]
+            }
+          },
           "status": {
             "type": "string",
             "enum": [
@@ -80272,6 +80384,7 @@
           "id",
           "advertiser",
           "placement",
+          "shows",
           "status",
           "phase",
           "startsAt",
@@ -80299,6 +80412,25 @@
         "required": [
           "campaign",
           "audit"
+        ]
+      },
+      "AdArtworkUploadView": {
+        "type": "object",
+        "properties": {
+          "artworkUrl": {
+            "type": "string"
+          },
+          "previewUrl": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "artworkUrl",
+          "previewUrl",
+          "bytes"
         ]
       },
       "AdDayCounts": {

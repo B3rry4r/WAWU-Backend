@@ -1,22 +1,34 @@
 import type { PrismaService } from '../common/prisma/prisma.service';
 import type { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import type { AdPlacementName } from './dto/ads.dto';
+import {
+  anyPicture,
+  pictureFor,
+  servableAnywhereWhere,
+  showsInWhere,
+} from './ads-pictures';
 
 /**
  * How a sponsored card is picked (task ADS-04, R-15). One place, so the
  * service, the tests and ADS-05 and ADS-06 read the same rule.
  *
  * A campaign is served when ALL of these hold at the server's clock:
- *   1. its placement is the one asked for;
+ *   1. it shows in the place asked for (R-92, the two shapes: a booking with a
+ *      landscape picture shows in `explore_slider` and `today_slot`, one with a
+ *      portrait picture in `tgif_card`; a booking saved before the two shapes
+ *      shows in its own `placement` only; see ads-pictures.ts);
  *   2. its status is `scheduled` or `live` (never `draft`, `paused`, `ended`);
  *   3. startsAt <= now < endsAt (the start instant is in, the end instant is out);
- *   4. it has a creative with artwork (R-59: a card is never drawn without a
- *      picture; campaigns saved before ADS-07 without one are skipped);
- *   5. what the button opens is still open: for `event`, the Event exists, is
- *      `published`, is not cancelled, has not finished (the same "upcoming"
- *      test GET /events uses) and its host is not hidden from the viewer by a
- *      block (the same rule GET /events/:id uses, so the button never leads
- *      to a 404).
+ *   4. it has a creative with a picture for that place (R-59: a card is never
+ *      drawn without a picture; campaigns saved before ADS-07 without one are
+ *      skipped), and the card carries that picture as `artworkUrl`;
+ *   5. what a tap opens is still open. A `link` card opens a web address and a
+ *      `none` card opens nothing, so neither has anything to check (R-92: ads
+ *      are not tied to events). For `event` (campaigns saved before R-92), the
+ *      Event exists, is `published`, is not cancelled, has not finished (the
+ *      same "upcoming" test GET /events uses) and its host is not hidden from
+ *      the viewer by a block (the same rule GET /events/:id uses, so the
+ *      button never leads to a 404).
  * Of the campaigns that pass, ONE is served for `tgif_card` and `today_slot`:
  * the highest weight first, then the order in AD_TIE_BREAK. The Explore slider
  * (`explore_slider`, ADS-07) serves ALL of them, in that same order. A campaign that fails (5) is skipped and the next
@@ -48,9 +60,15 @@ export interface ServableCampaign {
   creative: {
     headline: string;
     subline: string | null;
-    ctaLabel: string;
-    ctaDestination: 'event';
-    ctaDestinationId: string;
+    /** What a tap does (R-92). */
+    ctaDestination: 'event' | 'link' | 'none';
+    /** The button's words. Null for `none`: no button is drawn. */
+    ctaLabel: string | null;
+    /** An Event id, for `event` only. */
+    ctaDestinationId: string | null;
+    /** The https address, for `link` only. */
+    ctaUrl: string | null;
+    /** The picture for the place asked for (the landscape one for Explore and Today, the portrait one for TGIF). */
     artworkUrl: string;
   };
 }
@@ -70,17 +88,21 @@ export async function servableCampaigns(
 ): Promise<ServableCampaign[]> {
   const candidates = await deps.prisma.adCampaign.findMany({
     where: {
-      ...(narrow.placement ? { placement: narrow.placement } : {}),
       ...(narrow.campaignId ? { id: narrow.campaignId } : {}),
       status: { in: [...SERVED_STATUSES] },
       startsAt: { lte: now },
       endsAt: { gt: now },
-      creative: { is: { artworkUrl: { not: null } } },
+      // A place asked for: the bookings that show there. No place (counting a
+      // view): the bookings that could be served somewhere.
+      ...(narrow.placement
+        ? showsInWhere(narrow.placement, { requirePicture: true })
+        : servableAnywhereWhere()),
     },
     orderBy: [...AD_TIE_BREAK],
     select: {
       id: true,
       advertiser: true,
+      placement: true,
       creative: {
         select: {
           headline: true,
@@ -88,7 +110,10 @@ export async function servableCampaigns(
           ctaLabel: true,
           ctaDestination: true,
           ctaDestinationId: true,
+          ctaUrl: true,
           artworkUrl: true,
+          artworkLandscapeUrl: true,
+          artworkPortraitUrl: true,
         },
       },
     },
@@ -99,7 +124,7 @@ export async function servableCampaigns(
     deps,
     viewerWawuId,
     candidates.flatMap((c) =>
-      c.creative?.ctaDestination === 'event'
+      c.creative?.ctaDestination === 'event' && c.creative.ctaDestinationId
         ? [c.creative.ctaDestinationId]
         : [],
     ),
@@ -109,19 +134,31 @@ export async function servableCampaigns(
   const out: ServableCampaign[] = [];
   for (const c of candidates) {
     const creative = c.creative;
-    // Anything this code cannot check is not served.
-    if (!creative || creative.ctaDestination !== 'event') continue;
-    if (!creative.artworkUrl) continue;
-    if (!open.has(creative.ctaDestinationId)) continue;
-    out.push({
-      id: c.id,
-      advertiser: c.advertiser,
-      creative: {
-        ...creative,
-        ctaDestination: 'event',
-        artworkUrl: creative.artworkUrl,
-      },
-    });
+    if (!creative) continue;
+    // The picture this place draws; a booking with none for it is not served here.
+    const artworkUrl = narrow.placement
+      ? pictureFor(c, narrow.placement)
+      : anyPicture(c);
+    if (!artworkUrl) continue;
+    // Anything this code cannot check is not served: the fields a kind needs
+    // are checked here as well as by the database, so a card is never drawn
+    // half built.
+    const served = {
+      headline: creative.headline,
+      subline: creative.subline,
+      ctaDestination: creative.ctaDestination,
+      ctaLabel: creative.ctaLabel,
+      ctaDestinationId: creative.ctaDestinationId,
+      ctaUrl: creative.ctaUrl,
+      artworkUrl,
+    };
+    if (creative.ctaDestination === 'event') {
+      if (!creative.ctaLabel || !creative.ctaDestinationId) continue;
+      if (!open.has(creative.ctaDestinationId)) continue;
+    } else if (creative.ctaDestination === 'link') {
+      if (!creative.ctaLabel || !creative.ctaUrl) continue;
+    }
+    out.push({ id: c.id, advertiser: c.advertiser, creative: served });
   }
   return out;
 }
