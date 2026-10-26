@@ -43548,23 +43548,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "artworkUrl": {
-                      "type": "string"
-                    },
-                    "previewUrl": {
-                      "type": "string"
-                    },
-                    "bytes": {
-                      "type": "number"
-                    }
-                  },
-                  "required": [
-                    "artworkUrl",
-                    "previewUrl",
-                    "bytes"
-                  ]
+                  "$ref": "#/components/schemas/AdArtworkUploadView"
                 }
               }
             }
@@ -80068,6 +80052,25 @@
         "required": [
           "campaign",
           "audit"
+        ]
+      },
+      "AdArtworkUploadView": {
+        "type": "object",
+        "properties": {
+          "artworkUrl": {
+            "type": "string"
+          },
+          "previewUrl": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "artworkUrl",
+          "previewUrl",
+          "bytes"
         ]
       },
       "AdDayCounts": {
