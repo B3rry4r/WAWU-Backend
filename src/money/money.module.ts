@@ -1,4 +1,8 @@
-import { Module } from '@nestjs/common';
+import {
+  type MiddlewareConsumer,
+  Module,
+  type NestModule,
+} from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { MoneyBalanceController } from './balance/money-balance.controller';
 import { MoneyHistoryController } from './history/money-history.controller';
@@ -44,6 +48,8 @@ import {
 } from './pin/pin-request-keys.service';
 import { IdempotencyGuard, IdempotencyService } from './payments/idempotency';
 import { MerchantWallet } from './payments/merchant-wallet';
+import { PaymentFxService } from './payments/payment-fx.service';
+import { PaySourceMiddleware } from './payments/pay-source-context';
 import { HoldViewService } from './holds/hold-view.service';
 import { MoneyHoldsController } from './holds/money-holds.controller';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
@@ -400,6 +406,7 @@ import { WalletCardService } from './cards/wallet-card.service';
     IdempotencyService,
     IdempotencyGuard,
     MerchantWallet,
+    PaymentFxService,
     PayableRegistry,
     WalletPaymentService,
     TransferRecipients,
@@ -459,4 +466,9 @@ import { WalletCardService } from './cards/wallet-card.service';
     AbroadSendService,
   ],
 })
-export class MoneyModule {}
+export class MoneyModule implements NestModule {
+  /** Which account pays a wallet payment rides on one header every paying route reads (PAY-FX, R-91). */
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(PaySourceMiddleware).forRoutes('*');
+  }
+}

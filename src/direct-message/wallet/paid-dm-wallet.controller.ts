@@ -10,6 +10,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { ApiPaySourceHeader } from '../../money/payments/pay-source-context';
 import { ApiBearerAuth, ApiHeader, ApiOperation } from '@nestjs/swagger';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -18,6 +19,7 @@ import { RequireFeesSet } from '../../money/fees/fees-set.guard';
 import {
   CurrentWallet,
   type OpenWallet,
+  AllowWorldWallet,
   RequireOpenWallet,
 } from '../../money/gate/wallet-gate';
 import {
@@ -62,9 +64,10 @@ export class PaidDmWalletController {
    * `Idempotency-Key`, the same key and question answer the same draft.
    */
   @Post(':creatorWawuId/send/wallet')
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @Header('Cache-Control', 'no-store')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @ApiOperation({ operationId: 'askPaidQuestionFromWallet' })
   @ApiHeader({
     name: 'Idempotency-Key',
@@ -101,8 +104,10 @@ export class PaidDmWalletController {
    * (`Idempotent-Replayed: true`) without checking the PIN.
    */
   @Post('send/wallet/pay')
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @RequireIdempotentApproval(PAID_DM_PAY_ROUTE)
+  @AllowWorldWallet()
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',
@@ -123,8 +128,9 @@ export class PaidDmWalletController {
 
   /** The pay sheet again: I3 reopened, or a quote past its `expiresAt`. */
   @Get('send/wallet/:questionId/quote')
+  @ApiPaySourceHeader()
   @Header('Cache-Control', 'no-store')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'target_not_found',

@@ -943,6 +943,8 @@ export const NOT_A_USER_REFERENCE: ReadonlyArray<{
   // WAWU's fee in the currency's smallest unit on a quote and on an operation (WALLET-21), not a person.
   { model: 'FxQuote', column: 'wawuFeeMinor' },
   { model: 'FxOperation', column: 'wawuFeeMinor' },
+  // WAWU's fee in the currency's smallest unit on a payment made in foreign currency (PAY-FX), not a person.
+  { model: 'WalletPaymentFx', column: 'wawuFeeMinor' },
   // WAWU's fee in kobo on a card (WALLET-31), not a person.
   { model: 'WalletCard', column: 'wawuFeeKobo' },
 ];

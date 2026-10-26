@@ -596,6 +596,55 @@ export interface PaymentQuoteView {
   quoteToken: string;
   /** After this the quote is no longer honoured; ask for a new one. */
   expiresAt: string;
+  /**
+   * PAY-FX (R-91): present only when the quote was asked for with a
+   * `sourceCurrency`. The price above stays naira; this is what the buyer's
+   * own account in that currency pays for it, firm until `source.expiresAt`.
+   * `quoteToken` is then the firm quote's, `totalKobo` the naira price (no
+   * naira fee is taken), and `fee` is zero.
+   */
+  source?: PaymentSourceView;
+}
+
+/**
+ * The firm quote for paying a naira price from another currency (PAY-FX,
+ * R-91). Amounts are integers in the currency's smallest unit; `decimals`
+ * says how many places that is, so the app carries no table of currencies.
+ */
+export interface PaymentSourceView {
+  /** The currency of the account that pays (WAWU's code: USD, GBP, EUR ...). */
+  currency: string;
+  /** Places in the smallest unit (2 for USD). */
+  decimals: number;
+  /** What the provider's firm quote takes for exactly the naira price. */
+  amountMinor: number;
+  /** The provider's charge on the move, from config; 0 when none is set. */
+  providerFeeMinor: number;
+  /** WAWU's conversion fee, from config; 0 unless the owner sets one. */
+  wawuFeeMinor: number;
+  /** amountMinor + providerFeeMinor + wawuFeeMinor: what leaves the account. */
+  totalMinor: number;
+  /** The provider's rate as it sent it (smallest units per smallest unit). */
+  rate: string;
+  /** The account's available balance; null when the provider did not answer. */
+  availableMinor: number | null;
+  /** totalMinor - availableMinor when above 0, else 0; null when availableMinor is null. */
+  shortfallMinor: number | null;
+  /** The provider's own expiry of the quote. After it, ask again. */
+  expiresAt: string;
+}
+
+/** What a payment took from the buyer's other-currency account (PAY-FX), on `PaymentView.source`. */
+export interface PaymentPaidFromView {
+  currency: string;
+  decimals: number;
+  amountMinor: number;
+  providerFeeMinor: number;
+  wawuFeeMinor: number;
+  totalMinor: number;
+  rate: string;
+  /** What went back to the account when the payment was refunded; null otherwise. */
+  refundedMinor: number | null;
 }
 
 export type HoldStatus = 'held' | 'released' | 'refunded';
@@ -774,6 +823,8 @@ export interface PaymentView {
   statusMessage: string | null;
   createdAt: string;
   completedAt: string | null;
+  /** PAY-FX (R-91): present when the buyer paid from an account in another currency. */
+  source?: PaymentPaidFromView;
 }
 
 /* ------------------------------------------------------------------ */

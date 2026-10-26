@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AdsEventsModule } from '../../ads/ads-events.module';
+import { StorageModule } from '../../storage/storage.module';
 import { AdminAuthModule } from '../auth/admin-auth.module';
 import { AdminAdsController } from './admin-ads.controller';
 import { AdminAdsService } from './admin-ads.service';
@@ -11,7 +12,7 @@ import { AdminAdsService } from './admin-ads.service';
  * rule written in ad-campaign-state.ts, not a code path.
  */
 @Module({
-  imports: [AdminAuthModule, AdsEventsModule],
+  imports: [AdminAuthModule, AdsEventsModule, StorageModule],
   controllers: [AdminAdsController],
   providers: [AdminAdsService],
 })

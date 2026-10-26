@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { StorageService } from '../storage/storage.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { ADS_CLOCK, type AdsClock } from './ads-clock';
 import { servableCampaigns } from './ads-serving';
@@ -15,6 +16,7 @@ export class AdsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly blocked: BlockedAccountService,
+    private readonly storage: StorageService,
     @Inject(ADS_CLOCK) private readonly clock: AdsClock,
   ) {}
 
@@ -51,15 +53,26 @@ export class AdsService {
       now,
       { placement },
     );
-    return found.map((c) => ({
-      id: c.id,
-      advertiser: c.advertiser,
-      headline: c.creative.headline,
-      subline: c.creative.subline,
-      ctaLabel: c.creative.ctaLabel,
-      ctaDestination: c.creative.ctaDestination,
-      ctaDestinationId: c.creative.ctaDestinationId,
-      artworkUrl: c.creative.artworkUrl,
-    }));
+    return Promise.all(
+      found.map(async (c) => ({
+        id: c.id,
+        advertiser: c.advertiser,
+        headline: c.creative.headline,
+        subline: c.creative.subline,
+        // Each kind carries only its own fields, so an `event` card is exactly
+        // the eight keys it always had (R-92).
+        ...(c.creative.ctaLabel ? { ctaLabel: c.creative.ctaLabel } : {}),
+        ctaDestination: c.creative.ctaDestination,
+        ...(c.creative.ctaDestinationId
+          ? { ctaDestinationId: c.creative.ctaDestinationId }
+          : {}),
+        ...(c.creative.ctaUrl ? { ctaUrl: c.creative.ctaUrl } : {}),
+        // A picture the Hub stored is signed afresh, so it never goes dead; a
+        // typed link comes back as it is.
+        artworkUrl:
+          (await this.storage.freshUrlFor(c.creative.artworkUrl)) ??
+          c.creative.artworkUrl,
+      })),
+    );
   }
 }

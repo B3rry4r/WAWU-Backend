@@ -10,6 +10,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiPaySourceHeader } from '../../money/payments/pay-source-context';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -17,6 +18,7 @@ import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import {
   CurrentWallet,
   type OpenWallet,
+  AllowWorldWallet,
   RequireOpenWallet,
 } from '../../money/gate/wallet-gate';
 import {
@@ -53,8 +55,9 @@ export class TipWalletController {
    * is reserved.
    */
   @Get('quote')
+  @ApiPaySourceHeader()
   @Header('Cache-Control', 'no-store')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'target_not_found',
@@ -81,8 +84,10 @@ export class TipWalletController {
    * wallet_not_open`.
    */
   @Post()
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @RequireIdempotentApproval(TIP_WALLET_ROUTE)
+  @AllowWorldWallet()
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',

@@ -9,6 +9,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { ApiPaySourceHeader } from '../../money/payments/pay-source-context';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -17,6 +18,7 @@ import { RequireFeesSet } from '../../money/fees/fees-set.guard';
 import {
   CurrentWallet,
   type OpenWallet,
+  AllowWorldWallet,
   RequireOpenWallet,
 } from '../../money/gate/wallet-gate';
 import {
@@ -60,8 +62,9 @@ export class LegalFeeWalletController {
    * `POST /legal/requests/{id}/pay/wallet` sends back. Nothing is reserved.
    */
   @Get(':id/pay/wallet/quote')
+  @ApiPaySourceHeader()
   @Header('Cache-Control', 'no-store')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'target_not_found',
@@ -88,8 +91,10 @@ export class LegalFeeWalletController {
    * wallet_not_open`.
    */
   @Post(':id/pay/wallet')
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @RequireIdempotentApproval(LEGAL_FEE_WALLET_ROUTE)
+  @AllowWorldWallet()
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',

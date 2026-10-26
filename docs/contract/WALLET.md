@@ -694,3 +694,70 @@ what Nuvion serves:
 
 The W1 card summary and the W35 Cards row are drawn only while
 `GET /money/cards` answers `enabled: true`.
+
+## 8. Paying a naira price from another currency (PAY-FX; R-91)
+
+Every price stays one naira price. A buyer whose money is in another currency
+(a person outside Nigeria, R-87, or a Nigerian who added a dollar account)
+pays it from their own account; WAWU converts at the provider's rate at the
+moment of payment, the naira lands in WAWU's own account, and the payee
+receives naira exactly as today (85/15, deliver or refund, receipts).
+
+| Step | Route | What changes |
+|---|---|---|
+| Quote | `GET /money/payments/quote?...&sourceCurrency=USD` | Optional `sourceCurrency`. Absent or `NGN` is the naira wallet, byte for byte as before. With it, `source` carries the firm amount in that currency for exactly the naira price (`amountMinor`), `providerFeeMinor` and `wawuFeeMinor` (config, 0 unless set), `totalMinor`, `rate`, `decimals`, the account's `availableMinor` and `shortfallMinor`, and the provider's own `expiresAt`. `quoteToken` is the firm quote's (`fx.<id>`), `totalKobo` the naira price, `fee` zero. |
+| Pay | `POST /money/payments` | Optional `sourceCurrency` with the `quoteToken` and `expectedTotalKobo` the quote answered. A quote that is used or has run out is `409 quote_changed` with a fresh quote in `reason.paymentQuote`. `PaymentView.source` says what the payment took (and `refundedMinor` once refunded). |
+| Poll | `GET /money/payments/{id}` | Also served to a person with no naira account. |
+
+Who may pay this way: any person with an open fiat account in `sourceCurrency`
+(`fx_account_not_open` otherwise; `currency_not_supported` for a code that is
+not a fiat currency of ours or is switched off). A person with no naira
+account who asks for the naira way is told so, as before (`wallet_not_open`).
+
+What Nuvion allowed (dev, 26 Oct 2026, mobile `docs/nuvion/DEV-RESULTS.md`
+"PAY-FX"): `POST /fx-quotes` from the buyer's account with `amount_to` set to
+the naira price (rounded UP to whole cents), then `POST /transfers`
+book-transfer from that account with `currency` the account's, `amount` the
+quote's `amount_from`, `fx_quote_id`, `nuvion_ban` WAWU's operational account.
+Exactly `amount_to` kobo lands. Fee 0. A used quote is `error_fx_quote_used`,
+another amount `error_fx_quote_amount_mismatch`; the hold time is Nuvion's
+(179 s on dev), read from the quote.
+
+Fees (R-10): WAWU's conversion fee is `PAYMENT_FX_FEE_<CODE>_MINOR` (default
+0; paid to `FX_FEE_COLLECTOR_<CODE>_BAN`); the provider's charge on the move
+is shown from `PAYMENT_FX_PROVIDER_FEE_<CODE>_MINOR` (default 0, Nuvion names
+none on dev) and anything more that Nuvion's record reports is kept on the
+payment for review. Nuvion's spread is inside the rate, shown as it is.
+
+Refunds (R-91, lead ruling 26 Oct 2026, owner may override): back to the same
+account, in that currency, and the rule is the naira rule of R-10. A refund
+WAWU or the seller causes (a called-off event, a question that lapsed, an
+order that failed) returns everything taken, WAWU's conversion fee and the
+provider's charge included. A refund the payer causes keeps WAWU's conversion
+fee (the amount for the price goes back, the fee stays). With the fee at 0,
+the default, both return the full amount. WAWU pays the reverse conversion
+(a firm quote from its operational account with no `entity_id`, then the move
+under the hold's own reference), so the naira it costs differs from the naira
+the payment brought in: on dev 23 cents back cost 31,040 kobo for 30,000.
+
+**One header for every paying route.** The wallet payments of each feature (an
+unlock, a tip, a paid question, an event order, a legal fee, a school fee, a
+community pass) wrap the same payment service, so the account
+that pays rides on `X-Pay-Source-Currency: USD` for all of them, on both the
+quote and the payment (a body's own `sourceCurrency` on `/money/payments` wins).
+Absent or `NGN` is the naira wallet. Their quote answers carry the same
+`payment.source`, and their payment answers `payment.source`. These routes also
+take a person who has no naira account (a world wallet) when the header is
+sent; without it they are `409 wallet_not_open`, as before, and an event order
+is refused the same way BEFORE the order is made (no order is left behind).
+
+The header is declared in the contract (`parameters`, optional) on exactly the
+routes that read it: the quote and the payment of `/money/payments`,
+`/content/{id}/unlock/wallet`, `/tips/wallet`, `/dm/.../send/wallet`,
+`/events/.../orders/wallet`, `/legal/requests/{id}/pay/wallet` and
+`/communities/{id}/pass`. The app sends it on those requests and on no other.
+The `Idempotency-Key` of a payment is bound to the account that pays: the same
+key and body for another account (dollar after naira, or the other way round)
+is `409 idempotency_key_reused`, never the first account's receipt. A request
+that names no account, or the naira one, has the fingerprint it always had.
+
