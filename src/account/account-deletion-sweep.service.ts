@@ -53,23 +53,32 @@ export interface PassLimits {
   budgetMs?: number;
   outageAfter?: number;
   batch?: number;
+  /**
+   * The clock the time budget is measured on, in milliseconds. Wall time
+   * (`Date.now`) unless a spec passes a clock it controls, so a budget test
+   * does not depend on how fast the machine it runs on is.
+   */
+  clock?: () => number;
 }
 
 /** A pass's clock and its count of provider failures in a row. */
 class PassGuard {
-  private readonly startedAt = Date.now();
+  private readonly startedAt: number;
   private failures = 0;
   stopped: 'budget' | 'outage' | null = null;
 
   constructor(
     private readonly budgetMs: number,
     private readonly outageAfter: number,
-  ) {}
+    private readonly clock: () => number = () => Date.now(),
+  ) {
+    this.startedAt = clock();
+  }
 
   /** True once no further row should be asked. */
   halt(): boolean {
     if (this.stopped) return true;
-    if (Date.now() - this.startedAt >= this.budgetMs) this.stopped = 'budget';
+    if (this.clock() - this.startedAt >= this.budgetMs) this.stopped = 'budget';
     else if (this.failures >= this.outageAfter) this.stopped = 'outage';
     return this.stopped !== null;
   }
@@ -232,6 +241,7 @@ export class AccountDeletionSweepService {
     const guard = new PassGuard(
       limits.budgetMs ?? PASS_BUDGET_MS,
       limits.outageAfter ?? PASS_OUTAGE_FAILURES,
+      limits.clock,
     );
     const batch = limits.batch ?? PASS_BATCH;
     // Rows claimed before this moment are free to claim; rows this pass has
