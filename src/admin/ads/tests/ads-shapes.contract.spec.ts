@@ -34,6 +34,7 @@ const LAND2 = 'https://cdn.example.com/ads/acme-landscape-2.png';
 const PORT = 'https://cdn.example.com/ads/acme-portrait.png';
 const PORT2 = 'https://cdn.example.com/ads/acme-portrait-2.png';
 const OLD = 'https://cdn.example.com/ads/acme-old.png';
+const EVENT_ID = 'e8000000-0000-4000-8000-000000000001';
 
 /**
  * ADS-LINK round 2 (R-92, owner, 26 Oct 2026): an ad has TWO shapes, not three
@@ -150,6 +151,7 @@ describe('Ads have two shapes: landscape and portrait (ADS-LINK round 2, R-92)',
       where: { campaignId: { in: ids } },
     });
     await prisma.adCampaign.deleteMany({ where: { id: { in: ids } } });
+    await prisma.event.deleteMany({ where: { id: EVENT_ID } });
   }
 
   beforeAll(async () => {
@@ -342,6 +344,57 @@ describe('Ads have two shapes: landscape and portrait (ADS-LINK round 2, R-92)',
       const port = await created(shaped({ portraitUrl: PORT }));
       expect(land.placement).toBe('explore_slider');
       expect(port.placement).toBe('tgif_card');
+    });
+  });
+
+  describe('an event booking is served as before, in whatever places its pictures give it', () => {
+    it('carries exactly the eight keys it always had in every place, so a build already on phones reads it', async () => {
+      const future = hoursFromNow(24 * 60);
+      await prisma.event.create({
+        data: {
+          id: EVENT_ID,
+          hostWawuId: 'a8a8a8a8-0000-4000-8000-000000000001',
+          description: 'A fixture event for the ads shapes suite.',
+          hostOrg: 'Contract Fixtures Ltd',
+          format: 'in_person',
+          type: 'workshop',
+          location: 'Abuja',
+          name: 'Gospel Night Live',
+          status: 'published',
+          startsAt: future,
+          endsAt: new Date(future.getTime() + 4 * HOUR),
+        },
+      });
+      const c = await onAir(
+        shaped({
+          landscapeUrl: LAND,
+          portraitUrl: PORT,
+          ctaDestination: 'event',
+          ctaLabel: 'Get tickets',
+          ctaDestinationId: EVENT_ID,
+          ctaUrl: undefined,
+        }),
+      );
+      const at = await placesOf(c.id);
+      for (const [place, card] of Object.entries(at)) {
+        expect(card).not.toBeNull();
+        expect([place, Object.keys(card).sort()]).toEqual([
+          place,
+          [
+            'advertiser',
+            'artworkUrl',
+            'ctaDestination',
+            'ctaDestinationId',
+            'ctaLabel',
+            'headline',
+            'id',
+            'subline',
+          ],
+        ]);
+        expect(card.ctaDestinationId).toBe(EVENT_ID);
+      }
+      expect(at.tgif.artworkUrl).toBe(PORT);
+      expect(at.today.artworkUrl).toBe(LAND);
     });
   });
 
