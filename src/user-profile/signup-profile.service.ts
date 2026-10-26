@@ -8,6 +8,16 @@ import {
 } from '../explore/explore-categories';
 import { MIN_SIGNUP_INTERESTS } from './signup-interests';
 
+/** How many times a lost first write tries to find or make the profile row before it gives up (F1). */
+const ACCOUNT_TYPE_ATTEMPTS = 3;
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === 'P2002'
+  );
+}
+
 export interface InterestOption {
   id: string;
   label: string;
@@ -38,17 +48,37 @@ export class SignupProfileService {
    * ever moves from `user` to `creator` here: a request for `user` on a creator
    * changes nothing, and the answer names the type the profile holds, so the
    * caller reads the truth and not its own request.
+   *
+   * THE FIRST WRITES RACE (TIER-OFFER round 2, F1). The upsert has nothing to
+   * update, so Prisma runs it as a look and then an insert, and the sign-up's
+   * other first writes (the username, the interests, the profile read) make the
+   * same row at the same moment. The loser got a P2002, and a new creator stayed
+   * a `user`. A lost upsert now reads the row the winner made and carries on
+   * from it (a `user` row still moves to `creator`); if the row is not there to
+   * read, the upsert is tried again, a bounded number of times.
    */
   async setAccountType(
     wawuUserId: string,
     want: 'user' | 'creator',
   ): Promise<{ accountType: AccountType }> {
-    const row = await this.prisma.userProfile.upsert({
-      where: { wawuUserId },
-      create: { wawuUserId, accountType: want, interests: [] },
-      update: {},
-      select: { accountType: true },
-    });
+    let row: { accountType: AccountType } | null = null;
+    for (let attempt = 1; row === null; attempt += 1) {
+      try {
+        row = await this.prisma.userProfile.upsert({
+          where: { wawuUserId },
+          create: { wawuUserId, accountType: want, interests: [] },
+          update: {},
+          select: { accountType: true },
+        });
+      } catch (error) {
+        if (!isUniqueViolation(error) || attempt >= ACCOUNT_TYPE_ATTEMPTS)
+          throw error;
+        row = await this.prisma.userProfile.findUnique({
+          where: { wawuUserId },
+          select: { accountType: true },
+        });
+      }
+    }
     if (row.accountType === AccountType.user && want === 'creator') {
       // Only a `user` row moves, and in one statement: two taps at once both end as `creator`.
       await this.prisma.userProfile.updateMany({
