@@ -5412,6 +5412,11 @@ model WalletPayment {
   hold                  WalletHold?
   /// The payee's 85% of an ordinary sale, owed to their wallet until it lands (WALLET-16).
   earning               EarningSettlement?
+  /// PAY-FX (R-91): the currency of the account the buyer paid from, when it was
+  /// not their naira wallet. Null is a naira payment, exactly as before.
+  sourceCurrency        String?
+  /// The conversion's details, present exactly when `sourceCurrency` is.
+  fx                    WalletPaymentFx?
 
   @@index([payerWawuUserId, createdAt])
   @@index([status, createdAt])
@@ -8766,4 +8771,45 @@ model AbroadAdminAudit {
 
   @@index([subjectWawuId, at])
   @@index([sendId])
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// PAYING FROM ANOTHER CURRENCY (task PAY-FX, R-91)
+///
+/// A buyer whose money is in a foreign account pays a naira price: WAWU
+/// converts at the provider's firm quote at the moment of payment, the naira
+/// lands in WAWU's own account, and everything after is as for a naira payment.
+/// One row per such payment (the payment's `sourceCurrency` is set with it).
+/// Amounts in the SOURCE currency's smallest unit. A refund goes back to the
+/// same account, the same amount, by a conversion the other way (`refund*`).
+/// ─────────────────────────────────────────────────────────────────────────
+model WalletPaymentFx {
+  id                  String        @id @default(uuid())
+  paymentId           String        @unique
+  payment             WalletPayment @relation(fields: [paymentId], references: [id])
+  sourceCurrency      String
+  /// The FxAccount debited, and the provider's id for it.
+  fxAccountId         String
+  providerAccountId   String
+  /// Our FxQuote row, the provider's quote id and its rate as sent.
+  fxQuoteId           String
+  providerQuoteId     String
+  rate                String
+  /// What the quote debits for exactly the naira price.
+  sourceAmountMinor   BigInt
+  /// The provider's charge on the transfer (as its record says), and WAWU's conversion fee (config, 0 by default).
+  providerFeeMinor    BigInt?
+  wawuFeeMinor        BigInt        @default(0)
+  /// done, owed (to be asked again) or null when there is none to collect.
+  feeLeg              String?
+  providerTransferId  String?
+  /// The refund: what goes back (source currency), what it cost in kobo, the quote and the transfer.
+  refundMinor         BigInt?
+  refundCostKobo      BigInt?
+  refundQuoteId       String?
+  refundRate          String?
+  refundTransferId    String?
+  refundedAt          DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 }

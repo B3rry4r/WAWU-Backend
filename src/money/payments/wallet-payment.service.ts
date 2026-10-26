@@ -5,9 +5,10 @@ import {
   Injectable,
   Logger,
   type OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import type { Prisma } from '../../../generated/prisma/client';
+import type { Prisma, WalletPaymentFx } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import {
   type ProviderReconciliation,
@@ -38,7 +39,7 @@ import {
   QUOTE_CHANGED_MESSAGE,
   FeeQuoteService,
 } from '../fees/fee-quote.service';
-import type { OpenWallet } from '../gate/wallet-gate';
+import { NO_NAIRA_ACCOUNT_MESSAGE, type OpenWallet } from '../gate/wallet-gate';
 import {
   BALANCE_CHANGED_MESSAGE,
   insufficientAfterProviderRefusal,
@@ -77,6 +78,9 @@ import { isUniqueViolationOn } from '../prisma-unique';
 import { MoneyLimits } from '../limits/money-limits.service';
 import { PaymentSettings, splitPrice } from './payment-config';
 import { completedFigures, joinNotes } from './payment-figures';
+import { PaymentFxService } from './payment-fx.service';
+import { currentPaySource } from './pay-source-context';
+import type { ProviderFxTransfer } from '../../wallet-provider/wallet-provider-fx';
 
 /** The route a payment's Idempotency-Key is scoped to. */
 export const PAY_ROUTE = 'POST money/payments';
@@ -201,6 +205,31 @@ export const OTHER_CURRENCY_MESSAGE =
 export const isOpenKeyClash = (e: unknown) => isUniqueViolationOn(e, 'openKey');
 
 /**
+ * The currency a request names to pay from (PAY-FX, R-91): null for the naira
+ * wallet (absent or `NGN`, exactly as before), else the code.
+ */
+export function foreignCode(sourceCurrency: string | undefined): string | null {
+  return sourceCurrency === undefined || sourceCurrency === PAYMENT_CURRENCY
+    ? null
+    : sourceCurrency;
+}
+
+/**
+ * A request that pays from the naira wallet needs one: a person who opened
+ * from outside Nigeria (R-87) has none and pays from another currency.
+ */
+export function requireNairaWallet(
+  wallet: Pick<OpenWallet, 'accountNumber'>,
+): void {
+  if (wallet.accountNumber === '') {
+    throw new MoneyError('wallet_not_open', NO_NAIRA_ACCOUNT_MESSAGE);
+  }
+}
+
+/** The firm quote was spent or ran out between the check and the claim. */
+class ForeignQuoteSpent extends Error {}
+
+/**
  * Pay from wallet (task MONEY-17): one way to take a payment from a
  * person's wallet for anything WAWU sells.
  *
@@ -293,7 +322,19 @@ export class WalletPaymentService implements OnModuleInit {
     private readonly settings: PaymentSettings,
     private readonly limits: MoneyLimits,
     private readonly holds: HoldViewService,
+    @Optional() private readonly foreign?: PaymentFxService,
   ) {}
+
+  /** Paying from another currency (PAY-FX, R-91), or `currency_not_supported` where nothing serves it. */
+  private fx(): PaymentFxService {
+    if (!this.foreign) {
+      throw new MoneyError(
+        'currency_not_supported',
+        "That currency can't be used to pay for this.",
+      );
+    }
+    return this.foreign;
+  }
 
   onModuleInit(): void {
     // A key left `in_progress` by a request that died (a restart mid-send)
@@ -330,9 +371,7 @@ export class WalletPaymentService implements OnModuleInit {
         return p
           ? {
               status: 201,
-              body: successBody(
-                await present(this.view(p, await this.holdOf(p))),
-              ),
+              body: successBody(await present(await this.viewOf(p))),
             }
           : null;
       },
@@ -377,6 +416,8 @@ export class WalletPaymentService implements OnModuleInit {
     q: PaymentQuoteQueryDto,
     options: { refuseIfOpen?: boolean } = {},
   ): Promise<PaymentQuoteView> {
+    const code = foreignCode(q.sourceCurrency ?? currentPaySource());
+    if (!code) requireNairaWallet(wallet);
     const { target } = await this.target(
       wallet.wawuUserId,
       q.kind,
@@ -386,6 +427,8 @@ export class WalletPaymentService implements OnModuleInit {
     if (options.refuseIfOpen) {
       await this.refuseIfOpen(openKeyOf(wallet.wawuUserId, q.kind, q.targetId));
     }
+    if (code)
+      return this.quoteForeign(wallet, q.kind, q.targetId, target, code);
     const fee = this.fees.quote(
       wallet.wawuUserId,
       { kind: 'purchase', amountKobo: target.priceKobo },
@@ -498,6 +541,9 @@ export class WalletPaymentService implements OnModuleInit {
     ) {
       throw new BadRequestException(['note is only sent with a tip.']);
     }
+    const code = foreignCode(dto.sourceCurrency ?? currentPaySource());
+    if (code) return this.payForeign(wallet, dto, scope, code);
+    requireNairaWallet(wallet);
     const { handler, target } = await this.target(
       payer,
       dto.kind,
@@ -633,6 +679,10 @@ export class WalletPaymentService implements OnModuleInit {
     data: Prisma.WalletPaymentCreateInput,
     openKey: string,
     guard: (tx: Prisma.TransactionClient) => Promise<void>,
+    fxClaim?: {
+      quoteRowId: string;
+      fx: Prisma.WalletPaymentFxCreateWithoutPaymentInput;
+    },
   ): Promise<PaymentRow> {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
@@ -654,9 +704,29 @@ export class WalletPaymentService implements OnModuleInit {
           // transaction, so two payments claiming at once are checked one
           // after the other and a refusal records nothing.
           await guard(tx);
+          if (fxClaim) {
+            // PAY-FX: the firm quote is spent here, once, in the claim's own
+            // transaction (a second payment cannot use it).
+            const { count } = await tx.fxQuote.updateMany({
+              where: {
+                id: fxClaim.quoteRowId,
+                usedAt: null,
+                expiresAt: { gt: new Date() },
+              },
+              data: { usedAt: new Date() },
+            });
+            if (count !== 1) throw new ForeignQuoteSpent();
+          }
           await this.keys.attach(tx, scope, id);
-          const row = await tx.walletPayment.create({ data });
-          await this.ledger.record(this.movement(row, 'out', 'pending'), tx);
+          const row = await tx.walletPayment.create({
+            data: fxClaim ? { ...data, fx: { create: fxClaim.fx } } : data,
+          });
+          // A payment from another currency moves no naira out of the buyer:
+          // only WAWU's side is a naira row (the buyer's debit is in their
+          // own account's statement at the provider).
+          if (!fxClaim) {
+            await this.ledger.record(this.movement(row, 'out', 'pending'), tx);
+          }
           await this.ledger.record(this.movement(row, 'in', 'pending'), tx);
           return row;
         });
@@ -787,6 +857,7 @@ export class WalletPaymentService implements OnModuleInit {
     scope: IdempotencyScope,
     e: unknown,
     wallet: OpenWallet,
+    foreignCurrency?: string,
   ): Promise<PaymentView> {
     const refusal = e instanceof WalletProviderError ? e : null;
     if (!refusal || refusal.recordMayExist) {
@@ -806,6 +877,13 @@ export class WalletPaymentService implements OnModuleInit {
       // Nothing moved and the person can fix the cause: the key is given
       // back so the same payment can be sent again (CONVENTIONS section 4).
       await this.keys.release(scope);
+      if (refusal.kind === 'insufficient_funds' && foreignCurrency) {
+        throw new MoneyError(
+          'insufficient_funds',
+          'There is not enough in the account for this.',
+          { currency: foreignCurrency },
+        );
+      }
       if (refusal.kind === 'insufficient_funds') {
         throw insufficientAfterProviderRefusal(
           await this.balanceOrNull(wallet),
@@ -1442,6 +1520,7 @@ export class WalletPaymentService implements OnModuleInit {
     });
     if (!p) return null;
     if (p.status !== 'pending') return p.status as PaymentStatus;
+    if (p.sourceCurrency) return this.settleForeign(p, now, ask);
     const row = await this.prisma.fintavaLedgerEntry.findFirst({
       where: {
         customerReference: p.customerReference,
@@ -1693,6 +1772,322 @@ export class WalletPaymentService implements OnModuleInit {
         nextCheckAt: new Date(now.getTime() + nextCheckDelayMs(p.checks + 1)),
       },
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Paying a naira price from another currency (PAY-FX, R-91)
+  // -------------------------------------------------------------------------
+
+  /**
+   * The price stays naira; the buyer's own account in `code` pays it at the
+   * provider's firm quote for the exact naira price (shown with its fees and
+   * its real expiry). Nothing is reserved.
+   */
+  private async quoteForeign(
+    wallet: OpenWallet,
+    kind: PaymentKind,
+    targetId: string,
+    target: PayableTarget,
+    code: string,
+  ): Promise<PaymentQuoteView> {
+    const price = target.priceKobo;
+    const cap = this.fees.providerFees.merchantMaxPerTxnKobo;
+    if (cap !== null && price > cap) {
+      throw new MoneyError(
+        'amount_out_of_range',
+        'This is more than can be paid in one go. Try a smaller amount.',
+        { maximumKobo: cap },
+      );
+    }
+    const sq = await this.fx().quote(wallet, price, code);
+    const standing = await this.limits.dailyStanding({
+      wawuUserId: wallet.wawuUserId,
+      kind: limitKindOf(kind),
+      amountKobo: price,
+    });
+    return {
+      kind,
+      targetId,
+      title: target.title,
+      payee: target.payee,
+      priceKobo: price,
+      fee: { providerFeeKobo: 0, wawuFeeKobo: 0, totalFeeKobo: 0 },
+      totalKobo: price,
+      balanceKobo: null,
+      shortfallKobo: null,
+      willBeHeld: HELD_PAYMENT_KINDS.includes(kind),
+      withinDailyLimit: standing.withinDailyLimit,
+      remainingTodayKobo: standing.remainingTodayKobo,
+      quoteToken: this.fx().tokenOf(sq.row),
+      expiresAt: sq.row.expiresAt.toISOString(),
+      source: sq.view,
+    };
+  }
+
+  /** `409 quote_changed` with a fresh firm quote, when the one the buyer saw is spent, expired or for another price. */
+  private async quoteChangedForeign(
+    wallet: OpenWallet,
+    dto: Pick<QuoteBinding, 'kind' | 'targetId'>,
+    target: PayableTarget,
+    code: string,
+  ): Promise<MoneyError> {
+    return new MoneyError('quote_changed', QUOTE_CHANGED_MESSAGE, {
+      paymentQuote: await this.quoteForeign(
+        wallet,
+        dto.kind,
+        dto.targetId,
+        target,
+        code,
+      ),
+    });
+  }
+
+  private async payForeign(
+    wallet: OpenWallet,
+    dto: PaymentDto,
+    scope: IdempotencyScope,
+    code: string,
+  ): Promise<PaymentView> {
+    const payer = wallet.wawuUserId;
+    const fxs = this.fx();
+    const { handler, target } = await this.target(
+      payer,
+      dto.kind,
+      dto.targetId,
+      dto.amountKobo,
+    );
+    const price = target.priceKobo;
+    const cap = this.fees.providerFees.merchantMaxPerTxnKobo;
+    if (cap !== null && price > cap) {
+      throw new MoneyError(
+        'amount_out_of_range',
+        'This is more than can be paid in one go. Try a smaller amount.',
+        { maximumKobo: cap },
+      );
+    }
+    const quote = await fxs.usable(payer, dto.quoteToken, code, price);
+    if (!quote || dto.expectedTotalKobo !== price) {
+      throw await this.quoteChangedForeign(wallet, dto, target, code);
+    }
+    const openKey = openKeyOf(payer, dto.kind, dto.targetId);
+    await this.refuseIfOpen(openKey);
+    // The provider's balance of the account that pays, never ours.
+    const { account } = await fxs.assertFunds(wallet, quote);
+    const merchant = await this.merchant.account();
+
+    const id = randomUUID();
+    const split = splitPrice(
+      price,
+      target.payee !== null || target.payeeOutsideWawu === true,
+    );
+    const now = new Date();
+    const data: Prisma.WalletPaymentCreateInput = {
+      id,
+      payerWawuUserId: payer,
+      kind: dto.kind,
+      targetId: dto.targetId,
+      title: target.title.slice(0, 200),
+      payeeWawuUserId: target.payee?.wawuUserId ?? null,
+      priceKobo: BigInt(price),
+      // No naira charge: the buyer's cost is in their own currency (`fx`).
+      providerFeeKobo: 0n,
+      wawuFeeKobo: BigInt(target.wawuFeeKobo ?? 0),
+      totalKobo: BigInt(price),
+      payeeShareKobo: BigInt(split.payeeShareKobo),
+      wawuShareKobo: BigInt(split.wawuShareKobo),
+      customerReference: `wawu-pay-${id}`,
+      payerAccountNumber: null,
+      merchantAccountNumber: merchant,
+      provider: this.provider.name,
+      status: 'pending',
+      openKey,
+      nextCheckAt: new Date(now.getTime() + MINUTE),
+      note: dto.note?.trim() ? dto.note.trim() : null,
+      ...(target.terms === undefined ? {} : { terms: target.terms }),
+      sentAt: now,
+      sourceCurrency: code,
+    };
+    let payment: PaymentRow;
+    try {
+      payment = await this.claim(
+        scope,
+        id,
+        data,
+        openKey,
+        (tx) =>
+          handler.beforeClaim
+            ? handler.beforeClaim(
+                {
+                  payerWawuUserId: payer,
+                  targetId: dto.targetId,
+                  amountKobo: dto.amountKobo,
+                },
+                tx,
+              )
+            : Promise.resolve(),
+        {
+          quoteRowId: quote.id,
+          fx: {
+            sourceCurrency: code,
+            fxAccountId: account.id,
+            providerAccountId: account.providerAccountId!,
+            fxQuoteId: quote.id,
+            providerQuoteId: quote.providerQuoteId,
+            rate: quote.rate,
+            sourceAmountMinor: quote.amountFromMinor,
+            providerFeeMinor: quote.providerFeeMinor,
+            wawuFeeMinor: quote.wawuFeeMinor,
+            feeLeg: quote.wawuFeeMinor > 0n ? 'owed' : null,
+          },
+        },
+      );
+    } catch (e) {
+      if (e instanceof ForeignQuoteSpent) {
+        throw await this.quoteChangedForeign(wallet, dto, target, code);
+      }
+      throw e;
+    }
+
+    try {
+      const again = await this.target(
+        payer,
+        dto.kind,
+        dto.targetId,
+        dto.amountKobo,
+      );
+      if (
+        again.target.priceKobo !== price ||
+        (again.target.payee?.wawuUserId ?? null) !==
+          (target.payee?.wawuUserId ?? null)
+      ) {
+        throw await this.quoteChangedForeign(wallet, dto, again.target, code);
+      }
+    } catch (e) {
+      await this.abandon(payment, scope);
+      throw e;
+    }
+
+    const fxRow = await this.prisma.walletPaymentFx.findUniqueOrThrow({
+      where: { paymentId: payment.id },
+    });
+    let transfer: ProviderFxTransfer;
+    try {
+      transfer = await fxs.send(payment, fxRow, {
+        customerId: wallet.customerId,
+        walletId: wallet.walletId,
+      });
+    } catch (e) {
+      return this.afterRefusal(payment, scope, e, wallet, code);
+    }
+    const row = await this.afterForeignTransfer(
+      payment,
+      fxRow,
+      transfer,
+      handler,
+    );
+    return this.answer(scope, row);
+  }
+
+  /** What the provider said of the move: complete it, fail it, or leave it pending until the provider says. */
+  private async afterForeignTransfer(
+    payment: PaymentRow,
+    fx: WalletPaymentFx,
+    t: ProviderFxTransfer,
+    handler?: PayableKindHandler,
+  ): Promise<PaymentRow> {
+    await this.prisma.walletPaymentFx.updateMany({
+      where: { id: fx.id },
+      data: {
+        providerTransferId: t.transferId,
+        ...(t.feeMinor === null ? {} : { providerFeeMinor: t.feeMinor }),
+      },
+    });
+    if (t.status === 'failed') {
+      return this.markFailed(payment, PAYMENT_FAILED_REASON);
+    }
+    if (t.status === 'pending') return payment;
+    return this.completeForeign(payment, t, handler);
+  }
+
+  /** The provider completed the move: the naira price is in WAWU's account, and everything after is as for a naira payment. */
+  private async completeForeign(
+    payment: PaymentRow,
+    t: ProviderFxTransfer,
+    handler?: PayableKindHandler,
+  ): Promise<PaymentRow> {
+    const done = await this.completeFromRecord(
+      payment,
+      {
+        amountKobo: payment.priceKobo,
+        feeKobo: 0n,
+        totalKobo: payment.priceKobo,
+        refs: {
+          fintavaReference: t.transferId,
+          fintavaTransactionId: t.transferId,
+        },
+        source: 'send',
+        occurredAt: null,
+        debitRecorded: true,
+      },
+      handler,
+    );
+    const fx = await this.prisma.walletPaymentFx.findUnique({
+      where: { paymentId: payment.id },
+    });
+    if (fx) {
+      // The provider charged more on the move than the figure the buyer was
+      // shown (config): kept for review, never hidden.
+      const shown = fx.providerFeeMinor ?? 0n;
+      if (t.feeMinor !== null && t.feeMinor > shown) {
+        await this.keepNote(
+          done,
+          `${this.provider.label} charged ${t.feeMinor} on the move (${fx.sourceCurrency}), more than the ${shown} shown`,
+        );
+      }
+      if (fx.wawuFeeMinor > 0n && fx.feeLeg === 'owed') {
+        await this.fx().collectFee(payment, fx);
+      }
+    }
+    return done;
+  }
+
+  /**
+   * A pending payment from another currency: the provider's record of the
+   * move is asked (by its id, else our reference), never sent again. Absence
+   * is no proof that nothing moved; it goes to review past the bound, as any
+   * payment nothing answers for.
+   */
+  private async settleForeign(
+    p: PaymentRow,
+    now: Date,
+    ask: boolean,
+  ): Promise<PaymentStatus | null> {
+    if (!ask) return 'pending';
+    const fx = await this.prisma.walletPaymentFx.findUnique({
+      where: { paymentId: p.id },
+    });
+    if (fx && p.provider === this.provider.name && this.foreign) {
+      const found = await this.foreign.lookup(p, fx);
+      if (found.state === 'found') {
+        const t = found.transfer;
+        if (t.status === 'completed') {
+          await this.prisma.walletPaymentFx.updateMany({
+            where: { id: fx.id },
+            data: {
+              providerTransferId: t.transferId,
+              ...(t.feeMinor === null ? {} : { providerFeeMinor: t.feeMinor }),
+            },
+          });
+          return (await this.completeForeign(p, t)).status as PaymentStatus;
+        }
+        if (t.status === 'failed') {
+          return (await this.markFailed(p, PAYMENT_FAILED_REASON, true))
+            .status as PaymentStatus;
+        }
+      }
+    }
+    await this.reschedule(p, now);
+    return 'pending';
   }
 
   // -------------------------------------------------------------------------
@@ -2064,11 +2459,13 @@ export class WalletPaymentService implements OnModuleInit {
     });
     if (writeLedger && row.status === 'failed') {
       try {
-        await this.ledger.record(
-          this.movement(row, 'out', 'failed'),
-          undefined,
-          { quiet: true },
-        );
+        if (!row.sourceCurrency) {
+          await this.ledger.record(
+            this.movement(row, 'out', 'failed'),
+            undefined,
+            { quiet: true },
+          );
+        }
         await this.ledger.record(
           this.movement(row, 'in', 'failed'),
           undefined,
@@ -2189,7 +2586,7 @@ export class WalletPaymentService implements OnModuleInit {
     scope: IdempotencyScope,
     p: PaymentRow,
   ): Promise<PaymentView> {
-    const view = this.view(p, await this.holdOf(p));
+    const view = await this.viewOf(p);
     const present = this.presenters.get(scope.route);
     if (present) {
       scope.answered = await present(view);
@@ -2214,7 +2611,17 @@ export class WalletPaymentService implements OnModuleInit {
       where: { id, payerWawuUserId: wallet.wawuUserId },
     });
     if (!p) throw new MoneyError('not_found', PAYMENT_NOT_FOUND_MESSAGE);
-    return this.view(p, await this.holdOf(p));
+    return this.viewOf(p);
+  }
+
+  /** The payment as the app reads it: its hold, and for a payment from another currency what it took. */
+  private async viewOf(p: PaymentRow): Promise<PaymentView> {
+    const fx = p.sourceCurrency
+      ? await this.prisma.walletPaymentFx.findUnique({
+          where: { paymentId: p.id },
+        })
+      : null;
+    return this.view(p, await this.holdOf(p), fx);
   }
 
   /** The hold a held kind's completed payment sits in, as the app reads it; null for any other payment. */
@@ -2233,7 +2640,11 @@ export class WalletPaymentService implements OnModuleInit {
     }
   }
 
-  view(p: PaymentRow, hold: HoldView | null = null): PaymentView {
+  view(
+    p: PaymentRow,
+    hold: HoldView | null = null,
+    fx: WalletPaymentFx | null = null,
+  ): PaymentView {
     const providerFeeKobo = koboNumber(p.providerFeeKobo);
     // A WAWU fee that rides inside the price (a bill's) is not an extra charge
     // on top of it: the fee shown is the one that adds up to the total.
@@ -2272,6 +2683,7 @@ export class WalletPaymentService implements OnModuleInit {
             : null,
       createdAt: p.createdAt.toISOString(),
       completedAt: p.completedAt ? p.completedAt.toISOString() : null,
+      ...(fx && this.foreign ? { source: this.foreign.paidFrom(fx) } : {}),
     };
   }
 }

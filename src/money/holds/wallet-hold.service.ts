@@ -1,6 +1,6 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import type { Prisma } from '../../../generated/prisma/client';
+import type { Prisma, WalletPaymentFx } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { isRowOf } from '../../wallet-provider/provider-rows';
 import {
@@ -18,6 +18,8 @@ import type { LedgerMovementInput } from '../ledger/ledger.interface';
 import { koboNumber, LedgerService } from '../ledger/ledger.service';
 import { PaymentSettings } from '../payments/payment-config';
 import { joinNotes } from '../payments/payment-figures';
+import { PaymentFxService } from '../payments/payment-fx.service';
+import type { ProviderFxTransfer } from '../../wallet-provider/wallet-provider-fx';
 import { earningReference } from '../earnings/earning-rules';
 import {
   type HoldAction,
@@ -122,6 +124,7 @@ export class WalletHoldService {
     private readonly ledger: LedgerService,
     private readonly fees: FeeQuoteService,
     private readonly settings: PaymentSettings,
+    @Optional() private readonly foreign?: PaymentFxService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -213,6 +216,11 @@ export class WalletHoldService {
     }
     if (!hold.action) {
       const now = new Date();
+      // PAY-FX (R-91): a payment that came from another currency is paid back
+      // in that currency, the same amount; what goes back is fixed now.
+      if (action === 'refund') {
+        await this.foreign?.planRefund(hold.paymentId, !!opts.returnCharge);
+      }
       const amount =
         transferFor(action, hold) +
         (action === 'refund' && opts.returnCharge
@@ -482,6 +490,11 @@ export class WalletHoldService {
       );
     }
 
+    if (action === 'refund' && this.foreign) {
+      const fx = await this.foreign.forPayment(hold.paymentId);
+      if (fx) return this.sendForeignRefund(hold, fx, now);
+    }
+
     const destination = await this.destination(hold);
     if (destination.kind === 'wait') {
       return this.waitFor(hold, destination.waiting, now);
@@ -721,6 +734,10 @@ export class WalletHoldService {
   // -------------------------------------------------------------------------
 
   private async reconcile(hold: HoldRow, now: Date): Promise<HoldSettlement> {
+    if (hold.action === 'refund' && this.foreign) {
+      const fx = await this.foreign.forPayment(hold.paymentId);
+      if (fx) return this.reconcileForeignRefund(hold, fx, now);
+    }
     let answer: ProviderReconciliation | null = null;
     try {
       answer = await this.provider.reconcileSend(
@@ -772,6 +789,195 @@ export class WalletHoldService {
       // Pending, or a word we do not know: neither says no money moved.
     }
     return this.stillUnknown(hold, now);
+  }
+
+  // -------------------------------------------------------------------------
+  // A refund of a payment that came from another currency (PAY-FX, R-91)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Pays the buyer back into the account the money came from, in its
+   * currency, the same amount taken: a firm quote for the reverse conversion
+   * (WAWU's naira account to the buyer's account, for exactly that amount),
+   * then the move under the hold's own reference. The naira it costs is
+   * fixed by the quote and written on the hold with the lease, before the
+   * money is sent, so a lost answer is found and compared with that figure.
+   * WAWU bears any difference from the naira the payment brought in.
+   */
+  private async sendForeignRefund(
+    hold: HoldRow,
+    fx: WalletPaymentFx,
+    now: Date,
+  ): Promise<HoldSettlement> {
+    const foreign = this.foreign!;
+    const account = await foreign.refundAccount(fx);
+    if (!hold.payerWawuUserId || !account || !account.ban) {
+      return this.toReview(
+        hold,
+        "the payer's account in the currency it was paid from is gone, so there is nowhere to refund to",
+      );
+    }
+    let quote;
+    try {
+      quote = await foreign.refundQuote(fx, account);
+    } catch (e) {
+      // A quote moves nothing: the money stays, and the sweep asks again.
+      this.logger.warn(
+        `hold ${hold.id}: the refund quote was not given (${e instanceof WalletProviderError ? e.kind : 'error'}); trying again later`,
+      );
+      return this.waitFor(hold, 'provider', now);
+    }
+    if (quote.amountToMinor !== fx.refundMinor) {
+      return this.toReview(
+        hold,
+        `the reverse quote is for ${quote.amountToMinor} and the refund is ${fx.refundMinor}`,
+      );
+    }
+    const leaseUntil = new Date(
+      now.getTime() +
+        this.provider.timings.moneyTimeoutMs +
+        this.provider.timings.resendSafetyMs,
+    );
+    const leased = await this.prisma.walletHold.updateMany({
+      where: {
+        id: hold.id,
+        status: 'held',
+        action: 'refund',
+        reviewSince: null,
+        sentAt: null,
+        OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }],
+      },
+      data: {
+        sentAt: now,
+        nextAttemptAt: leaseUntil,
+        attempts: { increment: 1 },
+        waiting: null,
+        destinationAccountNumber: account.ban,
+        transferKobo: quote.amountFromMinor,
+      },
+    });
+    if (leased.count === 0) {
+      return this.settlementOf(await this.load(hold.id));
+    }
+    await this.prisma.walletPaymentFx.updateMany({
+      where: { id: fx.id, refundedAt: null },
+      data: { refundQuoteId: quote.id, refundRate: quote.rate },
+    });
+    let t: ProviderFxTransfer;
+    try {
+      t = await foreign.refundSend(hold.customerReference!, fx, account, quote);
+    } catch (e) {
+      return this.afterRefusal(hold, e, now);
+    }
+    return this.afterForeignRefund(
+      { ...hold, transferKobo: quote.amountFromMinor },
+      fx,
+      t,
+      now,
+    );
+  }
+
+  /** The provider's word on the refund move: settled, failed (a new try), or not finished yet. */
+  private async afterForeignRefund(
+    hold: HoldRow,
+    fx: WalletPaymentFx,
+    t: ProviderFxTransfer,
+    now: Date,
+  ): Promise<HoldSettlement> {
+    if (t.status === 'completed') {
+      return this.settleForeignRefund(hold, fx, t);
+    }
+    if (t.status === 'failed') return this.retryAfterFailure(hold, now);
+    await this.schedule(hold, now, 1);
+    return this.settlementOf(await this.load(hold.id));
+  }
+
+  private async reconcileForeignRefund(
+    hold: HoldRow,
+    fx: WalletPaymentFx,
+    now: Date,
+  ): Promise<HoldSettlement> {
+    const found = await this.foreign!.refundLookup(hold.customerReference!);
+    if (found.state === 'found') {
+      return this.afterForeignRefund(hold, fx, found.transfer, now);
+    }
+    return this.stillUnknown(hold, now);
+  }
+
+  /**
+   * The refund is confirmed: what went back (source currency) and what it
+   * cost WAWU (kobo) are kept on the conversion, WAWU's account gets its
+   * ledger row, and the hold is `refunded`. The buyer's own side is their
+   * account's statement at the provider, not a naira row.
+   */
+  private async settleForeignRefund(
+    hold: HoldRow,
+    fx: WalletPaymentFx,
+    t: ProviderFxTransfer,
+  ): Promise<HoldSettlement> {
+    const cost = hold.transferKobo!;
+    await this.foreign!.refundDone(fx, {
+      costKobo: cost,
+      quoteId: fx.refundQuoteId,
+      rate: fx.refundRate,
+      transferId: t.transferId,
+    });
+    try {
+      await this.ledger.record(
+        {
+          wallet: {
+            kind: 'merchant',
+            accountNumber: hold.merchantAccountNumber,
+          },
+          direction: 'out',
+          status: 'completed',
+          category: 'refund',
+          link: {
+            kind: hold.kind as PaymentKind,
+            targetId: hold.targetId,
+            title: hold.title,
+          },
+          narration: REFUND_NARRATION,
+          references: {
+            customerReference: hold.customerReference,
+            fintavaReference: t.transferId,
+            fintavaTransactionId: t.transferId,
+          },
+          paymentId: hold.paymentId,
+          source: 'send',
+          amountKobo: koboNumber(cost),
+          feeKobo: 0,
+          totalKobo: koboNumber(cost),
+          providerFeeKobo: 0,
+          wawuFeeKobo: 0,
+          counterparty: {
+            kind: 'wawu_user',
+            name: null,
+            wawuUserId: hold.payerWawuUserId,
+            accountNumber: null,
+          },
+        },
+        undefined,
+        { quiet: true },
+      );
+    } catch (e) {
+      this.logger.error(
+        `hold ${hold.id}: the ledger could not record the refund (${e instanceof Error ? e.name : 'error'})`,
+      );
+    }
+    await this.prisma.walletHold.updateMany({
+      where: { id: hold.id, status: 'held', action: 'refund' },
+      data: {
+        status: 'refunded',
+        settledAt: new Date(),
+        refundedKobo: hold.amountKobo,
+        providerFeeKobo:
+          t.feeMinor !== null && t.feeMinor >= 0n ? t.feeMinor : null,
+        waiting: null,
+        nextAttemptAt: null,
+      },
+    });
+    return this.settlementOf(await this.load(hold.id));
   }
 
   /** Still unknown: asked again later, or sent to a person past the bound. */

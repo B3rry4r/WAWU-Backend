@@ -363,14 +363,16 @@ function nullableRefAsAllOf(schema) {
 }
 
 /**
- * A field whose name ends in `Kobo` is an integer number of kobo, everywhere
+ * A field whose name ends in `Kobo` is an integer number of kobo, and one
+ * that ends in `Minor` an integer in a currency's smallest unit, everywhere
  * (docs/contract/CONVENTIONS.md section 1), but TypeScript has one `number`
  * and the checker cannot say which. The name is the contract, so the schema
- * says `integer`. The wire is unchanged, and openapi-typescript generates
+ * says `integer` (PAY-FX round 3: `PaymentSourceView` and `PaymentPaidFromView`
+ * sit outside the whole-number folders). The wire is unchanged, and openapi-typescript generates
  * `number` for both, so no generated client type changes.
  */
 function koboAsInteger(name, schema) {
-  if (!name.endsWith('Kobo') || !schema || schema.type !== 'number') return schema;
+  if (!(name.endsWith('Kobo') || name.endsWith('Minor')) || !schema || schema.type !== 'number') return schema;
   return { ...schema, type: 'integer' };
 }
 

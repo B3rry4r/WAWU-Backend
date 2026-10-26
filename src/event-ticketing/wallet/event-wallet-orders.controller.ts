@@ -10,6 +10,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { ApiPaySourceHeader } from '../../money/payments/pay-source-context';
 import { ApiBearerAuth, ApiHeader, ApiOperation } from '@nestjs/swagger';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -18,6 +19,7 @@ import { RequireFeesSet } from '../../money/fees/fees-set.guard';
 import {
   CurrentWallet,
   type OpenWallet,
+  AllowWorldWallet,
   RequireOpenWallet,
 } from '../../money/gate/wallet-gate';
 import {
@@ -76,6 +78,7 @@ export class EventWalletOrdersController {
    * one never asks for them.
    */
   @Post(':id/orders/wallet')
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
@@ -117,8 +120,10 @@ export class EventWalletOrdersController {
    * (`Idempotent-Replayed: true`) without checking the PIN.
    */
   @Post('orders/wallet/pay')
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @RequireIdempotentApproval(EVENT_ORDER_PAY_ROUTE)
+  @AllowWorldWallet()
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',
@@ -139,8 +144,9 @@ export class EventWalletOrdersController {
 
   /** The order's quote again: E3 reopened, or a quote past its `expiresAt`. */
   @Get('orders/wallet/:orderId/quote')
+  @ApiPaySourceHeader()
   @Header('Cache-Control', 'no-store')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'target_not_found',
