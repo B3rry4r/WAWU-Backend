@@ -56,11 +56,18 @@ describe('photo position fragment', () => {
       zoom: 1,
       ratio: 1,
     });
-    expect(parsePhotoPosition('wmt-pos=0.5,0.5,4,20')).toEqual({
+    // The widest and the tallest shapes kept: 1 wide to 5 tall, and 5 wide to 1 tall.
+    expect(parsePhotoPosition('wmt-pos=0.5,0.5,4,5')).toEqual({
       x: 0.5,
       y: 0.5,
       zoom: 4,
-      ratio: 20,
+      ratio: 5,
+    });
+    expect(parsePhotoPosition('wmt-pos=0.5,0.5,4,0.2')).toEqual({
+      x: 0.5,
+      y: 0.5,
+      zoom: 4,
+      ratio: 0.2,
     });
   });
 
@@ -70,7 +77,10 @@ describe('photo position fragment', () => {
     ['zoom below 1', 'wmt-pos=0.5,0.5,0.99,1'],
     ['zoom above 4', 'wmt-pos=0.5,0.5,4.01,1'],
     ['a ratio of 0', 'wmt-pos=0.5,0.5,1,0'],
-    ['a ratio above 20', 'wmt-pos=0.5,0.5,1,21'],
+    ['a ratio above 5', 'wmt-pos=0.5,0.5,1,5.01'],
+    ['a ratio of 20, once the widest', 'wmt-pos=0.5,0.5,4,20'],
+    ['a ratio below 0.2', 'wmt-pos=0.5,0.5,1,0.19'],
+    ['a ratio of 0.05, once the tallest', 'wmt-pos=0.5,0.5,4,0.05'],
     ['a negative number', 'wmt-pos=-0.1,0.5,1,1'],
     ['only three numbers', 'wmt-pos=0.5,0.5,1'],
     ['five numbers', 'wmt-pos=0.5,0.5,1,1,1'],

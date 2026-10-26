@@ -29,9 +29,14 @@ export const PHOTO_POSITION_NAME = 'wmt-pos';
 /** Zoom runs from the photo filling the frame (1) to four times that. */
 export const PHOTO_ZOOM_MIN = 1;
 export const PHOTO_ZOOM_MAX = 4;
-/** The widest and the tallest photo shape a position is kept for (a panorama of 20 to 1 is already absurd). */
-export const PHOTO_RATIO_MIN = 0.05;
-export const PHOTO_RATIO_MAX = 20;
+/**
+ * The widest and the tallest photo shape a position is kept for: 1 wide to 5 tall, and 5 wide to 1 tall. The app draws the whole
+ * photo at the size its shape and zoom give, so a shape of 0.05 at zoom 4 made an avatar element twenty times its height. Past
+ * these a photo is drawn centred, as before. The Hub cannot check the shape against the photo (it holds only the link), so it
+ * keeps the range small; the app also ignores a shape that differs from the photo it loaded.
+ */
+export const PHOTO_RATIO_MIN = 0.2;
+export const PHOTO_RATIO_MAX = 5;
 
 export interface PhotoPosition {
   x: number;

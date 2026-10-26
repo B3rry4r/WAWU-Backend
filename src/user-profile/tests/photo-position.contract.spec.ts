@@ -214,6 +214,11 @@ describe('Photo position (contract)', () => {
     ['a point off the photo', '#wmt-pos=1.5,0.5,1,1'],
     ['words', '#wmt-pos=left,top,big,wide'],
     ['three numbers', '#wmt-pos=0.5,0.5,1'],
+    [
+      'a shape far too tall (the one that drew a 384 by 7680 avatar)',
+      '#wmt-pos=0.5,0.5,4,0.05',
+    ],
+    ['a shape far too wide', '#wmt-pos=0.5,0.5,4,20'],
   ])(
     'refuses %s with a plain 400 and changes nothing',
     async (_name, fragment) => {
