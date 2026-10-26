@@ -315,6 +315,24 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // LEGAL-DOCS: which of the owner's documents the person agreed to at
+    // sign-up, the version (its effective date) and when.
+    key: 'legalAcceptances',
+    models: ['LegalAcceptance'],
+    load: async (prisma, me) => ({
+      acceptances: await prisma.legalAcceptance.findMany({
+        where: { userWawuId: me },
+        orderBy: [{ acceptedAt: 'asc' }, { slug: 'asc' }],
+        select: {
+          slug: true,
+          effectiveDate: true,
+          acceptedAt: true,
+          how: true,
+        },
+      }),
+    }),
+  },
+  {
     // FLIX-01: that the person agreed to the terms that name the movie partner
     // (and when and how), and when they first and last opened the partner's
     // site from the app. Never a link: none is stored.

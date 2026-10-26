@@ -143,7 +143,7 @@ describe('About and policies contract', () => {
   });
 
   it('a user cannot read a policy that does not exist', async () => {
-    await http().get('/api/hub/policies/cookies').expect(404);
+    await http().get('/api/hub/policies/imprint').expect(404);
   });
 
   it('a user can read About and sees no licence line or support address until the owner fills them in', async () => {
@@ -174,7 +174,7 @@ describe('About and policies contract', () => {
     await put({ ...DOC, sections: [] }).expect(400);
     await put({ ...DOC, sections: [{ heading: 'x' }] }).expect(400);
     await http()
-      .put('/api/hub/admin/policies/cookies')
+      .put('/api/hub/admin/policies/imprint')
       .set('Authorization', `Bearer ${superToken}`)
       .send(DOC)
       .expect(404);
