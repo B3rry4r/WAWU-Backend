@@ -44,6 +44,7 @@ import {
 } from './pin/pin-request-keys.service';
 import { IdempotencyGuard, IdempotencyService } from './payments/idempotency';
 import { MerchantWallet } from './payments/merchant-wallet';
+import { PaymentFxService } from './payments/payment-fx.service';
 import { HoldViewService } from './holds/hold-view.service';
 import { MoneyHoldsController } from './holds/money-holds.controller';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
@@ -400,6 +401,7 @@ import { WalletCardService } from './cards/wallet-card.service';
     IdempotencyService,
     IdempotencyGuard,
     MerchantWallet,
+    PaymentFxService,
     PayableRegistry,
     WalletPaymentService,
     TransferRecipients,

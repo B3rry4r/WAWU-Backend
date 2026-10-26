@@ -14,6 +14,7 @@ import { ApiBearerAuth } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import { PaymentDto, PaymentQuoteQueryDto } from '../dto/money-request.dto';
 import {
+  AllowWorldWallet,
   CurrentWallet,
   type OpenWallet,
   RequireOpenWallet,
@@ -61,11 +62,18 @@ export class MoneyPaymentsController {
    * payer already has an open payment for the item (a second phone),
    * `payment_in_progress` with `reason.paymentId`, as the payment itself
    * answers it: no live Pay is drawn. Every other kind is quoted as before.
+   *
+   * PAY-FX (R-91): with `sourceCurrency` (USD, GBP, EUR ...) the price stays
+   * naira and the answer carries `source`: the firm amount the buyer's own
+   * account in that currency pays for exactly that naira price, its fees and
+   * the provider's real expiry; `quoteToken` is then that quote's, `totalKobo`
+   * the naira price and `fee` zero. Absent (or `NGN`) is the naira wallet,
+   * exactly as before.
    */
   @Get('payments/quote')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('MONEY-17')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'target_not_found',
@@ -73,6 +81,11 @@ export class MoneyPaymentsController {
     'amount_out_of_range',
     'fees_not_set',
     'payment_in_progress',
+    'currency_not_supported',
+    'fx_account_not_open',
+    'rate_unavailable',
+    'provider_declined',
+    'provider_unreachable',
   )
   @RequireFeesSet()
   quote(
@@ -95,11 +108,18 @@ export class MoneyPaymentsController {
    * (`Idempotent-Replayed: true`) without checking the PIN. fees_not_set
    * comes before the wallet gate, the key and the PIN; limit_reached (WAWU's
    * limit or the provider's) before anything is sent.
+   *
+   * PAY-FX (R-91): with `sourceCurrency` the buyer's account in that currency
+   * pays at the firm quote named by `quoteToken`; WAWU converts, the naira
+   * lands in its own account and the payee is credited as for a naira
+   * payment. A quote that has run out or been used is `409 quote_changed`
+   * with a fresh one in `reason.paymentQuote`.
    */
   @Post('payments')
   @HttpCode(201)
   @BuiltBy('MONEY-17')
   @RequireIdempotentApproval(PAY_ROUTE)
+  @AllowWorldWallet()
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',
@@ -107,6 +127,10 @@ export class MoneyPaymentsController {
     'target_not_found',
     'target_not_payable',
     'payment_in_progress',
+    'currency_not_supported',
+    'fx_account_not_open',
+    'rate_unavailable',
+    'provider_declined',
   )
   @RequireFeesSet()
   pay(
@@ -132,7 +156,7 @@ export class MoneyPaymentsController {
   @Get('payments/:id')
   @Header('Cache-Control', 'no-store')
   @BuiltBy('MONEY-19')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(...WALLET_GATE_ERRORS, 'not_found')
   payment(
     @CurrentWallet() wallet: OpenWallet,

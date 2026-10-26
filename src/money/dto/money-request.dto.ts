@@ -403,6 +403,17 @@ export class PaymentQuoteQueryDto {
   @Min(1, { message: FEE_QUOTE_AMOUNT_MESSAGE })
   @Max(MAX_EXACT_KOBO, { message: FEE_QUOTE_AMOUNT_MESSAGE })
   amountKobo?: number;
+
+  /**
+   * PAY-FX (R-91): quote the price against the buyer's account in this
+   * currency (a firm quote for the exact naira price). Absent or `NGN`: the
+   * naira wallet, as before.
+   */
+  @ApiPropertyOptional({ example: 'USD' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Z]{3,5}$/, { message: 'sourceCurrency is not a currency code' })
+  sourceCurrency?: string;
 }
 
 /**
@@ -470,6 +481,18 @@ export class PaymentDto {
   @MaxLength(500)
   @IsStorableText(true)
   note?: string;
+
+  /**
+   * PAY-FX (R-91): pay from the buyer's account in this currency instead of
+   * the naira wallet. Absent (or `NGN`) is the naira wallet, exactly as
+   * before. Then `quoteToken` is the one the quote answered with
+   * `sourceCurrency` set, and `expectedTotalKobo` its `totalKobo`.
+   */
+  @ApiPropertyOptional({ example: 'USD' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Z]{3,5}$/, { message: 'sourceCurrency is not a currency code' })
+  sourceCurrency?: string;
 }
 
 /* ------------------------------------------------------------------ */

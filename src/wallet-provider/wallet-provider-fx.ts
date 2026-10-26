@@ -215,6 +215,32 @@ export interface ProviderForeignAccounts {
 
   quote(input: ProviderFxQuoteInput): Promise<ProviderFxQuote>;
 
+  /**
+   * PAY-FX (R-91): WAWU's own naira account as the SOURCE of a conversion
+   * into a person's foreign account (a refund of a payment that came from
+   * that account, in its currency, the same amount). Optional, like the rest
+   * of the provider's extras: a provider without it cannot pay such a refund
+   * back, and the Hub says so. `to` is the person's foreign account (its
+   * `ban` names it); `amountToMinor` is what must arrive, in its currency.
+   */
+  quoteFromMerchant?(input: {
+    to: ProviderFxSide;
+    amountToMinor: bigint;
+  }): Promise<ProviderFxQuote>;
+
+  /** The move that applies a `quoteFromMerchant` quote. Idempotent by `reference`. */
+  swapFromMerchant?(input: {
+    reference: string;
+    quoteId: string;
+    to: ProviderFxSide;
+    /** The quote's `amountFromMinor`, in kobo. */
+    amountFromMinor: bigint;
+    narration?: string;
+  }): Promise<ProviderFxTransfer>;
+
+  /** Finds a move made from WAWU's own naira account by its reference. */
+  findMerchantTransfer?(reference: string): Promise<ProviderFxTransferLookup>;
+
   /** A book transfer between two of the person's accounts at the quoted rate. Idempotent by `reference`. */
   swap(input: ProviderFxSwapInput): Promise<ProviderFxTransfer>;
 

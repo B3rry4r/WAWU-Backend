@@ -17466,6 +17466,17 @@
               "maximum": 9007199254740991,
               "type": "integer"
             }
+          },
+          {
+            "name": "sourceCurrency",
+            "required": false,
+            "in": "query",
+            "description": "PAY-FX (R-91): quote the price against the buyer's account in this\ncurrency (a firm quote for the exact naira price). Absent or `NGN`: the\nnaira wallet, as before.",
+            "schema": {
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -17500,7 +17511,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable, payment_in_progress",
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable, payment_in_progress, currency_not_supported, fx_account_not_open, rate_unavailable, provider_declined",
             "content": {
               "application/json": {
                 "schema": {
@@ -17520,7 +17531,7 @@
             }
           },
           "503": {
-            "description": "reason.code: fees_not_set",
+            "description": "reason.code: fees_not_set, provider_unreachable",
             "content": {
               "application/json": {
                 "schema": {
@@ -17535,7 +17546,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "What the pay sheet shows before the PIN (H14, H17): the price from the\nserver's own record of the item, the wallet provider's charge, the\ntotal, the balance and the shortfall, and a signed quote the payment\nsends back. Nothing is reserved. A total above MERCHANT_MAX_PER_TXN_KOBO\nis amount_out_of_range. A kind whose feature has not moved onto the\nwallet yet, or an item not priced in naira, is target_not_payable.\nWhile the running provider's fees are not set, fees_not_set before\nanything else (NUV-07); `withinDailyLimit` and `remainingTodayKobo` say\nwhere today's purchase limit stands. For a school fee (FIX-58), when the\npayer already has an open payment for the item (a second phone),\n`payment_in_progress` with `reason.paymentId`, as the payment itself\nanswers it: no live Pay is drawn. Every other kind is quoted as before.",
+        "summary": "What the pay sheet shows before the PIN (H14, H17): the price from the\nserver's own record of the item, the wallet provider's charge, the\ntotal, the balance and the shortfall, and a signed quote the payment\nsends back. Nothing is reserved. A total above MERCHANT_MAX_PER_TXN_KOBO\nis amount_out_of_range. A kind whose feature has not moved onto the\nwallet yet, or an item not priced in naira, is target_not_payable.\nWhile the running provider's fees are not set, fees_not_set before\nanything else (NUV-07); `withinDailyLimit` and `remainingTodayKobo` say\nwhere today's purchase limit stands. For a school fee (FIX-58), when the\npayer already has an open payment for the item (a second phone),\n`payment_in_progress` with `reason.paymentId`, as the payment itself\nanswers it: no live Pay is drawn. Every other kind is quoted as before.\n\nPAY-FX (R-91): with `sourceCurrency` (USD, GBP, EUR ...) the price stays\nnaira and the answer carries `source`: the firm amount the buyer's own\naccount in that currency pays for exactly that naira price, its fees and\nthe provider's real expiry; `quoteToken` is then that quote's, `totalKobo`\nthe naira price and `fee` zero. Absent (or `NGN`) is the naira wallet,\nexactly as before.",
         "tags": [
           "MoneyPayments"
         ],
@@ -17639,7 +17650,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress, currency_not_supported, fx_account_not_open, rate_unavailable, provider_declined",
             "content": {
               "application/json": {
                 "schema": {
@@ -17674,7 +17685,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Pay from the wallet: the price from the buyer's wallet to WAWU's own\naccount at the wallet provider (R-19, R-42), the provider's charge on\ntop (R-10), the 85/15 split of the price recorded with it (R-5). Answers\n201 with the payment: completed, pending when the provider has not\nconfirmed the debit yet (H18, E10; it is never sent again blindly), or\nfailed when the provider refused it and nothing moved. The same\nIdempotency-Key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN. fees_not_set\ncomes before the wallet gate, the key and the PIN; limit_reached (WAWU's\nlimit or the provider's) before anything is sent.",
+        "summary": "Pay from the wallet: the price from the buyer's wallet to WAWU's own\naccount at the wallet provider (R-19, R-42), the provider's charge on\ntop (R-10), the 85/15 split of the price recorded with it (R-5). Answers\n201 with the payment: completed, pending when the provider has not\nconfirmed the debit yet (H18, E10; it is never sent again blindly), or\nfailed when the provider refused it and nothing moved. The same\nIdempotency-Key and body answer the first result again\n(`Idempotent-Replayed: true`) without checking the PIN. fees_not_set\ncomes before the wallet gate, the key and the PIN; limit_reached (WAWU's\nlimit or the provider's) before anything is sent.\n\nPAY-FX (R-91): with `sourceCurrency` the buyer's account in that currency\npays at the firm quote named by `quoteToken`; WAWU converts, the naira\nlands in its own account and the payee is credited as for a naira\npayment. A quote that has run out or been used is `409 quote_changed`\nwith a fresh one in `reason.paymentQuote`.",
         "tags": [
           "MoneyPayments"
         ],
@@ -47110,6 +47121,12 @@
             "minimum": 1,
             "maximum": 9007199254740991
           },
+          "sourceCurrency": {
+            "type": "string",
+            "description": "PAY-FX (R-91): pay from the buyer's account in this currency instead of\nthe naira wallet. Absent (or `NGN`) is the naira wallet, exactly as\nbefore. Then `quoteToken` is the one the quote answered with\n`sourceCurrency` set, and `expectedTotalKobo` its `totalKobo`.",
+            "pattern": "^[A-Z]{3,5}$",
+            "example": "USD"
+          },
           "quoteToken": {
             "type": "string",
             "description": "`quoteToken` from that payment quote (MONEY-17, BACKEND_GAPS G-64): the\nserver checks it is its own, for this person and this price, and not\npast `expiresAt`; otherwise `409 quote_changed` with the new quote.",
@@ -53510,6 +53527,55 @@
           "nextCursor"
         ]
       },
+      "PaymentSourceView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "decimals": {
+            "type": "number"
+          },
+          "amountMinor": {
+            "type": "number"
+          },
+          "providerFeeMinor": {
+            "type": "number"
+          },
+          "wawuFeeMinor": {
+            "type": "number"
+          },
+          "totalMinor": {
+            "type": "number"
+          },
+          "rate": {
+            "type": "string"
+          },
+          "availableMinor": {
+            "type": "number",
+            "nullable": true
+          },
+          "shortfallMinor": {
+            "type": "number",
+            "nullable": true
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "currency",
+          "decimals",
+          "amountMinor",
+          "providerFeeMinor",
+          "wawuFeeMinor",
+          "totalMinor",
+          "rate",
+          "availableMinor",
+          "shortfallMinor",
+          "expiresAt"
+        ]
+      },
       "PaymentQuoteView": {
         "type": "object",
         "properties": {
@@ -53580,6 +53646,14 @@
           },
           "expiresAt": {
             "type": "string"
+          },
+          "source": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaymentSourceView"
+              }
+            ],
+            "nullable": true
           }
         },
         "required": [
@@ -53597,6 +53671,46 @@
           "remainingTodayKobo",
           "quoteToken",
           "expiresAt"
+        ]
+      },
+      "PaymentPaidFromView": {
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "decimals": {
+            "type": "number"
+          },
+          "amountMinor": {
+            "type": "number"
+          },
+          "providerFeeMinor": {
+            "type": "number"
+          },
+          "wawuFeeMinor": {
+            "type": "number"
+          },
+          "totalMinor": {
+            "type": "number"
+          },
+          "rate": {
+            "type": "string"
+          },
+          "refundedMinor": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "currency",
+          "decimals",
+          "amountMinor",
+          "providerFeeMinor",
+          "wawuFeeMinor",
+          "totalMinor",
+          "rate",
+          "refundedMinor"
         ]
       },
       "PaymentView": {
@@ -53677,6 +53791,14 @@
           },
           "completedAt": {
             "type": "string",
+            "nullable": true
+          },
+          "source": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PaymentPaidFromView"
+              }
+            ],
             "nullable": true
           }
         },

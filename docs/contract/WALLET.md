@@ -694,3 +694,43 @@ what Nuvion serves:
 
 The W1 card summary and the W35 Cards row are drawn only while
 `GET /money/cards` answers `enabled: true`.
+
+## 8. Paying a naira price from another currency (PAY-FX; R-91)
+
+Every price stays one naira price. A buyer whose money is in another currency
+(a person outside Nigeria, R-87, or a Nigerian who added a dollar account)
+pays it from their own account; WAWU converts at the provider's rate at the
+moment of payment, the naira lands in WAWU's own account, and the payee
+receives naira exactly as today (85/15, deliver or refund, receipts).
+
+| Step | Route | What changes |
+|---|---|---|
+| Quote | `GET /money/payments/quote?...&sourceCurrency=USD` | Optional `sourceCurrency`. Absent or `NGN` is the naira wallet, byte for byte as before. With it, `source` carries the firm amount in that currency for exactly the naira price (`amountMinor`), `providerFeeMinor` and `wawuFeeMinor` (config, 0 unless set), `totalMinor`, `rate`, `decimals`, the account's `availableMinor` and `shortfallMinor`, and the provider's own `expiresAt`. `quoteToken` is the firm quote's (`fx.<id>`), `totalKobo` the naira price, `fee` zero. |
+| Pay | `POST /money/payments` | Optional `sourceCurrency` with the `quoteToken` and `expectedTotalKobo` the quote answered. A quote that is used or has run out is `409 quote_changed` with a fresh quote in `reason.paymentQuote`. `PaymentView.source` says what the payment took (and `refundedMinor` once refunded). |
+| Poll | `GET /money/payments/{id}` | Also served to a person with no naira account. |
+
+Who may pay this way: any person with an open fiat account in `sourceCurrency`
+(`fx_account_not_open` otherwise; `currency_not_supported` for a code that is
+not a fiat currency of ours or is switched off). A person with no naira
+account who asks for the naira way is told so, as before (`wallet_not_open`).
+
+What Nuvion allowed (dev, 26 Oct 2026, mobile `docs/nuvion/DEV-RESULTS.md`
+"PAY-FX"): `POST /fx-quotes` from the buyer's account with `amount_to` set to
+the naira price (rounded UP to whole cents), then `POST /transfers`
+book-transfer from that account with `currency` the account's, `amount` the
+quote's `amount_from`, `fx_quote_id`, `nuvion_ban` WAWU's operational account.
+Exactly `amount_to` kobo lands. Fee 0. A used quote is `error_fx_quote_used`,
+another amount `error_fx_quote_amount_mismatch`; the hold time is Nuvion's
+(179 s on dev), read from the quote.
+
+Fees (R-10): WAWU's conversion fee is `PAYMENT_FX_FEE_<CODE>_MINOR` (default
+0; paid to `FX_FEE_COLLECTOR_<CODE>_BAN`); the provider's charge on the move
+is shown from `PAYMENT_FX_PROVIDER_FEE_<CODE>_MINOR` (default 0, Nuvion names
+none on dev) and anything more that Nuvion's record reports is kept on the
+payment for review. Nuvion's spread is inside the rate, shown as it is.
+
+Refunds (Default (lead), owner may override): back to the same account, in
+that currency, the same amount taken. WAWU pays the reverse conversion
+(a firm quote from its operational account with no `entity_id`, then the move
+under the hold's own reference), so the naira it costs differs from the naira
+the payment brought in: on dev 23 cents back cost 31,040 kobo for 30,000.
