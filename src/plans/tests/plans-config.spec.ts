@@ -239,7 +239,7 @@ describe('plans.config.json (TIER-01)', () => {
     it.each<[string, (text: string) => string, string]>([
       [
         'a price written twice (the old line left in place)',
-        (t) => t.replace('"kobo": 100000,', '"kobo": 100000, "kobo": 1,'),
+        (t) => t.replace('"kobo": 299900,', '"kobo": 299900, "kobo": 1,'),
         'tiers[0].price.kobo is written twice',
       ],
       [

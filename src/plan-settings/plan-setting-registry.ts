@@ -407,7 +407,6 @@ export function buildRegistry(
       label: `${t.name}: how long it lasts`,
       unit: 'days',
       usedBy: TIER_USED.days,
-      provisional: BOARD,
       default: t.days,
       parse: days,
       apply: (d, v) => {
