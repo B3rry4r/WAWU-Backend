@@ -20,6 +20,15 @@ import { MoneyError } from '../../src/money/money-error';
 import { MoneyModule } from '../../src/money/money.module';
 import { PayableRegistry } from '../../src/money/payments/payable-registry';
 import { WALLET_PROVIDER } from '../../src/wallet-provider/wallet-provider.interface';
+import { WalletProviderError } from '../../src/wallet-provider/wallet-provider-error';
+import type {
+  ProviderForeignAccounts,
+  ProviderFxAccount,
+  ProviderFxQuote,
+  ProviderFxSide,
+  ProviderFxTransfer,
+  ProviderFxTransferLookup,
+} from '../../src/wallet-provider/wallet-provider-fx';
 
 /**
  * What PAY-FX's two runs share: the Hub's real MoneyModule over a real
@@ -184,5 +193,289 @@ export function registerPfxItems(
         delivered.push(p);
       },
     });
+  }
+}
+
+/** Dev, 26 Oct 2026: USD to NGN 1315.440043 kobo per cent; NGN to USD 0.000741 cents per kobo. */
+const SELL = 1315.440043;
+const BUY = 0.000741;
+
+export interface FakeAccount {
+  accountId: string;
+  entityId: string;
+  currency: string;
+  ban: string;
+  available: bigint;
+}
+interface FakeQuote {
+  id: string;
+  from: string;
+  fromMerchant: boolean;
+  amountFrom: bigint;
+  amountTo: bigint;
+  used: boolean;
+  expiresAt: Date;
+}
+interface FakeTransfer {
+  transferId: string;
+  reference: string;
+  status: 'pending' | 'completed' | 'failed';
+  apply: () => void;
+}
+
+const id26 = (prefix: string, n: number) =>
+  `${prefix}${String(n).padStart(26 - prefix.length, '0')}`;
+
+/** Nuvion's foreign accounts as dev answered them, in memory. */
+export class FakeFx implements ProviderForeignAccounts {
+  readonly currencies = ['USD', 'GBP', 'EUR'] as const;
+  readonly accounts = new Map<string, FakeAccount>();
+  readonly quotes = new Map<string, FakeQuote>();
+  readonly transfers: FakeTransfer[] = [];
+  merchantKobo = 0n;
+  /** What a same-currency move (WAWU's conversion fee) delivered, by the receiver's routing number. */
+  readonly collected = new Map<string, bigint>();
+  /** What the next swap (either way) does. */
+  mode: 'completed' | 'pending' | 'failed' | 'lost' = 'completed';
+  /** Seconds a new quote is held. */
+  holdSeconds = 179;
+  private n = 0;
+  constructor(private readonly merchantBan: string) {}
+
+  private next(prefix: string) {
+    this.n += 1;
+    return id26(prefix, this.n);
+  }
+  open(entityId: string, currency: string, cents: bigint): FakeAccount {
+    const a = {
+      accountId: this.next('01FAKEACC'),
+      entityId,
+      currency,
+      ban: `00${String(1_000_000 + this.n)}`,
+      available: cents,
+    };
+    this.accounts.set(a.accountId, a);
+    return a;
+  }
+  openAccount(): never {
+    throw new Error('not used');
+  }
+  readDetails(): never {
+    throw new Error('not used');
+  }
+  send(): never {
+    throw new Error('not used');
+  }
+  statement(): never {
+    throw new Error('not used');
+  }
+
+  readAccount(_person: unknown, accountId: string): Promise<ProviderFxAccount> {
+    const a = this.accounts.get(accountId)!;
+    return Promise.resolve({
+      accountId,
+      currency: a.currency,
+      ban: a.ban,
+      availableMinor: a.available,
+      bookedMinor: a.available,
+    });
+  }
+
+  private newQuote(
+    from: string,
+    fromMerchant: boolean,
+    amountFrom: bigint,
+    amountTo: bigint,
+    rate: number,
+  ): ProviderFxQuote {
+    const q: FakeQuote = {
+      id: this.next('01FAKEQ'),
+      from,
+      fromMerchant,
+      amountFrom,
+      amountTo,
+      used: false,
+      expiresAt: new Date(Date.now() + this.holdSeconds * 1000),
+    };
+    this.quotes.set(q.id, q);
+    return {
+      id: q.id,
+      amountFromMinor: amountFrom,
+      amountToMinor: amountTo,
+      rate: String(rate),
+      expiresAt: q.expiresAt,
+      feeMinor: null,
+    };
+  }
+
+  quote(input: {
+    from: ProviderFxSide;
+    amountToMinor?: bigint;
+  }): Promise<ProviderFxQuote> {
+    const to = input.amountToMinor!;
+    const cents = BigInt(Math.ceil(Number(to) / SELL));
+    return Promise.resolve(
+      this.newQuote(input.from.currency, false, cents, to, SELL),
+    );
+  }
+
+  quoteFromMerchant(input: {
+    to: ProviderFxSide;
+    amountToMinor: bigint;
+  }): Promise<ProviderFxQuote> {
+    const kobo = BigInt(Math.ceil(Number(input.amountToMinor) / BUY));
+    return Promise.resolve(
+      this.newQuote('NGN', true, kobo, input.amountToMinor, BUY),
+    );
+  }
+
+  private move(
+    reference: string,
+    quoteId: string,
+    amount: bigint,
+    apply: () => void,
+  ): ProviderFxTransfer {
+    const q = this.quotes.get(quoteId);
+    const refuse = (why: string) =>
+      new WalletProviderError({
+        kind: 'refused',
+        provider: 'nuvion',
+        operation: 'fx',
+        messages: [why],
+      });
+    if (!q) throw refuse('no such quote');
+    if (q.used) throw refuse('This FX quote has already been used.');
+    if (q.amountFrom !== amount) throw refuse("The amount doesn't match.");
+    if (this.mode === 'lost') {
+      throw new WalletProviderError({
+        kind: 'outcome_unknown',
+        provider: 'nuvion',
+        operation: 'fx',
+        reference,
+      });
+    }
+    q.used = true;
+    const t: FakeTransfer = {
+      transferId: this.next('01FAKETR'),
+      reference,
+      status: this.mode,
+      apply,
+    };
+    this.transfers.push(t);
+    if (t.status === 'completed') apply();
+    return {
+      transferId: t.transferId,
+      reference,
+      status: t.status,
+      feeMinor: 0n,
+      failureReason: t.status === 'failed' ? 'declined' : null,
+    };
+  }
+
+  async swap(input: {
+    reference: string;
+    quoteId: string | null;
+    from: ProviderFxSide;
+    to: ProviderFxSide;
+    amountFromMinor: bigint;
+  }): Promise<ProviderFxTransfer> {
+    await Promise.resolve();
+    const from = this.accounts.get(input.from.accountId!)!;
+    if (input.quoteId === null) {
+      // A move in one currency with no quote: WAWU's conversion fee to its collector.
+      from.available -= input.amountFromMinor;
+      const ban = input.to.ban!;
+      this.collected.set(
+        ban,
+        (this.collected.get(ban) ?? 0n) + input.amountFromMinor,
+      );
+      const t: FakeTransfer = {
+        transferId: this.next('01FAKETR'),
+        reference: input.reference,
+        status: 'completed',
+        apply: () => undefined,
+      };
+      this.transfers.push(t);
+      return {
+        transferId: t.transferId,
+        reference: input.reference,
+        status: 'completed',
+        feeMinor: 0n,
+        failureReason: null,
+      };
+    }
+    if (from.available < input.amountFromMinor) {
+      throw new WalletProviderError({
+        kind: 'insufficient_funds',
+        provider: 'nuvion',
+        operation: 'fx',
+      });
+    }
+    const q = this.quotes.get(input.quoteId)!;
+    return this.move(
+      input.reference,
+      input.quoteId,
+      input.amountFromMinor,
+      () => {
+        from.available -= input.amountFromMinor;
+        if (input.to.ban === this.merchantBan) this.merchantKobo += q.amountTo;
+      },
+    );
+  }
+
+  async swapFromMerchant(input: {
+    reference: string;
+    quoteId: string;
+    to: ProviderFxSide;
+    amountFromMinor: bigint;
+  }): Promise<ProviderFxTransfer> {
+    await Promise.resolve();
+    const q = this.quotes.get(input.quoteId)!;
+    const to = [...this.accounts.values()].find((a) => a.ban === input.to.ban)!;
+    return this.move(
+      input.reference,
+      input.quoteId,
+      input.amountFromMinor,
+      () => {
+        this.merchantKobo -= input.amountFromMinor;
+        to.available += q.amountTo;
+      },
+    );
+  }
+
+  private lookup(pred: (t: FakeTransfer) => boolean): ProviderFxTransferLookup {
+    const t = this.transfers.find(pred);
+    return t
+      ? {
+          state: 'found',
+          transfer: {
+            transferId: t.transferId,
+            reference: t.reference,
+            status: t.status,
+            feeMinor: 0n,
+            failureReason: null,
+          },
+        }
+      : { state: 'absent' };
+  }
+  findTransferByReference(
+    _p: unknown,
+    _a: string,
+    reference: string,
+  ): Promise<ProviderFxTransferLookup> {
+    return Promise.resolve(this.lookup((t) => t.reference === reference));
+  }
+  readTransfer(_p: unknown, id: string): Promise<ProviderFxTransferLookup> {
+    return Promise.resolve(this.lookup((t) => t.transferId === id));
+  }
+  findMerchantTransfer(reference: string): Promise<ProviderFxTransferLookup> {
+    return Promise.resolve(this.lookup((t) => t.reference === reference));
+  }
+
+  /** The provider finishes a transfer it had left pending. */
+  finish(reference: string, to: 'completed' | 'failed'): void {
+    const t = this.transfers.find((x) => x.reference === reference)!;
+    t.status = to;
+    if (to === 'completed') t.apply();
   }
 }

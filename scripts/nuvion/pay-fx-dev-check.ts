@@ -10,6 +10,7 @@
  *   PFX_BUYER_ENTITY=<dev entity with a USD account and no naira account> PFX_BUYER_USD=<its USD account id> \
  *   PFX_BUYER_BAN=<its routing number> PFX_NAIRA_ENTITY=<dev entity with naira> PFX_NAIRA_ACCOUNT=<its naira account id> \
  *   PFX_PAYEE_ENTITY=<dev entity> PFX_PAYEE_ACCOUNT=<its naira account id> \
+ *   [PFX_FEE_MINOR=5 PFX_FEE_COLLECTOR_ACCOUNT=<WAWU's dev USD account id> PFX_FEE_COLLECTOR_BAN=<its routing number>] \
  *     npx ts-node --transpile-only \
  *       -O '{"module":"commonjs","moduleResolution":"node","resolvePackageJsonExports":false}' \
  *       scripts/nuvion/pay-fx-dev-check.ts
@@ -89,6 +90,16 @@ async function main(): Promise<number> {
   const payeeEntity = need('PFX_PAYEE_ENTITY');
   const payeeAccount = need('PFX_PAYEE_ACCOUNT');
 
+  // WAWU's conversion fee above 0 (cents), collected into WAWU's own dev dollar account.
+  const feeMinor = Number(env.PFX_FEE_MINOR ?? '0');
+  const feeAccount = env.PFX_FEE_COLLECTOR_ACCOUNT;
+  const feeBan = env.PFX_FEE_COLLECTOR_BAN;
+  if (feeMinor > 0 && (!feeAccount || !feeBan)) {
+    console.error(
+      'Refused: a fee needs PFX_FEE_COLLECTOR_ACCOUNT and PFX_FEE_COLLECTOR_BAN.',
+    );
+    return 2;
+  }
   const { settings, apiKey } = readNuvionSettings((k) => env[k]);
   const client = new NuvionClient(settings, apiKey);
   const prisma = new PrismaService();
@@ -101,6 +112,12 @@ async function main(): Promise<number> {
     NUVION_API_KEY: apiKey,
     NUVION_OPERATIONAL_ACCOUNT_ID: settings.operationalAccountId,
     NUVION_WEBHOOK_SECRET: env.NUVION_WEBHOOK_SECRET!,
+    ...(feeMinor > 0
+      ? {
+          PAYMENT_FX_FEE_USD_MINOR: String(feeMinor),
+          FX_FEE_COLLECTOR_USD_BAN: feeBan!,
+        }
+      : {}),
   });
   const app = booted.app;
   const users: string[] = [];
@@ -256,6 +273,16 @@ async function main(): Promise<number> {
         })
       ).availableKobo;
 
+    const collectorUsd = async () => {
+      if (!feeAccount) return 0n;
+      const a = await client.get<unknown>(
+        { name: 'collector account', call: 'read' },
+        `/accounts/${feeAccount}`,
+      );
+      const d = a.data as { account?: { balance?: { available?: number } } };
+      return BigInt(d.account?.balance?.available ?? 0);
+    };
+    const collector0 = await collectorUsd();
     // The earnings sweep takes sales from its start on: fix the start now.
     await earnings.sweepStart();
 
@@ -272,6 +299,12 @@ async function main(): Promise<number> {
         qd.q.source.currency === 'USD' &&
         qd.q.source.amountMinor > 0,
       `price ${qd.q.priceKobo} kobo, source ${JSON.stringify({ ...qd.q.source, rate: qd.q.source?.rate })}`,
+    );
+    row(
+      'quote: WAWU conversion fee is shown (0 unless set) and counted in the total',
+      qd.q.source?.wawuFeeMinor === feeMinor &&
+        qd.q.source?.totalMinor === qd.q.source.amountMinor + feeMinor,
+      `fee ${qd.q.source?.wawuFeeMinor}, total ${qd.q.source?.totalMinor} cents`,
     );
     const paid = await pay(worldAuth, qd.q, 'USD');
     const pv = paid.body.data;
@@ -300,6 +333,19 @@ async function main(): Promise<number> {
         prow.fx?.sourceAmountMinor === BigInt(qd.q.source!.amountMinor),
       `fee in ${prow.fx?.providerFeeMinor ?? 0n} provider, ${prow.fx?.wawuFeeMinor} WAWU (cents); transfer ${tail(prow.fx?.providerTransferId)}`,
     );
+
+    if (feeMinor > 0) {
+      const feeRow = await prisma.walletPaymentFx.findUniqueOrThrow({
+        where: { paymentId: pv.id },
+      });
+      const collector1 = await collectorUsd();
+      row(
+        "WAWU's fee was charged and collected once",
+        feeRow.feeLeg === 'done' &&
+          collector1 - collector0 === BigInt(feeMinor),
+        `feeLeg ${feeRow.feeLeg}; WAWU dollar account ${collector0} -> ${collector1} cents (+${collector1 - collector0})`,
+      );
+    }
 
     // ---- 2. the payee is credited as for any sale
     const payeeBefore = (
