@@ -19,7 +19,7 @@
     "ABROAD-FOREIGN-FEE": "WALLET-42: R-10 says the user pays the provider's fee plus WAWU's on top, from config, and no ruling names WAWU's fee for a send from a foreign account. None until the owner names it (a fee of 0 per currency and way). It is taken from the same foreign account the money leaves, in that currency, for everyone (lead ruling, owner may override): the fee follows the source account, and a send from the naira wallet keeps the naira fee above.",
     "ABROAD-LIMITS": "NUV-11: no ruling or board names a most per send or per day for sending abroad. None until the owner names them (the provider's own limits still apply); an admin may set one per currency.",
     "ABROAD-CORRIDORS": "NUV-11: on 24 Oct 2026 Nuvion's dev server refused a transfer to Uganda, Mexico, Singapore and Hong Kong (\"not supported for currency yet\"). They are listed as not available until an admin empties this list, which is the day Nuvion switches them on.",
-    "CAPITAL-ENABLED": "NUV-12 (owner-asked control): Capital is on by default, as the owner asked on 24 Oct 2026 (R-84). An admin can switch it off here (0): new orders close (the product list, a reservation and a confirmation answer that Capital is not available) and a person with nothing held loses the Wallet tab row, but what a person already holds can still be read and withdrawn, and the row stays for them."
+    "CAPITAL-ENABLED": "CAPITAL-OFF (R-97, owner, 26 Oct 2026): WAWU offers no investments, so Capital (fixed returns and shares, NUV-12) is OFF by default. An admin can still switch it on here (1). Off, new orders are closed (the product list, a reservation and a confirmation answer that Capital is not available) and a person who holds nothing never sees Capital; what a person already holds can still be read and withdrawn. Before R-97 the default was on (R-84, 24 Oct 2026)."
   },
   "values": {
     "ai.sfx_max_seconds": 30,
@@ -170,6 +170,6 @@
     "plan.event_name": [
       "Christmas event"
     ],
-    "capital.enabled": 1
+    "capital.enabled": 0
   }
 }
