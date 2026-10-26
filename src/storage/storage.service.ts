@@ -20,6 +20,7 @@ import {
   type UploadFormatId,
 } from './dto/presign-upload.dto';
 import { formatFolderRule } from './upload-formats';
+import { keepPhotoPosition } from './photo-position';
 import { deleteFromBucket } from './bucket-delete';
 import { createStorageClient } from './storage-client';
 import { releaseOwnUpload } from './upload-release';
@@ -722,7 +723,9 @@ export class StorageService {
     if (!this.client) return stored;
     const key = objectKeyFrom(stored);
     try {
-      return await this.readUrlFor(key);
+      // A profile picture's position (R-96) rides on the link as a fragment:
+      // signing gives a fresh link without it, so it is put back.
+      return keepPhotoPosition(stored, await this.readUrlFor(key));
     } catch (e) {
       this.logger.warn(
         `Could not refresh storage URL for ${key}: ${String(e)}`,
