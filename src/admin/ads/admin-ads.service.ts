@@ -44,6 +44,7 @@ import { resolveCta, type CtaFields } from './ad-destination';
 import { resolvePictures, type PictureColumns } from './ad-pictures-input';
 import {
   hasAnyPicture,
+  holdsShapes,
   picturesOf,
   showsIn,
   showsInWhere,
@@ -146,7 +147,11 @@ function snapshotOf(
 ): Snapshot {
   return {
     advertiser: campaign.advertiser,
-    placement: campaign.placement,
+    // A booking with the two shapes has only a derived placement (R-92): its
+    // places follow from its pictures, so the history does not record it.
+    placement: holdsShapes({ placement: campaign.placement, creative })
+      ? null
+      : campaign.placement,
     startsAt: campaign.startsAt.toISOString(),
     endsAt: campaign.endsAt.toISOString(),
     weight: campaign.weight,

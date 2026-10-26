@@ -542,6 +542,15 @@ describe('Ads have two shapes: landscape and portrait (ADS-LINK round 2, R-92)',
       const entry = res.body.data.audit;
       expect(entry.changes.portraitUrl).toEqual({ from: null, to: PORT });
       expect(entry.changes.landscapeUrl).toBeUndefined();
+      // The placement stored for a booking with pictures is only derived, so
+      // the history does not record it.
+      expect(entry.changes.placement).toBeUndefined();
+      const dropped = await patch(c.id, { landscapeUrl: null });
+      expect(dropped.body.data.audit.changes.placement).toBeUndefined();
+      expect(dropped.body.data.audit.changes.landscapeUrl).toEqual({
+        from: LAND,
+        to: null,
+      });
     });
   });
 
