@@ -452,6 +452,35 @@ describe('Pay a naira price from another currency (PAY-FX, R-91)', () => {
     expect(nrow.fx).toBeNull();
   });
 
+  it('the account that pays can ride on a header every paying route reads (X-Pay-Source-Currency)', async () => {
+    const p = await buyer(500n);
+    const q = await request(app.getHttpServer())
+      .get(`${BASE}/quote?kind=content_unlock&targetId=n-${randomUUID()}`)
+      .set('Authorization', p.auth)
+      .set('X-Pay-Source-Currency', 'USD');
+    expect(q.status).toBe(200);
+    const view = body<PaymentQuoteView>(q).data!;
+    expect(view.source?.currency).toBe('USD');
+    const res = await request(app.getHttpServer())
+      .post(BASE)
+      .set('Authorization', p.auth)
+      .set('X-Pay-Source-Currency', 'USD')
+      .set('Idempotency-Key', randomUUID())
+      .set('X-Transaction-Pin', PIN)
+      .send({
+        kind: view.kind,
+        targetId: view.targetId,
+        expectedTotalKobo: view.totalKobo,
+        quoteToken: view.quoteToken,
+      });
+    expect(res.status).toBe(201);
+    expect(body<PaymentView>(res).data!.source?.currency).toBe('USD');
+    expect(p.usd.available).toBe(477n);
+    // The header does not leak to the next request: without it, the naira way.
+    const next = await quote(p, 'content_unlock', `n-${randomUUID()}`);
+    expect(next.status).toBe(409);
+  });
+
   it('a person with no naira account who asks for the naira way is told so, as before', async () => {
     const p = await buyer(500n);
     const res = await quote(p, 'content_unlock', `n-${randomUUID()}`);

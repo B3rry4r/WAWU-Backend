@@ -734,3 +734,14 @@ that currency, the same amount taken. WAWU pays the reverse conversion
 (a firm quote from its operational account with no `entity_id`, then the move
 under the hold's own reference), so the naira it costs differs from the naira
 the payment brought in: on dev 23 cents back cost 31,040 kobo for 30,000.
+
+**One header for every paying route.** The wallet payments of each feature (an
+unlock, a tip, a paid question, an event order, a legal fee, a school fee, a
+community pass, a chat request) wrap the same payment service, so the account
+that pays rides on `X-Pay-Source-Currency: USD` for all of them, on both the
+quote and the payment (a body's own `sourceCurrency` on `/money/payments` wins).
+Absent or `NGN` is the naira wallet. Their quote answers carry the same
+`payment.source`, and their payment answers `payment.source`. These routes also
+take a person who has no naira account (a world wallet) when the header is
+sent; without it they are `409 wallet_not_open`, as before.
+

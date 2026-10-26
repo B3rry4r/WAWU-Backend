@@ -17,6 +17,7 @@ import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import {
   CurrentWallet,
   type OpenWallet,
+  AllowWorldWallet,
   RequireOpenWallet,
 } from '../../money/gate/wallet-gate';
 import {
@@ -54,7 +55,7 @@ export class TipWalletController {
    */
   @Get('quote')
   @Header('Cache-Control', 'no-store')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'target_not_found',
@@ -83,6 +84,7 @@ export class TipWalletController {
   @Post()
   @HttpCode(201)
   @RequireIdempotentApproval(TIP_WALLET_ROUTE)
+  @AllowWorldWallet()
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',

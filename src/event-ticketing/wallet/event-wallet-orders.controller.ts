@@ -18,6 +18,7 @@ import { RequireFeesSet } from '../../money/fees/fees-set.guard';
 import {
   CurrentWallet,
   type OpenWallet,
+  AllowWorldWallet,
   RequireOpenWallet,
 } from '../../money/gate/wallet-gate';
 import {
@@ -119,6 +120,7 @@ export class EventWalletOrdersController {
   @Post('orders/wallet/pay')
   @HttpCode(201)
   @RequireIdempotentApproval(EVENT_ORDER_PAY_ROUTE)
+  @AllowWorldWallet()
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',
@@ -140,7 +142,7 @@ export class EventWalletOrdersController {
   /** The order's quote again: E3 reopened, or a quote past its `expiresAt`. */
   @Get('orders/wallet/:orderId/quote')
   @Header('Cache-Control', 'no-store')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'target_not_found',

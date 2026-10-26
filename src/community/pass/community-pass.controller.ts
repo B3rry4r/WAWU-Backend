@@ -17,6 +17,7 @@ import { RequireFeesSet } from '../../money/fees/fees-set.guard';
 import {
   CurrentWallet,
   type OpenWallet,
+  AllowWorldWallet,
   RequireOpenWallet,
 } from '../../money/gate/wallet-gate';
 import {
@@ -73,7 +74,7 @@ export class CommunityPassController {
    */
   @Get(':id/pass/quote')
   @Header('Cache-Control', 'no-store')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'target_not_found',
@@ -103,6 +104,7 @@ export class CommunityPassController {
   @Post(':id/pass')
   @HttpCode(201)
   @RequireIdempotentApproval(COMMUNITY_PASS_ROUTE)
+  @AllowWorldWallet()
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',

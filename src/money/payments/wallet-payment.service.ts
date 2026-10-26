@@ -79,6 +79,7 @@ import { MoneyLimits } from '../limits/money-limits.service';
 import { PaymentSettings, splitPrice } from './payment-config';
 import { completedFigures, joinNotes } from './payment-figures';
 import { PaymentFxService } from './payment-fx.service';
+import { currentPaySource } from './pay-source-context';
 import type { ProviderFxTransfer } from '../../wallet-provider/wallet-provider-fx';
 
 /** The route a payment's Idempotency-Key is scoped to. */
@@ -415,7 +416,7 @@ export class WalletPaymentService implements OnModuleInit {
     q: PaymentQuoteQueryDto,
     options: { refuseIfOpen?: boolean } = {},
   ): Promise<PaymentQuoteView> {
-    const code = foreignCode(q.sourceCurrency);
+    const code = foreignCode(q.sourceCurrency ?? currentPaySource());
     if (!code) requireNairaWallet(wallet);
     const { target } = await this.target(
       wallet.wawuUserId,
@@ -540,7 +541,7 @@ export class WalletPaymentService implements OnModuleInit {
     ) {
       throw new BadRequestException(['note is only sent with a tip.']);
     }
-    const code = foreignCode(dto.sourceCurrency);
+    const code = foreignCode(dto.sourceCurrency ?? currentPaySource());
     if (code) return this.payForeign(wallet, dto, scope, code);
     requireNairaWallet(wallet);
     const { handler, target } = await this.target(

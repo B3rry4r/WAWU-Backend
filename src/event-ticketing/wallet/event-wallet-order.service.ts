@@ -256,7 +256,7 @@ export class EventWalletOrderService implements OnModuleInit {
     // an open wallet before an order is made: 409 wallet_not_open or
     // wallet_opening, and the app leads to Open your wallet.
     const wallet =
-      totalNaira === 0 ? null : await this.gate.requireOpen(buyerWawuId);
+      totalNaira === 0 ? null : await this.gate.requireOpenOrWorld(buyerWawuId);
 
     let order: OrderRow;
     try {
@@ -677,7 +677,7 @@ export class EventWalletOrderService implements OnModuleInit {
     if (order.paymentProvider === 'free' || order.status !== 'pending') {
       return { order: await this.viewOf(order), payment: null };
     }
-    const wallet = await this.gate.requireOpen(buyerWawuId);
+    const wallet = await this.gate.requireOpenOrWorld(buyerWawuId);
     return this.quoteOf(wallet, order);
   }
 

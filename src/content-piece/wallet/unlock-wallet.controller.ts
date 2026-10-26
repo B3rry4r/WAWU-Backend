@@ -17,6 +17,7 @@ import { RequireFeesSet } from '../../money/fees/fees-set.guard';
 import {
   CurrentWallet,
   type OpenWallet,
+  AllowWorldWallet,
   RequireOpenWallet,
 } from '../../money/gate/wallet-gate';
 import {
@@ -60,7 +61,7 @@ export class UnlockWalletController {
    */
   @Get(':id/unlock/wallet/quote')
   @Header('Cache-Control', 'no-store')
-  @RequireOpenWallet()
+  @RequireOpenWallet({ world: true })
   @MoneyErrors(
     ...WALLET_GATE_ERRORS,
     'target_not_found',
@@ -89,6 +90,7 @@ export class UnlockWalletController {
   @Post(':id/unlock/wallet')
   @HttpCode(201)
   @RequireIdempotentApproval(UNLOCK_WALLET_ROUTE)
+  @AllowWorldWallet()
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',
