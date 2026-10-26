@@ -29,8 +29,11 @@ import {
   PayableRegistry,
   type PayableTarget,
 } from '../../money/payments/payable-registry';
+import { currentPaySource } from '../../money/payments/pay-source-context';
 import {
   FINISHING_MESSAGE,
+  foreignCode,
+  requireNairaWallet,
   STILL_CONFIRMING_MESSAGE,
   WalletPaymentService,
 } from '../../money/payments/wallet-payment.service';
@@ -257,6 +260,12 @@ export class EventWalletOrderService implements OnModuleInit {
     // wallet_opening, and the app leads to Open your wallet.
     const wallet =
       totalNaira === 0 ? null : await this.gate.requireOpenOrWorld(buyerWawuId);
+    // PAY-FX (R-91): a person who opened from outside Nigeria has no naira
+    // account. With no account named to pay from (`X-Pay-Source-Currency`)
+    // nothing could pay the order, so it is refused here, before one exists.
+    if (wallet !== null && !foreignCode(currentPaySource())) {
+      requireNairaWallet(wallet);
+    }
 
     let order: OrderRow;
     try {

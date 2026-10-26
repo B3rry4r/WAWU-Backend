@@ -10,6 +10,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { ApiPaySourceHeader } from './pay-source-context';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { WawuAuthGuard } from '../../common/guards/wawu-auth.guard';
 import { PaymentDto, PaymentQuoteQueryDto } from '../dto/money-request.dto';
@@ -71,6 +72,7 @@ export class MoneyPaymentsController {
    * exactly as before.
    */
   @Get('payments/quote')
+  @ApiPaySourceHeader()
   @Header('Cache-Control', 'no-store')
   @BuiltBy('MONEY-17')
   @RequireOpenWallet({ world: true })
@@ -116,6 +118,7 @@ export class MoneyPaymentsController {
    * with a fresh one in `reason.paymentQuote`.
    */
   @Post('payments')
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @BuiltBy('MONEY-17')
   @RequireIdempotentApproval(PAY_ROUTE)

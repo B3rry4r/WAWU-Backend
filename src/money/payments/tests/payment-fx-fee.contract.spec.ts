@@ -238,4 +238,24 @@ describe('Paying from another currency with a WAWU conversion fee (PAY-FX)', () 
     });
     expect(fxRow.refundMinor).toBe(28n);
   });
+
+  it('a refund the payer caused keeps WAWU conversion fee: the 23 for the price go back, the 5 stay (R-10, R-91)', async () => {
+    const p = await buyer(500n);
+    const q = await usdQuote(p.auth, 'event_ticket');
+    const view = body<PaymentView>(await pay(p.auth, q)).data!;
+    expect(p.usd.available).toBe(472n);
+    const collected = fx.collected.get(COLLECTOR) ?? 0n;
+    await holds.refund({ paymentId: view.id }, 'the buyer changed their mind');
+    expect(p.usd.available).toBe(495n);
+    const fxRow = await prisma.walletPaymentFx.findUniqueOrThrow({
+      where: { paymentId: view.id },
+    });
+    expect(fxRow.refundMinor).toBe(23n);
+    // WAWU's fee was collected once and is not collected back.
+    expect(fx.collected.get(COLLECTOR) ?? 0n).toBe(collected);
+    const read = await request(app.getHttpServer())
+      .get(`${BASE}/${view.id}`)
+      .set('Authorization', p.auth);
+    expect(body<PaymentView>(read).data!.source?.refundedMinor).toBe(23);
+  });
 });

@@ -729,8 +729,13 @@ is shown from `PAYMENT_FX_PROVIDER_FEE_<CODE>_MINOR` (default 0, Nuvion names
 none on dev) and anything more that Nuvion's record reports is kept on the
 payment for review. Nuvion's spread is inside the rate, shown as it is.
 
-Refunds (Default (lead), owner may override): back to the same account, in
-that currency, the same amount taken. WAWU pays the reverse conversion
+Refunds (R-91, lead ruling 26 Oct 2026, owner may override): back to the same
+account, in that currency, and the rule is the naira rule of R-10. A refund
+WAWU or the seller causes (a called-off event, a question that lapsed, an
+order that failed) returns everything taken, WAWU's conversion fee and the
+provider's charge included. A refund the payer causes keeps WAWU's conversion
+fee (the amount for the price goes back, the fee stays). With the fee at 0,
+the default, both return the full amount. WAWU pays the reverse conversion
 (a firm quote from its operational account with no `entity_id`, then the move
 under the hold's own reference), so the naira it costs differs from the naira
 the payment brought in: on dev 23 cents back cost 31,040 kobo for 30,000.
@@ -743,5 +748,16 @@ quote and the payment (a body's own `sourceCurrency` on `/money/payments` wins).
 Absent or `NGN` is the naira wallet. Their quote answers carry the same
 `payment.source`, and their payment answers `payment.source`. These routes also
 take a person who has no naira account (a world wallet) when the header is
-sent; without it they are `409 wallet_not_open`, as before.
+sent; without it they are `409 wallet_not_open`, as before, and an event order
+is refused the same way BEFORE the order is made (no order is left behind).
+
+The header is declared in the contract (`parameters`, optional) on exactly the
+routes that read it: the quote and the payment of `/money/payments`,
+`/content/{id}/unlock/wallet`, `/tips/wallet`, `/dm/.../send/wallet`,
+`/events/.../orders/wallet`, `/legal/requests/{id}/pay/wallet` and
+`/communities/{id}/pass`. The app sends it on those requests and on no other.
+The `Idempotency-Key` of a payment is bound to the account that pays: the same
+key and body for another account (dollar after naira, or the other way round)
+is `409 idempotency_key_reused`, never the first account's receipt. A request
+that names no account, or the naira one, has the fingerprint it always had.
 

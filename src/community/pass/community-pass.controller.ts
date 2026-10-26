@@ -9,6 +9,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { ApiPaySourceHeader } from '../../money/payments/pay-source-context';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -73,6 +74,7 @@ export class CommunityPassController {
    * `POST /communities/{id}/pass` sends back. Nothing is reserved.
    */
   @Get(':id/pass/quote')
+  @ApiPaySourceHeader()
   @Header('Cache-Control', 'no-store')
   @RequireOpenWallet({ world: true })
   @MoneyErrors(
@@ -102,6 +104,7 @@ export class CommunityPassController {
    * wallet_not_open`. Nothing is ever debited without this request.
    */
   @Post(':id/pass')
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @RequireIdempotentApproval(COMMUNITY_PASS_ROUTE)
   @AllowWorldWallet()

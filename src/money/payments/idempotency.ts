@@ -27,6 +27,7 @@ import { MoneyError } from '../money-error';
 import { isUniqueViolation } from '../prisma-unique';
 import { RequireApproval } from '../pin/transaction-pin.guard';
 import { PaymentSettings } from './payment-config';
+import { currentPaySource } from './pay-source-context';
 
 /**
  * Idempotency-Key on money-moving requests (task MONEY-17;
@@ -125,13 +126,29 @@ export function bodyFingerprint(body: unknown): string {
  * on another request is `409 idempotency_key_reused`, never the first
  * request's receipt, while the same key on the same request still replays.
  */
-export function requestFingerprint(req: {
-  body?: unknown;
-  params?: Record<string, unknown>;
-}): string {
+export function requestFingerprint(
+  req: {
+    body?: unknown;
+    params?: Record<string, unknown>;
+  },
+  paySource?: string,
+): string {
   const params = req.params ?? {};
-  if (Object.keys(params).length === 0) return bodyFingerprint(req.body);
-  return bodyFingerprint({ body: req.body ?? null, params });
+  // PAY-FX (R-91, round 3): a key is bound to the account that pays. The same
+  // key and body sent for another account (the dollar one, then the naira
+  // wallet) is `idempotency_key_reused`, never the first account's receipt.
+  // No account named, or the naira one, adds nothing: the fingerprint is what
+  // it always was, so a key already stored still matches.
+  const account = paySource && paySource !== 'NGN' ? paySource : null;
+  if (account === null) {
+    if (Object.keys(params).length === 0) return bodyFingerprint(req.body);
+    return bodyFingerprint({ body: req.body ?? null, params });
+  }
+  return bodyFingerprint({
+    body: req.body ?? null,
+    ...(Object.keys(params).length === 0 ? {} : { params }),
+    paySource: account,
+  });
 }
 
 /**
@@ -377,7 +394,7 @@ export class IdempotencyGuard implements CanActivate {
       method: req.method.toUpperCase(),
       route,
       key: raw,
-      fingerprint: requestFingerprint(req),
+      fingerprint: requestFingerprint(req, currentPaySource()),
     };
     scope.claimId = await this.keys.claim(scope);
     req[SCOPE_KEY] = scope;

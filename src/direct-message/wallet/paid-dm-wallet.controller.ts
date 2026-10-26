@@ -10,6 +10,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { ApiPaySourceHeader } from '../../money/payments/pay-source-context';
 import { ApiBearerAuth, ApiHeader, ApiOperation } from '@nestjs/swagger';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -63,6 +64,7 @@ export class PaidDmWalletController {
    * `Idempotency-Key`, the same key and question answer the same draft.
    */
   @Post(':creatorWawuId/send/wallet')
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @Header('Cache-Control', 'no-store')
   @RequireOpenWallet({ world: true })
@@ -102,6 +104,7 @@ export class PaidDmWalletController {
    * (`Idempotent-Replayed: true`) without checking the PIN.
    */
   @Post('send/wallet/pay')
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @RequireIdempotentApproval(PAID_DM_PAY_ROUTE)
   @AllowWorldWallet()
@@ -125,6 +128,7 @@ export class PaidDmWalletController {
 
   /** The pay sheet again: I3 reopened, or a quote past its `expiresAt`. */
   @Get('send/wallet/:questionId/quote')
+  @ApiPaySourceHeader()
   @Header('Cache-Control', 'no-store')
   @RequireOpenWallet({ world: true })
   @MoneyErrors(

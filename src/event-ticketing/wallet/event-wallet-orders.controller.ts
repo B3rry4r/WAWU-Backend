@@ -10,6 +10,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { ApiPaySourceHeader } from '../../money/payments/pay-source-context';
 import { ApiBearerAuth, ApiHeader, ApiOperation } from '@nestjs/swagger';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -77,6 +78,7 @@ export class EventWalletOrdersController {
    * one never asks for them.
    */
   @Post(':id/orders/wallet')
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @Header('Cache-Control', 'no-store')
   @ApiOperation({
@@ -118,6 +120,7 @@ export class EventWalletOrdersController {
    * (`Idempotent-Replayed: true`) without checking the PIN.
    */
   @Post('orders/wallet/pay')
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @RequireIdempotentApproval(EVENT_ORDER_PAY_ROUTE)
   @AllowWorldWallet()
@@ -141,6 +144,7 @@ export class EventWalletOrdersController {
 
   /** The order's quote again: E3 reopened, or a quote past its `expiresAt`. */
   @Get('orders/wallet/:orderId/quote')
+  @ApiPaySourceHeader()
   @Header('Cache-Control', 'no-store')
   @RequireOpenWallet({ world: true })
   @MoneyErrors(

@@ -17477,6 +17477,17 @@
               "example": "USD",
               "type": "string"
             }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
+            }
           }
         ],
         "responses": {
@@ -17585,6 +17596,17 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
             }
           }
         ],
@@ -37880,6 +37902,17 @@
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{8,128}$"
             }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
+            }
           }
         ],
         "requestBody": {
@@ -37995,6 +38028,17 @@
             "in": "path",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
             }
           }
         ],
@@ -38139,6 +38183,17 @@
               "maximum": 9007199254740991,
               "type": "integer"
             }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
+            }
           }
         ],
         "responses": {
@@ -38246,6 +38301,17 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
             }
           }
         ],
@@ -38409,6 +38475,17 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
+            }
           }
         ],
         "responses": {
@@ -38514,6 +38591,17 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
             }
           }
         ],
@@ -38685,6 +38773,17 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
+            }
           }
         ],
         "responses": {
@@ -38790,6 +38889,17 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
             }
           }
         ],
@@ -38972,6 +39082,17 @@
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{8,128}$"
             }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
+            }
           }
         ],
         "requestBody": {
@@ -39059,6 +39180,17 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
             }
           }
         ],
@@ -39175,6 +39307,17 @@
             "in": "path",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
             }
           }
         ],
@@ -39308,6 +39451,17 @@
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{8,128}$"
             }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
+            }
           }
         ],
         "requestBody": {
@@ -39415,6 +39569,17 @@
             "schema": {
               "type": "string",
               "pattern": "^[A-Za-z0-9_-]{8,128}$"
+            }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
             }
           }
         ],
@@ -39531,6 +39696,17 @@
             "in": "path",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "X-Pay-Source-Currency",
+            "in": "header",
+            "description": "Optional. The currency of the caller's own account that pays (USD, GBP, EUR ...). Absent, or NGN, is the naira wallet. The price stays naira; the quote answers with the firm amount in that currency in `source`, and the payment must name the same account. The Idempotency-Key is bound to it.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Z]{3,5}$",
+              "example": "USD"
             }
           }
         ],
@@ -53604,26 +53780,26 @@
             "type": "number"
           },
           "amountMinor": {
-            "type": "number"
+            "type": "integer"
           },
           "providerFeeMinor": {
-            "type": "number"
+            "type": "integer"
           },
           "wawuFeeMinor": {
-            "type": "number"
+            "type": "integer"
           },
           "totalMinor": {
-            "type": "number"
+            "type": "integer"
           },
           "rate": {
             "type": "string"
           },
           "availableMinor": {
-            "type": "number",
+            "type": "integer",
             "nullable": true
           },
           "shortfallMinor": {
-            "type": "number",
+            "type": "integer",
             "nullable": true
           },
           "expiresAt": {
@@ -53750,22 +53926,22 @@
             "type": "number"
           },
           "amountMinor": {
-            "type": "number"
+            "type": "integer"
           },
           "providerFeeMinor": {
-            "type": "number"
+            "type": "integer"
           },
           "wawuFeeMinor": {
-            "type": "number"
+            "type": "integer"
           },
           "totalMinor": {
-            "type": "number"
+            "type": "integer"
           },
           "rate": {
             "type": "string"
           },
           "refundedMinor": {
-            "type": "number",
+            "type": "integer",
             "nullable": true
           }
         },

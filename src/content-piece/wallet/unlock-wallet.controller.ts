@@ -9,6 +9,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
+import { ApiPaySourceHeader } from '../../money/payments/pay-source-context';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import type { WawuJwtClaims } from '../../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -60,6 +61,7 @@ export class UnlockWalletController {
    * back. Nothing is reserved.
    */
   @Get(':id/unlock/wallet/quote')
+  @ApiPaySourceHeader()
   @Header('Cache-Control', 'no-store')
   @RequireOpenWallet({ world: true })
   @MoneyErrors(
@@ -88,6 +90,7 @@ export class UnlockWalletController {
    * wallet_not_open`.
    */
   @Post(':id/unlock/wallet')
+  @ApiPaySourceHeader()
   @HttpCode(201)
   @RequireIdempotentApproval(UNLOCK_WALLET_ROUTE)
   @AllowWorldWallet()

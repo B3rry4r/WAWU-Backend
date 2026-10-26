@@ -18,7 +18,11 @@ import { PrismaService } from '../../../common/prisma/prisma.service';
 import { WalletHoldService } from '../../holds/wallet-hold.service';
 import type { MoneyErrorReason } from '../../dto/money-error.dto';
 import type { PaymentQuoteView, PaymentView } from '../../money-view.type';
-import { IDEMPOTENT_REPLAYED_HEADER } from '../idempotency';
+import {
+  bodyFingerprint,
+  IDEMPOTENT_REPLAYED_HEADER,
+  requestFingerprint,
+} from '../idempotency';
 import { PayableRegistry } from '../payable-registry';
 import { WalletPaymentService } from '../wallet-payment.service';
 
@@ -479,6 +483,61 @@ describe('Pay a naira price from another currency (PAY-FX, R-91)', () => {
     // The header does not leak to the next request: without it, the naira way.
     const next = await quote(p, 'content_unlock', `n-${randomUUID()}`);
     expect(next.status).toBe(409);
+  });
+
+  it('a key is bound to the account that pays: the same key and body for another account is idempotency_key_reused, never a replay of the first (round 3, F6)', async () => {
+    const p = await buyer(500n, 400_000n);
+    const q = await usdQuote(p);
+    const key = randomUUID();
+    const pay = (header?: string) => {
+      const r = request(app.getHttpServer())
+        .post(BASE)
+        .set('Authorization', p.auth)
+        .set('Idempotency-Key', key)
+        .set('X-Transaction-Pin', PIN);
+      if (header) r.set('X-Pay-Source-Currency', header);
+      return r.send(payBody(q));
+    };
+    const first = await pay('USD');
+    expect(first.status).toBe(201);
+    const id = body<PaymentView>(first).data!.id;
+    // Same key, same body, no header (the naira way): not the dollar payment's receipt.
+    const naira = await pay();
+    expect(naira.status).toBe(409);
+    expect(body(naira).reason?.code).toBe('idempotency_key_reused');
+    expect(
+      naira.headers[IDEMPOTENT_REPLAYED_HEADER.toLowerCase()],
+    ).toBeUndefined();
+    // Same key, same body, another currency: refused the same way.
+    const gbp = await pay('GBP');
+    expect(gbp.status).toBe(409);
+    expect(body(gbp).reason?.code).toBe('idempotency_key_reused');
+    // The same key, body and account is still the same payment, replayed.
+    const again = await pay('USD');
+    expect(again.status).toBe(201);
+    expect(again.headers[IDEMPOTENT_REPLAYED_HEADER.toLowerCase()]).toBe(
+      'true',
+    );
+    expect(body<PaymentView>(again).data!.id).toBe(id);
+    expect(p.usd.available).toBe(477n);
+    expect(p.naira!.availableKobo).toBe(400_000n);
+  });
+
+  it('the key fingerprint of a naira request is what it always was; a named account changes it', () => {
+    const b = { kind: 'content_unlock', targetId: 'x', expectedTotalKobo: 1 };
+    const naira = bodyFingerprint(b);
+    // No account named, or the naira one: byte for byte the old fingerprint, so keys already stored still match.
+    expect(requestFingerprint({ body: b })).toBe(naira);
+    expect(requestFingerprint({ body: b }, undefined)).toBe(naira);
+    expect(requestFingerprint({ body: b }, 'NGN')).toBe(naira);
+    const usd = requestFingerprint({ body: b }, 'USD');
+    expect(usd).not.toBe(naira);
+    expect(requestFingerprint({ body: b }, 'GBP')).not.toBe(usd);
+    expect(requestFingerprint({ body: b }, 'USD')).toBe(usd);
+    const withParams = { body: b, params: { id: 'r1' } };
+    expect(requestFingerprint(withParams, 'USD')).not.toBe(
+      requestFingerprint(withParams),
+    );
   });
 
   it('a person with no naira account who asks for the naira way is told so, as before', async () => {
