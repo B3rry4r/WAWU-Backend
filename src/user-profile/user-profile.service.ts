@@ -28,6 +28,7 @@ import { profileCompleteness } from './profile-completeness';
 import { ProfileExperienceService } from './profile-experience.service';
 import type { ProfileStatsView } from './profile-stats.type';
 import { objectKeyFrom, StorageService } from '../storage/storage.service';
+import { cleanPhotoLink, keepPhotoPosition } from '../storage/photo-position';
 import { WalletService } from '../wallet/wallet.service';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 
@@ -78,10 +79,34 @@ export class UserProfileService {
     // somebody's own link and is passed through untouched.
     if (key === stored && /^https?:\/\//i.test(stored)) return stored;
     try {
-      return await this.storage.readUrlFor(key);
+      // The picture's position (R-96) is part of the stored link, and signing again drops it: put it back.
+      return keepPhotoPosition(stored, await this.storage.readUrlFor(key));
     } catch {
       return stored;
     }
+  }
+
+  /**
+   * The picture and cover links of an update, ready to store (R-96). A link that carries a position
+   * is stored with it in its canonical form; one that carries a malformed or out-of-range position is
+   * refused, in words the person can act on. A link with no position, which is every link the web
+   * sends, is returned exactly as it came: choosing a new photo therefore starts it centred, and
+   * nothing about the stored value changes for a client that knows nothing of positions.
+   */
+  private cleanPhotoLinks(dto: UpdateUserProfileDto): UpdateUserProfileDto {
+    const out = { ...dto };
+    for (const field of ['avatarUrl', 'coverUrl'] as const) {
+      const link = dto[field];
+      if (typeof link !== 'string') continue;
+      const cleaned = cleanPhotoLink(link);
+      if (cleaned === null) {
+        throw new BadRequestException(
+          'That picture position could not be read. Move the picture and try again.',
+        );
+      }
+      out[field] = cleaned;
+    }
+    return out;
   }
 
   async getMe(user: WawuJwtClaims): Promise<UserProfileWithClaims> {
@@ -172,8 +197,9 @@ export class UserProfileService {
    */
   async upsertMe(
     claims: WawuJwtClaims,
-    dto: UpdateUserProfileDto,
+    body: UpdateUserProfileDto,
   ): Promise<UserProfile> {
+    const dto = this.cleanPhotoLinks(body);
     const wawuUserId = claims.sub;
     // The name goes to WAWU ID FIRST, and a failure there stops the whole
     // update. Names are checked against a government ID at KYC, so a rename
