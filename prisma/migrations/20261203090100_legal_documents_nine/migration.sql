@@ -10,6 +10,7 @@
 -- newer version (owner ruling, 26 Oct 2026); the replaced text is not kept here. Running it again writes the same rows.
 -- Every row gets the fixed "updatedAt" below, which marks a row as written by this migration: the dashboard's save sets
 -- "updatedAt" to the time of the save, so rollback.sql can tell an untouched row from one the owner has edited since.
+-- Owner change (26 Oct 2026): Terms section 5 and Verification Policy section 1 name the tiers (Verify ₦2,999, Verify Plus ₦5,999, Founding Maker ₦9,999, each for one year) and say the store price can differ (VAT, taxes, store fees).
 -- Rollback: see rollback.sql (refuses while any of the nine has been edited since).
 
 INSERT INTO "LegalDocument" ("slug", "title", "effectiveDate", "sections", "updatedAt")
@@ -139,7 +140,7 @@ VALUES (
  },
  {
   "heading": "5. VERIFICATION",
-  "body": "Verification is optional but required to unlock selling, payments, and higher transaction limits. The verification fee is ₦2,000 per year, payable through the Platform.\n\nVerification is subject to identity checks, including submission of government-issued ID and biometric verification. We may use third-party verification partners.\n\nRefund Policy: Verification fees are non-refundable once the verification process has commenced. If verification is unsuccessful due to our error, we will refund the fee. If it is unsuccessful due to your failure to provide accurate information, no refund will be issued.\n\nAuto-Renewal: Verification is valid for one year from the date of successful verification. You will be notified before renewal. You may cancel renewal at any time in your account settings.\n\nEffect of Account Termination: If your account is terminated for violation of these Terms, your verification fee is non-refundable."
+  "body": "Verification is optional but required to unlock selling, payments, and higher transaction limits. The verification fee starts at ₦2,999 per year: Verify ₦2,999, Verify Plus ₦5,999 and Founding Maker ₦9,999, each for one year, payable through the Platform. When you pay through the Apple App Store or Google Play, the amount charged can differ slightly, because the store adds VAT or other taxes and its own fees for your country.\n\nVerification is subject to identity checks, including submission of government-issued ID and biometric verification. We may use third-party verification partners.\n\nRefund Policy: Verification fees are non-refundable once the verification process has commenced. If verification is unsuccessful due to our error, we will refund the fee. If it is unsuccessful due to your failure to provide accurate information, no refund will be issued.\n\nAuto-Renewal: Verification is valid for one year from the date of successful verification. You will be notified before renewal. You may cancel renewal at any time in your account settings.\n\nEffect of Account Termination: If your account is terminated for violation of these Terms, your verification fee is non-refundable."
  },
  {
   "heading": "6. CONTENT OWNERSHIP AND LICENSE",
@@ -304,7 +305,7 @@ VALUES (
   $lgd$[
  {
   "heading": "1. VERIFICATION FEE",
-  "body": "The minimum verification fee is ₦2,999 per year, payable through the Platform. This fee covers identity verification, fraud prevention, and access to monetization features."
+  "body": "The minimum verification fee is ₦2,999 per year, payable through the Platform. Verify costs ₦2,999, Verify Plus ₦5,999 and Founding Maker ₦9,999, each for one year. When you pay through the Apple App Store or Google Play, the amount charged can differ slightly, because the store adds VAT or other taxes and its own fees for your country. This fee covers identity verification, fraud prevention, and access to monetization features."
  },
  {
   "heading": "2. WHAT VERIFICATION INCLUDES",

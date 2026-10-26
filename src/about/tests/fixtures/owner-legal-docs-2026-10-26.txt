@@ -293,7 +293,7 @@ We reserve the right to suspend or terminate your account if we suspect fraudule
 
 1. VERIFICATION
 
-Verification is optional but required to unlock selling, payments, and higher transaction limits. The verification fee is ₦2,000 per year, payable through the Platform.
+Verification is optional but required to unlock selling, payments, and higher transaction limits. The verification fee starts at ₦2,999 per year: Verify ₦2,999, Verify Plus ₦5,999 and Founding Maker ₦9,999, each for one year, payable through the Platform. When you pay through the Apple App Store or Google Play, the amount charged can differ slightly, because the store adds VAT or other taxes and its own fees for your country.
 
 Verification is subject to identity checks, including submission of government-issued ID and biometric verification. We may use third-party verification partners.
 
@@ -489,7 +489,7 @@ VERIFICATION AND REFUND POLICY
 
 1. VERIFICATION FEE
 
-The minimum verification fee is ₦2,999 per year, payable through the Platform. This fee covers identity verification, fraud prevention, and access to monetization features.
+The minimum verification fee is ₦2,999 per year, payable through the Platform. Verify costs ₦2,999, Verify Plus ₦5,999 and Founding Maker ₦9,999, each for one year. When you pay through the Apple App Store or Google Play, the amount charged can differ slightly, because the store adds VAT or other taxes and its own fees for your country. This fee covers identity verification, fraud prevention, and access to monetization features.
 
 1. WHAT VERIFICATION INCLUDES
 
