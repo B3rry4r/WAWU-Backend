@@ -356,7 +356,15 @@ describe('money contract (MONEY-04)', () => {
             ? {
                 route,
                 required: ['Idempotency-Key'],
-                optional: ['X-Device-Approval', 'X-Transaction-Pin'],
+                // PAY-FX round 3 (F5): the payment names the account that pays on an optional header.
+                optional:
+                  route === 'POST /api/hub/money/payments'
+                    ? [
+                        'X-Device-Approval',
+                        'X-Pay-Source-Currency',
+                        'X-Transaction-Pin',
+                      ]
+                    : ['X-Device-Approval', 'X-Transaction-Pin'],
               }
             : {
                 route,
