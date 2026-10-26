@@ -18,7 +18,6 @@ import { RequireFeesSet } from '../money/fees/fees-set.guard';
 import {
   CurrentWallet,
   type OpenWallet,
-  AllowWorldWallet,
   RequireOpenWallet,
 } from '../money/gate/wallet-gate';
 import {
@@ -109,7 +108,6 @@ export class MoneyRequestController {
   @Post(':requestId/pay')
   @HttpCode(201)
   @RequireIdempotentApproval(MONEY_REQUEST_PAY_ROUTE, MoneyRequestPayGuard)
-  @AllowWorldWallet()
   @MoneyErrors(
     ...DEBIT_GATE_ERRORS,
     'device_approval_refused',
