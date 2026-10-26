@@ -1440,6 +1440,50 @@
         ]
       }
     },
+    "/api/hub/me/tier-offer": {
+      "get": {
+        "operationId": "TierOfferController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierOfferView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Whether to draw the offer now, and whether it has its close X. `no-store`: the answer is the caller's own.",
+        "tags": [
+          "TierOffer"
+        ]
+      }
+    },
+    "/api/hub/me/tier-offer/seen": {
+      "post": {
+        "operationId": "TierOfferController_seen",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierOfferSeenView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The offer has been drawn for this person: it is not offered again, on any phone.",
+        "tags": [
+          "TierOffer"
+        ]
+      }
+    },
     "/api/hub/me/points": {
       "get": {
         "operationId": "PointsController_mine",
@@ -57851,6 +57895,32 @@
           "checkoutBump",
           "actions",
           "caps"
+        ]
+      },
+      "TierOfferView": {
+        "type": "object",
+        "properties": {
+          "show": {
+            "type": "boolean"
+          },
+          "closeButton": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "show",
+          "closeButton"
+        ]
+      },
+      "TierOfferSeenView": {
+        "type": "object",
+        "properties": {
+          "seenAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "seenAt"
         ]
       },
       "UploadFormatView": {

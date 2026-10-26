@@ -580,6 +580,8 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // LEGAL-DOCS: what the person agreed to at sign-up (which of the owner's
   // documents, which version, when). Theirs, and it goes with them.
   { model: 'LegalAcceptance', column: 'userWawuId', disposition: 'OWNED' },
+  // TIER-OFFER (R-94): that the person was shown the tier offer, and when. Theirs, and it goes with them.
+  { model: 'TierOfferSeen', column: 'wawuUserId', disposition: 'OWNED' },
   // Points turned into cash (POINTS-04): each row is WAWU's own movement of
   // cash from its account to this person's wallet, and the provider's record
   // of it (our reference, the amount, whether it was confirmed) must outlive

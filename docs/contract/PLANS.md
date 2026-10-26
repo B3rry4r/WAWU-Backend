@@ -1108,3 +1108,16 @@ PROVISIONAL `DV2-BOARD-FIGURE`) times the minutes. The premium dub is not built
   Hub takes before anything parses it, the length is the Hub's own reading behind
   the read gate, and the provider run streams the file behind the same gate (about
   64 KB held a job, one place per account).
+
+## 15. The tier offer after sign-up (TIER-OFFER, R-94)
+
+A full screen that offers the three tiers (R-89) once, right after sign-up, before the person reaches Home. The Hub decides who is shown it and remembers that it was shown, so it is once across phones. The tiers, prices and lengths on the screen are `GET /plans`; the offer adds no figure.
+
+| Route | Answers |
+|---|---|
+| `GET /me/tier-offer` | `{ show, closeButton }`. `no-store`. Signed in only; the person is the token's. |
+| `POST /me/tier-offer/seen` | `{ seenAt }`. The app calls it when the offer is drawn. The first write wins; a second one (another phone, a retry) returns the same `seenAt`. |
+
+- `show` is true when the person has a creator account (a professional is a creator account), has not been shown the offer, and holds no running tier (`active` or `ending`). A fan or buyer account, and a person the Hub has no profile for yet, get false and are not marked: they are asked again, and a profile written later is then shown the offer. A tier that has `ended` does not stop it.
+- `closeButton` is the admin setting `tier_offer.close_button_on`, "Show the close button on the tier offer" (1 is on, 0 is off; default 1; group "Tier offer" in the dashboard's Settings). On: the app draws the close X, top right. Off: it draws a "Not now" text button at the bottom instead. The screen always has one of the two. It is sent whatever `show` says.
+- Stored in `TierOfferSeen` (migration `20261208090000_tier_offer_seen`): one row per person, `seenAt`. A table of its own because `GET /users/me` returns the whole `UserProfile` row. OWNED in the purge map and in the person's data export. Its rollback refuses while any row exists.

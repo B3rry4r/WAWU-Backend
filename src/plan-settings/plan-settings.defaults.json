@@ -170,6 +170,7 @@
     "plan.event_name": [
       "Christmas event"
     ],
-    "capital.enabled": 1
+    "capital.enabled": 1,
+    "tier_offer.close_button_on": 1
   }
 }

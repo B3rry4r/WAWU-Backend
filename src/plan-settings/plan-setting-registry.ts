@@ -1110,6 +1110,23 @@ export function buildRegistry(
     default: extra('capital.enabled', 1),
     parse: whole(0, 1),
   });
+  // TIER-OFFER (R-94): the full-screen offer of the three tiers right after
+  // sign-up. The owner's control over its way out: 1 draws the close button
+  // (the X, top right), 0 draws a "Not now" text button at the bottom instead.
+  // There is never a screen with no way out. On by default.
+  add({
+    key: 'tier_offer.close_button_on',
+    group: 'Tier offer',
+    label:
+      'Show the close button on the tier offer (1 is on, 0 shows "Not now" at the bottom instead)',
+    unit: 'count',
+    usedBy: [
+      'GET /me/tier-offer (closeButton), the tier offer screen (TIER-OFFER, R-94)',
+    ],
+    provisional: null,
+    default: extra('tier_offer.close_button_on', 1),
+    parse: whole(0, 1),
+  });
   other(
     'voice.intro_max_chars',
     'Characters a Voice Intro script can have',

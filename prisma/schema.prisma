@@ -8767,3 +8767,15 @@ model AbroadAdminAudit {
   @@index([subjectWawuId, at])
   @@index([sendId])
 }
+
+/// TIER-OFFER (R-94): that a person has been shown the full-screen offer of the
+/// three tiers, and when. One row per person, written once by the app when the
+/// screen is drawn (POST /me/tier-offer/seen); a second write changes nothing,
+/// so "shown once" holds across phones. It is a table of its own, not a column on
+/// UserProfile, because GET /users/me returns the whole UserProfile row and a
+/// column there would widen a live response. OWNED in the purge map; part of the
+/// person's data export.
+model TierOfferSeen {
+  wawuUserId String   @id
+  seenAt     DateTime @default(now())
+}
