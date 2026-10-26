@@ -1,6 +1,6 @@
 {
   "provisional": {
-    "PLAN-PRICES": "R-43: every figure in this file is the owner's example value from the Developer Brief v2.0 of 5 Oct 2026, kept until the owner sends final prices and rules.",
+    "PLAN-PRICES": "R-43: every figure in this file is the owner's example value from the Developer Brief v2.0 of 5 Oct 2026, kept until the owner sends final prices and rules. The three tiers are the exception: the owner set their prices (Verify 2,999, Verify Plus 5,999, Founding Maker 9,999 naira) and made all three last one year on 26 Oct 2026 (R-89).",
     "PLAN-CASHOUT-MINIMUM": "The brief gives no cash-out minimum and PT6 draws one. 1,000 points is the unit the cash-out rate is quoted in.",
     "PLAN-BOUGHT-POINTS-DAYS": "The brief does not say how long bought points last. 365 days is the longest period the plan uses.",
     "PLAN-ENDING-DAYS": "VF14 draws a tier ending in 3 days but gives no window. 7 days gives a week to renew."
@@ -14,11 +14,11 @@
     {
       "id": "verify",
       "name": "Verify",
-      "days": 30,
+      "days": 365,
       "products": 3,
       "bonus_points": 100,
       "bonus_expiry_days": 365,
-      "price": { "kobo": 100000, "cents": 300 },
+      "price": { "kobo": 299900, "cents": 300 },
       "event_pass": "watch_apply",
       "badge": { "id": "verified", "numbered": false },
       "pack_bonus_pct": 0,
@@ -27,11 +27,11 @@
     {
       "id": "plus",
       "name": "Verify Plus",
-      "days": 180,
+      "days": 365,
       "products": 6,
       "bonus_points": 300,
       "bonus_expiry_days": 365,
-      "price": { "kobo": 300000, "cents": 900 },
+      "price": { "kobo": 599900, "cents": 900 },
       "event_pass": "maker_pass",
       "badge": { "id": "verified", "numbered": false },
       "pack_bonus_pct": 0,
@@ -44,7 +44,7 @@
       "products": 10,
       "bonus_points": 600,
       "bonus_expiry_days": 365,
-      "price": { "kobo": 500000, "cents": 1500 },
+      "price": { "kobo": 999900, "cents": 1500 },
       "event_pass": "maker_pass_priority",
       "badge": { "id": "founding", "numbered": true },
       "pack_bonus_pct": 10,

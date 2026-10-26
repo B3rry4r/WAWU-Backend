@@ -11,7 +11,10 @@ needs.
 Every price, product count, points amount, expiry, cost and cap of the
 owner's 5 Oct plan (Developer Brief v2.0, section 2) is in
 `src/plans/plans.config.json`, and nowhere else. The figures in it are the
-owner's example values until the owner sends final prices (R-43): the file's
+owner's example values until the owner sends final prices (R-43), except the three
+tiers: on 26 Oct 2026 the owner set Verify at ₦2,999, Verify Plus at ₦5,999 and Founding Maker
+at ₦9,999, all three lasting one year (365 days) (R-89; migration `20261204090000_tier_yearly`
+moves any saved admin setting of those six figures to them). The file's
 `provisional` object and the `PROVISIONAL(...)` markers in
 `src/plans/plans-config.ts` say so, one per value (`PLAN-PRICES` for the whole
 file; `PLAN-CASHOUT-MINIMUM` and `PLAN-BOUGHT-POINTS-DAYS`, the two values the
@@ -977,7 +980,7 @@ new additive `reason.code`:
     "message": "Needs a tier. Pick a tier to host an event.",
     "tierState": "none",
     "currency": "NGN",
-    "lowestTier": { "id": "verify", "name": "Verify", "priceMinor": 100000 }
+    "lowestTier": { "id": "verify", "name": "Verify", "priceMinor": 299900 }
   }
 }
 ```

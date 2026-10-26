@@ -237,17 +237,47 @@ describe('SETTINGS-06 round 7: a late freeze always finds a row to be undone by'
 
     it('a time budget: the pass stops, and the next pass starts with the rows the first never reached', async () => {
       await seed(30, 'd');
-      slowProvider('d', 100);
-      const first = await h.sweep.runOnce(new Date(), 50, { budgetMs: 800, batch: 10 });
+      // The budget is measured on a clock this test controls: every call to the
+      // provider costs 100 ms on it, however fast or slow the machine is (a
+      // wall-clock version failed on a loaded CI runner that answered 3 rows
+      // in 800 ms). The pass has used 800 ms once it has asked 8 wallets.
+      const COST_MS = 100;
+      slowProvider('d', 0);
+      const clock = () => 1_000_000 + asked('d').length * COST_MS;
+      const first = await h.sweep.runOnce(new Date(), 50, { budgetMs: 800, batch: 10, clock });
       expect(first.stopped).toBe('budget');
       expect(first.reconciled).toBeGreaterThan(3);
       expect(first.reconciled).toBeLessThan(15);
+      expect(first.reconciled).toBe(8); // 800 ms of budget at 100 ms a call
       const firstAsked = new Set(asked('d'));
+      expect(firstAsked.size).toBe(8);
       h.double.seen.length = 0;
       const second = await h.sweep.runOnce(new Date(), 50);
       expect(second.stopped).toBeNull();
       const secondAsked = asked('d');
       // the oldest check goes first (R6-3): the first calls are wallets the first pass never asked
+      const unreached = 30 - firstAsked.size;
+      expect(secondAsked.slice(0, unreached).every((w) => !firstAsked.has(w))).toBe(true);
+      expect(new Set([...firstAsked, ...secondAsked]).size).toBe(30);
+    });
+
+    it('a time budget on the real clock: a slow provider stops the pass, whatever the machine does', async () => {
+      await seed(30, 'g');
+      slowProvider('g', 100);
+      // Each call takes at least 100 ms of wall time, so a 250 ms budget lets
+      // at most 3 rows start (at 0, 100 and 200 ms); a stall on a loaded
+      // machine can only make the pass stop sooner, never later. The lower
+      // bound is not asserted here: it is the test above, on a clock that
+      // cannot stall.
+      const first = await h.sweep.runOnce(new Date(), 50, { budgetMs: 250, batch: 10 });
+      expect(first.stopped).toBe('budget');
+      expect(first.reconciled).toBeLessThanOrEqual(3);
+      const firstAsked = new Set(asked('g'));
+      expect(firstAsked.size).toBeLessThan(30);
+      h.double.seen.length = 0;
+      const second = await h.sweep.runOnce(new Date(), 50);
+      expect(second.stopped).toBeNull();
+      const secondAsked = asked('g');
       const unreached = 30 - firstAsked.size;
       expect(secondAsked.slice(0, unreached).every((w) => !firstAsked.has(w))).toBe(true);
       expect(new Set([...firstAsked, ...secondAsked]).size).toBe(30);

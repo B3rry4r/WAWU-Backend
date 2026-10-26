@@ -62,9 +62,12 @@ describe('the settings registry (TIER-06)', () => {
 
   it("holds the owner's launch figures (R-65)", () => {
     const get = (k: string) => def(k).default;
-    expect(get('plan.tier.verify.price_kobo')).toBe(100_000);
-    expect(get('plan.tier.plus.price_kobo')).toBe(300_000);
-    expect(get('plan.tier.founding.price_kobo')).toBe(500_000);
+    expect(get('plan.tier.verify.price_kobo')).toBe(299_900);
+    expect(get('plan.tier.plus.price_kobo')).toBe(599_900);
+    expect(get('plan.tier.founding.price_kobo')).toBe(999_900);
+    expect(get('plan.tier.verify.days')).toBe(365);
+    expect(get('plan.tier.plus.days')).toBe(365);
+    expect(get('plan.tier.founding.days')).toBe(365);
     expect(get('plan.extra_products.price_kobo')).toBe(150_000);
     expect(get('plan.extra_products.count')).toBe(5);
     expect(get('points.cash_rate_kobo_per_1000')).toBe(50_000);

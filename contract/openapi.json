@@ -34464,6 +34464,28 @@
         ]
       }
     },
+    "/api/hub/policies": {
+      "get": {
+        "operationId": "AboutController_policyList",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyListView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "The published documents in the owner's order: slug, title and effective\ndate, no text. Empty until the owner has published one.",
+        "tags": [
+          "About"
+        ]
+      }
+    },
     "/api/hub/policies/{slug}": {
       "get": {
         "operationId": "AboutController_policy",
@@ -34489,9 +34511,40 @@
             }
           }
         },
-        "summary": "`terms` or `privacy`; `available: false` until the owner fills it in.",
+        "summary": "One of the nine slugs; `available: false` until the owner fills it in.",
         "tags": [
           "About"
+        ]
+      }
+    },
+    "/api/hub/policies/accept": {
+      "post": {
+        "operationId": "PolicyAcceptanceController_accept",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcceptPoliciesDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PolicyAcceptanceView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "PolicyAcceptance"
         ]
       }
     },
@@ -49805,6 +49858,20 @@
             }
           }
         }
+      },
+      "AcceptPoliciesDto": {
+        "type": "object",
+        "properties": {
+          "how": {
+            "type": "string",
+            "enum": [
+              "signup"
+            ]
+          }
+        },
+        "required": [
+          "how"
+        ]
       },
       "PolicySectionDto": {
         "type": "object",
@@ -67683,6 +67750,50 @@
           "supportEmail"
         ]
       },
+      "PolicySummaryView": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "enum": [
+              "privacy",
+              "terms",
+              "cookies",
+              "creator-monetization",
+              "verification-refund",
+              "acceptable-use",
+              "partner-dpa",
+              "community-guidelines",
+              "disclaimer"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "effectiveDate": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "title",
+          "effectiveDate"
+        ]
+      },
+      "PolicyListView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicySummaryView"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
       "PolicySectionView": {
         "type": "object",
         "properties": {
@@ -67704,8 +67815,15 @@
           "slug": {
             "type": "string",
             "enum": [
+              "privacy",
               "terms",
-              "privacy"
+              "cookies",
+              "creator-monetization",
+              "verification-refund",
+              "acceptable-use",
+              "partner-dpa",
+              "community-guidelines",
+              "disclaimer"
             ]
           },
           "available": {
@@ -67732,6 +67850,50 @@
           "title",
           "effectiveDate",
           "sections"
+        ]
+      },
+      "PolicyAcceptedView": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "enum": [
+              "privacy",
+              "terms",
+              "cookies",
+              "creator-monetization",
+              "verification-refund",
+              "acceptable-use",
+              "partner-dpa",
+              "community-guidelines",
+              "disclaimer"
+            ]
+          },
+          "effectiveDate": {
+            "type": "string"
+          },
+          "acceptedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "effectiveDate",
+          "acceptedAt"
+        ]
+      },
+      "PolicyAcceptanceView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PolicyAcceptedView"
+            }
+          }
+        },
+        "required": [
+          "items"
         ]
       },
       "SchoolPayeeView": {

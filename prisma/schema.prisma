@@ -6284,12 +6284,17 @@ model SchoolEnrolmentReport {
   @@index([sentAt, gaveUpAt, nextAttemptAt])
 }
 
-/// SETTINGS-02: the owner's legal text, one row per document ("terms",
-/// "privacy"), served by GET /policies/:slug and written by the superadmin
-/// route PUT /admin/policies/:slug. No row means the owner has not filled it
-/// in yet, and the app says so; nothing here is ever seeded with wording.
+/// SETTINGS-02, LEGAL-DOCS: the owner's legal text, one row per document (the
+/// nine slugs: "privacy", "terms", "cookies", "creator-monetization",
+/// "verification-refund", "acceptable-use", "partner-dpa",
+/// "community-guidelines", "disclaimer"), served by GET /policies/:slug and
+/// GET /policies and written by the superadmin route PUT /admin/policies/:slug.
+/// No row means the owner has not filled it in yet, and the app says so. The
+/// Hub never invents wording: the only text written by code is the owner's own,
+/// laid out as sections by migration 20261203090100_legal_documents_nine (owner
+/// ruling, 26 Oct 2026); everything after it is the owner's saves.
 model LegalDocument {
-  /// "terms" or "privacy".
+  /// One of the nine slugs above.
   slug          String   @id
   title         String
   /// The date the owner gives the text. Shown as "Updated 1 September 2026".
@@ -6297,6 +6302,26 @@ model LegalDocument {
   /// [{ heading, body }]; a body's paragraphs are separated by a blank line.
   sections      Json
   updatedAt     DateTime @updatedAt
+}
+
+/// LEGAL-DOCS: what a person agreed to at sign-up, written by the app once
+/// after sign-up (POST /policies/accept): one row per document and version the
+/// Hub had published, with the time. A retry adds nothing; a document the owner
+/// republishes with a new effective date adds one more row. OWNED in the purge
+/// map; part of the person's data export.
+model LegalAcceptance {
+  id            String   @id @default(uuid())
+  userWawuId    String
+  /// One of the nine slugs of LegalDocument.
+  slug          String
+  /// The effective date of the version agreed to.
+  effectiveDate DateTime @db.Date
+  acceptedAt    DateTime @default(now())
+  /// Where the person agreed: "signup".
+  how           String
+
+  @@unique([userWawuId, slug, effectiveDate])
+  @@index([userWawuId])
 }
 
 /// One person's reaction to one TGIF card on one day (HOME-10). The unique
