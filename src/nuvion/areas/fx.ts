@@ -283,7 +283,12 @@ export class NuvionFxArea implements ProviderForeignAccounts {
     const op: NuvionOp = { name: 'create fx quote', call: 'read' };
     const entityId = this.entity(op, input.person);
     const from = this.side(op, input.person, input.from);
-    const to = this.side(op, input.person, input.to);
+    // A naira DESTINATION is only a currency to Nuvion's quote (PAY-FX): a
+    // person with no naira account (a world wallet) pays a naira price.
+    const to =
+      input.to.currency === 'NGN' && input.person.walletId === ''
+        ? { currency: 'NGN' }
+        : this.side(op, input.person, input.to);
     if (
       (input.amountFromMinor === undefined) ===
       (input.amountToMinor === undefined)
@@ -301,8 +306,40 @@ export class NuvionFxArea implements ProviderForeignAccounts {
     } else {
       body.amount_to = Number(input.amountToMinor);
     }
-    // A quote is a request that makes no money move, but it is a POST: a
-    // lost answer is simply asked again.
+    return this.postQuote(op, body, from.currency, to.currency);
+  }
+
+  /**
+   * WAWU's operational (naira) account as the source of a quote (PAY-FX): the
+   * account is the authenticating entity's own, so the call names no
+   * `entity_id` (dev, 26 Oct 2026: answered 201).
+   */
+  async quoteFromMerchant(input: {
+    to: ProviderFxSide;
+    amountToMinor: bigint;
+  }): Promise<ProviderFxQuote> {
+    const op: NuvionOp = { name: 'create merchant fx quote', call: 'read' };
+    const to = this.side(op, { customerId: '', walletId: '' }, input.to);
+    return this.postQuote(
+      op,
+      {
+        from_currency: 'NGN',
+        to_currency: to.currency,
+        account_id: this.operationalId(op),
+        amount_to: Number(input.amountToMinor),
+      },
+      'NGN',
+      to.currency,
+    );
+  }
+
+  /** A quote is a request that makes no money move, but it is a POST: a lost answer is simply asked again. */
+  private async postQuote(
+    op: NuvionOp,
+    body: Record<string, unknown>,
+    fromCurrency: string,
+    toCurrency: string,
+  ): Promise<ProviderFxQuote> {
     const answer = await this.client.post<unknown>(op, '/fx-quotes', body);
     const d = answer.data;
     if (!isRecord(d)) throw this.bad(op, 'the answer is not a quote', answer);
@@ -327,7 +364,7 @@ export class NuvionFxArea implements ProviderForeignAccounts {
         answer,
       );
     }
-    if (text(d, 'from') !== from.currency || text(d, 'to') !== to.currency) {
+    if (text(d, 'from') !== fromCurrency || text(d, 'to') !== toCurrency) {
       throw this.bad(op, 'the quote is for another pair', answer);
     }
     return {
@@ -339,6 +376,54 @@ export class NuvionFxArea implements ProviderForeignAccounts {
       // Nuvion's quote carries no fee (api-reference__fx-quotes.md).
       feeMinor: null,
     };
+  }
+
+  /** The move that applies a merchant quote: from WAWU's naira account, no `entity_id`. */
+  async swapFromMerchant(input: {
+    reference: string;
+    quoteId: string;
+    to: ProviderFxSide;
+    amountFromMinor: bigint;
+    narration?: string;
+  }): Promise<ProviderFxTransfer> {
+    const op: NuvionOp = { name: 'swap from merchant account', call: 'write' };
+    this.id(op, input.quoteId);
+    const accountId = this.operationalId(op);
+    const nuvionBan = await this.receiver(
+      op,
+      { customerId: '', walletId: '' },
+      input.to,
+    );
+    const body = {
+      account_id: accountId,
+      amount: Number(input.amountFromMinor),
+      currency: 'NGN',
+      payment_type: 'book-transfer',
+      nuvion_ban: nuvionBan,
+      narration: (input.narration ?? 'WAWU refund').slice(0, NARRATION_MAX),
+      unique_reference: input.reference,
+      fx_quote_id: input.quoteId,
+    };
+    return this.transfer(op, body, input.reference, null, accountId);
+  }
+
+  async findMerchantTransfer(
+    reference: string,
+  ): Promise<ProviderFxTransferLookup> {
+    const op: NuvionOp = { name: 'find merchant transfer', call: 'read' };
+    return this.findOn(op, null, this.operationalId(op), reference);
+  }
+
+  private operationalId(op: NuvionOp): string {
+    const id = this.client.settings.operationalAccountId;
+    if (!isNuvionId(id)) {
+      throw this.fail(
+        op,
+        'validation',
+        "WAWU's operational account id is not in the form Nuvion uses",
+      );
+    }
+    return id;
   }
 
   async swap(input: ProviderFxSwapInput): Promise<ProviderFxTransfer> {
@@ -397,10 +482,24 @@ export class NuvionFxArea implements ProviderForeignAccounts {
     const op: NuvionOp = { name: 'find foreign transfer', call: 'read' };
     const entityId = this.entity(op, person);
     this.id(op, accountId);
+    return this.findOn(op, entityId, accountId, reference);
+  }
+
+  /** The transfers of one account, looked through for our reference (`entityId` null: WAWU's own account). */
+  private async findOn(
+    op: NuvionOp,
+    entityId: string | null,
+    accountId: string,
+    reference: string,
+  ): Promise<ProviderFxTransferLookup> {
     const listed = await this.client.listAll<unknown>(
       op,
       '/transfers',
-      { entity_id: entityId, account_id: accountId, limit: 100 },
+      {
+        ...(entityId === null ? {} : { entity_id: entityId }),
+        account_id: accountId,
+        limit: 100,
+      },
       { maxPages: LOOKUP_PAGES },
     );
     for (const row of listed.items) {
@@ -441,7 +540,7 @@ export class NuvionFxArea implements ProviderForeignAccounts {
     op: NuvionOp,
     body: Record<string, unknown>,
     reference: string,
-    entityId: string,
+    entityId: string | null,
     accountId: string,
   ): Promise<ProviderFxTransfer> {
     try {
@@ -514,23 +613,13 @@ export class NuvionFxArea implements ProviderForeignAccounts {
   }
 
   private async findByReference(
-    entityId: string,
+    entityId: string | null,
     accountId: string,
     reference: string,
   ): Promise<ProviderFxTransfer | null> {
     const op: NuvionOp = { name: 'find foreign transfer', call: 'read' };
-    const listed = await this.client.listAll<unknown>(
-      op,
-      '/transfers',
-      { entity_id: entityId, account_id: accountId, limit: 100 },
-      { maxPages: LOOKUP_PAGES },
-    );
-    for (const row of listed.items) {
-      const t = this.transferFrom(row, reference);
-      if (t && isRecord(row) && text(row, 'unique_reference') === reference)
-        return t;
-    }
-    return null;
+    const found = await this.findOn(op, entityId, accountId, reference);
+    return found.state === 'found' ? found.transfer : null;
   }
 
   // -------------------------------------------------------------------------

@@ -29,3 +29,10 @@ export const AD_TEXT_LIMITS = {
  * link and a notification campaign's picture. Covered by the marker above.
  */
 export const AD_ARTWORK_URL_MAX = 500;
+
+/**
+ * The longest web address a card may open (ADS-LINK, R-92), counted on the
+ * normalised form. The same bound as the artwork link, so the two links on a
+ * card share one rule. Covered by the marker above.
+ */
+export const AD_LINK_URL_MAX = 500;

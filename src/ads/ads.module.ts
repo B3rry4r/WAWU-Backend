@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
+import { StorageModule } from '../storage/storage.module';
 import { ADS_CLOCK, systemClock } from './ads-clock';
 import { AdsController } from './ads.controller';
 import { AdsService } from './ads.service';
@@ -11,7 +12,7 @@ import { AdsService } from './ads.service';
  * (ADS-06) and the counting half (ADS-05) are separate modules.
  */
 @Module({
-  imports: [WawuAuthModule, BlockedAccountModule],
+  imports: [WawuAuthModule, BlockedAccountModule, StorageModule],
   controllers: [AdsController],
   providers: [AdsService, { provide: ADS_CLOCK, useValue: systemClock }],
   exports: [AdsService],

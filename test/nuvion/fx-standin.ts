@@ -200,7 +200,10 @@ export class FxStandin {
         account_id?: string;
         entity_id?: string;
       };
-      if (!b.entity_id)
+      // Dev (26 Oct 2026, PAY-FX): WAWU's operational account is the
+      // authenticating entity's own, so a quote from it names no entity_id.
+      const source = b.account_id ? this.accounts.get(b.account_id) : undefined;
+      if (!b.entity_id && source?.type !== 'operational')
         return {
           status: 404,
           body: errorBody('error_resource_not_found', 'account not found'),
@@ -530,6 +533,22 @@ export class FxStandin {
       display_name: 'WAWU collector',
       nuvion_ban: ban,
       balance: { available: 0, current: 0, overdraft_used: 0 },
+      deleted: 0,
+    };
+    this.accounts.set(id, a);
+    return a;
+  }
+
+  /** WAWU's own operational naira account, under the id the adapter is configured with (PAY-FX). */
+  addOperational(id: string, ban: string, kobo: number): Acct {
+    const a: Acct = {
+      id,
+      entity_id: '01FXWAWUENTITY00000000001',
+      type: 'operational',
+      currency: 'NGN',
+      display_name: 'WAWU operational',
+      nuvion_ban: ban,
+      balance: { available: kobo, current: kobo, overdraft_used: 0 },
       deleted: 0,
     };
     this.accounts.set(id, a);

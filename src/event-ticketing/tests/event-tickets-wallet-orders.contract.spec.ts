@@ -275,6 +275,8 @@ describe('PUT /events/:id/tickets with wallet orders on the tiers (EVENTS-11 ove
       {} as never,
       {
         requireOpen: (id: string) => Promise.resolve({ wawuUserId: id }),
+        // PAY-FX: the service asks the gate for requireOpenOrWorld; answer it as requireOpen does (an open naira wallet).
+        requireOpenOrWorld: (id: string) => Promise.resolve({ wawuUserId: id }),
       } as never,
       { assertVisible: () => Promise.resolve() } as never,
       {} as never,

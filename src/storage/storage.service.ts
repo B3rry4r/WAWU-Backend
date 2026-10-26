@@ -20,6 +20,11 @@ import {
   type UploadFormatId,
 } from './dto/presign-upload.dto';
 import { formatFolderRule } from './upload-formats';
+import {
+  AD_ARTWORK_FOLDER,
+  AD_ARTWORK_KEY,
+  AD_ARTWORK_TYPES,
+} from './ad-artwork';
 import { deleteFromBucket } from './bucket-delete';
 import { createStorageClient } from './storage-client';
 import { releaseOwnUpload } from './upload-release';
@@ -262,6 +267,7 @@ export const KEY_FOLDERS: readonly string[] = [
   ...UPLOAD_FOLDERS,
   ...CHAT_UPLOAD_FOLDERS,
   ...GENERATED_KEY_FOLDERS,
+  AD_ARTWORK_FOLDER,
 ];
 
 /**
@@ -789,6 +795,67 @@ export class StorageService {
       },
     });
     return key;
+  }
+
+  /**
+   * Stores one picture for a sponsored card (ADS-LINK), at
+   * `ads/artwork/<uuid>.<ext>`. `contentType` must be one of the three picture
+   * types the Hub serves; the caller has already checked the bytes are that
+   * kind of picture. Returns the key, the address to save as the card's
+   * `artworkUrl` (the bucket address with no signature: serving signs it
+   * afresh) and a signed `previewUrl` the dashboard shows at once. Not
+   * creator content: no StorageObject row and no allowance. A network call:
+   * the caller holds no transaction and no lock.
+   */
+  async putAdArtwork(
+    body: Buffer,
+    contentType: string,
+  ): Promise<{ key: string; artworkUrl: string; previewUrl: string }> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const ext = AD_ARTWORK_TYPES[contentType];
+    if (!ext) {
+      throw new BadRequestException('That is not a JPEG, PNG or WebP picture.');
+    }
+    const key = `${AD_ARTWORK_FOLDER}/${randomUUID()}.${ext}`;
+    await this.client.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        ContentLength: body.length,
+      }),
+    );
+    const previewUrl = await this.readUrlFor(key);
+    const bare = new URL(previewUrl);
+    bare.search = '';
+    bare.hash = '';
+    return { key, artworkUrl: bare.toString(), previewUrl };
+  }
+
+  /**
+   * Whether `value` is the address of a picture this Hub stored for a card:
+   * its key is `ads/artwork/<uuid>.<ext>` and it is on this bucket's own host.
+   * Used for an artwork address that is not an ordinary public https link (the
+   * local test stack's storage is plain http).
+   */
+  async ownsAdArtworkUrl(value: string): Promise<boolean> {
+    if (!this.client) return false;
+    const key = objectKeyFrom(value);
+    if (!AD_ARTWORK_KEY.test(key)) return false;
+    try {
+      const own = new URL(await this.readUrlFor(key));
+      const given = new URL(value);
+      return (
+        given.origin === own.origin && given.search === '' && given.hash === ''
+      );
+    } catch {
+      return false;
+    }
   }
 
   /**

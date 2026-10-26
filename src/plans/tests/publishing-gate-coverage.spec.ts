@@ -248,12 +248,22 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     why: 'an admin writes a school logo and a link to its application page',
   },
   'POST admin/ads': {
-    files: ['creative.artworkUrl'],
-    why: 'an admin writes an ad with its artwork',
+    files: [
+      'creative.artworkUrl',
+      'creative.ctaUrl',
+      'creative.landscapeUrl',
+      'creative.portraitUrl',
+    ],
+    why: 'an admin writes an ad with its landscape and portrait pictures and the web address it opens',
   },
   'PATCH admin/ads/:id': {
-    files: ['creative.artworkUrl'],
-    why: 'an admin writes an ad with its artwork',
+    files: [
+      'creative.artworkUrl',
+      'creative.ctaUrl',
+      'creative.landscapeUrl',
+      'creative.portraitUrl',
+    ],
+    why: 'an admin writes an ad with its landscape and portrait pictures and the web address it opens',
   },
   'PATCH learn/playbook': {
     files: ['fileUrl'],
