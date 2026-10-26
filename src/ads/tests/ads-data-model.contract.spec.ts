@@ -445,8 +445,11 @@ describe('Ads data model (ADS-03)', () => {
       expect((await refusal(CREATIVE_SQL, withArg(id, 5, null))).code).toBe(
         '23502',
       );
+      // ADS-LINK (R-92): the id is only for an event card, so the column
+      // allows null; an `event` card without one is still refused, now by
+      // "AdCreative_cta_check" (23514) instead of NOT NULL (23502).
       expect((await refusal(CREATIVE_SQL, withArg(id, 6, null))).code).toBe(
-        '23502',
+        '23514',
       );
     });
 
@@ -753,6 +756,8 @@ describe('Ads data model (ADS-03)', () => {
           'ctaLabel',
           'ctaDestination',
           'ctaDestinationId',
+          // ADS-LINK (R-92): the web address a `link` card opens.
+          'ctaUrl',
           'artworkUrl',
           'createdAt',
           'updatedAt',

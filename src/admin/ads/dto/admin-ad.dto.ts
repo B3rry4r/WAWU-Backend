@@ -20,7 +20,12 @@ import {
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import { AD_WEIGHT_MAX, AD_WEIGHT_MIN } from '../../../ads/ads-limits';
 import { AD_TEXT_LIMITS } from '../../../ads/ads-text-limits';
-import { AdText, IsArtworkUrl, IsUtcInstant } from './ad-field-decorators';
+import {
+  AdText,
+  IsArtworkUrl,
+  IsCtaUrl,
+  IsUtcInstant,
+} from './ad-field-decorators';
 
 /**
  * "Optional" for a field that cannot be null: a field left out is unchanged, a
@@ -61,18 +66,38 @@ export class CreateAdCreativeDto {
   @AdText('subline', AD_TEXT_LIMITS.subline)
   subline?: string | null;
 
+  /**
+   * The button's words. Required for `event` and `link`; a `none` card has no
+   * button, so it must not carry one. Which of the two applies is checked in
+   * the service, with the rest of the destination's rules.
+   */
+  @Optional()
   @AdText('ctaLabel', AD_TEXT_LIMITS.ctaLabel)
-  ctaLabel!: string;
+  ctaLabel?: string;
 
-  /** What the button opens. The allow-list is the AdCtaDestination enum: `event` today. */
+  /**
+   * What a tap does (R-92): `link` opens `ctaUrl` in the phone's browser,
+   * `none` does nothing, `event` opens an event (kept for the campaigns that
+   * already use it; the dashboard no longer offers it).
+   */
   @IsIn(DESTINATIONS)
   ctaDestination!: AdCtaDestination;
 
-  /** For `event`, an Event id. The event must be published and not over. */
+  /** For `event` only, an Event id. The event must be published and not over. */
+  @Optional()
   @Transform(lowerCase)
   @IsString()
   @Matches(UUID_LIKE, { message: 'ctaDestinationId must be an event id.' })
-  ctaDestinationId!: string;
+  ctaDestinationId?: string;
+
+  /**
+   * For `link` only: the https address the card opens, as the artwork link is
+   * checked (public host, no password, no spaces, at most AD_LINK_URL_MAX),
+   * stored in its normal form.
+   */
+  @Optional()
+  @IsCtaUrl()
+  ctaUrl?: string;
 
   /**
    * An https link to the picture. REQUIRED (R-59): a campaign without artwork
@@ -138,6 +163,11 @@ export class UpdateAdCreativeDto {
   @IsString()
   @Matches(UUID_LIKE, { message: 'ctaDestinationId must be an event id.' })
   ctaDestinationId?: string;
+
+  /** A new address for a `link` card. Only a card that opens a link has one. */
+  @Optional()
+  @IsCtaUrl()
+  ctaUrl?: string;
 
   /** A new https link to the picture. Sending null, or leaving a campaign that has none without one, is refused with 422 (R-59). */
   @IsOptional()

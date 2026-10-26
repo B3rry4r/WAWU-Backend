@@ -43538,6 +43538,44 @@
         ]
       }
     },
+    "/api/hub/admin/ads/artwork": {
+      "post": {
+        "operationId": "AdminAdsController_uploadArtwork",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "artworkUrl": {
+                      "type": "string"
+                    },
+                    "previewUrl": {
+                      "type": "string"
+                    },
+                    "bytes": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "artworkUrl",
+                    "previewUrl",
+                    "bytes"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "Upload the picture for a card (ADS-LINK): the file itself is the request\nbody, with its type (`image/jpeg`, `image/png` or `image/webp`) as the\nContent-Type. Up to 5 MB, and the bytes must really be that kind of\npicture. Answers the address to save as `artworkUrl` and a link that shows\nthe picture now. A typed https link still works as the artwork.",
+        "tags": [
+          "AdminAds"
+        ]
+      }
+    },
     "/api/hub/admin/ads/{id}": {
       "get": {
         "operationId": "AdminAdsController_detail",
@@ -51369,18 +51407,25 @@
             "description": "Place, date and price as the team types them. Leave it out for no second line."
           },
           "ctaLabel": {
-            "type": "string"
+            "type": "string",
+            "description": "The button's words. Required for `event` and `link`; a `none` card has no\nbutton, so it must not carry one. Which of the two applies is checked in\nthe service, with the rest of the destination's rules."
           },
           "ctaDestination": {
             "type": "string",
-            "description": "What the button opens. The allow-list is the AdCtaDestination enum: `event` today.",
+            "description": "What a tap does (R-92): `link` opens `ctaUrl` in the phone's browser,\n`none` does nothing, `event` opens an event (kept for the campaigns that\nalready use it; the dashboard no longer offers it).",
             "enum": [
-              "event"
+              "event",
+              "link",
+              "none"
             ]
           },
           "ctaDestinationId": {
             "type": "string",
-            "description": "For `event`, an Event id. The event must be published and not over."
+            "description": "For `event` only, an Event id. The event must be published and not over."
+          },
+          "ctaUrl": {
+            "type": "string",
+            "description": "For `link` only: the https address the card opens, as the artwork link is\nchecked (public host, no password, no spaces, at most AD_LINK_URL_MAX),\nstored in its normal form."
           },
           "artworkUrl": {
             "type": "string",
@@ -51390,9 +51435,7 @@
         },
         "required": [
           "headline",
-          "ctaLabel",
-          "ctaDestination",
-          "ctaDestinationId"
+          "ctaDestination"
         ]
       },
       "CreateAdCampaignDto": {
@@ -51451,11 +51494,17 @@
           "ctaDestination": {
             "type": "string",
             "enum": [
-              "event"
+              "event",
+              "link",
+              "none"
             ]
           },
           "ctaDestinationId": {
             "type": "string"
+          },
+          "ctaUrl": {
+            "type": "string",
+            "description": "A new address for a `link` card. Only a card that opens a link has one."
           },
           "artworkUrl": {
             "type": "string",
@@ -68409,16 +68458,24 @@
             "nullable": true
           },
           "ctaLabel": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "ctaDestination": {
             "type": "string",
             "enum": [
-              "event"
+              "none",
+              "event",
+              "link"
             ]
           },
           "ctaDestinationId": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
+          },
+          "ctaUrl": {
+            "type": "string",
+            "nullable": true
           },
           "artworkUrl": {
             "type": "string"
@@ -68429,9 +68486,7 @@
           "advertiser",
           "headline",
           "subline",
-          "ctaLabel",
           "ctaDestination",
-          "ctaDestinationId",
           "artworkUrl"
         ]
       },
@@ -79401,18 +79456,30 @@
             "nullable": true
           },
           "ctaLabel": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "ctaDestination": {
             "type": "string",
             "enum": [
-              "event"
+              "none",
+              "event",
+              "link"
             ]
           },
           "ctaDestinationId": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
+          },
+          "ctaUrl": {
+            "type": "string",
+            "nullable": true
           },
           "artworkUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "artworkPreviewUrl": {
             "type": "string",
             "nullable": true
           }

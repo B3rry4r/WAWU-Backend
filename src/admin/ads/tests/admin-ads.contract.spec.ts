@@ -353,7 +353,9 @@ describe('Admin ads contract (ADS-06)', () => {
     });
     const open = await prisma.event.findMany({
       where: {
-        id: { in: candidates.map((c) => c.creative!.ctaDestinationId) },
+        id: {
+          in: candidates.map((c) => c.creative!.ctaDestinationId as string),
+        },
         status: 'published',
         cancelledAt: null,
         OR: [
@@ -364,7 +366,9 @@ describe('Admin ads contract (ADS-06)', () => {
       select: { id: true },
     });
     const ids = new Set(open.map((e) => e.id));
-    return candidates.filter((c) => ids.has(c.creative!.ctaDestinationId));
+    return candidates.filter((c) =>
+      ids.has(c.creative!.ctaDestinationId as string),
+    );
   }
 
   async function adminToken(id: string, role: string, email: string) {

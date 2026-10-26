@@ -6445,13 +6445,19 @@ enum AdCampaignStatus {
   ended
 }
 
-/// What the card's button opens. THE ALLOW-LIST: a card can only open one of
-/// these, so a destination outside it cannot be stored. `event` opens the event
-/// detail screen for `AdCreative.ctaDestinationId` (H33 "Get tickets", H36
-/// "Tickets"). The only destination the design draws is the event; a new kind
-/// is an additive `ALTER TYPE ... ADD VALUE` that the task needing it names.
+/// What a tap on the card does. THE ALLOW-LIST: a card can only do one of
+/// these, so a destination outside it cannot be stored. `link` opens the web
+/// address in `AdCreative.ctaUrl` in the phone's browser (ADS-LINK, R-92).
+/// `none` is a card that is only shown: no button, nothing to tap. `event`
+/// opened the event detail screen for `AdCreative.ctaDestinationId` (H33 "Get
+/// tickets", H36 "Tickets"); R-92 ruled that ads are not tied to events, so the
+/// dashboard no longer offers it, but a campaign that already uses it is served
+/// exactly as before. A new kind is an additive `ALTER TYPE ... ADD VALUE`
+/// that the task needing it names.
 enum AdCtaDestination {
   event
+  link
+  none
 }
 
 /// One booking: who it is for, where it shows, when, and how it ranks against
@@ -6507,14 +6513,19 @@ model AdCreative {
   /// Optional: a card with only a headline is allowed.
   subline  String?
 
-  /// The button's words ("Get tickets", "Tickets").
-  ctaLabel         String
-  /// What the button opens: a kind from the allow-list (AdCtaDestination) and
-  /// the id of the thing of that kind. For `event`, an Event id. No foreign
-  /// key: the id's table depends on the kind, and an FK onto Event would stop
-  /// an event being deleted. Serving checks the target is still open.
+  /// The button's words ("Get tickets", "Visit us"). Set for `event` and
+  /// `link`; null for `none`, which draws no button (R-47: no do-nothing button).
+  ctaLabel         String?
+  /// What a tap does: a kind from the allow-list (AdCtaDestination).
   ctaDestination   AdCtaDestination
-  ctaDestinationId String
+  /// For `event`, an Event id; null for the other two kinds. No foreign key:
+  /// an FK onto Event would stop an event being deleted. Serving checks the
+  /// target is still open.
+  ctaDestinationId String?
+  /// For `link`, the https address the button opens, normalised (ADS-LINK,
+  /// R-92); null for the other two kinds. A CHECK ties the three columns to
+  /// the kind (see the ads_link_destinations migration).
+  ctaUrl           String?
 
   /// The picture. An http(s) URL from POST /uploads/presign, the same as
   /// Event.bannerUrl and NotificationCampaign.imageUrl. REQUIRED for every

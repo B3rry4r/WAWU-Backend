@@ -12,11 +12,13 @@ import type { AdPlacementName } from './dto/ads.dto';
  *   3. startsAt <= now < endsAt (the start instant is in, the end instant is out);
  *   4. it has a creative with artwork (R-59: a card is never drawn without a
  *      picture; campaigns saved before ADS-07 without one are skipped);
- *   5. what the button opens is still open: for `event`, the Event exists, is
- *      `published`, is not cancelled, has not finished (the same "upcoming"
- *      test GET /events uses) and its host is not hidden from the viewer by a
- *      block (the same rule GET /events/:id uses, so the button never leads
- *      to a 404).
+ *   5. what a tap opens is still open. A `link` card opens a web address and a
+ *      `none` card opens nothing, so neither has anything to check (R-92: ads
+ *      are not tied to events). For `event` (campaigns saved before R-92), the
+ *      Event exists, is `published`, is not cancelled, has not finished (the
+ *      same "upcoming" test GET /events uses) and its host is not hidden from
+ *      the viewer by a block (the same rule GET /events/:id uses, so the
+ *      button never leads to a 404).
  * Of the campaigns that pass, ONE is served for `tgif_card` and `today_slot`:
  * the highest weight first, then the order in AD_TIE_BREAK. The Explore slider
  * (`explore_slider`, ADS-07) serves ALL of them, in that same order. A campaign that fails (5) is skipped and the next
@@ -48,9 +50,14 @@ export interface ServableCampaign {
   creative: {
     headline: string;
     subline: string | null;
-    ctaLabel: string;
-    ctaDestination: 'event';
-    ctaDestinationId: string;
+    /** What a tap does (R-92). */
+    ctaDestination: 'event' | 'link' | 'none';
+    /** The button's words. Null for `none`: no button is drawn. */
+    ctaLabel: string | null;
+    /** An Event id, for `event` only. */
+    ctaDestinationId: string | null;
+    /** The https address, for `link` only. */
+    ctaUrl: string | null;
     artworkUrl: string;
   };
 }
@@ -88,6 +95,7 @@ export async function servableCampaigns(
           ctaLabel: true,
           ctaDestination: true,
           ctaDestinationId: true,
+          ctaUrl: true,
           artworkUrl: true,
         },
       },
@@ -99,7 +107,7 @@ export async function servableCampaigns(
     deps,
     viewerWawuId,
     candidates.flatMap((c) =>
-      c.creative?.ctaDestination === 'event'
+      c.creative?.ctaDestination === 'event' && c.creative.ctaDestinationId
         ? [c.creative.ctaDestinationId]
         : [],
     ),
@@ -109,19 +117,21 @@ export async function servableCampaigns(
   const out: ServableCampaign[] = [];
   for (const c of candidates) {
     const creative = c.creative;
-    // Anything this code cannot check is not served.
-    if (!creative || creative.ctaDestination !== 'event') continue;
-    if (!creative.artworkUrl) continue;
-    if (!open.has(creative.ctaDestinationId)) continue;
-    out.push({
-      id: c.id,
-      advertiser: c.advertiser,
-      creative: {
-        ...creative,
-        ctaDestination: 'event',
-        artworkUrl: creative.artworkUrl,
-      },
-    });
+    if (!creative || !creative.artworkUrl) continue;
+    // Anything this code cannot check is not served: the fields a kind needs
+    // are checked here as well as by the database, so a card is never drawn
+    // half built.
+    const served = {
+      ...creative,
+      artworkUrl: creative.artworkUrl,
+    };
+    if (creative.ctaDestination === 'event') {
+      if (!creative.ctaLabel || !creative.ctaDestinationId) continue;
+      if (!open.has(creative.ctaDestinationId)) continue;
+    } else if (creative.ctaDestination === 'link') {
+      if (!creative.ctaLabel || !creative.ctaUrl) continue;
+    }
+    out.push({ id: c.id, advertiser: c.advertiser, creative: served });
   }
   return out;
 }

@@ -3,6 +3,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  PayloadTooLargeException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
@@ -17,6 +18,13 @@ import {
   type AdminAdAction,
 } from '../../../generated/prisma/enums';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import {
+  AD_ARTWORK_KEY,
+  AD_ARTWORK_MAX_BYTES,
+  AD_ARTWORK_TYPES,
+  sniffAdArtwork,
+} from '../../storage/ad-artwork';
+import { StorageService, objectKeyFrom } from '../../storage/storage.service';
 import { AdsCountsService } from '../../ads/ads-counts.service';
 import type { AdCounts, AdDayRange } from '../../ads/ads-counts.type';
 import { utcDay } from '../../ads/ads-day';
@@ -32,7 +40,8 @@ import {
   type AdAction,
   type AdPhase,
 } from './ad-campaign-state';
-import { parseUtcInstant } from './ad-text';
+import { resolveCta, type CtaFields } from './ad-destination';
+import { checkArtworkUrl, parseUtcInstant } from './ad-text';
 import {
   toAdAuditEntryView,
   type AdAuditEntryView,
@@ -139,6 +148,7 @@ function snapshotOf(
     ctaLabel: creative.ctaLabel,
     ctaDestination: creative.ctaDestination,
     ctaDestinationId: creative.ctaDestinationId,
+    ctaUrl: creative.ctaUrl,
     artworkUrl: creative.artworkUrl,
   };
 }
@@ -196,6 +206,7 @@ export class AdminAdsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly counts: AdsCountsService,
+    private readonly storage: StorageService,
   ) {}
 
   // ── reads ─────────────────────────────────────────────────────────────────
@@ -389,6 +400,65 @@ export class AdminAdsService {
     };
   }
 
+  /**
+   * POST /admin/ads/artwork: stores one picture for a card and returns the
+   * address to save as `artworkUrl` and a link to show it now. The bytes must
+   * be a JPEG, PNG or WebP (read from the file itself; the declared type must
+   * agree) and at most AD_ARTWORK_MAX_BYTES. Nothing is attached to a campaign
+   * yet: the dashboard saves the returned address with the campaign.
+   */
+  async uploadArtwork(
+    declaredType: string | undefined,
+    body: Buffer,
+  ): Promise<{ artworkUrl: string; previewUrl: string; bytes: number }> {
+    if (body.length === 0) throw refuse('bad_artwork', 'The picture is empty.');
+    if (body.length > AD_ARTWORK_MAX_BYTES) {
+      throw new PayloadTooLargeException(
+        `The picture is too big. Keep it under ${AD_ARTWORK_MAX_BYTES / (1024 * 1024)} MB.`,
+      );
+    }
+    const kind = sniffAdArtwork(body);
+    if (!kind || !AD_ARTWORK_TYPES[kind] || declaredType !== kind) {
+      throw refuse(
+        'bad_artwork',
+        'The picture must be a JPEG, PNG or WebP file.',
+      );
+    }
+    const stored = await this.storage.putAdArtwork(body, kind);
+    return {
+      artworkUrl: stored.artworkUrl,
+      previewUrl: stored.previewUrl,
+      bytes: body.length,
+    };
+  }
+
+  /**
+   * A typed artwork link was checked by the DTO. An address that only has the
+   * shape of one of the Hub's own pictures (plain http on the local test
+   * stack) is accepted only when it really is on the Hub's own bucket.
+   */
+  private async assertArtwork(url: string): Promise<void> {
+    if (checkArtworkUrl(url).ok) return;
+    if (await this.storage.ownsAdArtworkUrl(url)) return;
+    throw refuse(
+      'bad_artwork',
+      'artworkUrl must be an https link to a public host, without a password or spaces.',
+    );
+  }
+
+  /**
+   * A link that shows a picture the Hub stored (the bare address is not
+   * readable: the bucket is private), or undefined for a typed link, which
+   * the dashboard shows as it is.
+   */
+  private async previewOf(
+    artworkUrl: string | null | undefined,
+  ): Promise<string | undefined> {
+    if (!artworkUrl) return undefined;
+    if (!AD_ARTWORK_KEY.test(objectKeyFrom(artworkUrl))) return undefined;
+    return (await this.storage.freshUrlFor(artworkUrl)) ?? undefined;
+  }
+
   // ── writes ────────────────────────────────────────────────────────────────
 
   /** POST /admin/ads: a draft. Nothing is served until it is scheduled. */
@@ -397,17 +467,20 @@ export class AdminAdsService {
     admin: AdminUserView,
   ): Promise<AdCampaignChangeView> {
     if (!dto.creative.artworkUrl) throw artworkRequired();
+    await this.assertArtwork(dto.creative.artworkUrl);
     const now = new Date();
     const startsAt = this.instant(dto.startsAt, 'startsAt');
     const endsAt = this.instant(dto.endsAt, 'endsAt');
     this.assertWindow(startsAt, endsAt, now);
-    await this.assertEventOpen(
-      this.prisma,
-      dto.creative.ctaDestination,
-      dto.creative.ctaDestinationId,
-      now,
-      'bad_input',
-    );
+    const cta = this.ctaOf(null, dto.creative);
+    if (cta.ctaDestination === 'event') {
+      await this.assertEventOpen(
+        this.prisma,
+        cta.ctaDestinationId as string,
+        now,
+        'bad_input',
+      );
+    }
 
     const audit = await this.prisma.$transaction(async (tx) => {
       const created = await tx.adCampaign.create({
@@ -422,9 +495,10 @@ export class AdminAdsService {
             create: {
               headline: dto.creative.headline,
               subline: dto.creative.subline ?? null,
-              ctaLabel: dto.creative.ctaLabel,
-              ctaDestination: dto.creative.ctaDestination,
-              ctaDestinationId: dto.creative.ctaDestinationId,
+              ctaLabel: cta.ctaLabel,
+              ctaDestination: cta.ctaDestination,
+              ctaDestinationId: cta.ctaDestinationId,
+              ctaUrl: cta.ctaUrl,
               artworkUrl: dto.creative.artworkUrl,
             },
           },
@@ -476,6 +550,7 @@ export class AdminAdsService {
         ? this.instant(dto.endsAt, 'endsAt')
         : row.endsAt;
       const c = dto.creative ?? {};
+      if (c.artworkUrl) await this.assertArtwork(c.artworkUrl);
 
       const before = snapshotOf(row, creative);
       const nextCampaign: AdCampaignModel = {
@@ -490,9 +565,7 @@ export class AdminAdsService {
         ...creative,
         headline: c.headline ?? creative.headline,
         subline: c.subline === undefined ? creative.subline : c.subline,
-        ctaLabel: c.ctaLabel ?? creative.ctaLabel,
-        ctaDestination: c.ctaDestination ?? creative.ctaDestination,
-        ctaDestinationId: c.ctaDestinationId ?? creative.ctaDestinationId,
+        ...this.ctaOf(creative, c),
         artworkUrl:
           c.artworkUrl === undefined ? creative.artworkUrl : c.artworkUrl,
       };
@@ -511,11 +584,13 @@ export class AdminAdsService {
       if (changes.startsAt || changes.endsAt) {
         this.assertWindow(startsAt, endsAt, now);
       }
-      if (changes.ctaDestination || changes.ctaDestinationId) {
+      if (
+        nextCreative.ctaDestination === 'event' &&
+        (changes.ctaDestination || changes.ctaDestinationId)
+      ) {
         await this.assertEventOpen(
           tx,
-          nextCreative.ctaDestination,
-          nextCreative.ctaDestinationId,
+          nextCreative.ctaDestinationId as string,
           now,
           'bad_input',
         );
@@ -541,6 +616,7 @@ export class AdminAdsService {
           ctaLabel: nextCreative.ctaLabel,
           ctaDestination: nextCreative.ctaDestination,
           ctaDestinationId: nextCreative.ctaDestinationId,
+          ctaUrl: nextCreative.ctaUrl,
           artworkUrl: nextCreative.artworkUrl,
         },
       });
@@ -647,13 +723,14 @@ export class AdminAdsService {
             { endsAt: row.endsAt },
           );
         }
-        await this.assertEventOpen(
-          tx,
-          row.creative.ctaDestination,
-          row.creative.ctaDestinationId,
-          now,
-          'conflict',
-        );
+        if (row.creative.ctaDestination === 'event') {
+          await this.assertEventOpen(
+            tx,
+            row.creative.ctaDestinationId as string,
+            now,
+            'conflict',
+          );
+        }
         to = onAirStatus(row.startsAt, now);
       }
 
@@ -754,7 +831,20 @@ export class AdminAdsService {
   }
 
   /**
-   * The card's button opens an Event: it must exist, be published, not be
+   * The kind-specific fields a card will have after `sent` is applied to `prev`
+   * (R-92: link, none or event), or a 400 that names what is wrong.
+   */
+  private ctaOf(
+    prev: CtaFields | null,
+    sent: Parameters<typeof resolveCta>[1],
+  ): CtaFields {
+    const result = resolveCta(prev, sent);
+    if (!result.ok) throw refuse('bad_destination', result.message);
+    return result.value;
+  }
+
+  /**
+   * An `event` card's button opens an Event: it must exist, be published, not be
    * called off and not be over (the test serving applies). Checked when a
    * campaign is created, when its event is changed, when it is scheduled and
    * when it is resumed. If the event closes after that, the campaign is left alone
@@ -766,14 +856,10 @@ export class AdminAdsService {
    */
   private async assertEventOpen(
     db: Pick<Tx, 'event'>,
-    destination: string,
     eventId: string,
     now: Date,
     kind: 'bad_input' | 'conflict',
   ): Promise<void> {
-    if (destination !== 'event') {
-      throw refuse('bad_destination', 'ctaDestination is not one we can open.');
-    }
     const event = await db.event.findUnique({
       where: { id: eventId },
       select: {
@@ -934,7 +1020,7 @@ export class AdminAdsService {
     const eventIds = [
       ...new Set(
         rows.flatMap((r) =>
-          r.creative?.ctaDestination === 'event'
+          r.creative?.ctaDestination === 'event' && r.creative.ctaDestinationId
             ? [r.creative.ctaDestinationId]
             : [],
         ),
@@ -955,10 +1041,14 @@ export class AdminAdsService {
             },
           });
     const byId = new Map(events.map((e) => [e.id, e]));
+    const previews = await Promise.all(
+      rows.map((r) => this.previewOf(r.creative?.artworkUrl)),
+    );
 
-    return rows.map((row) => {
+    return rows.map((row, at) => {
       const event =
-        row.creative?.ctaDestination === 'event'
+        row.creative?.ctaDestination === 'event' &&
+        row.creative.ctaDestinationId
           ? byId.get(row.creative.ctaDestinationId)
           : undefined;
       const eventView: AdEventView | null = event
@@ -988,7 +1078,12 @@ export class AdminAdsService {
               ctaLabel: row.creative.ctaLabel,
               ctaDestination: row.creative.ctaDestination,
               ctaDestinationId: row.creative.ctaDestinationId,
+              // Only a link card has an address, so an event card's view is
+              // exactly the shape it had before R-92.
+              ...(row.creative.ctaUrl ? { ctaUrl: row.creative.ctaUrl } : {}),
               artworkUrl: row.creative.artworkUrl,
+              // Only a picture the Hub stored has one: a typed link needs none.
+              ...(previews[at] ? { artworkPreviewUrl: previews[at] } : {}),
             }
           : null,
         event: eventView,
@@ -999,7 +1094,8 @@ export class AdminAdsService {
           phase === 'running' &&
           row.creative !== null &&
           row.creative.artworkUrl !== null &&
-          eventView?.open === true,
+          // A link or none card has no event to wait for.
+          (row.creative.ctaDestination !== 'event' || eventView?.open === true),
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
       };

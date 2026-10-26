@@ -23,10 +23,26 @@ import type { AdCounts, AdDayCounts } from '../../ads/ads-counts.type';
 export interface AdCreativeView {
   headline: string;
   subline: string | null;
-  ctaLabel: string;
+  /** The button's words. Null for a `none` card, which draws no button. */
+  ctaLabel: string | null;
+  /** What a tap does (R-92): `link`, `none`, or `event` on campaigns that already use it. */
   ctaDestination: AdCtaDestination;
-  ctaDestinationId: string;
+  /** The Event id, for an `event` card only; null otherwise. */
+  ctaDestinationId: string | null;
+  /**
+   * The https address a `link` card opens, in its normal form. Present for a
+   * `link` card only; left out for the other two, so an `event` card's view is
+   * unchanged.
+   */
+  ctaUrl?: string;
   artworkUrl: string | null;
+  /**
+   * A signed link that shows the picture, for a picture uploaded through
+   * `POST /admin/ads/artwork` (its `artworkUrl` is not readable by itself: the
+   * bucket is private). Left out for a typed link, which `artworkUrl` already
+   * shows.
+   */
+  artworkPreviewUrl?: string;
 }
 
 /** The thing the card's button opens, as it stands now. Null when it no longer exists. */
