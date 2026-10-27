@@ -36,7 +36,15 @@ const ids = {
   foreign: randomUUID(),
   gone: randomUUID(),
   holdQuestion: randomUUID(),
+  holdForeign: randomUUID(),
+  viaId: randomUUID(),
+  otherViaId: randomUUID(),
+  fx: randomUUID(),
+  abroad: randomUUID(),
 };
+/** The provider's transfer ids our own records hold (the statement's line id is the provider's transfer id). */
+const TRANSFER_MINE = '01FP6TRANSFER0000000000MINE';
+const TRANSFER_OTHER = '01FP6TRANSFER000000000OTHER';
 
 function line(over: Partial<ProviderFxStatementLine>): ProviderFxStatementLine {
   return {
@@ -91,7 +99,48 @@ describe('a foreign account history never shows a WAWU internal account name (FI
     });
   }
 
+  /** The service over a fake provider whose statement is `statement`; `platform` is the operational account's own display name (null: the provider cannot say). */
+  function build(platform: string | null): FxAccountsService {
+    const provider = {
+      name: 'nuvion',
+      label: 'Nuvion',
+      configured: true,
+      ...(platform === null
+        ? {
+            getPlatformAccount: () => Promise.reject(new Error('no answer')),
+          }
+        : {
+            getPlatformAccount: () =>
+              Promise.resolve({
+                accountNumber: '0099990001',
+                accountName: platform,
+                availableKobo: 0n,
+                bookedKobo: 0n,
+              }),
+          }),
+      fx: {
+        statement: (
+          _person: unknown,
+          _account: unknown,
+          query: { cursor: string | null },
+        ) =>
+          Promise.resolve({
+            lines: query.cursor ? [] : statement,
+            nextCursor: null,
+          }),
+      },
+    } as unknown as WalletProvider;
+    return new FxAccountsService(
+      new FxPort(provider),
+      prisma,
+      {} as FxSettings,
+    );
+  }
+
   async function clean() {
+    await prisma.walletPaymentFx.deleteMany({
+      where: { payment: { payerWawuUserId: { in: [USER, OTHER] } } },
+    });
     await prisma.walletHold.deleteMany({
       where: { payerWawuUserId: { in: [USER, OTHER] } },
     });
@@ -106,27 +155,7 @@ describe('a foreign account history never shows a WAWU internal account name (FI
   beforeAll(async () => {
     Logger.overrideLogger(false);
     await clean();
-    const provider = {
-      name: 'nuvion',
-      label: 'Nuvion',
-      configured: true,
-      fx: {
-        statement: (
-          _person: unknown,
-          _account: unknown,
-          query: { cursor: string | null },
-        ) =>
-          Promise.resolve({
-            lines: query.cursor ? [] : statement,
-            nextCursor: null,
-          }),
-      },
-    } as unknown as WalletProvider;
-    accounts = new FxAccountsService(
-      new FxPort(provider),
-      prisma,
-      {} as FxSettings,
-    );
+    accounts = build(INTERNAL);
     const row = await prisma.fxAccount.create({
       data: {
         wawuUserId: USER,
@@ -152,6 +181,50 @@ describe('a foreign account history never shows a WAWU internal account name (FI
       "Somebody else's piece",
       OTHER,
     );
+    await payment(ids.viaId, 'tip', 'Tip on Lagos Photo Walk', USER);
+    await payment(ids.otherViaId, 'tip', "Somebody else's tip", OTHER);
+    for (const [paymentId, transferId] of [
+      [ids.viaId, TRANSFER_MINE],
+      [ids.otherViaId, TRANSFER_OTHER],
+    ]) {
+      await prisma.walletPaymentFx.create({
+        data: {
+          paymentId,
+          sourceCurrency: 'USD',
+          fxAccountId: accountId,
+          providerAccountId: '01FP6ACCOUNT0000000000000A',
+          fxQuoteId: `quote-${paymentId}`,
+          providerQuoteId: `pq-${paymentId}`,
+          rate: '1315.44',
+          sourceAmountMinor: 23n,
+          providerTransferId: transferId,
+        },
+      });
+    }
+    await prisma.walletHold.create({
+      data: {
+        id: ids.holdForeign,
+        paymentId: ids.foreign,
+        payerWawuUserId: OTHER,
+        payeeWawuUserId: null,
+        kind: 'content_unlock',
+        targetId: `target-${ids.foreign}`,
+        title: "Somebody else's piece",
+        releaseCondition: 'bill_delivered',
+        amountKobo: 30_000n,
+        payeeShareKobo: 25_500n,
+        wawuShareKobo: 4_500n,
+        merchantAccountNumber: 'MERCHANT-FP6',
+        provider: 'nuvion',
+        status: 'refunded',
+        heldAt: new Date(),
+        settledAt: new Date(),
+        refundedKobo: 30_000n,
+        transferKobo: 30_000n,
+        action: 'refund',
+        customerReference: `wawu-ref-${ids.holdForeign}`,
+      },
+    });
     await prisma.walletHold.create({
       data: {
         id: ids.holdQuestion,
@@ -293,6 +366,266 @@ describe('a foreign account history never shows a WAWU internal account name (FI
       description: 'WAWU swap',
     });
     expect(rows[swap.id].conversion).not.toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // Round 2 (the verifier's findings): what a stranger controls is never trusted,
+  // a WAWU line that matches nothing never shows the provider's name, and a
+  // payment's rate block stays.
+  // -------------------------------------------------------------------------
+
+  const strangerWords = (l: ProviderFxStatementLine) => ({
+    counterpartyName: l.counterpartyName,
+    description: l.description,
+  });
+
+  it('M1: money from a person is never relabelled, whatever its narration or reference says', async () => {
+    const ada = (over: Partial<ProviderFxStatementLine>) =>
+      line({ direction: 'in', counterpartyName: 'Ada Okoro', ...over });
+    const lines = [
+      ada({ description: 'WAWU refund', reference: 'ACH-1' }),
+      ada({ description: 'WAWU purchase', reference: 'ACH-2' }),
+      ada({ description: 'WAWU fee', reference: 'ACH-3' }),
+      ada({ description: 'Rent', reference: `wawu-pay-${ids.unlock}` }),
+      // a stranger who cites the owner's real hold reference
+      ada({
+        description: 'Rent',
+        reference: `book-transfer-inflow-for-wawu-ref-${ids.holdQuestion}`,
+      }),
+      // a person's own account carries a name WAWU gave it: it is theirs, not WAWU's operational account
+      ada({
+        description: 'WAWU refund',
+        counterpartyName: 'WAWU USD 1a2b3c4d',
+        reference: 'ACH-6',
+      }),
+      line({
+        direction: 'out',
+        description: 'WAWU purchase',
+        counterpartyName: 'Ada Okoro',
+        reference: 'ACH-7',
+      }),
+      // text a stranger controls that merely mentions an internal name
+      ada({ description: 'WAWU operational (held money)', reference: 'ACH-8' }),
+    ];
+    statement = lines;
+    const rows = await read();
+    for (const l of lines) {
+      expect(strangerWords(rows[l.id] as never)).toEqual(strangerWords(l));
+    }
+  });
+
+  it('M1: a payment reference is taken only for a debit, a refund reference only for a credit, and only in the exact format WAWU writes', async () => {
+    const credit = line({
+      direction: 'in',
+      reference: `wawu-pay-${ids.unlock}`,
+    });
+    const debit = line({
+      direction: 'out',
+      reference: `wawu-ref-${ids.holdQuestion}`,
+    });
+    const padded = line({ reference: `xx-wawu-pay-${ids.unlock}-yy` });
+    const longer = line({ reference: `wawu-pay-${ids.unlock}-feeX` });
+    statement = [credit, debit, padded, longer];
+    const rows = await read();
+    // still WAWU's own line, so the provider's name never shows, but what it was for is not claimed
+    expect(rows[credit.id]).toMatchObject({
+      counterpartyName: 'Who Made This',
+      description: 'Refund',
+    });
+    for (const l of [debit, padded, longer]) {
+      expect(rows[l.id]).toMatchObject({
+        counterpartyName: 'Who Made This',
+        description: 'Payment',
+      });
+    }
+    expect(JSON.stringify(rows)).not.toContain('Lighting night shoots');
+    expect(JSON.stringify(rows)).not.toContain('Question for Cleo');
+  });
+
+  it("another person's reference or transfer id never lends this person's history its title", async () => {
+    const foreignRef = line({
+      direction: 'in',
+      reference: `book-transfer-inflow-for-wawu-ref-${ids.holdForeign}`,
+    });
+    const foreignId = line({ id: TRANSFER_OTHER, reference: 'zz-1' });
+    statement = [foreignRef, foreignId];
+    const rows = await read();
+    expect(rows[foreignRef.id]).toMatchObject({
+      counterpartyName: 'Who Made This',
+      description: 'Refund',
+    });
+    expect(rows[foreignId.id]).toMatchObject({
+      counterpartyName: 'Who Made This',
+      description: 'Payment',
+    });
+    expect(JSON.stringify(rows)).not.toContain('Somebody else');
+  });
+
+  it('a line is named by the transfer id our own payment record holds, whatever its reference says, and only in the direction of that move', async () => {
+    const mine = line({ id: TRANSFER_MINE, reference: 'zz-2' });
+    statement = [mine];
+    let rows = await read();
+    expect(rows[mine.id]).toMatchObject({
+      counterpartyName: 'Who Made This',
+      description: 'Tip · Tip on Lagos Photo Walk',
+    });
+    const backwards = line({
+      id: TRANSFER_MINE,
+      direction: 'in',
+      reference: 'zz-3',
+    });
+    statement = [backwards];
+    rows = await read();
+    expect(rows[backwards.id]).toMatchObject({
+      counterpartyName: 'Who Made This',
+      description: 'Refund',
+    });
+  });
+
+  it("M2: a WAWU line that matches no record never shows the provider's name for WAWU's own account, by direction", async () => {
+    const lines = [
+      line({ description: 'Book transfer', reference: 'BT-5' }),
+      line({
+        description: 'Transfer to WAWU',
+        counterpartyName: 'WAWU merchant',
+        reference: 'x',
+      }),
+      line({
+        direction: 'in',
+        description: 'Credit',
+        counterpartyName: 'WAWU Collector',
+        reference: 'BT-6',
+      }),
+      line({
+        description: 'WAWU fee',
+        counterpartyName: 'WAWU collector',
+        reference: 'BT-7',
+      }),
+      line({
+        description: 'Book transfer to WAWU operational',
+        counterpartyName: null,
+        reference: 'BT-8',
+      }),
+      line({
+        direction: 'in',
+        description: 'Book transfer',
+        counterpartyName: 'WAWU',
+        reference: 'BT-9',
+      }),
+    ];
+    statement = lines;
+    const rows = await read();
+    const want = [
+      'Payment',
+      'Payment',
+      'Refund',
+      'Conversion fee',
+      'Payment',
+      'Refund',
+    ];
+    lines.forEach((l, i) => {
+      expect(rows[l.id]).toMatchObject({
+        counterpartyName: 'Who Made This',
+        description: want[i],
+      });
+    });
+    expect(JSON.stringify(rows)).not.toMatch(
+      /operational|merchant|collector|held money/i,
+    );
+  });
+
+  it("M2: the operational account's own display name, as the provider reads it, is WAWU's own whatever it is called, and a provider that cannot say still has the names the adapter uses", async () => {
+    const desk = line({
+      description: 'Book transfer',
+      counterpartyName: 'Operations Desk',
+      reference: 'BT-10',
+    });
+    statement = [desk];
+    const named = build('Operations Desk (held money)');
+    let page = await named.transactions(WALLET, accountId, { limit: 50 });
+    expect(page.items[0]).toMatchObject({
+      counterpartyName: 'Who Made This',
+      description: 'Payment',
+    });
+    // not told by the provider: a name nobody here knows stays as it is, the adapter's own names do not
+    const blind = build(null);
+    page = await blind.transactions(WALLET, accountId, { limit: 50 });
+    expect(page.items[0].counterpartyName).toBe('Operations Desk');
+    const known = line({ counterpartyName: INTERNAL, reference: 'BT-11' });
+    statement = [known];
+    page = await blind.transactions(WALLET, accountId, { limit: 50 });
+    expect(page.items[0].counterpartyName).toBe('Who Made This');
+  });
+
+  it("a swap's fee and a send's fee keep the provider's description (main's names), with WAWU's account hidden; only a payment's conversion fee reads Conversion fee", async () => {
+    const swapFee = line({
+      description: 'WAWU fee',
+      counterpartyName: 'WAWU collector',
+      reference: `wawu-fx-${ids.fx}-fee`,
+    });
+    const swapFeeRetry = line({
+      description: 'WAWU fee',
+      counterpartyName: 'WAWU collector',
+      reference: `wawu-fx-${ids.fx}-fee-2`,
+    });
+    const sendFee = line({
+      description: 'WAWU fee',
+      counterpartyName: 'WAWU collector',
+      reference: `wawu-abroad-${ids.abroad}-fee`,
+    });
+    const sendFeeBack = line({
+      direction: 'in',
+      description: 'WAWU fee given back',
+      counterpartyName: 'WAWU collector',
+      reference: `wawu-abroad-${ids.abroad}-fee-back`,
+    });
+    const paymentFee = line({
+      description: 'WAWU fee',
+      counterpartyName: 'WAWU collector',
+      reference: `wawu-pay-${ids.unlock}-fee`,
+    });
+    statement = [swapFee, swapFeeRetry, sendFee, sendFeeBack, paymentFee];
+    const rows = await read();
+    for (const l of [swapFee, swapFeeRetry, sendFee, sendFeeBack]) {
+      expect(rows[l.id]).toMatchObject({
+        counterpartyName: 'Who Made This',
+        description: l.description,
+      });
+    }
+    expect(rows[paymentFee.id].description).toBe(
+      'Conversion fee · Lighting night shoots',
+    );
+  });
+
+  it("a payment keeps the provider's rate block, and nothing else of the line changes but its two words", async () => {
+    const conversion = {
+      fromCurrency: 'USD',
+      toCurrency: 'NGN',
+      rate: '1315.44',
+      fromMinor: 23n,
+      toMinor: 30_000n,
+    };
+    const paid = line({
+      reference: `wawu-pay-${ids.unlock}`,
+      conversion,
+    });
+    statement = [paid];
+    const rows = await read();
+    expect(rows[paid.id]).toMatchObject({
+      counterpartyName: 'Who Made This',
+      description: 'Unlock · Lighting night shoots',
+      conversion: {
+        fromCurrency: 'USD',
+        toCurrency: 'NGN',
+        rate: '1315.44',
+        fromMinor: 23,
+        toMinor: 30_000,
+      },
+      amountMinor: 23,
+      direction: 'out',
+      status: 'completed',
+      reference: `wawu-pay-${ids.unlock}`,
+    });
   });
 
   it('no row of a whole history carries the internal account name, whatever the lines are', async () => {

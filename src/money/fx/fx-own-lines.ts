@@ -15,64 +15,115 @@ import type { FxTransactionView } from './fx-view.type';
  * never reads WAWU's internal account names. So these lines are named the way
  * the naira history names the same movement (history-labels.ts): "Who Made
  * This" as the other side, then what it was for ("Unlock · the piece's
- * title"), from WAWU's own records of the payment or the hold. A line whose
- * record cannot be found (or is another person's) is still named plainly
- * ("Payment", "Refund", "Conversion fee"), never by the provider's account.
+ * title"), from WAWU's own records of the payment or the hold. A line of
+ * WAWU's own whose record cannot be found (or is another person's) is still
+ * named plainly ("Payment", "Refund", "Conversion fee"), never by the
+ * provider's account.
  *
- * Money from a person, a swap and a send keep what the provider says: the
- * other side there is a person, not WAWU.
+ * What a stranger controls is never trusted (round 2). Money from a person
+ * (its name, its narration and its reference are theirs to write), a swap, a
+ * send abroad and everything else that is not WAWU's own account keep what the
+ * provider says. A line is WAWU's own only when
+ *   - its transfer id is one our own payment record holds (a stranger cannot
+ *     choose it), in the direction of that move; or
+ *   - its reference is, in the exact format WAWU writes, of the matching
+ *     direction (`wawu-pay-<id>` and its `-fee` are debits, `wawu-ref-<id>` is
+ *     a credit), and the other side is WAWU's own account; or
+ *   - its narration is ours, of the matching direction, and the other side is
+ *     WAWU's own account; or
+ *   - (last resort) the other side is WAWU's own account by name, whatever the
+ *     line says: it is named by its direction, and nothing more.
+ * "WAWU's own account" is a name this file knows (below), or the operational
+ * account's own display name as the provider reads it.
  */
-
-/**
- * Our references (payments `wawu-pay-<id>`, holds `wawu-rel-<id>` and `wawu-ref-<id>`, a number after a proven failure), as the
- * provider's statement echoes them: on its own, with the provider's receiving-side prefix, or with a fee leg's suffix.
- */
-const OURS =
-  /wawu-(?:pay|ref|rel)-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?:-\d+)?/i;
-const FEE_SUFFIX = '-fee';
 
 export const FEE_LABEL = 'Conversion fee';
 
-type Part = 'payment' | 'refund' | 'release' | 'fee';
+/**
+ * What WAWU's own accounts are called, as the code that makes and reads them
+ * says: the operational account's fallback name in the Nuvion adapter
+ * (`getPlatformAccount`, src/nuvion/areas/book.ts) and its stand-in's, WAWU's
+ * fee collector (the stand-in's `WAWU collector`) and the merchant wallet of
+ * R-19. Compared whole, ignoring
+ * case, spaces and a bracketed ending ("(held money)"), so "WAWU Operational
+ * (held money)" is the operational account while "WAWU USD 1a2b3c4d", the name
+ * WAWU gives a person's own account (fx-accounts.service.ts), is not.
+ */
+const WAWU_ACCOUNT_NAMES = [
+  'wawu',
+  'wawu operational',
+  'wawu collector',
+  'wawu merchant',
+];
 
-/** What the provider calls the moves WAWU makes (the narrations in payment-fx.service.ts and hold-rules.ts). */
-const NARRATIONS: Record<string, Part> = {
-  'wawu purchase': 'payment',
-  'wawu refund': 'refund',
-  'wawu fee': 'fee',
-  'wawu earning': 'release',
+/** A name, as it is compared: lower case, brackets and their words taken off, spaces collapsed. */
+function plain(text: string | null | undefined): string {
+  return (text ?? '')
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Says whether a name is one of WAWU's own accounts (`is`), and whether a line of words mentions one ("Book transfer to WAWU
+ * operational"; only the names of two words or more are looked for inside words, so the bare "WAWU" of a narration such as
+ * "WAWU swap" mentions nothing). `operational` is the operational account's display name as the provider reads it.
+ */
+export function ownAccountNamer(operational: readonly string[]): {
+  is: (name: string | null | undefined) => boolean;
+  mentions: (words: string | null | undefined) => boolean;
+} {
+  const names = [
+    ...new Set(
+      [...WAWU_ACCOUNT_NAMES, ...operational.map(plain)].filter(Boolean),
+    ),
+  ];
+  const inside = names
+    .filter((n) => n.includes(' '))
+    .map(
+      (n) => new RegExp(`\\b${n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`),
+    );
+  const is = (name: string | null | undefined) => {
+    const p = plain(name);
+    return p !== '' && names.includes(p);
+  };
+  return {
+    is,
+    mentions: (words) => {
+      const p = plain(words);
+      return p !== '' && (is(words) || inside.some((re) => re.test(p)));
+    },
+  };
+}
+
+const UUID = '[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}';
+/** The references WAWU writes, whole and nothing around them (a payment's debit, its fee leg, a hold's refund as the provider echoes it to the receiver). */
+const PAYMENT = new RegExp(`^wawu-pay-(${UUID})$`, 'i');
+const PAYMENT_FEE = new RegExp(`^wawu-pay-(${UUID})-fee$`, 'i');
+const REFUND = new RegExp(
+  `^(?:book-transfer-inflow-for-)?(wawu-ref-${UUID}(?:-\\d+)?)$`,
+  'i',
+);
+/** WAWU's other moves (a swap `wawu-fx-`, a send abroad `wawu-abroad-`, a send `wawu-send-`, a bank send `wawu-bank-`): their lines keep the provider's words, with WAWU's account hidden. */
+const OTHER_WAWU =
+  /^(?:book-transfer-inflow-for-)?wawu-(?:fx|abroad|send|bank)-/i;
+
+/** What the provider's narration says of a move WAWU made (payment-fx.service.ts, hold-rules.ts). */
+const PURCHASE_NARRATION = 'wawu purchase';
+const REFUND_NARRATION = 'wawu refund';
+const FEE_NARRATION = 'wawu fee';
+
+type Part = 'payment' | 'refund' | 'fee';
+const DIRECTION: Record<Part, 'in' | 'out'> = {
+  payment: 'out',
+  fee: 'out',
+  refund: 'in',
 };
 
 interface Kept {
   kind: string;
   title: string;
-}
-
-/** Our reference inside a statement reference, and whether the line is the fee leg of it. */
-function ours(reference: string): { base: string; fee: boolean } {
-  const found = OURS.exec(reference);
-  if (!found) return { base: reference.trim(), fee: false };
-  const rest = reference.slice(found.index + found[0].length);
-  return { base: found[0], fee: rest.startsWith(FEE_SUFFIX) };
-}
-
-function partOf(
-  reference: string,
-  description: string,
-  transfers: ReadonlyMap<string, Part>,
-  id: string,
-): { part: Part; base: string } | null {
-  const { base, fee } = ours(reference);
-  const known = transfers.get(id);
-  if (base.startsWith('wawu-pay-')) {
-    return { part: fee ? 'fee' : 'payment', base };
-  }
-  if (base.startsWith('wawu-ref-')) return { part: 'refund', base };
-  if (base.startsWith('wawu-rel-')) return { part: 'release', base };
-  // The transfer id our own record of the payment holds: the statement's line id is the provider's transfer id.
-  if (known) return { part: known, base };
-  const narrated = NARRATIONS[description.trim().toLowerCase()];
-  return narrated ? { part: narrated, base } : null;
 }
 
 function wordsOf(part: Part, kept: Kept | undefined): string {
@@ -81,52 +132,67 @@ function wordsOf(part: Part, kept: Kept | undefined): string {
       ? FEE_LABEL
       : part === 'refund'
         ? CATEGORY_LABELS.refund
-        : part === 'release'
-          ? CATEGORY_LABELS.earning
-          : ((kept &&
-              (LINK_KIND_LABELS as Record<string, string | undefined>)[
-                kept.kind
-              ]) ??
-            CATEGORY_LABELS.purchase);
-  // A refund of a payment says what it was for the way a payment does: "Refund · the title".
+        : ((kept &&
+            (LINK_KIND_LABELS as Record<string, string | undefined>)[
+              kept.kind
+            ]) ??
+          CATEGORY_LABELS.purchase);
   return [label, kept?.title.trim()]
     .filter((p): p is string => !!p)
     .join(DESCRIPTION_SEPARATOR);
 }
 
+/** The last-resort word of a line that is WAWU's own and nothing more is known of: its direction. */
+function directionWord(line: FxTransactionView): string {
+  if (line.direction === 'in') return CATEGORY_LABELS.refund;
+  return plain(line.description) === FEE_NARRATION
+    ? FEE_LABEL
+    : CATEGORY_LABELS.purchase;
+}
+
 /**
  * Names the lines of one page of an account's history that WAWU made, in
  * place. `owner` is the account's own person: only their payments and holds
- * are read, so a title is never another person's.
+ * are read, so a title is never another person's. `operational` is the
+ * operational account's display name as the provider reads it (empty when it
+ * could not say). Nothing but the two words of a line (`counterpartyName`,
+ * `description`) is ever changed: its figures, time, status, reference and
+ * rate block stay as the provider sent them.
  */
 export async function nameOwnLines(
   prisma: PrismaService,
   owner: { wawuUserId: string; fxAccountId: string },
   lines: FxTransactionView[],
+  operational: readonly string[] = [],
 ): Promise<void> {
   if (lines.length === 0) return;
-  const bases = [
-    ...new Set(
-      lines
-        .map((l) => ours(l.reference).base)
-        .filter((b) => /^wawu-(pay|ref|rel)-/.test(b)),
-    ),
-  ];
+  const namer = ownAccountNamer(operational);
+  const isOwn = namer.is;
+
+  // The records the lines may be ours by: payments and holds by our reference, payments by the provider's transfer id.
+  const bases = new Set<string>();
+  for (const l of lines) {
+    const ref = l.reference.trim();
+    const m = PAYMENT.exec(ref) ?? PAYMENT_FEE.exec(ref);
+    if (m) bases.add(`wawu-pay-${m[1]}`);
+    const r = REFUND.exec(ref);
+    if (r) bases.add(r[1]);
+  }
   const ids = lines.map((l) => l.id);
   const [payments, holds, moves] = await Promise.all([
-    bases.length
+    bases.size
       ? prisma.walletPayment.findMany({
           where: {
-            customerReference: { in: bases },
+            customerReference: { in: [...bases] },
             payerWawuUserId: owner.wawuUserId,
           },
           select: { customerReference: true, kind: true, title: true },
         })
       : [],
-    bases.length
+    bases.size
       ? prisma.walletHold.findMany({
           where: {
-            customerReference: { in: bases },
+            customerReference: { in: [...bases] },
             payerWawuUserId: owner.wawuUserId,
           },
           select: { customerReference: true, kind: true, title: true },
@@ -154,25 +220,78 @@ export async function nameOwnLines(
       byReference.set(p.customerReference, { kind: p.kind, title: p.title });
     }
   }
-  const transfers = new Map<string, Part>();
-  const byTransfer = new Map<string, Kept>();
+  const byDebit = new Map<string, Kept>();
+  const byRefund = new Map<string, Kept>();
   for (const m of moves) {
-    if (m.providerTransferId) {
-      transfers.set(m.providerTransferId, 'payment');
-      byTransfer.set(m.providerTransferId, m.payment);
-    }
-    if (m.refundTransferId) {
-      transfers.set(m.refundTransferId, 'refund');
-      byTransfer.set(m.refundTransferId, m.payment);
-    }
+    if (m.providerTransferId) byDebit.set(m.providerTransferId, m.payment);
+    if (m.refundTransferId) byRefund.set(m.refundTransferId, m.payment);
   }
-  for (const line of lines) {
-    const found = partOf(line.reference, line.description, transfers, line.id);
-    if (!found) continue;
-    const kept = byReference.get(found.base) ?? byTransfer.get(line.id);
+
+  const say = (line: FxTransactionView, description: string) => {
     line.counterpartyName = COUNTERPARTY_FALLBACK_NAMES.wawu;
-    line.description = wordsOf(found.part, kept);
-    // A payment is not a swap the person made: no rate line stands in for what it paid for.
-    if (found.part === 'payment') line.conversion = null;
+    line.description = description;
+  };
+
+  for (const line of lines) {
+    const ref = line.reference.trim();
+    const own = isOwn(line.counterpartyName);
+    // The other side is not a person: WAWU's own account, or one the provider names nobody on.
+    const notAPerson = own || line.counterpartyName === null;
+
+    // 1. The provider's transfer id is one of our own records' (a stranger cannot choose it), in the direction of that move.
+    const byId =
+      line.direction === 'out' ? byDebit.get(line.id) : byRefund.get(line.id);
+    if (byId) {
+      say(line, wordsOf(line.direction === 'out' ? 'payment' : 'refund', byId));
+      continue;
+    }
+
+    // 2. Our reference, whole, in the direction it is written for, with WAWU's own account on the other side.
+    let part: Part | null = null;
+    let base = '';
+    const pay = PAYMENT.exec(ref);
+    const fee = PAYMENT_FEE.exec(ref);
+    const back = REFUND.exec(ref);
+    if (pay) {
+      part = 'payment';
+      base = `wawu-pay-${pay[1]}`;
+    } else if (fee) {
+      part = 'fee';
+      base = `wawu-pay-${fee[1]}`;
+    } else if (back) {
+      part = 'refund';
+      base = back[1];
+    }
+    if (part && line.direction === DIRECTION[part] && notAPerson) {
+      const kept = byReference.get(base);
+      // Without a record the line is still WAWU's own only if the provider says whose it is.
+      if (kept || own) {
+        say(line, wordsOf(part, kept));
+        continue;
+      }
+    }
+
+    // 3. Our narration, in the direction it is written for, with WAWU's own account on the other side. A fee's narration is also
+    // a swap's and a send's, so it names nothing here: only a payment's own fee reference does (above).
+    if (own && !OTHER_WAWU.test(ref)) {
+      const narration = plain(line.description);
+      if (
+        (narration === PURCHASE_NARRATION && line.direction === 'out') ||
+        (narration === REFUND_NARRATION && line.direction === 'in')
+      ) {
+        say(line, directionWord(line));
+        continue;
+      }
+    }
+
+    // 4. Last resort: the other side is WAWU's own account, or the provider named none and the line says so. Nothing is known of
+    // what it was for, so it says its direction; WAWU's other moves (a swap's or a send's fee) keep the provider's own description.
+    if (
+      own ||
+      (line.counterpartyName === null && namer.mentions(line.description))
+    ) {
+      const keep = OTHER_WAWU.test(ref) && !namer.mentions(line.description);
+      say(line, keep ? line.description : directionWord(line));
+    }
   }
 }
