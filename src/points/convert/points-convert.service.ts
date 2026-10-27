@@ -9,6 +9,7 @@ import { MoneyError } from '../../money/money-error';
 import { safeKoboNumber } from '../../wallet-provider/wallet-provider.interface';
 import { PointsError } from '../points-error';
 import { PointsConvertQuoteToken } from './points-convert-quote-token';
+import { NOT_CASHABLE_WORDS } from '../points-bought';
 import { POINTS_WORD } from '../points-words';
 import { PointsService } from '../points.service';
 import { PointsCashOutService } from './points-cash-out.service';
@@ -72,15 +73,23 @@ export class PointsConvertService {
     asked?: number,
   ): Promise<PointsConvertQuoteView> {
     await this.requireNairaAccount(wawuUserId, claims);
-    const balance = await this.points.balanceOf(wawuUserId);
-    return this.signed(wawuUserId, this.figures(asked ?? balance, balance));
+    const [balance, cashable] = await Promise.all([
+      this.points.balanceOf(wawuUserId),
+      this.points.cashableBalanceOf(wawuUserId),
+    ]);
+    // With no amount asked the quote is for all the points that can be cashed
+    // out; points the person bought are never part of it (R-101 point 7).
+    return this.signed(
+      wawuUserId,
+      this.figures(asked ?? cashable, balance, cashable),
+    );
   }
 
   /**
    * Every figure the quote shows, from the config as it stands (read once, so
    * the rate and the minimum belong together) and the provider's cap.
    */
-  private figures(points: number, balance: number): Figures {
+  private figures(points: number, balance: number, cashable: number): Figures {
     const cashOut = this.config.cashOut;
     const rate = cashOut.per1000Points.kobo;
     const minimum = cashOut.minimumPoints;
@@ -89,9 +98,11 @@ export class PointsConvertService {
     if (points < minimum) blockedBy = 'below_minimum';
     else if (maximum !== null && points > maximum) blockedBy = 'above_maximum';
     else if (points > balance) blockedBy = 'insufficient_points';
+    else if (points > cashable) blockedBy = 'not_cashable';
     return {
       currency: 'NGN',
       balancePoints: balance,
+      cashablePoints: cashable,
       minimumPoints: minimum,
       maximumPoints: maximum,
       rate: { points: Number(POINTS_PER_RATE_UNIT), kobo: rate },
@@ -171,8 +182,11 @@ export class PointsConvertService {
     quoteToken: string,
   ): Promise<Figures> {
     await this.requireNairaAccount(wawuUserId, claims);
-    const balance = await this.points.balanceOf(wawuUserId);
-    const figures = this.figures(points, balance);
+    const [balance, cashable] = await Promise.all([
+      this.points.balanceOf(wawuUserId),
+      this.points.cashableBalanceOf(wawuUserId),
+    ]);
+    const figures = this.figures(points, balance, cashable);
     if (points < figures.minimumPoints) {
       throw new MoneyError('below_minimum', BELOW_MINIMUM_WORDS, {
         minimumPoints: figures.minimumPoints,
@@ -196,6 +210,15 @@ export class PointsConvertService {
           shortfallPoints: points - balance,
         },
       );
+    }
+    // Points the person bought are theirs to spend and never to cash out. The
+    // hold checks again under the person's points lock.
+    if (points > cashable) {
+      throw new PointsError('points_not_cashable', NOT_CASHABLE_WORDS, {
+        balancePoints: balance,
+        cashablePoints: cashable,
+        neededPoints: points,
+      });
     }
     this.assertQuoteHolds(wawuUserId, figures, quoteToken);
     return figures;

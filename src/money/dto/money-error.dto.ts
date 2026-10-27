@@ -163,7 +163,7 @@ export class MoneyErrorReason {
   @ApiPropertyOptional({ type: 'integer' })
   minimumPoints?: number;
 
-  /** below_minimum, insufficient_points: the points the person has now. */
+  /** below_minimum, insufficient_points, points_not_cashable: the points the person has now. */
   @ApiPropertyOptional({ type: 'integer' })
   balancePoints?: number;
 
@@ -174,6 +174,10 @@ export class MoneyErrorReason {
   /** insufficient_points: neededPoints minus balancePoints. */
   @ApiPropertyOptional({ type: 'integer' })
   shortfallPoints?: number;
+
+  /** points_not_cashable (POINTS-BOUGHT): the points the person can turn into cash now (earned and bonus points). */
+  @ApiPropertyOptional({ type: 'integer' })
+  cashablePoints?: number;
 
   /** points_cap_reached (POINTS-03): which cap stopped the job. */
   @ApiPropertyOptional({

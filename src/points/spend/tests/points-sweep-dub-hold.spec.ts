@@ -56,7 +56,8 @@ describe('The points sweep and a working dub (AITOOLS-05)', () => {
   const give = (wawuUserId: string, n: number) =>
     points.grant({
       wawuUserId,
-      source: 'pack',
+      // A lot that ends in 30 days: bought points never end (R-101 point 7), so this is a bonus lot.
+      source: 'tier_bonus',
       sourceRef: randomUUID(),
       points: n,
       expiresAt: new Date(Date.now() + 30 * DAY),

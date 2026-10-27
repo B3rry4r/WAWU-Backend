@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { POINTS_NEVER_EXPIRES } from '../../../points/points-bought';
 import request from 'supertest';
 import type { Response } from 'supertest';
 import {
@@ -142,7 +143,6 @@ describe('Buy a points pack from the wallet (POINTS-02)', () => {
   it('check 1: pays the pack price in one debit, adds one lot of the pack points with the bought-points expiry, and answers the same purchase to every poll', async () => {
     const p = await h.buyer(RICH);
     const before = h.wallets.kobo.get(p.accountNumber)!;
-    const startedAt = Date.now();
 
     const q = await quoted(p);
     expect(q).toMatchObject({
@@ -154,7 +154,8 @@ describe('Buy a points pack from the wallet (POINTS-02)', () => {
       bonusPercent: 0,
       bonusPoints: 0,
       totalPoints: packPoints,
-      expiryDays: config.points.boughtExpiryDays,
+      // Points you buy never expire (R-101 point 7): no days are quoted.
+      expiryDays: null,
       paymentKind: 'points_pack',
     });
     expect(q.payment).toMatchObject({
@@ -182,13 +183,8 @@ describe('Buy a points pack from the wallet (POINTS-02)', () => {
       grant: { points: packPoints, bonusPoints: 0, totalPoints: packPoints },
     });
     expect(view.paidAt).not.toBeNull();
-    const expiresAt = Date.parse(view.grant!.expiresAt);
-    expect(expiresAt).toBeGreaterThan(
-      startedAt + config.points.boughtExpiryDays * DAY - 1_000,
-    );
-    expect(expiresAt).toBeLessThan(
-      Date.now() + config.points.boughtExpiryDays * DAY + 1_000,
-    );
+    // Bought points never end (R-101 point 7); this asserted a year's expiry before.
+    expect(view.grant!.expiresAt).toBeNull();
 
     // One debit at the price, the provider's charge on top.
     expect(sendsFrom(p)).toHaveLength(1);
@@ -207,7 +203,7 @@ describe('Buy a points pack from the wallet (POINTS-02)', () => {
       quantity: packPoints,
       remaining: packPoints,
     });
-    expect(lots[0].expiresAt.getTime()).toBe(expiresAt);
+    expect(lots[0].expiresAt.getTime()).toBe(POINTS_NEVER_EXPIRES.getTime());
     expect((await pointsOf(p)).balance).toBe(packPoints);
 
     // The currency is fixed by the first purchase, as a tier's is.
@@ -494,10 +490,8 @@ describe('Buy a points pack from the wallet (POINTS-02)', () => {
       const lots = await lotsOf(p);
       expect(lots).toHaveLength(1);
       expect(lots[0].quantity).toBe(packPoints);
-      // The quoted expiry (a year), not the month the setting says by now.
-      expect(lots[0].expiresAt.getTime()).toBeGreaterThan(
-        Date.now() + (config.points.boughtExpiryDays - 1) * DAY,
-      );
+      // Bought points never end (R-101 point 7), whatever the setting says by now.
+      expect(lots[0].expiresAt.getTime()).toBe(POINTS_NEVER_EXPIRES.getTime());
       expect(sendsFrom(p)).toHaveLength(1);
     } finally {
       await set(`plan.pack.${pack.id}.points`, null);

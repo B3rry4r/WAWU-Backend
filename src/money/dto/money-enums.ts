@@ -251,6 +251,9 @@ export const MONEY_ERROR_CODES = [
   // has enough points, so there is no shortfall to buy.
   'points_cap_reached',
   'points_not_short',
+  // Turning points into cash (POINTS-BOUGHT, R-101): more points asked than the
+  // person's earned and bonus points; points they bought cannot be cashed out.
+  'points_not_cashable',
   // Adding products needs a tier that is running (TIER-04, VF13): the person
   // has none, or it ended. Also the code of the publishing gate (TIER-02), in
   // its own richer body on the routes that publish.

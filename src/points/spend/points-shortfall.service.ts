@@ -21,6 +21,7 @@ import {
   type PlansConfig,
 } from '../../plans/plans-config';
 import { PointsError } from '../points-error';
+import { endOf, POINTS_NEVER_EXPIRES } from '../points-bought';
 import { PointsService } from '../points.service';
 import type { PointsShortfallDto } from './points-spend.dto';
 import {
@@ -54,7 +55,6 @@ export const DOLLARS_NOTE =
   'Topping up points from your wallet is in naira only for now.';
 
 /** A day, in milliseconds. */
-const DAY_MS = 86_400_000;
 
 /**
  * Pay the points an AI job is short of from the wallet (task POINTS-03, PT3,
@@ -275,7 +275,8 @@ export class PointsShortfallService implements OnModuleInit {
           source: 'shortfall',
           sourceRef: payment.paymentId,
           points: goods.points,
-          expiresAt: new Date(now.getTime() + goods.expiryDays * DAY_MS),
+          // Topped-up points are bought points: they never end (R-101 point 7).
+          expiresAt: POINTS_NEVER_EXPIRES,
         },
         { tx, now },
       );
@@ -311,7 +312,7 @@ export class PointsShortfallService implements OnModuleInit {
       amountKobo: view.priceKobo,
       payment: view,
       grant: lot
-        ? { points: lot.quantity, expiresAt: lot.expiresAt.toISOString() }
+        ? { points: lot.quantity, expiresAt: endOf(lot.expiresAt) }
         : null,
       createdAt: view.createdAt,
       paidAt: lot ? lot.createdAt.toISOString() : null,

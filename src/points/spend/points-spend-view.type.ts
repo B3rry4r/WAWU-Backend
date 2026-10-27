@@ -97,7 +97,7 @@ export interface PointsShortfallView {
   amountKobo: number;
   payment: PaymentView;
   /** The lot that was added, once the payment is confirmed. */
-  grant: { points: number; expiresAt: string } | null;
+  grant: { points: number; expiresAt: string | null } | null;
   createdAt: string;
   paidAt: string | null;
 }

@@ -129,6 +129,10 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // buy, as wallet_already_open).
   points_cap_reached: 422,
   points_not_short: 409,
+  // POINTS-BOUGHT (R-101 point 7). Default (agent), owner may override: 422, as
+  // below_minimum and points_cap_reached: the request is understood, the amount
+  // is the problem (bought points are not cashable).
+  points_not_cashable: 422,
   // TIER-04. 402, as the publishing gate answers the same code (TIER-02,
   // CONVENTIONS section 23): the person has to pay for a tier first.
   tier_required: 402,

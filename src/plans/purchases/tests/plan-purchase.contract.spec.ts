@@ -213,7 +213,7 @@ describe('Buy, renew or upgrade a tier from the wallet (TIER-03)', () => {
       source: 'tier_bonus',
       granted: big.bonusPoints,
     });
-    expect(Date.parse(points.lots[0].expiresAt)).toBe(
+    expect(Date.parse(points.lots[0].expiresAt!)).toBe(
       from + big.bonusExpiryDays * DAY,
     );
 
@@ -301,9 +301,9 @@ describe('Buy, renew or upgrade a tier from the wallet (TIER-03)', () => {
     ]);
     const bump = points.lots.find((l) => l.source === 'bump')!;
     expect(bump.granted).toBe(bumpPoints);
-    expect(
-      Date.parse(bump.expiresAt) - Date.parse(view.paidAt!),
-    ).toBeGreaterThan(config.points.boughtExpiryDays * DAY - 60_000);
+    // Bought points never end (R-101 point 7); this asserted a year's expiry before.
+    expect(bump.expiresAt).toBeNull();
+    expect(bump.cashable).toBe(false);
     expect(view.grant).toMatchObject({
       bonusPoints: small.bonusPoints,
       bumpPoints,

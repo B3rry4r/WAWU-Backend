@@ -39926,7 +39926,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "PT6 before the PIN: the rate (1,000 points for so many kobo, from the\nconfig), the fewest points one conversion takes, the balance, and the\ncash for `points` (the whole balance when none is asked). WAWU pays the\nprovider's charge, so the person pays nothing to convert (R-31).\n`canConvert` and `blockedBy` say when the points asked cannot be\nconverted as they are (below the minimum, more than the balance, more\nthan one move carries), with the figures, instead of refusing. Nothing is\nheld. A person billed in dollars is `409 currency_not_supported`; with no\nwallet, `409 wallet_not_open`.",
+        "summary": "PT6 before the PIN: the rate (1,000 points for so many kobo, from the\nconfig), the fewest points one conversion takes, the balance, and the\ncash for `points` (all the cashable points when none is asked; points the\nperson bought are never cashable, `cashablePoints`). WAWU pays the\nprovider's charge, so the person pays nothing to convert (R-31).\n`canConvert` and `blockedBy` say when the points asked cannot be\nconverted as they are (below the minimum, more than the balance, more\nthan one move carries), with the figures, instead of refusing. Nothing is\nheld. A person billed in dollars is `409 currency_not_supported`; with no\nwallet, `409 wallet_not_open`.",
         "tags": [
           "PointsConvert"
         ],
@@ -40030,7 +40030,7 @@
             }
           },
           "422": {
-            "description": "reason.code: below_minimum",
+            "description": "reason.code: below_minimum, points_not_cashable",
             "content": {
               "application/json": {
                 "schema": {
@@ -40065,7 +40065,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Turns points into cash in the wallet, once. The cash is worked out at the\nconfig's rate and rounded down; the points are held (soonest-ending lots\nfirst) and the cash is paid from WAWU's own account into the person's\nwallet; the points are spent only when the provider has confirmed it, and\ngo back to their lots if it did not move. Answers 201 with the\nconversion: `completed`, `pending` while the provider has not confirmed\nthe cash yet (the points stay on hold; poll `GET /points/convert/{id}`;\nit is never sent again), or `failed` when the cash did not move and the\npoints are back. The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN.\nThe body carries the `quoteToken` of the quote the person was shown: the\nconversion is paid at that quote or not at all. If the rate, the\nminimum, the cap or the cash changed since (or the token is not this\nperson's, not for these points, or past its end), it is `409\nquote_changed` with the new quote in `reason.pointsQuote`, and nothing\nis paid. A body with no token is a plain 400.\nBefore the PIN, and changing nothing: `422 below_minimum`, `402\ninsufficient_points`, `400 amount_out_of_range` (more than one move\ncarries), `409 quote_changed`, `409 currency_not_supported`, `409\nwallet_not_open`, `503 fees_not_set`.",
+        "summary": "Turns points into cash in the wallet, once. The cash is worked out at the\nconfig's rate and rounded down; the points are held (soonest-ending lots\nfirst) and the cash is paid from WAWU's own account into the person's\nwallet; the points are spent only when the provider has confirmed it, and\ngo back to their lots if it did not move. Answers 201 with the\nconversion: `completed`, `pending` while the provider has not confirmed\nthe cash yet (the points stay on hold; poll `GET /points/convert/{id}`;\nit is never sent again), or `failed` when the cash did not move and the\npoints are back. The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN.\nThe body carries the `quoteToken` of the quote the person was shown: the\nconversion is paid at that quote or not at all. If the rate, the\nminimum, the cap or the cash changed since (or the token is not this\nperson's, not for these points, or past its end), it is `409\nquote_changed` with the new quote in `reason.pointsQuote`, and nothing\nis paid. A body with no token is a plain 400.\nBefore the PIN, and changing nothing: `422 below_minimum`, `402\ninsufficient_points`, `422 points_not_cashable` (more than the person's\nearned and bonus points: points they bought cannot be cashed out),\n`400 amount_out_of_range` (more than one move\ncarries), `409 quote_changed`, `409 currency_not_supported`, `409\nwallet_not_open`, `503 fees_not_set`.",
         "tags": [
           "PointsConvert"
         ],
@@ -46773,6 +46773,7 @@
               "question_already_waiting",
               "points_cap_reached",
               "points_not_short",
+              "points_not_cashable",
               "tier_required",
               "pack_not_allowed",
               "add_money_unavailable",
@@ -46912,7 +46913,7 @@
           },
           "balancePoints": {
             "type": "integer",
-            "description": "below_minimum, insufficient_points: the points the person has now."
+            "description": "below_minimum, insufficient_points, points_not_cashable: the points the person has now."
           },
           "neededPoints": {
             "type": "integer",
@@ -46921,6 +46922,10 @@
           "shortfallPoints": {
             "type": "integer",
             "description": "insufficient_points: neededPoints minus balancePoints."
+          },
+          "cashablePoints": {
+            "type": "integer",
+            "description": "points_not_cashable (POINTS-BOUGHT): the points the person can turn into cash now (earned and bonus points)."
           },
           "cap": {
             "description": "points_cap_reached (POINTS-03): which cap stopped the job.",
@@ -57822,7 +57827,11 @@
             "type": "string"
           },
           "expiresAt": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
+          },
+          "cashable": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -57831,7 +57840,8 @@
           "granted",
           "source",
           "label",
-          "expiresAt"
+          "expiresAt",
+          "cashable"
         ]
       },
       "PointMovementView": {
@@ -57877,6 +57887,9 @@
           "balance": {
             "type": "number"
           },
+          "cashablePoints": {
+            "type": "number"
+          },
           "nextExpiry": {
             "allOf": [
               {
@@ -57903,6 +57916,7 @@
         },
         "required": [
           "balance",
+          "cashablePoints",
           "nextExpiry",
           "lots",
           "lotCount",
@@ -74578,7 +74592,8 @@
             "type": "integer"
           },
           "expiryDays": {
-            "type": "integer"
+            "type": "integer",
+            "nullable": true
           },
           "paymentKind": {
             "type": "string",
@@ -74963,7 +74978,8 @@
             "type": "integer"
           },
           "expiresAt": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -76369,6 +76385,9 @@
           "balancePoints": {
             "type": "number"
           },
+          "cashablePoints": {
+            "type": "number"
+          },
           "minimumPoints": {
             "type": "number"
           },
@@ -76411,7 +76430,8 @@
             "enum": [
               "below_minimum",
               "insufficient_points",
-              "above_maximum"
+              "above_maximum",
+              "not_cashable"
             ],
             "nullable": true
           },
@@ -76425,6 +76445,7 @@
         "required": [
           "currency",
           "balancePoints",
+          "cashablePoints",
           "minimumPoints",
           "maximumPoints",
           "rate",
@@ -76700,7 +76721,8 @@
                 "type": "number"
               },
               "expiresAt": {
-                "type": "string"
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [

@@ -406,7 +406,8 @@ export abstract class CashOutBase {
     for (const l of list) {
       const out = await this.points.grant({
         wawuUserId: p.id,
-        source: 'pack',
+        // Earned and bonus points: bought points can never be cashed out (R-101 point 7).
+        source: 'tier_bonus',
         sourceRef: `p04-${randomUUID()}`,
         points: l.points,
         expiresAt: new Date(Date.now() + l.days * DAY),
