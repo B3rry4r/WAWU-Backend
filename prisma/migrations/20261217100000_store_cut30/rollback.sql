@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- Rollback for 20261218090000_store_cut30 (STORE-CUT30). It refuses while either table has rows: the switch records a price
+-- Rollback for 20261217100000_store_cut30 (STORE-CUT30). It refuses while either table has rows: the switch records a price
 -- change made in the stores and the entries are the proof of the total it was made on.
 DO $$
 BEGIN
