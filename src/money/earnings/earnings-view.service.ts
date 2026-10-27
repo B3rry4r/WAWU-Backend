@@ -186,7 +186,10 @@ export class EarningsViewService {
     wawuUserId: string,
   ): Promise<StoreEarningWaitingView[]> {
     const rows = await this.prisma.storeEarning.findMany({
-      where: { payeeWawuUserId: wawuUserId, status: 'owed' },
+      where: {
+        payeeWawuUserId: wawuUserId,
+        status: { in: ['owed', 'sending'] },
+      },
       orderBy: [{ availableAt: 'asc' }, { id: 'asc' }],
       take: 50,
     });

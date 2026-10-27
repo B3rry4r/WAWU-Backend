@@ -4,6 +4,7 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { DirectMessageModule } from '../direct-message/direct-message.module';
 import { NotificationModule } from '../notification/notification.module';
+import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { PlansModule } from '../plans/plans.module';
 import { PointsModule } from '../points/points.module';
 import { PriceListModule } from '../price-list/price-list.module';
@@ -45,6 +46,7 @@ import { StoreWebhookController } from './store-webhook.controller';
     WawuAuthModule,
     AdminAuthModule,
     PlansModule,
+    PlanSettingsModule,
     PointsModule,
     BlockedAccountModule,
     PriceListModule,

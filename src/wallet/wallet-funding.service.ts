@@ -36,6 +36,13 @@ const STANDARD_COMMISSION_RATE = 0.15;
  *     refundable until it expires
  *   - community credit spend, which is already settled when it is recorded
  * Anything still refundable stays where it is until it is not.
+ *
+ * ── WHAT IT NEVER PAYS (STORE-PAYOUT) ─────────────────────────────────────
+ * A sale made in the App Store or Google Play: its Purchase row (or answered
+ * question) has the reference 'store:<id>'. The creator's 85% of the list
+ * price is a StoreEarning, paid by StorePayoutService from WAWU's own
+ * account 3 working days on. Paying it here as well would pay it twice, so this
+ * sweep leaves every 'store:' row alone.
  */
 @Injectable()
 export class WalletFundingService {
@@ -90,6 +97,9 @@ export class WalletFundingService {
       SELECT p."id", p."creatorWawuId", p."amount", p."commissionRate"
         FROM "Purchase" p
        WHERE p."status" = 'completed'
+         -- A store sale (reference 'store:<StorePurchase id>') is paid by StoreEarning
+         -- only (STORE-PAYOUT): from WAWU's own account, 3 working days on.
+         AND p."flutterwaveTxRef" NOT LIKE 'store:%'
          AND NOT EXISTS (
                SELECT 1 FROM "WalletLedgerEntry" e
                 WHERE e."sourceType" = 'purchase' AND e."sourceId" = p."id"
@@ -120,6 +130,9 @@ export class WalletFundingService {
       SELECT d."id", d."creatorWawuId", d."amount"
         FROM "DirectMessage" d
        WHERE d."status" = 'responded'
+         -- A question bought in the store (reference 'store:<StorePurchase id>') is
+         -- paid by StoreEarning only (STORE-PAYOUT), never here.
+         AND d."flutterwaveTxRef" NOT LIKE 'store:%'
          AND NOT EXISTS (
                SELECT 1 FROM "WalletLedgerEntry" e
                 WHERE e."sourceType" = 'direct_message' AND e."sourceId" = d."id"

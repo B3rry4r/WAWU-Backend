@@ -228,7 +228,11 @@ export class StorePurchaseService {
       });
       if (existing !== null)
         return heldBy(existing, userId, communityId, intent);
-      const fee = (await this.catalog.availability(platform)).feeBps;
+      const availability = await this.catalog.availability(platform);
+      const fee = availability.feeBps;
+      // Creator and host shares are worked on the cut that applied before a
+      // store moved to 30% (STORE-CUT30): the same as `fee` unless it has.
+      const shareFee = availability.shareFeeBps;
       // A ladder purchase is worth the list price its intent named, whatever
       // the product row says now. The store price is made so that WAWU receives
       // at least that (R-101 point 2), so the net recorded is the list price
@@ -277,8 +281,8 @@ export class StorePurchaseService {
           ? null
           : intent !== null && args.late == null
             ? creatorShareOfList(intent.listPriceKobo)
-            : netKobo !== null
-              ? creatorShareOf(netKobo)
+            : referenceKobo !== null
+              ? creatorShareOf(netOf(referenceKobo, shareFee))
               : null;
       try {
         return await this.prisma.$transaction(async (tx) => {
@@ -347,6 +351,7 @@ export class StorePurchaseService {
               grant: {},
               referenceKobo,
               storeFeeBps: fee,
+              ...(shareFee === fee ? {} : { shareFeeBps: shareFee }),
               netKobo,
               creatorWawuUserId,
               creatorShareKobo,

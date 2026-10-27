@@ -77,8 +77,8 @@ function lagosWeekday(at: Date): number {
  * skipped, the time of day kept. A sale on Thursday at 15:00 is payable on
  * Tuesday at 15:00 (Friday, Monday, Tuesday); one on Saturday or Sunday counts
  * from Monday, so it is payable on Wednesday. `holidays` is a set of Lagos
- * dates (`YYYY-MM-DD`) that do not count either; the admin holiday list is a
- * later task, so callers pass none today.
+ * dates (`YYYY-MM-DD`) that do not count either; the admin holiday list is the
+ * setting `store.holidays` (STORE-HOLIDAYS).
  */
 export function addWorkingDays(
   from: Date,
@@ -94,7 +94,14 @@ export function addWorkingDays(
   return at;
 }
 
-/** When a creator's share of a sale made at `soldAt` may be paid. */
-export function payableAt(soldAt: Date): Date {
-  return addWorkingDays(soldAt, PAYOUT_WORKING_DAYS);
+/**
+ * When a creator's share of a sale made at `soldAt` may be paid: 3 working days
+ * on, skipping weekends and the public holidays in `holidays` (the admin
+ * setting `store.holidays`, STORE-HOLIDAYS).
+ */
+export function payableAt(
+  soldAt: Date,
+  holidays: ReadonlySet<string> = new Set(),
+): Date {
+  return addWorkingDays(soldAt, PAYOUT_WORKING_DAYS, holidays);
 }

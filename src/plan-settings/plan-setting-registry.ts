@@ -1,5 +1,10 @@
 import { FX_CURRENCIES } from '../money/fx/fx-currencies';
 import {
+  HolidayListProblem,
+  parseHolidayLines,
+  STORE_HOLIDAYS_KEY,
+} from '../store/payout/store-holidays';
+import {
   PRICE_LIST_KEY,
   PriceListProblem,
   TIP_LIST_KEY,
@@ -1375,6 +1380,51 @@ export function buildRegistry(
     usedBy: ['The tip picker', 'GET /prices'],
     default: extra(TIP_LIST_KEY, null),
     parse: nairaList,
+  });
+
+  // ---- Paying creators for store sales (STORE-HOLIDAYS, STORE-CUT30, R-101) ----
+  add({
+    key: STORE_HOLIDAYS_KEY,
+    group: 'Store payouts',
+    label:
+      "Public holidays a creator's waiting days skip (one date per line, YYYY-MM-DD, Lagos)",
+    unit: 'lines',
+    usedBy: [
+      'The day a store sale may be paid out (availableAt)',
+      'GET /money/earnings (storeEarnings)',
+    ],
+    default: extra(STORE_HOLIDAYS_KEY, null),
+    parse: (raw) => {
+      try {
+        return parseHolidayLines(raw);
+      } catch (e) {
+        if (e instanceof HolidayListProblem)
+          throw new SettingInvalid(e.message);
+        throw e;
+      }
+    },
+  });
+  add({
+    key: 'store.cut30_threshold_usd',
+    group: 'Store payouts',
+    label:
+      "US dollars of a store's proceeds in a year at which its prices move to the 30% ladder",
+    unit: 'count',
+    usedBy: ['The store price switch (STORE-CUT30)', 'GET /prices'],
+    default: extra('store.cut30_threshold_usd', null),
+    parse: (raw) => {
+      if (
+        typeof raw !== 'number' ||
+        !Number.isSafeInteger(raw) ||
+        raw < 1 ||
+        raw > 1_000_000_000
+      ) {
+        throw new SettingInvalid(
+          'needs a whole number of US dollars, 1 to 1000000000',
+        );
+      }
+      return raw;
+    },
   });
 
   return out;

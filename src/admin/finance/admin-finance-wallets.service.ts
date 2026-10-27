@@ -209,6 +209,8 @@ export class AdminFinanceWalletsService {
                COALESCE(SUM(FLOOR(p."amount" * (1 - p."commissionRate"))), 0)::bigint AS "owed"
           FROM "Purchase" p
          WHERE p."status" = 'completed'
+           -- A store sale is StoreEarning's, not this sweep's (STORE-PAYOUT).
+           AND p."flutterwaveTxRef" NOT LIKE 'store:%'
            AND NOT EXISTS (
                  SELECT 1 FROM "WalletLedgerEntry" e
                   WHERE e."sourceType" = 'purchase' AND e."sourceId" = p."id"
@@ -223,6 +225,7 @@ export class AdminFinanceWalletsService {
                  COALESCE(SUM(FLOOR(d."amount" * 0.85)), 0)::bigint AS "owed"
             FROM "DirectMessage" d
            WHERE d."status" = 'responded'
+             AND d."flutterwaveTxRef" NOT LIKE 'store:%'
              AND NOT EXISTS (
                    SELECT 1 FROM "WalletLedgerEntry" e
                     WHERE e."sourceType" = 'direct_message' AND e."sourceId" = d."id"

@@ -1675,6 +1675,11 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       reason:
         'The creator share of somebody else store sale, kept like a wallet sale earning (EarningSettlement): a record WAWU holds about money it owes, not content the person wrote; the buyer sale is exported under storePurchases.',
     },
+    {
+      model: 'StoreEarningPayout',
+      reason:
+        'WAWU record of the transfer that paid a creator share of a store sale (STORE-PAYOUT), kept like the earning it pays: money WAWU paid out, not content the person wrote.',
+    },
     // Secrets and identity records: never in an email.
     {
       model: 'EventDoorStaff',
