@@ -36940,7 +36940,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable, payment_in_progress",
+            "description": "reason.code: wallet_not_open, wallet_opening, target_not_payable, pack_not_allowed, payment_in_progress",
             "content": {
               "application/json": {
                 "schema": {
@@ -37091,7 +37091,7 @@
             }
           },
           "409": {
-            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, payment_in_progress",
+            "description": "reason.code: wallet_not_open, wallet_opening, idempotency_key_reused, idempotency_in_progress, pin_not_set, quote_changed, target_not_payable, pack_not_allowed, payment_in_progress",
             "content": {
               "application/json": {
                 "schema": {
@@ -46774,6 +46774,7 @@
               "points_cap_reached",
               "points_not_short",
               "tier_required",
+              "pack_not_allowed",
               "add_money_unavailable",
               "fx_switched_off",
               "quote_expired",

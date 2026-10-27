@@ -22,6 +22,11 @@ import { CreatorStateModule } from '../../creator-state/creator-state.module';
 import { StorageModule } from '../../storage/storage.module';
 import { STORAGE_LOCK_WAITERS_PER_PERSON } from '../../storage/storage-lock';
 import { TICK_UPLOADS } from '../../common/creator-allowance';
+import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
+import {
+  openPackRule,
+  resetPackRule,
+} from '../../../test/plans/open-pack-rule';
 import { PLANS_CONFIG, type PlansConfig } from '../plans-config';
 import { PlansModule } from '../plans.module';
 import type { MyTierView, PlansView, PlanTierView } from '../plans-view.type';
@@ -272,6 +277,13 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
     await app.listen(0, '127.0.0.1');
     prisma = app.get(PrismaService);
     config = app.get<PlansConfig>(PLANS_CONFIG);
+    // PACK-CAP (R-100): these cases test the gate's room logic, wording and
+    // offers on the first tier; the pack rule is open for them and has its own
+    // spec (purchases/tests/extra-products-cap).
+    await openPackRule(
+      app.get(PlanSettingsService),
+      config.tiers.map((t) => t.id),
+    );
   }, 60_000);
 
   afterEach(() => {
@@ -296,6 +308,7 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
     await prisma.creatorState.deleteMany({ where });
     await prisma.personBilling.deleteMany({ where });
     await prisma.userProfile.deleteMany({ where });
+    if (app) await resetPackRule(app.get(PlanSettingsService));
     await app?.close();
     for (const [k, v] of Object.entries(envSnapshot)) {
       if (v === undefined) delete process.env[k];

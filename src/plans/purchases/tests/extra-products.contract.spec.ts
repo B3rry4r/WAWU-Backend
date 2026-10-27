@@ -14,6 +14,10 @@ import type { AdminActor } from '../../../common/audit/admin-ops-audit.service';
 import type { TransactionPage } from '../../../money/money-view.type';
 import { OTHER_CURRENCY_MESSAGE } from '../../../money/payments/wallet-payment.service';
 import { PlanSettingsService } from '../../../plan-settings/plan-settings.service';
+import {
+  openPackRule,
+  resetPackRule,
+} from '../../../../test/plans/open-pack-rule';
 import { loadPlansConfig, priceIn } from '../../plans-config';
 import { PublishingAllowanceService } from '../../publishing-allowance.service';
 import { PublishingGate } from '../../publishing-gate.service';
@@ -68,8 +72,15 @@ describe('Add more products to a tier (TIER-04), Nuvion stood in', () => {
     settings = h.get(PlanSettingsService);
     allowance = h.get(PublishingAllowanceService);
     gate = h.get(PublishingGate);
+    // PACK-CAP (R-100): these cases test the payment on the first tier with
+    // many packs; the pack rule has its own spec (extra-products-cap).
+    await openPackRule(
+      settings,
+      config.tiers.map((t) => t.id),
+    );
   });
   afterAll(async () => {
+    await resetPackRule(settings);
     await h.prisma.creatorState.deleteMany({
       where: { wawuUserId: { in: h.users } },
     });

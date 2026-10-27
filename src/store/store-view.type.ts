@@ -87,7 +87,7 @@ export interface StorePurchaseView {
   purchasedAt: string;
   /** When the subscription period ends as the store said; null for anything bought once (points, credits, an upload pack, a pass). */
   expiresAt: string | null;
-  /** `member_removed` when the purchase was recorded but the pass was not given because the host removed the person. Null otherwise. */
+  /** `member_removed` when the purchase was recorded but the pass was not given because the host removed the person; `pack_not_allowed` when the upload pack was recorded and nothing was added because the person's tier may not buy it or they hold the most packs (R-100). Null otherwise. */
   flag: string | null;
 }
 

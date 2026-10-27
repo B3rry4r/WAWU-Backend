@@ -22,6 +22,11 @@ import {
 } from '../plans/plans-config';
 import { lockPersonTier, TierGrantService } from '../plans/tier-grant.service';
 import {
+  PACK_NOT_ALLOWED_FLAG,
+  packRefusalFor,
+  packRuleOf,
+} from '../plans/purchases/extra-products-cap';
+import {
   EXTRA_PRODUCTS_TOO_MANY_MESSAGE,
   TIER_REQUIRED_MESSAGE,
 } from '../plans/purchases/extra-products-rules';
@@ -69,7 +74,7 @@ export interface StoreGrantSnapshot {
   /** Products an upload pack added to the tier row (IAP-03). */
   extraProducts?: number;
   communityId?: string;
-  /** Set when the purchase was recorded and nothing was given: `member_removed`. */
+  /** Set when the purchase was recorded and nothing was given: `member_removed`, or `pack_not_allowed` (R-100). */
   skipped?: string;
 }
 
@@ -257,6 +262,19 @@ export class StoreGrantService {
           select: { tierId: true, extraProducts: true },
         });
         if (held === null) throw grantFailed(TIER_REQUIRED_MESSAGE);
+        // PACK-CAP (R-100): the pack is sold only on a tier the settings name,
+        // and only up to the most packs a profile holds. A purchase that
+        // arrives against the rule (the store has taken the money) is recorded
+        // with a flag and gives nothing, as a removed member's pass renewal is:
+        // it is never thrown into a retry loop, and an admin looks.
+        if (
+          packRefusalFor(
+            packRuleOf(this.plans),
+            held.tierId,
+            held.extraProducts,
+          ) !== null
+        )
+          return { kind: 'extra_products', skipped: PACK_NOT_ALLOWED_FLAG };
         if (held.extraProducts + count > INT4_MAX)
           throw grantFailed(EXTRA_PRODUCTS_TOO_MANY_MESSAGE);
         // The store purchase row is the once-only gate; this key makes the

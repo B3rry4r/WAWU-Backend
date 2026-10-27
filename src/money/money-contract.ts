@@ -132,6 +132,9 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // TIER-04. 402, as the publishing gate answers the same code (TIER-02,
   // CONVENTIONS section 23): the person has to pay for a tier first.
   tier_required: 402,
+  // PACK-CAP (R-100). Default (agent), owner may override: 409, as
+  // target_not_payable: the request is understood; the rule does not allow it.
+  pack_not_allowed: 409,
   // WALLET-25, WALLET-26. Default (agent), owner may override: 409, as
   // currency_not_supported: the request is understood; this way cannot be used now.
   add_money_unavailable: 409,

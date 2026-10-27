@@ -13,6 +13,10 @@ import { body } from '../../../../test/payments/poll-helpers';
 import { AdminRole } from '../../../../generated/prisma/enums';
 import type { AdminActor } from '../../../common/audit/admin-ops-audit.service';
 import { PlanSettingsService } from '../../../plan-settings/plan-settings.service';
+import {
+  openPackRule,
+  resetPackRule,
+} from '../../../../test/plans/open-pack-rule';
 import { loadPlansConfig, priceIn } from '../../plans-config';
 import { PublishingAllowanceService } from '../../publishing-allowance.service';
 import { TIER_ENDED_MESSAGE } from '../extra-products-rules';
@@ -65,8 +69,15 @@ describe('Add more products by bank transfer (TIER-04), Nuvion stood in', () => 
     transfers = h.get(PlanTransferService);
     settings = h.get(PlanSettingsService);
     allowance = h.get(PublishingAllowanceService);
+    // PACK-CAP (R-100): these cases test the order on the first tier with many
+    // packs; the pack rule has its own spec (extra-products-cap).
+    await openPackRule(
+      settings,
+      config.tiers.map((t) => t.id),
+    );
   });
   afterAll(async () => {
+    await resetPackRule(settings);
     await h.prisma.makerExtraProducts.deleteMany({
       where: { wawuUserId: { in: h.users } },
     });

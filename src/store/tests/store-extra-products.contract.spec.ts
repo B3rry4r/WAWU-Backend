@@ -19,9 +19,10 @@ import { AdminRole } from '../../../generated/prisma/enums';
 import { AdminTokenService } from '../../admin/auth/admin-token.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PLANS_CONFIG, type PlansConfig } from '../../plans/plans-config';
+import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import { PublishingGate } from '../../plans/publishing-gate.service';
 import { TierGateError } from '../../plans/tier-gate-error';
-import { loadPlansConfig } from '../../plans/plans-config';
+import { INT4_MAX, loadPlansConfig } from '../../plans/plans-config';
 import { checkProduct, resolveGrants } from '../store-grants';
 import { StoreError } from '../store-error';
 import {
@@ -251,6 +252,22 @@ describe('IAP-03: buying more products in a store (stand-in stores)', () => {
     prisma = moduleRef.get(PrismaService);
     plans = moduleRef.get<PlansConfig>(PLANS_CONFIG);
     tierId = plans.tiers[0].id;
+    // These cases test the grant mechanics on the first tier. The pack rule
+    // (PACK-CAP, R-100) is opened for them in the settings; the rule has its own
+    // spec (store-extra-products-cap.contract.spec.ts).
+    await moduleRef.get(PlanSettingsService).set(
+      {
+        id: randomUUID(),
+        email: 'iap03@admin.test.wawu.dev',
+        role: AdminRole.finance,
+      },
+      {
+        settings: {
+          'plan.extra_products.tiers': plans.tiers.map((t) => t.id),
+          'plan.extra_products.max_packs': INT4_MAX,
+        },
+      },
+    );
     buyerToken = dataOf<{ accountToken: string }>(
       await as(buyer).get('/store/products?platform=android').expect(200),
     ).accountToken;
@@ -307,6 +324,20 @@ describe('IAP-03: buying more products in a store (stand-in stores)', () => {
       await prisma.storePlatformSetting.deleteMany({});
       await prisma.adminUser.deleteMany({ where: { id: { in: adminIds } } });
     }
+    if (prisma)
+      await moduleRef.get(PlanSettingsService).set(
+        {
+          id: randomUUID(),
+          email: 'iap03@admin.test.wawu.dev',
+          role: AdminRole.finance,
+        },
+        {
+          settings: {
+            'plan.extra_products.tiers': null,
+            'plan.extra_products.max_packs': null,
+          },
+        },
+      );
     await app?.close();
     mock?.kill();
   });

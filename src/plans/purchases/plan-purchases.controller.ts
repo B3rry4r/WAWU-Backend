@@ -82,6 +82,7 @@ export class PlanPurchasesController {
     'target_not_found',
     'target_not_payable',
     'tier_required',
+    'pack_not_allowed',
     'payment_in_progress',
     'amount_out_of_range',
     'fees_not_set',
@@ -142,6 +143,7 @@ export class PlanPurchasesController {
     'target_not_found',
     'target_not_payable',
     'tier_required',
+    'pack_not_allowed',
     'payment_in_progress',
   )
   @RequireFeesSet()

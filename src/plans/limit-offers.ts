@@ -1,6 +1,7 @@
 import type { PublishingAllowance } from './publishing-allowance.service';
 import type { PlansView } from './plans-view.type';
 import type { TierGateOffers } from './tier-gate-error';
+import { packRefusalFor, type PackRule } from './purchases/extra-products-cap';
 
 /**
  * The offers a `product_limit_reached` refusal carries (TIER-02, R-43): only
@@ -21,8 +22,11 @@ import type { TierGateOffers } from './tier-gate-error';
  *   (a tick ended, then a small tier was bought) it is only the tiers big
  *   enough for all they have, and often none.
  * - The extra-products pack counts when the person has a running tier (the
- *   pack is bought on one) and the pack lifts that tier above what is
- *   published.
+ *   pack is bought on one), the pack lifts that tier above what is
+ *   published, and the pack rule allows it (PACK-CAP, R-100): the tier is one
+ *   the settings name (Founding Maker by default) and the person holds fewer
+ *   than the most packs. A person on Verify or Verify Plus is offered tiers
+ *   only.
  *
  * When nothing counts both come back empty and the sentence says products
  * must come down first.
@@ -36,17 +40,21 @@ export function limitOffers(
     'productsUsed' | 'runningTierId' | 'runningTierProducts' | 'extraProducts'
   >,
   plan: Pick<PlansView, 'tiers' | 'extraProducts'>,
+  rule: PackRule,
 ): Pick<TierGateOffers, 'tiers' | 'extraProducts'> {
   const used = allowance.productsUsed;
   const tiers = tiersWithRoom(allowance, plan);
-  const hasTier = allowance.runningTierId !== null;
+  const packSold =
+    allowance.runningTierId !== null &&
+    packRefusalFor(rule, allowance.runningTierId, allowance.extraProducts) ===
+      null;
   const withPack =
     allowance.runningTierProducts +
     allowance.extraProducts +
     plan.extraProducts.count;
   return {
     tiers,
-    extraProducts: hasTier && withPack > used ? plan.extraProducts : null,
+    extraProducts: packSold && withPack > used ? plan.extraProducts : null,
   };
 }
 

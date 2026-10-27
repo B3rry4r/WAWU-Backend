@@ -255,6 +255,9 @@ export const MONEY_ERROR_CODES = [
   // has none, or it ended. Also the code of the publishing gate (TIER-02), in
   // its own richer body on the routes that publish.
   'tier_required',
+  // The pack of extra products is not sold to this person: their tier may not
+  // buy it, or they hold the most packs a profile can (PACK-CAP, R-100).
+  'pack_not_allowed',
   // Adding money by card, Apple Pay, USSD or a bank checkout (WALLET-25, WALLET-26):
   // the way asked for is switched off, or the provider has not switched it on.
   'add_money_unavailable',

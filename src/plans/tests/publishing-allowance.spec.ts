@@ -4,7 +4,11 @@ import {
 } from '../../common/creator-allowance';
 import { FREE_STORAGE_BYTES } from '../../common/creator-allowance';
 import { TierGateError } from '../tier-gate-error';
-import { limitOffers, tierRequiredOffers } from '../limit-offers';
+import {
+  limitOffers as limitOffersWith,
+  tierRequiredOffers,
+} from '../limit-offers';
+import type { PackRule } from '../purchases/extra-products-cap';
 import type { PlanTierView } from '../plans-view.type';
 import {
   publishingOver,
@@ -22,6 +26,21 @@ const gateOf = (world: PublishingWorld) => {
   const prisma = publishingTables(world, 'p1');
   return publishingOver(prisma);
 };
+
+/**
+ * These cases test which tiers leave room. The pack rule (PACK-CAP, R-100) is
+ * open here, so they keep testing room; the rule has its own spec
+ * (purchases/tests/extra-products-cap.spec.ts).
+ */
+const OPEN: PackRule = {
+  tiers: ['verify', 'plus', 'founding'],
+  maxPacks: 1000,
+  count: 5,
+};
+const limitOffers = (
+  allowance: Parameters<typeof limitOffersWith>[0],
+  plan: Parameters<typeof limitOffersWith>[1],
+) => limitOffersWith(allowance, plan, OPEN);
 
 describe('PublishingAllowanceService (TIER-02)', () => {
   it('a person with no tier and no tick may publish nothing', async () => {

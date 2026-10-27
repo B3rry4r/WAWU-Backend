@@ -171,6 +171,10 @@
       "Christmas event"
     ],
     "capital.enabled": 0,
+    "plan.extra_products.tiers": [
+      "founding"
+    ],
+    "plan.extra_products.max_packs": 2,
     "tier_offer.close_button_on": 1
   }
 }
