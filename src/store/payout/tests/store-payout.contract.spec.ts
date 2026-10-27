@@ -786,4 +786,83 @@ describe('STORE-PAYOUT: paying a creator for a store sale (Nuvion stood in)', ()
       }),
     ).toBe(0);
   });
+
+  it('an answered store question is paid once: its StoreEarning is paid by the payout, and the funding sweep leaves its store: message alone', async () => {
+    const c = await creator(0);
+    const purchaseId = randomUUID();
+    const answeredAt = new Date(Date.now() - 6 * DAY);
+    const messageId = randomUUID();
+    messageIds.push(messageId);
+    await prisma.directMessage.create({
+      data: {
+        id: messageId,
+        creatorWawuId: c.id,
+        senderWawuId: randomUUID(),
+        text: 'A question bought in the store',
+        amount: 1000,
+        status: 'responded',
+        deadlineAt: new Date(Date.now() + DAY),
+        respondedAt: answeredAt,
+        flutterwaveTxRef: `store:${purchaseId}`,
+      },
+    });
+    // The earning STORE-QUESTION records when the creator answers: 85% of the list price, 3 working days from the answer.
+    await prisma.$transaction((tx) =>
+      storeEarnings.record(tx, {
+        purchase: { id: purchaseId, createdAt: answeredAt } as never,
+        payeeWawuUserId: c.id,
+        buyKind: 'question',
+        targetId: messageId,
+        title: 'A question',
+        listPriceKobo: 100_000,
+        soldAt: answeredAt,
+        earnedAt: answeredAt,
+      }),
+    );
+    const earned = await prisma.storeEarning.findFirstOrThrow({
+      where: { storePurchaseId: purchaseId },
+    });
+    expect(earned.amountKobo).toBe(85_000n);
+    expect(earned.availableAt.getTime()).toBeLessThan(Date.now());
+    // This test server runs no WALLET_PROVIDER setting, so the earning was recorded for the default; it is Nuvion's here.
+    await prisma.storeEarning.update({
+      where: { id: earned.id },
+      data: { provider: 'nuvion' },
+    });
+
+    const credited: string[] = [];
+    const funding = new WalletFundingService(
+      prisma,
+      {
+        creditEarning: (i: { reference: string }) => {
+          credited.push(i.reference);
+          return Promise.resolve();
+        },
+        reconcilePending: () => Promise.resolve({ checked: 0, settled: 0 }),
+      } as never,
+      {
+        get: (k: string) => (k === 'WALLET_FUNDING' ? 'on' : undefined),
+      } as never,
+    );
+    await funding.run();
+    await payouts.sweep();
+    await funding.run();
+    await payouts.sweep();
+    await other.sweep();
+
+    expect(credited).not.toContain(`direct_message:${messageId}`);
+    expect(balance(c)).toBe(85_000n);
+    expect(
+      (
+        await prisma.storeEarning.findUniqueOrThrow({
+          where: { id: earned.id },
+        })
+      ).status,
+    ).toBe('paid');
+    expect(
+      sentFromMerchant().filter(
+        (t) => t.request.unique_reference === payoutReference(earned.id, 1),
+      ),
+    ).toHaveLength(1);
+  });
 });
