@@ -793,6 +793,43 @@ the same person naming another room for it is refused (`store_purchase_other_roo
 the pass reminder (3 days before the end) reaches store passes too. `GET /communities/{id}/pass`
 no longer answers `cancelInStore` (nothing renews).
 
+### The price ladder: a piece, a tip or a community pass (STORE-BUY-HUB, R-101)
+
+In the app, unlocking a piece, sending a tip and getting a community pass are store
+purchases at the LIST price. Each price on `prices.list_naira` has one consumable on each
+store, `wawu.buy.<naira>` (kind `buy`, `referenceKobo` the list price, `storePriceKobo` the
+Nigeria store price on the 15% ladder, both seeded by migration `20261213090100` and edited
+in `admin/store/products` like any row). What a purchase is FOR is the person's intent, said
+before the store sheet opens:
+
+1. `POST /store/intents` `{ platform, kind: content | tip | pass, contentId | creatorWawuId |
+   communityId, listPriceNaira }` answers `{ intentId, productId, accountToken, expiresAt }`.
+   It checks as the wallet path does (a piece: live, paid, not theirs, not blocked, not
+   already theirs, priced at the list price; a tip: on `prices.tip_list_naira`, a person who
+   can be tipped; a pass: the room's price is the list price, they may join), refuses a price
+   off the list (`price_not_on_list`), and writes `StorePurchaseIntent`. One OPEN intent per
+   person, kind and target (a partial unique index); asking again returns it; another price or
+   store replaces it. It stays open 60 minutes, judged at the time of the STORE SALE and not of
+   the post, so a slow payment is never lost.
+2. The app buys `productId` with `accountToken`, then `POST /store/purchases` with `intentId`.
+   The Hub verifies with the store's own server (as above), checks the product is the intent's
+   and the token is the person's, and grants once per store transaction: a piece writes the
+   `Purchase` row of type `content` (`store:<id>`), a tip the one of type `tip`, a pass 30 days
+   (`grantPassPeriod`). A piece taken down meanwhile is recorded with `flag: target_unavailable`
+   and nothing is given.
+3. The creator's exactly-85% of the LIST price (never of what the store charged) is a
+   `StoreEarning` (source `store`) with `availableAt`: the sale plus 3 working days, Lagos time,
+   Monday to Friday (`addWorkingDays`; an admin holiday list is a later task). It is its own
+   table: the daily mover (`EarningSettlementService`) reads only `EarningSettlement`, so it
+   cannot pay one early and pays nothing for it today. STORE-PAYOUT pays it. The creator's
+   earnings view counts it as earned and waiting.
+4. A store refund, revoke or Google voided purchase removes the access (the `Purchase` row stops
+   counting, the pass days end now) and takes the 85% back: a `StoreEarning` not yet paid is
+   cancelled; one already paid becomes an `EarningDeduction` (`storePurchaseId`) that the
+   creator's next daily move takes from their earnings, never from a wallet. Apple
+   REFUND_REVERSED puts the grant and the earning back (a ladder purchase only). Every notice is
+   idempotent: the purchase row's status decides who acts, once.
+
 ## Verification: two ticks, not a ladder
 
 There is no five-rung ladder any more. There are exactly **two** verifications,
