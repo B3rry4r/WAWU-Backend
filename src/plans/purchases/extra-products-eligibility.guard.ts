@@ -9,7 +9,7 @@ import { EXTRA_PRODUCTS_KIND } from './plan-purchase-terms';
  * products pack (PACK-CAP, R-100): a refusal because of who the person is
  * (`pack_not_allowed`) is answered first, so no wallet or payment gate leads a
  * person to something they cannot buy. Any other kind passes untouched.
- * Put last among a route's decorators, so it is the first guard of the route.
+ * Put directly above `@RequireFeesSet()`, so it runs right after FeesSetGuard (the house order: auth, fees_not_set, eligibility, then the wallet gate).
  */
 @Injectable()
 export class ExtraProductsEligibilityGuard implements CanActivate {

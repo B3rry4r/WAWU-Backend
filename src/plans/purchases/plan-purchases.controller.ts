@@ -88,9 +88,9 @@ export class PlanPurchasesController {
     'amount_out_of_range',
     'fees_not_set',
   )
-  @RequireFeesSet()
-  // Last, so it runs first: the pack's eligibility before any wallet gate (R-100).
+  // Above RequireFeesSet, so it runs right after FeesSetGuard and before any wallet gate: auth, fees_not_set, then the pack's eligibility (R-100).
   @UseGuards(ExtraProductsEligibilityGuard)
+  @RequireFeesSet()
   quote(
     @CurrentWallet() wallet: OpenWallet,
     @Query() query: PlanPurchaseQuoteQueryDto,
@@ -149,8 +149,9 @@ export class PlanPurchasesController {
     'pack_not_allowed',
     'payment_in_progress',
   )
-  @RequireFeesSet()
+  // Right after FeesSetGuard, before the wallet gate (R-100).
   @UseGuards(ExtraProductsEligibilityGuard)
+  @RequireFeesSet()
   buy(
     @CurrentWallet() wallet: OpenWallet,
     @CurrentIdempotencyScope() scope: IdempotencyScope,
