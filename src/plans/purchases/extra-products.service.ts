@@ -1,5 +1,6 @@
-import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { WalletHoldService } from '../../money/holds/wallet-hold.service';
 import type { OpenWallet } from '../../money/gate/wallet-gate';
 import { MoneyError } from '../../money/money-error';
 import type { PaymentStatus, PaymentView } from '../../money/money-view.type';
@@ -15,6 +16,7 @@ import {
 } from '../../money/payments/wallet-payment.service';
 import type { PlanTransferOrder } from '../../../generated/prisma/client';
 import { BillingCurrencyService } from '../billing-currency.service';
+import { PublishingAllowanceService } from '../publishing-allowance.service';
 import { MakerTierService } from '../maker-tier.service';
 import { INT4_MAX, PLANS_CONFIG, type PlansConfig } from '../plans-config';
 import type { PlanCurrency } from '../plans-view.type';
@@ -26,6 +28,8 @@ import {
   extraGoodsToTerms,
 } from './extra-products-goods';
 import {
+  TIER_ENDED_MESSAGE,
+  TIER_REQUIRED_MESSAGE,
   EXTRA_PRODUCTS_TITLE,
   priceExtraProducts,
   type ExtraProductsPlan,
@@ -35,7 +39,18 @@ import type {
   ExtraProductsPurchaseView,
   ExtraProductsQuoteView,
 } from './extra-products-view.type';
-import { PurchaseRefusal } from './plan-purchase-rules';
+import {
+  EXTRA_PRODUCTS_REFUND_CONDITION,
+  packRefundedMessage,
+  packRefundingMessage,
+  PACK_NO_ROOM_MESSAGE,
+  PACK_NOT_ALLOWED_CODE,
+  packLiftsLimit,
+  packRefusalFor,
+  packRefusalMessage,
+  packRuleOf,
+} from './extra-products-cap';
+import { isRunning, PurchaseRefusal } from './plan-purchase-rules';
 import {
   EXTRA_PRODUCTS_KIND,
   EXTRA_PRODUCTS_TARGET_ID,
@@ -92,7 +107,11 @@ export class ExtraProductsService implements OnModuleInit {
     private readonly billing: BillingCurrencyService,
     private readonly payments: WalletPaymentService,
     private readonly registry: PayableRegistry,
+    private readonly holds: WalletHoldService,
+    private readonly allowance: PublishingAllowanceService,
   ) {}
+
+  private readonly logger = new Logger(ExtraProductsService.name);
 
   onModuleInit(): void {
     this.registry.register({
@@ -109,6 +128,41 @@ export class ExtraProductsService implements OnModuleInit {
   /** The payment target of a request for the add-on. */
   targetOf(): string {
     return EXTRA_PRODUCTS_TARGET_ID;
+  }
+
+  /**
+   * PACK-CAP (R-100, round 3 M2): eligibility comes before any wallet or
+   * payment gate. A person on a running tier that may not buy the pack, or who
+   * holds the most packs, is refused `pack_not_allowed` here, so a Verify
+   * person with no wallet is told the pack is not for them and not led to open
+   * one for it. Without a running tier it is silent: `tier_required` is
+   * answered later, as before.
+   */
+  async assertEligible(wawuUserId: string): Promise<void> {
+    const [held, allowance] = await Promise.all([
+      this.tiers.tierOf(wawuUserId),
+      this.allowance.of(wawuUserId),
+    ]);
+    // No running tier (none, or ended): tier_required, before any wallet gate.
+    if (!isRunning(held))
+      throw new MoneyError(
+        'tier_required',
+        held.state === 'ended' ? TIER_ENDED_MESSAGE : TIER_REQUIRED_MESSAGE,
+      );
+    const why = packRefusalFor(
+      packRuleOf(this.config),
+      held.tierId,
+      held.extraProducts,
+    );
+    if (why !== null)
+      throw new MoneyError(PACK_NOT_ALLOWED_CODE, packRefusalMessage(why));
+    this.assertRoom(held.productsAllowed, allowance.productsUsed);
+  }
+
+  /** A pack that would not lift the limit above what is published is not sold. */
+  private assertRoom(placesNow: number, used: number): void {
+    if (!packLiftsLimit(placesNow, this.config.extraProducts.count, used))
+      throw new MoneyError(PACK_NOT_ALLOWED_CODE, PACK_NO_ROOM_MESSAGE);
   }
 
   /** The pay sheet (VF13): the add-on priced for the person, with the wallet payment's quote. */
@@ -152,16 +206,20 @@ export class ExtraProductsService implements OnModuleInit {
   }
 
   private async priced(wawuUserId: string): Promise<ExtraProductsPlan> {
-    const [held, billing] = await Promise.all([
+    const [held, billing, allowance] = await Promise.all([
       this.tiers.tierOf(wawuUserId),
       this.billing.resolve(wawuUserId, {}),
+      this.allowance.of(wawuUserId),
     ]);
+    let plan: ExtraProductsPlan;
     try {
-      return priceExtraProducts(this.config, billing.currency, held);
+      plan = priceExtraProducts(this.config, billing.currency, held);
     } catch (e) {
       if (e instanceof PurchaseRefusal) throw new MoneyError(e.code, e.message);
       throw e;
     }
+    this.assertRoom(held.productsAllowed, allowance.productsUsed);
+    return plan;
   }
 
   /**
@@ -183,48 +241,122 @@ export class ExtraProductsService implements OnModuleInit {
       throw new Error(`Payment ${payment.paymentId} has no usable price.`);
     const goods = extraGoodsFromTerms(payment.terms);
     const wawuUserId = payment.payerWawuUserId;
-    await this.prisma.$transaction(async (tx) => {
-      await lockPersonTier(tx, wawuUserId);
-      const held = await tx.makerTier.findUnique({
-        where: { wawuUserId },
-        select: { tierId: true, extraProducts: true },
-      });
-      if (held === null)
-        throw new Error(
-          `Payment ${payment.paymentId}: the person holds no tier to add products to.`,
+    const outcome = await this.prisma.$transaction(
+      async (tx): Promise<'added' | 'refund'> => {
+        await lockPersonTier(tx, wawuUserId);
+        // Already added by an earlier delivery of this payment: nothing more,
+        // and never judged against the cap its own pack is part of.
+        const done = await tx.makerExtraProducts.findUnique({
+          where: { paymentRef: payment.paymentId },
+          select: { paymentRef: true },
+        });
+        if (done) return 'added';
+        // A payment already being paid back is never added, whatever has
+        // changed since: the refund and the add are decided under this lock
+        // and exclude each other.
+        const paidBack = await tx.walletHold.findUnique({
+          where: { paymentId: payment.paymentId },
+          select: { id: true },
+        });
+        if (paidBack) return 'refund';
+        const held = await tx.makerTier.findUnique({
+          where: { wawuUserId },
+          select: { tierId: true, extraProducts: true },
+        });
+        if (held === null)
+          throw new Error(
+            `Payment ${payment.paymentId}: the person holds no tier to add products to.`,
+          );
+        // PACK-CAP (R-100): the cap is judged again where the pack is added,
+        // under the person's tier lock. Another channel (a store purchase)
+        // can have taken the last place while this payment confirmed; the pack
+        // is then not added and the whole price goes back, once.
+        // The pack must still lift the limit above what is published (a tier
+        // that has ended waits, so it is not judged for room).
+        const now = await this.allowance.of(wawuUserId, new Date(), tx);
+        const noRoom =
+          now.runningTierId !== null &&
+          !packLiftsLimit(
+            now.runningTierProducts + now.extraProducts,
+            goods.products,
+            now.productsUsed,
+          );
+        if (
+          noRoom ||
+          packRefusalFor(
+            packRuleOf(this.config),
+            held.tierId,
+            held.extraProducts,
+          ) !== null
+        ) {
+          const p = await tx.walletPayment.findUniqueOrThrow({
+            where: { id: payment.paymentId },
+          });
+          await tx.walletHold.createMany({
+            data: [
+              {
+                paymentId: p.id,
+                payerWawuUserId: p.payerWawuUserId,
+                payeeWawuUserId: null,
+                kind: p.kind,
+                targetId: p.targetId,
+                title: p.title,
+                releaseCondition: EXTRA_PRODUCTS_REFUND_CONDITION,
+                amountKobo: p.priceKobo,
+                payeeShareKobo: p.payeeShareKobo,
+                wawuShareKobo: p.wawuShareKobo,
+                merchantAccountNumber: p.merchantAccountNumber,
+                provider: p.provider,
+                heldAt: new Date(),
+              },
+            ],
+            skipDuplicates: true,
+          });
+          return 'refund';
+        }
+        if (held.extraProducts + goods.products > INT4_MAX)
+          throw new Error(
+            `Payment ${payment.paymentId}: too many extra products for one account.`,
+          );
+        // The once-per-payment gate: the row's key is the payment's id.
+        const { count } = await tx.makerExtraProducts.createMany({
+          data: [
+            {
+              paymentRef: payment.paymentId,
+              wawuUserId,
+              tierId: held.tierId,
+              products: goods.products,
+              currency: PAYMENT_CURRENCY,
+              amountMinor: payment.priceKobo,
+            },
+          ],
+          skipDuplicates: true,
+        });
+        if (count === 0) return 'added';
+        const fixed = await this.billing.fixAtFirstPurchase(
+          { wawuUserId, purchaseRef: payment.paymentId },
+          tx,
         );
-      if (held.extraProducts + goods.products > INT4_MAX)
-        throw new Error(
-          `Payment ${payment.paymentId}: too many extra products for one account.`,
-        );
-      // The once-per-payment gate: the row's key is the payment's id.
-      const { count } = await tx.makerExtraProducts.createMany({
-        data: [
-          {
-            paymentRef: payment.paymentId,
-            wawuUserId,
-            tierId: held.tierId,
-            products: goods.products,
-            currency: PAYMENT_CURRENCY,
-            amountMinor: payment.priceKobo,
-          },
-        ],
-        skipDuplicates: true,
-      });
-      if (count === 0) return;
-      const fixed = await this.billing.fixAtFirstPurchase(
-        { wawuUserId, purchaseRef: payment.paymentId },
-        tx,
+        if (fixed !== PAYMENT_CURRENCY)
+          throw new Error(
+            `Payment ${payment.paymentId}: the person is billed in another currency than the one that was paid.`,
+          );
+        await tx.makerTier.update({
+          where: { wawuUserId },
+          data: { extraProducts: { increment: goods.products } },
+        });
+        return 'added';
+      },
+    );
+    if (outcome === 'refund') {
+      this.logger.warn(
+        `payment ${payment.paymentId}: the pack could not be added (the cap is reached); the price is being refunded`,
       );
-      if (fixed !== PAYMENT_CURRENCY)
-        throw new Error(
-          `Payment ${payment.paymentId}: the person is billed in another currency than the one that was paid.`,
-        );
-      await tx.makerTier.update({
-        where: { wawuUserId },
-        data: { extraProducts: { increment: goods.products } },
-      });
-    });
+      await this.holds.refund(
+        { paymentId: payment.paymentId },
+        'extra products not added: the most packs a profile can hold',
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -249,6 +381,14 @@ export class ExtraProductsService implements OnModuleInit {
     ]);
     const goods = extraGoodsFromJson(stored.terms);
     const held = row ? await this.tiers.tierOf(row.wawuUserId) : null;
+    // A pack that could not be added after the payment confirmed has a hold:
+    // its price is going back, or has gone back.
+    const payback = row
+      ? null
+      : await this.prisma.walletHold.findUnique({
+          where: { paymentId: view.id },
+          select: { status: true, amountKobo: true },
+        });
     return {
       id: order?.id ?? view.id,
       kind: EXTRA_PRODUCTS_KIND,
@@ -256,8 +396,14 @@ export class ExtraProductsService implements OnModuleInit {
       currency: PAYMENT_CURRENCY as PlanCurrency,
       amountMinor: view.priceKobo,
       products: goods.products,
-      status: row ? 'paid' : statusOf(view.status),
-      statusMessage: row ? null : (view.failureReason ?? view.statusMessage),
+      status: row ? 'paid' : payback ? 'refunded' : statusOf(view.status),
+      statusMessage: row
+        ? null
+        : payback
+          ? payback.status === 'refunded'
+            ? packRefundedMessage(Number(payback.amountKobo))
+            : packRefundingMessage(Number(payback.amountKobo))
+          : (view.failureReason ?? view.statusMessage),
       payment: view,
       transfer: null,
       grant:

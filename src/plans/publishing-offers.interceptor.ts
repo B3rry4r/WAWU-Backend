@@ -1,4 +1,5 @@
 import {
+  Inject,
   CallHandler,
   ExecutionContext,
   Injectable,
@@ -13,7 +14,9 @@ import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { IdentityPausedErrorEnvelope } from './dto/identity-paused-error.dto';
 import { TierGateErrorEnvelope } from './dto/tier-gate-error.dto';
 import { limitOffers, tierRequiredOffers } from './limit-offers';
+import { PLANS_CONFIG, type PlansConfig } from './plans-config';
 import { PlansService } from './plans.service';
+import { packRuleOf } from './purchases/extra-products-cap';
 import { PublishingAllowanceService } from './publishing-allowance.service';
 import {
   TierGateError,
@@ -40,6 +43,7 @@ export class PublishingOffersInterceptor implements NestInterceptor {
   constructor(
     private readonly plans: PlansService,
     private readonly allowance: PublishingAllowanceService,
+    @Inject(PLANS_CONFIG) private readonly config: PlansConfig,
   ) {}
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
@@ -82,7 +86,7 @@ export class PublishingOffersInterceptor implements NestInterceptor {
       const offers =
         err.code === 'tier_required'
           ? tierRequiredOffers(allowance, plan)
-          : limitOffers(allowance, plan);
+          : limitOffers(allowance, plan, packRuleOf(this.config));
       // The tier that ended, named from the plan, so the `tier_required`
       // sentence says "Renew it" only when that tier is among the offers
       // (round 5, D8). Only the wording uses it, never the body.

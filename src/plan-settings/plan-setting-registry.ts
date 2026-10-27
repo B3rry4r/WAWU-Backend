@@ -198,6 +198,28 @@ function countryCodes(raw: unknown): string[] {
 }
 
 /**
+ * The tiers that may buy the add-on (PACK-CAP): a list of tier ids, each one
+ * the plan names, each once. An empty list is allowed: it closes the add-on.
+ */
+function tierIds(plans: PlansConfig) {
+  const known = new Set(plans.tiers.map((t) => t.id));
+  return (raw: unknown): string[] => {
+    const list = lines(raw);
+    if (new Set(list).size !== list.length) {
+      throw new SettingInvalid('names a tier more than once');
+    }
+    for (const id of list) {
+      if (!known.has(id)) {
+        throw new SettingInvalid(
+          `names "${id}", which is not a tier (${[...known].join(', ')})`,
+        );
+      }
+    }
+    return list;
+  };
+}
+
+/**
  * The languages Dubbing offers (AITOOLS-05): a list of lines, each a language
  * code, one space and the name a person reads ("yo Yoruba"). 1 to 200 lines,
  * each code once, no long dash in a name (R-5).
@@ -477,6 +499,42 @@ export function buildRegistry(
     parse: count,
     apply: (d, v) => {
       d.extraProducts.count = v as number;
+    },
+  });
+
+  // PACK-CAP (R-100): only the tiers named here buy the add-on, and a profile
+  // holds at most this many packs. Founding Maker alone, 2 packs, is 20 products.
+  add({
+    key: 'plan.extra_products.tiers',
+    group: 'Add more products',
+    label:
+      'Tiers that may buy the add-on (tier ids, one per line; an empty list closes it)',
+    unit: 'lines',
+    usedBy: [
+      'VF13, the offers of a full profile',
+      'GET /plans/purchases/quote and POST /plans/purchases (extra_products)',
+      'POST /store/purchases (extra_products)',
+    ],
+    default: extra('plan.extra_products.tiers', ['founding']),
+    parse: tierIds(plans),
+    apply: (d, v) => {
+      d.extraProducts.tiers = v as string[];
+    },
+  });
+  add({
+    key: 'plan.extra_products.max_packs',
+    group: 'Add more products',
+    label: 'Most add-ons one profile can hold (0 closes it)',
+    unit: 'count',
+    usedBy: [
+      'VF13, the offers of a full profile',
+      'GET /plans/purchases/quote and POST /plans/purchases (extra_products)',
+      'POST /store/purchases (extra_products)',
+    ],
+    default: extra('plan.extra_products.max_packs', 2),
+    parse: whole(0, INT4_MAX),
+    apply: (d, v) => {
+      d.extraProducts.maxPacks = v as number;
     },
   });
 

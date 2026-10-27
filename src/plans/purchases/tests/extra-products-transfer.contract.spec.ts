@@ -13,8 +13,13 @@ import { body } from '../../../../test/payments/poll-helpers';
 import { AdminRole } from '../../../../generated/prisma/enums';
 import type { AdminActor } from '../../../common/audit/admin-ops-audit.service';
 import { PlanSettingsService } from '../../../plan-settings/plan-settings.service';
+import {
+  openPackRule,
+  resetPackRule,
+} from '../../../../test/plans/open-pack-rule';
 import { loadPlansConfig, priceIn } from '../../plans-config';
 import { PublishingAllowanceService } from '../../publishing-allowance.service';
+import { PACK_TIER_MESSAGE } from '../extra-products-cap';
 import { TIER_ENDED_MESSAGE } from '../extra-products-rules';
 import type {
   ExtraProductsPurchaseView,
@@ -65,8 +70,15 @@ describe('Add more products by bank transfer (TIER-04), Nuvion stood in', () => 
     transfers = h.get(PlanTransferService);
     settings = h.get(PlanSettingsService);
     allowance = h.get(PublishingAllowanceService);
+    // PACK-CAP (R-100): these cases test the order on the first tier with many
+    // packs; the pack rule has its own spec (extra-products-cap).
+    await openPackRule(
+      settings,
+      config.tiers.map((t) => t.id),
+    );
   });
   afterAll(async () => {
+    await resetPackRule(settings);
     await h.prisma.makerExtraProducts.deleteMany({
       where: { wawuUserId: { in: h.users } },
     });
@@ -79,7 +91,7 @@ describe('Add more products by bank transfer (TIER-04), Nuvion stood in', () => 
   const data = <T>(res: Response) => body<T>(res).data!;
   const reasonOf = (res: Response) =>
     body<unknown>(res).reason as unknown as { code: string; message: string };
-  const set = (key: string, value: number | null) =>
+  const set = (key: string, value: number | string[] | null) =>
     settings.set(admin, { settings: { [key]: value } });
 
   async function person(kobo: number): Promise<Person> {
@@ -284,6 +296,33 @@ describe('Add more products by bank transfer (TIER-04), Nuvion stood in', () => 
     // The order is not tried again, however often the sweep runs.
     await transfers.sweep();
     expect(sendsFrom(p)).toHaveLength(0);
+  });
+
+  it('PACK-CAP: a waiting order closes failed with nothing sent when the rule stops allowing the pack, extras unchanged', async () => {
+    const p = await person(0);
+    await running(p);
+    const placed = await order(p);
+    // The settings stop naming this person's tier while the order waits.
+    await set('plan.extra_products.tiers', ['founding']);
+    try {
+      await credit(p, placed.transfer!.totalKobo + 20_000);
+      expect((await transfers.sweep()).closed).toBe(1);
+      expect(await statusOf(p, placed.id)).toMatchObject({
+        status: 'failed',
+        statusMessage: PACK_TIER_MESSAGE,
+        payment: null,
+        grant: null,
+      });
+      expect(sendsFrom(p)).toHaveLength(0);
+      expect(await extrasOf(p)).toBe(0);
+      expect(await rowsOf(p)).toBe(0);
+      expect(balance(p)).toBe(placed.transfer!.totalKobo + 20_000);
+    } finally {
+      await openPackRule(
+        settings,
+        config.tiers.map((t) => t.id),
+      );
+    }
   });
 
   it('the quote binds price and count: either changed while it waits closes the order with nothing taken', async () => {

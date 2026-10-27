@@ -1,6 +1,12 @@
 import type { BillingCurrency } from '../../../generated/prisma/enums';
 import type { HeldTier } from '../maker-tier.service';
 import { INT4_MAX, priceIn, type PlansConfig } from '../plans-config';
+import {
+  PACK_NOT_ALLOWED_CODE,
+  packRefusalFor,
+  packRefusalMessage,
+  packRuleOf,
+} from './extra-products-cap';
 import { isRunning, PurchaseRefusal } from './plan-purchase-rules';
 
 /**
@@ -46,13 +52,25 @@ export interface ExtraProductsPlan {
 export function priceExtraProducts(
   config: PlansConfig,
   currency: BillingCurrency,
-  held: Pick<HeldTier, 'state' | 'extraProducts' | 'productsAllowed'>,
+  held: Pick<
+    HeldTier,
+    'state' | 'tierId' | 'extraProducts' | 'productsAllowed'
+  >,
 ): ExtraProductsPlan {
   if (!isRunning(held))
     throw new PurchaseRefusal(
       'tier_required',
       held.state === 'ended' ? TIER_ENDED_MESSAGE : TIER_REQUIRED_MESSAGE,
     );
+  // PACK-CAP (R-100): only a tier the settings name buys the pack, and only up
+  // to the most packs a profile holds. Checked before anything is priced.
+  const why = packRefusalFor(
+    packRuleOf(config),
+    held.tierId,
+    held.extraProducts,
+  );
+  if (why !== null)
+    throw new PurchaseRefusal(PACK_NOT_ALLOWED_CODE, packRefusalMessage(why));
   const products = config.extraProducts.count;
   // The tier row keeps the total in a whole-number column: an add-on that does
   // not fit it is not sold, rather than failing after the person has paid.

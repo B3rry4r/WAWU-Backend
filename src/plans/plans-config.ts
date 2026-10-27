@@ -205,7 +205,21 @@ export interface PlansConfig {
   preselectedTier: string;
   /** A tier is `ending` this many days or fewer before it ends (VF14). */
   tierEndingDays: number;
-  extraProducts: { count: number; price: MinorPrice };
+  extraProducts: {
+    count: number;
+    price: MinorPrice;
+    /**
+     * The tier ids that may buy the pack (PACK-CAP, R-100). An admin setting
+     * (`plan.extra_products.tiers`), not in the file; the live plan always
+     * carries it. Absent sells nothing.
+     */
+    tiers?: readonly string[];
+    /**
+     * The most packs one profile holds (`plan.extra_products.max_packs`).
+     * Not in the file; absent sells nothing.
+     */
+    maxPacks?: number;
+  };
   packs: readonly PlanPack[];
   checkoutBump: { points: PerCurrency; price: MinorPrice };
   points: {

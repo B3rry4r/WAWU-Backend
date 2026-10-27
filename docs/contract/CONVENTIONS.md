@@ -2883,6 +2883,7 @@ may have:
 
 | `reason.code` | HTTP | When | Extra fields |
 |---|---|---|---|
+| `pack_not_allowed` | 409 | PACK-CAP (R-100): `GET /plans/purchases/quote?kind=extra_products` and `POST /plans/purchases` (kind `extra_products`) refuse the extra-products pack: the running tier may not buy it (admin setting `plan.extra_products.tiers`, Founding Maker by default) or the profile already holds the most packs (`plan.extra_products.max_packs`, 2 by default). Nothing moves. A store purchase of the pack that arrives against the rule is not refused: it is recorded with `flag: pack_not_allowed` and grants nothing | none |
 | `tier_required` | 402 | no running tier and no verification tick that has not ended | `tierState` (`none` or `ended`), `productsUsed`, `productsAllowed`, `currency`, `tiers`, `extraProducts` |
 | `product_limit_reached` | 402 | every product the person may have is published | the same fields |
 | `identity_paused` | 403 | the person's identity check is paused: waiting for documents, refused, stopped, or closed unfinished (S7 round 2). A check that passed, one under way, and one never started are not refused. Asked after the tier, before the room | `stage` (`needs_documents`, `rejected`, `stopped` or `expired`); `message` is the Hub's own sentence, no offers |

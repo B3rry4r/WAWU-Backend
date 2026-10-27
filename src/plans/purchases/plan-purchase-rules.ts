@@ -45,7 +45,11 @@ export const NO_DOWNGRADE_MESSAGE =
 /** Why a purchase cannot be made, as the money error code it answers with. */
 export class PurchaseRefusal extends Error {
   constructor(
-    readonly code: 'target_not_found' | 'target_not_payable' | 'tier_required',
+    readonly code:
+      | 'target_not_found'
+      | 'target_not_payable'
+      | 'tier_required'
+      | 'pack_not_allowed',
     message: string,
   ) {
     super(message);

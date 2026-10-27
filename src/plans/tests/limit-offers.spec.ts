@@ -1,5 +1,9 @@
 const TICK_UPLOADS = 25;
-import { limitOffers, tierRequiredOffers } from '../limit-offers';
+import {
+  limitOffers as limitOffersWith,
+  tierRequiredOffers,
+} from '../limit-offers';
+import type { PackRule } from '../purchases/extra-products-cap';
 import type { PlanTierView } from '../plans-view.type';
 
 /**
@@ -25,6 +29,21 @@ const held = (over: Partial<Held>): Held => ({
   ...over,
 });
 const ids = (o: ReturnType<typeof limitOffers>) => o.tiers.map((t) => t.id);
+
+/**
+ * These cases test which tiers leave room. The pack rule (PACK-CAP, R-100) is
+ * open here, so they keep testing room; the rule has its own spec
+ * (purchases/tests/extra-products-cap.spec.ts).
+ */
+const OPEN: PackRule = {
+  tiers: ['verify', 'plus', 'founding'],
+  maxPacks: 1000,
+  count: 5,
+};
+const limitOffers = (
+  allowance: Parameters<typeof limitOffersWith>[0],
+  plan: Parameters<typeof limitOffersWith>[1],
+) => limitOffersWith(allowance, plan, OPEN);
 
 describe('limitOffers', () => {
   describe('at the limit (used equals allowed)', () => {

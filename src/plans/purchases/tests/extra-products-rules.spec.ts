@@ -1,4 +1,8 @@
-import { INT4_MAX, loadPlansConfig } from '../../plans-config';
+import {
+  INT4_MAX,
+  loadPlansConfig,
+  type PlansConfig,
+} from '../../plans-config';
 import type { HeldTier } from '../../maker-tier.service';
 import {
   extraGoodsFromJson,
@@ -26,13 +30,30 @@ import {
  * figure is read from the config; none is written in a case.
  */
 
-const config = loadPlansConfig();
+// The pricing figures are read from the file; the pack rule (PACK-CAP, R-100) is
+// open here so these cases keep testing the price. The rule has its own spec
+// (extra-products-cap.spec.ts).
+const config: PlansConfig = (() => {
+  const file = loadPlansConfig();
+  return {
+    ...file,
+    extraProducts: {
+      ...file.extraProducts,
+      tiers: file.tiers.map((t) => t.id),
+      maxPacks: INT4_MAX,
+    },
+  };
+})();
 const held = (
   state: HeldTier['state'],
   extraProducts = 0,
   productsAllowed = 3,
-): Pick<HeldTier, 'state' | 'extraProducts' | 'productsAllowed'> => ({
+): Pick<
+  HeldTier,
+  'state' | 'tierId' | 'extraProducts' | 'productsAllowed'
+> => ({
   state,
+  tierId: 'verify',
   extraProducts,
   productsAllowed,
 });
@@ -67,6 +88,7 @@ describe('priceExtraProducts', () => {
     const other = {
       ...config,
       extraProducts: {
+        ...config.extraProducts,
         count: config.extraProducts.count + 4,
         price: { kobo: 777_700, cents: 999 },
       },

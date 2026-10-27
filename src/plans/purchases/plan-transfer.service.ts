@@ -100,6 +100,8 @@ const CLOSING_CODES = new Set<string>([
   'amount_out_of_range',
   // The tier an extra products order was placed on ended while it waited.
   'tier_required',
+  // The pack was ruled out while the order waited (PACK-CAP, R-100).
+  'pack_not_allowed',
 ]);
 
 /**
