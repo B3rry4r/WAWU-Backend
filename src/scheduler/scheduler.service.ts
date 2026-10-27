@@ -3,7 +3,10 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { NotificationService } from '../notification/notification.service';
 import { DmRefundService } from '../direct-message/dm-refund.service';
-import { STORE_QUESTION_REF_PREFIX } from '../direct-message/store-question-ref';
+import {
+  isStoreQuestionRef,
+  STORE_QUESTION_REF_PREFIX,
+} from '../direct-message/store-question-ref';
 import type { NotificationEvent } from '../notification/notification-event';
 
 /**
@@ -127,6 +130,7 @@ export class SchedulerService {
         creatorWawuId: true,
         senderWawuId: true,
         deadlineAt: true,
+        flutterwaveTxRef: true,
       },
       take: 500,
     });
@@ -137,6 +141,10 @@ export class SchedulerService {
         kind: 'dm_deadline',
         userWawuId: dm.creatorWawuId,
         hoursLeft: (dm.deadlineAt.getTime() - now) / (60 * 60 * 1000),
+        // A question bought in the store ends in a question credit, not a refund (STORE-QUESTION).
+        ...(isStoreQuestionRef(dm.flutterwaveTxRef)
+          ? { storeQuestion: true }
+          : {}),
         // ME-10: Reply opens the question that is running out of time.
         about: {
           target: { kind: 'paid_question', id: dm.id },

@@ -110,9 +110,27 @@ type NotificationEventCore =
   /** Tip settled. Recipient: the creator. `netAmount` is post-commission. */
   | { kind: 'tip_received'; userWawuId: string; netAmount: number }
   /** Paid DM paid for and created. Recipient: the creator. `amount` is what the fan paid. */
-  | { kind: 'dm_received'; userWawuId: string; amount: number }
+  | {
+      kind: 'dm_received';
+      userWawuId: string;
+      amount: number;
+      /**
+       * A question bought in the app store (STORE-QUESTION, lead ruling): an
+       * unanswered one gives the asker a question credit, not a refund, so the
+       * words say so. `replyHours` is the creator's real window. Unset for a
+       * wallet or web question, whose words are unchanged.
+       */
+      storeQuestion?: boolean;
+      replyHours?: number;
+    }
   /** The 24h reply window is closing. Recipient: the creator. */
-  | { kind: 'dm_deadline'; userWawuId: string; hoursLeft: number }
+  | {
+      kind: 'dm_deadline';
+      userWawuId: string;
+      hoursLeft: number;
+      /** A question bought in the app store: the words say the asker gets a question credit instead. Unset for the others. */
+      storeQuestion?: boolean;
+    }
   /** The 24h window closed unanswered. Recipient: the fan who paid. */
   | { kind: 'dm_refunded'; userWawuId: string; amount: number }
   /**
@@ -531,24 +549,30 @@ export function composeNotification(
         ...NO_RICH_MEDIA,
       };
 
-    case 'dm_received':
+    case 'dm_received': {
+      const replyHours = Math.max(1, Math.round(event.replyHours ?? 24));
       return {
         ...base,
         title: 'Paid DM received',
-        body: `Someone paid ${formatNaira(event.amount)} to message you. Reply within 24 hours or it is refunded to them.`,
+        body: event.storeQuestion
+          ? `Someone paid ${formatNaira(event.amount)} to ask you a question. Reply within ${replyHours} ${replyHours === 1 ? 'hour' : 'hours'} or they get a question credit instead.`
+          : `Someone paid ${formatNaira(event.amount)} to message you. Reply within 24 hours or it is refunded to them.`,
         tone: 'accent',
         amount: Math.round(event.amount),
         creditsCount: null,
         actionLabel: 'Reply now',
         ...NO_RICH_MEDIA,
       };
+    }
 
     case 'dm_deadline': {
       const hours = Math.max(1, Math.round(event.hoursLeft));
       return {
         ...base,
         title: 'Reply deadline approaching',
-        body: `A paid DM is still waiting. About ${hours} ${hours === 1 ? 'hour' : 'hours'} left to reply before it is refunded.`,
+        body: event.storeQuestion
+          ? `A paid question is still waiting. About ${hours} ${hours === 1 ? 'hour' : 'hours'} left to reply before they get a question credit instead.`
+          : `A paid DM is still waiting. About ${hours} ${hours === 1 ? 'hour' : 'hours'} left to reply before it is refunded.`,
         tone: 'danger',
         amount: null,
         creditsCount: null,

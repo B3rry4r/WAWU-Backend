@@ -136,6 +136,9 @@ export class StoreQuestionService implements OnModuleInit {
         kind: 'dm_received',
         userWawuId: creator,
         amount: intent.listPriceNaira,
+        // The words say an unanswered question gives the asker a question credit.
+        storeQuestion: true,
+        replyHours: intent.questionWindowHours,
         about: {
           target: { kind: 'paid_question', id: intent.id },
           actorWawuId: asker,
@@ -298,6 +301,7 @@ export class StoreQuestionService implements OnModuleInit {
     purchase: StorePurchase,
     dm: DirectMessage,
     now: Date,
+    countsAsMiss = true,
   ): Promise<void> {
     const asker = purchase.wawuUserId;
     // The asker's account is gone: there is no one to credit.
@@ -322,11 +326,16 @@ export class StoreQuestionService implements OnModuleInit {
     await tx.directMessage.update({
       where: { id: dm.id },
       data: {
-        refundReference: `store_credit:${credit.id}`,
+        // A question a refund withdrew keeps its mark, so it stays out of the creator's standing.
+        ...(countsAsMiss
+          ? { refundReference: `store_credit:${credit.id}` }
+          : {}),
         refundedAt: now,
       },
     });
-    if (count > 0)
+    // The asker is told once. A question a refund withdrew did not go unanswered,
+    // so the notice's words ("did not reply in time") would be false: none is sent.
+    if (count > 0 && countsAsMiss)
       await this.notifications.emitOrThrow(
         {
           kind: 'question_credit',
@@ -412,7 +421,9 @@ export class StoreQuestionService implements OnModuleInit {
     tx: Db,
     purchase: StorePurchase,
     now: Date,
-  ): Promise<{ question: 'reopened' | 'unanswered' | 'unchanged' | 'none' }> {
+  ): Promise<{
+    question: 'reopened' | 'credited' | 'unanswered' | 'unchanged' | 'none';
+  }> {
     const dm = await tx.directMessage.findUnique({
       where: { flutterwaveTxRef: storeQuestionRef(purchase.id) },
     });
@@ -420,6 +431,16 @@ export class StoreQuestionService implements OnModuleInit {
     if (dm.status !== 'refunded' || dm.refundReference !== STORE_REFUND_MARK)
       return { question: 'unchanged' };
     if (dm.deadlineAt.getTime() > now.getTime()) {
+      // The person has asked this creator again since the refund: one question
+      // waits per creator (G-75), so the reversal gives a question credit instead
+      // of a second waiting question. The creator did nothing, so it is no miss.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`paid-dm:${dm.senderWawuId}:${dm.creatorWawuId}`}, 0))`;
+      if (
+        (await this.target.waiting(tx, dm.senderWawuId, dm.creatorWawuId)) > 0
+      ) {
+        await this.creditUnanswered(tx, purchase, dm, now, false);
+        return { question: 'credited' };
+      }
       await tx.directMessage.update({
         where: { id: dm.id },
         data: {
@@ -433,6 +454,14 @@ export class StoreQuestionService implements OnModuleInit {
     }
     await this.creditUnanswered(tx, purchase, dm, now);
     return { question: 'unanswered' };
+  }
+
+  /** The asker's words are no longer needed once the sale is settled as a credit instead of a sent question: they are cleared from the intent. */
+  async clearWords(tx: Db, intentId: string): Promise<void> {
+    await tx.storePurchaseIntent.updateMany({
+      where: { id: intentId, questionText: { not: null } },
+      data: { questionText: null },
+    });
   }
 
   /** The lock a grant, a refund and every decision about one store transaction take. */

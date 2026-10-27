@@ -846,6 +846,8 @@ export class StoreGrantService {
     // purchase is undone and the fan told.
     if (target === null) {
       if (buy.creditId) throw notPayableNow();
+      if (intent.kind === 'question')
+        await this.questions.clearWords(tx, intent.id);
       return this.credited(
         tx,
         purchase,
@@ -911,6 +913,7 @@ export class StoreGrantService {
       );
       if (questionId === null) {
         if (buy.creditId) throw notPayableNow();
+        await this.questions.clearWords(tx, intent.id);
         return this.credited(
           tx,
           purchase,

@@ -16,6 +16,7 @@ import type { INestApplication } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import request from 'supertest';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { composeNotification } from '../../../notification/notification-event';
 import {
   API,
   BUYER,
@@ -195,6 +196,9 @@ describe('STORE-QUESTION: a paid question bought in the store (stand-in stores)'
     );
     return { intent, view, tx };
   }
+  /** The messages of this spec's own people: a seeded database holds others. */
+  const ourMessages = () =>
+    prisma.directMessage.count({ where: { creatorWawuId: { in: PEOPLE } } });
   const dm = (id: string) =>
     prisma.directMessage.findUniqueOrThrow({ where: { id } });
   const notices = (userWawuId: string, kind: string) =>
@@ -383,7 +387,7 @@ describe('STORE-QUESTION: a paid question bought in the store (stand-in stores)'
         questionWindowHours: 24,
       });
       // Nothing was charged, sent or earned.
-      expect(await prisma.directMessage.count({})).toBe(0);
+      expect(await ourMessages()).toBe(0);
       expect(await prisma.storeEarning.count({})).toBe(0);
     });
 
@@ -534,8 +538,16 @@ describe('STORE-QUESTION: a paid question bought in the store (stand-in stores)'
         ).questionText,
       ).toBeNull();
       // Not in a wallet and not in a hold.
-      expect(await prisma.walletPayment.count({})).toBe(0);
-      expect(await prisma.walletHold.count({})).toBe(0);
+      expect(
+        await prisma.walletPayment.count({
+          where: { payerWawuUserId: { in: PEOPLE } },
+        }),
+      ).toBe(0);
+      expect(
+        await prisma.walletHold.count({
+          where: { payeeWawuUserId: { in: PEOPLE } },
+        }),
+      ).toBe(0);
       // The creator's 85% is recorded on the purchase, and nothing is earned yet.
       expect(
         await prisma.storePurchase.findUniqueOrThrow({
@@ -557,7 +569,7 @@ describe('STORE-QUESTION: a paid question bought in the store (stand-in stores)'
         await postIos(tx, intent.intentId).expect(201),
       );
       expect(again).toMatchObject({ id: view.id, alreadyGranted: true });
-      expect(await prisma.directMessage.count({})).toBe(1);
+      expect(await ourMessages()).toBe(1);
       expect(await notices(HOST, 'dm_received')).toHaveLength(1);
       // It is in the creator's inbox like any paid question.
       const inbox = dataOf<Array<{ id: string }>>(
@@ -579,7 +591,7 @@ describe('STORE-QUESTION: a paid question bought in the store (stand-in stores)'
       expect(view.status).toBe('credited');
       expect(view.credit?.amountKobo).toBe(100_000);
       expect(view.credit?.message).toContain('ask any creator a question');
-      expect(await prisma.directMessage.count({})).toBe(0);
+      expect(await ourMessages()).toBe(0);
       expect(await prisma.storeEarning.count({})).toBe(0);
       expect(await prisma.storeCredit.findFirstOrThrow({})).toMatchObject({
         wawuUserId: BUYER,
@@ -631,7 +643,7 @@ describe('STORE-QUESTION: a paid question bought in the store (stand-in stores)'
         await postIos('6100099000003', second.id).expect(201),
       );
       expect(view.status).toBe('credited');
-      expect(await prisma.directMessage.count({})).toBe(1);
+      expect(await ourMessages()).toBe(1);
       expect(first.view.status).toBe('granted');
     });
   });
@@ -1152,6 +1164,160 @@ describe('STORE-QUESTION: a paid question bought in the store (stand-in stores)'
       const told = await notices(HOST, 'question_answered');
       expect(told).toHaveLength(1);
       expect(told[0].amount).toBe(850);
+    });
+  });
+
+  // ------------------------------------------------------- patch round 1
+
+  describe('patch round 1 (verifier findings)', () => {
+    it('VQ-1: the creator is told an unanswered store question gives the asker a question credit, with their real window; the wallet words are unchanged', async () => {
+      const { intent } = await buyQuestion(OTHER, 500);
+      const got = await notices(OTHER, 'dm_received');
+      expect(got).toHaveLength(1);
+      expect(got[0].body).toBe(
+        'Someone paid ₦500 to ask you a question. Reply within 12 hours or they get a question credit instead.',
+      );
+      expect(got[0].body).not.toMatch(/refund|—/);
+      // The hourly reminder says the same of the same question.
+      await prisma.directMessage.update({
+        where: { id: intent.intentId },
+        data: { deadlineAt: new Date(Date.now() + 3.6 * HOUR) },
+      });
+      const scheduler = new SchedulerService(
+        prisma,
+        moduleRef.get(NotificationService, { strict: false }),
+        moduleRef.get(DmRefundService, { strict: false }),
+      );
+      await scheduler.remindDmDeadlines();
+      const reminders = await notices(OTHER, 'dm_deadline');
+      expect(reminders).toHaveLength(1);
+      expect(reminders[0].body).toMatch(
+        /^A paid question is still waiting\. About [34] hours left to reply before they get a question credit instead\.$/,
+      );
+      // The wallet and web words keep their wording.
+      expect(
+        composeNotification({
+          kind: 'dm_received',
+          userWawuId: 'u',
+          amount: 1000,
+        }).body,
+      ).toBe(
+        'Someone paid ₦1,000 to message you. Reply within 24 hours or it is refunded to them.',
+      );
+      expect(
+        composeNotification({
+          kind: 'dm_deadline',
+          userWawuId: 'u',
+          hoursLeft: 3,
+        }).body,
+      ).toBe(
+        'A paid DM is still waiting. About 3 hours left to reply before it is refunded.',
+      );
+    });
+
+    it('VQ-2: a reversal while the person has another question waiting on the creator gives a question credit, not a second waiting question', async () => {
+      const a = await buyQuestion();
+      expect(outcomeOf(await appleNote('v2-refund', 'REFUND', a.tx))).toBe(
+        'taken_back',
+      );
+      // Asked again after the refund.
+      const b = await buyQuestion();
+      expect(b.view.status).toBe('granted');
+      expect(
+        outcomeOf(await appleNote('v2-reverse', 'REFUND_REVERSED', a.tx)),
+      ).toBe('restored');
+      const waiting = await prisma.directMessage.findMany({
+        where: {
+          senderWawuId: BUYER,
+          creatorWawuId: HOST,
+          status: 'awaiting_response',
+        },
+      });
+      expect(waiting.map((m) => m.id)).toEqual([b.intent.intentId]);
+      // The first question stays withdrawn (no miss for the creator) and its payment is a credit.
+      expect(await dm(a.intent.intentId)).toMatchObject({
+        status: 'refunded',
+        refundReference: STORE_REFUND_MARK,
+      });
+      expect(await prisma.storeCredit.findFirstOrThrow({})).toMatchObject({
+        wawuUserId: BUYER,
+        amountKobo: 100_000,
+        scope: 'question',
+        status: 'open',
+        sourcePurchaseId: a.view.id,
+      });
+      expect(
+        (
+          await prisma.storePurchase.findUniqueOrThrow({
+            where: { id: a.view.id },
+          })
+        ).status,
+      ).toBe('granted');
+      // A second refund of the restored payment voids that credit.
+      expect(outcomeOf(await appleNote('v2-refund2', 'REFUND', a.tx))).toBe(
+        'taken_back',
+      );
+      expect((await prisma.storeCredit.findFirstOrThrow({})).status).toBe(
+        'void',
+      );
+    });
+
+    it('VQ-3: the words are cleared from the intent when the sale is credited instead of sent', async () => {
+      const off = await intentFor(q('ios'));
+      await prisma.creatorState.update({
+        where: { wawuUserId: HOST },
+        data: { dmEnabled: false },
+      });
+      iosSale('6100077000001', 'wawu.buy.1000');
+      expect(
+        dataOf<PurchaseView>(
+          await postIos('6100077000001', off.intentId).expect(201),
+        ).status,
+      ).toBe('credited');
+      expect(
+        (
+          await prisma.storePurchaseIntent.findUniqueOrThrow({
+            where: { id: off.intentId },
+          })
+        ).questionText,
+      ).toBeNull();
+      // And when one is already waiting.
+      await prisma.creatorState.update({
+        where: { wawuUserId: HOST },
+        data: { dmEnabled: true },
+      });
+      await buyQuestion();
+      const product = await prisma.storeProduct.findFirstOrThrow({
+        where: { platform: 'ios', storeProductId: 'wawu.buy.1000' },
+      });
+      const second = await prisma.storePurchaseIntent.create({
+        data: {
+          wawuUserId: BUYER,
+          platform: 'ios',
+          kind: 'question',
+          targetId: HOST,
+          listPriceNaira: 1000,
+          listPriceKobo: 100_000,
+          productId: product.id,
+          storeProductId: 'wawu.buy.1000',
+          expiresAt: new Date(Date.now() + HOUR),
+          questionText: 'A second one',
+          questionWindowHours: 24,
+        },
+      });
+      iosSale('6100077000002', 'wawu.buy.1000');
+      expect(
+        dataOf<PurchaseView>(
+          await postIos('6100077000002', second.id).expect(201),
+        ).status,
+      ).toBe('credited');
+      expect(
+        (
+          await prisma.storePurchaseIntent.findUniqueOrThrow({
+            where: { id: second.id },
+          })
+        ).questionText,
+      ).toBeNull();
     });
   });
 
