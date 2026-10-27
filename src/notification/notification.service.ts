@@ -105,6 +105,11 @@ export const SETTINGS_GATE: Partial<Record<NotificationKind, SwitchName>> = {
   // nobody who has not touched the switch notices anything.
   tip_received: 'moneyIn',
   sale: 'moneyIn',
+  // STORE-SALE-NOTICE (R-101). A pass sold and a question answered through a
+  // store are sales; the question credit is the asker's refund in another form.
+  pass_sold: 'moneyIn',
+  question_answered: 'moneyIn',
+  question_credit: 'refunds',
   // WALLET-10. A bank transfer into the person's account is "Money in" too
   // (Z3: "Tips, sales, transfers"). With the switch off nothing is written
   // and nothing is kept to send later; the history row is there either way.

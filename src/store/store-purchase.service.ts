@@ -473,7 +473,11 @@ export class StorePurchaseService {
     dto: StoreIntentDto,
   ): Promise<StoreIntentView> {
     const ready = await this.intents.prepare(userId, dto);
-    const credit = await this.credits.pick(userId, ready.listPriceKobo);
+    const credit = await this.credits.pick(
+      userId,
+      ready.listPriceKobo,
+      dto.kind,
+    );
     const intent = await this.intents.openIntent(userId, dto, ready);
     const now = new Date();
     const verified: VerifiedStorePurchase = {
@@ -675,6 +679,11 @@ export function creditMessage(
       ? 'This creator can no longer be tipped.'
       : buyKind === 'pass'
         ? 'This pass is no longer available.'
-        : 'This piece is no longer available.';
+        : buyKind === 'question'
+          ? 'This question could not be sent.'
+          : 'This piece is no longer available.';
+  // A question credit pays for a question and nothing else (R-101 point 6).
+  if (buyKind === 'question')
+    return `${lead} You have a ${naira(creditKobo)} credit to ask any creator a question at that price or less.`;
   return `${lead} You have a ${naira(creditKobo)} credit to use on Who Made This.`;
 }

@@ -3,6 +3,7 @@ import type { StoreIntentKind } from '../../generated/prisma/enums';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { passTitle } from '../community/pass/community-pass-rules';
+import { StoreQuestionTargetService } from './question/store-question-target.service';
 import type { StoreErrorCode } from './store-error';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -34,6 +35,8 @@ export interface BuyTarget {
   creatorWawuId: string;
   /** What the earning is called. */
   title: string;
+  /** A question: the hours the creator has to answer, as the asker is shown them (STORE-QUESTION). */
+  responseWindowHours?: number;
 }
 
 export type TargetCheck =
@@ -58,7 +61,8 @@ const refuse = (code: StoreErrorCode, message: string): TargetCheck => ({
  * their own, not blocked, not already theirs), `TipWalletService.resolve` for a
  * tip (a person who exists, not themselves, not blocked) and
  * `CommunityPassService.resolve` for a pass (the room sells one, they do not
- * host it, they are not blocked or removed).
+ * host it, they are not blocked or removed). A paid question (STORE-QUESTION) is
+ * `PaidDmWalletService.askable`'s check, in `StoreQuestionTargetService`.
  *
  * It is asked twice: when the intent is made (with `listNaira`, so the price on
  * the piece or room must be the list price the app named) and when the store
@@ -70,6 +74,7 @@ export class StoreBuyTargetService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly blocked: BlockedAccountService,
+    private readonly questions: StoreQuestionTargetService,
   ) {}
 
   async check(
@@ -85,6 +90,8 @@ export class StoreBuyTargetService {
         return this.tip(userId, targetId);
       case 'pass':
         return this.pass(userId, targetId, opts);
+      case 'question':
+        return this.questions.check(userId, targetId, opts);
     }
   }
 

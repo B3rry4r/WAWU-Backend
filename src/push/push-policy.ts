@@ -70,6 +70,13 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   // person has opened the room. The Z3 "Community messages" switch mutes it
   // (SETTINGS_GATE), read again at the moment of sending.
   community_messages: 'send',
+  // STORE-SALE-NOTICE (R-101, owner: the creator is told of each store sale).
+  // A pass sold and a question answered are money in like a sale or a tip, so
+  // the "Money in" switch mutes them (SETTINGS_GATE). The question credit is the
+  // asker's money back in another form, so the "Refunds" switch mutes it.
+  pass_sold: 'send',
+  question_answered: 'send',
+  question_credit: 'send',
   // The state of the person's own account or a marketing send, with no switch
   // that is agreed to cover them. Held until the owner answers (G-265).
   paid_dm_warning: 'hold',

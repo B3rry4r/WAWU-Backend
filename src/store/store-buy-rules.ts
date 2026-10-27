@@ -51,6 +51,7 @@ export const EARNING_KIND_OF: Record<StoreIntentKind, string> = {
   content: 'content_unlock',
   tip: 'tip',
   pass: 'community_pass',
+  question: 'paid_dm',
 };
 
 /** What a creator waits after a store sale before WAWU pays them: 3 working days (R-101 point 4). */

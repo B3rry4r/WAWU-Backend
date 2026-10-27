@@ -8322,6 +8322,11 @@ enum StoreIntentKind {
   content
   tip
   pass
+  /// A paid question to a creator (STORE-QUESTION, R-101): `targetId` is the
+  /// creator asked. Sent when the sale is verified; the creator's 85% is
+  /// earned when they answer, and an unanswered one gives the asker a question
+  /// credit worth the list price.
+  question
 }
 
 /// open: the store sheet may be opened for it. used: a store purchase was
@@ -8542,6 +8547,12 @@ model StorePurchaseIntent {
   status         StoreIntentStatus @default(open)
   expiresAt      DateTime
   usedAt         DateTime?
+  /// A `question` intent (STORE-QUESTION): the words, kept only until the sale
+  /// sends the question (they then live on the direct message and this is
+  /// cleared), and the hours the creator has to answer, as the asker was shown
+  /// them. Null on every other kind.
+  questionText        String?
+  questionWindowHours Int?
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 
@@ -8574,6 +8585,12 @@ model StoreCredit {
   spentPurchaseId  String?   @unique
   spentAt          DateTime?
   voidedAt         DateTime?
+  /// What the credit may pay for (STORE-QUESTION, R-101 point 6). Null: a piece,
+  /// a tip or a pass (every credit made before this column, and a credit made
+  /// when a payment could not be given as one of those). `question`: a paid
+  /// question to any creator, at its price or less, and nothing else. A credit
+  /// never changes scope, and the rest of one keeps its scope.
+  scope            String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 

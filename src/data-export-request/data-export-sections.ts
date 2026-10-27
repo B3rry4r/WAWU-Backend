@@ -918,8 +918,9 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       })),
   },
   // The store credits this person was given when a paid purchase could not be
-  // given (STORE-BUY-HUB round 3): how much, whether it is spent, and when. The
-  // purchase ids stay out (rule 3).
+  // given (STORE-BUY-HUB round 3), or a paid question was not answered
+  // (STORE-QUESTION): how much, what it may pay for, whether it is spent, and
+  // when. The purchase ids stay out (rule 3).
   {
     key: 'storeCredits',
     models: ['StoreCredit'],
@@ -928,6 +929,7 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         where: { wawuUserId: me },
         select: {
           amountKobo: true,
+          scope: true,
           status: true,
           createdAt: true,
           spentAt: true,
@@ -1666,7 +1668,7 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
     {
       model: 'StorePurchaseIntent',
       reason:
-        'The Hub note, made just before a store sheet opened, of what a purchase was for; what they bought, and what it was for, is exported under storePurchases.',
+        "The Hub note, made just before a store sheet opened, of what a purchase was for; what they bought, and what it was for, is exported under storePurchases. A paid question's words wait on it only until the sale sends the question, and then live on the direct message, exported with the person's messages.",
     },
     {
       model: 'StoreEarning',

@@ -5,6 +5,7 @@ import {
   FLUTTERWAVE_CLIENT,
   type FlutterwaveClient,
 } from './flutterwave-client.interface';
+import { STORE_QUESTION_REF_PREFIX } from './store-question-ref';
 
 /**
  * Actually sends the money back.
@@ -78,8 +79,12 @@ export class DmRefundService {
       where: {
         refundStatus: 'owed',
         refundAttempts: { lt: MAX_REFUND_ATTEMPTS },
-        // A question paid from the wallet is paid back through its hold (INBOX-17).
-        NOT: { flutterwaveTxRef: { startsWith: 'wallet:' } },
+        // A question paid from the wallet is paid back through its hold (INBOX-17);
+        // one bought in a store is the store module's (STORE-QUESTION).
+        NOT: [
+          { flutterwaveTxRef: { startsWith: 'wallet:' } },
+          { flutterwaveTxRef: { startsWith: STORE_QUESTION_REF_PREFIX } },
+        ],
         OR: [{ refundLockedAt: null }, { refundLockedAt: { lt: staleBefore } }],
       },
       select: { id: true, refundLockedAt: true },

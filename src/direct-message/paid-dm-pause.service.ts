@@ -18,6 +18,7 @@ import type {
   PaidDmStandingState,
 } from './paid-dm-view.type';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
+import { NOT_WITHDRAWN_BY_STORE_REFUND } from './store-question-ref';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -194,7 +195,7 @@ export class PaidDmPauseService {
           where: {
             sentAt: { gte: from },
             OR: [
-              { status: 'refunded' },
+              { AND: [{ status: 'refunded' }, NOT_WITHDRAWN_BY_STORE_REFUND] },
               { status: 'awaiting_response', deadlineAt: { lt: now } },
             ],
             ...(after === undefined ? {} : { creatorWawuId: { gt: after } }),
@@ -279,7 +280,7 @@ export class PaidDmPauseService {
       };
       const missed: Prisma.DirectMessageWhereInput = {
         OR: [
-          { status: 'refunded' },
+          { AND: [{ status: 'refunded' }, NOT_WITHDRAWN_BY_STORE_REFUND] },
           { status: 'awaiting_response', deadlineAt: { lt: now } },
         ],
       };

@@ -38,6 +38,12 @@ import { PurchaseRefusal } from '../plans/purchases/plan-purchase-rules';
 import { POINTS_NEVER_EXPIRES } from '../points/points-bought';
 import { PointsService } from '../points/points.service';
 import type { BuyTarget } from './store-buy-target.service';
+import { StoreSaleNoticeService } from './notice/store-sale-notice.service';
+import { StoreQuestionService } from './question/store-question.service';
+import {
+  creditScopeFor,
+  QUESTION_CREDIT_SCOPE,
+} from './question/store-question-rules';
 import { StoreEarningService } from './store-earning.service';
 import { grantsConfigOf } from './store-grants';
 import { StoreError } from './store-error';
@@ -106,6 +112,8 @@ export interface StoreGrantSnapshot {
   buyKind?: StoreIntentKind;
   targetId?: string;
   earningId?: string;
+  /** A ladder question that was sent: its id, which is the direct message's (STORE-QUESTION). Its earning is recorded when it is answered. */
+  questionId?: string;
   /** A ladder purchase that could not be given: the store credit the fan has instead, worth the list price. */
   creditId?: string;
   creditKobo?: number;
@@ -143,6 +151,8 @@ export class StoreGrantService {
     private readonly tierGrants: TierGrantService,
     private readonly tiers: MakerTierService,
     private readonly earnings: StoreEarningService,
+    private readonly questions: StoreQuestionService,
+    private readonly notices: StoreSaleNoticeService,
   ) {}
 
   /**
@@ -486,6 +496,10 @@ export class StoreGrantService {
             given = { purchaseRowsEnded: count };
           } else if (purchase.buyKind === 'pass') {
             given = await this.takeBackPass(tx, purchase, userId, now);
+          } else if (purchase.buyKind === 'question') {
+            // Before the answer the question is withdrawn; after it, the answer
+            // stays and the earning below is taken back (STORE-QUESTION).
+            given = await this.questions.cancel(tx, purchase, now);
           }
         }
         const earning = await this.earnings.takeBack(tx, purchase, now);
@@ -572,6 +586,8 @@ export class StoreGrantService {
       where: { flutterwaveTxRef: storeRef(purchase.id), status: 'completed' },
       data: { status: 'failed' },
     });
+    if (purchase.buyKind === 'question')
+      await this.questions.cancel(tx, purchase, now);
     const earning = await this.earnings.takeBack(tx, purchase, now);
     const credit = await this.creditTakeBack(tx, purchase, now);
     return { buyerGone: true, earning, ...credit };
@@ -781,6 +797,13 @@ export class StoreGrantService {
           });
       }
       given = { passDaysRestored: granted ? days : 0 };
+    } else if (purchase.buyKind === 'question') {
+      // The question the refund withdrew is open again (or unanswered, if its
+      // deadline has passed), and the credit it made is open again.
+      given = {
+        ...(await this.questions.reopen(tx, purchase, now)),
+        ...(await this.creditRestore(tx, purchase, now)),
+      };
     }
     const earning = await this.earnings.restore(tx, purchase, now);
     return { ...given, earning };
@@ -823,6 +846,8 @@ export class StoreGrantService {
     // purchase is undone and the fan told.
     if (target === null) {
       if (buy.creditId) throw notPayableNow();
+      if (intent.kind === 'question')
+        await this.questions.clearWords(tx, intent.id);
       return this.credited(
         tx,
         purchase,
@@ -835,11 +860,14 @@ export class StoreGrantService {
     }
     let extra: Partial<StoreGrantSnapshot> = {};
     if (buy.creditId) {
+      // A credit pays only for the kind its scope allows: a question credit for
+      // a question, an unscoped one for a piece, a tip or a pass (R-101 point 6).
+      const scope = creditScopeFor(intent.kind);
       const credit = await tx.storeCredit.findFirst({
-        where: { id: buy.creditId, wawuUserId: userId, status: 'open' },
+        where: { id: buy.creditId, wawuUserId: userId, status: 'open', scope },
       });
       const { count } = await tx.storeCredit.updateMany({
-        where: { id: buy.creditId, wawuUserId: userId, status: 'open' },
+        where: { id: buy.creditId, wawuUserId: userId, status: 'open', scope },
         data: { status: 'spent', spentAt: now, spentPurchaseId: purchase.id },
       });
       if (credit === null || count === 0)
@@ -867,8 +895,41 @@ export class StoreGrantService {
             sourcePurchaseId: `${credit.sourcePurchaseId}:rem:${purchase.id}`,
             originPurchaseId:
               credit.originPurchaseId ?? credit.sourcePurchaseId,
+            // The rest keeps the scope: a question credit's rest is for questions.
+            scope: credit.scope,
           },
         });
+    }
+    if (intent.kind === 'question') {
+      // The question is sent now. Its earning waits for the answer, and the
+      // creator is told then (STORE-QUESTION, STORE-SALE-NOTICE). One the person
+      // already has waiting on this creator cannot be sent: nothing is spent
+      // (a credit's use is undone), or the payment becomes a question credit.
+      const questionId = await this.questions.deliver(
+        tx,
+        purchase,
+        intent,
+        now,
+      );
+      if (questionId === null) {
+        if (buy.creditId) throw notPayableNow();
+        await this.questions.clearWords(tx, intent.id);
+        return this.credited(
+          tx,
+          purchase,
+          userId,
+          intent.listPriceKobo,
+          intent.kind,
+          intent.targetId,
+          'target_unavailable',
+        );
+      }
+      return {
+        ...base,
+        questionId,
+        ...(buy.creditId ? { paidWithCredit: buy.creditId } : {}),
+        ...(buy.priceChanged === true ? { note: 'price_changed' } : {}),
+      };
     }
     if (intent.kind === 'content' || intent.kind === 'tip') {
       // The same row the wallet path writes (UnlockWalletService, TipWalletService),
@@ -938,6 +999,15 @@ export class StoreGrantService {
       listPriceKobo: intent.listPriceKobo,
       soldAt: purchase.purchasedAt,
     });
+    // The creator is told of the sale, once, with the earning (STORE-SALE-NOTICE).
+    await this.notices.told(tx, {
+      kind: intent.kind,
+      creatorWawuId: target.creatorWawuId,
+      buyerWawuId: userId,
+      targetId: intent.targetId,
+      title: target.title,
+      listPriceKobo: intent.listPriceKobo,
+    });
     return {
       ...base,
       ...extra,
@@ -966,6 +1036,8 @@ export class StoreGrantService {
           amountKobo,
           sourcePurchaseId: purchase.id,
           originPurchaseId: purchase.id,
+          // A question that could not be sent is a question credit (R-101 point 6).
+          scope: buyKind === 'question' ? QUESTION_CREDIT_SCOPE : null,
         },
       ],
       skipDuplicates: true,
@@ -1007,7 +1079,12 @@ export class StoreGrantService {
                 ? (snap.targetId ?? null)
                 : null,
             creatorWawuId:
-              gave && snap.buyKind === 'tip' ? (snap.targetId ?? null) : null,
+              gave && (snap.buyKind === 'tip' || snap.buyKind === 'question')
+                ? (snap.targetId ?? null)
+                : null,
+            ...(snap.questionId === undefined
+              ? {}
+              : { questionId: snap.questionId }),
           }),
     };
   }

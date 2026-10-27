@@ -872,6 +872,43 @@ Round 4 (re-verify):
 - **A notice with no signed date is ordered by its arrival time:** it is applied when it arrives, and
   a notice signed before that moment is then older and changes nothing.
 
+### A paid question bought in the store (STORE-QUESTION and STORE-SALE-NOTICE, R-101, ruling 1A)
+
+- **Asking.** `POST /store/intents` takes `kind: question` with `creatorWawuId` (the creator asked),
+  `text` (the question, 1 to 2,000 characters) and `listPriceNaira`, which must be the creator's
+  question price and on the price list. The creator must take questions (`dmEnabled`, a price), not be
+  the person, not be blocked either way, not be paused for missing replies (INBOX-09), and the person
+  must have no question still waiting on them. The refusals are the ladder's codes: `price_not_on_list`
+  (400), `store_intent_target_not_found` (404), `store_intent_not_payable` (409: not taking questions,
+  their own, blocked, paused, one already waiting), `store_intent_price_changed` (409). The words and the
+  creator's reply window (`dmResponseHours`, 24 by default) are kept on the intent only until the sale.
+- **The sale sends it.** A verified `wawu.buy.<naira>` purchase writes the same `DirectMessage` the wallet
+  path writes (`awaiting_response`, `deadlineAt` = the send time plus the reply window, `amount` the list
+  price), with the reference `store:<StorePurchase id>`. The money is a store sale: no wallet payment, no
+  hold. The creator gets `dm_received` as for any paid question. The web's Flutterwave sweeps leave a
+  `store:` question alone, as they leave a `wallet:` one.
+- **Answered in time.** When the creator replies (any route; `DmAnsweredHooks`, with the minute sweep
+  `store-questions` as the fallback) the creator's 85% of the LIST price becomes a `StoreEarning`
+  (`kind: paid_dm`, payable 3 working days from the ANSWER) and they get a `question_answered` notice,
+  once.
+- **Not answered by `deadlineAt`.** One conditional write flips the question to `refunded`
+  (the reply's own write is the other half, so they cannot both win); no earning; the asker gets a
+  `StoreCredit` with `scope: question` worth the list price, and one `question_credit` notice. A credit
+  is never cash and never expires. It pays for a question to any creator at that price or less
+  (`POST /store/intents` with `kind: question` and `payWith: credit`; the rest stays a question credit),
+  and never for a piece, a tip or a pass. A credit with no scope (every credit made before this) never
+  pays for a question. A question that cannot be sent after the sale (the creator switched questions
+  off, or one is already waiting) also becomes a question credit.
+- **A store refund.** Before the answer the question is withdrawn (`refunded`, `refundReference:
+  store_refund`, which the creator's standing does not count as a miss). After the answer the answer
+  stays and the earning is taken back as for any ladder sale (cancelled, or a deduction when paid).
+  A credit the question made is voided, and what a spent one paid for is taken back. A reversal puts
+  all of it back.
+- **The creator is told of each store sale** (STORE-SALE-NOTICE), once, in the transaction that records
+  the earning, with their 85% in naira: a piece (`sale`), a tip (`tip_received`), a pass (`pass_sold`)
+  and a question when it is answered (`question_answered`). All four follow the "Money in" switch and
+  are pushed.
+
 ## Verification: two ticks, not a ladder
 
 There is no five-rung ladder any more. There are exactly **two** verifications,

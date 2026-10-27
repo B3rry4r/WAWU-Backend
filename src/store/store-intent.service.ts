@@ -18,6 +18,10 @@ import { StoreBuyTargetService } from './store-buy-target.service';
 import { StoreAccountService } from './store-account.service';
 import { StoreCatalogService } from './store-catalog.service';
 import { StoreError } from './store-error';
+import {
+  QUESTION_ONLY,
+  QUESTION_TEXT_MISSING,
+} from './question/store-question-rules';
 import type { StoreIntentDto, StorePurchaseDto } from './store.dto';
 import type { StoreIntentView } from './store-view.type';
 
@@ -27,6 +31,8 @@ export interface ReadyIntent {
   product: StoreProduct;
   accountToken: string;
   listPriceKobo: number;
+  /** A question: the hours the creator has to answer, as the asker is shown them. Null for the other kinds. */
+  questionWindowHours: number | null;
 }
 
 const NOT_ON_TIP_LIST =
@@ -101,7 +107,13 @@ export class StoreIntentService {
     });
     if (!checked.ok) throw new StoreError(checked.code, checked.message);
     const accountToken = await this.accounts.tokenFor(userId);
-    return { targetId, product, accountToken, listPriceKobo };
+    return {
+      targetId,
+      product,
+      accountToken,
+      listPriceKobo,
+      questionWindowHours: checked.target.responseWindowHours ?? null,
+    };
   }
 
   /** The open intent for this thing: made now, or the one already open. */
@@ -112,7 +124,7 @@ export class StoreIntentService {
   ): Promise<StorePurchaseIntent> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        return await this.open(userId, dto, ready.targetId, ready.product);
+        return await this.open(userId, dto, ready);
       } catch (e) {
         // The partial unique index is the backstop for two asks at once.
         if (isUniqueViolation(e) && attempt === 0) continue;
@@ -183,9 +195,9 @@ export class StoreIntentService {
   private open(
     userId: string,
     dto: StoreIntentDto,
-    targetId: string,
-    product: StoreProduct,
+    ready: ReadyIntent,
   ): Promise<StorePurchaseIntent> {
+    const { targetId, product } = ready;
     return this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-intent:${userId}:${dto.kind}:${targetId}`}, 0))`;
       const now = new Date();
@@ -212,7 +224,9 @@ export class StoreIntentService {
       if (
         open !== null &&
         open.platform === dto.platform &&
-        open.listPriceNaira === dto.listPriceNaira
+        open.listPriceNaira === dto.listPriceNaira &&
+        // A question asked again in other words is another intent.
+        open.questionText === (dto.text ?? null)
       )
         return open;
       if (open !== null)
@@ -231,26 +245,44 @@ export class StoreIntentService {
           productId: product.id,
           storeProductId: product.storeProductId,
           expiresAt: intentExpiry(now),
+          ...(dto.kind === 'question'
+            ? {
+                questionText: dto.text ?? null,
+                questionWindowHours: ready.questionWindowHours,
+              }
+            : {}),
         },
       });
     });
   }
 
-  /** The one id the kind is about; the others must not be sent. */
+  /** The one id the kind is about; the others must not be sent. A question names the creator asked, as a tip names the creator tipped. */
   private targetIdOf(dto: StoreIntentDto): string {
     const named = {
       content: dto.contentId,
-      tip: dto.creatorWawuId,
+      creator: dto.creatorWawuId,
       pass: dto.communityId,
     };
+    const own: keyof typeof named =
+      dto.kind === 'tip' || dto.kind === 'question'
+        ? 'creator'
+        : dto.kind === 'content'
+          ? 'content'
+          : 'pass';
     const others = (Object.keys(named) as (keyof typeof named)[]).filter(
-      (k) => k !== dto.kind && named[k] !== undefined,
+      (k) => k !== own && named[k] !== undefined,
     );
-    const id = named[dto.kind];
+    const id = named[own];
     if (id === undefined || others.length > 0)
       throw new BadRequestException(
         'Name only the piece, creator or room this purchase is for.',
       );
+    if (dto.kind === 'question') {
+      if (dto.text === undefined || dto.text.trim() === '')
+        throw new BadRequestException(QUESTION_TEXT_MISSING);
+    } else if (dto.text !== undefined) {
+      throw new BadRequestException(QUESTION_ONLY);
+    }
     return id;
   }
 
