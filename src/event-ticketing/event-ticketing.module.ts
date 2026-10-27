@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PriceListModule } from '../price-list/price-list.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { DirectMessageModule } from '../direct-message/direct-message.module';
 import { EventCancelHooks } from './event-cancel-hooks';
@@ -40,6 +41,8 @@ import { PlansModule } from '../plans/plans.module';
     EventServiceModule,
     // HostTierOffersInterceptor on PUT /events/:id/tickets (EVENTS-12).
     PlansModule,
+    // Ticket prices are on the price list for the app's requests (PRICE-LIST round 2).
+    PriceListModule,
   ],
   controllers: [
     EventTicketingController,

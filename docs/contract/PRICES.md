@@ -27,7 +27,9 @@ A price a person sets is on `prices` (or 0 where R-8 allows free). Otherwise `40
 - `PUT /paid-dm/settings`: the price of a paid question (`priceKobo`, a new price only);
 - `POST /communities/rooms`: a private room's `passPriceKobo`.
 
-Not enforced yet, because the website calls them and the Hub cannot tell the app's request from the website's: `POST /content`, `PUT /events/{id}/tickets`, `POST /events` (ticket types), `PATCH /creator/dm-settings`, `POST /tips`. See the hand-back of PRICE-LIST.
+Enforced only for the app's requests (`X-Wawu-Client: app`, CONVENTIONS section 3a), because the website calls them too and must see no change: `POST /content` and the draft publish (a draft's price is judged when it is published), `PUT /events/{id}/tickets` and `POST /events` (paid ticket types; a free tier is 0). Without the header those routes behave exactly as before.
+
+Not enforced: `PATCH /creator/dm-settings` and `POST /tips` (website only; the tip list is stored and served).
 
 ## The migration
 

@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { MoneyError } from '../money/money-error';
+import { isAppRequest } from './app-client';
 import { PlanSettingsService } from '../plan-settings/plan-settings.service';
 import {
   PRICE_LIST_KEY,
@@ -70,6 +71,25 @@ export class PriceListService {
       nearestLowerNaira: lower,
       nearestHigherNaira: higher,
     });
+  }
+
+  /**
+   * For the routes the website also calls (`POST /content`, `PUT
+   * /events/{id}/tickets`, `POST /events`, the draft publish). Call it ONCE,
+   * early, in the request's own chain, and keep the result: it binds who sent
+   * the request now. The check it returns refuses a price off the list when the
+   * request is the app's (`X-Wawu-Client: app`) and does nothing otherwise, so
+   * the website's behaviour is unchanged.
+   */
+  forThisRequest(): {
+    assertOnList(priceNaira: number, options?: { allowFree?: boolean }): void;
+  } {
+    const app = isAppRequest();
+    return {
+      assertOnList: (priceNaira, options = {}) => {
+        if (app) this.assertOnList(priceNaira, options);
+      },
+    };
   }
 
   /** The two lists as a client reads them: whole naira and the same in kobo (the app never multiplies money, R-21). */

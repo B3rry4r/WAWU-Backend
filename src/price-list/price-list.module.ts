@@ -1,4 +1,9 @@
-import { Module } from '@nestjs/common';
+import {
+  Module,
+  type MiddlewareConsumer,
+  type NestModule,
+} from '@nestjs/common';
+import { AppClientMiddleware } from './app-client';
 import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { PriceListController } from './price-list.controller';
 import { PriceListService } from './price-list.service';
@@ -17,4 +22,9 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
   providers: [PriceListService, PriceMoveNoticeService],
   exports: [PriceListService],
 })
-export class PriceListModule {}
+export class PriceListModule implements NestModule {
+  /** Every route learns whether the request is the app's (`X-Wawu-Client: app`), the way X-Pay-Source-Currency is read. */
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(AppClientMiddleware).forRoutes('*');
+  }
+}

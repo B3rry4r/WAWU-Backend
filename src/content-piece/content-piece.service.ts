@@ -809,6 +809,12 @@ export class ContentPieceService {
         'Paid content must have a price greater than ₦0.',
       );
     }
+    // PRICE-LIST round 2: this is also the website's route (and the draft
+    // publish's), so the list applies only to the app's requests
+    // (`X-Wawu-Client: app`); without the header nothing here changes.
+    if (dto.accessType === 'paid') {
+      this.priceList.forThisRequest().assertOnList(dto.price);
+    }
 
     if (dto.parentCourseId !== undefined) {
       await this.assertOwnCourse(creatorWawuId, dto);
