@@ -8,6 +8,7 @@ import type { ProviderFxChain } from '../../wallet-provider/wallet-provider-fx';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import type { OpenFxAccountDto } from './dto/fx-request.dto';
 import { FX_CURRENCIES, fxCurrency } from './fx-currencies';
+import { nameOwnLines } from './fx-own-lines';
 import { FxPort, providerFailure } from './fx-provider';
 import { FxSettings } from './fx-settings';
 import { accountView, num } from './fx-views';
@@ -399,6 +400,12 @@ export class FxAccountsService {
       cursor = p.nextCursor;
       if (!cursor) break;
     }
+    // FIX-P6 L2: a line WAWU made is named by what it was for, never by WAWU's internal account.
+    await nameOwnLines(
+      this.prisma,
+      { wawuUserId: row.wawuUserId, fxAccountId: row.id },
+      out,
+    );
     return out.sort((a, b) =>
       a.occurredAt < b.occurredAt ? 1 : a.occurredAt > b.occurredAt ? -1 : 0,
     );

@@ -121,7 +121,9 @@ export interface FxTransactionView {
   feeMinor: number;
   /** The account's balance right after, when the statement says. */
   balanceAfterMinor: number | null;
+  /** For a line WAWU made (a payment, its conversion fee, a refund) what it was for, as the naira history words it ("Unlock · the title"). */
   description: string;
+  /** The provider's name for the other side; "Who Made This" for a line WAWU made, never one of WAWU's own account names (FIX-P6 L2). */
   counterpartyName: string | null;
   reference: string;
   occurredAt: string;
