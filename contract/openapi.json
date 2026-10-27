@@ -904,6 +904,27 @@
         ]
       }
     },
+    "/api/hub/prices": {
+      "get": {
+        "operationId": "PriceListController_read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceListView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "PriceList"
+        ]
+      }
+    },
     "/api/hub/wallet": {
       "get": {
         "operationId": "WalletController_get",
@@ -44696,6 +44717,27 @@
           "blockedWawuId"
         ]
       },
+      "PriceListView": {
+        "type": "object",
+        "properties": {
+          "prices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriceListItem"
+            }
+          },
+          "tips": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriceListItem"
+            }
+          }
+        },
+        "required": [
+          "prices",
+          "tips"
+        ]
+      },
       "ResolveAccountDto": {
         "type": "object",
         "properties": {
@@ -46775,6 +46817,7 @@
               "points_not_short",
               "tier_required",
               "pack_not_allowed",
+              "price_not_on_list",
               "add_money_unavailable",
               "fx_switched_off",
               "quote_expired",
@@ -46921,6 +46964,16 @@
           "shortfallPoints": {
             "type": "integer",
             "description": "insufficient_points: neededPoints minus balancePoints."
+          },
+          "nearestLowerNaira": {
+            "type": "integer",
+            "nullable": true,
+            "description": "price_not_on_list (R-101): the highest list price below the price sent, in whole naira; null when the price is under the lowest."
+          },
+          "nearestHigherNaira": {
+            "type": "integer",
+            "nullable": true,
+            "description": "price_not_on_list (R-101): the lowest list price above the price sent, in whole naira; null when the price is over the highest."
           },
           "cap": {
             "description": "points_cap_reached (POINTS-03): which cap stopped the job.",
@@ -61472,6 +61525,21 @@
           "mediaJobId",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "PriceListItem": {
+        "type": "object",
+        "properties": {
+          "priceNaira": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceNaira",
+          "priceKobo"
         ]
       },
       "DmSendInitResponse": {

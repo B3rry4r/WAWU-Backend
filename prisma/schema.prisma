@@ -8851,3 +8851,26 @@ model TierOfferSeen {
   wawuUserId String   @id
   seenAt     DateTime @default(now())
 }
+
+/// PRICE-LIST (R-101). One row for each price the data migration moved onto the
+/// price list: what it was, what it became, and whether the owner was told. The
+/// old price is kept so the rollback can put it back. `kind` is `content`,
+/// `paid_dm`, `community_pass` or `ticket_type`; `subjectId` is the piece's id,
+/// the creator's wawuUserId (paid messages), the community's id or the ticket
+/// type's id. Written by the migration; `notifiedAt` is set by
+/// PriceMoveNoticeService in the same transaction that writes the notification.
+/// Prices are kobo, as the pass price is.
+model PriceListMove {
+  id            String    @id @default(uuid())
+  kind          String
+  subjectId     String
+  ownerWawuId   String
+  title         String
+  oldPriceKobo  BigInt
+  newPriceKobo  BigInt
+  movedAt       DateTime  @default(now())
+  notifiedAt    DateTime?
+
+  @@index([kind, subjectId])
+  @@index([ownerWawuId])
+}

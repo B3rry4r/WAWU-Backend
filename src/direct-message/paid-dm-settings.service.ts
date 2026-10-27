@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Injectable,
 } from '@nestjs/common';
+import { PriceListService } from '../price-list/price-list.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { commissionRate } from '../event-ticketing/event-ticketing.constants';
 import type { UpdatePaidDmSettingsDto } from './dto/paid-dm-settings.dto';
@@ -34,6 +35,7 @@ export class PaidDmSettingsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly pause: PaidDmPauseService,
+    private readonly priceList: PriceListService,
   ) {}
 
   async get(
@@ -85,6 +87,13 @@ export class PaidDmSettingsService {
     }
     const priceNaira =
       dto.priceKobo === undefined ? existing?.dmPrice : dto.priceKobo / KOBO;
+    // PRICE-LIST (R-101): the price of a paid question is on the price list.
+    // A price sent again unchanged is not a new price and is not judged.
+    if (priceNaira !== undefined && priceNaira !== null) {
+      if (dto.priceKobo !== undefined && priceNaira !== existing?.dmPrice) {
+        this.priceList.assertOnList(priceNaira);
+      }
+    }
     if (dto.enabled && (priceNaira === undefined || priceNaira === null)) {
       throw new BadRequestException(
         'Set a price before you turn paid messages on.',

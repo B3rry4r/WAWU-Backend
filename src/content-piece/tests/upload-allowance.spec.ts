@@ -111,6 +111,8 @@ function buildService(opts: {
     // a block.
     {} as never,
     gate,
+    // PriceListService (PRICE-LIST) — only an edit's price is judged; nothing here edits.
+    {} as never,
   );
   return { service, state, tx, created, upserted };
 }

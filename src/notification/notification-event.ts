@@ -76,6 +76,9 @@ type CoreNotificationKind =
   // INBOX-25 (R-71): a removed member's unused pass days were paid back.
   /** The unused days of a pass were paid back to the wallet. Recipient: the removed member. */
   | 'community_pass_refunded'
+  // PRICE-LIST (R-101): a price was moved onto the price list.
+  /** A price of the person's was moved to the nearest list price. Recipient: the owner of the piece, question, pass or ticket. */
+  | 'price_moved'
   // FIX-105 (R-81): new messages in a community the person joined.
   /** Other people posted in a community the person joined. One notice per person and room, counted. */
   | 'community_messages';
@@ -304,6 +307,19 @@ type NotificationEventCore =
       communityId: string;
       communityName: string;
       messageCount: number;
+    }
+  /**
+   * PRICE-LIST (R-101, point 8). The data migration moved a price that was not
+   * on the price list to the nearest list price. Once per item, written by
+   * PriceMoveNoticeService in the transaction that marks the move as told.
+   * Recipient: whoever set the price. `itemTitle` names the piece, the room,
+   * the ticket or "paid messages"; `newPrice` is whole naira.
+   */
+  | {
+      kind: 'price_moved';
+      userWawuId: string;
+      itemTitle: string;
+      newPrice: number;
     };
 
 /** A pass's last day as the reminder writes it: "12 Nov 2026", Lagos time. */
@@ -864,6 +880,18 @@ export function composeNotification(
      * notice. The member did nothing, so it says what came back and why, in
      * plain words.
      */
+    case 'price_moved':
+      return {
+        ...base,
+        title: 'Price changed',
+        body: `The price of ${event.itemTitle} is now ${formatNaira(event.newPrice)}, the nearest on the price list.`,
+        tone: 'info',
+        amount: null,
+        creditsCount: null,
+        actionLabel: null,
+        ...NO_RICH_MEDIA,
+      };
+
     case 'community_pass_refunded':
       return {
         ...base,
@@ -1369,6 +1397,8 @@ export const NOTIFICATION_CATEGORY: Record<
   community_join_approved: 'messages',
   community_join_declined: 'messages',
   community_pass_refunded: 'money',
+  // PRICE-LIST (R-101). Default (agent), owner may override: under "Money".
+  price_moved: 'money',
   content_published: 'content',
   content_rejected: 'content',
   review_received: 'content',

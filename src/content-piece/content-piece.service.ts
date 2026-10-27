@@ -111,6 +111,7 @@ class PlaceNotClaimed extends Error {
 
 // Imported here, after the exported types, so they stay where they were.
 import { ServiceUnavailableException } from '@nestjs/common';
+import { PriceListService } from '../price-list/price-list.service';
 
 /**
  * Said when a listing names a file another person uploaded (SWEEP-APP-5, row
@@ -141,6 +142,7 @@ export class ContentPieceService {
     private readonly storage: StorageService,
     private readonly blockedAccounts: BlockedAccountService,
     private readonly gate: PublishingGate,
+    private readonly priceList: PriceListService,
   ) {}
 
   /**
@@ -1095,6 +1097,16 @@ export class ContentPieceService {
       throw new BadRequestException(
         'Paid content must have a price greater than ₦0.',
       );
+    }
+    // PRICE-LIST (R-101): a price a creator sets is on the price list. Only a
+    // price that is being set is judged: an edit that leaves the price as it
+    // is does not refuse a piece that already had one.
+    if (
+      accessType === 'paid' &&
+      dto.price !== undefined &&
+      dto.price !== existing.price
+    ) {
+      this.priceList.assertOnList(price);
     }
     const previewAsset = dto.previewAsset ?? existing.previewAssetUrl;
     const fullAsset = dto.fullAsset ?? existing.fullAssetUrl;

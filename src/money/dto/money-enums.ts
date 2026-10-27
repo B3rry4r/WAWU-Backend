@@ -258,6 +258,9 @@ export const MONEY_ERROR_CODES = [
   // The pack of extra products is not sold to this person: their tier may not
   // buy it, or they hold the most packs a profile can (PACK-CAP, R-100).
   'pack_not_allowed',
+  // A price a person set is not on the price list (PRICE-LIST, R-101): a piece,
+  // a paid question, a community pass or an event ticket. Nothing is saved.
+  'price_not_on_list',
   // Adding money by card, Apple Pay, USSD or a bank checkout (WALLET-25, WALLET-26):
   // the way asked for is switched off, or the provider has not switched it on.
   'add_money_unavailable',
