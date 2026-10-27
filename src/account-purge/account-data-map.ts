@@ -601,6 +601,12 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'LegalAcceptance', column: 'userWawuId', disposition: 'OWNED' },
   // TIER-OFFER (R-94): that the person was shown the tier offer, and when. Theirs, and it goes with them.
   { model: 'TierOfferSeen', column: 'wawuUserId', disposition: 'OWNED' },
+  // PRICE-LIST (R-101): the record that a price of this person's (a piece, a paid
+  // question, a room's pass, a ticket) was moved onto the price list: the item's
+  // title, the old price, the new one and whether they were told. It names their
+  // own writing, was made only to tell them and to roll the migration back, and
+  // the item it names goes with them, so the row goes too.
+  { model: 'PriceListMove', column: 'ownerWawuId', disposition: 'OWNED' },
   // Points turned into cash (POINTS-04): each row is WAWU's own movement of
   // cash from its account to this person's wallet, and the provider's record
   // of it (our reference, the amount, whether it was confirmed) must outlive

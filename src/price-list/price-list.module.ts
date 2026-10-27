@@ -3,6 +3,7 @@ import {
   type MiddlewareConsumer,
   type NestModule,
 } from '@nestjs/common';
+import { NotificationModule } from '../notification/notification.module';
 import { AppClientMiddleware } from './app-client';
 import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { PriceListController } from './price-list.controller';
@@ -18,7 +19,12 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
  * price; the route registers through them, so AppModule is unchanged.
  */
 @Module({
-  imports: [PlanSettingsModule, WawuAuthModule],
+  imports: [
+    PlanSettingsModule,
+    WawuAuthModule,
+    // PriceMoveNoticeService writes the notices; a testing module built from a resource's own module has no global one.
+    NotificationModule,
+  ],
   controllers: [PriceListController],
   providers: [PriceListService, PriceMoveNoticeService, StorePriceService],
   exports: [PriceListService],

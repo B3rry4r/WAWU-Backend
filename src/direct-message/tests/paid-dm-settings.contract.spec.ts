@@ -340,9 +340,10 @@ describe('Paid message settings (contract, INBOX-12)', () => {
       }
     });
 
+    // Updated for R-101: a saved price is a list price now, so the figures are compared at list prices (₦100, ₦1,500, ₦7,500, ₦250,000).
     it('gives the same figure the saved settings give for the same price', async () => {
       const c = await creator('EarnSame');
-      for (const priceKobo of [5_100, 9_900, 123_400, 777_700]) {
+      for (const priceKobo of [10_000, 150_000, 750_000, 25_000_000]) {
         await as(c)
           .put('/paid-dm/settings', { enabled: false, priceKobo })
           .expect(200);
@@ -583,16 +584,26 @@ describe('Paid message settings (contract, INBOX-12)', () => {
       expect((await stored(c)).dmPrice).toBe(1500);
     });
 
-    it('takes the lowest and the highest price', async () => {
+    // Updated for R-101: the lowest and highest LIST prices (₦100, ₦1,000,000) are taken; the old extremes (₦50, ₦10,000,000) are not on the list.
+    it('takes the lowest and the highest list price, and refuses the old extremes with price_not_on_list', async () => {
       const c = await creator('Edges', { dmEnabled: true, dmPrice: 1500 });
       await as(c)
-        .put('/paid-dm/settings', { enabled: true, priceKobo: 5_000 })
+        .put('/paid-dm/settings', { enabled: true, priceKobo: 10_000 })
         .expect(200);
-      expect((await stored(c)).dmPrice).toBe(50);
+      expect((await stored(c)).dmPrice).toBe(100);
       await as(c)
-        .put('/paid-dm/settings', { enabled: true, priceKobo: 1_000_000_000 })
+        .put('/paid-dm/settings', { enabled: true, priceKobo: 100_000_000 })
         .expect(200);
-      expect((await stored(c)).dmPrice).toBe(10_000_000);
+      expect((await stored(c)).dmPrice).toBe(1_000_000);
+      for (const priceKobo of [5_000, 1_000_000_000]) {
+        const res = await as(c)
+          .put('/paid-dm/settings', { enabled: true, priceKobo })
+          .expect(400);
+        expect((res.body as { reason: { code: string } }).reason.code).toBe(
+          'price_not_on_list',
+        );
+      }
+      expect((await stored(c)).dmPrice).toBe(1_000_000);
     });
 
     it('refuses a reply time that is not on offer, unless it is the one already saved', async () => {

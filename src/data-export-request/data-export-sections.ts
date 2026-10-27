@@ -1609,6 +1609,14 @@ export const EXPORT_SECTIONS: ExportSection[] = [
  */
 export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
   [
+    // PRICE-LIST (R-101): the Hub's own record of a price it moved onto the price list,
+    // kept to tell the person once and to roll the move back. The result is in the
+    // exports of the piece, the paid messages, the room and the ticket (their price now).
+    {
+      model: 'PriceListMove',
+      reason:
+        'WAWU bookkeeping of a price moved onto the price list, used to tell the person once; the price they hold now is in the export of the item itself.',
+    },
     // Editorial placement, not the person's own content (EXPLORE-03).
     {
       model: 'FeaturedCreator',
