@@ -51,8 +51,6 @@ import type {
   PointsPackQuoteView,
 } from './points-pack-view.type';
 
-/** A day, in milliseconds. */
-
 /**
  * Buy a points pack from the wallet or by bank transfer (task POINTS-02, PT4
  * to PT4c, R-43, R-44).

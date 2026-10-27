@@ -81,7 +81,7 @@ export class PointsConvertService {
     // out; points the person bought are never part of it (R-101 point 7).
     return this.signed(
       wawuUserId,
-      this.figures(asked ?? cashable, balance, cashable),
+      this.figures(asked ?? cashable, balance, cashable, asked === undefined),
     );
   }
 
@@ -89,13 +89,21 @@ export class PointsConvertService {
    * Every figure the quote shows, from the config as it stands (read once, so
    * the rate and the minimum belong together) and the provider's cap.
    */
-  private figures(points: number, balance: number, cashable: number): Figures {
+  private figures(
+    points: number,
+    balance: number,
+    cashable: number,
+    noneAsked = false,
+  ): Figures {
     const cashOut = this.config.cashOut;
     const rate = cashOut.per1000Points.kobo;
     const minimum = cashOut.minimumPoints;
     const maximum = pointsWithinCap(this.cap(), rate);
     let blockedBy: ConvertBlockedBy | null = null;
-    if (points < minimum) blockedBy = 'below_minimum';
+    // Someone who holds only points they bought, and asked for no amount, is
+    // told those points are not cashable, not that they are below the minimum.
+    if (noneAsked && cashable === 0 && balance > 0) blockedBy = 'not_cashable';
+    else if (points < minimum) blockedBy = 'below_minimum';
     else if (maximum !== null && points > maximum) blockedBy = 'above_maximum';
     else if (points > balance) blockedBy = 'insufficient_points';
     else if (points > cashable) blockedBy = 'not_cashable';

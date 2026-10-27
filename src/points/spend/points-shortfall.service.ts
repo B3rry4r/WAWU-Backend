@@ -54,8 +54,6 @@ export const NO_WALLET_NOTE = 'Open your wallet to top up points from it.';
 export const DOLLARS_NOTE =
   'Topping up points from your wallet is in naira only for now.';
 
-/** A day, in milliseconds. */
-
 /**
  * Pay the points an AI job is short of from the wallet (task POINTS-03, PT3,
  * R-43, R-10, R-16, R-19).

@@ -11,6 +11,7 @@ process.env.DATABASE_URL =
 import { randomUUID } from 'node:crypto';
 import type { PointLotSource } from '../../../generated/prisma/enums';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { EXPORT_SECTIONS } from '../../data-export-request/data-export-sections';
 import {
   BOUGHT_POINT_SOURCES,
   endOf,
@@ -332,6 +333,25 @@ describe('POINTS-BOUGHT: bought points never expire and are never cashable', () 
       );
       expect(err.code).toBe('points_not_cashable');
       expect(err.detail.cashablePoints).toBe(0);
+    });
+  });
+
+  describe('6. the data export never shows the "never" date', () => {
+    it('a bought lot exports its end as null; an earned lot exports the end it has', async () => {
+      const me = person();
+      await give(me, 'pack', 100, null);
+      await give(me, 'shortfall', 10, null);
+      await give(me, 'tier_bonus', 20, days(90));
+      const section = EXPORT_SECTIONS.find((x) => x.key === 'pointLots')!;
+      const lots = (await section.load(prisma, me)) as Array<{
+        source: string;
+        expiresAt: Date | null;
+      }>;
+      const by = (source: string) => lots.find((l) => l.source === source)!;
+      expect(by('pack').expiresAt).toBeNull();
+      expect(by('shortfall').expiresAt).toBeNull();
+      expect(by('tier_bonus').expiresAt).toEqual(days(90));
+      expect(JSON.stringify(lots)).not.toContain('2099');
     });
   });
 

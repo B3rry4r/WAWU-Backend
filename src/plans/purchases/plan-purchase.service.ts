@@ -132,8 +132,6 @@ export function refundedMessage(amountKobo: number): string {
 /** The hold's `releaseCondition` for a tier payment that is being refunded. */
 export const PLAN_REFUND_CONDITION = 'plan_granted';
 
-/** A day, in milliseconds. */
-
 /** Payments that are paid but not yet delivered keep their claim (`openKey`). */
 const OPEN_PAYMENT_STATES = [
   { status: 'pending' },

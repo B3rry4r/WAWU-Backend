@@ -125,6 +125,20 @@ describe('POINTS-BOUGHT: points to cash uses earned and bonus points only', () =
     expect(q.canConvert).toBe(false);
   });
 
+  it('a person with only bought points who asks no amount is blocked as not_cashable (cashablePoints 0), not below_minimum', async () => {
+    const me = await mixed(5000, 0);
+    const q = await svc.quote(me, CLAIMS);
+    expect(q).toMatchObject({
+      balancePoints: 5000,
+      cashablePoints: 0,
+      canConvert: false,
+      blockedBy: 'not_cashable',
+    });
+    // Nobody holding nothing at all is told their points are bought ones.
+    const nobody = await mixed(0, 0);
+    expect((await svc.quote(nobody, CLAIMS)).blockedBy).toBe('below_minimum');
+  });
+
   it('the checks before the PIN refuse more than the cashable points with points_not_cashable (422), changing nothing', async () => {
     const me = await mixed(5000, MIN + 40);
     const q = await svc.quote(me, CLAIMS, MIN + 41);

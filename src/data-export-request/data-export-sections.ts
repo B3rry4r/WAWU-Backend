@@ -1,4 +1,5 @@
 import { PrismaService } from '../common/prisma/prisma.service';
+import { endsNever } from '../points/points-bought';
 
 /**
  * WHAT A DATA EXPORT CONTAINS, AND WHAT IT NEVER CONTAINS (SETTINGS-04).
@@ -1183,8 +1184,8 @@ export const EXPORT_SECTIONS: ExportSection[] = [
     // reference is the granting task's own id, not a payment provider's).
     key: 'pointLots',
     models: ['PointLot'],
-    load: (prisma, me) =>
-      prisma.pointLot.findMany({
+    load: async (prisma, me) => {
+      const lots = await prisma.pointLot.findMany({
         where: { wawuUserId: me },
         select: {
           id: true,
@@ -1196,7 +1197,14 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           createdAt: true,
         },
         orderBy: NEWEST,
-      }),
+      });
+      // Bought points never end (R-101 point 7): the stored "never" date is
+      // not an end and is not exported; the end is null, as in every view.
+      return lots.map((lot) => ({
+        ...lot,
+        expiresAt: endsNever(lot.expiresAt) ? null : lot.expiresAt,
+      }));
+    },
   },
   {
     key: 'pointHolds',
