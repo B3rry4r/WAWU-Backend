@@ -96,6 +96,7 @@ export class StoreAdminService {
       ...(q.kind ? { kind: q.kind } : {}),
       ...(q.status && base.status === undefined ? { status: q.status } : {}),
       ...(q.wawuUserId ? { wawuUserId: q.wawuUserId } : {}),
+      ...(q.flag ? { flag: q.flag } : {}),
       ...(after
         ? {
             OR: [
@@ -135,6 +136,9 @@ export function adminPurchaseView(
     environment: r.environment,
     storeTransactionId: r.storeTransactionId,
     communityId: r.communityId,
+    ...(r.kind === 'buy'
+      ? { buyKind: r.buyKind, intentId: r.intentId, targetId: r.targetId }
+      : {}),
     currency: r.currency,
     priceMicros: r.priceMicros === null ? null : r.priceMicros.toString(),
     referenceKobo: r.referenceKobo,

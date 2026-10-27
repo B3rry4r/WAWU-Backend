@@ -36,7 +36,25 @@ export type StoreErrorCode =
   /** The purchase carries no account token and the cutover has passed: the app did not bind it to the person. */
   | 'store_account_token_missing'
   /** The purchase was paid but the Hub could not finish giving it (a fault on our side). Nothing is lost; asking again, or the store's own notice, tries again. */
-  | 'store_grant_failed';
+  | 'store_grant_failed'
+  /** (STORE-BUY-HUB) No such intent, or it is another person's. */
+  | 'store_intent_not_found'
+  /** (STORE-BUY-HUB) The sale was made after the intent's time ran out. Ask for a new intent. */
+  | 'store_intent_expired'
+  /** (STORE-BUY-HUB) The intent already has a purchase. */
+  | 'store_intent_used'
+  /** (STORE-BUY-HUB) This store transaction was already given for another intent. */
+  | 'store_purchase_other_intent'
+  /** (STORE-BUY-HUB) The piece, creator or room is not there, or is hidden from this person. */
+  | 'store_intent_target_not_found'
+  /** (STORE-BUY-HUB) The piece, creator or room cannot be bought or tipped by this person (free, their own, already theirs, no pass, removed). */
+  | 'store_intent_not_payable'
+  /** (STORE-BUY-HUB) The price on the piece or the room is not the list price the app named. */
+  | 'store_intent_price_changed'
+  /** (STORE-BUY-HUB round 3) The store credit named is not there, is another person's, or has been used or taken back. */
+  | 'store_credit_unavailable'
+  /** (STORE-BUY-HUB round 3) The person has no store credit worth that price, so there is nothing to pay with. */
+  | 'store_credit_insufficient';
 
 export const STORE_ERROR_STATUS: Record<StoreErrorCode, HttpStatus> = {
   store_not_configured: HttpStatus.SERVICE_UNAVAILABLE,
@@ -52,6 +70,15 @@ export const STORE_ERROR_STATUS: Record<StoreErrorCode, HttpStatus> = {
   store_product_invalid: HttpStatus.BAD_REQUEST,
   store_account_token_missing: HttpStatus.UNPROCESSABLE_ENTITY,
   store_grant_failed: HttpStatus.INTERNAL_SERVER_ERROR,
+  store_intent_not_found: HttpStatus.NOT_FOUND,
+  store_intent_expired: HttpStatus.CONFLICT,
+  store_intent_used: HttpStatus.CONFLICT,
+  store_purchase_other_intent: HttpStatus.CONFLICT,
+  store_intent_target_not_found: HttpStatus.NOT_FOUND,
+  store_intent_not_payable: HttpStatus.CONFLICT,
+  store_intent_price_changed: HttpStatus.CONFLICT,
+  store_credit_unavailable: HttpStatus.CONFLICT,
+  store_credit_insufficient: HttpStatus.CONFLICT,
 };
 
 export class StoreError extends HttpException {
@@ -75,3 +102,11 @@ export const OTHER_ROOM_MESSAGE =
 
 export const GRANT_FAILED_MESSAGE =
   'The store has your payment, but we could not finish giving it yet. Please try again in a moment.';
+
+export const INTENT_NOT_FOUND_MESSAGE =
+  'We could not find that purchase to finish.';
+export const INTENT_EXPIRED_MESSAGE =
+  'This purchase took too long to start. Please start it again.';
+export const INTENT_USED_MESSAGE = 'That purchase has already been used.';
+export const OTHER_INTENT_MESSAGE =
+  'That payment was already used for something else.';

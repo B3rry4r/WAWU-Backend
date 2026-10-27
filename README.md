@@ -793,6 +793,85 @@ the same person naming another room for it is refused (`store_purchase_other_roo
 the pass reminder (3 days before the end) reaches store passes too. `GET /communities/{id}/pass`
 no longer answers `cancelInStore` (nothing renews).
 
+### The price ladder: a piece, a tip or a community pass (STORE-BUY-HUB, R-101)
+
+In the app, unlocking a piece, sending a tip and getting a community pass are store
+purchases at the LIST price. Each price on `prices.list_naira` has one consumable on each
+store, `wawu.buy.<naira>` (kind `buy`, `referenceKobo` the list price, `storePriceKobo` the
+Nigeria store price on the 15% ladder, both seeded by migration `20261213090100` and edited
+in `admin/store/products` like any row). What a purchase is FOR is the person's intent, said
+before the store sheet opens:
+
+1. `POST /store/intents` `{ platform, kind: content | tip | pass, contentId | creatorWawuId |
+   communityId, listPriceNaira }` answers `{ intentId, productId, accountToken, expiresAt }`.
+   It checks as the wallet path does (a piece: live, paid, not theirs, not blocked, not
+   already theirs, priced at the list price; a tip: on `prices.tip_list_naira`, a person who
+   can be tipped; a pass: the room's price is the list price, they may join), refuses a price
+   off the list (`price_not_on_list`), and writes `StorePurchaseIntent`. One OPEN intent per
+   person, kind and target (a partial unique index); asking again returns it; another price or
+   store replaces it. It stays open 60 minutes, judged at the time of the STORE SALE and not of
+   the post, so a slow payment is never lost.
+2. The app buys `productId` with `accountToken`, then `POST /store/purchases` with `intentId`.
+   The Hub verifies with the store's own server (as above), checks the product is the intent's
+   and the token is the person's, and grants once per store transaction: a piece writes the
+   `Purchase` row of type `content` (`store:<id>`), a tip the one of type `tip`, a pass 30 days
+   (`grantPassPeriod`). A piece taken down meanwhile is recorded with `flag: target_unavailable`
+   and nothing is given.
+3. The creator's exactly-85% of the LIST price (never of what the store charged) is a
+   `StoreEarning` (source `store`) with `availableAt`: the sale plus 3 working days, Lagos time,
+   Monday to Friday (`addWorkingDays`; an admin holiday list is a later task). It is its own
+   table: the daily mover (`EarningSettlementService`) reads only `EarningSettlement`, so it
+   cannot pay one early and pays nothing for it today. STORE-PAYOUT pays it. The creator's
+   earnings view counts it as earned and waiting.
+4. A store refund, revoke or Google voided purchase removes the access (the `Purchase` row stops
+   counting, the pass days end now) and takes the 85% back: a `StoreEarning` not yet paid is
+   cancelled; one already paid becomes an `EarningDeduction` (`storePurchaseId`) that the
+   creator's next daily move takes from their earnings, never from a wallet. Apple
+   REFUND_REVERSED puts the grant and the earning back (a ladder purchase only). Every notice is
+   idempotent: the purchase row's status decides who acts, once.
+
+Round 3 (verifier findings, lead rulings):
+
+- **A deleted buyer's purchase is kept** (`StorePurchase.wawuUserId` is nullable; the account map
+  ANONYMISES it and clears the buyer's currency and price). Its store transaction ids, product,
+  grant and earning links stay, so a refund that arrives after the account is gone still finds
+  it and takes the creator's 85% back (cancelled, or a deduction). The buyer's own unlock, tip
+  record, pass days and credit go with the account.
+- **Notices are ordered by Apple's `signedDate`**, per store transaction (`StorePurchase.lastNoticeAt`).
+  A refund, revoke or reversal older than the last one seen is recorded and changes nothing (the
+  webhook answers `ignored`), so a REFUND_REVERSED that arrives before its REFUND ends granted.
+- **A paid purchase whose target is gone** (the piece is free now, already theirs or taken down; the
+  room removed them, no longer sells a pass or the creator can no longer be tipped) gives nothing and
+  earns the creator nothing. The fan gets a `StoreCredit` worth the LIST price: the 201 answers
+  `status: credited` and a `credit.message` sentence the app shows. A credit is never cash and never
+  expires; `GET /store/credits` lists them; `POST /store/intents` with `payWith: credit` consumes the
+  smallest one worth at least the price, whole, and grants at once (no store sheet; the purchase
+  carries `paidWithCredit`). A store refund of the original voids an unspent credit (and a reversal
+  brings it back); a refund after the credit was spent goes to a person (`flag: earning_review`).
+  `GET /admin/store/purchases?flag=` filters by flag.
+- **The sale must not come before the intent** (less 5 minutes of clock difference), so an older
+  transaction cannot be re-posted under a fresh intent. A price that moved up after the intent is
+  granted at the intent's price with `flag: price_changed`. A daily sweep deletes intents that were
+  never used 7 days after they ran out. The creator's `GET /money/earnings` shows each waiting store
+  share's `availableAt` under `storeEarnings`.
+
+Round 4 (re-verify):
+
+- **A spent credit cannot launder a refund.** A store refund of a purchase takes back every credit made
+  of its payment (the credit it made and the rest of any larger one): unspent ones are voided, and
+  what a SPENT one paid for is taken back as if that sale had been refunded itself (its grant ends,
+  its creator share is cancelled or becomes a deduction), once. Both purchases carry a flag
+  (`credit_spent_taken_back`, `credit_source_refunded`). A reversal restores both.
+- **A credit larger than the price is not forfeited.** The rest is a new open credit with the same
+  origin (`StoreCredit.originPurchaseId`), never cash, never expires.
+- **A verified sale is never lost.** When its intent is missing, not the person's, used or expired, or
+  the sale came before the intent, the sale is recorded (`flag: late_sale`, the purchase consumed) and
+  the fan gets a credit worth the product's list price (`status: credited`); no goods, no creator
+  earning. Goods are still granted only inside the intent's window. A credited answer carries no
+  content id, creator or room.
+- **A notice with no signed date is ordered by its arrival time:** it is applied when it arrives, and
+  a notice signed before that moment is then older and changes nothing.
+
 ## Verification: two ticks, not a ladder
 
 There is no five-rung ladder any more. There are exactly **two** verifications,

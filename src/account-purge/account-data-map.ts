@@ -196,21 +196,67 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'MakerPurchase', column: 'wawuUserId', disposition: 'OWNED' },
   // What this account bought through Google Play or the App Store (IAP-01, R-86):
   // the product, what the store charged, what was granted and what a refund took
-  // back. OWNED, like MakerPurchase above: the row exists only because this account
-  // bought something. The money is the store's and WAWU's own accounting, not a
-  // wallet payment, so there is no payer's record to keep. `creatorWawuUserId` names
-  // a room's host on somebody else's purchase of a pass: their record survives.
-  { model: 'StorePurchase', column: 'wawuUserId', disposition: 'OWNED' },
+  // back. ANONYMISED, not deleted (STORE-BUY-HUB round 3): the store can still
+  // refund or revoke the purchase after the buyer has gone, and the refund is
+  // how WAWU takes the creator's 85% back (the creator's earning and a deduction
+  // follow the purchase row, not the buyer). A purchase that is deleted with the
+  // account is a purchase a later refund cannot find, and the creator keeps
+  // money the store paid back. So the row stays with the buyer cleared and the
+  // amount the store charged in the buyer's own currency (it hints where they
+  // live); its store transaction ids, the product, what was granted, the creator
+  // and the earning links stay. The buyer's own unlock, tip record and pass days
+  // go with the account as before, and a refund after that takes back the
+  // creator's share only. The ladder columns `intentId`, `buyKind` and
+  // `targetId`, `lastNoticeAt` and `creditOriginId` (the purchase whose payment a
+  // store credit that paid for this sale was made of, which is how a refund of that
+  // purchase still finds this sale after the credit rows have gone) are on this row
+  // and stay with it.
+  // `creatorWawuUserId` names a room's host (a pass) or the person tipped or whose
+  // piece was bought, on somebody else's purchase: their record survives.
+  {
+    model: 'StorePurchase',
+    column: 'wawuUserId',
+    disposition: 'ANONYMISED',
+    clear: ['currency', 'priceMicros'],
+  },
   {
     model: 'StorePurchase',
     column: 'creatorWawuUserId',
     disposition: 'COUNTERPARTY',
   },
+  // A store credit a fan was given when a paid purchase could not be given
+  // (STORE-BUY-HUB round 3): theirs, never cash, and it goes with them. The
+  // purchase it came from stays (above), so a refund of that purchase still finds it.
+  { model: 'StoreCredit', column: 'wawuUserId', disposition: 'OWNED' },
   // Who holds a store subscription, and the id this account's store purchases are
   // bound to (IAP-01 fix round 1). OWNED: both exist only because this account
   // bought through a store, and name no counterparty.
   { model: 'StoreSubscription', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'StoreAccountToken', column: 'wawuUserId', disposition: 'OWNED' },
+  // What a ladder purchase was for, said before the store sheet opened
+  // (STORE-BUY-HUB, R-101): the person, the thing and the list price. OWNED: it
+  // exists only because this account asked to buy, and names no counterparty
+  // beyond a target id. No foreign key points at it. The columns the ladder
+  // added to StorePurchase (`intentId`, `buyKind`, `targetId`) are on a row
+  // already OWNED above and go with it.
+  {
+    model: 'StorePurchaseIntent',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+  // A creator's 85% of somebody else's store sale (STORE-BUY-HUB, R-101): the
+  // buyer's purchase and the share it owes survive, like a wallet sale's
+  // earning (EarningSettlement). Kept when the creator's account goes: it is the
+  // record of what WAWU owed or paid. It has no foreign key to the purchase, so
+  // the buyer's own deletion never waits on it. While one is still owed the
+  // creator's own deletion waits instead (`waiting_earnings`, SETTINGS-06). A
+  // deduction a store refund makes (`EarningDeduction.storePurchaseId`) is on a
+  // row already COUNTERPARTY below, kept with it.
+  {
+    model: 'StoreEarning',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
   // More products this account bought on its tier (TIER-04): how many and what
   // it cost. OWNED, like MakerPurchase above: the row exists only because this
   // account bought something and names no counterparty. The money's record is

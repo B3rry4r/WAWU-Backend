@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsEnum,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -11,10 +12,12 @@ import {
   Matches,
   Max,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import {
   CreditPack,
+  StoreIntentKind,
   StorePlatform,
   StoreProductKind,
   StorePurchaseStatus,
@@ -67,6 +70,72 @@ export class StorePurchaseDto {
   @IsOptional()
   @IsUUID()
   communityId?: string;
+
+  /**
+   * The intent this purchase was made against (`POST /store/intents`). Required
+   * for a ladder product (`wawu.buy.<naira>`), refused for any other.
+   */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsUUID()
+  intentId?: string;
+}
+
+/**
+ * POST /store/intents: what a ladder purchase is for, said BEFORE the store
+ * sheet opens. Name only the thing the kind is about: `contentId` for
+ * `content`, `creatorWawuId` for `tip`, `communityId` for `pass`.
+ */
+export class StoreIntentDto {
+  /** The store the app runs on. */
+  @ApiProperty({ enum: StorePlatform })
+  @IsEnum(StorePlatform, { message: 'platform must be android or ios' })
+  platform!: StorePlatform;
+
+  /** `content` (unlock a piece), `tip` (tip a creator) or `pass` (a community pass). */
+  @ApiProperty({ enum: StoreIntentKind })
+  @IsEnum(StoreIntentKind, {
+    message: 'kind must be content, tip or pass',
+  })
+  kind!: StoreIntentKind;
+
+  /** The piece to unlock. Required for `content`. */
+  @ApiPropertyOptional()
+  @ValidateIf((o: StoreIntentDto) => o.kind === 'content')
+  @IsUUID()
+  contentId?: string;
+
+  /** The creator to tip. Required for `tip`. */
+  @ApiPropertyOptional()
+  @ValidateIf((o: StoreIntentDto) => o.kind === 'tip')
+  @IsUUID()
+  creatorWawuId?: string;
+
+  /** The room whose pass to buy. Required for `pass`. */
+  @ApiPropertyOptional()
+  @ValidateIf((o: StoreIntentDto) => o.kind === 'pass')
+  @IsUUID()
+  communityId?: string;
+
+  /**
+   * The price in whole naira. Must be on the price list (`GET /prices`); a tip
+   * must be on the tip list. A piece's or room's price must equal it.
+   */
+  @ApiProperty({ type: 'integer' })
+  @IsInt()
+  @Min(1)
+  @Max(1_000_000_000)
+  listPriceNaira!: number;
+
+  /**
+   * `store` (the default): the store sheet is opened and the purchase made
+   * against this intent. `credit`: a store credit worth at least the price is
+   * consumed whole and the purchase is granted at once, with no store sheet.
+   */
+  @ApiPropertyOptional({ enum: ['store', 'credit'] })
+  @IsOptional()
+  @IsIn(['store', 'credit'], { message: 'payWith must be store or credit' })
+  payWith?: 'store' | 'credit';
 }
 
 // ---------------------------------------------------------------------------
@@ -141,13 +210,21 @@ export class CreateStoreProductDto {
   @Type(() => StoreProductGrantsDto)
   grants!: StoreProductGrantsDto;
 
-  /** Kobo one purchase is worth before the store's share. Needed for credits and pass products. */
+  /** Kobo one purchase is worth before the store's share. Needed for credits, pass and `buy` (ladder) products; a ladder product's must be a list price. */
   @ApiPropertyOptional({ type: 'integer' })
   @IsOptional()
   @IsInt()
   @Min(1)
   @Max(2_000_000_000)
   referenceKobo?: number;
+
+  /** What the store charges in Nigeria, in kobo. Only for a `buy` (ladder) product. */
+  @ApiPropertyOptional({ type: 'integer' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(2_000_000_000)
+  storePriceKobo?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -182,6 +259,14 @@ export class UpdateStoreProductDto {
   @Min(1)
   @Max(2_000_000_000)
   referenceKobo?: number;
+
+  /** What the store charges in Nigeria, in kobo. Only for a `buy` (ladder) product. */
+  @ApiPropertyOptional({ type: 'integer' })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(2_000_000_000)
+  storePriceKobo?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -237,6 +322,13 @@ export class AdminStorePurchaseQueryDto {
   @IsString()
   @Length(1, 100)
   wawuUserId?: string;
+
+  /** Purchases the Hub flagged for a person to look at: `member_removed`, `pack_not_allowed`, `target_unavailable`, `price_changed`, `earning_review`. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @Length(1, 60)
+  flag?: string;
 
   /** From the `nextCursor` of the page before. */
   @ApiPropertyOptional()

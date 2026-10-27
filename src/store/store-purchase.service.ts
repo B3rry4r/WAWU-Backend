@@ -11,6 +11,7 @@ import type {
   StorePlatform,
   StoreProduct,
   StorePurchase,
+  StorePurchaseIntent,
 } from '../../generated/prisma/client';
 import { BlockedAccountService } from '../blocked-account/blocked-account.service';
 import { PrismaService } from '../common/prisma/prisma.service';
@@ -29,21 +30,26 @@ import {
   creatorShareOf,
   netOf,
   StoreGrantService,
+  type BuyContext,
   type StoreGrantSnapshot,
 } from './store-grant.service';
+import { creatorShareOfList } from './store-buy-rules';
+import { StoreBuyTargetService } from './store-buy-target.service';
+import { StoreIntentService } from './store-intent.service';
+import { StoreCreditService } from './store-credit.service';
 import { isSubscriptionKind } from './store-grants';
 import { StoreAccountService } from './store-account.service';
 import { StoreCatalogService } from './store-catalog.service';
 import {
-  DISABLED_MESSAGE,
   GRANT_FAILED_MESSAGE,
-  NOT_CONFIGURED_MESSAGE,
+  OTHER_INTENT_MESSAGE,
   OTHER_ROOM_MESSAGE,
   StoreError,
   UNREACHABLE_MESSAGE,
+  NOT_CONFIGURED_MESSAGE,
 } from './store-error';
-import type { StorePurchaseDto } from './store.dto';
-import type { StorePurchaseView } from './store-view.type';
+import type { StoreIntentDto, StorePurchaseDto } from './store.dto';
+import type { StoreIntentView, StorePurchaseView } from './store-view.type';
 
 export const PASS_ROOM_MISSING = 'We could not find that room.';
 export const PASS_NOT_SOLD = 'This room does not sell a pass.';
@@ -51,6 +57,19 @@ export const PASS_OWN_ROOM = 'You host this room, so you do not need a pass.';
 export const PASS_REMOVED =
   'The host has removed you from this room. Ask the host to let you back in.';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface SettleArgs {
+  userId: string;
+  product: StoreProduct;
+  verified: VerifiedStorePurchase;
+  communityId: string | null;
+  /** The intent a ladder purchase is made against; null for every other kind. */
+  intent?: StorePurchaseIntent | null;
+  /** A store credit that pays for this purchase instead of a store sale; consumed whole in the same transaction. */
+  creditId?: string | null;
+  /** A ladder sale that cannot be given as goods (no intent, outside its window): recorded and credited. */
+  late?: 'missing' | 'before_intent' | 'expired' | 'used' | null;
+}
 
 export interface Settled {
   purchase: StorePurchase;
@@ -86,6 +105,9 @@ export class StorePurchaseService {
     private readonly accounts: StoreAccountService,
     private readonly grants: StoreGrantService,
     private readonly blocked: BlockedAccountService,
+    private readonly intents: StoreIntentService,
+    private readonly targets: StoreBuyTargetService,
+    private readonly credits: StoreCreditService,
     @Optional()
     @Inject(GOOGLE_PLAY_CLIENT)
     private readonly google: GooglePlayClient | null,
@@ -105,6 +127,13 @@ export class StorePurchaseService {
       dto.productId,
     );
     const communityId = await this.checkRequest(userId, dto, product);
+    // A ladder purchase is made against an intent (STORE-BUY-HUB): the person's
+    // own, for this store and this product, found before the store is asked.
+    // Without one (missing, not theirs) the sale is credited after it verifies.
+    const intent =
+      product.kind === 'buy'
+        ? await this.intents.resolveForPurchase(userId, dto, product)
+        : null;
     const verified = await this.verify(dto, product);
     if (verified.storeProductId !== product.storeProductId)
       throw invalid('That purchase is for another product.');
@@ -129,11 +158,22 @@ export class StorePurchaseService {
     )
       throw new StoreError('store_purchase_other_room', OTHER_ROOM_MESSAGE);
 
+    // The sale must fall inside the intent's window to be given as goods. It is
+    // the STORE's time of sale that counts, not when the app posted it: a payment
+    // that was slow to arrive is never refused for that. A verified sale outside
+    // the window, or with no intent, is not lost: it is recorded and credited.
+    const late =
+      product.kind === 'buy'
+        ? this.intents.lateReason(intent, verified.purchasedAt)
+        : null;
+
     const settled = await this.settle({
       userId,
       product,
       verified,
       communityId,
+      intent,
+      late,
     });
     if (settled.purchase.wawuUserId !== userId)
       throw new StoreError(
@@ -149,11 +189,8 @@ export class StorePurchaseService {
   // -------------------------------------------------------------------------
 
   /** The store switch and credentials, as the routes answer them. */
-  async assertOpen(platform: StorePlatform): Promise<void> {
-    const a = await this.catalog.availability(platform);
-    if (!a.configured)
-      throw new StoreError('store_not_configured', NOT_CONFIGURED_MESSAGE);
-    if (!a.enabled) throw new StoreError('store_disabled', DISABLED_MESSAGE);
+  assertOpen(platform: StorePlatform): Promise<void> {
+    return this.catalog.assertOpen(platform);
   }
 
   /**
@@ -161,13 +198,10 @@ export class StorePurchaseService {
    * Returns the existing row when the transaction was granted before (whoever
    * it was granted to: the caller compares the owner).
    */
-  async settle(args: {
-    userId: string;
-    product: StoreProduct;
-    verified: VerifiedStorePurchase;
-    communityId: string | null;
-  }): Promise<Settled> {
+  async settle(args: SettleArgs): Promise<Settled> {
     const { userId, product, verified, communityId } = args;
+    const intent = args.intent ?? null;
+    const isBuy = product.kind === 'buy';
     const platform = verified.platform;
     const key = {
       platform_storeTransactionId: {
@@ -192,12 +226,46 @@ export class StorePurchaseService {
       const existing = await this.prisma.storePurchase.findUnique({
         where: key,
       });
-      if (existing !== null) return heldBy(existing, userId, communityId);
+      if (existing !== null)
+        return heldBy(existing, userId, communityId, intent);
       const fee = (await this.catalog.availability(platform)).feeBps;
-      const referenceKobo = product.referenceKobo;
-      const netKobo = referenceKobo === null ? null : netOf(referenceKobo, fee);
+      // A ladder purchase is worth the list price its intent named, whatever
+      // the product row says now. The store price is made so that WAWU receives
+      // at least that (R-101 point 2), so the net recorded is the list price
+      // itself and the store's cut is not taken off it: the creator's 85% is of
+      // the list price.
+      const referenceKobo =
+        intent !== null && args.late == null
+          ? intent.listPriceKobo
+          : product.referenceKobo;
+      const netKobo =
+        referenceKobo === null
+          ? null
+          : isBuy
+            ? referenceKobo
+            : netOf(referenceKobo, fee);
       let creatorWawuUserId: string | null = null;
-      if (product.kind === 'pass' && communityId !== null) {
+      let buy: BuyContext | null = null;
+      if (isBuy && (intent === null || args.late != null)) {
+        // A late sale: credited the product's list price, no creator.
+        buy = { intent: null, target: null, late: args.late ?? 'missing' };
+      } else if (intent !== null) {
+        // Asked again now, outside the transaction (a block is read from
+        // another table): the piece may have been taken down since the intent.
+        const checked = await this.targets.check(
+          userId,
+          intent.kind,
+          intent.targetId,
+          { listNaira: intent.listPriceNaira, tolerateChangedPrice: true },
+        );
+        buy = {
+          intent,
+          target: checked.ok ? checked.target : null,
+          priceChanged: checked.ok && checked.priceChanged === true,
+          creditId: args.creditId ?? null,
+        };
+        creatorWawuUserId = buy.target?.creatorWawuId ?? null;
+      } else if (product.kind === 'pass' && communityId !== null) {
         const room = await this.prisma.community.findUnique({
           where: { id: communityId },
           select: { hostWawuId: true },
@@ -205,9 +273,13 @@ export class StorePurchaseService {
         creatorWawuUserId = room?.hostWawuId ?? null;
       }
       const creatorShareKobo =
-        creatorWawuUserId !== null && netKobo !== null
-          ? creatorShareOf(netKobo)
-          : null;
+        creatorWawuUserId === null
+          ? null
+          : intent !== null && args.late == null
+            ? creatorShareOfList(intent.listPriceKobo)
+            : netKobo !== null
+              ? creatorShareOf(netKobo)
+              : null;
       try {
         return await this.prisma.$transaction(async (tx) => {
           if (holderKey !== null) {
@@ -219,7 +291,22 @@ export class StorePurchaseService {
           }
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-purchase:${platform}:${verified.storeTransactionId}`}, 0))`;
           const again = await tx.storePurchase.findUnique({ where: key });
-          if (again !== null) return heldBy(again, userId, communityId);
+          if (again !== null) return heldBy(again, userId, communityId, intent);
+          // One intent, one purchase: a second store transaction against an
+          // intent already used is not refused (the store has the money): it is
+          // recorded and credited, linked to no intent.
+          let lateInTx = args.late ?? null;
+          if (intent !== null && lateInTx === null) {
+            const rows = await tx.$queryRaw<{ status: string }[]>`
+              SELECT "status"::text AS "status" FROM "StorePurchaseIntent"
+              WHERE "id" = ${intent.id} FOR UPDATE`;
+            if (rows[0]?.status === 'used') lateInTx = 'used';
+          }
+          const linked = intent !== null && lateInTx === null;
+          const grantBuy: BuyContext | null =
+            lateInTx !== null
+              ? { intent: null, target: null, late: lateInTx }
+              : buy;
           if (holderKey !== null && subscriptionKey !== null)
             await tx.storeSubscription.upsert({
               where: holderKey,
@@ -243,7 +330,20 @@ export class StorePurchaseService {
               storeProductId: product.storeProductId,
               kind: product.kind,
               environment: verified.environment,
-              communityId: product.kind === 'pass' ? communityId : null,
+              communityId: linked
+                ? intent.kind === 'pass'
+                  ? intent.targetId
+                  : null
+                : product.kind === 'pass'
+                  ? communityId
+                  : null,
+              ...(linked
+                ? {
+                    intentId: intent.id,
+                    buyKind: intent.kind,
+                    targetId: intent.targetId,
+                  }
+                : {}),
               grant: {},
               referenceKobo,
               storeFeeBps: fee,
@@ -256,15 +356,22 @@ export class StorePurchaseService {
               expiresAt: verified.expiresAt,
             },
           });
-          const snap = await this.grants.give(tx, row, product, now);
+          const snap = await this.grants.give(tx, row, product, now, grantBuy);
+          if (linked)
+            await tx.storePurchaseIntent.update({
+              where: { id: intent.id },
+              data: { status: 'used', usedAt: now },
+            });
           const done = await tx.storePurchase.update({
             where: { id: row.id },
             data: {
               grant: snap as unknown as Prisma.InputJsonValue,
-              // Paid but not given (a pass renewal for a removed member): an admin looks.
-              ...(snap.skipped === undefined
+              // Paid but not given (a pass renewal for a removed member, a ladder
+              // purchase whose target is gone, which became a store credit), or
+              // given at the intent's price after the price moved: an admin looks.
+              ...(snap.skipped === undefined && snap.note === undefined
                 ? {}
-                : { flag: snap.skipped, flaggedAt: now }),
+                : { flag: snap.skipped ?? snap.note, flaggedAt: now }),
             },
           });
           return { purchase: done, alreadyGranted: false };
@@ -317,17 +424,92 @@ export class StorePurchaseService {
     alreadyGranted: boolean,
   ): StorePurchaseView {
     const snap = (purchase.grant ?? {}) as unknown as StoreGrantSnapshot;
+    const credited =
+      snap.creditId !== undefined && purchase.status === 'granted';
     return {
       id: purchase.id,
       platform: purchase.platform,
       storeProductId: product.storeProductId,
       kind: product.kind,
-      status: purchase.status,
+      status: credited ? 'credited' : purchase.status,
       alreadyGranted,
       grant: this.grants.grantedView(snap, purchase.communityId),
       purchasedAt: purchase.purchasedAt.toISOString(),
       expiresAt: purchase.expiresAt?.toISOString() ?? null,
       flag: purchase.flag,
+      ...(purchase.kind === 'buy'
+        ? {
+            buyKind: purchase.buyKind,
+            intentId: purchase.intentId,
+            targetId: purchase.targetId,
+            credit:
+              snap.creditId === undefined
+                ? null
+                : {
+                    id: snap.creditId,
+                    amountKobo: snap.creditKobo ?? 0,
+                    message: creditMessage(
+                      purchase.buyKind,
+                      snap.creditKobo ?? 0,
+                      purchase.flag === 'late_sale',
+                    ),
+                  },
+            paidWithCredit: snap.paidWithCredit ?? null,
+          }
+        : {}),
+    };
+  }
+
+  /**
+   * Pays for a ladder purchase with a store credit (STORE-BUY-HUB round 3):
+   * `POST /store/intents` with `payWith: credit`. The thing is checked as for a
+   * store purchase; a credit worth at least the price (the smallest that fits)
+   * is consumed whole and the purchase is granted at once, in one transaction,
+   * with no store sheet. The creator's 85% of the list price is recorded as for
+   * any sale. If the piece, creator or room is gone by then, nothing is spent.
+   */
+  async payWithCredit(
+    userId: string,
+    dto: StoreIntentDto,
+  ): Promise<StoreIntentView> {
+    const ready = await this.intents.prepare(userId, dto);
+    const credit = await this.credits.pick(userId, ready.listPriceKobo);
+    const intent = await this.intents.openIntent(userId, dto, ready);
+    const now = new Date();
+    const verified: VerifiedStorePurchase = {
+      platform: dto.platform,
+      environment: 'production',
+      storeProductId: ready.product.storeProductId,
+      // One credit, one purchase: the unique key on the transaction id is the
+      // once-only gate, as a store's own id is for a store sale.
+      storeTransactionId: `credit:${credit.id}`,
+      subscriptionKey: null,
+      purchasedAt: now,
+      expiresAt: null,
+      currency: null,
+      priceMicros: null,
+      state: 'purchased',
+      needsAcknowledge: false,
+      accountToken: ready.accountToken,
+    };
+    const settled = await this.settle({
+      userId,
+      product: ready.product,
+      verified,
+      communityId: null,
+      intent,
+      creditId: credit.id,
+    });
+    return {
+      intentId: intent.id,
+      productId: intent.storeProductId,
+      accountToken: ready.accountToken,
+      expiresAt: intent.expiresAt.toISOString(),
+      purchase: this.view(
+        settled.purchase,
+        ready.product,
+        settled.alreadyGranted,
+      ),
     };
   }
 
@@ -351,6 +533,12 @@ export class StorePurchaseService {
         'store_receipt_missing',
         'An App Store purchase needs its transaction id.',
       );
+    if (dto.intentId && product.kind !== 'buy')
+      throw new StoreError(
+        'store_purchase_invalid',
+        'This product is not bought against an intent.',
+      );
+    if (product.kind === 'buy') return null;
     if (product.kind === 'extra_products') {
       // Checked before the store is asked: the products are kept on the
       // person's tier row, and a person who has never held a tier has none.
@@ -430,7 +618,19 @@ function heldBy(
   existing: StorePurchase,
   userId: string,
   communityId: string | null,
+  intent: StorePurchaseIntent | null = null,
 ): Settled {
+  // A ladder transaction is bound to the intent it first granted: the same
+  // person naming another one for it gets nothing (their payment was for the
+  // first). Another person's is returned and refused by the caller.
+  if (
+    existing.kind === 'buy' &&
+    existing.wawuUserId === userId &&
+    intent !== null &&
+    existing.intentId !== null &&
+    existing.intentId !== intent.id
+  )
+    throw new StoreError('store_purchase_other_intent', OTHER_INTENT_MESSAGE);
   if (
     existing.kind === 'pass' &&
     existing.wawuUserId === userId &&
@@ -454,4 +654,27 @@ function invalid(message: string): StoreError {
 /** A short tag for a log line that must not carry a purchase token. */
 export function hashOf(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 12);
+}
+
+/** ₦ with thousands separators, no decimals. */
+function naira(kobo: number): string {
+  return `₦${Math.floor(kobo / 100)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+}
+
+/** The sentence the app shows when a paid purchase could not be given and became a store credit. */
+export function creditMessage(
+  buyKind: StorePurchase['buyKind'],
+  creditKobo: number,
+  late = false,
+): string {
+  const lead = late
+    ? 'This purchase could not be finished in time.'
+    : buyKind === 'tip'
+      ? 'This creator can no longer be tipped.'
+      : buyKind === 'pass'
+        ? 'This pass is no longer available.'
+        : 'This piece is no longer available.';
+  return `${lead} You have a ${naira(creditKobo)} credit to use on Who Made This.`;
 }

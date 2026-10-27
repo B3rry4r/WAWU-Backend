@@ -15,6 +15,7 @@ import type {
   EarningsView,
   EarningsWaitingView,
   EarningStreamView,
+  StoreEarningWaitingView,
 } from '../money-view.type';
 import { decodeEarningCursor, encodeEarningCursor } from './earning-cursor';
 
@@ -65,6 +66,7 @@ function kobo(text: string | null | undefined): number {
  *   hold service's plain release) is landed when the move is confirmed. A
  *   hold whose owner has not decided is `held`, not earned; a refunded one is
  *   the payer's.
+ * - a store sale (STORE-BUY-HUB): a `StoreEarning`, waiting until it is paid.
  * `at` is when it was earned: the sale's completion, or the release.
  */
 function earned(person: string): Prisma.Sql {
@@ -74,6 +76,14 @@ function earned(person: string): Prisma.Sql {
            (s."status" = 'landed') AS "landed"
       FROM "EarningSettlement" s
      WHERE s."payeeWawuUserId" = ${person}::text
+    UNION ALL
+    -- A creator's 85% of a store sale (STORE-BUY-HUB, R-101): earned at the sale,
+    -- waiting until WAWU pays it (3 working days on, STORE-PAYOUT). A cancelled
+    -- one (the store paid the buyer back first) is not earned.
+    SELECT se."kind", se."targetId", se."title", se."earnedAt", se."amountKobo",
+           (se."status" = 'paid')
+      FROM "StoreEarning" se
+     WHERE se."payeeWawuUserId" = ${person}::text AND se."status" <> 'cancelled'
     UNION ALL
     SELECT h."kind", h."targetId", h."title", h."actionAt", h."payeeShareKobo",
            (h."status" = 'released')
@@ -158,7 +168,36 @@ export class EarningsViewService {
       waiting: one('waiting'),
       held: one('held'),
       walletOpen: !!wallet && isRowOf(this.provider.name, wallet.provider),
+      // Only when there are some: a creator with no store sale gets exactly the
+      // shape this view always had (a spec compares the keys).
+      ...(await this.storeWaitingField(wawuUserId)),
     };
+  }
+
+  private async storeWaitingField(
+    wawuUserId: string,
+  ): Promise<{ storeEarnings?: StoreEarningWaitingView[] }> {
+    const rows = await this.storeWaiting(wawuUserId);
+    return rows.length > 0 ? { storeEarnings: rows } : {};
+  }
+
+  /** The store sales' shares still waiting to be paid, soonest first, with the day each may be paid (STORE-BUY-HUB). */
+  private async storeWaiting(
+    wawuUserId: string,
+  ): Promise<StoreEarningWaitingView[]> {
+    const rows = await this.prisma.storeEarning.findMany({
+      where: { payeeWawuUserId: wawuUserId, status: 'owed' },
+      orderBy: [{ availableAt: 'asc' }, { id: 'asc' }],
+      take: 50,
+    });
+    return rows.map((r) => ({
+      kind: r.kind as PaymentKind,
+      targetId: r.targetId,
+      title: r.title,
+      amountKobo: kobo(r.amountKobo.toString()),
+      earnedAt: r.earnedAt.toISOString(),
+      availableAt: r.availableAt.toISOString(),
+    }));
   }
 
   /** A period's streams, largest first, and their sum. */

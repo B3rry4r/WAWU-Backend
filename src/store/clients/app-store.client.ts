@@ -148,6 +148,11 @@ export class RealAppStoreClient implements AppStoreClient {
         subtype: decoded.subtype ? String(decoded.subtype) : null,
         environment: env === Environment.PRODUCTION ? 'production' : 'sandbox',
         transaction,
+        signedAt:
+          decoded.signedDate !== undefined &&
+          Number.isFinite(decoded.signedDate)
+            ? new Date(Number(decoded.signedDate))
+            : null,
       };
     }
     throw refused instanceof Error ? refused : new StoreUnreachable();

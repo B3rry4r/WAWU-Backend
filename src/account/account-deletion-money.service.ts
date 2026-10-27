@@ -19,8 +19,9 @@ import { WalletProviderError } from '../wallet-provider/wallet-provider-error';
  *
  *   wallet_balance       the wallet holds money (the provider's balance)
  *   open_hold            a paid DM, ticket or bill is held, for or against them (R-19)
- *   waiting_earnings     a sale's share, or a community host's share of spent
- *                        credits, has not reached their wallet yet (R-11)
+ *   waiting_earnings     a sale's share, a community host's share of spent
+ *                        credits, or their 85% of a sale made in a store
+ *                        (STORE-BUY-HUB), has not been paid to them yet (R-11)
  *   payment_in_progress  a payment of theirs has no final answer yet (a send
  *                        abroad included, NUV-11)
  *   cash_out_in_flight   points are held for a cash-out
@@ -344,7 +345,14 @@ export class AccountDeletionMoneyService {
         creditSpendEarningId: { not: null },
       },
     });
-    const waitingEarnings = owedSales + owedHostShares;
+    // Their 85% of a sale made in the App Store or Google Play (STORE-BUY-HUB,
+    // R-101): recorded at the sale and owed until WAWU pays it, 3 working days
+    // on. It lives in `StoreEarning`, not `EarningSettlement`, so it is counted
+    // here on its own: an account is not deleted while WAWU still owes it.
+    const owedStoreEarnings = await this.prisma.storeEarning.count({
+      where: { payeeWawuUserId: wawuUserId, status: 'owed' },
+    });
+    const waitingEarnings = owedSales + owedHostShares + owedStoreEarnings;
     // A send abroad (NUV-11) the provider has not finished, or whose WAWU fee the sweep is still taking or giving back: its row is
     // what the sweep finds the answer and the fee by, so it is not deleted from under it. The money already left the wallet, so the
     // balance below does not hold the deletion; it counts as a payment with no final answer. It stops counting once the sweep has

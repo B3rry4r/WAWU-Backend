@@ -194,14 +194,25 @@ describe('the rule and the read', () => {
   });
 
   it('GET /prices carries both lists in naira and kobo', async () => {
-    const view = new PriceListController(
+    // STORE-BUY-HUB: GET /prices now also reads the store prices, so the
+    // controller takes the (here empty) store price reader and read() is async.
+    // Every price then carries `storePriceNaira`, null when no store sells it.
+    const view = await new PriceListController(
       new PriceListService(await settings()),
-    ).read();
+      {
+        byListPrice: () => Promise.resolve(new Map<number, number>()),
+      } as never,
+    ).read({});
     expect(view.prices).toHaveLength(25);
-    expect(view.prices[0]).toEqual({ priceNaira: 100, priceKobo: 10_000 });
+    expect(view.prices[0]).toEqual({
+      priceNaira: 100,
+      priceKobo: 10_000,
+      storePriceNaira: null,
+    });
     expect(view.prices.at(-1)).toEqual({
       priceNaira: 1_000_000,
       priceKobo: 100_000_000,
+      storePriceNaira: null,
     });
     expect(view.tips.map((t) => t.priceNaira)).toEqual(R101_TIPS);
   });

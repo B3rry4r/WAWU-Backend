@@ -4,6 +4,7 @@ import { BlockedAccountModule } from '../blocked-account/blocked-account.module'
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { PlansModule } from '../plans/plans.module';
 import { PointsModule } from '../points/points.module';
+import { PriceListModule } from '../price-list/price-list.module';
 import { RealAppStoreClient } from './clients/app-store.client';
 import { RealGooglePlayClient } from './clients/google-play.client';
 import { APP_STORE_CLIENT, GOOGLE_PLAY_CLIENT } from './clients/store-clients';
@@ -15,7 +16,12 @@ import {
 } from './store-config';
 import { StoreAccountService } from './store-account.service';
 import { StoreAdminService } from './store-admin.service';
+import { StoreBuyTargetService } from './store-buy-target.service';
 import { StoreCatalogService } from './store-catalog.service';
+import { StoreCreditService } from './store-credit.service';
+import { StoreEarningService } from './store-earning.service';
+import { StoreIntentService } from './store-intent.service';
+import { StoreIntentSweepService } from './store-intent-sweep.service';
 import { StoreGrantService } from './store-grant.service';
 import { StoreNotificationService } from './store-notification.service';
 import { StorePurchaseService } from './store-purchase.service';
@@ -36,6 +42,7 @@ import { StoreWebhookController } from './store-webhook.controller';
     PlansModule,
     PointsModule,
     BlockedAccountModule,
+    PriceListModule,
   ],
   controllers: [StoreController, StoreWebhookController, AdminStoreController],
   providers: [
@@ -53,8 +60,13 @@ import { StoreWebhookController } from './store-webhook.controller';
       inject: [STORE_CONFIG],
     },
     StoreAccountService,
+    StoreBuyTargetService,
     StoreCatalogService,
+    StoreCreditService,
+    StoreEarningService,
     StoreGrantService,
+    StoreIntentService,
+    StoreIntentSweepService,
     StorePurchaseService,
     StoreNotificationService,
     StoreAdminService,
