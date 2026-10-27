@@ -3,6 +3,7 @@ import { VerificationStateModule } from '../common/verification/verification-sta
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { PlansModule } from '../plans/plans.module';
 import { EventService } from './event.service';
+import { PriceListModule } from '../price-list/price-list.module';
 
 /**
  * EventService on its own, with no controller (R-40, EVENTS-11).
@@ -20,7 +21,13 @@ import { EventService } from './event.service';
  * controller files in the order the compiler meets them).
  */
 @Module({
-  imports: [VerificationStateModule, BlockedAccountModule, PlansModule],
+  imports: [
+    VerificationStateModule,
+    BlockedAccountModule,
+    PlansModule,
+    // Ticket prices are on the price list for the app's requests (PRICE-LIST round 2).
+    PriceListModule,
+  ],
   providers: [EventService],
   exports: [EventService],
 })

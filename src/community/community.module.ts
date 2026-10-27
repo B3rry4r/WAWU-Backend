@@ -4,6 +4,7 @@ import { CommunityService } from './community.service';
 import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
 import { CommunityRoomsController } from './rooms/community-rooms.controller';
 import { CommunityRoomsService } from './rooms/community-rooms.service';
+import { PriceListModule } from '../price-list/price-list.module';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { NotificationModule } from '../notification/notification.module';
 import { CommunityMessageModule } from '../community-message/community-message.module';
@@ -30,6 +31,8 @@ import { CommunityPassAccessModule } from './pass/community-pass-access.module';
     CommunityMessageModule,
     BlockedAccountModule,
     CommunityPassAccessModule,
+    // A pass costs a price on the price list (PRICE-LIST, R-101).
+    PriceListModule,
   ],
   controllers: [CommunityRoomsController, CommunityController],
   providers: [CommunityService, CommunityRoomsService, CreatorAccountGuard],

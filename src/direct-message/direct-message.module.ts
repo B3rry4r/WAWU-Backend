@@ -8,6 +8,7 @@ import { DmAnsweredHooks } from './dm-answered-hooks';
 import { DmCreatorEarningHooks } from './dm-creator-earning-hooks';
 import { PaidDmPauseService } from './paid-dm-pause.service';
 import { PaidDmSettingsService } from './paid-dm-settings.service';
+import { PriceListModule } from '../price-list/price-list.module';
 import { PaidDmStandingSweep } from './paid-dm-standing.sweep';
 import { DmRefundService } from './dm-refund.service';
 import { CreatorAccountGuard } from '../common/guards/creator-account.guard';
@@ -41,7 +42,13 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
  * never either adapter directly.
  */
 @Module({
-  imports: [NotificationModule, BlockedAccountModule, WawuAuthModule],
+  imports: [
+    NotificationModule,
+    BlockedAccountModule,
+    WawuAuthModule,
+    // The price of a paid question is on the price list (PRICE-LIST, R-101).
+    PriceListModule,
+  ],
   controllers: [DirectMessageController, PaidDmController],
   providers: [
     DirectMessageService,

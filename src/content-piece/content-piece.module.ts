@@ -28,6 +28,7 @@ import { NotificationModule } from '../notification/notification.module';
 import { StorageModule } from '../storage/storage.module';
 import { PlansModule } from '../plans/plans.module';
 import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
+import { PriceListModule } from '../price-list/price-list.module';
 import { ContentSaleTermsService } from './content-sale-terms.service';
 import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
 
@@ -52,6 +53,8 @@ import { TierBadgeModule } from '../plans/tier-badge/tier-badge.module';
     TierBadgeModule,
     // The quick prices and the review time are admin settings (FIX-110).
     PlanSettingsModule,
+    // A price a creator sets is on the price list (PRICE-LIST, R-101); also serves GET /prices.
+    PriceListModule,
   ],
   controllers: [
     ContentPieceController,

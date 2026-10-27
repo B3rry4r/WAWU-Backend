@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { PriceListService } from '../price-list/price-list.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { VerificationStateService } from '../common/verification/verification-state.service';
 import {
@@ -75,6 +76,7 @@ export class EventService {
     private readonly verification: VerificationStateService,
     private readonly tiers: MakerTierService,
     private readonly blockedAccounts: BlockedAccountService,
+    private readonly priceList: PriceListService,
   ) {}
 
   /**
@@ -356,11 +358,17 @@ export class EventService {
    * event detail carry the event's ticket types (R-42, EVENTS-11).
    */
   async create(userWawuId: string, dto: CreateEventDto): Promise<EventView> {
+    const listCheck = this.priceList.forThisRequest();
     await this.assertMayHost(userWawuId);
     const startsAt = new Date(dto.startsAt);
     const endsAt = dto.endsAt ? new Date(dto.endsAt) : null;
     assertWindowOrdered(startsAt, endsAt);
     const ticketTypes = ticketTypeRows(dto.ticketTypes);
+    // PRICE-LIST round 2: also the website's route, so the list applies only
+    // to the app's requests (`X-Wawu-Client: app`). A free tier is 0.
+    for (const t of ticketTypes) {
+      if (t.tier !== 'free') listCheck.assertOnList(t.priceNaira);
+    }
     const address = dto.address?.trim() || null;
 
     const created = await this.prisma.event.create({

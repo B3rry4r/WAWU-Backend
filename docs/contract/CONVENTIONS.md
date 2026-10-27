@@ -355,6 +355,28 @@ The same table is `MONEY_ERROR_STATUS` in `src/money/money-contract.ts`; each
 operation in the contract lists the codes it can answer with, grouped by
 status.
 
+### 3a. `X-Wawu-Client: app` (PRICE-LIST round 2, lead ruling, 27 Oct 2026)
+
+The mobile app sends `X-Wawu-Client: app` on **every** Hub request (one line in
+its API client). The website sends nothing. The Hub reads it on every route
+(`AppClientMiddleware`, registered by `PriceListModule`, kept per request the way
+`X-Pay-Source-Currency` is) and uses it for one thing: some routes the app uses
+are routes the website also calls and must keep their behaviour for it (the
+protected registry), so the price list (R-101, `price_not_on_list`, section 3)
+applies on them only to a request that carries the header. Without it, or with
+any value but `app` (compared without case), behaviour is exactly as before.
+
+- It is a product rule, not a security check: anyone may send it, and all it
+  does is hold that caller's own prices to the list.
+- Routes where the list applies **only with the header**: `POST /content`, the
+  draft publish, `PUT /events/{id}/tickets`, `POST /events` (`ticketTypes`; a
+  free tier is 0 and passes). `PATCH /content/{id}`, `PUT /paid-dm/settings` and
+  `POST /communities/rooms` are the app's alone and always apply it.
+- CORS: `app.enableCors({ origin, credentials })` sets no `allowedHeaders`, so
+  the preflight reflects the headers the browser asks for and `X-Wawu-Client`
+  is allowed with no change (`price-list-app-client.spec.ts` pins it; an explicit
+  allow-list added later must name the header).
+
 ## 4. `Idempotency-Key` on every request that moves money
 
 **Which requests:** `POST /money/transfers/wawu`, `POST /money/transfers/bank`
@@ -2884,6 +2906,7 @@ may have:
 | `reason.code` | HTTP | When | Extra fields |
 |---|---|---|---|
 | `pack_not_allowed` | 409 | PACK-CAP (R-100): `GET /plans/purchases/quote?kind=extra_products` and `POST /plans/purchases` (kind `extra_products`) refuse the extra-products pack: the running tier may not buy it (admin setting `plan.extra_products.tiers`, Founding Maker by default) or the profile already holds the most packs (`plan.extra_products.max_packs`, 2 by default). Nothing moves. A store purchase of the pack that arrives against the rule is not refused: it is recorded with `flag: pack_not_allowed` and grants nothing | none |
+| `price_not_on_list` | 400 | PRICE-LIST (R-101): a price a person set is not on the price list (`prices.list_naira`, an admin setting). Refused on `PATCH /content/{id}` (a new price on a paid piece), `PUT /paid-dm/settings` (the price of a paid question) and `POST /communities/rooms` (a private room's monthly pass), before anything is saved. Free (0) passes only where R-8 allows it. Also refused on `POST /content`, the draft publish (`POST /product-drafts/{id}/publish`), `PUT /events/{id}/tickets` and `POST /events` (ticket types), but only when the request carries `X-Wawu-Client: app` (section 3a); without it those routes answer as they always did. `PATCH /creator/dm-settings` and `POST /tips` do not consult the list. The list is read from `GET /prices` | `nearestLowerNaira`, `nearestHigherNaira` (whole naira; null when the price is under the lowest or over the highest list price) |
 | `tier_required` | 402 | no running tier and no verification tick that has not ended | `tierState` (`none` or `ended`), `productsUsed`, `productsAllowed`, `currency`, `tiers`, `extraProducts` |
 | `product_limit_reached` | 402 | every product the person may have is published | the same fields |
 | `identity_paused` | 403 | the person's identity check is paused: waiting for documents, refused, stopped, or closed unfinished (S7 round 2). A check that passed, one under way, and one never started are not refused. Asked after the tier, before the room | `stage` (`needs_documents`, `rejected`, `stopped` or `expired`); `message` is the Hub's own sentence, no offers |

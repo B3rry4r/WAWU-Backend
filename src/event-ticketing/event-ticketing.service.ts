@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'crypto';
+import { PriceListService } from '../price-list/price-list.service';
 import {
   BadRequestException,
   ConflictException,
@@ -108,6 +109,7 @@ export class EventTicketingService {
     private readonly blockedAccounts: BlockedAccountService,
     private readonly events: EventService,
     private readonly cancelHooks: EventCancelHooks,
+    private readonly priceList: PriceListService,
   ) {}
 
   /* ------------------------------------------------------------------ *
@@ -144,6 +146,7 @@ export class EventTicketingService {
       salesEndAt?: string;
     }>,
   ) {
+    const listCheck = this.priceList.forThisRequest();
     await editableEvent(this.prisma, eventId, organiserWawuId);
 
     for (const t of types) {
@@ -164,6 +167,12 @@ export class EventTicketingService {
     // write, and before the no-change answer below, so a host without a
     // current tick gets the same 403 here as on POST and PATCH /events.
     await this.events.assertMayHost(organiserWawuId);
+
+    // PRICE-LIST round 2: also the website's route, so the list applies only
+    // to the app's requests (`X-Wawu-Client: app`). A free tier is 0.
+    for (const t of types) {
+      if (t.tier !== 'free') listCheck.assertOnList(t.priceNaira);
+    }
 
     const rows = types.map((t) => ({
       eventId,

@@ -135,6 +135,10 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // PACK-CAP (R-100). Default (agent), owner may override: 409, as
   // target_not_payable: the request is understood; the rule does not allow it.
   pack_not_allowed: 409,
+  // PRICE-LIST (R-101). Default (agent), owner may override: 400, the way a
+  // malformed field is refused: the price sent is the problem, and the body
+  // names the list prices either side of it.
+  price_not_on_list: 400,
   // WALLET-25, WALLET-26. Default (agent), owner may override: 409, as
   // currency_not_supported: the request is understood; this way cannot be used now.
   add_money_unavailable: 409,

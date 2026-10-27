@@ -111,6 +111,8 @@ function buildService(opts: {
     // a block.
     {} as never,
     gate,
+    // PriceListService (PRICE-LIST) — a create asks it whether the request is the app's; these are not.
+    { forThisRequest: () => ({ assertOnList: jest.fn() }) } as never,
   );
   return { service, state, tx, created, upserted };
 }

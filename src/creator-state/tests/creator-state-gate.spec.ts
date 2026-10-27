@@ -78,6 +78,8 @@ describe('creator state gate, with no row yet', () => {
     return new CreatorStateService(
       prisma as never,
       publishingOver(prisma).allowance,
+      // PriceListService (PRICE-LIST round 3) — only the DM settings write asks it.
+      {} as never,
     );
   }
 
