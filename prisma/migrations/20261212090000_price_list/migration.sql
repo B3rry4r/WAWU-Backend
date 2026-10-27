@@ -30,17 +30,18 @@ CREATE TABLE "PriceListMove" (
 CREATE INDEX "PriceListMove_kind_subjectId_idx" ON "PriceListMove"("kind", "subjectId");
 CREATE INDEX "PriceListMove_ownerWawuId_idx" ON "PriceListMove"("ownerWawuId");
 
--- The list price nearest to p: the lower on a tie, the top for a price above it, the bottom for one below it.
+-- The list price (whole naira) nearest to p, a price in KOBO, compared in kobo so a pass of 175,049 kobo is judged as it is and
+-- not rounded to naira first: the lower on an exact midpoint, the top for a price above it, the bottom for one below it.
 CREATE FUNCTION pg_temp.price_list_nearest(p bigint, list integer[]) RETURNS integer AS $$
   SELECT CASE
     WHEN lo IS NULL THEN hi
     WHEN hi IS NULL THEN lo
-    WHEN p - lo <= hi - p THEN lo
+    WHEN p - lo::bigint * 100 <= hi::bigint * 100 - p THEN lo
     ELSE hi
   END
   FROM (
-    SELECT (SELECT max(l) FROM unnest(list) AS l WHERE l <= p) AS lo,
-           (SELECT min(l) FROM unnest(list) AS l WHERE l >= p) AS hi
+    SELECT (SELECT max(l) FROM unnest(list) AS l WHERE l::bigint * 100 <= p) AS lo,
+           (SELECT min(l) FROM unnest(list) AS l WHERE l::bigint * 100 >= p) AS hi
   ) AS around
 $$ LANGUAGE sql IMMUTABLE;
 
@@ -57,7 +58,7 @@ BEGIN
 
   -- Paid pieces.
   WITH off AS (
-    SELECT "id", "creatorWawuId", "title", "price", pg_temp.price_list_nearest("price", list) AS np
+    SELECT "id", "creatorWawuId", "title", "price", pg_temp.price_list_nearest("price"::bigint * 100, list) AS np
       FROM "ContentPiece"
      WHERE "accessType" = 'paid' AND "price" > 0 AND "status" <> 'removed' AND NOT ("price" = ANY (list))
        FOR UPDATE
@@ -69,7 +70,7 @@ BEGIN
 
   -- Paid messages: the creator's price for one question.
   WITH off AS (
-    SELECT "wawuUserId", "dmPrice", pg_temp.price_list_nearest("dmPrice", list) AS np
+    SELECT "wawuUserId", "dmPrice", pg_temp.price_list_nearest("dmPrice"::bigint * 100, list) AS np
       FROM "CreatorState"
      WHERE "dmPrice" IS NOT NULL AND "dmPrice" > 0 AND NOT ("dmPrice" = ANY (list))
        FOR UPDATE
@@ -82,7 +83,7 @@ BEGIN
   -- A private room's monthly pass. A price in kobo that is not whole naira is not on the list either.
   WITH off AS (
     SELECT p."communityId", c."hostWawuId", c."name", p."priceKobo",
-           pg_temp.price_list_nearest(((p."priceKobo" + 50) / 100), list) AS np
+           pg_temp.price_list_nearest(p."priceKobo", list) AS np
       FROM "CommunityPassPrice" p JOIN "Community" c ON c."id" = p."communityId"
      WHERE p."priceKobo" > 0 AND (p."priceKobo" % 100 <> 0 OR NOT ((p."priceKobo" / 100)::integer = ANY (list)))
        FOR UPDATE OF p
@@ -95,7 +96,7 @@ BEGIN
   -- Ticket types nothing has sold on.
   WITH off AS (
     SELECT t."id", e."hostWawuId", t."name" || ' at ' || e."name" AS label, t."priceNaira",
-           pg_temp.price_list_nearest(t."priceNaira", list) AS np
+           pg_temp.price_list_nearest(t."priceNaira"::bigint * 100, list) AS np
       FROM "EventTicketType" t JOIN "Event" e ON e."id" = t."eventId"
      WHERE t."priceNaira" > 0 AND t."sold" = 0 AND t."retiredAt" IS NULL
        AND e."status" NOT IN ('removed', 'cancelled') AND NOT (t."priceNaira" = ANY (list))

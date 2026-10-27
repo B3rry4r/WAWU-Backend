@@ -113,6 +113,10 @@ describe('PRICE-LIST: the migration, the notices and the rollback', () => {
     ids.pass3500 = (await room('a', 350_000n)).id;
     ids.passOdd = (await room('b', 300_050n)).id;
     ids.passOk = (await room('c', 500_000n)).id;
+    // Judged in kobo, not rounded to naira first (round 3): 175,049 kobo is nearer ₦2,000 (249.51 away) than ₦1,500 (250.49 away);
+    // 175,000 is the exact midpoint, which goes lower.
+    ids.pass17549 = (await room('d', 175_049n)).id;
+    ids.pass1750 = (await room('e', 175_000n)).id;
     const event = await tx.event.create({
       data: {
         hostWawuId: owner,
@@ -180,6 +184,16 @@ describe('PRICE-LIST: the migration, the notices and the rollback', () => {
         where: { communityId: ids.passOk },
       })
     ).priceKobo,
+    pass17549: (
+      await tx.communityPassPrice.findUniqueOrThrow({
+        where: { communityId: ids.pass17549 },
+      })
+    ).priceKobo,
+    pass1750: (
+      await tx.communityPassPrice.findUniqueOrThrow({
+        where: { communityId: ids.pass1750 },
+      })
+    ).priceKobo,
     tUnsold: (
       await tx.eventTicketType.findUniqueOrThrow({ where: { id: ids.tUnsold } })
     ).priceNaira,
@@ -206,6 +220,8 @@ describe('PRICE-LIST: the migration, the notices and the rollback', () => {
     pass3500: 350_000n,
     passOdd: 300_050n,
     passOk: 500_000n,
+    pass17549: 175_049n,
+    pass1750: 175_000n,
     tUnsold: 3500,
     tSold: 3500,
     tRetired: 3500,
@@ -218,6 +234,8 @@ describe('PRICE-LIST: the migration, the notices and the rollback', () => {
     above: 1_000_000,
     pass3500: 300_000n,
     passOdd: 300_000n,
+    pass17549: 200_000n,
+    pass1750: 150_000n,
     tUnsold: 3000,
   };
 
@@ -234,8 +252,10 @@ describe('PRICE-LIST: the migration, the notices and the rollback', () => {
       const moves = await tx.priceListMove.findMany({
         where: { ownerWawuId: owner },
       });
-      // 3 pieces, 1 paid-message price, 2 passes, 1 ticket type. The sold, retired, free and on-list items have no row.
+      // 3 pieces, 1 paid-message price, 4 passes, 1 ticket type. The sold, retired, free and on-list items have no row.
       expect(moves.map((m) => m.kind).sort()).toEqual([
+        'community_pass',
+        'community_pass',
         'community_pass',
         'community_pass',
         'content',
@@ -318,11 +338,11 @@ describe('PRICE-LIST: the migration, the notices and the rollback', () => {
         where: { userWawuId: owner, kind: 'price_moved' },
       });
       expect(before).toBe(0);
-      expect(await service.sendPending()).toBeGreaterThanOrEqual(7);
+      expect(await service.sendPending()).toBeGreaterThanOrEqual(9);
       const told = await tx.notification.findMany({
         where: { userWawuId: owner, kind: 'price_moved' },
       });
-      expect(told).toHaveLength(7);
+      expect(told).toHaveLength(9);
       expect(told.map((n) => n.body)).toEqual(
         expect.arrayContaining([
           'The price of Piece a is now ₦1,000, the nearest on the price list.',
@@ -337,7 +357,7 @@ describe('PRICE-LIST: the migration, the notices and the rollback', () => {
         await tx.notification.count({
           where: { userWawuId: owner, kind: 'price_moved' },
         }),
-      ).toBe(7);
+      ).toBe(9);
     });
   });
 

@@ -3,6 +3,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 import type { CreatorStateResponse } from '../common/types/creator-state.type';
 import type { UpdateDmSettingsDto } from './dto/update-dm-settings.dto';
 import { PublishingAllowanceService } from '../plans/publishing-allowance.service';
+import { PriceListService } from '../price-list/price-list.service';
 
 /**
  * CreatorState is the creator-only entitlement/gate resource. kycStatus gates
@@ -21,6 +22,7 @@ export class CreatorStateService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly publishing: PublishingAllowanceService,
+    private readonly priceList: PriceListService,
   ) {}
 
   /**
@@ -122,6 +124,10 @@ export class CreatorStateService {
     wawuUserId: string,
     dto: UpdateDmSettingsDto,
   ): Promise<CreatorStateResponse> {
+    // PRICE-LIST round 3: this is the website's route for the price of a paid
+    // question, so the list applies only to the app's requests
+    // (`X-Wawu-Client: app`); without the header nothing here changes.
+    const listCheck = this.priceList.forThisRequest();
     const [existing, submissionCount, allowance] = await Promise.all([
       this.prisma.creatorState.findUnique({ where: { wawuUserId } }),
       this.prisma.kycSubmission.count({ where: { wawuUserId } }),
@@ -132,6 +138,7 @@ export class CreatorStateService {
         'This account has no creator state - a creator account type is required.',
       );
     }
+    listCheck.assertOnList(dto.dmPrice);
     const updated = await this.prisma.creatorState.update({
       where: { wawuUserId },
       data: {

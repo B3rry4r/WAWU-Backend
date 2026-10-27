@@ -5,6 +5,7 @@ import type { App } from 'supertest/types';
 import { configureHubApp } from '../../hub-app-config';
 import { ContentPieceService } from '../../content-piece/content-piece.service';
 import { ProductDraftService } from '../../content-piece/product-draft.service';
+import { CreatorStateService } from '../../creator-state/creator-state.service';
 import { EventService } from '../../event/event.service';
 import { EventTicketingService } from '../../event-ticketing/event-ticketing.service';
 import { MoneyError } from '../../money/money-error';
@@ -351,6 +352,54 @@ describe('POST /events with ticket types', () => {
     const s = await build();
     expect(
       await outcome(asClient(undefined, () => s.create('h1', dto(3500)))),
+    ).toBe('accepted');
+  });
+});
+
+describe("PATCH /creator/dm-settings (the website's route for the paid question price)", () => {
+  const build = async () => {
+    const existing = { wawuUserId: 'c1', dmPrice: 500, dmEnabled: true };
+    const prisma = {
+      creatorState: {
+        findUnique: jest.fn(() => Promise.resolve(existing)),
+        update: jest.fn(() => Promise.reject(new Error(REACHED))),
+      },
+      kycSubmission: { count: jest.fn(() => Promise.resolve(0)) },
+    };
+    const publishing = { of: jest.fn(() => Promise.resolve({})) };
+    return {
+      prisma,
+      service: make<CreatorStateService>(
+        CreatorStateService,
+        prisma,
+        publishing,
+        await realList(),
+      ),
+    };
+  };
+  const dto = (dmPrice: number) => ({ dmEnabled: true, dmPrice }) as never;
+
+  it('refuses a price off the list with the header, writing nothing, and takes a list price', async () => {
+    const { service, prisma } = await build();
+    expect(
+      await outcome(
+        asClient('app', () => service.updateDmSettings('c1', dto(450))),
+      ),
+    ).toBe('price_not_on_list');
+    expect(prisma.creatorState.update).not.toHaveBeenCalled();
+    expect(
+      await outcome(
+        asClient('app', () => service.updateDmSettings('c1', dto(500))),
+      ),
+    ).toBe('accepted');
+  });
+
+  it('answers as before without the header', async () => {
+    const { service } = await build();
+    expect(
+      await outcome(
+        asClient(undefined, () => service.updateDmSettings('c1', dto(450))),
+      ),
     ).toBe('accepted');
   });
 });
