@@ -595,7 +595,11 @@ export class StoreGrantService {
       where: { originPurchaseId: purchase.id },
       orderBy: { createdAt: 'asc' },
     });
-    if (credits.length === 0) return {};
+    // The sales this payment's credits paid for: from the credit rows, and from
+    // the sales themselves (`creditOriginId`), which survive the fan's account
+    // being deleted when the credit rows do not.
+    const spentIds = await this.spentSalesOf(tx, purchase.id, credits);
+    if (credits.length === 0 && spentIds.length === 0) return {};
     let voided = 0;
     const takenBack: string[] = [];
     const review: string[] = [];
@@ -606,16 +610,12 @@ export class StoreGrantService {
           data: { status: 'void', voidedAt: now },
         });
         voided += 1;
-      } else if (credit.status === 'spent' && credit.spentPurchaseId !== null) {
-        const out = await this.takeBackSpentSale(
-          tx,
-          credit.spentPurchaseId,
-          purchase.id,
-          now,
-        );
-        if (out === 'review') review.push(credit.spentPurchaseId);
-        else if (out === 'taken_back') takenBack.push(credit.spentPurchaseId);
       }
+    }
+    for (const spentId of spentIds) {
+      const out = await this.takeBackSpentSale(tx, spentId, purchase.id, now);
+      if (out === 'review') review.push(spentId);
+      else if (out === 'taken_back') takenBack.push(spentId);
     }
     if (takenBack.length > 0 || review.length > 0)
       await tx.storePurchase.update({
@@ -632,6 +632,26 @@ export class StoreGrantService {
       creditsVoided: voided,
       spentSalesTakenBack: takenBack,
     };
+  }
+
+  /** The ids of the sales that credits made of this purchase's payment paid for, however they are still linked. */
+  private async spentSalesOf(
+    tx: Prisma.TransactionClient,
+    originId: string,
+    credits: Array<{ status: string; spentPurchaseId: string | null }>,
+  ): Promise<string[]> {
+    const ids = new Set(
+      credits
+        .filter((c) => c.status === 'spent' && c.spentPurchaseId !== null)
+        .map((c) => c.spentPurchaseId as string),
+    );
+    const linked = await tx.storePurchase.findMany({
+      where: { creditOriginId: originId },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    for (const l of linked) ids.add(l.id);
+    return [...ids];
   }
 
   /** Takes back a sale a store credit paid for, as if the sale itself had been refunded. Once: only a granted sale is touched. */
@@ -674,17 +694,14 @@ export class StoreGrantService {
       where: { originPurchaseId: purchase.id, status: 'void' },
       data: { status: 'open', voidedAt: null },
     });
-    const spent = await tx.storeCredit.findMany({
-      where: {
-        originPurchaseId: purchase.id,
-        status: 'spent',
-        spentPurchaseId: { not: null },
-      },
+    const credits = await tx.storeCredit.findMany({
+      where: { originPurchaseId: purchase.id },
     });
+    const spent = await this.spentSalesOf(tx, purchase.id, credits);
     const restoredSales: string[] = [];
-    for (const credit of spent) {
+    for (const spentId of spent) {
       const sale = await tx.storePurchase.findUnique({
-        where: { id: credit.spentPurchaseId as string },
+        where: { id: spentId },
       });
       if (
         sale === null ||
@@ -830,6 +847,15 @@ export class StoreGrantService {
           'store_credit_unavailable',
           'That credit has already been used.',
         );
+      // Remember on the sale itself which purchase's payment paid for it, so a
+      // refund of that purchase still finds it after the fan's account (and the
+      // credit rows with it) is deleted.
+      await tx.storePurchase.update({
+        where: { id: purchase.id },
+        data: {
+          creditOriginId: credit.originPurchaseId ?? credit.sourcePurchaseId,
+        },
+      });
       // What the price did not use is not forfeited: a new open credit of the
       // rest, with the same origin (never cash, never expires).
       const rest = credit.amountKobo - intent.listPriceKobo;

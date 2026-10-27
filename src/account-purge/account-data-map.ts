@@ -207,7 +207,10 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // and the earning links stay. The buyer's own unlock, tip record and pass days
   // go with the account as before, and a refund after that takes back the
   // creator's share only. The ladder columns `intentId`, `buyKind` and
-  // `targetId`, and `lastNoticeAt`, are on this row and stay with it.
+  // `targetId`, `lastNoticeAt` and `creditOriginId` (the purchase whose payment a
+  // store credit that paid for this sale was made of, which is how a refund of that
+  // purchase still finds this sale after the credit rows have gone) are on this row
+  // and stay with it.
   // `creatorWawuUserId` names a room's host (a pass) or the person tipped or whose
   // piece was bought, on somebody else's purchase: their record survives.
   {

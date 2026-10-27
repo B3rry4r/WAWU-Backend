@@ -8443,6 +8443,12 @@ model StorePurchase {
   /// changes nothing, so notices that arrive out of order end where the store's
   /// own order ends (STORE-BUY-HUB round 3).
   lastNoticeAt       DateTime?
+  /// A ladder purchase paid with a store credit: the store purchase whose payment
+  /// that credit is made of (the credit's origin). Kept on the purchase itself so
+  /// that a store refund of the origin can still find and take back this sale
+  /// after the fan's account is deleted and the credit rows have gone with it
+  /// (STORE-BUY-HUB round 5, R4-1). Null on every other purchase.
+  creditOriginId     String?
   purchasedAt        DateTime
   /// When a subscription period ends, as the store last said.
   expiresAt          DateTime?
@@ -8463,6 +8469,7 @@ model StorePurchase {
   @@index([platform, subscriptionKey])
   @@index([status, createdAt])
   @@index([productId])
+  @@index([creditOriginId])
 }
 
 /// A store notification, kept once (IAP-01): Google's Pub/Sub message id or

@@ -2470,6 +2470,139 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
         ).toBe('granted');
     });
 
+    for (const [label, creatorPaid] of [
+      ['unpaid', false],
+      ['already paid', true],
+    ] as const) {
+      it(`R4-1 (H2c, creator share ${label}): the claw-back survives the fan's account being deleted`, async () => {
+        const gone = randomUUID();
+        const asGone = as(mintToken(gone));
+        const acct = dataOf<{ accountToken: string }>(
+          await asGone.get('/store/products?platform=ios').expect(200),
+        ).accountToken;
+        // The fan pays, the piece is gone, the payment becomes a 1,000 credit; the
+        // credit is spent on a tip to the same creator (the collusion path).
+        const intent = await intentFor(content('ios'), asGone);
+        await prisma.contentPiece.update({
+          where: { id: piece },
+          data: { status: 'removed' },
+        });
+        iosSale(`40000000011${creatorPaid ? 1 : 0}`, 'wawu.buy.1000', {
+          accountToken: acct,
+        });
+        const source = dataOf<PurchaseView>(
+          await postIos(
+            `40000000011${creatorPaid ? 1 : 0}`,
+            intent.intentId,
+            'wawu.buy.1000',
+            asGone,
+          ).expect(201),
+        );
+        await prisma.contentPiece.update({
+          where: { id: piece },
+          data: { status: 'live' },
+        });
+        expect(source.status).toBe('credited');
+        const sale = dataOf<Intent & { purchase: PurchaseView }>(
+          await ask(asGone, { ...tip('ios', 1000), payWith: 'credit' }).expect(
+            201,
+          ),
+        ).purchase;
+        expect(sale.status).toBe('granted');
+        if (creatorPaid)
+          await prisma.storeEarning.updateMany({
+            where: { storePurchaseId: sale.id },
+            data: { status: 'paid', paidAt: new Date() },
+          });
+
+        // The fan deletes the account: the credit rows go, the purchases stay with the buyer cleared.
+        expect(
+          (await new AccountPurgeService(prisma).purge(gone)).failed,
+        ).toEqual([]);
+        expect(
+          await prisma.storeCredit.count({ where: { wawuUserId: gone } }),
+        ).toBe(0);
+        expect(
+          await prisma.storePurchase.findUniqueOrThrow({
+            where: { id: sale.id },
+          }),
+        ).toMatchObject({ wawuUserId: null, status: 'granted' });
+
+        // The store then pays the original back: what the credit paid for is taken back.
+        expect(
+          outcomeOf(
+            await appleNote(
+              `r41-${label}`,
+              'REFUND',
+              `40000000011${creatorPaid ? 1 : 0}`,
+              {},
+              T(1),
+            ),
+          ),
+        ).toBe('taken_back');
+        expect(
+          await prisma.storePurchase.findUniqueOrThrow({
+            where: { id: sale.id },
+          }),
+        ).toMatchObject({ status: 'refunded', flag: 'credit_source_refunded' });
+        expect(
+          (
+            await prisma.storePurchase.findUniqueOrThrow({
+              where: { id: source.id },
+            })
+          ).flag,
+        ).toBe('credit_spent_taken_back');
+        if (creatorPaid) {
+          expect(
+            await prisma.earningDeduction.findFirstOrThrow({}),
+          ).toMatchObject({
+            payeeWawuUserId: HOST,
+            storePurchaseId: sale.id,
+            amountKobo: 85_000n,
+          });
+        } else {
+          expect(
+            (
+              await prisma.storeEarning.findFirstOrThrow({
+                where: { storePurchaseId: sale.id },
+              })
+            ).status,
+          ).toBe('cancelled');
+        }
+        // Once, and a reversal puts it back.
+        expect(
+          outcomeOf(
+            await appleNote(
+              `r41-${label}-2`,
+              'REFUND',
+              `40000000011${creatorPaid ? 1 : 0}`,
+              {},
+              T(2),
+            ),
+          ),
+        ).toBe('duplicate');
+        expect(
+          outcomeOf(
+            await appleNote(
+              `r41-${label}-3`,
+              'REFUND_REVERSED',
+              `40000000011${creatorPaid ? 1 : 0}`,
+              {},
+              T(3),
+            ),
+          ),
+        ).toBe('restored');
+        expect(
+          (
+            await prisma.storePurchase.findUniqueOrThrow({
+              where: { id: sale.id },
+            })
+          ).status,
+        ).toBe('granted');
+        expect(await prisma.earningDeduction.count({})).toBe(0);
+      });
+    }
+
     it('LOW: a credited answer carries no content id, creator or room', async () => {
       const view = await creditedOnIos('4000000000097');
       expect(view.grant.contentId ?? null).toBeNull();
