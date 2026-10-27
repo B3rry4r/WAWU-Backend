@@ -8555,6 +8555,14 @@ model StoreCredit {
   wawuUserId       String
   amountKobo       Int
   sourcePurchaseId String    @unique
+  /// The store purchase whose payment this credit is made of. The same as
+  /// `sourcePurchaseId` for a credit made when a payment could not be given; for
+  /// the rest of a larger credit after part of it paid for something, the origin
+  /// of the credit it came from (its `sourcePurchaseId` is then
+  /// `<origin>:rem:<the sale it was left over from>`). A store refund of the
+  /// origin takes back every credit with it: open ones are voided, spent ones
+  /// have what they paid for taken back (STORE-BUY-HUB round 4).
+  originPurchaseId String?
   status           String    @default("open")
   spentPurchaseId  String?   @unique
   spentAt          DateTime?
@@ -8563,6 +8571,7 @@ model StoreCredit {
   updatedAt        DateTime  @updatedAt
 
   @@index([wawuUserId, status])
+  @@index([originPurchaseId])
 }
 
 /// The creator's 85% of a store sale (STORE-BUY-HUB, R-101 points 2 and 4): 85%

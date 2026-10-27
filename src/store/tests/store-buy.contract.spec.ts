@@ -928,7 +928,7 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
       expect(
         codeOf(await postAndroid('tok-none', intent.intentId).expect(422)),
       ).toBe('store_account_token_missing');
-      // Another person's intent, and none.
+      // Another person posting a payment the store made for the buyer's account.
       androidSale('tok-ok', 'wawu.buy.1000', 'GPA.ok');
       expect(
         codeOf(
@@ -937,15 +937,9 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
             intent.intentId,
             'wawu.buy.1000',
             other,
-          ).expect(404),
+          ).expect(409),
         ),
-      ).toBe('store_intent_not_found');
-      expect(
-        codeOf(await postAndroid('tok-ok', randomUUID()).expect(404)),
-      ).toBe('store_intent_not_found');
-      expect(codeOf(await postAndroid('tok-ok', undefined).expect(400))).toBe(
-        'store_receipt_missing',
-      );
+      ).toBe('store_purchase_taken');
       // An intent id that is not an id.
       await buyer
         .post('/store/purchases', {
@@ -974,16 +968,18 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
       androidSale('tok-a', 'wawu.buy.1000', 'GPA.a');
       androidSale('tok-b', 'wawu.buy.1000', 'GPA.b');
       await postAndroid('tok-a', intent.intentId).expect(201);
-      // A second payment against the same intent.
-      expect(
-        codeOf(await postAndroid('tok-b', intent.intentId).expect(409)),
-      ).toBe('store_intent_used');
+      // A second payment against the same intent is not refused and not lost:
+      // it is recorded and the fan is credited (M3), and nothing is given twice.
+      const second = dataOf<PurchaseView>(
+        await postAndroid('tok-b', intent.intentId).expect(201),
+      );
+      expect(second).toMatchObject({ status: 'credited', flag: 'late_sale' });
       // The first payment named for another intent of the same person.
       const tipIntent = await intentFor(tip('android', 1000));
       expect(
         codeOf(await postAndroid('tok-a', tipIntent.intentId).expect(409)),
       ).toBe('store_purchase_other_intent');
-      expect(await prisma.storePurchase.count({})).toBe(1);
+      expect(await prisma.storePurchase.count({})).toBe(2);
       expect(await prisma.storeEarning.count({})).toBe(1);
     });
 
@@ -1019,10 +1015,12 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
       });
       // Sold just now, after it ran out.
       androidSale('tok-late', 'wawu.buy.1000', 'GPA.late');
+      // Not refused and not lost (M3): recorded, and the fan is credited.
       expect(
-        codeOf(await postAndroid('tok-late', intent.intentId).expect(409)),
-      ).toBe('store_intent_expired');
-      expect(await prisma.storePurchase.count({})).toBe(0);
+        dataOf<PurchaseView>(
+          await postAndroid('tok-late', intent.intentId).expect(201),
+        ),
+      ).toMatchObject({ status: 'credited', flag: 'late_sale' });
       expect(
         dataOf<PurchaseView>(
           await postAndroid('tok-slow', intent.intentId).expect(201),
@@ -1090,11 +1088,7 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
       ).toBe(1);
     });
 
-    it('a ladder product with no intent id is refused, and an intent id on any other product is refused', async () => {
-      androidSale('tok-n', 'wawu.buy.1000', 'GPA.n');
-      expect(codeOf(await postAndroid('tok-n', undefined).expect(400))).toBe(
-        'store_receipt_missing',
-      );
+    it('an intent id on any other product is refused', async () => {
       const intent = await intentFor(content('android'));
       await prisma.storeProduct.create({
         data: {
@@ -1756,9 +1750,16 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
       androidSale('tok-old', 'wawu.buy.1000', 'GPA.old-sale', {
         purchasedAt: new Date(Date.now() - 2 * 3_600_000),
       });
+      // Goods are not granted for it (M3: the money is not lost, it is credited).
+      const old = dataOf<PurchaseView>(
+        await postAndroid('tok-old', intent.intentId).expect(201),
+      );
+      expect(old).toMatchObject({ status: 'credited', flag: 'late_sale' });
       expect(
-        codeOf(await postAndroid('tok-old', intent.intentId).expect(422)),
-      ).toBe('store_purchase_invalid');
+        await prisma.purchase.count({
+          where: { flutterwaveTxRef: { startsWith: 'store:' } },
+        }),
+      ).toBe(0);
       // Inside the clock difference it counts.
       androidSale('tok-near', 'wawu.buy.1000', 'GPA.near-sale', {
         purchasedAt: new Date(Date.now() - 2 * 60_000),
@@ -2029,15 +2030,26 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
           amountKobo: 42_500n,
           kind: 'tip',
         });
-        // Used once: the next ask has nothing to pay with.
+        // Used once, and the part not used is not forfeited: a new open credit of
+        // the rest (same origin, never cash, never expires). Nothing at 1,000 fits it.
+        const rest = await prisma.storeCredit.findMany({
+          where: { status: 'open' },
+        });
+        expect(rest).toHaveLength(1);
+        expect(rest[0].amountKobo).toBe(50_000);
         expect(
           codeOf(
             await ask(buyer, {
-              ...tip('android', 200),
+              ...pass('android', 1000),
               payWith: 'credit',
             }).expect(409),
           ),
         ).toBe('store_credit_insufficient');
+        expect(
+          dataOf<{ credits: Array<{ amountKobo: number }> }>(
+            await buyer.get('/store/credits').expect(200),
+          ).credits.map((c) => c.amountKobo),
+        ).toEqual([50_000]);
       });
 
       it('picks the smallest credit that fits, refuses a price above every credit, and spends nothing on something that is gone', async () => {
@@ -2112,7 +2124,7 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
         expect(lesser.status).toBe('open');
       });
 
-      it('a store refund voids the credit it made while unspent, a reversal brings it back, and a spent one goes to a person', async () => {
+      it('a store refund voids the credit it made while unspent, a reversal brings it back, and a spent one has what it paid for taken back', async () => {
         const intent = await intentFor(content('ios'));
         await prisma.contentPiece.update({
           where: { id: piece },
@@ -2152,7 +2164,15 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
               where: { id: view.id },
             })
           ).flag,
-        ).toBe('earning_review');
+        ).toBe('credit_spent_taken_back');
+        // What the spent credit paid for was taken back with it (H2, round 4).
+        expect(
+          (
+            await prisma.storePurchase.findMany({
+              where: { status: 'refunded' },
+            })
+          ).length,
+        ).toBe(2);
       });
 
       it('admin/store/purchases can be filtered by flag', async () => {
@@ -2199,6 +2219,472 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
           await prisma.adminUser.deleteMany({ where: { id: adminId } });
         }
       });
+    });
+  });
+
+  // ============================================ round 4 (re-verify of 6d75649)
+
+  describe('round 4: a spent credit cannot launder a refund; a late sale is credited, never lost', () => {
+    const T = (minute: number) => new Date(Date.UTC(2026, 9, 28, 9, minute, 0));
+    let piece2: string;
+    beforeAll(async () => {
+      const row = await prisma.contentPiece.create({
+        data: {
+          slug: `sb2-p2-${uid()}`,
+          creatorWawuId: HOST,
+          contentType: 'video',
+          title: 'Second ladder piece',
+          description: 'A piece',
+          category: 'business_entrepreneurship',
+          previewAssetUrl: 'https://cdn.example.com/p.jpg',
+          fullAssetUrl: 'https://cdn.example.com/f.mp4',
+          accessType: 'paid',
+          price: 1000,
+          status: 'live',
+        },
+      });
+      piece2 = row.id;
+      pieceIds.push(piece2);
+    });
+
+    /** The fan pays for `piece` on Apple, the piece is gone, and the payment becomes a 1,000 credit. */
+    async function creditedOnIos(txid: string): Promise<PurchaseView> {
+      const intent = await intentFor(content('ios'));
+      await prisma.contentPiece.update({
+        where: { id: piece },
+        data: { status: 'removed' },
+      });
+      iosSale(txid, 'wawu.buy.1000');
+      const view = dataOf<PurchaseView>(
+        await postIos(txid, intent.intentId).expect(201),
+      );
+      await prisma.contentPiece.update({
+        where: { id: piece },
+        data: { status: 'live' },
+      });
+      expect(view.status).toBe('credited');
+      return view;
+    }
+    const spend = async (body: object) =>
+      dataOf<Intent & { purchase: PurchaseView }>(
+        await ask(buyer, { ...body, payWith: 'credit' }).expect(201),
+      ).purchase;
+    const spentOn = (kind: 'tip' | 'content' | 'pass') =>
+      kind === 'tip'
+        ? tip('ios', 1000)
+        : kind === 'content'
+          ? { ...content('ios', 1000), contentId: piece2 }
+          : pass('ios', 1000);
+
+    for (const kind of ['tip', 'content', 'pass'] as const) {
+      it(`H2 (${kind}): refunding the original of a spent credit takes back what the credit paid for, and the creator's share, once; a reversal restores both`, async () => {
+        const source = await creditedOnIos(`4000000000${kind.length}1`);
+        const sale = await spend(spentOn(kind));
+        expect(sale.status).toBe('granted');
+        expect(
+          await prisma.storeEarning.count({ where: { status: 'owed' } }),
+        ).toBe(1);
+
+        expect(
+          outcomeOf(
+            await appleNote(
+              `h2-${kind}-1`,
+              'REFUND',
+              `4000000000${kind.length}1`,
+              {},
+              T(1),
+            ),
+          ),
+        ).toBe('taken_back');
+        const spentRow = await prisma.storePurchase.findUniqueOrThrow({
+          where: { id: sale.id },
+        });
+        expect(spentRow).toMatchObject({
+          status: 'refunded',
+          flag: 'credit_source_refunded',
+        });
+        expect(
+          (
+            await prisma.storePurchase.findUniqueOrThrow({
+              where: { id: source.id },
+            })
+          ).flag,
+        ).toBe('credit_spent_taken_back');
+        expect(
+          (
+            await prisma.storeEarning.findFirstOrThrow({
+              where: { storePurchaseId: sale.id },
+            })
+          ).status,
+        ).toBe('cancelled');
+        if (kind === 'pass') {
+          const rows = await prisma.communityPass.findMany({
+            where: { userWawuId: BUYER },
+          });
+          for (const r of rows)
+            expect(r.endsAt.getTime()).toBeLessThanOrEqual(Date.now());
+        } else {
+          expect((await ownedRow(sale.id)).status).toBe('failed');
+        }
+        // Once: the same refund again, later, changes nothing.
+        expect(
+          outcomeOf(
+            await appleNote(
+              `h2-${kind}-2`,
+              'REFUND',
+              `4000000000${kind.length}1`,
+              {},
+              T(2),
+            ),
+          ),
+        ).toBe('duplicate');
+        expect(await prisma.earningDeduction.count({})).toBe(0);
+
+        expect(
+          outcomeOf(
+            await appleNote(
+              `h2-${kind}-3`,
+              'REFUND_REVERSED',
+              `4000000000${kind.length}1`,
+              {},
+              T(3),
+            ),
+          ),
+        ).toBe('restored');
+        expect(
+          (
+            await prisma.storePurchase.findUniqueOrThrow({
+              where: { id: sale.id },
+            })
+          ).status,
+        ).toBe('granted');
+        expect(
+          (
+            await prisma.storeEarning.findFirstOrThrow({
+              where: { storePurchaseId: sale.id },
+            })
+          ).status,
+        ).toBe('owed');
+        if (kind !== 'pass')
+          expect((await ownedRow(sale.id)).status).toBe('completed');
+        // The credit stays spent: it is not paid twice.
+        expect(
+          (
+            await prisma.storeCredit.findFirstOrThrow({
+              where: { sourcePurchaseId: source.id },
+            })
+          ).status,
+        ).toBe('spent');
+      });
+    }
+
+    it('H2: the collusion path with the creator already paid leaves a deduction of the credit-paid sale, once, and nothing is left to review', async () => {
+      const source = await creditedOnIos('4000000000099');
+      const sale = await spend(tip('ios', 1000));
+      await prisma.storeEarning.updateMany({
+        where: { storePurchaseId: sale.id },
+        data: { status: 'paid', paidAt: new Date() },
+      });
+      expect(
+        outcomeOf(
+          await appleNote('h2-p-1', 'REFUND', '4000000000099', {}, T(1)),
+        ),
+      ).toBe('taken_back');
+      expect(await prisma.earningDeduction.findFirstOrThrow({})).toMatchObject({
+        payeeWawuUserId: HOST,
+        storePurchaseId: sale.id,
+        amountKobo: 85_000n,
+      });
+      expect(
+        (
+          await prisma.storePurchase.findUniqueOrThrow({
+            where: { id: source.id },
+          })
+        ).flag,
+      ).not.toBe('earning_review');
+      expect(
+        outcomeOf(
+          await appleNote('h2-p-2', 'REFUND', '4000000000099', {}, T(2)),
+        ),
+      ).toBe('duplicate');
+      expect(await prisma.earningDeduction.count({})).toBe(1);
+      // Reversed with nothing yet taken: the deduction is voided.
+      await appleNote('h2-p-3', 'REFUND_REVERSED', '4000000000099', {}, T(3));
+      expect(await prisma.earningDeduction.count({})).toBe(0);
+    });
+
+    it('LOW: a credit larger than the price is not forfeited: the rest is a new open credit of the same origin, and a refund of the origin takes everything back', async () => {
+      const source = await creditedOnIos('4000000000098');
+      const sale = await spend(tip('ios', 500));
+      const credits = await prisma.storeCredit.findMany({
+        orderBy: { createdAt: 'asc' },
+      });
+      expect(credits.map((c) => [c.amountKobo, c.status])).toEqual([
+        [100_000, 'spent'],
+        [50_000, 'open'],
+      ]);
+      expect(credits[1].originPurchaseId).toBe(source.id);
+      // The rest pays for another thing at that price or less.
+      const second = await spend(tip('ios', 200));
+      expect(second.status).toBe('granted');
+      const rest = await prisma.storeCredit.findMany({
+        where: { status: 'open' },
+      });
+      expect(rest.map((c) => c.amountKobo)).toEqual([30_000]);
+      // The origin is refunded: the open rest is voided and both sales are taken back.
+      expect(
+        outcomeOf(
+          await appleNote('low-1', 'REFUND', '4000000000098', {}, T(1)),
+        ),
+      ).toBe('taken_back');
+      expect(
+        await prisma.storeCredit.count({ where: { status: 'open' } }),
+      ).toBe(0);
+      for (const id of [sale.id, second.id])
+        expect(
+          (await prisma.storePurchase.findUniqueOrThrow({ where: { id } }))
+            .status,
+        ).toBe('refunded');
+      expect(
+        await prisma.storeEarning.count({ where: { status: 'owed' } }),
+      ).toBe(0);
+      // Reversed: the sales and the rest come back.
+      await appleNote('low-2', 'REFUND_REVERSED', '4000000000098', {}, T(2));
+      expect(
+        await prisma.storeCredit.count({ where: { status: 'open' } }),
+      ).toBe(1);
+      for (const id of [sale.id, second.id])
+        expect(
+          (await prisma.storePurchase.findUniqueOrThrow({ where: { id } }))
+            .status,
+        ).toBe('granted');
+    });
+
+    it('LOW: a credited answer carries no content id, creator or room', async () => {
+      const view = await creditedOnIos('4000000000097');
+      expect(view.grant.contentId ?? null).toBeNull();
+      expect(view.grant.creatorWawuId ?? null).toBeNull();
+      expect(view.grant.communityId ?? null).toBeNull();
+    });
+
+    describe('M3: a paid sale whose intent is expired, missing or used is recorded and credited, not refused', () => {
+      const late = async (post: () => request.Test, expectedKobo = 100_000) => {
+        const view = dataOf<PurchaseView>(await post().expect(201));
+        expect(view).toMatchObject({
+          status: 'credited',
+          flag: 'late_sale',
+          grant: { contentId: null },
+        });
+        expect(view.credit?.amountKobo).toBe(expectedKobo);
+        return view;
+      };
+      const expectNoGoods = async () => {
+        expect(await prisma.storeEarning.count({})).toBe(0);
+        expect(
+          await prisma.purchase.count({
+            where: { flutterwaveTxRef: { startsWith: 'store:' } },
+          }),
+        ).toBe(0);
+        expect(
+          await prisma.communityPass.count({ where: { userWawuId: BUYER } }),
+        ).toBe(0);
+      };
+
+      it("an intent that expired: the sale is recorded, the credit is the product's list price, the purchase is consumed, no creator earning", async () => {
+        const intent = await intentFor(content('android'));
+        await prisma.storePurchaseIntent.update({
+          where: { id: intent.intentId },
+          data: {
+            createdAt: new Date(Date.now() - 3 * 3_600_000),
+            expiresAt: new Date(Date.now() - 2 * 3_600_000),
+          },
+        });
+        androidSale('tok-m3a', 'wawu.buy.1000', 'GPA.m3a');
+        const view = await late(() => postAndroid('tok-m3a', intent.intentId));
+        expect(view.credit?.message).toBe(
+          'This purchase could not be finished in time. You have a ₦1,000 credit to use on Who Made This.',
+        );
+        expect(google.consumed).toContain('tok-m3a');
+        expect(
+          await prisma.storePurchase.findUniqueOrThrow({
+            where: { id: view.id },
+          }),
+        ).toMatchObject({
+          kind: 'buy',
+          intentId: null,
+          wawuUserId: BUYER,
+          referenceKobo: 100_000,
+          flag: 'late_sale',
+        });
+        expect(await prisma.storeCredit.findFirstOrThrow({})).toMatchObject({
+          amountKobo: 100_000,
+          status: 'open',
+          wawuUserId: BUYER,
+        });
+        await expectNoGoods();
+        // The expired intent is not marked used: it was never the purchase's.
+        expect(
+          (
+            await prisma.storePurchaseIntent.findUniqueOrThrow({
+              where: { id: intent.intentId },
+            })
+          ).status,
+        ).not.toBe('used');
+        // A replay answers the same credit and makes no second one.
+        const again = dataOf<PurchaseView>(
+          await postAndroid('tok-m3a', intent.intentId).expect(201),
+        );
+        expect(again).toMatchObject({
+          id: view.id,
+          status: 'credited',
+          alreadyGranted: true,
+        });
+        expect(await prisma.storeCredit.count({})).toBe(1);
+      });
+
+      it("no intent, or an intent that is not the person's: credited the same, at the product's list price", async () => {
+        androidSale('tok-m3b', 'wawu.buy.1000', 'GPA.m3b');
+        await late(() => postAndroid('tok-m3b', undefined));
+        androidSale('tok-m3c', 'wawu.buy.500', 'GPA.m3c');
+        const other500 = await intentFor(tip('android', 500), other);
+        await late(
+          () => postAndroid('tok-m3c', other500.intentId, 'wawu.buy.500'),
+          50_000,
+        );
+        androidSale('tok-m3d', 'wawu.buy.200', 'GPA.m3d');
+        await late(
+          () => postAndroid('tok-m3d', randomUUID(), 'wawu.buy.200'),
+          20_000,
+        );
+        expect(
+          await prisma.storeCredit.count({ where: { wawuUserId: BUYER } }),
+        ).toBe(3);
+        await expectNoGoods();
+      });
+
+      it('an intent already used by another payment: the second payment is credited', async () => {
+        const intent = await intentFor(content('android'));
+        androidSale('tok-m3e', 'wawu.buy.1000', 'GPA.m3e');
+        androidSale('tok-m3f', 'wawu.buy.1000', 'GPA.m3f');
+        await postAndroid('tok-m3e', intent.intentId).expect(201);
+        await late(() => postAndroid('tok-m3f', intent.intentId));
+        expect(
+          await prisma.purchase.count({
+            where: { flutterwaveTxRef: { startsWith: 'store:' } },
+          }),
+        ).toBe(1);
+        expect(await prisma.storeEarning.count({})).toBe(1);
+      });
+
+      it('a sale that came before the intent: credited, not granted', async () => {
+        const intent = await intentFor(content('android'));
+        androidSale('tok-m3g', 'wawu.buy.1000', 'GPA.m3g', {
+          purchasedAt: new Date(Date.now() - 3 * 3_600_000),
+        });
+        await late(() => postAndroid('tok-m3g', intent.intentId));
+        await expectNoGoods();
+      });
+
+      it("still refused: another person's account token, no token, a product the store does not know; nothing is recorded", async () => {
+        androidSale('tok-m3h', 'wawu.buy.1000', 'GPA.m3h', {
+          accountToken: acctOther,
+        });
+        expect(
+          codeOf(await postAndroid('tok-m3h', undefined).expect(409)),
+        ).toBe('store_purchase_taken');
+        androidSale('tok-m3i', 'wawu.buy.1000', 'GPA.m3i', {
+          accountToken: null,
+        });
+        expect(
+          codeOf(await postAndroid('tok-m3i', undefined).expect(422)),
+        ).toBe('store_account_token_missing');
+        expect(
+          codeOf(await postAndroid('tok-unknown', undefined).expect(422)),
+        ).toBe('store_purchase_invalid');
+        expect(await prisma.storePurchase.count({})).toBe(0);
+        expect(await prisma.storeCredit.count({})).toBe(0);
+      });
+
+      it("a late sale's credit can be spent, and a refund of the late sale voids it", async () => {
+        androidSale('tok-m3j', 'wawu.buy.1000', 'GPA.m3j');
+        const view = await late(() => postAndroid('tok-m3j', undefined));
+        const used = await spend(tip('android', 200));
+        expect(used.status).toBe('granted');
+        const push = (note: object, messageId: string) =>
+          http()
+            .post(`${API}/webhooks/google-play`)
+            .set('Authorization', `Bearer ${google.pushToken}`)
+            .send({
+              message: {
+                data: Buffer.from(
+                  JSON.stringify({ packageName: 'africa.wawu.test', ...note }),
+                ).toString('base64'),
+                messageId,
+              },
+            });
+        const res = await push(
+          {
+            voidedPurchaseNotification: {
+              orderId: 'GPA.m3j',
+              purchaseToken: 'x',
+              productType: 2,
+              refundType: 1,
+            },
+          },
+          `m-${uid()}`,
+        );
+        expect(outcomeOf(res)).toBe('taken_back');
+        expect(
+          (
+            await prisma.storePurchase.findUniqueOrThrow({
+              where: { id: view.id },
+            })
+          ).status,
+        ).toBe('refunded');
+        expect(
+          (
+            await prisma.storePurchase.findUniqueOrThrow({
+              where: { id: used.id },
+            })
+          ).status,
+        ).toBe('refunded');
+        expect(
+          await prisma.storeCredit.count({ where: { status: 'open' } }),
+        ).toBe(0);
+      });
+    });
+
+    it('LOW: a notice with no signed date is applied in the order it arrives, and one signed earlier than it is then stale', async () => {
+      const intent = await intentFor(content('ios'));
+      iosSale('4000000000096', 'wawu.buy.1000');
+      const view = dataOf<PurchaseView>(
+        await postIos('4000000000096', intent.intentId).expect(201),
+      );
+      expect(
+        outcomeOf(await appleNote('nd-1', 'REFUND', '4000000000096')),
+      ).toBe('taken_back');
+      expect(
+        outcomeOf(await appleNote('nd-2', 'REFUND_REVERSED', '4000000000096')),
+      ).toBe('restored');
+      // Signed before the undated reversal arrived: stale.
+      expect(
+        outcomeOf(
+          await appleNote(
+            'nd-3',
+            'REFUND',
+            '4000000000096',
+            {},
+            new Date(Date.now() - 60_000),
+          ),
+        ),
+      ).toBe('ignored');
+      expect(
+        (
+          await prisma.storePurchase.findUniqueOrThrow({
+            where: { id: view.id },
+          })
+        ).status,
+      ).toBe('granted');
     });
   });
 });

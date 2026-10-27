@@ -17,11 +17,7 @@ import {
 import { StoreBuyTargetService } from './store-buy-target.service';
 import { StoreAccountService } from './store-account.service';
 import { StoreCatalogService } from './store-catalog.service';
-import {
-  INTENT_EXPIRED_MESSAGE,
-  INTENT_NOT_FOUND_MESSAGE,
-  StoreError,
-} from './store-error';
+import { StoreError } from './store-error';
 import type { StoreIntentDto, StorePurchaseDto } from './store.dto';
 import type { StoreIntentView } from './store-view.type';
 
@@ -138,26 +134,23 @@ export class StoreIntentService {
   }
 
   /**
-   * The intent a purchase is made against, checked before the store is asked:
-   * it is the person's own, in this store, and for the product the app posted.
-   * Whether the sale was in time and whether the intent is already used is
-   * decided after the store has vouched for the sale.
+   * The intent a purchase is made against, found before the store is asked:
+   * the person's own, in this store, and for the product the app posted. An
+   * intent that is not there, is not theirs or was not posted is `null`: the
+   * payment is then credited rather than refused (a verified sale is never
+   * lost, STORE-BUY-HUB round 4, M3). An intent that is theirs but for another
+   * store or product is still refused.
    */
-  async forPurchase(
+  async resolveForPurchase(
     userId: string,
     dto: StorePurchaseDto,
     product: StoreProduct,
-  ): Promise<StorePurchaseIntent> {
-    if (!dto.intentId)
-      throw new StoreError(
-        'store_receipt_missing',
-        'A purchase from the price ladder needs its intent.',
-      );
+  ): Promise<StorePurchaseIntent | null> {
+    if (!dto.intentId) return null;
     const intent = await this.prisma.storePurchaseIntent.findUnique({
       where: { id: dto.intentId },
     });
-    if (intent === null || intent.wawuUserId !== userId)
-      throw new StoreError('store_intent_not_found', INTENT_NOT_FOUND_MESSAGE);
+    if (intent === null || intent.wawuUserId !== userId) return null;
     if (
       intent.platform !== dto.platform ||
       intent.productId !== product.id ||
@@ -171,18 +164,19 @@ export class StoreIntentService {
   }
 
   /**
-   * Refuses a sale made after the intent's time ran out, or before it was
-   * made: a payment that came first is not this purchase's, so an older
-   * transaction cannot be re-posted under a fresh intent.
+   * Why a verified sale cannot be given as goods, or null when it can: there is
+   * no intent, the sale came before the intent was made (an older transaction
+   * re-posted under a fresh intent), or after its time ran out. The money is
+   * credited in each case; goods are only granted inside the intent's window.
    */
-  assertCovers(intent: StorePurchaseIntent, soldAt: Date): void {
-    if (!saleAfterIntent(intent.createdAt, soldAt))
-      throw new StoreError(
-        'store_purchase_invalid',
-        'That payment was made before this purchase was started.',
-      );
-    if (!intentCoversSale(intent.expiresAt, soldAt))
-      throw new StoreError('store_intent_expired', INTENT_EXPIRED_MESSAGE);
+  lateReason(
+    intent: StorePurchaseIntent | null,
+    soldAt: Date,
+  ): 'missing' | 'before_intent' | 'expired' | null {
+    if (intent === null) return 'missing';
+    if (!saleAfterIntent(intent.createdAt, soldAt)) return 'before_intent';
+    if (!intentCoversSale(intent.expiresAt, soldAt)) return 'expired';
+    return null;
   }
 
   /** Writes the open intent, or returns the one already open for this thing. */

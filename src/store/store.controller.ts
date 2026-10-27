@@ -119,14 +119,16 @@ export class StoreController {
    * `store_purchase_taken` (that purchase, or that subscription, was already used on another account, or was made with another account's token), `store_purchase_other_room` (409, a pass payment was first given to another room), `store_account_token_missing` (422, the purchase carries no account token),
    * `store_pass_not_available`, `store_unreachable` (503, safe to repeat) and `store_grant_failed` (500, the store has the payment but the Hub could not finish; ask again).
    *
-   * A ladder product (`wawu.buy.<naira>`) also needs `intentId` from `POST
+   * A ladder product (`wawu.buy.<naira>`) should carry the `intentId` from `POST
    * /store/intents`; the Hub checks the product is the intent's and the account
    * token is the person's, and grants what the intent names once per store
-   * transaction. Further codes: `store_intent_not_found` (404), `store_intent_expired`
-   * (409, the store sale was after the intent's time), `store_intent_used` (409) and
-   * `store_purchase_other_intent` (409, this store transaction was already given for
-   * another intent). When the piece, creator or room can no longer be bought the
-   * purchase is recorded with `flag: target_unavailable` and nothing is given.
+   * transaction. `store_purchase_other_intent` (409) when this store transaction was
+   * already given for another intent. A payment the store has verified is never lost:
+   * when the intent is missing, not the person's, used, expired, or the sale came before
+   * it, the purchase is recorded with `flag: late_sale`, the fan gets a store credit worth
+   * the product's list price, and the answer is `status: credited`. The same when the
+   * piece, creator or room can no longer be bought (`flag: target_unavailable`). No
+   * goods are given and no creator earns in either case.
    */
   @Post('purchases')
   @HttpCode(201)

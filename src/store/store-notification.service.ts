@@ -581,10 +581,15 @@ function isStale(row: StorePurchase, signedAt: Date | null): boolean {
   );
 }
 
-/** The date to remember after a notice: the later of this one and the last seen. */
+/**
+ * The date to remember after a notice: the later of its own signed date and the
+ * last one seen. A notice with no signed date is ordered by its ARRIVAL time: it
+ * is applied when it arrives (it is never stale among undated ones), and a
+ * notice signed before it arrived is then older than it and changes nothing.
+ */
 function noticeDate(row: StorePurchase, signedAt: Date | null): Date | null {
-  if (signedAt === null) return row.lastNoticeAt;
-  if (row.lastNoticeAt === null || signedAt > row.lastNoticeAt) return signedAt;
+  const at = signedAt ?? new Date();
+  if (row.lastNoticeAt === null || at > row.lastNoticeAt) return at;
   return row.lastNoticeAt;
 }
 

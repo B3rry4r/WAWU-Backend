@@ -855,6 +855,23 @@ Round 3 (verifier findings, lead rulings):
   never used 7 days after they ran out. The creator's `GET /money/earnings` shows each waiting store
   share's `availableAt` under `storeEarnings`.
 
+Round 4 (re-verify):
+
+- **A spent credit cannot launder a refund.** A store refund of a purchase takes back every credit made
+  of its payment (the credit it made and the rest of any larger one): unspent ones are voided, and
+  what a SPENT one paid for is taken back as if that sale had been refunded itself (its grant ends,
+  its creator share is cancelled or becomes a deduction), once. Both purchases carry a flag
+  (`credit_spent_taken_back`, `credit_source_refunded`). A reversal restores both.
+- **A credit larger than the price is not forfeited.** The rest is a new open credit with the same
+  origin (`StoreCredit.originPurchaseId`), never cash, never expires.
+- **A verified sale is never lost.** When its intent is missing, not the person's, used or expired, or
+  the sale came before the intent, the sale is recorded (`flag: late_sale`, the purchase consumed) and
+  the fan gets a credit worth the product's list price (`status: credited`); no goods, no creator
+  earning. Goods are still granted only inside the intent's window. A credited answer carries no
+  content id, creator or room.
+- **A notice with no signed date is ordered by its arrival time:** it is applied when it arrives, and
+  a notice signed before that moment is then older and changes nothing.
+
 ## Verification: two ticks, not a ladder
 
 There is no five-rung ladder any more. There are exactly **two** verifications,

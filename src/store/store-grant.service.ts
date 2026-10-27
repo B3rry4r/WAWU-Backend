@@ -48,13 +48,20 @@ const BUY_COMMISSION_RATE = 0.15;
 
 /** What a ladder purchase is made against: its intent and what the intent names, checked just before the grant. */
 export interface BuyContext {
-  intent: StorePurchaseIntent;
+  /** Null for a late sale that has no intent of its own (STORE-BUY-HUB round 4). */
+  intent: StorePurchaseIntent | null;
   /** Null when the piece, creator or room can no longer be bought: the fan is given a store credit and nothing else. */
   target: BuyTarget | null;
   /** True when the price on the piece or room has moved since the intent: the intent's price is still what is granted, flagged. */
   priceChanged?: boolean;
   /** Set when a store credit pays for this purchase instead of a store sale: consumed whole in the same transaction. */
   creditId?: string | null;
+  /**
+   * Set when a verified store sale cannot be given as goods because its intent
+   * is missing, expired or used, or the sale came before it: the fan is credited
+   * the product's list price instead (STORE-BUY-HUB round 4, M3).
+   */
+  late?: 'missing' | 'expired' | 'used' | 'before_intent' | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -571,26 +578,137 @@ export class StoreGrantService {
   }
 
   /**
-   * The store paid a purchase back: a credit it made is voided if it has not
-   * been spent. One already spent is left (the fan used it) and goes to a person.
+   * The store paid a purchase back, so every credit made of its payment goes
+   * with it (the credit it made, and the rest of any larger one). An unspent
+   * credit is voided. A SPENT one is not left standing: what it paid for is
+   * taken back exactly as if that sale had been refunded itself (its grant ends
+   * and its creator share is cancelled, or becomes a deduction when it was
+   * paid), once; otherwise a fan and a creator could take 85% of the price per
+   * cycle (STORE-BUY-HUB round 4, H2). Both purchases are flagged for the record.
    */
   private async creditTakeBack(
     tx: Prisma.TransactionClient,
     purchase: StorePurchase,
     now: Date,
   ): Promise<Record<string, unknown>> {
-    const credit = await tx.storeCredit.findUnique({
-      where: { sourcePurchaseId: purchase.id },
+    const credits = await tx.storeCredit.findMany({
+      where: { originPurchaseId: purchase.id },
+      orderBy: { createdAt: 'asc' },
     });
-    if (credit === null) return {};
-    if (credit.status === 'open') {
-      await tx.storeCredit.update({
-        where: { id: credit.id },
-        data: { status: 'void', voidedAt: now },
-      });
-      return { credit: 'voided' };
+    if (credits.length === 0) return {};
+    let voided = 0;
+    const takenBack: string[] = [];
+    const review: string[] = [];
+    for (const credit of credits) {
+      if (credit.status === 'open') {
+        await tx.storeCredit.update({
+          where: { id: credit.id },
+          data: { status: 'void', voidedAt: now },
+        });
+        voided += 1;
+      } else if (credit.status === 'spent' && credit.spentPurchaseId !== null) {
+        const out = await this.takeBackSpentSale(
+          tx,
+          credit.spentPurchaseId,
+          purchase.id,
+          now,
+        );
+        if (out === 'review') review.push(credit.spentPurchaseId);
+        else if (out === 'taken_back') takenBack.push(credit.spentPurchaseId);
+      }
     }
-    return { credit: credit.status === 'spent' ? 'review' : 'already_void' };
+    if (takenBack.length > 0 || review.length > 0)
+      await tx.storePurchase.update({
+        where: { id: purchase.id },
+        data: { flag: 'credit_spent_taken_back', flaggedAt: now },
+      });
+    return {
+      credit:
+        review.length > 0
+          ? 'review'
+          : takenBack.length > 0
+            ? 'spent_taken_back'
+            : 'voided',
+      creditsVoided: voided,
+      spentSalesTakenBack: takenBack,
+    };
+  }
+
+  /** Takes back a sale a store credit paid for, as if the sale itself had been refunded. Once: only a granted sale is touched. */
+  private async takeBackSpentSale(
+    tx: Prisma.TransactionClient,
+    spentPurchaseId: string,
+    originId: string,
+    now: Date,
+  ): Promise<'taken_back' | 'already' | 'review'> {
+    const sale = await tx.storePurchase.findUnique({
+      where: { id: spentPurchaseId },
+    });
+    if (sale === null || sale.status !== 'granted') return 'already';
+    const taken = await this.takeBack(tx, sale, now);
+    const earning = taken.earning as { earning?: string } | undefined;
+    await tx.storePurchase.update({
+      where: { id: sale.id },
+      data: {
+        status: 'refunded',
+        endedAt: now,
+        endReason: 'credit_source_refunded',
+        takenBack: { ...taken, creditOrigin: originId } as never,
+        flag:
+          earning?.earning === 'review'
+            ? 'earning_review'
+            : 'credit_source_refunded',
+        flaggedAt: now,
+      },
+    });
+    return earning?.earning === 'review' ? 'review' : 'taken_back';
+  }
+
+  /** Puts back what `creditTakeBack` took: voided credits are open again, and the sales a spent credit paid for are restored. */
+  private async creditRestore(
+    tx: Prisma.TransactionClient,
+    purchase: StorePurchase,
+    now: Date,
+  ): Promise<Record<string, unknown>> {
+    const reopened = await tx.storeCredit.updateMany({
+      where: { originPurchaseId: purchase.id, status: 'void' },
+      data: { status: 'open', voidedAt: null },
+    });
+    const spent = await tx.storeCredit.findMany({
+      where: {
+        originPurchaseId: purchase.id,
+        status: 'spent',
+        spentPurchaseId: { not: null },
+      },
+    });
+    const restoredSales: string[] = [];
+    for (const credit of spent) {
+      const sale = await tx.storePurchase.findUnique({
+        where: { id: credit.spentPurchaseId as string },
+      });
+      if (
+        sale === null ||
+        sale.status !== 'refunded' ||
+        sale.endReason !== 'credit_source_refunded'
+      )
+        continue;
+      const restored = await this.restore(tx, sale, now);
+      await tx.storePurchase.update({
+        where: { id: sale.id },
+        data: {
+          status: 'granted',
+          endedAt: null,
+          endReason: null,
+          takenBack: {
+            ...((sale.takenBack ?? {}) as Record<string, unknown>),
+            restoredAt: now.toISOString(),
+            restored,
+          } as never,
+        },
+      });
+      restoredSales.push(sale.id);
+    }
+    return { creditRestored: reopened.count, salesRestored: restoredSales };
   }
 
   /**
@@ -608,13 +726,10 @@ export class StoreGrantService {
     const ref = storeRef(purchase.id);
     if (purchase.kind !== 'buy') return { restored: false };
     if (snap.skipped !== undefined) {
-      // Nothing was given, but the fan was credited: the credit the refund
-      // voided is put back.
-      const { count } = await tx.storeCredit.updateMany({
-        where: { sourcePurchaseId: purchase.id, status: 'void' },
-        data: { status: 'open', voidedAt: null },
-      });
-      return { restored: count > 0, creditRestored: count };
+      // Nothing was given, but the fan was credited: the credits the refund
+      // voided are put back, and the sales a spent one paid for are restored.
+      const back = await this.creditRestore(tx, purchase, now);
+      return { restored: true, ...back };
     }
     let given: Record<string, unknown> = {};
     if (purchase.buyKind === 'content' || purchase.buyKind === 'tip') {
@@ -665,6 +780,19 @@ export class StoreGrantService {
     const userId = purchase.wawuUserId;
     if (userId === null)
       throw new Error(`Purchase ${purchase.id} has no buyer to give to.`);
+    // A verified sale that cannot be given as goods because its intent is gone,
+    // ran out or was used, or the sale came before it: the money is not lost, the
+    // fan is credited the product's list price (no creator earning).
+    if (buy.late || intent === null)
+      return this.credited(
+        tx,
+        purchase,
+        userId,
+        purchase.referenceKobo ?? 0,
+        null,
+        null,
+        'late_sale',
+      );
     const base = {
       kind: 'buy' as const,
       buyKind: intent.kind,
@@ -678,19 +806,43 @@ export class StoreGrantService {
     // purchase is undone and the fan told.
     if (target === null) {
       if (buy.creditId) throw notPayableNow();
-      return this.credited(tx, purchase, intent, userId, 'target_unavailable');
+      return this.credited(
+        tx,
+        purchase,
+        userId,
+        intent.listPriceKobo,
+        intent.kind,
+        intent.targetId,
+        'target_unavailable',
+      );
     }
     let extra: Partial<StoreGrantSnapshot> = {};
     if (buy.creditId) {
+      const credit = await tx.storeCredit.findFirst({
+        where: { id: buy.creditId, wawuUserId: userId, status: 'open' },
+      });
       const { count } = await tx.storeCredit.updateMany({
         where: { id: buy.creditId, wawuUserId: userId, status: 'open' },
         data: { status: 'spent', spentAt: now, spentPurchaseId: purchase.id },
       });
-      if (count === 0)
+      if (credit === null || count === 0)
         throw new StoreError(
           'store_credit_unavailable',
           'That credit has already been used.',
         );
+      // What the price did not use is not forfeited: a new open credit of the
+      // rest, with the same origin (never cash, never expires).
+      const rest = credit.amountKobo - intent.listPriceKobo;
+      if (rest > 0)
+        await tx.storeCredit.create({
+          data: {
+            wawuUserId: userId,
+            amountKobo: rest,
+            sourcePurchaseId: `${credit.sourcePurchaseId}:rem:${purchase.id}`,
+            originPurchaseId:
+              credit.originPurchaseId ?? credit.sourcePurchaseId,
+          },
+        });
     }
     if (intent.kind === 'content' || intent.kind === 'tip') {
       // The same row the wallet path writes (UnlockWalletService, TipWalletService),
@@ -723,7 +875,15 @@ export class StoreGrantService {
         FOR UPDATE`;
       if (rows[0]?.status === 'pending') {
         if (buy.creditId) throw notPayableNow();
-        return this.credited(tx, purchase, intent, userId, 'member_removed');
+        return this.credited(
+          tx,
+          purchase,
+          userId,
+          intent.listPriceKobo,
+          intent.kind,
+          intent.targetId,
+          'member_removed',
+        );
       }
       await grantPassPeriod(tx, {
         communityId: intent.targetId,
@@ -767,16 +927,19 @@ export class StoreGrantService {
   private async credited(
     tx: Prisma.TransactionClient,
     purchase: StorePurchase,
-    intent: StorePurchaseIntent,
     userId: string,
-    why: 'target_unavailable' | 'member_removed',
+    amountKobo: number,
+    buyKind: StoreIntentKind | null,
+    targetId: string | null,
+    why: 'target_unavailable' | 'member_removed' | 'late_sale',
   ): Promise<StoreGrantSnapshot> {
     await tx.storeCredit.createMany({
       data: [
         {
           wawuUserId: userId,
-          amountKobo: intent.listPriceKobo,
+          amountKobo,
           sourcePurchaseId: purchase.id,
+          originPurchaseId: purchase.id,
         },
       ],
       skipDuplicates: true,
@@ -787,11 +950,11 @@ export class StoreGrantService {
     });
     return {
       kind: 'buy',
-      buyKind: intent.kind,
-      targetId: intent.targetId,
+      ...(buyKind === null ? {} : { buyKind }),
+      ...(targetId === null ? {} : { targetId }),
       skipped: why,
       creditId: credit.id,
-      creditKobo: intent.listPriceKobo,
+      creditKobo: amountKobo,
     };
   }
 
@@ -800,18 +963,25 @@ export class StoreGrantService {
     snap: StoreGrantSnapshot,
     communityId: string | null,
   ): StoreGrantedView {
+    // A ladder payment that became a store credit gave nothing: no piece,
+    // creator or room in the answer.
+    const gave = snap.creditId === undefined;
     return {
       points: snap.points ?? null,
       credits: snap.credits ?? null,
       tierId: snap.tierId ?? null,
       extraProducts: snap.extraProducts ?? null,
       until: snap.until ?? null,
-      communityId: snap.communityId ?? communityId,
-      ...(snap.buyKind === undefined
+      communityId: gave ? (snap.communityId ?? communityId) : null,
+      ...(snap.buyKind === undefined && gave
         ? {}
         : {
-            contentId: snap.buyKind === 'content' ? snap.targetId : null,
-            creatorWawuId: snap.buyKind === 'tip' ? snap.targetId : null,
+            contentId:
+              gave && snap.buyKind === 'content'
+                ? (snap.targetId ?? null)
+                : null,
+            creatorWawuId:
+              gave && snap.buyKind === 'tip' ? (snap.targetId ?? null) : null,
           }),
     };
   }

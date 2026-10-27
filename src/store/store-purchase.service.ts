@@ -42,7 +42,6 @@ import { StoreAccountService } from './store-account.service';
 import { StoreCatalogService } from './store-catalog.service';
 import {
   GRANT_FAILED_MESSAGE,
-  INTENT_USED_MESSAGE,
   OTHER_INTENT_MESSAGE,
   OTHER_ROOM_MESSAGE,
   StoreError,
@@ -68,6 +67,8 @@ export interface SettleArgs {
   intent?: StorePurchaseIntent | null;
   /** A store credit that pays for this purchase instead of a store sale; consumed whole in the same transaction. */
   creditId?: string | null;
+  /** A ladder sale that cannot be given as goods (no intent, outside its window): recorded and credited. */
+  late?: 'missing' | 'before_intent' | 'expired' | 'used' | null;
 }
 
 export interface Settled {
@@ -127,10 +128,11 @@ export class StorePurchaseService {
     );
     const communityId = await this.checkRequest(userId, dto, product);
     // A ladder purchase is made against an intent (STORE-BUY-HUB): the person's
-    // own, for this store and this product, checked before the store is asked.
+    // own, for this store and this product, found before the store is asked.
+    // Without one (missing, not theirs) the sale is credited after it verifies.
     const intent =
       product.kind === 'buy'
-        ? await this.intents.forPurchase(userId, dto, product)
+        ? await this.intents.resolveForPurchase(userId, dto, product)
         : null;
     const verified = await this.verify(dto, product);
     if (verified.storeProductId !== product.storeProductId)
@@ -156,11 +158,14 @@ export class StorePurchaseService {
     )
       throw new StoreError('store_purchase_other_room', OTHER_ROOM_MESSAGE);
 
-    // The sale must fall inside the intent's time. It is the STORE's time of
-    // sale that counts, not when the app posted it: a payment that was slow to
-    // arrive is never refused for that.
-    if (intent !== null)
-      this.intents.assertCovers(intent, verified.purchasedAt);
+    // The sale must fall inside the intent's window to be given as goods. It is
+    // the STORE's time of sale that counts, not when the app posted it: a payment
+    // that was slow to arrive is never refused for that. A verified sale outside
+    // the window, or with no intent, is not lost: it is recorded and credited.
+    const late =
+      product.kind === 'buy'
+        ? this.intents.lateReason(intent, verified.purchasedAt)
+        : null;
 
     const settled = await this.settle({
       userId,
@@ -168,6 +173,7 @@ export class StorePurchaseService {
       verified,
       communityId,
       intent,
+      late,
     });
     if (settled.purchase.wawuUserId !== userId)
       throw new StoreError(
@@ -195,6 +201,7 @@ export class StorePurchaseService {
   async settle(args: SettleArgs): Promise<Settled> {
     const { userId, product, verified, communityId } = args;
     const intent = args.intent ?? null;
+    const isBuy = product.kind === 'buy';
     const platform = verified.platform;
     const key = {
       platform_storeTransactionId: {
@@ -228,16 +235,21 @@ export class StorePurchaseService {
       // itself and the store's cut is not taken off it: the creator's 85% is of
       // the list price.
       const referenceKobo =
-        intent !== null ? intent.listPriceKobo : product.referenceKobo;
+        intent !== null && args.late == null
+          ? intent.listPriceKobo
+          : product.referenceKobo;
       const netKobo =
         referenceKobo === null
           ? null
-          : intent !== null
+          : isBuy
             ? referenceKobo
             : netOf(referenceKobo, fee);
       let creatorWawuUserId: string | null = null;
       let buy: BuyContext | null = null;
-      if (intent !== null) {
+      if (isBuy && (intent === null || args.late != null)) {
+        // A late sale: credited the product's list price, no creator.
+        buy = { intent: null, target: null, late: args.late ?? 'missing' };
+      } else if (intent !== null) {
         // Asked again now, outside the transaction (a block is read from
         // another table): the piece may have been taken down since the intent.
         const checked = await this.targets.check(
@@ -263,7 +275,7 @@ export class StorePurchaseService {
       const creatorShareKobo =
         creatorWawuUserId === null
           ? null
-          : intent !== null
+          : intent !== null && args.late == null
             ? creatorShareOfList(intent.listPriceKobo)
             : netKobo !== null
               ? creatorShareOf(netKobo)
@@ -280,15 +292,21 @@ export class StorePurchaseService {
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-purchase:${platform}:${verified.storeTransactionId}`}, 0))`;
           const again = await tx.storePurchase.findUnique({ where: key });
           if (again !== null) return heldBy(again, userId, communityId, intent);
-          if (intent !== null) {
-            // One intent, one purchase: a second store transaction against it
-            // is refused (the store keeps it unfinished).
+          // One intent, one purchase: a second store transaction against an
+          // intent already used is not refused (the store has the money): it is
+          // recorded and credited, linked to no intent.
+          let lateInTx = args.late ?? null;
+          if (intent !== null && lateInTx === null) {
             const rows = await tx.$queryRaw<{ status: string }[]>`
               SELECT "status"::text AS "status" FROM "StorePurchaseIntent"
               WHERE "id" = ${intent.id} FOR UPDATE`;
-            if (rows[0]?.status === 'used')
-              throw new StoreError('store_intent_used', INTENT_USED_MESSAGE);
+            if (rows[0]?.status === 'used') lateInTx = 'used';
           }
+          const linked = intent !== null && lateInTx === null;
+          const grantBuy: BuyContext | null =
+            lateInTx !== null
+              ? { intent: null, target: null, late: lateInTx }
+              : buy;
           if (holderKey !== null && subscriptionKey !== null)
             await tx.storeSubscription.upsert({
               where: holderKey,
@@ -312,21 +330,20 @@ export class StorePurchaseService {
               storeProductId: product.storeProductId,
               kind: product.kind,
               environment: verified.environment,
-              communityId:
-                intent !== null
-                  ? intent.kind === 'pass'
-                    ? intent.targetId
-                    : null
-                  : product.kind === 'pass'
-                    ? communityId
-                    : null,
-              ...(intent === null
-                ? {}
-                : {
+              communityId: linked
+                ? intent.kind === 'pass'
+                  ? intent.targetId
+                  : null
+                : product.kind === 'pass'
+                  ? communityId
+                  : null,
+              ...(linked
+                ? {
                     intentId: intent.id,
                     buyKind: intent.kind,
                     targetId: intent.targetId,
-                  }),
+                  }
+                : {}),
               grant: {},
               referenceKobo,
               storeFeeBps: fee,
@@ -339,8 +356,8 @@ export class StorePurchaseService {
               expiresAt: verified.expiresAt,
             },
           });
-          const snap = await this.grants.give(tx, row, product, now, buy);
-          if (intent !== null)
+          const snap = await this.grants.give(tx, row, product, now, grantBuy);
+          if (linked)
             await tx.storePurchaseIntent.update({
               where: { id: intent.id },
               data: { status: 'used', usedAt: now },
@@ -434,6 +451,7 @@ export class StorePurchaseService {
                     message: creditMessage(
                       purchase.buyKind,
                       snap.creditKobo ?? 0,
+                      purchase.flag === 'late_sale',
                     ),
                   },
             paidWithCredit: snap.paidWithCredit ?? null,
@@ -609,6 +627,7 @@ function heldBy(
     existing.kind === 'buy' &&
     existing.wawuUserId === userId &&
     intent !== null &&
+    existing.intentId !== null &&
     existing.intentId !== intent.id
   )
     throw new StoreError('store_purchase_other_intent', OTHER_INTENT_MESSAGE);
@@ -648,9 +667,11 @@ function naira(kobo: number): string {
 export function creditMessage(
   buyKind: StorePurchase['buyKind'],
   creditKobo: number,
+  late = false,
 ): string {
-  const lead =
-    buyKind === 'tip'
+  const lead = late
+    ? 'This purchase could not be finished in time.'
+    : buyKind === 'tip'
       ? 'This creator can no longer be tipped.'
       : buyKind === 'pass'
         ? 'This pass is no longer available.'
