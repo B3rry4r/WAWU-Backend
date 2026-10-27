@@ -1321,6 +1321,156 @@ describe('STORE-QUESTION: a paid question bought in the store (stand-in stores)'
     });
   });
 
+  // ------------------------------------------------------- patch round 2
+
+  describe('patch round 2: one payment gives at most one live thing', () => {
+    let note = 0;
+    const storeNote = (type: string, tx: string) =>
+      appleNote(`r2-${(note += 1)}`, type, tx);
+
+    /** A question (waiting or answered) plus an open credit, for ONE payment: never more than one of them. */
+    async function liveThings(a: {
+      intent: Intent;
+      view: PurchaseView;
+    }): Promise<{ question: number; credit: number; purchase: string }> {
+      const row = await dm(a.intent.intentId);
+      const purchase = await prisma.storePurchase.findUniqueOrThrow({
+        where: { id: a.view.id },
+      });
+      return {
+        question:
+          row.status === 'awaiting_response' || row.status === 'responded'
+            ? 1
+            : 0,
+        credit: await prisma.storeCredit.count({
+          where: { sourcePurchaseId: a.view.id, status: 'open' },
+        }),
+        purchase: purchase.status,
+      };
+    }
+    const waitingFromBuyer = () =>
+      prisma.directMessage.count({
+        where: {
+          senderWawuId: BUYER,
+          creatorWawuId: HOST,
+          status: 'awaiting_response',
+        },
+      });
+
+    it('R1 to R4: refund, ask again, reversal (credit), second refund (void), answer the other question, second reversal: the credit is open again and the first question stays withdrawn', async () => {
+      const a = await buyQuestion();
+      expect(outcomeOf(await storeNote('REFUND', a.tx))).toBe('taken_back');
+      const b = await buyQuestion();
+      expect(outcomeOf(await storeNote('REFUND_REVERSED', a.tx))).toBe(
+        'restored',
+      );
+      expect(await waitingFromBuyer()).toBe(1);
+      expect(await prisma.storeCredit.count({})).toBe(1);
+      expect(outcomeOf(await storeNote('REFUND', a.tx))).toBe('taken_back');
+      expect((await prisma.storeCredit.findFirstOrThrow({})).status).toBe(
+        'void',
+      );
+      // The other question is answered, so nothing waits any more.
+      await answer(b.intent.intentId).expect(201);
+      expect(await waitingFromBuyer()).toBe(0);
+      expect(outcomeOf(await storeNote('REFUND_REVERSED', a.tx))).toBe(
+        'restored',
+      );
+      // One payment, one live thing: the credit, and the question stays withdrawn.
+      expect(await dm(a.intent.intentId)).toMatchObject({
+        status: 'refunded',
+        refundReference: STORE_REFUND_MARK,
+      });
+      expect(await liveThings(a)).toEqual({
+        question: 0,
+        credit: 1,
+        purchase: 'granted',
+      });
+      expect(await waitingFromBuyer()).toBe(0);
+    });
+
+    it('for every order of refunds and reversals with one new question asked and answered between them, then the deadline passing and the sweep, one payment gives at most one live thing', async () => {
+      // T: the store refunds the payment, or reverses its refund. K: the person asks again.
+      // N: the creator answers the new question. S: the first question's deadline passes and the sweep runs.
+      const words: string[] = ['T'.repeat(8)];
+      for (let k = 0; k < 8; k += 1) {
+        const w = Array<string>(8).fill('T');
+        w[k] = 'K';
+        words.push(w.join(''));
+        for (let n = k + 1; n < 8; n += 1) {
+          const both = [...w];
+          both[n] = 'N';
+          words.push(both.join(''));
+        }
+      }
+      const runs = words.flatMap((w) => [w, `${w}S`, `${w}ST`]);
+      expect(runs.length).toBe(111);
+      for (const word of runs) {
+        await wipe();
+        google.oneTime.clear();
+        apple.transactions.clear();
+        apple.notifications.clear();
+        const a = await buyQuestion();
+        let b: Awaited<ReturnType<typeof buyQuestion>> | null = null;
+        const done: string[] = [];
+        for (const op of word) {
+          if (op === 'T') {
+            const purchase = await prisma.storePurchase.findUniqueOrThrow({
+              where: { id: a.view.id },
+            });
+            await storeNote(
+              purchase.status === 'granted' ? 'REFUND' : 'REFUND_REVERSED',
+              a.tx,
+            );
+          } else if (op === 'K') {
+            if ((await waitingFromBuyer()) > 0 || b !== null) continue;
+            // A creator paused for missing replies (INBOX-09) refuses: skip.
+            const asked = await ask(buyer, q('ios', HOST, 1000, 'Once more?'));
+            if (asked.status !== 201) continue;
+            seq += 1;
+            const tx = `62000000${String(seq).padStart(5, '0')}`;
+            const intent = dataOf<Intent>(asked);
+            iosSale(tx, 'wawu.buy.1000');
+            b = {
+              intent,
+              tx,
+              view: dataOf<PurchaseView>(
+                await postIos(tx, intent.intentId).expect(201),
+              ),
+            };
+          } else if (op === 'N') {
+            if (
+              b === null ||
+              (await dm(b.intent.intentId)).status !== 'awaiting_response'
+            )
+              continue;
+            await answer(b.intent.intentId).expect(201);
+          } else {
+            if ((await dm(a.intent.intentId)).status !== 'responded')
+              await prisma.directMessage.update({
+                where: { id: a.intent.intentId },
+                data: { deadlineAt: new Date(Date.now() - HOUR) },
+              });
+            await questions.sweep();
+          }
+          done.push(op);
+          const live = await liveThings(a);
+          const problems: string[] = [];
+          if (live.question + live.credit > 1) problems.push('two live things');
+          // Nothing is live on a payment the store has taken back and not given again.
+          if (live.purchase !== 'granted' && live.credit > 0)
+            problems.push('a credit on a refunded payment');
+          if ((await waitingFromBuyer()) > 1) problems.push('two waiting');
+          expect(
+            problems.length === 0
+              ? ''
+              : `${problems.join('; ')} in ${word} after ${done.join('')}: ${JSON.stringify(live)}`,
+          ).toBe('');
+        }
+      }
+    }, 900_000);
+  });
+
   // ---------------------------------------------------- the wallet path stays
 
   describe('the wallet path and the web are untouched', () => {

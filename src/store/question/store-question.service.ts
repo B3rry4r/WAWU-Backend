@@ -430,6 +430,15 @@ export class StoreQuestionService implements OnModuleInit {
     if (dm === null) return { question: 'none' };
     if (dm.status !== 'refunded' || dm.refundReference !== STORE_REFUND_MARK)
       return { question: 'unchanged' };
+    // This payment already became a question credit (a reversal while another
+    // question was waiting, then a second refund voided it): the credit is what
+    // the payment is now, so the caller's `creditRestore` opens it again and the
+    // question stays withdrawn. One payment, one live thing.
+    const made = await tx.storeCredit.findUnique({
+      where: { sourcePurchaseId: purchase.id },
+      select: { id: true },
+    });
+    if (made !== null) return { question: 'credited' };
     if (dm.deadlineAt.getTime() > now.getTime()) {
       // The person has asked this creator again since the refund: one question
       // waits per creator (G-75), so the reversal gives a question credit instead
