@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
+import { DirectMessageModule } from '../direct-message/direct-message.module';
+import { NotificationModule } from '../notification/notification.module';
 import { PlansModule } from '../plans/plans.module';
 import { PointsModule } from '../points/points.module';
 import { PriceListModule } from '../price-list/price-list.module';
@@ -23,6 +25,9 @@ import { StoreEarningService } from './store-earning.service';
 import { StoreIntentService } from './store-intent.service';
 import { StoreIntentSweepService } from './store-intent-sweep.service';
 import { StoreGrantService } from './store-grant.service';
+import { StoreSaleNoticeService } from './notice/store-sale-notice.service';
+import { StoreQuestionService } from './question/store-question.service';
+import { StoreQuestionTargetService } from './question/store-question-target.service';
 import { StoreNotificationService } from './store-notification.service';
 import { StorePurchaseService } from './store-purchase.service';
 import { StoreController } from './store.controller';
@@ -43,6 +48,10 @@ import { StoreWebhookController } from './store-webhook.controller';
     PointsModule,
     BlockedAccountModule,
     PriceListModule,
+    // A paid question is a direct message (STORE-QUESTION): the module that owns
+    // the pause rule and the after-answer step.
+    DirectMessageModule,
+    NotificationModule,
   ],
   controllers: [StoreController, StoreWebhookController, AdminStoreController],
   providers: [
@@ -70,6 +79,9 @@ import { StoreWebhookController } from './store-webhook.controller';
     StorePurchaseService,
     StoreNotificationService,
     StoreAdminService,
+    StoreQuestionService,
+    StoreQuestionTargetService,
+    StoreSaleNoticeService,
   ],
   exports: [StoreCatalogService, StorePurchaseService],
 })

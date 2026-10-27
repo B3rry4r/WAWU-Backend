@@ -168,6 +168,15 @@ const EVENTS: NotificationEvent[] = [
     communityName: 'Lagos Makers',
     messageCount: 3,
   },
+  // STORE-SALE-NOTICE and STORE-QUESTION (R-101): added with the kinds (this list must name every pushed kind).
+  {
+    kind: 'pass_sold',
+    userWawuId: 'u',
+    roomName: 'Lagos Makers',
+    netAmount: 850,
+  },
+  { kind: 'question_answered', userWawuId: 'u', netAmount: 850 },
+  { kind: 'question_credit', userWawuId: 'u', amount: 1000 },
 ];
 
 describe('the words of a push', () => {

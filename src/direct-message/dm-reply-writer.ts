@@ -10,6 +10,7 @@ import type {
 } from '../../generated/prisma/models';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { DmAnsweredHooks } from './dm-answered-hooks';
+import { isStoreQuestionRef } from './store-question-ref';
 
 /** `first`: the legacy route, which answers a question once. `any`: INBOX-08, which adds bubbles while the window is open. */
 export type ReplyMode = 'first' | 'any';
@@ -100,9 +101,13 @@ export class DmReplyWriter {
       throw error;
     }
     // The answer is committed. A question paid from the wallet now has its
-    // held price released to the creator (INBOX-17); a failure there never
-    // undoes the answer, and the hold sweep asks again.
-    if (posted.message.flutterwaveTxRef.startsWith('wallet:')) {
+    // held price released to the creator (INBOX-17), and one bought in a store
+    // earns the creator's share (STORE-QUESTION); a failure there never undoes
+    // the answer, and each one's sweep asks again.
+    if (
+      posted.message.flutterwaveTxRef.startsWith('wallet:') ||
+      isStoreQuestionRef(posted.message.flutterwaveTxRef)
+    ) {
       await this.answered.afterAnswered({
         id: posted.message.id,
         flutterwaveTxRef: posted.message.flutterwaveTxRef,

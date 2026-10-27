@@ -81,7 +81,14 @@ type CoreNotificationKind =
   | 'price_moved'
   // FIX-105 (R-81): new messages in a community the person joined.
   /** Other people posted in a community the person joined. One notice per person and room, counted. */
-  | 'community_messages';
+  | 'community_messages'
+  // STORE-SALE-NOTICE and STORE-QUESTION (R-101): sales made through the app stores.
+  /** A community pass was sold through a store. Recipient: the room's host, who earns 85% of the list price. */
+  | 'pass_sold'
+  /** A paid question bought in a store was answered. Recipient: the creator, who earns 85% of the list price. */
+  | 'question_answered'
+  /** A paid question bought in a store was not answered in time. Recipient: the asker, who has a question credit. */
+  | 'question_credit';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -320,7 +327,31 @@ type NotificationEventCore =
       userWawuId: string;
       itemTitle: string;
       newPrice: number;
-    };
+    }
+  /**
+   * STORE-SALE-NOTICE (R-101). A community pass was sold through a store, told
+   * once per sale in the transaction that records the host's earning.
+   * Recipient: the host. `netAmount` is the host's 85% of the list price, whole naira.
+   */
+  | {
+      kind: 'pass_sold';
+      userWawuId: string;
+      roomName: string;
+      netAmount: number;
+    }
+  /**
+   * STORE-SALE-NOTICE (R-101). A paid question bought through a store was
+   * answered; told once, in the transaction that records the earning.
+   * Recipient: the creator. `netAmount` is their 85% of the list price, whole naira.
+   */
+  | { kind: 'question_answered'; userWawuId: string; netAmount: number }
+  /**
+   * STORE-QUESTION (R-101 point 6). A paid question bought through a store was
+   * not answered by its deadline; the asker has a question credit worth the list
+   * price, never cash. Told once, in the transaction that makes the credit.
+   * Recipient: the asker. `amount` is whole naira.
+   */
+  | { kind: 'question_credit'; userWawuId: string; amount: number };
 
 /** A pass's last day as the reminder writes it: "12 Nov 2026", Lagos time. */
 function passEndDay(endsAt: Date): string {
@@ -892,6 +923,42 @@ export function composeNotification(
         ...NO_RICH_MEDIA,
       };
 
+    case 'pass_sold':
+      return {
+        ...base,
+        title: 'Pass sold',
+        body: `Someone got a pass to “${event.roomName}”. You earned ${formatNaira(event.netAmount)} after the platform fee.`,
+        tone: 'success',
+        amount: Math.round(event.netAmount),
+        creditsCount: null,
+        actionLabel: 'View earnings',
+        ...NO_RICH_MEDIA,
+      };
+
+    case 'question_answered':
+      return {
+        ...base,
+        title: 'Question answered',
+        body: `You answered a paid question. You earned ${formatNaira(event.netAmount)} after the platform fee.`,
+        tone: 'success',
+        amount: Math.round(event.netAmount),
+        creditsCount: null,
+        actionLabel: 'View earnings',
+        ...NO_RICH_MEDIA,
+      };
+
+    case 'question_credit':
+      return {
+        ...base,
+        title: 'You have a question credit',
+        body: `A creator did not reply in time. You have a ${formatNaira(event.amount)} credit to ask any creator a question at that price or less.`,
+        tone: 'info',
+        amount: Math.round(event.amount),
+        creditsCount: null,
+        actionLabel: null,
+        ...NO_RICH_MEDIA,
+      };
+
     case 'community_pass_refunded':
       return {
         ...base,
@@ -1399,6 +1466,10 @@ export const NOTIFICATION_CATEGORY: Record<
   community_pass_refunded: 'money',
   // PRICE-LIST (R-101). Default (agent), owner may override: under "Money".
   price_moved: 'money',
+  // STORE-SALE-NOTICE and STORE-QUESTION (R-101). Money the creator earned, or a credit the asker was given.
+  pass_sold: 'money',
+  question_answered: 'money',
+  question_credit: 'money',
   content_published: 'content',
   content_rejected: 'content',
   review_received: 'content',

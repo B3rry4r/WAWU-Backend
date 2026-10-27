@@ -234,7 +234,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   { model: 'StoreSubscription', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'StoreAccountToken', column: 'wawuUserId', disposition: 'OWNED' },
   // What a ladder purchase was for, said before the store sheet opened
-  // (STORE-BUY-HUB, R-101): the person, the thing and the list price. OWNED: it
+  // (STORE-BUY-HUB, R-101): the person, the thing and the list price. A paid
+  // question's words (STORE-QUESTION) wait here only until the sale sends the
+  // question, then live on the direct message and are cleared. OWNED: it
   // exists only because this account asked to buy, and names no counterparty
   // beyond a target id. No foreign key points at it. The columns the ladder
   // added to StorePurchase (`intentId`, `buyKind`, `targetId`) are on a row

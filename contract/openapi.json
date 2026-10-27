@@ -51972,11 +51972,12 @@
             "type": "string"
           },
           "kind": {
-            "description": "`content` (unlock a piece), `tip` (tip a creator) or `pass` (a community pass).",
+            "description": "`content` (unlock a piece), `tip` (tip a creator), `pass` (a community pass) or `question` (a paid question to a creator).",
             "enum": [
               "content",
               "tip",
-              "pass"
+              "pass",
+              "question"
             ],
             "type": "string"
           },
@@ -51987,8 +51988,14 @@
           },
           "creatorWawuId": {
             "type": "string",
-            "description": "The creator to tip. Required for `tip`.",
+            "description": "The creator to tip, or to ask a question. Required for `tip` and `question`.",
             "format": "uuid"
+          },
+          "text": {
+            "type": "string",
+            "description": "The question, 2,000 characters at most. Required for `question`, refused for any other kind.",
+            "minLength": 1,
+            "maxLength": 2000
           },
           "communityId": {
             "type": "string",
@@ -79850,7 +79857,8 @@
             "enum": [
               "tip",
               "content",
-              "pass"
+              "pass",
+              "question"
             ],
             "nullable": true
           },
@@ -80095,6 +80103,10 @@
           "creatorWawuId": {
             "type": "string",
             "nullable": true
+          },
+          "questionId": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -80191,7 +80203,8 @@
             "enum": [
               "tip",
               "content",
-              "pass"
+              "pass",
+              "question"
             ],
             "nullable": true
           },
@@ -80253,6 +80266,13 @@
           "amountKobo": {
             "type": "integer"
           },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "question"
+            ],
+            "nullable": true
+          },
           "createdAt": {
             "type": "string"
           }
@@ -80260,6 +80280,7 @@
         "required": [
           "id",
           "amountKobo",
+          "scope",
           "createdAt"
         ]
       },

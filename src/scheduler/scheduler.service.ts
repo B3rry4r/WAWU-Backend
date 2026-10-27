@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { NotificationService } from '../notification/notification.service';
 import { DmRefundService } from '../direct-message/dm-refund.service';
+import { STORE_QUESTION_REF_PREFIX } from '../direct-message/store-question-ref';
 import type { NotificationEvent } from '../notification/notification-event';
 
 /**
@@ -56,7 +57,11 @@ export class SchedulerService {
         deadlineAt: { lt: now },
         // A question paid from the wallet is refunded through its hold
         // (INBOX-17), not by a Flutterwave refund that does not exist for it.
-        NOT: { flutterwaveTxRef: { startsWith: 'wallet:' } },
+        // One bought in a store is the store module's (STORE-QUESTION).
+        NOT: [
+          { flutterwaveTxRef: { startsWith: 'wallet:' } },
+          { flutterwaveTxRef: { startsWith: STORE_QUESTION_REF_PREFIX } },
+        ],
       },
       select: { id: true },
       take: 500,
@@ -70,7 +75,10 @@ export class SchedulerService {
           // wins the race rather than being refunded out from under them.
           status: 'awaiting_response',
           deadlineAt: { lt: now },
-          NOT: { flutterwaveTxRef: { startsWith: 'wallet:' } },
+          NOT: [
+            { flutterwaveTxRef: { startsWith: 'wallet:' } },
+            { flutterwaveTxRef: { startsWith: STORE_QUESTION_REF_PREFIX } },
+          ],
         },
         data: { status: 'refunded', refundStatus: 'owed' },
       });
