@@ -884,8 +884,9 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   // What this person bought through Google Play or the App Store (IAP-01, R-86).
-  // The store's transaction id, the person's own other ids and the room's host
-  // stay out (rule 3); the price is in the store's own currency, as a string.
+  // The store's transaction id, the intent's id, the person's own other ids and
+  // the room's host stay out (rule 3); the price is in the store's own currency,
+  // as a string.
   {
     key: 'storePurchases',
     models: ['StorePurchase'],
@@ -903,6 +904,11 @@ export const EXPORT_SECTIONS: ExportSection[] = [
             purchasedAt: true,
             expiresAt: true,
             endedAt: true,
+            // A price-ladder purchase (STORE-BUY-HUB): what it was for (a piece, a
+            // tip, a pass) and which one. The person's own action; the intent's id
+            // is the Hub's and stays out (rule 3).
+            buyKind: true,
+            targetId: true,
           },
           orderBy: { purchasedAt: 'desc' },
         })
@@ -1636,6 +1642,17 @@ export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
       model: 'StoreAccountToken',
       reason:
         'A random id the Hub made to tie the person to their store purchases; not data the person gave.',
+    },
+    // The price ladder (STORE-BUY-HUB, R-101).
+    {
+      model: 'StorePurchaseIntent',
+      reason:
+        'The Hub note, made just before a store sheet opened, of what a purchase was for; what they bought, and what it was for, is exported under storePurchases.',
+    },
+    {
+      model: 'StoreEarning',
+      reason:
+        'The creator share of somebody else store sale, kept like a wallet sale earning (EarningSettlement): a record WAWU holds about money it owes, not content the person wrote; the buyer sale is exported under storePurchases.',
     },
     // Secrets and identity records: never in an email.
     {
