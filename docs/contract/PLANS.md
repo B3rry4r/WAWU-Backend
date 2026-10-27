@@ -669,7 +669,10 @@ price, never the provider's charge), `products` (as quoted), `status`,
 `statusMessage`, `payment` (null until the money is taken), `transfer` (set
 while `awaiting_transfer`: the same `PlanPurchaseTransferView` section 8
 describes), `grant` and `paidAt`. `status`: `awaiting_transfer`, `pending`,
-`paid`, `failed`, `reversed`, `expired`, as for a points pack (section 10).
+`paid`, `failed`, `reversed`, `expired`, as for a points pack (section 10),
+and `refunded` (PACK-CAP: the pack could not be added after the payment
+confirmed, because another channel took the last place; the whole price goes
+back to the wallet and `statusMessage` says so).
 `grant` (once `paid`): `productsAdded` (this purchase), `extraProducts` (all
 the extras bought on the account, as they stand now) and `productsAllowed`
 (the tier's own plus the extras, as they stand now).
@@ -682,6 +685,23 @@ the extras bought on the account, as they stand now) and `productsAllowed`
   tier_required` (CONVENTIONS section 23) and nothing is taken or kept. A
   person with an open wallet and no tier is told this, not that the wallet is
   missing: the wallet is checked first, as for every purchase.
+- **Only some tiers, and at most some packs (PACK-CAP, R-100).** The pack is
+  sold only to a person whose running tier is named by the admin setting
+  `plan.extra_products.tiers` (a list of tier ids; the default is `founding`,
+  Founding Maker alone), and only while they hold fewer than
+  `plan.extra_products.max_packs` packs (default 2, so 20 products at most:
+  10 + 2 x 5). Packs are counted on the extras the tier row holds, which carry
+  across renewals and upgrades, so 20 stays the most a profile can hold; packs
+  bought before the rule stay as they were. Verify and Verify Plus are offered
+  the higher tiers only. Otherwise the quote and the purchase answer `409
+  pack_not_allowed` (CONVENTIONS section 23): it is answered **before any
+  wallet or payment gate**, so a person with no wallet is told it too and not
+  led to open one for it. The check is made again under the tier lock where the
+  pack is added: a payment that confirms after another channel (a store
+  purchase) took the last place is not added and its whole price is refunded
+  (`refunded`). A waiting transfer order is closed `failed` with nothing taken.
+  A store purchase of the pack that arrives against the rule is recorded with
+  `flag: pack_not_allowed` and grants nothing (`POST /store/purchases`).
 - **The quote binds price and count.** The number of products is the
   payment's terms. A quote whose price or count changed since it was given is
   `409 quote_changed`, before anything moves. The payment keeps them from the

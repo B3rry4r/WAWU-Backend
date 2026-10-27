@@ -1,3 +1,4 @@
+import { nairaText } from '../../money/insufficient-funds';
 import type { PlansConfig } from '../plans-config';
 
 /**
@@ -66,4 +67,21 @@ export function packRefusalFor(
 /** The sentence for a refusal. */
 export function packRefusalMessage(why: 'tier' | 'max'): string {
   return why === 'tier' ? PACK_TIER_MESSAGE : PACK_AT_MOST_MESSAGE;
+}
+
+/** The hold's `releaseCondition` for a pack payment that is being refunded (the tier payment's own word). */
+export const EXTRA_PRODUCTS_REFUND_CONDITION = 'plan_granted';
+
+const NOT_RETURNED = 'The charge on your first payment is not returned.';
+
+/**
+ * What a pack purchase says when the pack could not be added after the payment
+ * confirmed (another channel took the last place) and the price is going back
+ * (R-10: a refund returns the price, never the provider's charge).
+ */
+export function packRefundingMessage(amountKobo: number): string {
+  return `We could not add these products, so ${nairaText(amountKobo)} is on its way back to your wallet. ${NOT_RETURNED}`;
+}
+export function packRefundedMessage(amountKobo: number): string {
+  return `We could not add these products, so ${nairaText(amountKobo)} is back in your wallet. ${NOT_RETURNED}`;
 }

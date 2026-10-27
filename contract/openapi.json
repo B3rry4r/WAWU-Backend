@@ -75134,6 +75134,7 @@
               "failed",
               "reversed",
               "expired",
+              "refunded",
               "paid",
               "awaiting_transfer"
             ]

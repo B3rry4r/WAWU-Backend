@@ -280,4 +280,81 @@ describe('PACK-CAP: only Founding Maker adds products, at most two packs', () =>
     expect((await quoteRoute(p)).status).toBe(409);
     expect(await extraOf(p)).toBe(addOn.count);
   });
+
+  // ---------------------------------------------------------------------------
+  // Round 3: the cap is re-checked where the pack is added, and eligibility
+  // comes before the wallet.
+  // ---------------------------------------------------------------------------
+
+  it('M1: a pack paid while another channel took the last place is refunded in full and never added (the cap is 20, not 25)', async () => {
+    const p = await h.buyer(RICH);
+    await hold(p, 'founding', addOn.count);
+    const q = data<ExtraProductsQuoteView>(await quoteRoute(p));
+    // The provider has not confirmed yet: the payment is claimed and pending.
+    nuvion.mode = 'pending';
+    const pending = data<ExtraProductsPurchaseView>(
+      await call.buy(p, bodyFor(q)),
+    );
+    expect(pending.status).toBe('pending');
+    // A store grant lands meanwhile and takes the second pack.
+    await h.prisma.makerTier.update({
+      where: { wawuUserId: p.id },
+      data: { extraProducts: 2 * addOn.count },
+    });
+    nuvion.settle(pending.payment!.reference, 'successful');
+    await h.sweepLater();
+    const done = data<ExtraProductsPurchaseView>(
+      await call.read(p, pending.id),
+    );
+    expect(done.status).toBe('refunded');
+    expect(done.grant).toBeNull();
+    expect(done.statusMessage).toMatch(/back/);
+    expect(done.statusMessage).not.toMatch(/[\u2013\u2014]/);
+    // Nothing was added, and the purchase is recorded as a refund hold.
+    expect(await extraOf(p)).toBe(2 * addOn.count);
+    expect(await packsBought(p)).toBe(0);
+    const holdRow = await h.prisma.walletHold.findUniqueOrThrow({
+      where: { paymentId: pending.payment!.id },
+    });
+    expect(Number(holdRow.amountKobo)).toBe(addOnPrice);
+    // The whole price went back to the payer, once, however often the sweep runs.
+    const back = () =>
+      nuvion
+        .sendsFrom(nuvion.operational.accountId)
+        .filter((s) => s.toAccountId === p.account!.accountId);
+    expect(back()).toHaveLength(1);
+    expect(back()[0].amountKobo).toBe(BigInt(addOnPrice));
+    await h.sweepLater();
+    expect(back()).toHaveLength(1);
+    expect(await extraOf(p)).toBe(2 * addOn.count);
+  });
+
+  it('M2: the quote and the purchase answer pack_not_allowed before wallet_not_open, so a Verify person with no wallet is not shown the pack', async () => {
+    const p = await h.walletless();
+    await hold(p, 'verify');
+    const quote = await quoteRoute(p);
+    expect(quote.status).toBe(409);
+    expect(reasonOf(quote)).toEqual({
+      code: PACK_NOT_ALLOWED_CODE,
+      message: PACK_TIER_MESSAGE,
+    });
+    const res = await request(h.app.getHttpServer())
+      .post('/api/hub/plans/purchases')
+      .set('Authorization', p.auth)
+      .set('Idempotency-Key', randomUUID())
+      .send({
+        kind: 'extra_products',
+        method: 'wallet',
+        expectedTotalKobo: 1,
+        quoteToken: 'x',
+      });
+    expect(res.status).toBe(409);
+    expect(reasonOf(res).code).toBe(PACK_NOT_ALLOWED_CODE);
+    // A Founding Maker with no wallet is eligible, so the wallet gate answers.
+    const f = await h.walletless();
+    await hold(f, 'founding');
+    const fq = await quoteRoute(f);
+    expect(fq.status).toBe(409);
+    expect(reasonOf(fq).code).toBe('wallet_not_open');
+  });
 });

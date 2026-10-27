@@ -31,7 +31,13 @@ import type { PlanPurchaseTransferView } from './plan-purchase-view.type';
  * taken.
  */
 export type ExtraProductsPurchaseStatus =
-  'awaiting_transfer' | 'pending' | 'paid' | 'failed' | 'reversed' | 'expired';
+  | 'awaiting_transfer'
+  | 'pending'
+  | 'paid'
+  | 'failed'
+  | 'reversed'
+  | 'expired'
+  | 'refunded';
 
 /** What a paid purchase gave: more places to publish. */
 export interface ExtraProductsGrantView {

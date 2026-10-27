@@ -71,14 +71,20 @@ describe('PACK-CAP: the store grant of the upload pack follows the rule', () => 
       .set('Authorization', `Bearer ${token}`)
       .send(body);
 
-  async function giveTier(tierId: string, extraProducts = 0): Promise<void> {
+  async function giveTier(
+    tierId: string,
+    extraProducts = 0,
+    state: 'running' | 'ended' = 'running',
+  ): Promise<void> {
     const day = 86_400_000;
     await prisma.makerTier.create({
       data: {
         wawuUserId: BUYER,
         tierId,
         activeFrom: new Date(Date.now() - 40 * day),
-        activeUntil: new Date(Date.now() + 20 * day),
+        activeUntil: new Date(
+          Date.now() + (state === 'running' ? 20 : -10) * day,
+        ),
         productsIncluded: plans.tiers.find((t) => t.id === tierId)!.products,
         extraProducts,
         pointsIncluded: 0,
@@ -266,5 +272,20 @@ describe('PACK-CAP: the store grant of the upload pack follows the rule', () => 
       flag: PACK_NOT_ALLOWED_CODE,
     });
     expect(await extraOf()).toBe(COUNT());
+  });
+
+  it("an ended Founding Maker's late store purchase is still granted and waits for the next tier; an ended Verify's is flagged", async () => {
+    await giveTier('founding', 0, 'ended');
+    expect(await buyPack('tok-late')).toMatchObject({
+      flag: null,
+      grant: { extraProducts: COUNT() },
+    });
+    expect(await extraOf()).toBe(COUNT());
+    await wipe();
+    await giveTier('verify', 0, 'ended');
+    expect(await buyPack('tok-late-v')).toMatchObject({
+      flag: PACK_NOT_ALLOWED_CODE,
+    });
+    expect(await extraOf()).toBe(0);
   });
 });

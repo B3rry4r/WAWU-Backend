@@ -34,6 +34,7 @@ import {
   PlanPurchaseDto,
   PlanPurchaseQuoteQueryDto,
 } from './plan-purchase.dto';
+import { ExtraProductsEligibilityGuard } from './extra-products-eligibility.guard';
 import {
   PLAN_PURCHASE_ROUTE,
   PlanPurchaseService,
@@ -88,6 +89,8 @@ export class PlanPurchasesController {
     'fees_not_set',
   )
   @RequireFeesSet()
+  // Last, so it runs first: the pack's eligibility before any wallet gate (R-100).
+  @UseGuards(ExtraProductsEligibilityGuard)
   quote(
     @CurrentWallet() wallet: OpenWallet,
     @Query() query: PlanPurchaseQuoteQueryDto,
@@ -147,6 +150,7 @@ export class PlanPurchasesController {
     'payment_in_progress',
   )
   @RequireFeesSet()
+  @UseGuards(ExtraProductsEligibilityGuard)
   buy(
     @CurrentWallet() wallet: OpenWallet,
     @CurrentIdempotencyScope() scope: IdempotencyScope,
