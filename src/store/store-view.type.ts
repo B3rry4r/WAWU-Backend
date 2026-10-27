@@ -89,7 +89,8 @@ export interface StorePurchaseView {
   platform: StorePlatform;
   storeProductId: string;
   kind: StoreProductKind;
-  status: StorePurchaseStatus;
+  /** `credited` when the payment could not be given (the piece, creator or room was gone) and the fan has a store credit instead; `credit` then says how much. */
+  status: StorePurchaseStatus | 'credited';
   /** True when this store transaction had already been granted (a replay, a restore): nothing more was given. */
   alreadyGranted: boolean;
   grant: StoreGrantedView;
@@ -98,12 +99,38 @@ export interface StorePurchaseView {
   expiresAt: string | null;
   /** `member_removed` when the purchase was recorded but the pass was not given because the host removed the person; `pack_not_allowed` when the upload pack was recorded and nothing was added because the person's tier may not buy it or they hold the most packs (R-100); `target_unavailable` when a ladder purchase was recorded and nothing was given because the piece, creator or room can no longer be bought (STORE-BUY-HUB); `earning_review` when a store refund of an already-paid earning needs a person. Null otherwise. */
   flag: string | null;
+  /** A ladder purchase that could not be given: the store credit made instead. Absent on every other purchase. */
+  credit?: StoreCreditNoticeView | null;
+  /** A ladder purchase paid with a store credit: the credit it used. Absent otherwise. */
+  paidWithCredit?: string | null;
   /** A ladder purchase: what it was for (`content`, `tip` or `pass`). Absent on the other kinds. */
   buyKind?: StoreIntentKind | null;
   /** A ladder purchase: the intent it was made against. Absent on the other kinds. */
   intentId?: string | null;
   /** A ladder purchase: the piece, creator or room. Absent on the other kinds. */
   targetId?: string | null;
+}
+
+/** A store credit made when a paid purchase could not be given. */
+export interface StoreCreditNoticeView {
+  id: string;
+  /** Worth the list price the fan paid, in kobo. Never cash. */
+  amountKobo: number;
+  /** A plain sentence the app shows as it is, for example "This piece is no longer available. You have a ₦1,000 credit to use on Who Made This." */
+  message: string;
+}
+
+/** One store credit the fan can spend (`GET /store/credits`). */
+export interface StoreCreditView {
+  id: string;
+  amountKobo: number;
+  createdAt: string;
+}
+
+/** `GET /store/credits`. */
+export interface StoreCreditListView {
+  /** Credits not yet spent, smallest first. A credit pays for ONE purchase at its price or less, whole; it is never cash and never expires. */
+  credits: StoreCreditView[];
 }
 
 /** `POST /store/intents`: what to hand the store when the sheet opens. */
@@ -116,6 +143,8 @@ export interface StoreIntentView {
   accountToken: string;
   /** When the intent stops being open (ISO 8601): 60 minutes after it was made. A sale made before then still counts however late it is posted. */
   expiresAt: string;
+  /** With `payWith: credit`: the purchase, already granted. No store sheet is opened. Null otherwise. */
+  purchase?: StorePurchaseView | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +207,8 @@ export interface AdminStorePlatformListView {
 
 export interface AdminStorePurchaseView {
   id: string;
-  wawuUserId: string;
+  /** The buyer; null once their account is deleted (the purchase is kept so a store refund can still find it). */
+  wawuUserId: string | null;
   platform: StorePlatform;
   storeProductId: string;
   kind: StoreProductKind;

@@ -96,6 +96,7 @@ export class StoreAdminService {
       ...(q.kind ? { kind: q.kind } : {}),
       ...(q.status && base.status === undefined ? { status: q.status } : {}),
       ...(q.wawuUserId ? { wawuUserId: q.wawuUserId } : {}),
+      ...(q.flag ? { flag: q.flag } : {}),
       ...(after
         ? {
             OR: [

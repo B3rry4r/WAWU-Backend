@@ -8401,7 +8401,10 @@ model StorePlatformSetting {
 /// originalTransactionId; Google's first purchase token).
 model StorePurchase {
   id                 String              @id @default(uuid())
-  wawuUserId         String
+  /// The buyer. Null once their account is deleted (STORE-BUY-HUB round 3): the
+  /// row stays, with the buyer cleared, so a later store refund still finds it
+  /// and takes the creator's share back.
+  wawuUserId         String?
   platform           StorePlatform
   storeTransactionId String
   subscriptionKey    String?
@@ -8435,6 +8438,11 @@ model StorePurchase {
   /// What the store charged, in the buyer's own currency (display only).
   currency           String?
   priceMicros        BigInt?
+  /// The signed date of the last refund, revoke or reversal notice applied or
+  /// seen for this transaction (Apple's `signedDate`). A notice older than this
+  /// changes nothing, so notices that arrive out of order end where the store's
+  /// own order ends (STORE-BUY-HUB round 3).
+  lastNoticeAt       DateTime?
   purchasedAt        DateTime
   /// When a subscription period ends, as the store last said.
   expiresAt          DateTime?
@@ -8532,6 +8540,29 @@ model StorePurchaseIntent {
 
   @@index([wawuUserId, kind, targetId])
   @@index([status, expiresAt])
+}
+
+/// A store credit (STORE-BUY-HUB round 3, R-101): what a fan paid for a ladder
+/// purchase that could not be given because the piece, creator or room was no
+/// longer there when the payment arrived. Worth the LIST price they paid, usable
+/// on a later piece, tip or pass at that price or less (`POST /store/intents`
+/// with `payWith: credit` consumes one WHOLE and grants at once), never cash,
+/// never expires. `open` until spent (`spent`, with the purchase it paid for) or
+/// taken back (`void`, the store paid the original back). One per source
+/// purchase. No foreign keys: the purchase outlives the buyer's account.
+model StoreCredit {
+  id               String    @id @default(uuid())
+  wawuUserId       String
+  amountKobo       Int
+  sourcePurchaseId String    @unique
+  status           String    @default("open")
+  spentPurchaseId  String?   @unique
+  spentAt          DateTime?
+  voidedAt         DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([wawuUserId, status])
 }
 
 /// The creator's 85% of a store sale (STORE-BUY-HUB, R-101 points 2 and 4): 85%

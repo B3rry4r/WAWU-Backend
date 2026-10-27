@@ -37,7 +37,12 @@ export interface BuyTarget {
 }
 
 export type TargetCheck =
-  | { ok: true; target: BuyTarget }
+  | {
+      ok: true;
+      target: BuyTarget;
+      /** Only when asked to tolerate it: the price on the piece or room is no longer the list price named. */
+      priceChanged?: boolean;
+    }
   | { ok: false; code: StoreErrorCode; message: string };
 
 const refuse = (code: StoreErrorCode, message: string): TargetCheck => ({
@@ -71,22 +76,22 @@ export class StoreBuyTargetService {
     userId: string,
     kind: StoreIntentKind,
     targetId: string,
-    opts: { listNaira?: number } = {},
+    opts: { listNaira?: number; tolerateChangedPrice?: boolean } = {},
   ): Promise<TargetCheck> {
     switch (kind) {
       case 'content':
-        return this.content(userId, targetId, opts.listNaira);
+        return this.content(userId, targetId, opts);
       case 'tip':
         return this.tip(userId, targetId);
       case 'pass':
-        return this.pass(userId, targetId, opts.listNaira);
+        return this.pass(userId, targetId, opts);
     }
   }
 
   private async content(
     userId: string,
     contentId: string,
-    listNaira: number | undefined,
+    opts: { listNaira?: number; tolerateChangedPrice?: boolean },
   ): Promise<TargetCheck> {
     const notFound = refuse(
       'store_intent_target_not_found',
@@ -124,10 +129,13 @@ export class StoreBuyTargetService {
       select: { id: true },
     });
     if (owned) return refuse('store_intent_not_payable', TARGET_CONTENT_OWNED);
-    if (listNaira !== undefined && content.price !== listNaira)
+    const priceChanged =
+      opts.listNaira !== undefined && content.price !== opts.listNaira;
+    if (priceChanged && opts.tolerateChangedPrice !== true)
       return refuse('store_intent_price_changed', TARGET_PRICE_CHANGED);
     return {
       ok: true,
+      priceChanged,
       target: {
         kind: 'content',
         targetId: content.id,
@@ -166,7 +174,7 @@ export class StoreBuyTargetService {
   private async pass(
     userId: string,
     communityId: string,
-    listNaira: number | undefined,
+    opts: { listNaira?: number; tolerateChangedPrice?: boolean },
   ): Promise<TargetCheck> {
     const notFound = refuse(
       'store_intent_target_not_found',
@@ -195,13 +203,14 @@ export class StoreBuyTargetService {
     });
     if (membership?.status === 'pending')
       return refuse('store_intent_not_payable', TARGET_ROOM_REMOVED);
-    if (
-      listNaira !== undefined &&
-      Number(room.passPrice.priceKobo) !== listNaira * 100
-    )
+    const priceChanged =
+      opts.listNaira !== undefined &&
+      Number(room.passPrice.priceKobo) !== opts.listNaira * 100;
+    if (priceChanged && opts.tolerateChangedPrice !== true)
       return refuse('store_intent_price_changed', TARGET_PRICE_CHANGED);
     return {
       ok: true,
+      priceChanged,
       target: {
         kind: 'pass',
         targetId: room.id,

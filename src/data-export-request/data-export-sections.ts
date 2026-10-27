@@ -917,6 +917,25 @@ export const EXPORT_SECTIONS: ExportSection[] = [
         priceMicros: r.priceMicros === null ? null : r.priceMicros.toString(),
       })),
   },
+  // The store credits this person was given when a paid purchase could not be
+  // given (STORE-BUY-HUB round 3): how much, whether it is spent, and when. The
+  // purchase ids stay out (rule 3).
+  {
+    key: 'storeCredits',
+    models: ['StoreCredit'],
+    load: (prisma, me) =>
+      prisma.storeCredit.findMany({
+        where: { wawuUserId: me },
+        select: {
+          amountKobo: true,
+          status: true,
+          createdAt: true,
+          spentAt: true,
+          voidedAt: true,
+        },
+        orderBy: NEWEST,
+      }),
+  },
   // The products this person added to their tier (TIER-04). The payment
   // reference is a payment id, so it stays out (rule 3).
   {

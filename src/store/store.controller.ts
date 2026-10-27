@@ -13,6 +13,7 @@ import type { WawuJwtClaims } from '../common/auth/wawu-jwt-claims.interface';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { WawuAuthGuard } from '../common/guards/wawu-auth.guard';
 import { StoreCatalogService } from './store-catalog.service';
+import { StoreCreditService } from './store-credit.service';
 import { StoreIntentService } from './store-intent.service';
 import { StorePurchaseService } from './store-purchase.service';
 import {
@@ -21,6 +22,7 @@ import {
   StorePurchaseDto,
 } from './store.dto';
 import type {
+  StoreCreditListView,
   StoreIntentView,
   StoreProductListView,
   StorePurchaseView,
@@ -39,6 +41,7 @@ export class StoreController {
     private readonly catalog: StoreCatalogService,
     private readonly purchases: StorePurchaseService,
     private readonly intents: StoreIntentService,
+    private readonly credits: StoreCreditService,
   ) {}
 
   /**
@@ -86,7 +89,20 @@ export class StoreController {
     @CurrentUser() user: WawuJwtClaims,
     @Body() dto: StoreIntentDto,
   ): Promise<StoreIntentView> {
-    return this.intents.create(user.sub, dto);
+    return dto.payWith === 'credit'
+      ? this.purchases.payWithCredit(user.sub, dto)
+      : this.intents.create(user.sub, dto);
+  }
+
+  /**
+   * The store credits the person can spend (STORE-BUY-HUB round 3): what they
+   * paid for a purchase that could not be given because the piece, creator or
+   * room was gone. Pay with one by `POST /store/intents` with `payWith: credit`.
+   */
+  @Get('credits')
+  @Header('Cache-Control', 'no-store')
+  creditList(@CurrentUser() user: WawuJwtClaims): Promise<StoreCreditListView> {
+    return this.credits.list(user.sub);
   }
 
   /**

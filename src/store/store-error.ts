@@ -50,7 +50,11 @@ export type StoreErrorCode =
   /** (STORE-BUY-HUB) The piece, creator or room cannot be bought or tipped by this person (free, their own, already theirs, no pass, removed). */
   | 'store_intent_not_payable'
   /** (STORE-BUY-HUB) The price on the piece or the room is not the list price the app named. */
-  | 'store_intent_price_changed';
+  | 'store_intent_price_changed'
+  /** (STORE-BUY-HUB round 3) The store credit named is not there, is another person's, or has been used or taken back. */
+  | 'store_credit_unavailable'
+  /** (STORE-BUY-HUB round 3) The person has no store credit worth that price, so there is nothing to pay with. */
+  | 'store_credit_insufficient';
 
 export const STORE_ERROR_STATUS: Record<StoreErrorCode, HttpStatus> = {
   store_not_configured: HttpStatus.SERVICE_UNAVAILABLE,
@@ -73,6 +77,8 @@ export const STORE_ERROR_STATUS: Record<StoreErrorCode, HttpStatus> = {
   store_intent_target_not_found: HttpStatus.NOT_FOUND,
   store_intent_not_payable: HttpStatus.CONFLICT,
   store_intent_price_changed: HttpStatus.CONFLICT,
+  store_credit_unavailable: HttpStatus.CONFLICT,
+  store_credit_insufficient: HttpStatus.CONFLICT,
 };
 
 export class StoreError extends HttpException {

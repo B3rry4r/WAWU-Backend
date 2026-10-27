@@ -47,4 +47,13 @@ describe('data export of a price-ladder purchase', () => {
     expect(left.StorePurchaseIntent).toContain('storePurchases');
     expect(left.StoreEarning).toContain('EarningSettlement');
   });
+
+  it('shows a store credit as how much, whether it is spent and when, and never the purchase it came from', async () => {
+    const columns = await selectOf('storeCredits');
+    expect(columns).toEqual(
+      expect.arrayContaining(['amountKobo', 'status', 'createdAt', 'spentAt']),
+    );
+    for (const never of ['sourcePurchaseId', 'spentPurchaseId', 'wawuUserId'])
+      expect(columns).not.toContain(never);
+  });
 });

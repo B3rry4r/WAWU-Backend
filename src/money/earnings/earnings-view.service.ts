@@ -15,6 +15,7 @@ import type {
   EarningsView,
   EarningsWaitingView,
   EarningStreamView,
+  StoreEarningWaitingView,
 } from '../money-view.type';
 import { decodeEarningCursor, encodeEarningCursor } from './earning-cursor';
 
@@ -167,7 +168,27 @@ export class EarningsViewService {
       waiting: one('waiting'),
       held: one('held'),
       walletOpen: !!wallet && isRowOf(this.provider.name, wallet.provider),
+      storeEarnings: await this.storeWaiting(wawuUserId),
     };
+  }
+
+  /** The store sales' shares still waiting to be paid, soonest first, with the day each may be paid (STORE-BUY-HUB). */
+  private async storeWaiting(
+    wawuUserId: string,
+  ): Promise<StoreEarningWaitingView[]> {
+    const rows = await this.prisma.storeEarning.findMany({
+      where: { payeeWawuUserId: wawuUserId, status: 'owed' },
+      orderBy: [{ availableAt: 'asc' }, { id: 'asc' }],
+      take: 50,
+    });
+    return rows.map((r) => ({
+      kind: r.kind as PaymentKind,
+      targetId: r.targetId,
+      title: r.title,
+      amountKobo: kobo(r.amountKobo.toString()),
+      earnedAt: r.earnedAt.toISOString(),
+      availableAt: r.availableAt.toISOString(),
+    }));
   }
 
   /** A period's streams, largest first, and their sum. */

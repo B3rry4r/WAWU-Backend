@@ -747,6 +747,26 @@ export interface EarningsView {
   held: EarningsWaitingView;
   /** Whether the caller has a wallet to receive earnings; false shows "Open your wallet" beside the waiting money. */
   walletOpen: boolean;
+  /**
+   * The creator's 85% of sales made in the App Store or Google Play that WAWU
+   * has not paid yet (STORE-BUY-HUB, R-101), soonest first, at most 50. Each
+   * says the day it may be paid, `availableAt`: the sale plus 3 working days,
+   * Lagos time. They are part of `waiting`, not on top of it. Absent from an
+   * older Hub.
+   */
+  storeEarnings?: StoreEarningWaitingView[];
+}
+
+/** One store sale's share the creator is waiting to be paid. */
+export interface StoreEarningWaitingView {
+  kind: PaymentKind;
+  targetId: string;
+  title: string;
+  amountKobo: number;
+  /** When the sale was made (ISO 8601). */
+  earnedAt: string;
+  /** The day WAWU may pay it (ISO 8601): not before. */
+  availableAt: string;
 }
 
 /** A count and a sum in kobo. */

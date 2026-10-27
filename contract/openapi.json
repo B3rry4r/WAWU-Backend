@@ -44222,6 +44222,33 @@
         ]
       }
     },
+    "/api/hub/store/credits": {
+      "get": {
+        "operationId": "StoreController_creditList",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreCreditListView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The store credits the person can spend (STORE-BUY-HUB round 3): what they\npaid for a purchase that could not be given because the piece, creator or\nroom was gone. Pay with one by `POST /store/intents` with `payWith: credit`.",
+        "tags": [
+          "Store"
+        ]
+      }
+    },
     "/api/hub/store/purchases": {
       "post": {
         "operationId": "StoreController_buy",
@@ -44521,6 +44548,17 @@
             }
           },
           {
+            "name": "flag",
+            "required": false,
+            "in": "query",
+            "description": "Purchases the Hub flagged for a person to look at: `member_removed`, `pack_not_allowed`, `target_unavailable`, `price_changed`, `earning_review`.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 60,
+              "type": "string"
+            }
+          },
+          {
             "name": "cursor",
             "required": false,
             "in": "query",
@@ -44615,6 +44653,17 @@
             "schema": {
               "minLength": 1,
               "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "name": "flag",
+            "required": false,
+            "in": "query",
+            "description": "Purchases the Hub flagged for a person to look at: `member_removed`, `pack_not_allowed`, `target_unavailable`, `price_changed`, `earning_review`.",
+            "schema": {
+              "minLength": 1,
+              "maxLength": 60,
               "type": "string"
             }
           },
@@ -51951,6 +52000,14 @@
             "description": "The price in whole naira. Must be on the price list (`GET /prices`); a tip\nmust be on the tip list. A piece's or room's price must equal it.",
             "minimum": 1,
             "maximum": 1000000000
+          },
+          "payWith": {
+            "description": "`store` (the default): the store sheet is opened and the purchase made\nagainst this intent. `credit`: a store credit worth at least the price is\nconsumed whole and the purchase is granted at once, with no store sheet.",
+            "enum": [
+              "store",
+              "credit"
+            ],
+            "type": "string"
           }
         },
         "required": [
@@ -53941,6 +53998,55 @@
           "amountKobo"
         ]
       },
+      "StoreEarningWaitingView": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bill",
+              "content_unlock",
+              "tip",
+              "credit_pack",
+              "verification",
+              "legal_fee",
+              "school_fee",
+              "paid_dm",
+              "event_ticket",
+              "tier",
+              "tier_bump",
+              "points_pack",
+              "extra_products",
+              "points_shortfall",
+              "points_cash_out",
+              "community_pass"
+            ]
+          },
+          "targetId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "earnedAt": {
+            "type": "string"
+          },
+          "availableAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "targetId",
+          "title",
+          "amountKobo",
+          "earnedAt",
+          "availableAt"
+        ]
+      },
       "EarningsView": {
         "type": "object",
         "properties": {
@@ -53961,6 +54067,13 @@
           },
           "walletOpen": {
             "type": "boolean"
+          },
+          "storeEarnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoreEarningWaitingView"
+            },
+            "nullable": true
           }
         },
         "required": [
@@ -79690,7 +79803,8 @@
             "type": "string"
           },
           "wawuUserId": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           },
           "platform": {
             "type": "string",
@@ -79947,29 +80061,6 @@
           "products"
         ]
       },
-      "StoreIntentView": {
-        "type": "object",
-        "properties": {
-          "intentId": {
-            "type": "string"
-          },
-          "productId": {
-            "type": "string"
-          },
-          "accountToken": {
-            "type": "string"
-          },
-          "expiresAt": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "intentId",
-          "productId",
-          "accountToken",
-          "expiresAt"
-        ]
-      },
       "StoreGrantedView": {
         "type": "object",
         "properties": {
@@ -80015,6 +80106,25 @@
           "communityId"
         ]
       },
+      "StoreCreditNoticeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "amountKobo",
+          "message"
+        ]
+      },
       "StorePurchaseView": {
         "type": "object",
         "properties": {
@@ -80047,7 +80157,8 @@
             "enum": [
               "refunded",
               "granted",
-              "revoked"
+              "revoked",
+              "credited"
             ]
           },
           "alreadyGranted": {
@@ -80064,6 +80175,14 @@
             "nullable": true
           },
           "flag": {
+            "type": "string",
+            "nullable": true
+          },
+          "credit": {
+            "$ref": "#/components/schemas/StoreCreditNoticeView",
+            "nullable": true
+          },
+          "paidWithCredit": {
             "type": "string",
             "nullable": true
           },
@@ -80096,6 +80215,66 @@
           "purchasedAt",
           "expiresAt",
           "flag"
+        ]
+      },
+      "StoreIntentView": {
+        "type": "object",
+        "properties": {
+          "intentId": {
+            "type": "string"
+          },
+          "productId": {
+            "type": "string"
+          },
+          "accountToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          },
+          "purchase": {
+            "$ref": "#/components/schemas/StorePurchaseView",
+            "nullable": true
+          }
+        },
+        "required": [
+          "intentId",
+          "productId",
+          "accountToken",
+          "expiresAt"
+        ]
+      },
+      "StoreCreditView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "amountKobo": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "amountKobo",
+          "createdAt"
+        ]
+      },
+      "StoreCreditListView": {
+        "type": "object",
+        "properties": {
+          "credits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoreCreditView"
+            }
+          }
+        },
+        "required": [
+          "credits"
         ]
       },
       "StoreWebhookAck": {

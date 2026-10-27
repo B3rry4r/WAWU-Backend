@@ -205,7 +205,8 @@ export class StoreNotificationService {
       if (found === null) return 'unknown';
       // refundType 1 is a full refund; anything else (a quantity-based or a chargeback) is a revocation.
       const status = voided.refundType === 1 ? 'refunded' : 'revoked';
-      return (await this.takeBackPurchase(found, status, 'voided_by_store'))
+      return (await this.takeBackPurchase(found, status, 'voided_by_store')) ===
+        'applied'
         ? 'taken_back'
         : 'duplicate';
     }
@@ -274,13 +275,17 @@ export class StoreNotificationService {
             },
           });
           if (found === null) return 'unknown';
-          return (await this.takeBackPurchase(
+          const done = await this.takeBackPurchase(
             found,
             note.type === 'REFUND' ? 'refunded' : 'revoked',
             note.type === 'REFUND' ? 'refunded_by_store' : 'revoked_by_store',
-          ))
+            note.signedAt ?? null,
+          );
+          return done === 'applied'
             ? 'taken_back'
-            : 'duplicate';
+            : done === 'stale'
+              ? 'ignored'
+              : 'duplicate';
         }
         case 'REFUND_REVERSED': {
           // Apple reversed a refund (G-IAP-01-5): what the refund took is put
@@ -296,7 +301,12 @@ export class StoreNotificationService {
           });
           if (found === null) return 'unknown';
           if (found.kind !== 'buy') return 'ignored';
-          return (await this.restorePurchase(found)) ? 'restored' : 'duplicate';
+          const done = await this.restorePurchase(found, note.signedAt ?? null);
+          return done === 'applied'
+            ? 'restored'
+            : done === 'stale'
+              ? 'ignored'
+              : 'duplicate';
         }
         case 'EXPIRED':
         case 'GRACE_PERIOD_EXPIRED':
@@ -379,7 +389,7 @@ export class StoreNotificationService {
       where: { platform, subscriptionKey: key, lapsedAt: null },
       data: { lapsedAt: new Date() },
     });
-    return done ? 'taken_back' : 'duplicate';
+    return done === 'applied' ? 'taken_back' : 'duplicate';
   }
 
   /**
@@ -391,13 +401,27 @@ export class StoreNotificationService {
     purchase: StorePurchase,
     status: 'refunded' | 'revoked',
     reason: string,
-  ): Promise<boolean> {
+    signedAt: Date | null = null,
+  ): Promise<NoticeResult> {
     return this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-purchase:${purchase.platform}:${purchase.storeTransactionId}`}, 0))`;
       const row = await tx.storePurchase.findUnique({
         where: { id: purchase.id },
       });
-      if (row === null || row.status !== 'granted') return false;
+      if (row === null) return 'noop';
+      // Notices for one transaction are ordered by the date Apple signed them,
+      // not by when they arrived: an older one changes nothing (STORE-BUY-HUB
+      // round 3, M1).
+      if (isStale(row, signedAt)) return 'stale';
+      const seen = noticeDate(row, signedAt);
+      if (row.status !== 'granted') {
+        if (seen !== row.lastNoticeAt)
+          await tx.storePurchase.update({
+            where: { id: row.id },
+            data: { lastNoticeAt: seen },
+          });
+        return 'noop';
+      }
       const now = new Date();
       const taken = await this.grants.takeBack(tx, row, now);
       await tx.storePurchase.update({
@@ -406,6 +430,7 @@ export class StoreNotificationService {
           status,
           endedAt: now,
           endReason: reason,
+          lastNoticeAt: seen,
           // A purchase refunded, reversed and refunded again keeps what the
           // first refund took.
           takenBack: (row.takenBack === null
@@ -416,7 +441,7 @@ export class StoreNotificationService {
             : {}),
         },
       });
-      return true;
+      return 'applied';
     });
   }
 
@@ -426,13 +451,29 @@ export class StoreNotificationService {
    * `refunded` one is restored, so the notice twice restores once. A
    * `revoked` purchase is not reversed by this notice.
    */
-  async restorePurchase(purchase: StorePurchase): Promise<boolean> {
+  async restorePurchase(
+    purchase: StorePurchase,
+    signedAt: Date | null = null,
+  ): Promise<NoticeResult> {
     return this.prisma.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-purchase:${purchase.platform}:${purchase.storeTransactionId}`}, 0))`;
       const row = await tx.storePurchase.findUnique({
         where: { id: purchase.id },
       });
-      if (row === null || row.status !== 'refunded') return false;
+      if (row === null) return 'noop';
+      if (isStale(row, signedAt)) return 'stale';
+      const seen = noticeDate(row, signedAt);
+      // A reversal that finds nothing refunded (it arrived before the refund it
+      // reverses) restores nothing, and is remembered so that the older refund
+      // arriving after it changes nothing either.
+      if (row.status !== 'refunded') {
+        if (seen !== row.lastNoticeAt)
+          await tx.storePurchase.update({
+            where: { id: row.id },
+            data: { lastNoticeAt: seen },
+          });
+        return 'noop';
+      }
       const now = new Date();
       const restored = await this.grants.restore(tx, row, now);
       await tx.storePurchase.update({
@@ -441,6 +482,7 @@ export class StoreNotificationService {
           status: 'granted',
           endedAt: null,
           endReason: null,
+          lastNoticeAt: seen,
           takenBack: {
             ...((row.takenBack ?? {}) as Record<string, unknown>),
             restoredAt: now.toISOString(),
@@ -451,7 +493,7 @@ export class StoreNotificationService {
             : {}),
         },
       });
-      return true;
+      return 'applied';
     });
   }
 
@@ -521,10 +563,29 @@ export class StoreNotificationService {
   }
 }
 
-/** True when a take-back or restore left an earning a person has to look at. */
+/** True when a take-back or restore left an earning, or a spent credit, a person has to look at. */
 function needsReview(result: Record<string, unknown>): boolean {
   const earning = result.earning as { earning?: string } | undefined;
-  return earning?.earning === 'review';
+  return earning?.earning === 'review' || result.credit === 'review';
+}
+
+/** What a refund, revoke or reversal notice did: changed the purchase, found nothing to change, or was older than one already seen. */
+type NoticeResult = 'applied' | 'noop' | 'stale';
+
+/** True when a notice signed at `signedAt` is not newer than the last one seen for this transaction. */
+function isStale(row: StorePurchase, signedAt: Date | null): boolean {
+  return (
+    signedAt !== null &&
+    row.lastNoticeAt !== null &&
+    signedAt.getTime() <= row.lastNoticeAt.getTime()
+  );
+}
+
+/** The date to remember after a notice: the later of this one and the last seen. */
+function noticeDate(row: StorePurchase, signedAt: Date | null): Date | null {
+  if (signedAt === null) return row.lastNoticeAt;
+  if (row.lastNoticeAt === null || signedAt > row.lastNoticeAt) return signedAt;
+  return row.lastNoticeAt;
 }
 
 function ack(outcome: Outcome): StoreWebhookAck {

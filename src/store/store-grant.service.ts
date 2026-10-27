@@ -49,8 +49,12 @@ const BUY_COMMISSION_RATE = 0.15;
 /** What a ladder purchase is made against: its intent and what the intent names, checked just before the grant. */
 export interface BuyContext {
   intent: StorePurchaseIntent;
-  /** Null when the piece, creator or room can no longer be bought: the purchase is recorded and nothing is given. */
+  /** Null when the piece, creator or room can no longer be bought: the fan is given a store credit and nothing else. */
   target: BuyTarget | null;
+  /** True when the price on the piece or room has moved since the intent: the intent's price is still what is granted, flagged. */
+  priceChanged?: boolean;
+  /** Set when a store credit pays for this purchase instead of a store sale: consumed whole in the same transaction. */
+  creditId?: string | null;
 }
 
 const DAY_MS = 86_400_000;
@@ -95,6 +99,13 @@ export interface StoreGrantSnapshot {
   buyKind?: StoreIntentKind;
   targetId?: string;
   earningId?: string;
+  /** A ladder purchase that could not be given: the store credit the fan has instead, worth the list price. */
+  creditId?: string;
+  creditKobo?: number;
+  /** A ladder purchase paid with a store credit: the credit it consumed. */
+  paidWithCredit?: string;
+  /** Given, but an admin or the fan should know why: `price_changed`. */
+  note?: string;
   /** Set when the purchase was recorded and nothing was given: `member_removed`, `pack_not_allowed` (R-100) or `target_unavailable` (a ladder purchase whose piece, creator or room can no longer be bought). */
   skipped?: string;
 }
@@ -141,6 +152,8 @@ export class StoreGrantService {
   ): Promise<StoreGrantSnapshot> {
     const grants = grantsConfigOf(product.grants);
     const userId = purchase.wawuUserId;
+    if (userId === null)
+      throw new Error(`Purchase ${purchase.id} has no buyer to give to.`);
     const ref = storeRef(purchase.id);
     switch (product.kind) {
       case 'points': {
@@ -381,6 +394,11 @@ export class StoreGrantService {
     const snap = (purchase.grant ?? {}) as unknown as StoreGrantSnapshot;
     const ref = storeRef(purchase.id);
     const userId = purchase.wawuUserId;
+    // The buyer's account is gone (the purge keeps this purchase with the buyer
+    // cleared so a refund still finds it): everything of theirs went with the
+    // account, and what is left to take back is the creator's share and a
+    // credit the fan never spent.
+    if (userId === null) return this.takeBackForGoneBuyer(tx, purchase, now);
     switch (purchase.kind) {
       case 'points': {
         const r = await this.points.revokeLot('pack', ref, { tx, now });
@@ -446,7 +464,7 @@ export class StoreGrantService {
         return { extraProducts: taken, grantedExtraProducts: given };
       }
       case 'pass':
-        return this.takeBackPass(tx, purchase, now);
+        return this.takeBackPass(tx, purchase, userId, now);
       case 'buy': {
         // What the ladder purchase gave is taken back by what it was for, and
         // the creator's 85% with it (R-101 point 5). A tip has no access to
@@ -460,11 +478,12 @@ export class StoreGrantService {
             });
             given = { purchaseRowsEnded: count };
           } else if (purchase.buyKind === 'pass') {
-            given = await this.takeBackPass(tx, purchase, now);
+            given = await this.takeBackPass(tx, purchase, userId, now);
           }
         }
         const earning = await this.earnings.takeBack(tx, purchase, now);
-        return { ...given, earning };
+        const credit = await this.creditTakeBack(tx, purchase, now);
+        return { ...given, earning, ...credit };
       }
     }
   }
@@ -477,9 +496,9 @@ export class StoreGrantService {
   private async takeBackPass(
     tx: Prisma.TransactionClient,
     purchase: StorePurchase,
+    userId: string,
     now: Date,
   ): Promise<Record<string, unknown>> {
-    const userId = purchase.wawuUserId;
     const reference = storePassReference(purchase.id);
     const rows = await tx.communityPass.findMany({
       where: {
@@ -530,6 +549,51 @@ export class StoreGrantService {
   }
 
   /**
+   * A refund of a purchase whose buyer has deleted the account. Only a ladder
+   * purchase has anything left: the creator's share (cancelled, or a deduction)
+   * and a credit the fan never spent. The buyer's own unlock, tip record or
+   * pass days went with their account (and a row that survived is ended all the
+   * same).
+   */
+  private async takeBackForGoneBuyer(
+    tx: Prisma.TransactionClient,
+    purchase: StorePurchase,
+    now: Date,
+  ): Promise<Record<string, unknown>> {
+    if (purchase.kind !== 'buy') return { buyerGone: true };
+    await tx.purchase.updateMany({
+      where: { flutterwaveTxRef: storeRef(purchase.id), status: 'completed' },
+      data: { status: 'failed' },
+    });
+    const earning = await this.earnings.takeBack(tx, purchase, now);
+    const credit = await this.creditTakeBack(tx, purchase, now);
+    return { buyerGone: true, earning, ...credit };
+  }
+
+  /**
+   * The store paid a purchase back: a credit it made is voided if it has not
+   * been spent. One already spent is left (the fan used it) and goes to a person.
+   */
+  private async creditTakeBack(
+    tx: Prisma.TransactionClient,
+    purchase: StorePurchase,
+    now: Date,
+  ): Promise<Record<string, unknown>> {
+    const credit = await tx.storeCredit.findUnique({
+      where: { sourcePurchaseId: purchase.id },
+    });
+    if (credit === null) return {};
+    if (credit.status === 'open') {
+      await tx.storeCredit.update({
+        where: { id: credit.id },
+        data: { status: 'void', voidedAt: now },
+      });
+      return { credit: 'voided' };
+    }
+    return { credit: credit.status === 'spent' ? 'review' : 'already_void' };
+  }
+
+  /**
    * Puts back what a refund took, because Apple reversed it (REFUND_REVERSED,
    * G-IAP-01-5). Only a ladder purchase is restored (STORE-BUY-HUB): the other
    * kinds' take-backs are partial (a spent point stays spent), so a reversal
@@ -542,8 +606,16 @@ export class StoreGrantService {
   ): Promise<Record<string, unknown>> {
     const snap = (purchase.grant ?? {}) as unknown as StoreGrantSnapshot;
     const ref = storeRef(purchase.id);
-    if (purchase.kind !== 'buy' || snap.skipped !== undefined)
-      return { restored: false };
+    if (purchase.kind !== 'buy') return { restored: false };
+    if (snap.skipped !== undefined) {
+      // Nothing was given, but the fan was credited: the credit the refund
+      // voided is put back.
+      const { count } = await tx.storeCredit.updateMany({
+        where: { sourcePurchaseId: purchase.id, status: 'void' },
+        data: { status: 'open', voidedAt: null },
+      });
+      return { restored: count > 0, creditRestored: count };
+    }
     let given: Record<string, unknown> = {};
     if (purchase.buyKind === 'content' || purchase.buyKind === 'tip') {
       const { count } = await tx.purchase.updateMany({
@@ -551,7 +623,11 @@ export class StoreGrantService {
         data: { status: 'completed' },
       });
       given = { purchaseRowsRestored: count };
-    } else if (purchase.buyKind === 'pass' && purchase.communityId !== null) {
+    } else if (
+      purchase.buyKind === 'pass' &&
+      purchase.communityId !== null &&
+      purchase.wawuUserId !== null
+    ) {
       // The days the refund took are given again, from the later of now and
       // the end of whatever the person holds, as one more period.
       const taken = (purchase.takenBack ?? {}) as { daysRemoved?: number };
@@ -587,16 +663,35 @@ export class StoreGrantService {
   ): Promise<StoreGrantSnapshot> {
     const { intent, target } = buy;
     const userId = purchase.wawuUserId;
+    if (userId === null)
+      throw new Error(`Purchase ${purchase.id} has no buyer to give to.`);
     const base = {
       kind: 'buy' as const,
       buyKind: intent.kind,
       targetId: intent.targetId,
     };
-    // The piece, creator or room cannot be bought any more (taken down, the
-    // person blocked, the pass withdrawn). The store has the payment: it is
-    // recorded and flagged for an admin, and nothing is given or earned.
-    if (target === null) return { ...base, skipped: 'target_unavailable' };
+    // The piece, creator or room cannot be bought any more (taken down, free
+    // now, already the person's, the person blocked or removed, the pass
+    // withdrawn). The store has the payment: the fan gets a store credit worth
+    // the list price and nothing is given or earned (R-101, round 3). A credit
+    // that was meant to pay for it is never spent on nothing: the whole
+    // purchase is undone and the fan told.
+    if (target === null) {
+      if (buy.creditId) throw notPayableNow();
+      return this.credited(tx, purchase, intent, userId, 'target_unavailable');
+    }
     let extra: Partial<StoreGrantSnapshot> = {};
+    if (buy.creditId) {
+      const { count } = await tx.storeCredit.updateMany({
+        where: { id: buy.creditId, wawuUserId: userId, status: 'open' },
+        data: { status: 'spent', spentAt: now, spentPurchaseId: purchase.id },
+      });
+      if (count === 0)
+        throw new StoreError(
+          'store_credit_unavailable',
+          'That credit has already been used.',
+        );
+    }
     if (intent.kind === 'content' || intent.kind === 'tip') {
       // The same row the wallet path writes (UnlockWalletService, TipWalletService),
       // so every access check, the creator's tip and sale lists and the admin
@@ -626,8 +721,10 @@ export class StoreGrantService {
         SELECT "status"::text AS "status" FROM "CommunityMembership"
         WHERE "userWawuId" = ${userId} AND "communityId" = ${intent.targetId}
         FOR UPDATE`;
-      if (rows[0]?.status === 'pending')
-        return { ...base, skipped: 'member_removed' };
+      if (rows[0]?.status === 'pending') {
+        if (buy.creditId) throw notPayableNow();
+        return this.credited(tx, purchase, intent, userId, 'member_removed');
+      }
       await grantPassPeriod(tx, {
         communityId: intent.targetId,
         userWawuId: userId,
@@ -655,7 +752,47 @@ export class StoreGrantService {
       listPriceKobo: intent.listPriceKobo,
       soldAt: purchase.purchasedAt,
     });
-    return { ...base, ...extra, earningId };
+    return {
+      ...base,
+      ...extra,
+      earningId,
+      ...(buy.creditId ? { paidWithCredit: buy.creditId } : {}),
+      // The price on the piece or the room moved after the intent: the fan gets
+      // what they paid for, at the price they were shown.
+      ...(buy.priceChanged === true ? { note: 'price_changed' } : {}),
+    };
+  }
+
+  /** The fan paid and cannot be given what they bought: a store credit worth the list price, once per purchase. */
+  private async credited(
+    tx: Prisma.TransactionClient,
+    purchase: StorePurchase,
+    intent: StorePurchaseIntent,
+    userId: string,
+    why: 'target_unavailable' | 'member_removed',
+  ): Promise<StoreGrantSnapshot> {
+    await tx.storeCredit.createMany({
+      data: [
+        {
+          wawuUserId: userId,
+          amountKobo: intent.listPriceKobo,
+          sourcePurchaseId: purchase.id,
+        },
+      ],
+      skipDuplicates: true,
+    });
+    const credit = await tx.storeCredit.findUniqueOrThrow({
+      where: { sourcePurchaseId: purchase.id },
+      select: { id: true },
+    });
+    return {
+      kind: 'buy',
+      buyKind: intent.kind,
+      targetId: intent.targetId,
+      skipped: why,
+      creditId: credit.id,
+      creditKobo: intent.listPriceKobo,
+    };
   }
 
   /** What a purchase gave, for the app. */
@@ -678,6 +815,14 @@ export class StoreGrantService {
           }),
     };
   }
+}
+
+/** A purchase a store credit was to pay for can no longer be given: nothing is spent. */
+function notPayableNow(): StoreError {
+  return new StoreError(
+    'store_intent_not_payable',
+    'This is no longer available, so nothing was taken from your credit.',
+  );
 }
 
 /** Refuses the way every store route does when the grant cannot be made at all. */

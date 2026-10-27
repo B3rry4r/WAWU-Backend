@@ -8,7 +8,12 @@ import { isUniqueViolation } from '../money/prisma-unique';
 import { MoneyError } from '../money/money-error';
 import { neighbours } from '../price-list/price-list';
 import { PriceListService } from '../price-list/price-list.service';
-import { intentCoversSale, intentExpiry } from './store-buy-rules';
+import {
+  INTENT_KEEP_MS,
+  intentCoversSale,
+  intentExpiry,
+  saleAfterIntent,
+} from './store-buy-rules';
 import { StoreBuyTargetService } from './store-buy-target.service';
 import { StoreAccountService } from './store-account.service';
 import { StoreCatalogService } from './store-catalog.service';
@@ -19,6 +24,14 @@ import {
 } from './store-error';
 import type { StoreIntentDto, StorePurchaseDto } from './store.dto';
 import type { StoreIntentView } from './store-view.type';
+
+/** What `prepare` has checked, ready to open an intent from. */
+export interface ReadyIntent {
+  targetId: string;
+  product: StoreProduct;
+  accountToken: string;
+  listPriceKobo: number;
+}
 
 const NOT_ON_TIP_LIST =
   'That tip is not on the tip list. Pick one of the tips shown.';
@@ -56,6 +69,23 @@ export class StoreIntentService {
   ) {}
 
   async create(userId: string, dto: StoreIntentDto): Promise<StoreIntentView> {
+    const ready = await this.prepare(userId, dto);
+    const intent = await this.openIntent(userId, dto, ready);
+    return {
+      intentId: intent.id,
+      productId: intent.storeProductId,
+      accountToken: ready.accountToken,
+      expiresAt: intent.expiresAt.toISOString(),
+    };
+  }
+
+  /**
+   * Everything an intent needs checked before a row is made: the store is open,
+   * the price is on the list (a tip: on the tip list), a ladder product sells it
+   * in that store, and the piece, creator or room can be bought by this person at
+   * that price. Nothing is written.
+   */
+  async prepare(userId: string, dto: StoreIntentDto): Promise<ReadyIntent> {
     await this.catalog.assertOpen(dto.platform);
     const targetId = this.targetIdOf(dto);
     this.prices.assertOnList(dto.listPriceNaira);
@@ -75,16 +105,18 @@ export class StoreIntentService {
     });
     if (!checked.ok) throw new StoreError(checked.code, checked.message);
     const accountToken = await this.accounts.tokenFor(userId);
+    return { targetId, product, accountToken, listPriceKobo };
+  }
 
+  /** The open intent for this thing: made now, or the one already open. */
+  async openIntent(
+    userId: string,
+    dto: StoreIntentDto,
+    ready: ReadyIntent,
+  ): Promise<StorePurchaseIntent> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const intent = await this.open(userId, dto, targetId, product);
-        return {
-          intentId: intent.id,
-          productId: intent.storeProductId,
-          accountToken,
-          expiresAt: intent.expiresAt.toISOString(),
-        };
+        return await this.open(userId, dto, ready.targetId, ready.product);
       } catch (e) {
         // The partial unique index is the backstop for two asks at once.
         if (isUniqueViolation(e) && attempt === 0) continue;
@@ -92,6 +124,17 @@ export class StoreIntentService {
       }
     }
     throw new Error('unreachable');
+  }
+
+  /** Deletes intents that were never used, 7 days after they ran out (STORE-BUY-HUB round 3). Used intents are kept: a purchase names them. */
+  async sweepUnused(now = new Date()): Promise<number> {
+    const { count } = await this.prisma.storePurchaseIntent.deleteMany({
+      where: {
+        status: { in: ['open', 'expired', 'replaced'] },
+        expiresAt: { lt: new Date(now.getTime() - INTENT_KEEP_MS) },
+      },
+    });
+    return count;
   }
 
   /**
@@ -127,8 +170,17 @@ export class StoreIntentService {
     return intent;
   }
 
-  /** Refuses a sale made after the intent's time ran out. */
+  /**
+   * Refuses a sale made after the intent's time ran out, or before it was
+   * made: a payment that came first is not this purchase's, so an older
+   * transaction cannot be re-posted under a fresh intent.
+   */
   assertCovers(intent: StorePurchaseIntent, soldAt: Date): void {
+    if (!saleAfterIntent(intent.createdAt, soldAt))
+      throw new StoreError(
+        'store_purchase_invalid',
+        'That payment was made before this purchase was started.',
+      );
     if (!intentCoversSale(intent.expiresAt, soldAt))
       throw new StoreError('store_intent_expired', INTENT_EXPIRED_MESSAGE);
   }

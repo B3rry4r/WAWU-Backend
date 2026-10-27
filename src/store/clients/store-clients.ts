@@ -114,6 +114,12 @@ export interface AppStoreNotification {
   environment: 'production' | 'sandbox';
   /** The transaction the notification is about; null for a notification with none (TEST). */
   transaction: VerifiedStorePurchase | null;
+  /**
+   * When Apple signed the notification (`signedDate`). Notices for one
+   * transaction are ordered by it, not by when they arrive. Null or absent when
+   * the payload carries none.
+   */
+  signedAt?: Date | null;
 }
 
 export interface AppStoreClient {

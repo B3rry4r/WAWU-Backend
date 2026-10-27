@@ -36,6 +36,7 @@ import {
 import { creatorShareOfList } from './store-buy-rules';
 import { StoreBuyTargetService } from './store-buy-target.service';
 import { StoreIntentService } from './store-intent.service';
+import { StoreCreditService } from './store-credit.service';
 import { isSubscriptionKind } from './store-grants';
 import { StoreAccountService } from './store-account.service';
 import { StoreCatalogService } from './store-catalog.service';
@@ -48,8 +49,8 @@ import {
   UNREACHABLE_MESSAGE,
   NOT_CONFIGURED_MESSAGE,
 } from './store-error';
-import type { StorePurchaseDto } from './store.dto';
-import type { StorePurchaseView } from './store-view.type';
+import type { StoreIntentDto, StorePurchaseDto } from './store.dto';
+import type { StoreIntentView, StorePurchaseView } from './store-view.type';
 
 export const PASS_ROOM_MISSING = 'We could not find that room.';
 export const PASS_NOT_SOLD = 'This room does not sell a pass.';
@@ -65,6 +66,8 @@ export interface SettleArgs {
   communityId: string | null;
   /** The intent a ladder purchase is made against; null for every other kind. */
   intent?: StorePurchaseIntent | null;
+  /** A store credit that pays for this purchase instead of a store sale; consumed whole in the same transaction. */
+  creditId?: string | null;
 }
 
 export interface Settled {
@@ -103,6 +106,7 @@ export class StorePurchaseService {
     private readonly blocked: BlockedAccountService,
     private readonly intents: StoreIntentService,
     private readonly targets: StoreBuyTargetService,
+    private readonly credits: StoreCreditService,
     @Optional()
     @Inject(GOOGLE_PLAY_CLIENT)
     private readonly google: GooglePlayClient | null,
@@ -240,8 +244,14 @@ export class StorePurchaseService {
           userId,
           intent.kind,
           intent.targetId,
+          { listNaira: intent.listPriceNaira, tolerateChangedPrice: true },
         );
-        buy = { intent, target: checked.ok ? checked.target : null };
+        buy = {
+          intent,
+          target: checked.ok ? checked.target : null,
+          priceChanged: checked.ok && checked.priceChanged === true,
+          creditId: args.creditId ?? null,
+        };
         creatorWawuUserId = buy.target?.creatorWawuId ?? null;
       } else if (product.kind === 'pass' && communityId !== null) {
         const room = await this.prisma.community.findUnique({
@@ -339,10 +349,12 @@ export class StorePurchaseService {
             where: { id: row.id },
             data: {
               grant: snap as unknown as Prisma.InputJsonValue,
-              // Paid but not given (a pass renewal for a removed member): an admin looks.
-              ...(snap.skipped === undefined
+              // Paid but not given (a pass renewal for a removed member, a ladder
+              // purchase whose target is gone, which became a store credit), or
+              // given at the intent's price after the price moved: an admin looks.
+              ...(snap.skipped === undefined && snap.note === undefined
                 ? {}
-                : { flag: snap.skipped, flaggedAt: now }),
+                : { flag: snap.skipped ?? snap.note, flaggedAt: now }),
             },
           });
           return { purchase: done, alreadyGranted: false };
@@ -395,12 +407,14 @@ export class StorePurchaseService {
     alreadyGranted: boolean,
   ): StorePurchaseView {
     const snap = (purchase.grant ?? {}) as unknown as StoreGrantSnapshot;
+    const credited =
+      snap.creditId !== undefined && purchase.status === 'granted';
     return {
       id: purchase.id,
       platform: purchase.platform,
       storeProductId: product.storeProductId,
       kind: product.kind,
-      status: purchase.status,
+      status: credited ? 'credited' : purchase.status,
       alreadyGranted,
       grant: this.grants.grantedView(snap, purchase.communityId),
       purchasedAt: purchase.purchasedAt.toISOString(),
@@ -411,8 +425,73 @@ export class StorePurchaseService {
             buyKind: purchase.buyKind,
             intentId: purchase.intentId,
             targetId: purchase.targetId,
+            credit:
+              snap.creditId === undefined
+                ? null
+                : {
+                    id: snap.creditId,
+                    amountKobo: snap.creditKobo ?? 0,
+                    message: creditMessage(
+                      purchase.buyKind,
+                      snap.creditKobo ?? 0,
+                    ),
+                  },
+            paidWithCredit: snap.paidWithCredit ?? null,
           }
         : {}),
+    };
+  }
+
+  /**
+   * Pays for a ladder purchase with a store credit (STORE-BUY-HUB round 3):
+   * `POST /store/intents` with `payWith: credit`. The thing is checked as for a
+   * store purchase; a credit worth at least the price (the smallest that fits)
+   * is consumed whole and the purchase is granted at once, in one transaction,
+   * with no store sheet. The creator's 85% of the list price is recorded as for
+   * any sale. If the piece, creator or room is gone by then, nothing is spent.
+   */
+  async payWithCredit(
+    userId: string,
+    dto: StoreIntentDto,
+  ): Promise<StoreIntentView> {
+    const ready = await this.intents.prepare(userId, dto);
+    const credit = await this.credits.pick(userId, ready.listPriceKobo);
+    const intent = await this.intents.openIntent(userId, dto, ready);
+    const now = new Date();
+    const verified: VerifiedStorePurchase = {
+      platform: dto.platform,
+      environment: 'production',
+      storeProductId: ready.product.storeProductId,
+      // One credit, one purchase: the unique key on the transaction id is the
+      // once-only gate, as a store's own id is for a store sale.
+      storeTransactionId: `credit:${credit.id}`,
+      subscriptionKey: null,
+      purchasedAt: now,
+      expiresAt: null,
+      currency: null,
+      priceMicros: null,
+      state: 'purchased',
+      needsAcknowledge: false,
+      accountToken: ready.accountToken,
+    };
+    const settled = await this.settle({
+      userId,
+      product: ready.product,
+      verified,
+      communityId: null,
+      intent,
+      creditId: credit.id,
+    });
+    return {
+      intentId: intent.id,
+      productId: intent.storeProductId,
+      accountToken: ready.accountToken,
+      expiresAt: intent.expiresAt.toISOString(),
+      purchase: this.view(
+        settled.purchase,
+        ready.product,
+        settled.alreadyGranted,
+      ),
     };
   }
 
@@ -556,4 +635,25 @@ function invalid(message: string): StoreError {
 /** A short tag for a log line that must not carry a purchase token. */
 export function hashOf(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 12);
+}
+
+/** ₦ with thousands separators, no decimals. */
+function naira(kobo: number): string {
+  return `₦${Math.floor(kobo / 100)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
+}
+
+/** The sentence the app shows when a paid purchase could not be given and became a store credit. */
+export function creditMessage(
+  buyKind: StorePurchase['buyKind'],
+  creditKobo: number,
+): string {
+  const lead =
+    buyKind === 'tip'
+      ? 'This creator can no longer be tipped.'
+      : buyKind === 'pass'
+        ? 'This pass is no longer available.'
+        : 'This piece is no longer available.';
+  return `${lead} You have a ${naira(creditKobo)} credit to use on Who Made This.`;
 }

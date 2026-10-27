@@ -23,6 +23,19 @@ export function intentCoversSale(expiresAt: Date, soldAt: Date): boolean {
   return soldAt.getTime() <= expiresAt.getTime() + INTENT_SKEW_MS;
 }
 
+/**
+ * True when a store sale was made at or after the intent was created (less the
+ * same clock difference): a payment made before the person started this
+ * purchase is not this purchase's, so an older transaction cannot be re-posted
+ * under a fresh intent (STORE-BUY-HUB round 3).
+ */
+export function saleAfterIntent(createdAt: Date, soldAt: Date): boolean {
+  return soldAt.getTime() >= createdAt.getTime() - INTENT_SKEW_MS;
+}
+
+/** How long an intent that was never used is kept before the sweep deletes it: 7 days after it ran out. */
+export const INTENT_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** When a new intent made at `now` expires. */
 export function intentExpiry(now: Date): Date {
   return new Date(now.getTime() + INTENT_TTL_MS);

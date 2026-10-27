@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsEnum,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -125,6 +126,16 @@ export class StoreIntentDto {
   @Min(1)
   @Max(1_000_000_000)
   listPriceNaira!: number;
+
+  /**
+   * `store` (the default): the store sheet is opened and the purchase made
+   * against this intent. `credit`: a store credit worth at least the price is
+   * consumed whole and the purchase is granted at once, with no store sheet.
+   */
+  @ApiPropertyOptional({ enum: ['store', 'credit'] })
+  @IsOptional()
+  @IsIn(['store', 'credit'], { message: 'payWith must be store or credit' })
+  payWith?: 'store' | 'credit';
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +322,13 @@ export class AdminStorePurchaseQueryDto {
   @IsString()
   @Length(1, 100)
   wawuUserId?: string;
+
+  /** Purchases the Hub flagged for a person to look at: `member_removed`, `pack_not_allowed`, `target_unavailable`, `price_changed`, `earning_review`. */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @Length(1, 60)
+  flag?: string;
 
   /** From the `nextCursor` of the page before. */
   @ApiPropertyOptional()
