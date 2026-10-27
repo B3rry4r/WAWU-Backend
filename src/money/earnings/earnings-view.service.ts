@@ -168,8 +168,17 @@ export class EarningsViewService {
       waiting: one('waiting'),
       held: one('held'),
       walletOpen: !!wallet && isRowOf(this.provider.name, wallet.provider),
-      storeEarnings: await this.storeWaiting(wawuUserId),
+      // Only when there are some: a creator with no store sale gets exactly the
+      // shape this view always had (a spec compares the keys).
+      ...(await this.storeWaitingField(wawuUserId)),
     };
+  }
+
+  private async storeWaitingField(
+    wawuUserId: string,
+  ): Promise<{ storeEarnings?: StoreEarningWaitingView[] }> {
+    const rows = await this.storeWaiting(wawuUserId);
+    return rows.length > 0 ? { storeEarnings: rows } : {};
   }
 
   /** The store sales' shares still waiting to be paid, soonest first, with the day each may be paid (STORE-BUY-HUB). */

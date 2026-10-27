@@ -1864,8 +1864,18 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
       await prisma.storeEarning.updateMany({
         data: { status: 'paid', paidAt: new Date() },
       });
-      expect((await earnings.summary(HOST, undefined)).storeEarnings).toEqual(
-        [],
+      // None waiting: the key is absent, so the view is exactly what it always was.
+      const none = await earnings.summary(HOST, undefined);
+      expect(none.storeEarnings).toBeUndefined();
+      expect(Object.keys(none).sort()).toEqual(
+        [
+          'allTime',
+          'held',
+          'month',
+          'thisMonth',
+          'waiting',
+          'walletOpen',
+        ].sort(),
       );
     });
 

@@ -751,7 +751,7 @@ export interface EarningsView {
    * The creator's 85% of sales made in the App Store or Google Play that WAWU
    * has not paid yet (STORE-BUY-HUB, R-101), soonest first, at most 50. Each
    * says the day it may be paid, `availableAt`: the sale plus 3 working days,
-   * Lagos time. They are part of `waiting`, not on top of it. Absent from an
+   * Lagos time. They are part of `waiting`, not on top of it. Absent when there are none, and from an
    * older Hub.
    */
   storeEarnings?: StoreEarningWaitingView[];
