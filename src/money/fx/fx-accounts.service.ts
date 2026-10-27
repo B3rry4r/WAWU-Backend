@@ -8,6 +8,7 @@ import type { ProviderFxChain } from '../../wallet-provider/wallet-provider-fx';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
 import type { OpenFxAccountDto } from './dto/fx-request.dto';
 import { FX_CURRENCIES, fxCurrency } from './fx-currencies';
+import { nameOwnLines } from './fx-own-lines';
 import { FxPort, providerFailure } from './fx-provider';
 import { FxSettings } from './fx-settings';
 import { accountView, num } from './fx-views';
@@ -25,6 +26,9 @@ const OPENING_STALE_MS = 2 * 60_000;
 const MAX_MONTHS_BACK = 12;
 const MONTH_LINES = 500;
 const PAGE_LINES = 100;
+/** How long the operational account's name is remembered, and how soon it is asked for again when the provider could not say. */
+const OPERATIONAL_NAME_MS = 5 * 60_000;
+const OPERATIONAL_NAME_RETRY_MS = 30_000;
 
 /** What an account's details say when the provider could not be asked at all. */
 export const DETAILS_UNREAD_MESSAGE =
@@ -321,10 +325,11 @@ export class FxAccountsService {
       row.createdAt.getUTCFullYear() * 12 + row.createdAt.getUTCMonth();
     const person = this.port.person(wallet);
     const items: FxTransactionView[] = [];
+    const names = await this.operationalNames();
     let months = 0;
     try {
       while (items.length < limit && months < MAX_MONTHS_BACK) {
-        const lines = await this.month(fx, person, row, at);
+        const lines = await this.month(fx, person, row, at, names);
         const take = lines.slice(at.o, at.o + (limit - items.length));
         items.push(...take);
         if (at.o + take.length < lines.length) {
@@ -352,12 +357,37 @@ export class FxAccountsService {
     };
   }
 
+  /**
+   * The operational account's own display name as the provider reads it (FIX-P6 round 2): a line whose other side bears it is
+   * WAWU's own, whatever the account is called. Remembered for a few minutes; a provider that cannot say gives none (the names
+   * the adapter itself uses still stand) and is asked again soon.
+   */
+  private operational: { names: string[]; until: number } | null = null;
+
+  private async operationalNames(): Promise<string[]> {
+    const now = Date.now();
+    if (this.operational && this.operational.until > now) {
+      return this.operational.names;
+    }
+    let names: string[] = [];
+    let keep = OPERATIONAL_NAME_MS;
+    try {
+      const account = await this.port.provider.getPlatformAccount();
+      names = account.accountName ? [account.accountName] : [];
+    } catch {
+      keep = OPERATIONAL_NAME_RETRY_MS;
+    }
+    this.operational = { names, until: now + keep };
+    return names;
+  }
+
   /** A month's lines, newest first. */
   private async month(
     fx: ReturnType<FxPort['get']>,
     person: ReturnType<FxPort['person']>,
     row: FxAccount,
     at: FxHistoryCursor,
+    operational: readonly string[],
   ): Promise<FxTransactionView[]> {
     const out: FxTransactionView[] = [];
     let cursor: string | null = null;
@@ -399,6 +429,13 @@ export class FxAccountsService {
       cursor = p.nextCursor;
       if (!cursor) break;
     }
+    // FIX-P6 L2: a line WAWU made is named by what it was for, never by WAWU's internal account.
+    await nameOwnLines(
+      this.prisma,
+      { wawuUserId: row.wawuUserId, fxAccountId: row.id },
+      out,
+      operational,
+    );
     return out.sort((a, b) =>
       a.occurredAt < b.occurredAt ? 1 : a.occurredAt > b.occurredAt ? -1 : 0,
     );
