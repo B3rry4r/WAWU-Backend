@@ -207,7 +207,7 @@ export class StorePayoutService {
            WHERE e."status" = 'owed' AND e."availableAt" <= ${now}
              AND e."provider" = ${provider}
              AND NOT (e."id" = ANY(${skip}::text[]))
-             AND NOT EXISTS (SELECT 1 FROM "StoreEarningPayout" p WHERE p."storeEarningId" = e."id")
+             AND NOT EXISTS (SELECT 1 FROM "StoreEarningPayout" p WHERE p."storeEarningId" = e."id" AND p."status" <> 'cancelled')
              AND EXISTS (
                SELECT 1 FROM "FintavaWallet" w
                 WHERE w."wawuUserId" = e."payeeWawuUserId"
@@ -276,9 +276,12 @@ export class StorePayoutService {
           });
           const had = await tx.storeEarningPayout.findUnique({
             where: { storeEarningId: id },
-            select: { id: true },
+            select: { id: true, status: true },
           });
-          if (had !== null) return null;
+          // A payout that was cancelled (the sale was refunded before anything
+          // was sent) and whose earning is owed again (the store reversed its
+          // refund) is made again on the same row, not skipped for good.
+          if (had !== null && had.status !== 'cancelled') return null;
           const wallet = await tx.fintavaWallet.findUnique({
             where: { wawuUserId: earning.payeeWawuUserId },
             select: { accountNumber: true, provider: true },
@@ -306,22 +309,42 @@ export class StorePayoutService {
           );
           if (netting.netKobo > available) throw new ShortOfFunds();
 
-          const payout = await tx.storeEarningPayout.create({
-            data: {
-              storeEarningId: id,
-              payeeWawuUserId: earning.payeeWawuUserId,
-              provider,
-              grossKobo: earning.amountKobo,
-              deductedKobo: netting.deductedKobo,
-              amountKobo: netting.netKobo,
-              merchantAccountNumber,
-              destinationAccountNumber: wallet.accountNumber,
-              customerReference: payoutReference(id, 1),
-              ...(netting.netKobo === 0n
-                ? { status: 'paid', settledAt: now }
-                : {}),
-            },
-          });
+          const figures = {
+            payeeWawuUserId: earning.payeeWawuUserId,
+            provider,
+            grossKobo: earning.amountKobo,
+            deductedKobo: netting.deductedKobo,
+            amountKobo: netting.netKobo,
+            merchantAccountNumber,
+            destinationAccountNumber: wallet.accountNumber,
+            ...(netting.netKobo === 0n
+              ? { status: 'paid', settledAt: now }
+              : { status: 'pending', settledAt: null }),
+          };
+          const payout =
+            had === null
+              ? await tx.storeEarningPayout.create({
+                  data: {
+                    storeEarningId: id,
+                    customerReference: payoutReference(id, 1),
+                    ...figures,
+                  },
+                })
+              : await tx.storeEarningPayout.update({
+                  // Nothing was ever sent on a cancelled payout, so its
+                  // reference is unused at the provider and stays.
+                  where: { id: had.id },
+                  data: {
+                    ...figures,
+                    sentAt: null,
+                    nextAttemptAt: null,
+                    attempts: 0,
+                    checks: 0,
+                    waiting: null,
+                    reviewSince: null,
+                    discrepancy: null,
+                  },
+                });
           if (netting.takes.length > 0) {
             await tx.earningDeductionTake.createMany({
               data: netting.takes.map((t) => ({
@@ -351,11 +374,23 @@ export class StorePayoutService {
   /**
    * The owner is told, once a day, that WAWU's account could not cover what
    * creators are owed. The day's key makes any number of passes and servers
-   * write one notice.
+   * write one notice. It is built from the provider's real balance (read here
+   * when the caller does not have it) and from the earnings that are really
+   * waiting; when nothing is waiting no notice is written, so a refusal that
+   * proves nothing never uses up the day's key.
    */
-  private async tellShort(now: Date, availableKobo: bigint): Promise<void> {
+  private async tellShort(now: Date, balance?: bigint): Promise<void> {
     try {
       const provider = this.provider.name;
+      let availableKobo = balance;
+      if (availableKobo === undefined) {
+        try {
+          availableKobo = (await this.provider.getPlatformAccount())
+            .availableKobo;
+        } catch {
+          availableKobo = undefined;
+        }
+      }
       const owed = await this.prisma.$queryRaw<
         Array<{ n: string; kobo: string | null }>
       >(Prisma.sql`
@@ -363,29 +398,33 @@ export class StorePayoutService {
           FROM "StoreEarning" e
          WHERE e."status" = 'owed' AND e."availableAt" <= ${now}
            AND e."provider" = ${provider}
-           AND NOT EXISTS (SELECT 1 FROM "StoreEarningPayout" p WHERE p."storeEarningId" = e."id")
            AND EXISTS (
              SELECT 1 FROM "FintavaWallet" w
               WHERE w."wawuUserId" = e."payeeWawuUserId"
                 AND LOWER(BTRIM(COALESCE(w."provider", 'fintava'))) = ${provider})`);
       const n = Number(owed[0]?.n ?? 0);
       const kobo = BigInt(owed[0]?.kobo ?? '0');
+      if (n === 0) return;
       const day = lagosDayKey(now);
+      const holds =
+        availableKobo === undefined
+          ? 'WAWU could not read what its account holds just now.'
+          : `WAWU's account holds ${naira(availableKobo)}.`;
       const wrote = await this.notices.once({
         kind: 'store_payout_short',
         noticeKey: `store_payout_short:${day}`,
         title: "WAWU's account is short for creator payouts",
-        body: `WAWU's account holds ${naira(availableKobo)}. ${n} store ${n === 1 ? 'earning' : 'earnings'} worth ${naira(kobo)} ${n === 1 ? 'is' : 'are'} due to creators and wait for money to be added. They are paid in the order they fell due as soon as it is.`,
+        body: `${holds} ${n} store ${n === 1 ? 'earning' : 'earnings'} worth ${naira(kobo)} ${n === 1 ? 'is' : 'are'} due to creators and wait for money to be added. They are paid in the order they fell due as soon as it is.`,
         data: {
           day,
-          availableKobo: availableKobo.toString(),
+          availableKobo: availableKobo?.toString() ?? null,
           owedKobo: kobo.toString(),
           earnings: n,
         },
       });
       if (wrote)
         this.logger.error(
-          `store payout: WAWU's account holds ${availableKobo} kobo and ${n} earnings (${kobo} kobo) are due; the owner has been told`,
+          `store payout: ${availableKobo === undefined ? 'WAWU account balance unknown' : `WAWU's account holds ${availableKobo} kobo`} and ${n} earnings (${kobo} kobo) are due; the owner has been told`,
         );
     } catch (e) {
       this.logger.error(
@@ -554,7 +593,6 @@ export class StorePayoutService {
       this.logger.error(
         `store payout ${r.id}: ${this.provider.label} says WAWU's own account cannot cover the payout (${r.amountKobo} kobo)`,
       );
-      await this.tellShort(now, 0n);
     } else if (waiting === 'refused') {
       this.logger.error(
         `store payout ${r.id}: ${this.provider.label} refused the payout (${refusal.kind}); nothing moved`,
@@ -576,6 +614,8 @@ export class StorePayoutService {
         data: { status: 'owed' },
       });
     });
+    // The earning is owed again now, so it counts among those waiting.
+    if (waiting === 'funds') await this.tellShort(now);
     if (waiting === 'refused' && this.refusedTooLong(r, now)) {
       return this.toReview(
         r,

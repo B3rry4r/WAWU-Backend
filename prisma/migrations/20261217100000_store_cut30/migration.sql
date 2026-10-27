@@ -1,7 +1,7 @@
 -- STORE-CUT30 (R-101 point 9): the Hub keeps each store's calendar-year total of WAWU's proceeds in US dollars, and when a
 -- store reaches the threshold its `wawu.buy.*` prices move to the 30% ladder.
 --
--- Additive only: two new tables. "StoreProceedsEntry" is one row per store purchase (its proceeds in kobo and in US
+-- Additive only: two new tables and one new nullable column ("StorePurchase"."shareFeeBps": the cut a creator's or host's share was worked on when a store has moved to 30%; null on every existing row). "StoreProceedsEntry" is one row per store purchase (its proceeds in kobo and in US
 -- cents, with the FX figures used). "StoreCut30Switch" is one row per store and year, written when the total crossed the
 -- threshold; its unique key is what makes the switch happen once. No existing table, column or row changes. The 30%
 -- prices themselves are in code (src/store/cut30/store-ladder-30.ts), not in a table.
@@ -34,12 +34,16 @@ CREATE TABLE "StoreCut30Switch" (
     "thresholdUsdCents" BIGINT NOT NULL,
     "crossedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "storeSync" TEXT,
+    "priorFeeBps" INTEGER,
     "noticedAt" TIMESTAMP(3),
     "backAt" TIMESTAMP(3),
     "backByAdminId" TEXT,
 
     CONSTRAINT "StoreCut30Switch_pkey" PRIMARY KEY ("id")
 );
+
+-- AlterTable
+ALTER TABLE "StorePurchase" ADD COLUMN "shareFeeBps" INTEGER;
 
 -- CreateIndex
 CREATE UNIQUE INDEX "StoreProceedsEntry_storePurchaseId_key" ON "StoreProceedsEntry"("storePurchaseId");

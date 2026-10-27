@@ -8451,6 +8451,11 @@ model StorePurchase {
   /// changes nothing, so notices that arrive out of order end where the store's
   /// own order ends (STORE-BUY-HUB round 3).
   lastNoticeAt       DateTime?
+  /// The cut the creator's and the host's share were worked on, when it is not
+  /// `storeFeeBps`: after a store moved to the 30% ladder (STORE-CUT30) WAWU's own
+  /// net is worked on 3000 and the shares stay on the cut from before. Null:
+  /// the shares were worked on `storeFeeBps`.
+  shareFeeBps        Int?
   /// A ladder purchase paid with a store credit: the store purchase whose payment
   /// that credit is made of (the credit's origin). Kept on the purchase itself so
   /// that a store refund of the origin can still find and take back this sale
@@ -8742,6 +8747,8 @@ model StoreCut30Switch {
   thresholdUsdCents BigInt
   crossedAt         DateTime      @default(now())
   storeSync         String?
+  /// The store's recorded cut (`StorePlatformSetting.storeFeeBps`) before the switch, put back by the switch back; null when it had none.
+  priorFeeBps       Int?
   noticedAt         DateTime?
   backAt            DateTime?
   backByAdminId     String?

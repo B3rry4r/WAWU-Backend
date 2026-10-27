@@ -21,6 +21,9 @@ import { StoreUsdRateService } from './store-usd-rate.service';
 
 export const CUT30_THRESHOLD_KEY = 'store.cut30_threshold_usd';
 
+/** The store's cut once it is on the 30% ladder, in basis points (recorded on each purchase as WAWU's own net). */
+export const CUT30_FEE_BPS = 3000;
+
 const STORE_NAME: Record<StorePlatform, string> = {
   android: 'Google Play',
   ios: 'the App Store',
@@ -181,15 +184,29 @@ export class StoreCut30Service {
     let row: StoreCut30Switch;
     try {
       row = await this.prisma.$transaction(async (tx) => {
+        const before = await tx.storePlatformSetting.findUnique({
+          where: { platform },
+          select: { storeFeeBps: true },
+        });
         const made = await tx.storeCut30Switch.create({
           data: {
             platform,
             year,
             totalUsdCents: total,
             thresholdUsdCents: threshold,
+            priorFeeBps: before?.storeFeeBps ?? null,
           },
         });
         await this.setPrices(tx, platform, STORE_LADDER_30);
+        // WAWU's own recorded nets are true from now on (the store keeps 30%).
+        // Every creator and host share is still worked on the cut from before
+        // (`StoreAvailability.shareFeeBps`, recorded as `shareFeeBps` on each
+        // purchase), so nobody but WAWU feels the extra cut.
+        await tx.storePlatformSetting.upsert({
+          where: { platform },
+          create: { platform, storeFeeBps: CUT30_FEE_BPS },
+          update: { storeFeeBps: CUT30_FEE_BPS },
+        });
         return made;
       });
     } catch (e) {
@@ -239,10 +256,16 @@ export class StoreCut30Service {
     }
     const store = STORE_NAME[row.platform];
     const upper = store.charAt(0).toUpperCase() + store.slice(1);
+    const allIds = STORE_LADDER_30.map((s) => buyProductId(s.listNaira));
+    // No keys: all 25 are for the owner to change by hand. Done: none. Partly
+    // or wholly failed: the ones that were not changed (all of them when the
+    // sync result is no longer known).
     const byHand =
-      sync === null
-        ? STORE_LADDER_30.map((s) => buyProductId(s.listNaira))
-        : sync.failed;
+      state === 'no_keys'
+        ? allIds
+        : state === 'done'
+          ? []
+          : (sync?.failed ?? allIds);
     const ladder = STORE_LADDER_30.map((s) => ({
       productId: buyProductId(s.listNaira),
       storeNaira: s.storeNaira,
@@ -331,6 +354,12 @@ export class StoreCut30Service {
       if (marked.count === 0)
         throw new ConflictException('That store is already on the 15% prices.');
       await this.setPrices(tx, platform, STORE_LADDER);
+      // The cut the store had before the switch is put back (none: the
+      // config's, 15% unless the server sets another).
+      await tx.storePlatformSetting.updateMany({
+        where: { platform, storeFeeBps: CUT30_FEE_BPS },
+        data: { storeFeeBps: open.priorFeeBps, updatedBy: adminId },
+      });
     });
     const sync = await this.sync.apply(platform, STORE_LADDER);
     return {

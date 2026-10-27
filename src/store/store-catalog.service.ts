@@ -45,6 +45,8 @@ export interface StoreAvailability {
   configured: boolean;
   enabled: boolean;
   feeBps: number;
+  /** The cut creator and host shares are worked on: `feeBps`, unless the store moved to the 30% ladder (STORE-CUT30), then the cut from before. */
+  shareFeeBps: number;
   feeOverridden: boolean;
   updatedAt: Date | null;
 }
@@ -75,11 +77,21 @@ export class StoreCatalogService {
     const row = await this.prisma.storePlatformSetting.findUnique({
       where: { platform },
     });
+    const feeBps = row?.storeFeeBps ?? this.config.feeBps[platform];
+    const moved = await this.prisma.storeCut30Switch.findFirst({
+      where: { platform, backAt: null },
+      orderBy: [{ year: 'desc' }],
+      select: { priorFeeBps: true },
+    });
     return {
       platform,
       configured: this.isConfigured(platform),
       enabled: row?.enabled ?? true,
-      feeBps: row?.storeFeeBps ?? this.config.feeBps[platform],
+      feeBps,
+      shareFeeBps:
+        moved === null
+          ? feeBps
+          : (moved.priorFeeBps ?? this.config.feeBps[platform]),
       feeOverridden: row?.storeFeeBps != null,
       updatedAt: row?.updatedAt ?? null,
     };

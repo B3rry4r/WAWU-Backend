@@ -227,11 +227,21 @@ export class StoreEarningService {
     return { earning: 'debt_reduced', owedBackKobo: Number(takenKobo) };
   }
 
-  private rowOf(
+  /**
+   * The earning of a purchase, read with its row LOCKED until the caller's
+   * transaction ends (STORE-PAYOUT patch, V-SP-1). The payout takes the same
+   * lock when it hands a transfer to the provider and marks the earning
+   * `sending`, so a refund and a send cannot pass each other: either the refund
+   * commits first (the payout then sees `cancelled` and sends nothing), or the
+   * send is first (the refund then reads `sending`, which is the paid case: a
+   * deduction, never a cancellation of money that is out).
+   */
+  private async rowOf(
     tx: Prisma.TransactionClient,
     storePurchaseId: string,
     role: 'sale' | 'restore',
   ): Promise<StoreEarning | null> {
+    await tx.$queryRaw`SELECT "id" FROM "StoreEarning" WHERE "storePurchaseId" = ${storePurchaseId} AND "role" = ${role} FOR UPDATE`;
     return tx.storeEarning.findUnique({
       where: { storePurchaseId_role: { storePurchaseId, role } },
     });
@@ -243,8 +253,10 @@ export class StoreEarningService {
     now: Date,
     reason: string,
   ): Promise<void> {
-    await tx.storeEarning.update({
-      where: { id },
+    // Only an earning still owed is cancelled: one whose transfer is out
+    // (`sending`) or paid is a deduction instead (takeBack decides before it gets here).
+    await tx.storeEarning.updateMany({
+      where: { id, status: 'owed' },
       data: { status: 'cancelled', cancelledAt: now, cancelReason: reason },
     });
   }

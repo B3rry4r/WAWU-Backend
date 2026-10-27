@@ -355,6 +355,11 @@ describe('STORE-CUT30: the switch (stand-in FX and stores)', () => {
         where: { createdAt: { gte: startedAt } },
       });
       await prisma.storeCut30Switch.deleteMany({ where: { year } });
+      // The switch put each store's recorded cut at 3000; put it back to none.
+      await prisma.storePlatformSetting.updateMany({
+        where: { storeFeeBps: 3000 },
+        data: { storeFeeBps: null },
+      });
       await prisma.storePurchase.deleteMany({
         where: { id: { in: purchases } },
       });
@@ -469,6 +474,8 @@ describe('STORE-CUT30: the switch (stand-in FX and stores)', () => {
     expect(notices[0].body).toContain('by hand');
     expect(notices[0].body).not.toContain('—');
     expect(hits).toHaveLength(0);
+    // V-SP-7: with no keys all 25 products are listed for the owner to change by hand.
+    expect((notices[0].data as { byHand: string[] }).byHand).toHaveLength(25);
 
     // Crossing again and again changes nothing: not the prices, not the notice.
     await purchase('android', 1000);

@@ -13,6 +13,8 @@ import { ConfigModule } from '@nestjs/config';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { PrismaModule } from '../../../common/prisma/prisma.module';
 import { PrismaService } from '../../../common/prisma/prisma.service';
+import { PlanSettingsModule } from '../../../plan-settings/plan-settings.module';
+import { StoreEarningService } from '../../store-earning.service';
 import { LedgerService } from '../../../money/ledger/ledger.service';
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
 import {
@@ -35,6 +37,7 @@ describe('STORE-PAYOUT: paying a creator for a store sale (Nuvion stood in)', ()
   let payouts: StorePayoutService;
   let other: StorePayoutService;
   let notices: StoreAdminNoticeService;
+  let storeEarnings: StoreEarningService;
   const nuvion = new NuvionSeamStandIn();
   const people: string[] = [];
   const purchaseIds: string[] = [];
@@ -126,8 +129,10 @@ describe('STORE-PAYOUT: paying a creator for a store sale (Nuvion stood in)', ()
       imports: [
         ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
         PrismaModule,
+        PlanSettingsModule,
         StorePayoutModule,
       ],
+      providers: [StoreEarningService],
     })
       .overrideProvider(WALLET_PROVIDER)
       .useValue(nuvion)
@@ -136,6 +141,7 @@ describe('STORE-PAYOUT: paying a creator for a store sale (Nuvion stood in)', ()
     prisma = moduleRef.get(PrismaService);
     payouts = moduleRef.get(StorePayoutService);
     notices = moduleRef.get(StoreAdminNoticeService);
+    storeEarnings = moduleRef.get(StoreEarningService);
     // A second server: its own service on the same database and provider.
     other = new StorePayoutService(
       prisma,
@@ -602,5 +608,182 @@ describe('STORE-PAYOUT: paying a creator for a store sale (Nuvion stood in)', ()
         (t) => t.request.unique_reference === payoutReference(e.id, 1),
       ),
     ).toHaveLength(1);
+  });
+
+  // ---------------------------------------------------------- patch round 1 (verifier V-SP-1, 2, 4)
+
+  /** The store refunds a sale: the creator's share is taken back (the real code, in its own transaction). */
+  const refund = (storePurchaseId: string) =>
+    prisma.$transaction((tx) =>
+      storeEarnings.takeBack(tx, { id: storePurchaseId } as never, new Date()),
+    );
+  const reverse = (storePurchaseId: string) =>
+    prisma.$transaction((tx) =>
+      storeEarnings.restore(tx, { id: storePurchaseId } as never, new Date()),
+    );
+
+  it('V-SP-1: a refund racing the send either cancels before anything leaves or becomes a deduction after, never both', async () => {
+    const c = await creator(0);
+    const e = await earning(c, 85_000);
+    await payouts['plan'](new Date(), Date.now(), 45_000); // the payout is made, nothing is sent
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let entered!: () => void;
+    const inside = new Promise<void>((r) => (entered = r));
+    // The refund reads the earning, then waits before it writes (the verifier's order).
+    const refunding = prisma.$transaction(async (tx) => {
+      const gated = new Proxy(tx, {
+        get(target, prop, receiver) {
+          const v = Reflect.get(target, prop, receiver) as unknown;
+          if (prop !== 'storeEarning') return v;
+          return new Proxy(v as object, {
+            get(model, key) {
+              const f = Reflect.get(model, key) as (...a: unknown[]) => unknown;
+              if (key !== 'update' && key !== 'updateMany') return f;
+              return async (...a: unknown[]) => {
+                entered();
+                await gate;
+                return f.apply(model, a);
+              };
+            },
+          });
+        },
+      });
+      return storeEarnings.takeBack(
+        gated,
+        { id: e.storePurchaseId } as never,
+        new Date(),
+      );
+    });
+    await inside;
+    const sweeping = payouts.sweep(); // the send must not pass the refund
+    await new Promise((r) => setTimeout(r, 500));
+    release();
+    await refunding;
+    await sweeping;
+    await payouts.sweep();
+
+    const earned = await prisma.storeEarning.findUniqueOrThrow({
+      where: { id: e.id },
+    });
+    const payout = await prisma.storeEarningPayout.findUniqueOrThrow({
+      where: { storeEarningId: e.id },
+    });
+    const debt = await prisma.earningDeduction.findUnique({
+      where: { storePurchaseId: e.storePurchaseId },
+    });
+    // The refund came first: nothing left WAWU's account, the earning and the payout are cancelled.
+    expect(earned.status).toBe('cancelled');
+    expect(payout.status).toBe('cancelled');
+    expect(balance(c)).toBe(0n);
+    expect(debt).toBeNull();
+    // Whichever way the race goes, money out always has a debt or a paid earning behind it.
+    expect(balance(c) === 0n || debt !== null || earned.status === 'paid').toBe(
+      true,
+    );
+  });
+
+  it('V-SP-1: a refund of an earning whose transfer is out is a deduction, not a cancellation', async () => {
+    const c = await creator(0);
+    const e = await earning(c, 85_000);
+    nuvion.mode = 'pending'; // the provider takes the transfer and says it is not finished
+    await payouts.sweep();
+    expect(
+      (await prisma.storeEarning.findUniqueOrThrow({ where: { id: e.id } }))
+        .status,
+    ).toBe('sending');
+    const out = await refund(e.storePurchaseId);
+    expect(out.earning).toBe('debt');
+    expect(
+      (await prisma.storeEarning.findUniqueOrThrow({ where: { id: e.id } }))
+        .status,
+    ).toBe('sending');
+    nuvion.mode = 'successful';
+    const p = await prisma.storeEarningPayout.findUniqueOrThrow({
+      where: { storeEarningId: e.id },
+    });
+    nuvion.settle(p.customerReference, 'successful');
+    await payouts.sweep(new Date(Date.now() + 10 * 60_000));
+    expect(
+      (await prisma.storeEarning.findUniqueOrThrow({ where: { id: e.id } }))
+        .status,
+    ).toBe('paid');
+    expect(balance(c)).toBe(85_000n);
+    const debt = await prisma.earningDeduction.findUniqueOrThrow({
+      where: { storePurchaseId: e.storePurchaseId },
+    });
+    expect(debt.amountKobo).toBe(85_000n); // taken from the creator's next earnings
+  });
+
+  it('V-SP-2: a refund, then the store reverses it, then the payout: the creator is paid once', async () => {
+    const c = await creator(0);
+    const e = await earning(c, 85_000);
+    await payouts['plan'](new Date(), Date.now(), 45_000); // payout made, nothing sent
+    expect((await refund(e.storePurchaseId)).earning).toBe('cancelled');
+    await payouts.sweep(); // the lease sees the cancelled sale and cancels the payout
+    expect(
+      (
+        await prisma.storeEarningPayout.findUniqueOrThrow({
+          where: { storeEarningId: e.id },
+        })
+      ).status,
+    ).toBe('cancelled');
+    expect((await reverse(e.storePurchaseId)).earning).toBe('restored');
+
+    await payouts.sweep();
+    await other.sweep();
+    await payouts.sweep();
+    expect(balance(c)).toBe(85_000n);
+    expect(
+      (await prisma.storeEarning.findUniqueOrThrow({ where: { id: e.id } }))
+        .status,
+    ).toBe('paid');
+    // One payout row, one transfer under its reference.
+    expect(
+      await prisma.storeEarningPayout.count({
+        where: { storeEarningId: e.id },
+      }),
+    ).toBe(1);
+    expect(
+      sentFromMerchant().filter(
+        (t) => t.request.unique_reference === payoutReference(e.id, 1),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('V-SP-4: a refusal for funds writes a notice from the real balance and the real earnings waiting', async () => {
+    await payouts.sweep();
+    await prisma.storeAdminNotice.deleteMany({
+      where: { kind: 'store_payout_short' },
+    });
+    const c = await creator(0);
+    const e = await earning(c, 85_000);
+    nuvion.mode = 'insufficient';
+    await payouts.sweep();
+    nuvion.mode = 'successful';
+    const told = await prisma.storeAdminNotice.findMany({
+      where: { kind: 'store_payout_short' },
+    });
+    expect(told).toHaveLength(1);
+    expect(told[0].body).toContain('holds \u20a61,000,000');
+    expect(told[0].body).toContain('1 store earning worth \u20a6850 is due');
+    expect(told[0].body).not.toContain('holds \u20a60.');
+    // And a refusal that proves nothing is waiting writes nothing and keeps the day's key free.
+    await prisma.storeAdminNotice.deleteMany({
+      where: { kind: 'store_payout_short' },
+    });
+    await payouts.sweep(new Date(Date.now() + 10 * 60_000));
+    expect(
+      (await prisma.storeEarning.findUniqueOrThrow({ where: { id: e.id } }))
+        .status,
+    ).toBe('paid');
+    nuvion.mode = 'insufficient';
+    await payouts['tellShort'](new Date());
+    nuvion.mode = 'successful';
+    expect(
+      await prisma.storeAdminNotice.count({
+        where: { kind: 'store_payout_short' },
+      }),
+    ).toBe(0);
   });
 });

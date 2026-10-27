@@ -190,7 +190,14 @@ export class StoreGrantService {
         if (pack === null || !(pack in PACK_TABLE))
           throw new Error(`Product ${product.id} names no credit pack.`);
         const info = PACK_TABLE[pack];
-        const gross = purchase.netKobo ?? 0;
+        // The lot's gross is what the host's share of spent credits is worked
+        // on. After a store's cut moved to 30% (STORE-CUT30) it stays on the cut
+        // that applied before (`shareFeeBps`), while `purchase.netKobo` is WAWU's
+        // own true net: WAWU absorbs the extra, the host's share is unchanged.
+        const gross = netOf(
+          purchase.referenceKobo ?? 0,
+          purchase.shareFeeBps ?? purchase.storeFeeBps,
+        );
         await tx.creditPurchase.create({
           data: {
             id: randomUUID(),
