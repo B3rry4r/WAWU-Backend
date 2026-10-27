@@ -79,8 +79,10 @@ export interface StoreGrantedView {
   communityId: string | null;
   /** A ladder purchase of a piece: the piece unlocked (STORE-BUY-HUB). Absent on the other kinds. */
   contentId?: string | null;
-  /** A ladder tip: the creator tipped. Absent on the other kinds. */
+  /** A ladder tip or question: the creator tipped or asked. Absent on the other kinds. */
   creatorWawuId?: string | null;
+  /** A ladder question that was sent: its id, the message the asker reads the answer in (STORE-QUESTION). Absent on the other kinds. */
+  questionId?: string | null;
 }
 
 /** `POST /store/purchases`. */
@@ -103,7 +105,7 @@ export interface StorePurchaseView {
   credit?: StoreCreditNoticeView | null;
   /** A ladder purchase paid with a store credit: the credit it used. Absent otherwise. */
   paidWithCredit?: string | null;
-  /** A ladder purchase: what it was for (`content`, `tip` or `pass`). Absent on the other kinds. */
+  /** A ladder purchase: what it was for (`content`, `tip`, `pass` or `question`). Absent on the other kinds. */
   buyKind?: StoreIntentKind | null;
   /** A ladder purchase: the intent it was made against. Absent on the other kinds. */
   intentId?: string | null;
@@ -124,12 +126,14 @@ export interface StoreCreditNoticeView {
 export interface StoreCreditView {
   id: string;
   amountKobo: number;
+  /** What the credit may pay for: `question` (a paid question to any creator at its price or less) or null (a piece, a tip or a pass). */
+  scope: 'question' | null;
   createdAt: string;
 }
 
 /** `GET /store/credits`. */
 export interface StoreCreditListView {
-  /** Credits not yet spent, smallest first. A credit pays for ONE purchase at its price or less, whole; it is never cash and never expires. */
+  /** Credits not yet spent, smallest first. A credit pays for ONE purchase at its price or less, whole (the rest stays a credit of the same scope); it is never cash and never expires. */
   credits: StoreCreditView[];
 }
 

@@ -22,6 +22,7 @@ import {
   StoreProductKind,
   StorePurchaseStatus,
 } from '../../generated/prisma/enums';
+import { MAX_QUESTION_LENGTH } from './question/store-question-rules';
 
 /** Ids a store sells products under: letters, digits, dot, dash, underscore. */
 const STORE_ID = /^[A-Za-z0-9._-]+$/;
@@ -84,7 +85,8 @@ export class StorePurchaseDto {
 /**
  * POST /store/intents: what a ladder purchase is for, said BEFORE the store
  * sheet opens. Name only the thing the kind is about: `contentId` for
- * `content`, `creatorWawuId` for `tip`, `communityId` for `pass`.
+ * `content`, `creatorWawuId` for `tip` and for `question` (the creator asked),
+ * `communityId` for `pass`. A `question` also carries its words in `text`.
  */
 export class StoreIntentDto {
   /** The store the app runs on. */
@@ -92,10 +94,10 @@ export class StoreIntentDto {
   @IsEnum(StorePlatform, { message: 'platform must be android or ios' })
   platform!: StorePlatform;
 
-  /** `content` (unlock a piece), `tip` (tip a creator) or `pass` (a community pass). */
+  /** `content` (unlock a piece), `tip` (tip a creator), `pass` (a community pass) or `question` (a paid question to a creator). */
   @ApiProperty({ enum: StoreIntentKind })
   @IsEnum(StoreIntentKind, {
-    message: 'kind must be content, tip or pass',
+    message: 'kind must be content, tip, pass or question',
   })
   kind!: StoreIntentKind;
 
@@ -105,11 +107,20 @@ export class StoreIntentDto {
   @IsUUID()
   contentId?: string;
 
-  /** The creator to tip. Required for `tip`. */
+  /** The creator to tip, or to ask a question. Required for `tip` and `question`. */
   @ApiPropertyOptional()
-  @ValidateIf((o: StoreIntentDto) => o.kind === 'tip')
+  @ValidateIf((o: StoreIntentDto) => o.kind === 'tip' || o.kind === 'question')
   @IsUUID()
   creatorWawuId?: string;
+
+  /** The question, 2,000 characters at most. Required for `question`, refused for any other kind. */
+  @ApiPropertyOptional({ maxLength: MAX_QUESTION_LENGTH })
+  @ValidateIf(
+    (o: StoreIntentDto) => o.kind === 'question' || o.text !== undefined,
+  )
+  @IsString()
+  @Length(1, MAX_QUESTION_LENGTH)
+  text?: string;
 
   /** The room whose pass to buy. Required for `pass`. */
   @ApiPropertyOptional()

@@ -3,6 +3,10 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { NotificationService } from '../notification/notification.service';
 import { DmRefundService } from '../direct-message/dm-refund.service';
+import {
+  isStoreQuestionRef,
+  STORE_QUESTION_REF_PREFIX,
+} from '../direct-message/store-question-ref';
 import type { NotificationEvent } from '../notification/notification-event';
 
 /**
@@ -56,7 +60,11 @@ export class SchedulerService {
         deadlineAt: { lt: now },
         // A question paid from the wallet is refunded through its hold
         // (INBOX-17), not by a Flutterwave refund that does not exist for it.
-        NOT: { flutterwaveTxRef: { startsWith: 'wallet:' } },
+        // One bought in a store is the store module's (STORE-QUESTION).
+        NOT: [
+          { flutterwaveTxRef: { startsWith: 'wallet:' } },
+          { flutterwaveTxRef: { startsWith: STORE_QUESTION_REF_PREFIX } },
+        ],
       },
       select: { id: true },
       take: 500,
@@ -70,7 +78,10 @@ export class SchedulerService {
           // wins the race rather than being refunded out from under them.
           status: 'awaiting_response',
           deadlineAt: { lt: now },
-          NOT: { flutterwaveTxRef: { startsWith: 'wallet:' } },
+          NOT: [
+            { flutterwaveTxRef: { startsWith: 'wallet:' } },
+            { flutterwaveTxRef: { startsWith: STORE_QUESTION_REF_PREFIX } },
+          ],
         },
         data: { status: 'refunded', refundStatus: 'owed' },
       });
@@ -119,6 +130,7 @@ export class SchedulerService {
         creatorWawuId: true,
         senderWawuId: true,
         deadlineAt: true,
+        flutterwaveTxRef: true,
       },
       take: 500,
     });
@@ -129,6 +141,10 @@ export class SchedulerService {
         kind: 'dm_deadline',
         userWawuId: dm.creatorWawuId,
         hoursLeft: (dm.deadlineAt.getTime() - now) / (60 * 60 * 1000),
+        // A question bought in the store ends in a question credit, not a refund (STORE-QUESTION).
+        ...(isStoreQuestionRef(dm.flutterwaveTxRef)
+          ? { storeQuestion: true }
+          : {}),
         // ME-10: Reply opens the question that is running out of time.
         about: {
           target: { kind: 'paid_question', id: dm.id },

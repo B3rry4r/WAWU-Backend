@@ -81,7 +81,14 @@ type CoreNotificationKind =
   | 'price_moved'
   // FIX-105 (R-81): new messages in a community the person joined.
   /** Other people posted in a community the person joined. One notice per person and room, counted. */
-  | 'community_messages';
+  | 'community_messages'
+  // STORE-SALE-NOTICE and STORE-QUESTION (R-101): sales made through the app stores.
+  /** A community pass was sold through a store. Recipient: the room's host, who earns 85% of the list price. */
+  | 'pass_sold'
+  /** A paid question bought in a store was answered. Recipient: the creator, who earns 85% of the list price. */
+  | 'question_answered'
+  /** A paid question bought in a store was not answered in time. Recipient: the asker, who has a question credit. */
+  | 'question_credit';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -103,9 +110,27 @@ type NotificationEventCore =
   /** Tip settled. Recipient: the creator. `netAmount` is post-commission. */
   | { kind: 'tip_received'; userWawuId: string; netAmount: number }
   /** Paid DM paid for and created. Recipient: the creator. `amount` is what the fan paid. */
-  | { kind: 'dm_received'; userWawuId: string; amount: number }
+  | {
+      kind: 'dm_received';
+      userWawuId: string;
+      amount: number;
+      /**
+       * A question bought in the app store (STORE-QUESTION, lead ruling): an
+       * unanswered one gives the asker a question credit, not a refund, so the
+       * words say so. `replyHours` is the creator's real window. Unset for a
+       * wallet or web question, whose words are unchanged.
+       */
+      storeQuestion?: boolean;
+      replyHours?: number;
+    }
   /** The 24h reply window is closing. Recipient: the creator. */
-  | { kind: 'dm_deadline'; userWawuId: string; hoursLeft: number }
+  | {
+      kind: 'dm_deadline';
+      userWawuId: string;
+      hoursLeft: number;
+      /** A question bought in the app store: the words say the asker gets a question credit instead. Unset for the others. */
+      storeQuestion?: boolean;
+    }
   /** The 24h window closed unanswered. Recipient: the fan who paid. */
   | { kind: 'dm_refunded'; userWawuId: string; amount: number }
   /**
@@ -320,7 +345,31 @@ type NotificationEventCore =
       userWawuId: string;
       itemTitle: string;
       newPrice: number;
-    };
+    }
+  /**
+   * STORE-SALE-NOTICE (R-101). A community pass was sold through a store, told
+   * once per sale in the transaction that records the host's earning.
+   * Recipient: the host. `netAmount` is the host's 85% of the list price, whole naira.
+   */
+  | {
+      kind: 'pass_sold';
+      userWawuId: string;
+      roomName: string;
+      netAmount: number;
+    }
+  /**
+   * STORE-SALE-NOTICE (R-101). A paid question bought through a store was
+   * answered; told once, in the transaction that records the earning.
+   * Recipient: the creator. `netAmount` is their 85% of the list price, whole naira.
+   */
+  | { kind: 'question_answered'; userWawuId: string; netAmount: number }
+  /**
+   * STORE-QUESTION (R-101 point 6). A paid question bought through a store was
+   * not answered by its deadline; the asker has a question credit worth the list
+   * price, never cash. Told once, in the transaction that makes the credit.
+   * Recipient: the asker. `amount` is whole naira.
+   */
+  | { kind: 'question_credit'; userWawuId: string; amount: number };
 
 /** A pass's last day as the reminder writes it: "12 Nov 2026", Lagos time. */
 function passEndDay(endsAt: Date): string {
@@ -500,24 +549,30 @@ export function composeNotification(
         ...NO_RICH_MEDIA,
       };
 
-    case 'dm_received':
+    case 'dm_received': {
+      const replyHours = Math.max(1, Math.round(event.replyHours ?? 24));
       return {
         ...base,
         title: 'Paid DM received',
-        body: `Someone paid ${formatNaira(event.amount)} to message you. Reply within 24 hours or it is refunded to them.`,
+        body: event.storeQuestion
+          ? `Someone paid ${formatNaira(event.amount)} to ask you a question. Reply within ${replyHours} ${replyHours === 1 ? 'hour' : 'hours'} or they get a question credit instead.`
+          : `Someone paid ${formatNaira(event.amount)} to message you. Reply within 24 hours or it is refunded to them.`,
         tone: 'accent',
         amount: Math.round(event.amount),
         creditsCount: null,
         actionLabel: 'Reply now',
         ...NO_RICH_MEDIA,
       };
+    }
 
     case 'dm_deadline': {
       const hours = Math.max(1, Math.round(event.hoursLeft));
       return {
         ...base,
         title: 'Reply deadline approaching',
-        body: `A paid DM is still waiting. About ${hours} ${hours === 1 ? 'hour' : 'hours'} left to reply before it is refunded.`,
+        body: event.storeQuestion
+          ? `A paid question is still waiting. About ${hours} ${hours === 1 ? 'hour' : 'hours'} left to reply before they get a question credit instead.`
+          : `A paid DM is still waiting. About ${hours} ${hours === 1 ? 'hour' : 'hours'} left to reply before it is refunded.`,
         tone: 'danger',
         amount: null,
         creditsCount: null,
@@ -887,6 +942,42 @@ export function composeNotification(
         body: `The price of ${event.itemTitle} is now ${formatNaira(event.newPrice)}, the nearest on the price list.`,
         tone: 'info',
         amount: null,
+        creditsCount: null,
+        actionLabel: null,
+        ...NO_RICH_MEDIA,
+      };
+
+    case 'pass_sold':
+      return {
+        ...base,
+        title: 'Pass sold',
+        body: `Someone got a pass to “${event.roomName}”. You earned ${formatNaira(event.netAmount)} after the platform fee.`,
+        tone: 'success',
+        amount: Math.round(event.netAmount),
+        creditsCount: null,
+        actionLabel: 'View earnings',
+        ...NO_RICH_MEDIA,
+      };
+
+    case 'question_answered':
+      return {
+        ...base,
+        title: 'Question answered',
+        body: `You answered a paid question. You earned ${formatNaira(event.netAmount)} after the platform fee.`,
+        tone: 'success',
+        amount: Math.round(event.netAmount),
+        creditsCount: null,
+        actionLabel: 'View earnings',
+        ...NO_RICH_MEDIA,
+      };
+
+    case 'question_credit':
+      return {
+        ...base,
+        title: 'You have a question credit',
+        body: `A creator did not reply in time. You have a ${formatNaira(event.amount)} credit to ask any creator a question at that price or less.`,
+        tone: 'info',
+        amount: Math.round(event.amount),
         creditsCount: null,
         actionLabel: null,
         ...NO_RICH_MEDIA,
@@ -1399,6 +1490,10 @@ export const NOTIFICATION_CATEGORY: Record<
   community_pass_refunded: 'money',
   // PRICE-LIST (R-101). Default (agent), owner may override: under "Money".
   price_moved: 'money',
+  // STORE-SALE-NOTICE and STORE-QUESTION (R-101). Money the creator earned, or a credit the asker was given.
+  pass_sold: 'money',
+  question_answered: 'money',
+  question_credit: 'money',
   content_published: 'content',
   content_rejected: 'content',
   review_received: 'content',

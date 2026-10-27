@@ -57,6 +57,12 @@ export interface RecordEarning {
   listPriceKobo: number;
   /** When the sale was made. */
   soldAt: Date;
+  /**
+   * When the creator earned it, if that is later than the sale: a paid
+   * question is earned when it is answered, and the 3 working days count from
+   * then (STORE-QUESTION). Unset, the sale's own time counts.
+   */
+  earnedAt?: Date;
 }
 
 /**
@@ -99,9 +105,9 @@ export class StoreEarningService {
     tx: Prisma.TransactionClient,
     a: RecordEarning,
   ): Promise<string> {
-    const earnedAt = new Date(
-      Math.min(a.soldAt.getTime(), a.purchase.createdAt.getTime()),
-    );
+    const earnedAt =
+      a.earnedAt ??
+      new Date(Math.min(a.soldAt.getTime(), a.purchase.createdAt.getTime()));
     const data = {
       storePurchaseId: a.purchase.id,
       role: 'sale',
