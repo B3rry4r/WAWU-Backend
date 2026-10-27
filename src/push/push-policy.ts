@@ -64,9 +64,6 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   // wallet. It is money in, so the "Money in" switch mutes the push (see
   // PUSH_ONLY_GATE); the list always carries it.
   community_pass_refunded: 'send',
-  // PRICE-LIST (R-101). Default (agent), owner may override: a creator is told
-  // when a price of theirs moves; no Z3 switch covers it, so it is always sent.
-  price_moved: 'send',
   // FIX-105 (R-81, owner, 24 Oct 2026: it reaches the phone like the other
   // kinds). One push per notice, when the notice is first written; later
   // messages update the notice and do not buzz the phone again until the
@@ -95,6 +92,8 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   // it is the state of their account and no Z3 switch is agreed to cover it,
   // so it is held until the owner answers (G-265). It reaches the in-app list.
   identity_review: 'hold',
+  // PRICE-LIST (R-101, lead ruling): a price the migration moved is told in the app only, never pushed.
+  price_moved: 'hold',
 };
 
 /**
