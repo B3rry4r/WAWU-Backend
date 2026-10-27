@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261213090000_store_buy_ladder (STORE-BUY-HUB). Run 20261213090100_store_buy_ladder_rows' rollback first.
 -- It refuses while any record of money made by the ladder exists: an intent, a store earning, a ladder purchase, or a
 -- deduction a store refund made. Those cannot be rebuilt, so they are never dropped silently.

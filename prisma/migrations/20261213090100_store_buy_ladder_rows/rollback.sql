@@ -1,3 +1,4 @@
+\set ON_ERROR_STOP on
 -- Rollback for 20261213090100_store_buy_ladder_rows (STORE-BUY-HUB). Removes the ladder products. It refuses while any
 -- purchase or intent names one (a purchase is a record of money; "StorePurchase"."productId" restricts the delete).
 DO $$
