@@ -872,6 +872,53 @@ Round 4 (re-verify):
 - **A notice with no signed date is ordered by its arrival time:** it is applied when it arrives, and
   a notice signed before that moment is then older and changes nothing.
 
+## Paying creators for store sales, and the stores' 30% cut (STORE-PAYOUT, STORE-HOLIDAYS, STORE-CUT30, R-101)
+
+**Payout.** A creator's 85% of the list price of a store sale is a `StoreEarning`. Every minute
+`StorePayoutService` pays each one whose `availableAt` has passed, from WAWU's own account at the wallet
+provider to the creator's wallet, through `WALLET_PROVIDER` only (`src/store/payout/`). One
+`StoreEarningPayout` row per earning; its reference `wawu-spay-<earning id>` is the idempotency key, so two
+runs or two servers pay it once. Open `EarningDeduction`s (a store refund of an already paid earning, a pass
+refund) are taken from the share first, oldest first, never below 0 (`EarningDeductionTake.storePayoutId`;
+the daily mover's takes are in the same table, so a deduction is never taken twice). A creator with no wallet
+keeps the earning owed and is paid within a minute of opening one (R-11). When WAWU's account holds less than
+is due, earnings are paid in `availableAt` order up to the balance and the rest wait; the owner gets one
+notice a day (`GET /api/hub/admin/store/notices`, superadmin and finance; `PATCH .../:id/read`). The
+legacy wallet funding sweep (`WALLET_FUNDING=on`) skips every `store:` row, so a store sale is paid only here.
+
+**Holidays.** Admin plan setting `store.holidays` (dates `YYYY-MM-DD`, Lagos, one per line). A store
+earning's 3 working days skip weekends and these dates. The seed holds Nigeria's fixed public holidays for
+2026 and 2027; Eid, Good Friday, Easter Monday and the Prophet's birthday (and a Monday given for a holiday
+on a weekend) are added by an admin each year. An earning already recorded keeps its `availableAt`.
+
+**The 30% cut.** `StoreCut30Service` (every 5 minutes) keeps each store's calendar-year (Lagos) total of
+WAWU's proceeds from granted production purchases in US dollars (`StoreProceedsEntry`), converted once at
+**Nuvion's FX quote** through the wallet provider seam (a live NGN to USD quote from WAWU's own account,
+`fx.quoteFromMerchant`, cached 30 minutes; else the newest NGN/USD quote the Hub stored in `FxQuote` in the
+last 30 days; with neither, nothing is counted that pass). A refunded or revoked purchase stops counting.
+When a store reaches the admin setting `store.cut30_threshold_usd` (default 900000), once for that store and
+year, its `wawu.buy.*` rows take the 30% prices (`src/store/cut30/store-ladder-30.ts`), `GET /prices` shows
+them, and the owner gets one notice. `GET /api/hub/admin/store/cut30` shows where each store stands;
+`POST /api/hub/admin/store/cut30/{android|ios}/switch-back` puts the 15% prices back (an admin action at the
+new year, never automatic).
+
+**Store price changes (optional keys).** The prices in Google Play and App Store Connect change through the
+stores' APIs only when the server has the keys for that store; without them the notice says to change them by
+hand and lists the new Nigeria prices. These are not the keys that verify purchases.
+
+| Variable | For |
+| --- | --- |
+| `STORE_PRICE_GOOGLE_PACKAGE_NAME` | Google Play: the app's package name |
+| `STORE_PRICE_GOOGLE_SERVICE_ACCOUNT_JSON` | Google Play: a service account (JSON, or that JSON in base64) allowed to manage in-app products |
+| `STORE_PRICE_GOOGLE_API_BASE` | optional, a stand-in for tests (default Google's) |
+| `STORE_PRICE_APPLE_APP_ID` | App Store Connect: the app's numeric Apple id |
+| `STORE_PRICE_APPLE_ISSUER_ID`, `STORE_PRICE_APPLE_KEY_ID`, `STORE_PRICE_APPLE_PRIVATE_KEY` | App Store Connect API key (App Manager role); the `.p8` text, `\n` for line breaks |
+| `STORE_PRICE_APPLE_API_BASE` | optional, a stand-in for tests (default Apple's) |
+
+Google is changed with the Android Publisher `inappproducts.patch` call (the `NG` price); Apple with the
+App Store Connect `inAppPurchasePriceSchedules` call on the matching Nigeria price point. Neither has been run
+against the real store (no credentials here); the specs use local stand-ins for both.
+
 ## Verification: two ticks, not a ladder
 
 There is no five-rung ladder any more. There are exactly **two** verifications,

@@ -257,6 +257,15 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
     column: 'payeeWawuUserId',
     disposition: 'COUNTERPARTY',
   },
+  // How WAWU paid that share (STORE-PAYOUT, R-101 point 4): the transfer from
+  // WAWU's own account to the creator's wallet, with the deductions it took.
+  // Kept with the earning it pays, for the same reason: the record of money
+  // WAWU paid out.
+  {
+    model: 'StoreEarningPayout',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
   // More products this account bought on its tier (TIER-04): how many and what
   // it cost. OWNED, like MakerPurchase above: the row exists only because this
   // account bought something and names no counterparty. The money's record is

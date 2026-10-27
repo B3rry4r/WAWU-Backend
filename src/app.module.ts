@@ -90,6 +90,8 @@ import { PlanPurchasesModule } from './plans/purchases/plan-purchases.module';
 import { WalletBillsModule } from './wallet-bills/wallet-bills.module';
 import { CreditWalletModule } from './credit-purchase/wallet/credit-wallet.module';
 import { CommunityPassModule } from './community/pass/community-pass.module';
+import { StoreCut30Module } from './store/cut30/store-cut30.module';
+import { StorePayoutModule } from './store/payout/store-payout.module';
 import { UnlockWalletModule } from './content-piece/wallet/unlock-wallet.module';
 import { LegalFeeWalletModule } from './legal/wallet/legal-fee-wallet.module';
 import { TipWalletModule } from './purchase/wallet/tip-wallet.module';
@@ -443,6 +445,8 @@ import { PushModule } from './push/push.module';
     CreditWalletModule,
     // A private community's monthly pass, paid from the wallet (INBOX-24, R-63).
     CommunityPassModule,
+    StorePayoutModule,
+    StoreCut30Module,
     // Tip, unlock and pay a legal fee from the wallet (bundle B1). HOME-14: `tips/wallet`
     // (quote, tip, one tip by id) and the payment kind `tip`. HOME-15:
     // `content/:id/unlock/wallet` (quote, unlock, one unlock by id) and the kind

@@ -6,6 +6,7 @@ import type {
   StorePurchase,
 } from '../../generated/prisma/client';
 import type { StoreIntentKind } from '../../generated/prisma/enums';
+import { PlanSettingsService } from '../plan-settings/plan-settings.service';
 import {
   readWalletProviderName,
   WALLET_PROVIDER_CONFIG_KEY,
@@ -15,6 +16,7 @@ import {
   EARNING_KIND_OF,
   payableAt,
 } from './store-buy-rules';
+import { holidaySet, STORE_HOLIDAYS_KEY } from './payout/store-holidays';
 
 /** What a store refund did to the creator's share (recorded on the purchase's `takenBack`). */
 export interface EarningTakeBack {
@@ -75,7 +77,15 @@ export interface RecordEarning {
  */
 @Injectable()
 export class StoreEarningService {
-  constructor(private readonly config: ConfigService) {}
+  constructor(
+    private readonly config: ConfigService,
+    private readonly settings: PlanSettingsService,
+  ) {}
+
+  /** The public holidays the waiting days skip: the live admin setting `store.holidays` (STORE-HOLIDAYS). */
+  private holidays(): ReadonlySet<string> {
+    return holidaySet(this.settings.lines(STORE_HOLIDAYS_KEY));
+  }
 
   /** The wallet provider this Hub runs: the one whose mover takes the creator's deductions. */
   providerName(): string {
@@ -102,7 +112,7 @@ export class StoreEarningService {
       earnedAt,
       listPriceKobo: BigInt(a.listPriceKobo),
       amountKobo: BigInt(creatorShareOfList(a.listPriceKobo)),
-      availableAt: payableAt(earnedAt),
+      availableAt: payableAt(earnedAt, this.holidays()),
       provider: this.providerName(),
     };
     await tx.storeEarning.createMany({ data: [data], skipDuplicates: true });

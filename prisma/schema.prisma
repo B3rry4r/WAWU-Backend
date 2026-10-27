@@ -5786,16 +5786,24 @@ model EarningDeduction {
 /// exactly this. A move withdrawn before it was sent takes its takes with it
 /// (the deduction is owed again).
 model EarningDeductionTake {
-  id          String           @id @default(uuid())
-  deductionId String
-  deduction   EarningDeduction @relation(fields: [deductionId], references: [id], onDelete: Restrict)
-  moveId      String
-  move        EarningMove      @relation(fields: [moveId], references: [id], onDelete: Cascade)
-  amountKobo  BigInt
-  createdAt   DateTime         @default(now())
+  id            String              @id @default(uuid())
+  deductionId   String
+  deduction     EarningDeduction    @relation(fields: [deductionId], references: [id], onDelete: Restrict)
+  /// Exactly one of `moveId` (the creator's daily move took it) and
+  /// `storePayoutId` (a store payout took it, STORE-PAYOUT) is set. Both are
+  /// takes of the same deduction, so what is still owed is always the
+  /// deduction's amount less every take, whoever made it.
+  moveId        String?
+  move          EarningMove?        @relation(fields: [moveId], references: [id], onDelete: Cascade)
+  storePayoutId String?
+  storePayout   StoreEarningPayout? @relation(fields: [storePayoutId], references: [id], onDelete: Restrict)
+  amountKobo    BigInt
+  createdAt     DateTime            @default(now())
 
   @@unique([deductionId, moveId])
+  @@unique([deductionId, storePayoutId])
   @@index([moveId])
+  @@index([storePayoutId])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────
@@ -8589,8 +8597,9 @@ model StoreCredit {
 ///
 /// This table is NOT `EarningSettlement`: the daily mover reads only that
 /// table, so nothing here can be paid early. `status` is owed (recorded, not
-/// paid), paid (STORE-PAYOUT paid it out) or cancelled (the store paid the
-/// buyer back first). A refund of a paid earning is a debt in
+/// paid), sending (STORE-PAYOUT's transfer is out and not yet confirmed), paid
+/// (STORE-PAYOUT paid it out) or cancelled (the store paid the buyer back
+/// first). A refund of a paid earning is a debt in
 /// `EarningDeduction` (`storePurchaseId`), which the creator's next daily move
 /// takes. `role` is `sale`, or `restore` for the part of a debt that had
 /// already been taken when the store reversed its refund. No foreign key to the
@@ -8623,6 +8632,121 @@ model StoreEarning {
   @@unique([storePurchaseId, role])
   @@index([payeeWawuUserId, status])
   @@index([status, availableAt])
+}
+
+/// How WAWU pays one `StoreEarning` (STORE-PAYOUT, R-101 point 4): one transfer
+/// from WAWU's own account at the wallet provider to the creator's wallet, once
+/// the earning's `availableAt` has passed. One row per earning (`storeEarningId`
+/// is unique), made when the creator has a wallet, and it carries the whole
+/// money story: the share (`grossKobo`), what open `EarningDeduction`s took of
+/// it (`deductedKobo`, with a take row each, never below 0), and what is sent
+/// (`amountKobo`, 0 when the deductions took it all: nothing moves). `status` is
+/// pending until the provider confirmed the transfer, then paid; the earning is
+/// marked paid in the same write. While a transfer is out the earning is
+/// `sending`, so a store refund in that time becomes a deduction, not a
+/// cancellation; a refund before it was sent cancels the payout and gives its
+/// takes back. `customerReference` is ours at the provider,
+/// the idempotency key: it names the earning, so two runs, two servers or a
+/// restart send it once. `sentAt` is the lease; `waiting` says why nothing has
+/// moved (wallet frozen, WAWU's account short, provider out of reach).
+model StoreEarningPayout {
+  id                       String                 @id @default(uuid())
+  storeEarningId           String                 @unique
+  payeeWawuUserId          String
+  /// The wallet provider that pays it (the one this Hub runs).
+  provider                 String
+  grossKobo                BigInt
+  deductedKobo             BigInt                 @default(0)
+  amountKobo               BigInt
+  /// WAWU's own account the money leaves, as the provider reported it.
+  merchantAccountNumber    String
+  destinationAccountNumber String?
+  customerReference        String                 @unique
+  attempt                  Int                    @default(1)
+  /// pending, paid, or cancelled (the sale was refunded before anything was sent).
+  status                   String                 @default("pending")
+  settledAt                DateTime?
+  sentAt                   DateTime?
+  providerFeeKobo          BigInt?
+  nextAttemptAt            DateTime?
+  attempts                 Int                    @default(0)
+  checks                   Int                    @default(0)
+  waiting                  String?
+  reviewSince              DateTime?
+  discrepancy              String?
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+  takes                    EarningDeductionTake[]
+
+  @@index([status, reviewSince, nextAttemptAt])
+  @@index([payeeWawuUserId])
+}
+
+/// A notice for the owner that the dashboard lists (STORE-PAYOUT, STORE-CUT30):
+/// WAWU's own account is short of what the creators are owed (once a day), and a
+/// store's cut moved from 15% to 30% (once a year per store). `noticeKey` is
+/// unique, so a notice is written once however many servers look. Holds no
+/// person's id.
+model StoreAdminNotice {
+  id            String    @id @default(uuid())
+  kind          String
+  noticeKey     String    @unique
+  title         String
+  body          String
+  data          Json?
+  createdAt     DateTime  @default(now())
+  readAt        DateTime?
+  readByAdminId String?
+
+  @@index([createdAt])
+  @@index([readAt, createdAt])
+}
+
+/// WAWU's proceeds from one store purchase, in US dollars (STORE-CUT30, R-101
+/// point 9): the sum of these rows for a store and a calendar year is how near
+/// that store is to the 30% cut. One row per purchase, made the first time the
+/// Hub sees it. `proceedsKobo` is what the store pays WAWU for it (the list price
+/// for a ladder sale); `usdCents` is that in dollars at the Hub's FX source
+/// (`rateKobo` kobo for `rateCents` cents, Nuvion's quote through the wallet
+/// provider seam), kept so a figure can be checked. A refunded or revoked
+/// purchase stops counting without the row changing.
+model StoreProceedsEntry {
+  id              String        @id @default(uuid())
+  storePurchaseId String        @unique
+  platform        StorePlatform
+  /// The Africa/Lagos calendar year of the sale.
+  year            Int
+  proceedsKobo    BigInt
+  usdCents        BigInt
+  rateKobo        BigInt
+  rateCents       BigInt
+  rateSource      String
+  createdAt       DateTime      @default(now())
+
+  @@index([platform, year])
+}
+
+/// One store's switch to the 30% prices in one calendar year (STORE-CUT30):
+/// written when the store's total for the year reached `store.cut30_threshold_usd`.
+/// Unique per store and year, so the switch happens once. The 15% prices come
+/// back only when an admin says so (`backAt`). `storeSync` says what was done in
+/// the store itself: done, partial or failed (the keys were set), or no_keys
+/// (the owner changes them by hand). `noticedAt` is set when the owner's notice
+/// was written.
+model StoreCut30Switch {
+  id                String        @id @default(uuid())
+  platform          StorePlatform
+  year              Int
+  /// The total, in US cents, and the threshold, in US cents, when it was crossed.
+  totalUsdCents     BigInt
+  thresholdUsdCents BigInt
+  crossedAt         DateTime      @default(now())
+  storeSync         String?
+  noticedAt         DateTime?
+  backAt            DateTime?
+  backByAdminId     String?
+
+  @@unique([platform, year])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────

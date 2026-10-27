@@ -38237,6 +38237,138 @@
         ]
       }
     },
+    "/api/hub/admin/store/notices": {
+      "get": {
+        "operationId": "AdminStoreNoticesController_list",
+        "parameters": [
+          {
+            "name": "unread",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreAdminNoticePageView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Newest first, with how many are unread.",
+        "tags": [
+          "AdminStoreNotices"
+        ]
+      }
+    },
+    "/api/hub/admin/store/notices/{id}/read": {
+      "patch": {
+        "operationId": "AdminStoreNoticesController_read",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreAdminNoticeView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Marks one read. Marking it again changes nothing.",
+        "tags": [
+          "AdminStoreNotices"
+        ]
+      }
+    },
+    "/api/hub/admin/store/cut30": {
+      "get": {
+        "operationId": "AdminStoreCut30Controller_status",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StoreCut30StatusView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Both stores: this year's proceeds in US cents, the threshold, and the ladder in force (15 or 30).",
+        "tags": [
+          "AdminStoreCut30"
+        ]
+      }
+    },
+    "/api/hub/admin/store/cut30/{platform}/switch-back": {
+      "post": {
+        "operationId": "AdminStoreCut30Controller_switchBack",
+        "parameters": [
+          {
+            "name": "platform",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "enum": [
+                "android",
+                "ios"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreCut30SwitchBackView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Puts one store's `wawu.buy.*` prices back on the 15% ladder. 409 when it is already on it.",
+        "tags": [
+          "AdminStoreCut30"
+        ]
+      }
+    },
     "/api/hub/tips/wallet/quote": {
       "get": {
         "operationId": "TipWalletController_quote",
@@ -76016,6 +76148,151 @@
           "payment",
           "createdAt",
           "paidAt"
+        ]
+      },
+      "StoreAdminNoticeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "data": {},
+          "createdAt": {
+            "type": "string"
+          },
+          "readAt": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "body",
+          "data",
+          "createdAt",
+          "readAt"
+        ]
+      },
+      "StoreAdminNoticePageView": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StoreAdminNoticeView"
+            }
+          },
+          "unread": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "unread"
+        ]
+      },
+      "StoreCut30StatusView": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "year": {
+            "type": "number"
+          },
+          "totalUsdCents": {
+            "type": "number"
+          },
+          "thresholdUsdCents": {
+            "type": "number"
+          },
+          "ladder": {
+            "oneOf": [
+              {
+                "type": "number",
+                "enum": [
+                  15
+                ]
+              },
+              {
+                "type": "number",
+                "enum": [
+                  30
+                ]
+              }
+            ]
+          },
+          "crossedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "storeSync": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "platform",
+          "year",
+          "totalUsdCents",
+          "thresholdUsdCents",
+          "ladder",
+          "crossedAt",
+          "storeSync"
+        ]
+      },
+      "StoreCut30SwitchBackView": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios"
+            ]
+          },
+          "ladder": {
+            "type": "number",
+            "enum": [
+              15
+            ]
+          },
+          "storeSync": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "done",
+              "no_keys",
+              "partial"
+            ]
+          },
+          "byHand": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "platform",
+          "ladder",
+          "storeSync",
+          "byHand"
         ]
       },
       "UnlockWalletQuoteView": {

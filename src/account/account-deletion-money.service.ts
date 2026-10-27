@@ -350,7 +350,11 @@ export class AccountDeletionMoneyService {
     // on. It lives in `StoreEarning`, not `EarningSettlement`, so it is counted
     // here on its own: an account is not deleted while WAWU still owes it.
     const owedStoreEarnings = await this.prisma.storeEarning.count({
-      where: { payeeWawuUserId: wawuUserId, status: 'owed' },
+      where: {
+        payeeWawuUserId: wawuUserId,
+        // `sending`: STORE-PAYOUT's transfer is out and not yet confirmed.
+        status: { in: ['owed', 'sending'] },
+      },
     });
     const waitingEarnings = owedSales + owedHostShares + owedStoreEarnings;
     // A send abroad (NUV-11) the provider has not finished, or whose WAWU fee the sweep is still taking or giving back: its row is
