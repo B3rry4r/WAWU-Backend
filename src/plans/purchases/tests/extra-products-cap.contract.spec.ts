@@ -20,10 +20,15 @@ import { PublishingGate } from '../../publishing-gate.service';
 import { PublishingOffersInterceptor } from '../../publishing-offers.interceptor';
 import { TierGateError } from '../../tier-gate-error';
 import {
+  PACK_NO_ROOM_MESSAGE,
   PACK_AT_MOST_MESSAGE,
   PACK_NOT_ALLOWED_CODE,
   PACK_TIER_MESSAGE,
 } from '../extra-products-cap';
+import {
+  TIER_ENDED_MESSAGE,
+  TIER_REQUIRED_MESSAGE,
+} from '../extra-products-rules';
 import type {
   ExtraProductsPurchaseView,
   ExtraProductsQuoteView,
@@ -115,13 +120,20 @@ describe('PACK-CAP: only Founding Maker adds products, at most two packs', () =>
     expect(res.status).toBe(201);
     return data<ExtraProductsPurchaseView>(res);
   }
-  async function hold(p: Person, tierId: string, extraProducts = 0) {
+  async function hold(
+    p: Person,
+    tierId: string,
+    extraProducts = 0,
+    state: 'running' | 'ended' = 'running',
+  ) {
     await h.prisma.makerTier.create({
       data: {
         wawuUserId: p.id,
         tierId,
-        activeFrom: new Date(Date.now() - 10 * DAY),
-        activeUntil: new Date(Date.now() + 100 * DAY),
+        activeFrom: new Date(Date.now() - 40 * DAY),
+        activeUntil: new Date(
+          Date.now() + (state === 'running' ? 100 : -10) * DAY,
+        ),
         productsIncluded: tierOf(tierId).products,
         extraProducts,
         pointsIncluded: 0,
@@ -356,5 +368,94 @@ describe('PACK-CAP: only Founding Maker adds products, at most two packs', () =>
     const fq = await quoteRoute(f);
     expect(fq.status).toBe(409);
     expect(reasonOf(fq).code).toBe('wallet_not_open');
+  });
+
+  // ---------------------------------------------------------------------------
+  // Round 4: eligibility first, fully (no tier, ended tier, no room).
+  // ---------------------------------------------------------------------------
+
+  const payBody = {
+    kind: 'extra_products',
+    method: 'wallet',
+    expectedTotalKobo: 1,
+    quoteToken: 'x',
+  };
+  const buyRaw = (p: Person) =>
+    request(h.app.getHttpServer())
+      .post('/api/hub/plans/purchases')
+      .set('Authorization', p.auth)
+      .set('Idempotency-Key', randomUUID())
+      .send(payBody);
+
+  it('R4-1: with no tier, or an ended one, the quote and the purchase answer tier_required before wallet_not_open', async () => {
+    const none = await h.walletless();
+    const ended = await h.walletless();
+    await hold(ended, 'founding', 0, 'ended');
+    for (const p of [none, ended]) {
+      const quote = await quoteRoute(p);
+      expect(quote.status).toBe(402);
+      expect(reasonOf(quote).code).toBe('tier_required');
+      const res = await buyRaw(p);
+      expect(res.status).toBe(402);
+      expect(reasonOf(res).code).toBe('tier_required');
+    }
+    expect(reasonOf(await quoteRoute(ended)).message).toBe(TIER_ENDED_MESSAGE);
+    expect(reasonOf(await quoteRoute(none)).message).toBe(
+      TIER_REQUIRED_MESSAGE,
+    );
+  });
+
+  it('R4-2: a pack that would not lift the limit above what is published is pack_not_allowed, on the quote and the purchase', async () => {
+    await set('plan.extra_products.tiers', ['verify', 'founding']);
+    const full = await h.buyer(RICH);
+    await hold(full, 'verify');
+    // 3 included + 5 = 8 places, 12 published: five more still leave no room.
+    await publish(full, 12);
+    const quote = await quoteRoute(full);
+    expect(quote.status).toBe(409);
+    expect(reasonOf(quote)).toEqual({
+      code: PACK_NOT_ALLOWED_CODE,
+      message: PACK_NO_ROOM_MESSAGE,
+    });
+    const res = await request(h.app.getHttpServer())
+      .post('/api/hub/plans/purchases')
+      .set('Authorization', full.auth)
+      .set('Idempotency-Key', randomUUID())
+      .send(payBody);
+    expect(res.status).toBe(409);
+    expect(reasonOf(res).code).toBe(PACK_NOT_ALLOWED_CODE);
+    expect(sendsFrom(full)).toHaveLength(0);
+    // Seven published (8 places): five more lift the limit, so it is sold.
+    const room = await h.buyer(RICH);
+    await hold(room, 'verify');
+    await publish(room, 7);
+    expect((await quoteRoute(room)).status).toBe(200);
+  });
+
+  it('R4-3: a pack paid for that no longer lifts the limit when it is added is refunded in full and not added', async () => {
+    const p = await h.buyer(RICH);
+    await hold(p, 'founding');
+    await publish(p, tierOf('founding').products);
+    const q = data<ExtraProductsQuoteView>(await quoteRoute(p));
+    nuvion.mode = 'pending';
+    const pending = data<ExtraProductsPurchaseView>(
+      await call.buy(p, bodyFor(q)),
+    );
+    expect(pending.status).toBe('pending');
+    // More is published than the pack could ever cover before the payment lands.
+    await publish(p, 40);
+    nuvion.settle(pending.payment!.reference, 'successful');
+    await h.sweepLater();
+    const done = data<ExtraProductsPurchaseView>(
+      await call.read(p, pending.id),
+    );
+    expect(done.status).toBe('refunded');
+    expect(await extraOf(p)).toBe(0);
+    expect(await packsBought(p)).toBe(0);
+    const back = nuvion
+      .sendsFrom(nuvion.operational.accountId)
+      .filter((s) => s.toAccountId === p.account!.accountId);
+    expect(back).toHaveLength(1);
+    expect(back[0].amountKobo).toBe(BigInt(addOnPrice));
   });
 });

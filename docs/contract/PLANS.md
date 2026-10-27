@@ -683,8 +683,9 @@ the extras bought on the account, as they stand now) and `productsAllowed`
 - **Needs a running tier.** A person whose tier is `active` or `ending` can
   buy. With no tier, or an ended one, the quote and the purchase answer `402
   tier_required` (CONVENTIONS section 23) and nothing is taken or kept. A
-  person with an open wallet and no tier is told this, not that the wallet is
-  missing: the wallet is checked first, as for every purchase.
+  person with no tier is told this, not that the wallet is missing: since
+  PACK-CAP (R-100) eligibility is answered first, before any wallet or payment
+  gate, on the quote and on the purchase.
 - **Only some tiers, and at most some packs (PACK-CAP, R-100).** The pack is
   sold only to a person whose running tier is named by the admin setting
   `plan.extra_products.tiers` (a list of tier ids; the default is `founding`,
@@ -702,6 +703,12 @@ the extras bought on the account, as they stand now) and `productsAllowed`
   (`refunded`). A waiting transfer order is closed `failed` with nothing taken.
   A store purchase of the pack that arrives against the rule is recorded with
   `flag: pack_not_allowed` and grants nothing (`POST /store/purchases`).
+- **The pack must make room.** A pack that would not lift the limit above
+  what is published (the places the person has plus the pack are not more than
+  the products they have up) is `409 pack_not_allowed`, on the quote, on the
+  purchase and again where the pack is added (then the payment is refunded in
+  full, as for the cap; a tier that has ended waits and is not judged for
+  room).
 - **The quote binds price and count.** The number of products is the
   payment's terms. A quote whose price or count changed since it was given is
   `409 quote_changed`, before anything moves. The payment keeps them from the

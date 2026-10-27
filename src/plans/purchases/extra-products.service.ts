@@ -16,6 +16,7 @@ import {
 } from '../../money/payments/wallet-payment.service';
 import type { PlanTransferOrder } from '../../../generated/prisma/client';
 import { BillingCurrencyService } from '../billing-currency.service';
+import { PublishingAllowanceService } from '../publishing-allowance.service';
 import { MakerTierService } from '../maker-tier.service';
 import { INT4_MAX, PLANS_CONFIG, type PlansConfig } from '../plans-config';
 import type { PlanCurrency } from '../plans-view.type';
@@ -27,6 +28,8 @@ import {
   extraGoodsToTerms,
 } from './extra-products-goods';
 import {
+  TIER_ENDED_MESSAGE,
+  TIER_REQUIRED_MESSAGE,
   EXTRA_PRODUCTS_TITLE,
   priceExtraProducts,
   type ExtraProductsPlan,
@@ -40,7 +43,9 @@ import {
   EXTRA_PRODUCTS_REFUND_CONDITION,
   packRefundedMessage,
   packRefundingMessage,
+  PACK_NO_ROOM_MESSAGE,
   PACK_NOT_ALLOWED_CODE,
+  packLiftsLimit,
   packRefusalFor,
   packRefusalMessage,
   packRuleOf,
@@ -103,6 +108,7 @@ export class ExtraProductsService implements OnModuleInit {
     private readonly payments: WalletPaymentService,
     private readonly registry: PayableRegistry,
     private readonly holds: WalletHoldService,
+    private readonly allowance: PublishingAllowanceService,
   ) {}
 
   private readonly logger = new Logger(ExtraProductsService.name);
@@ -133,8 +139,16 @@ export class ExtraProductsService implements OnModuleInit {
    * answered later, as before.
    */
   async assertEligible(wawuUserId: string): Promise<void> {
-    const held = await this.tiers.tierOf(wawuUserId);
-    if (!isRunning(held)) return;
+    const [held, allowance] = await Promise.all([
+      this.tiers.tierOf(wawuUserId),
+      this.allowance.of(wawuUserId),
+    ]);
+    // No running tier (none, or ended): tier_required, before any wallet gate.
+    if (!isRunning(held))
+      throw new MoneyError(
+        'tier_required',
+        held.state === 'ended' ? TIER_ENDED_MESSAGE : TIER_REQUIRED_MESSAGE,
+      );
     const why = packRefusalFor(
       packRuleOf(this.config),
       held.tierId,
@@ -142,6 +156,13 @@ export class ExtraProductsService implements OnModuleInit {
     );
     if (why !== null)
       throw new MoneyError(PACK_NOT_ALLOWED_CODE, packRefusalMessage(why));
+    this.assertRoom(held.productsAllowed, allowance.productsUsed);
+  }
+
+  /** A pack that would not lift the limit above what is published is not sold. */
+  private assertRoom(placesNow: number, used: number): void {
+    if (!packLiftsLimit(placesNow, this.config.extraProducts.count, used))
+      throw new MoneyError(PACK_NOT_ALLOWED_CODE, PACK_NO_ROOM_MESSAGE);
   }
 
   /** The pay sheet (VF13): the add-on priced for the person, with the wallet payment's quote. */
@@ -185,16 +206,20 @@ export class ExtraProductsService implements OnModuleInit {
   }
 
   private async priced(wawuUserId: string): Promise<ExtraProductsPlan> {
-    const [held, billing] = await Promise.all([
+    const [held, billing, allowance] = await Promise.all([
       this.tiers.tierOf(wawuUserId),
       this.billing.resolve(wawuUserId, {}),
+      this.allowance.of(wawuUserId),
     ]);
+    let plan: ExtraProductsPlan;
     try {
-      return priceExtraProducts(this.config, billing.currency, held);
+      plan = priceExtraProducts(this.config, billing.currency, held);
     } catch (e) {
       if (e instanceof PurchaseRefusal) throw new MoneyError(e.code, e.message);
       throw e;
     }
+    this.assertRoom(held.productsAllowed, allowance.productsUsed);
+    return plan;
   }
 
   /**
@@ -246,7 +271,18 @@ export class ExtraProductsService implements OnModuleInit {
         // under the person's tier lock. Another channel (a store purchase)
         // can have taken the last place while this payment confirmed; the pack
         // is then not added and the whole price goes back, once.
+        // The pack must still lift the limit above what is published (a tier
+        // that has ended waits, so it is not judged for room).
+        const now = await this.allowance.of(wawuUserId, new Date(), tx);
+        const noRoom =
+          now.runningTierId !== null &&
+          !packLiftsLimit(
+            now.runningTierProducts + now.extraProducts,
+            goods.products,
+            now.productsUsed,
+          );
         if (
+          noRoom ||
           packRefusalFor(
             packRuleOf(this.config),
             held.tierId,

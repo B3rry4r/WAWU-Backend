@@ -85,3 +85,21 @@ export function packRefundingMessage(amountKobo: number): string {
 export function packRefundedMessage(amountKobo: number): string {
   return `We could not add these products, so ${nairaText(amountKobo)} is back in your wallet. ${NOT_RETURNED}`;
 }
+
+/** Said when five more would still leave fewer places than the person has products published (no figure in it). */
+export const PACK_NO_ROOM_MESSAGE =
+  'Adding more products would still leave fewer places than you have published. Take something down or move up a tier.';
+
+/**
+ * Whether the pack lifts the limit above what is published: the places the
+ * person has now plus the pack are more than the products they have up. A pack
+ * that would not is not sold (the same rule the offers of a full profile
+ * follow, `limitOffers`).
+ */
+export function packLiftsLimit(
+  placesNow: number,
+  count: number,
+  used: number,
+): boolean {
+  return placesNow + count > used;
+}

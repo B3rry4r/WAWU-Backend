@@ -5,6 +5,7 @@ import {
   PACK_NOT_ALLOWED_CODE,
   PACK_AT_MOST_MESSAGE,
   PACK_TIER_MESSAGE,
+  packLiftsLimit,
   packRefusalFor,
   packRuleOf,
 } from '../extra-products-cap';
@@ -166,5 +167,16 @@ describe('the offers a full profile is shown', () => {
     expect(limitOffers(full('verify', 3, 0), plan, open).extraProducts).toEqual(
       plan.extraProducts,
     );
+  });
+});
+
+describe('the pack must lift the limit above what is published', () => {
+  it('lifts it only when places plus the pack are more than the products published', () => {
+    expect(packLiftsLimit(3, COUNT, 3)).toBe(true);
+    expect(packLiftsLimit(3, COUNT, 7)).toBe(true);
+    expect(packLiftsLimit(3, COUNT, 8)).toBe(false);
+    expect(packLiftsLimit(3, COUNT, 12)).toBe(false);
+    expect(packLiftsLimit(0, COUNT, 0)).toBe(true);
+    expect(packLiftsLimit(20, 0, 20)).toBe(false);
   });
 });
