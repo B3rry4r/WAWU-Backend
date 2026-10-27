@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { POINTS_NEVER_EXPIRES } from '../../points-bought';
 import request from 'supertest';
 import type { Response } from 'supertest';
 import {
@@ -140,7 +141,8 @@ describe('Spend points on AI tools (POINTS-03)', () => {
   const give = (p: Person, n: number, daysLeft = 30) =>
     points.grant({
       wawuUserId: p.id,
-      source: 'pack',
+      // A lot that ends in `daysLeft` days: bought points never end (R-101 point 7), so this is a bonus lot.
+      source: 'tier_bonus',
       sourceRef: randomUUID(),
       points: n,
       expiresAt: new Date(Date.now() + daysLeft * DAY),
@@ -376,9 +378,8 @@ describe('Spend points on AI tools (POINTS-03)', () => {
       quantity: short,
       remaining: short,
     });
-    expect(lots[0].expiresAt.getTime()).toBeGreaterThan(
-      Date.now() + config.points.boughtExpiryDays * DAY - 60_000,
-    );
+    // Topped-up points are bought points: they never end (R-101 point 7).
+    expect(lots[0].expiresAt.getTime()).toBe(POINTS_NEVER_EXPIRES.getTime());
     // Exactly the shortfall: the job can run now, with nothing over.
     expect(await balanceOf(p)).toBe(costOf(minuteTool, 2));
     expect((await quoted(p, job(2))).canRun).toBe(true);

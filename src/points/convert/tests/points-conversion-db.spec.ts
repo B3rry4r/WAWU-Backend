@@ -45,7 +45,8 @@ describe('POINTS-04: the database holds the rules of a conversion', () => {
     people.push(id);
     await points.grant({
       wawuUserId: id,
-      source: 'pack',
+      // Earned and bonus points: bought points can never be cashed out (R-101 point 7).
+      source: 'tier_bonus',
       sourceRef: `p04db-${randomUUID()}`,
       points: 5000,
       expiresAt: new Date(Date.now() + 30 * 86_400_000),

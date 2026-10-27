@@ -26,6 +26,7 @@ import {
   STILL_CONFIRMING_MESSAGE,
   WalletPaymentService,
 } from '../../money/payments/wallet-payment.service';
+import { endOf, POINTS_NEVER_EXPIRES } from '../../points/points-bought';
 import { PointsService } from '../../points/points.service';
 import { ReferralRewardService } from '../../referrals/referral-reward.service';
 import type { PlanTransferOrder } from '../../../generated/prisma/client';
@@ -130,9 +131,6 @@ export function refundedMessage(amountKobo: number): string {
 
 /** The hold's `releaseCondition` for a tier payment that is being refunded. */
 export const PLAN_REFUND_CONDITION = 'plan_granted';
-
-/** A day, in milliseconds. */
-const DAY_MS = 86_400_000;
 
 /** Payments that are paid but not yet delivered keep their claim (`openKey`). */
 const OPEN_PAYMENT_STATES = [
@@ -736,13 +734,8 @@ export class PlanPurchaseService implements OnModuleInit {
               source: 'bump',
               sourceRef,
               points: goods ? goods.bumpPoints : this.bumpPoints(),
-              expiresAt: new Date(
-                now.getTime() +
-                  (goods
-                    ? goods.boughtExpiryDays
-                    : this.config.points.boughtExpiryDays) *
-                    DAY_MS,
-              ),
+              // The checkout bump is bought points: they never end (R-101 point 7).
+              expiresAt: POINTS_NEVER_EXPIRES,
             },
             { tx, now },
           );
@@ -900,7 +893,7 @@ export class PlanPurchaseService implements OnModuleInit {
         bonusPoints: bonus?.quantity ?? 0,
         bonusPointsExpireAt: bonus?.expiresAt.toISOString() ?? null,
         bumpPoints: bump?.quantity ?? 0,
-        bumpPointsExpireAt: bump?.expiresAt.toISOString() ?? null,
+        bumpPointsExpireAt: bump ? endOf(bump.expiresAt) : null,
         eventPass: issued ? { id: issued.id, name: issued.name } : null,
         firstVoiceIntroIncluded: held.voiceIntroIncluded,
       };

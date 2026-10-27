@@ -24,7 +24,9 @@ export type PointsErrorCode =
   /** A cap stops the job (POINTS-03, PT7): the day's limit, or too long a job. Nothing is held. */
   | 'points_cap_reached'
   /** The person has enough points for the job, so there is no shortfall to buy (POINTS-03). */
-  | 'points_not_short';
+  | 'points_not_short'
+  /** The points asked to turn into cash are more than the person's earned and bonus points: points they bought cannot be cashed out (R-101). */
+  | 'points_not_cashable';
 
 export const POINTS_ERROR_STATUS: Record<PointsErrorCode, HttpStatus> = {
   insufficient_points: HttpStatus.PAYMENT_REQUIRED,
@@ -35,6 +37,7 @@ export const POINTS_ERROR_STATUS: Record<PointsErrorCode, HttpStatus> = {
   points_invalid: HttpStatus.BAD_REQUEST,
   points_cap_reached: HttpStatus.UNPROCESSABLE_ENTITY,
   points_not_short: HttpStatus.CONFLICT,
+  points_not_cashable: HttpStatus.UNPROCESSABLE_ENTITY,
 };
 
 /**
@@ -46,6 +49,8 @@ export interface PointsErrorDetail {
   balancePoints?: number;
   neededPoints?: number;
   shortfallPoints?: number;
+  /** `points_not_cashable`: the points the person can turn into cash now (earned and bonus points that have not ended). */
+  cashablePoints?: number;
   /** `points_cap_reached`: which cap stopped the job (`daily`, `characters_per_job`, `minutes_per_job`). */
   cap?: string;
   /** `points_cap_reached`: the cap's size, in the unit it counts (points, characters or minutes). */

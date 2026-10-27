@@ -125,8 +125,8 @@ export class PlanPurchasesController {
    *
    * `kind: points_pack` with a `packId` buys a points pack the same way
    * (POINTS-02, PT4 to PT4c), from the wallet or by transfer: one lot of the
-   * pack's points (plus the Founding Maker's bonus) is added once, ending
-   * after the bought-points expiry, and the answer is a `PointsPackPurchaseView`
+   * pack's points (plus the Founding Maker's bonus) is added once, and never
+   * ends (bought points never expire, R-101 point 7), and the answer is a `PointsPackPurchaseView`
    * (`kind: "points_pack"`).
    *
    * `kind: extra_products` (TIER-04, VF13) adds the settings' number of

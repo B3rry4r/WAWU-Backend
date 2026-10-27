@@ -21,8 +21,13 @@ export interface PointLotView {
   source: PointLotSourceName;
   /** Where the points came from, in plain words ("Tier bonus"). */
   label: string;
-  /** When what is left of the lot ends (ISO 8601, UTC). */
-  expiresAt: string;
+  /**
+   * When what is left of the lot ends (ISO 8601, UTC); null for a lot that
+   * never ends: points a person bought (R-101 point 7).
+   */
+  expiresAt: string | null;
+  /** True when the points in this lot can be turned into cash; false for bought points. */
+  cashable: boolean;
 }
 
 /** The soonest points to end: every live lot that ends at that moment. */
@@ -52,9 +57,15 @@ export interface PointMovementView {
 export interface MyPointsView {
   /** Points the caller can spend now: every live lot, whether listed or not. */
   balance: number;
-  /** The soonest points to end, or null with no live lot. */
+  /**
+   * Points the caller can turn into cash now: their earned and bonus points
+   * that have not ended. Points they bought are in `balance` and never here
+   * (R-101 point 7).
+   */
+  cashablePoints: number;
+  /** The soonest points to end, or null with no live lot that ends (bought points never end). */
   nextExpiry: PointNextExpiryView | null;
-  /** Live lots, soonest-expiring first (the order they are spent in). */
+  /** Live lots in the order they are spent: soonest end first, then lots that never end, oldest first. */
   lots: PointLotView[];
   /** How many live lots there are; `lots` lists the first POINTS_VIEW.lots. */
   lotCount: number;

@@ -82,7 +82,7 @@ export class PointsSpendController {
    * body is the job as it was quoted plus `wallet.payment.totalKobo` and
    * `wallet.payment.quoteToken`; the PIN is in `X-Transaction-Pin`. One
    * lot of the shortfall's points is added when the provider confirms the
-   * debit, ending after the bought-points expiry. Answers 201 with the
+   * debit, and it never ends (bought points never expire, R-101 point 7). Answers 201 with the
    * purchase: `paid`, `pending` while the provider has not confirmed (poll
    * `GET /points/shortfall/{id}`; it is never sent again) or `failed` when
    * nothing moved. The same Idempotency-Key and body answer the first result

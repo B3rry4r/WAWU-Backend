@@ -13,6 +13,7 @@ import {
   PAYMENT_CURRENCY,
   WalletPaymentService,
 } from '../../money/payments/wallet-payment.service';
+import { endOf, POINTS_NEVER_EXPIRES } from '../../points/points-bought';
 import { PointsService } from '../../points/points.service';
 import type { PlanTransferOrder } from '../../../generated/prisma/client';
 import { BillingCurrencyService } from '../billing-currency.service';
@@ -49,9 +50,6 @@ import type {
   PointsPackPurchaseView,
   PointsPackQuoteView,
 } from './points-pack-view.type';
-
-/** A day, in milliseconds. */
-const DAY_MS = 86_400_000;
 
 /**
  * Buy a points pack from the wallet or by bank transfer (task POINTS-02, PT4
@@ -133,7 +131,8 @@ export class PointsPackService implements OnModuleInit {
       bonusPercent: plan.bonusPercent,
       bonusPoints: plan.bonusPoints,
       totalPoints: plan.totalPoints,
-      expiryDays: plan.boughtExpiryDays,
+      // Bought points never end (R-101 point 7): no days to show.
+      expiryDays: null,
       paymentKind: POINTS_PACK_KIND,
       payment,
     };
@@ -209,7 +208,9 @@ export class PointsPackService implements OnModuleInit {
           source: 'pack',
           sourceRef: payment.paymentId,
           points: total,
-          expiresAt: new Date(now.getTime() + goods.boughtExpiryDays * DAY_MS),
+          // Bought points never end (R-101 point 7); the goods' day count is
+          // the plan setting the quote was bound to and no longer ends a lot.
+          expiresAt: POINTS_NEVER_EXPIRES,
         },
         { tx, now },
       );
@@ -258,7 +259,7 @@ export class PointsPackService implements OnModuleInit {
             points: goods.points,
             bonusPoints: goods.bonusPoints,
             totalPoints: lot.quantity,
-            expiresAt: lot.expiresAt.toISOString(),
+            expiresAt: endOf(lot.expiresAt),
           }
         : null,
       createdAt: view.createdAt,

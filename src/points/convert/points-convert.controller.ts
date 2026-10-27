@@ -53,7 +53,8 @@ export class PointsConvertController {
   /**
    * PT6 before the PIN: the rate (1,000 points for so many kobo, from the
    * config), the fewest points one conversion takes, the balance, and the
-   * cash for `points` (the whole balance when none is asked). WAWU pays the
+   * cash for `points` (all the cashable points when none is asked; points the
+   * person bought are never cashable, `cashablePoints`). WAWU pays the
    * provider's charge, so the person pays nothing to convert (R-31).
    * `canConvert` and `blockedBy` say when the points asked cannot be
    * converted as they are (below the minimum, more than the balance, more
@@ -96,7 +97,9 @@ export class PointsConvertController {
    * quote_changed` with the new quote in `reason.pointsQuote`, and nothing
    * is paid. A body with no token is a plain 400.
    * Before the PIN, and changing nothing: `422 below_minimum`, `402
-   * insufficient_points`, `400 amount_out_of_range` (more than one move
+   * insufficient_points`, `422 points_not_cashable` (more than the person's
+   * earned and bonus points: points they bought cannot be cashed out),
+   * `400 amount_out_of_range` (more than one move
    * carries), `409 quote_changed`, `409 currency_not_supported`, `409
    * wallet_not_open`, `503 fees_not_set`.
    */
@@ -109,6 +112,7 @@ export class PointsConvertController {
     'device_approval_refused',
     'below_minimum',
     'insufficient_points',
+    'points_not_cashable',
     'quote_changed',
     'currency_not_supported',
   )

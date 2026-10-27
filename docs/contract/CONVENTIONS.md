@@ -346,6 +346,7 @@ Every refusal is the envelope this backend already answers with
 | `step_not_used` | 409 | `POST /money/identity/bvn` under a provider with no BVN lookup (Nuvion): that step does not exist there, the BVN is checked inside the review when the details are sent to open the wallet. Permanent, never "try again"; nothing is hashed, counted or sent (NUV-02 round 2, section 9a) | |
 | `below_minimum` | 422 | `POST /points/convert` with fewer points than the config's minimum; answered before the PIN, nothing held or changed (POINTS-04, section 20) | `minimumPoints`, `balancePoints` |
 | `insufficient_points` | 402 | more points than the person has (`PointsError`, section 16); answered before the PIN by the conversion, and again under the person's points lock (POINTS-04) | `balancePoints`, `neededPoints`, `shortfallPoints` |
+| `points_not_cashable` | 422 | `POST /points/convert` with more points than the person's earned and bonus points: points they bought are in the balance and can never be cashed out (R-101 point 7, POINTS-BOUGHT). Answered before the PIN, and again under the person's points lock; nothing is held | `balancePoints`, `cashablePoints`, `neededPoints` |
 | `currency_not_supported` | 409 | `GET /points/convert/quote` or `POST /points/convert` for a person billed in dollars: their cash would be dollars and the dollar wallet is not built (NUV-09). Nothing is held (POINTS-04) | |
 | `capital_unavailable` | 409 | Capital is switched off (the plan setting `capital.enabled`), or the running wallet provider has none, or an admin holds this order; nothing was sent (NUV-12, section 28) | |
 | `reservation_expired` | 409 | the 15 minutes of a Capital reservation ran out (or the provider says it can no longer be confirmed and the order was not approved); nothing was taken, the person starts again (NUV-12) | |
@@ -2096,6 +2097,30 @@ written here because the tasks that sell, spend and cash them out
   end between 2000-01-01 and 2100-01-01 UTC.
 - **Spent soonest-ending first,** then oldest grant, then lot id. A release
   puts every point back into the lot it came from.
+- **Bought points never end and are never cashable** (R-101 point 7,
+  POINTS-BOUGHT, owner, 27 Oct 2026, on every platform). Lots of source
+  `pack` (a points pack paid by the wallet, by transfer or in a store, its
+  bonus points included), `bump` and `shortfall` are stored with the "never"
+  end `POINTS_NEVER_EXPIRES` (2099-12-31 23:59:59.999 UTC, `src/points/
+  points-bought.ts`) whatever end the caller gives; the expiry job never
+  reaches them, a balance and a hold count them, and every view answers their
+  end as `null`. Earned and bonus lots (`tier_bonus`, `referral`) keep their
+  end and must end before the "never" end. The spend order BEFORE was the
+  soonest end across all lots, bought ones included (they ended after the
+  plan's `bought_expiry_days`); it IS now: lots that end, soonest end first
+  (then oldest grant, then lot id), then the lots that never end, oldest
+  first, so nobody loses earned points to an end date while holding bought
+  ones. A hold to turn points into cash (`purpose: cash_out`) takes only
+  earned and bonus lots, soonest end first; more than those, with the balance
+  covering it, is `422 points_not_cashable` (`balancePoints`,
+  `cashablePoints`, `neededPoints`), and more than the balance is
+  `402 insufficient_points`. A store refund still takes back only what is
+  unspent of the refunded lot (`revokeLot`). The migration
+  `20261211090000_points_bought_never_expire` cleared the end of the bought
+  lots that existed (the old ends are in `PointLotExpiryChange`; its rollback
+  restores them and refuses if a lot was spent past its old end, or would
+  lose points at once); the plan setting `points.bought_expiry_days` no longer
+  ends any lot.
 - **What the database refuses** (the migration's CHECKs and triggers): a lot
   below 0 or above what it was granted, or ending outside 2000 to 2099; a lot
   whose points differ from the sum of its ledger rows when the transaction
@@ -2114,9 +2139,12 @@ written here because the tasks that sell, spend and cash them out
   account purge deleted while it waited for the person's lock); `409 points_hold_settled` (spent, or already
   given back); `400 points_invalid`. A field that carries points ends in
   `Points`, as money fields end in `Kobo`.
-- **`GET /me/points`** (PT5): `balance`, `nextExpiry` or null (the soonest end
-  and every point that ends then, over all live lots), `lots` (soonest end
-  first, at most 50, `lotCount` says how many in all), `movements` (the last
+- **`GET /me/points`** (PT5): `balance`, `cashablePoints` (earned and bonus
+  points that have not ended: the most that can be turned into cash),
+  `nextExpiry` or null (the soonest end and every point that ends then, over
+  all live lots that end; null when every lot is bought), `lots` (in the order
+  they are spent, at most 50, `lotCount` says how many in all; each has
+  `cashable`, and `expiresAt` is null for bought points), `movements` (the last
   20 ledger rows, newest first, each with a plain `label` and `pending` for a
   hold still running). `Cache-Control: no-store`; the token is the person.
 - **For every caller** (lead, 8 Oct 2026): call `grant` or `hold` last in your
@@ -2607,9 +2635,14 @@ WAWU's (R-31); the person pays nothing to convert.
   - `GET /points/convert/quote?points=` (wallet gate, `fees_not_set` first,
     `no-store`): `balancePoints`, `minimumPoints`, `maximumPoints` (from the
     provider's cap on one move, or null), `rate` (`points: 1000`, `kobo`),
-    `points` (the ones asked about, else the whole balance), `cashKobo`,
+    `points` (the ones asked about, else all the cashable points), `cashKobo`,
     `feeKobo` 0, `wawuPaysProviderCharge` true, `canConvert` and `blockedBy`
-    (`below_minimum`, `insufficient_points` or `above_maximum`). It answers
+    (`below_minimum`, `insufficient_points`, `above_maximum` or `not_cashable`).
+    `balancePoints` counts every point the person has; `cashablePoints` is
+    their earned and bonus points that have not ended. Points a person bought
+    never expire and can never be turned into cash (R-101 point 7,
+    POINTS-BOUGHT): they are in the balance and never in `cashablePoints`;
+    asking for more than `cashablePoints` is `blockedBy: not_cashable`. It answers
     the figures instead of refusing, so PT6 can draw "below the minimum".
     A dollar-billed person is `409 currency_not_supported`.
   - `POST /points/convert` `{ points }` with `Idempotency-Key` and
@@ -2634,7 +2667,9 @@ WAWU's (R-31); the person pays nothing to convert.
   minimum `422 below_minimum` (`minimumPoints`, `balancePoints`), more cash
   than one move may carry `400 amount_out_of_range` (`maximumKobo`), more
   points than the person has `402 insufficient_points` (`balancePoints`,
-  `neededPoints`, `shortfallPoints`). None uses a PIN try, holds a point or
+  `neededPoints`, `shortfallPoints`), more than their earned and bonus points
+  `422 points_not_cashable` (`balancePoints`, `cashablePoints`,
+  `neededPoints`). None uses a PIN try, holds a point or
   keeps the Idempotency-Key. A repeat of a finished request is answered
   before any of them, so a balance that has since changed never turns a replay
   into a refusal. `points` that is not a whole number of 1 or more is the
