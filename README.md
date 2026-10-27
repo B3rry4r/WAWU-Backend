@@ -274,7 +274,9 @@ and the webhooks the Hub expects, signed with a test secret the stack sets
 The Hub reads webhooks on a 30 second tick, so opening a wallet (three webhooks in
 a row) takes about two minutes. The Nuvion fees are the stack's own
 (`STACK_NUVION_FEE_BOOK`, `STACK_NUVION_FEE_BANK`, `STACK_NUVION_FEE_INFLOW`, kobo;
-defaults 0, 2500, 0), given to the Hub and charged by the stand-in alike. The
+defaults 0, 2500, 0), given to the Hub and charged by the stand-in alike. The Hub
+also gets `NUVION_WALLET_BANK_NAME=Nuvion` (FIX-P5), as production does, so
+`GET /about` answers `bankName: "Nuvion"` and the app draws "Powered by Nuvion". The
 stand-in's log is `<scratch>/<n>/logs/nuvion.log`.
 
 ```bash
