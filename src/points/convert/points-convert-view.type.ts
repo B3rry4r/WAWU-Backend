@@ -8,20 +8,31 @@
 
 /** Why a quote cannot be converted as asked; null when it can. */
 export type ConvertBlockedBy =
-  'below_minimum' | 'insufficient_points' | 'above_maximum';
+  | 'below_minimum'
+  | 'insufficient_points'
+  | 'above_maximum'
+  /** More points than the person's earned and bonus points: points they bought cannot be cashed out (R-101). */
+  | 'not_cashable';
 
 /** `GET /points/convert/quote`: PT6 before the PIN. Nothing is held. */
 export interface PointsConvertQuoteView {
   currency: 'NGN';
-  /** The points the person can convert now. */
+  /** The points the person has now, bought ones included. */
   balancePoints: number;
+  /**
+   * The points the person can turn into cash now: their earned and bonus
+   * points that have not ended. Points they bought are in `balancePoints` and
+   * never here (R-101 point 7). The quote is for all of these when no
+   * `points` is asked.
+   */
+  cashablePoints: number;
   /** The fewest points one conversion takes (config, TIER-01). */
   minimumPoints: number;
   /** The most points one conversion takes, from the provider cap on one move; null with no cap. */
   maximumPoints: number | null;
   /** The rate, as the config quotes it: `rate.kobo` is paid for `rate.points` points. */
   rate: { points: number; kobo: number };
-  /** The points this quote is for: the ones asked about, else the whole balance. */
+  /** The points this quote is for: the ones asked about, else all the cashable points. */
   points: number;
   /** The naira the person receives for `points`, in kobo, rounded down. */
   cashKobo: number;

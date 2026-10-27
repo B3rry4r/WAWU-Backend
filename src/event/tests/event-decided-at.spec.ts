@@ -22,6 +22,8 @@ function serviceWith(
     {} as never,
     {} as never,
     {} as never,
+    // PriceListService (PRICE-LIST round 2) — this method sets no price.
+    {} as never,
   );
   return { service, findMany, groupBy };
 }

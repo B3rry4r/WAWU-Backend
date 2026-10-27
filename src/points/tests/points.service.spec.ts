@@ -102,7 +102,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       const march = await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('march'),
           points: 100,
           expiresAt: MARCH,
@@ -155,7 +155,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('a'),
           points: 30,
           expiresAt: JANUARY,
@@ -206,7 +206,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('c'),
           points: 1,
           expiresAt: MARCH,
@@ -227,7 +227,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: other,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('other'),
           points: 500,
           expiresAt: JANUARY,
@@ -237,7 +237,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('mine'),
           points: 10,
           expiresAt: JANUARY,
@@ -269,7 +269,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'bump',
+          source: 'referral',
           sourceRef: ref('soon'),
           points: 40,
           expiresAt: soon,
@@ -279,7 +279,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('later'),
           points: 10,
           expiresAt: MARCH,
@@ -353,7 +353,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
           points.grant(
             {
               wawuUserId: me,
-              source: 'pack',
+              source: 'tier_bonus',
               sourceRef,
               points: 1000,
               expiresAt: JANUARY,
@@ -417,7 +417,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       const pack = await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef,
           points: 5,
           expiresAt: JANUARY,
@@ -435,7 +435,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
         points.grant(
           {
             wawuUserId: a,
-            source: 'pack',
+            source: 'tier_bonus',
             sourceRef,
             points: 50,
             expiresAt: JANUARY,
@@ -445,7 +445,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
         points.grant(
           {
             wawuUserId: b,
-            source: 'pack',
+            source: 'tier_bonus',
             sourceRef,
             points: 50,
             expiresAt: JANUARY,
@@ -461,7 +461,9 @@ describe('POINTS-01: lots, holds and the ledger', () => {
         'points_grant_conflict',
       );
       expect(
-        await prisma.pointLot.count({ where: { sourceRef, source: 'pack' } }),
+        await prisma.pointLot.count({
+          where: { sourceRef, source: 'tier_bonus' },
+        }),
       ).toBe(1);
     });
 
@@ -479,7 +481,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
         points.grant(
           {
             wawuUserId: me,
-            source: 'pack',
+            source: 'tier_bonus',
             sourceRef: ref('bad'),
             points: 10,
             expiresAt: JANUARY,
@@ -502,7 +504,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('a'),
           points: 60,
           expiresAt: JANUARY,
@@ -512,7 +514,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('b'),
           points: 40,
           expiresAt: MARCH,
@@ -554,7 +556,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('a'),
           points: 100,
           expiresAt: JANUARY,
@@ -594,7 +596,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('a'),
           points: 100,
           expiresAt: JANUARY,
@@ -643,7 +645,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       const mar = await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('mar'),
           points: 300,
           expiresAt: MARCH,
@@ -713,7 +715,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('a'),
           points: 100,
           expiresAt: JANUARY,
@@ -764,7 +766,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       const lot = await points.grant(
         {
           wawuUserId: me,
-          source: 'bump',
+          source: 'referral',
           sourceRef: ref('soon'),
           points: 100,
           expiresAt: soon,
@@ -813,7 +815,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       const a = await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('a'),
           points: 100,
           expiresAt: t1,
@@ -848,7 +850,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       const empty = await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('empty'),
           points: 5,
           expiresAt: t1,
@@ -904,7 +906,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('x1'),
           points: 3,
           expiresAt: end,
@@ -914,7 +916,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('x2'),
           points: 4,
           expiresAt: end,
@@ -984,7 +986,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       const lot = await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('ao'),
           points: 10,
           expiresAt: JANUARY,
@@ -994,7 +996,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('ao2'),
           points: 5,
           expiresAt: MARCH,
@@ -1048,7 +1050,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: other,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('ao3'),
           points: 7,
           expiresAt: JANUARY,
@@ -1173,7 +1175,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
         await svc.grant(
           {
             wawuUserId: who,
-            source: 'pack',
+            source: 'tier_bonus',
             sourceRef: ref('l1'),
             points: 50,
             expiresAt: soon,
@@ -1183,7 +1185,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
         await svc.grant(
           {
             wawuUserId: who,
-            source: 'pack',
+            source: 'tier_bonus',
             sourceRef: ref('l2'),
             points: 50,
             expiresAt: MARCH,
@@ -1233,7 +1235,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: other,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('o'),
           points: 999,
           expiresAt: JANUARY,
@@ -1243,7 +1245,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       const mar = await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('mar'),
           points: 1000,
           expiresAt: MARCH,
@@ -1296,14 +1298,18 @@ describe('POINTS-01: lots, holds and the ledger', () => {
           source: 'tier_bonus',
           label: 'Tier bonus',
           expiresAt: JANUARY.toISOString(),
+          cashable: true,
         },
         {
           id: mar.lotId,
           points: 1000,
           granted: 1000,
-          source: 'pack',
-          label: 'Bought points',
+          source: 'tier_bonus',
+          // This lot was a 'pack' lot before R-101 point 7 (bought points
+          // never end, so it could not carry a March end); it is a bonus lot now.
+          label: 'Tier bonus',
           expiresAt: MARCH.toISOString(),
+          cashable: true,
         },
       ]);
       expect(view.nextExpiry).toEqual({
@@ -1356,6 +1362,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
     it('someone with no points sees an empty view', async () => {
       expect(await points.view(person(), NOW)).toEqual({
         balance: 0,
+        cashablePoints: 0,
         nextExpiry: null,
         lots: [],
         lotCount: 0,
@@ -1372,7 +1379,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('e1'),
           points: 20,
           expiresAt: JANUARY,
@@ -1382,7 +1389,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: other,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('e2'),
           points: 30,
           expiresAt: JANUARY,
@@ -1412,7 +1419,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       >;
       expect(lots).toHaveLength(1);
       expect(lots[0]).toMatchObject({
-        source: 'pack',
+        source: 'tier_bonus',
         quantity: 20,
         remaining: 15,
       });
@@ -1434,7 +1441,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('d1'),
           points: 20,
           expiresAt: JANUARY,
@@ -1449,7 +1456,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: other,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('d3'),
           points: 30,
           expiresAt: JANUARY,
@@ -1500,7 +1507,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
         await points.grant(
           {
             wawuUserId: me,
-            source: 'pack',
+            source: 'tier_bonus',
             sourceRef: ref(`d1-late-${i}`),
             points: 100,
             expiresAt: MARCH,
@@ -1525,7 +1532,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
         await points.grant(
           {
             wawuUserId: who,
-            source: 'pack',
+            source: 'tier_bonus',
             sourceRef: ref('d3'),
             points: 1000,
             expiresAt: JANUARY,
@@ -1582,7 +1589,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
           points.grant(
             {
               wawuUserId: me,
-              source: 'pack',
+              source: 'tier_bonus',
               sourceRef: ref('d4'),
               points: 5,
               expiresAt: end,
@@ -1604,7 +1611,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       const ok = await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('d4-ok'),
           points: 5,
           expiresAt: lastDay,
@@ -1635,7 +1642,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('d5'),
           points: 100,
           expiresAt: JANUARY,
@@ -1690,7 +1697,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('u2'),
           points: 100,
           expiresAt: JANUARY,
@@ -1767,7 +1774,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       const older = await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('tie-1'),
           points: 10,
           expiresAt: JANUARY,
@@ -1778,7 +1785,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       const newer = await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('tie-2'),
           points: 10,
           expiresAt: JANUARY,
@@ -1806,7 +1813,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       const ending = await points.grant(
         {
           wawuUserId: me,
-          source: 'bump',
+          source: 'referral',
           sourceRef: ref('edge'),
           points: 30,
           expiresAt: end,
@@ -1816,7 +1823,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('edge-live'),
           points: 5,
           expiresAt: MARCH,
@@ -1859,7 +1866,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
         await points.grant(
           {
             wawuUserId: who,
-            source: 'pack',
+            source: 'tier_bonus',
             sourceRef: ref(`u1-${round}`),
             points: 100,
             expiresAt: JANUARY,
@@ -1923,7 +1930,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('d6'),
           points: 100,
           expiresAt: JANUARY,
@@ -1986,7 +1993,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
         await points.grant(
           {
             wawuUserId: who,
-            source: 'pack',
+            source: 'tier_bonus',
             sourceRef: ref(`d6r-${round}`),
             points: 100,
             expiresAt: JANUARY,
@@ -2033,7 +2040,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('u4'),
           points: 9,
           expiresAt: JANUARY,
@@ -2097,7 +2104,7 @@ describe('POINTS-01: lots, holds and the ledger', () => {
       await points.grant(
         {
           wawuUserId: me,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('n4'),
           points: 12,
           expiresAt: JANUARY,

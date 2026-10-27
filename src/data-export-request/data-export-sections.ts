@@ -1,4 +1,5 @@
 import { PrismaService } from '../common/prisma/prisma.service';
+import { endsNever } from '../points/points-bought';
 
 /**
  * WHAT A DATA EXPORT CONTAINS, AND WHAT IT NEVER CONTAINS (SETTINGS-04).
@@ -1183,8 +1184,8 @@ export const EXPORT_SECTIONS: ExportSection[] = [
     // reference is the granting task's own id, not a payment provider's).
     key: 'pointLots',
     models: ['PointLot'],
-    load: (prisma, me) =>
-      prisma.pointLot.findMany({
+    load: async (prisma, me) => {
+      const lots = await prisma.pointLot.findMany({
         where: { wawuUserId: me },
         select: {
           id: true,
@@ -1196,7 +1197,14 @@ export const EXPORT_SECTIONS: ExportSection[] = [
           createdAt: true,
         },
         orderBy: NEWEST,
-      }),
+      });
+      // Bought points never end (R-101 point 7): the stored "never" date is
+      // not an end and is not exported; the end is null, as in every view.
+      return lots.map((lot) => ({
+        ...lot,
+        expiresAt: endsNever(lot.expiresAt) ? null : lot.expiresAt,
+      }));
+    },
   },
   {
     key: 'pointHolds',
@@ -1601,6 +1609,14 @@ export const EXPORT_SECTIONS: ExportSection[] = [
  */
 export const EXPORT_EXCLUDED: ReadonlyArray<{ model: string; reason: string }> =
   [
+    // PRICE-LIST (R-101): the Hub's own record of a price it moved onto the price list,
+    // kept to tell the person once and to roll the move back. The result is in the
+    // exports of the piece, the paid messages, the room and the ticket (their price now).
+    {
+      model: 'PriceListMove',
+      reason:
+        'WAWU bookkeeping of a price moved onto the price list, used to tell the person once; the price they hold now is in the export of the item itself.',
+    },
     // Editorial placement, not the person's own content (EXPLORE-03).
     {
       model: 'FeaturedCreator',

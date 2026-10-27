@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PriceListModule } from '../price-list/price-list.module';
 import { PlansModule } from '../plans/plans.module';
 import { CreatorStateController } from './creator-state.controller';
 import { CreatorStateService } from './creator-state.service';
@@ -13,7 +14,11 @@ import { CreatorStateService } from './creator-state.service';
  * (TIER-02).
  */
 @Module({
-  imports: [PlansModule],
+  imports: [
+    PlansModule,
+    // The paid question price is on the price list for the app's requests (PRICE-LIST round 3).
+    PriceListModule,
+  ],
   controllers: [CreatorStateController],
   providers: [CreatorStateService],
 })

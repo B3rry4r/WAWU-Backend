@@ -7305,12 +7305,27 @@ model PointLot {
   createdAt  DateTime       @default(now())
 
   ledger PointLedger[]
+  /// Set when the migration of R-101 point 7 cleared this bought lot's end.
+  expiryChange PointLotExpiryChange?
 
   @@unique([source, sourceRef])
   /// A person's live lots, soonest-expiring first.
   @@index([wawuUserId, expiresAt])
   /// The expiry job's search.
   @@index([expiresAt])
+}
+
+/// The end a bought lot had before R-101 point 7 cleared it (POINTS-BOUGHT, owner,
+/// 27 Oct 2026: bought points never expire). One row per cleared lot, written by the
+/// migration `20261211090000_points_bought_never_expire`; the rollback reads it to put
+/// the old end back, and refuses if that would end a lot that was spent past it. Nothing
+/// in the Hub reads it.
+model PointLotExpiryChange {
+  lotId             String   @id
+  previousExpiresAt DateTime
+  clearedAt         DateTime @default(now())
+
+  lot PointLot @relation(fields: [lotId], references: [id], onDelete: Cascade)
 }
 
 /// Points taken from a person's lots for one job, until it is committed or
@@ -8850,4 +8865,27 @@ model WalletPaymentFx {
 model TierOfferSeen {
   wawuUserId String   @id
   seenAt     DateTime @default(now())
+}
+
+/// PRICE-LIST (R-101). One row for each price the data migration moved onto the
+/// price list: what it was, what it became, and whether the owner was told. The
+/// old price is kept so the rollback can put it back. `kind` is `content`,
+/// `paid_dm`, `community_pass` or `ticket_type`; `subjectId` is the piece's id,
+/// the creator's wawuUserId (paid messages), the community's id or the ticket
+/// type's id. Written by the migration; `notifiedAt` is set by
+/// PriceMoveNoticeService in the same transaction that writes the notification.
+/// Prices are kobo, as the pass price is.
+model PriceListMove {
+  id            String    @id @default(uuid())
+  kind          String
+  subjectId     String
+  ownerWawuId   String
+  title         String
+  oldPriceKobo  BigInt
+  newPriceKobo  BigInt
+  movedAt       DateTime  @default(now())
+  notifiedAt    DateTime?
+
+  @@index([kind, subjectId])
+  @@index([ownerWawuId])
 }

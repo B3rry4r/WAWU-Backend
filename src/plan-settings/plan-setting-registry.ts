@@ -1,4 +1,10 @@
 import { FX_CURRENCIES } from '../money/fx/fx-currencies';
+import {
+  PRICE_LIST_KEY,
+  PriceListProblem,
+  TIP_LIST_KEY,
+  parseNairaLines,
+} from '../price-list/price-list';
 import { INT4_MAX, type PlansConfig } from '../plans/plans-config';
 import {
   SettingInvalid,
@@ -1334,6 +1340,42 @@ export function buildRegistry(
     ['GET /money/world/options', 'POST /money/wallet/open (WALLET-41, R-87)'],
     onOff,
   );
+
+  // ---- Prices come from a list (PRICE-LIST, R-101) ----
+  // Whole naira, as lines of digits, lowest first. The seed holds the launch
+  // lists; the cross-check that every tip is also a price is in the service
+  // (it needs both lists at once).
+  const nairaList = (raw: unknown): string[] => {
+    try {
+      return parseNairaLines(raw);
+    } catch (e) {
+      if (e instanceof PriceListProblem) throw new SettingInvalid(e.message);
+      throw e;
+    }
+  };
+  add({
+    key: PRICE_LIST_KEY,
+    group: 'Prices',
+    label: 'Price list in naira (one price per line, lowest first)',
+    unit: 'lines',
+    usedBy: [
+      'The price pickers (pieces, paid questions, community passes, event tickets)',
+      'GET /prices',
+      'PATCH /content/{id}, PUT /paid-dm/settings, POST /communities/rooms',
+    ],
+    default: extra(PRICE_LIST_KEY, null),
+    parse: nairaList,
+  });
+  add({
+    key: TIP_LIST_KEY,
+    group: 'Prices',
+    label:
+      'Tip list in naira (one price per line, lowest first; each must be on the price list)',
+    unit: 'lines',
+    usedBy: ['The tip picker', 'GET /prices'],
+    default: extra(TIP_LIST_KEY, null),
+    parse: nairaList,
+  });
 
   return out;
 }

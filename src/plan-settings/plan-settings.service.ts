@@ -16,6 +16,12 @@ import {
   ruleKeys,
 } from './plan-setting-rules';
 import {
+  PRICE_LIST_KEY,
+  TIP_LIST_KEY,
+  nairaNumbers,
+  tipsOffTheList,
+} from '../price-list/price-list';
+import {
   SettingInvalid,
   type Draft,
   type SettingDef,
@@ -350,6 +356,23 @@ export class PlanSettingsService
     steps: readonly Change[],
     next: Snapshot['stored'],
   ): void {
+    // PRICE-LIST (R-101): every tip is also a price on the price list. Judged
+    // on the two lists the rows would give, so changing both at once works in
+    // any order and removing a price a tip uses is refused.
+    if (steps.some((c) => c.key === PRICE_LIST_KEY || c.key === TIP_LIST_KEY)) {
+      const listOf = (key: string): number[] =>
+        nairaNumbers(
+          (next.get(key)?.value ??
+            this.mustHave(key).default ??
+            []) as string[],
+        );
+      const off = tipsOffTheList(listOf(PRICE_LIST_KEY), listOf(TIP_LIST_KEY));
+      if (off.length > 0) {
+        throw new BadRequestException(
+          `${TIP_LIST_KEY} needs every tip to be on the price list (${PRICE_LIST_KEY}); ${off.join(', ')} ${off.length === 1 ? 'is' : 'are'} not.`,
+        );
+      }
+    }
     const touched = ruleKeys(this.seed.plans);
     if (!steps.some((c) => touched.has(c.key))) return;
     const plan = this.build(next).config;

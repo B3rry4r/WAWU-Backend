@@ -32,6 +32,7 @@ import {
 } from '../plans/purchases/extra-products-rules';
 import { pricePack } from '../plans/purchases/points-pack-rules';
 import { PurchaseRefusal } from '../plans/purchases/plan-purchase-rules';
+import { POINTS_NEVER_EXPIRES } from '../points/points-bought';
 import { PointsService } from '../points/points.service';
 import { grantsConfigOf } from './store-grants';
 import { StoreError } from './store-error';
@@ -63,6 +64,7 @@ export function creatorShareOf(netKobo: number): number {
 export interface StoreGrantSnapshot {
   kind: StoreProduct['kind'];
   points?: number;
+  /** Set on a snapshot written before R-101 point 7; bought points no longer end, so new ones carry none. */
   pointsExpireAt?: string;
   credits?: number;
   creditPurchaseId?: string;
@@ -129,24 +131,18 @@ export class StoreGrantService {
           if (e instanceof PurchaseRefusal) throw new Error(e.message);
           throw e;
         }
-        const expiresAt = new Date(
-          now.getTime() + plan.boughtExpiryDays * DAY_MS,
-        );
         await this.points.grant(
           {
             wawuUserId: userId,
             source: 'pack',
             sourceRef: ref,
             points: plan.totalPoints,
-            expiresAt,
+            // Bought points never end (R-101 point 7), on every platform.
+            expiresAt: POINTS_NEVER_EXPIRES,
           },
           { tx, now },
         );
-        return {
-          kind: 'points',
-          points: plan.totalPoints,
-          pointsExpireAt: expiresAt.toISOString(),
-        };
+        return { kind: 'points', points: plan.totalPoints };
       }
       case 'credits': {
         const pack = grants.pack;

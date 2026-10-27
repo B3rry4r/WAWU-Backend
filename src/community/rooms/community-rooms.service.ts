@@ -1,4 +1,5 @@
 import { BlockedAccountService } from '../../blocked-account/blocked-account.service';
+import { PriceListService } from '../../price-list/price-list.service';
 import {
   BadRequestException,
   ConflictException,
@@ -76,6 +77,7 @@ export class CommunityRoomsService {
     private readonly blockedAccounts: BlockedAccountService,
     private readonly passAccess: CommunityPassAccess,
     private readonly notifications: NotificationService,
+    private readonly priceList: PriceListService,
   ) {}
 
   /**
@@ -108,6 +110,8 @@ export class CommunityRoomsService {
       }
       const problem = passPriceProblem(dto.passPriceKobo, passPriceBounds());
       if (problem) throw new BadRequestException(problem);
+      // PRICE-LIST (R-101): a pass costs a price on the price list.
+      this.priceList.assertOnList(dto.passPriceKobo / 100);
     }
     const community = await this.communities.create(
       hostWawuId,

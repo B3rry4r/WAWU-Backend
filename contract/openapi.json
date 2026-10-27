@@ -904,6 +904,27 @@
         ]
       }
     },
+    "/api/hub/prices": {
+      "get": {
+        "operationId": "PriceListController_read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceListView"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "PriceList"
+        ]
+      }
+    },
     "/api/hub/wallet": {
       "get": {
         "operationId": "WalletController_get",
@@ -37126,7 +37147,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Pays for a tier from the wallet, once: the tier and its dates, the bonus\npoints as one lot with its expiry, the event pass and the first Voice\nIntro are granted when the payment is confirmed, and the checkout bump's\npoints with them when it was bought. Answers 201 with the purchase:\n`paid`, `pending` while the provider has not confirmed the debit yet\n(poll `GET /plans/purchases/{id}`; it is never sent again), or `failed`\nwhen the provider refused it and nothing moved. The same Idempotency-Key\nand body answer the first result again (`Idempotent-Replayed: true`)\nwithout checking the PIN. Not enough money is `402 insufficient_funds`\nwith the shortfall; no wallet is `409 wallet_not_open`.\n\n`method: transfer` (TIER-05, VF6 \"transfer details shown\") confirms the\npurchase with the PIN at the quote the person saw and takes nothing. It\nanswers 201 with a `PlanTransferOrderView`, `awaiting_transfer`: the\nwallet's own account number, bank and account name, the Bank charge and\nthe amount still needed (the total less the available balance, never\nbelow 0). The purchase is paid from the wallet, once, the moment the\nbalance covers the total, and then reads like any other purchase under\nthe same id. A quote that changed is `409 quote_changed`; the time to send\nthe money (an admin setting) runs out as `expired`, with nothing taken.\nTwo requests for one item leave one waiting purchase.\n\n`kind: points_pack` with a `packId` buys a points pack the same way\n(POINTS-02, PT4 to PT4c), from the wallet or by transfer: one lot of the\npack's points (plus the Founding Maker's bonus) is added once, ending\nafter the bought-points expiry, and the answer is a `PointsPackPurchaseView`\n(`kind: \"points_pack\"`).\n\n`kind: extra_products` (TIER-04, VF13) adds the settings' number of\nproducts to the tier the person holds, the same way: from the wallet or\nby transfer, added once, kept by the account whatever happens to the tier\nafter, and answered as an `ExtraProductsPurchaseView`\n(`kind: \"extra_products\"`). Without a tier that is running it is `402\ntier_required` and nothing is taken.",
+        "summary": "Pays for a tier from the wallet, once: the tier and its dates, the bonus\npoints as one lot with its expiry, the event pass and the first Voice\nIntro are granted when the payment is confirmed, and the checkout bump's\npoints with them when it was bought. Answers 201 with the purchase:\n`paid`, `pending` while the provider has not confirmed the debit yet\n(poll `GET /plans/purchases/{id}`; it is never sent again), or `failed`\nwhen the provider refused it and nothing moved. The same Idempotency-Key\nand body answer the first result again (`Idempotent-Replayed: true`)\nwithout checking the PIN. Not enough money is `402 insufficient_funds`\nwith the shortfall; no wallet is `409 wallet_not_open`.\n\n`method: transfer` (TIER-05, VF6 \"transfer details shown\") confirms the\npurchase with the PIN at the quote the person saw and takes nothing. It\nanswers 201 with a `PlanTransferOrderView`, `awaiting_transfer`: the\nwallet's own account number, bank and account name, the Bank charge and\nthe amount still needed (the total less the available balance, never\nbelow 0). The purchase is paid from the wallet, once, the moment the\nbalance covers the total, and then reads like any other purchase under\nthe same id. A quote that changed is `409 quote_changed`; the time to send\nthe money (an admin setting) runs out as `expired`, with nothing taken.\nTwo requests for one item leave one waiting purchase.\n\n`kind: points_pack` with a `packId` buys a points pack the same way\n(POINTS-02, PT4 to PT4c), from the wallet or by transfer: one lot of the\npack's points (plus the Founding Maker's bonus) is added once, and never\nends (bought points never expire, R-101 point 7), and the answer is a `PointsPackPurchaseView`\n(`kind: \"points_pack\"`).\n\n`kind: extra_products` (TIER-04, VF13) adds the settings' number of\nproducts to the tier the person holds, the same way: from the wallet or\nby transfer, added once, kept by the account whatever happens to the tier\nafter, and answered as an `ExtraProductsPurchaseView`\n(`kind: \"extra_products\"`). Without a tier that is running it is `402\ntier_required` and nothing is taken.",
         "tags": [
           "PlanPurchases"
         ]
@@ -39926,7 +39947,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "PT6 before the PIN: the rate (1,000 points for so many kobo, from the\nconfig), the fewest points one conversion takes, the balance, and the\ncash for `points` (the whole balance when none is asked). WAWU pays the\nprovider's charge, so the person pays nothing to convert (R-31).\n`canConvert` and `blockedBy` say when the points asked cannot be\nconverted as they are (below the minimum, more than the balance, more\nthan one move carries), with the figures, instead of refusing. Nothing is\nheld. A person billed in dollars is `409 currency_not_supported`; with no\nwallet, `409 wallet_not_open`.",
+        "summary": "PT6 before the PIN: the rate (1,000 points for so many kobo, from the\nconfig), the fewest points one conversion takes, the balance, and the\ncash for `points` (all the cashable points when none is asked; points the\nperson bought are never cashable, `cashablePoints`). WAWU pays the\nprovider's charge, so the person pays nothing to convert (R-31).\n`canConvert` and `blockedBy` say when the points asked cannot be\nconverted as they are (below the minimum, more than the balance, more\nthan one move carries), with the figures, instead of refusing. Nothing is\nheld. A person billed in dollars is `409 currency_not_supported`; with no\nwallet, `409 wallet_not_open`.",
         "tags": [
           "PointsConvert"
         ],
@@ -40030,7 +40051,7 @@
             }
           },
           "422": {
-            "description": "reason.code: below_minimum",
+            "description": "reason.code: below_minimum, points_not_cashable",
             "content": {
               "application/json": {
                 "schema": {
@@ -40065,7 +40086,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Turns points into cash in the wallet, once. The cash is worked out at the\nconfig's rate and rounded down; the points are held (soonest-ending lots\nfirst) and the cash is paid from WAWU's own account into the person's\nwallet; the points are spent only when the provider has confirmed it, and\ngo back to their lots if it did not move. Answers 201 with the\nconversion: `completed`, `pending` while the provider has not confirmed\nthe cash yet (the points stay on hold; poll `GET /points/convert/{id}`;\nit is never sent again), or `failed` when the cash did not move and the\npoints are back. The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN.\nThe body carries the `quoteToken` of the quote the person was shown: the\nconversion is paid at that quote or not at all. If the rate, the\nminimum, the cap or the cash changed since (or the token is not this\nperson's, not for these points, or past its end), it is `409\nquote_changed` with the new quote in `reason.pointsQuote`, and nothing\nis paid. A body with no token is a plain 400.\nBefore the PIN, and changing nothing: `422 below_minimum`, `402\ninsufficient_points`, `400 amount_out_of_range` (more than one move\ncarries), `409 quote_changed`, `409 currency_not_supported`, `409\nwallet_not_open`, `503 fees_not_set`.",
+        "summary": "Turns points into cash in the wallet, once. The cash is worked out at the\nconfig's rate and rounded down; the points are held (soonest-ending lots\nfirst) and the cash is paid from WAWU's own account into the person's\nwallet; the points are spent only when the provider has confirmed it, and\ngo back to their lots if it did not move. Answers 201 with the\nconversion: `completed`, `pending` while the provider has not confirmed\nthe cash yet (the points stay on hold; poll `GET /points/convert/{id}`;\nit is never sent again), or `failed` when the cash did not move and the\npoints are back. The same Idempotency-Key and body answer the first\nresult again (`Idempotent-Replayed: true`) without checking the PIN.\nThe body carries the `quoteToken` of the quote the person was shown: the\nconversion is paid at that quote or not at all. If the rate, the\nminimum, the cap or the cash changed since (or the token is not this\nperson's, not for these points, or past its end), it is `409\nquote_changed` with the new quote in `reason.pointsQuote`, and nothing\nis paid. A body with no token is a plain 400.\nBefore the PIN, and changing nothing: `422 below_minimum`, `402\ninsufficient_points`, `422 points_not_cashable` (more than the person's\nearned and bonus points: points they bought cannot be cashed out),\n`400 amount_out_of_range` (more than one move\ncarries), `409 quote_changed`, `409 currency_not_supported`, `409\nwallet_not_open`, `503 fees_not_set`.",
         "tags": [
           "PointsConvert"
         ],
@@ -40289,7 +40310,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Buys exactly the shortfall of one job from the wallet, once (PT3). The\nbody is the job as it was quoted plus `wallet.payment.totalKobo` and\n`wallet.payment.quoteToken`; the PIN is in `X-Transaction-Pin`. One\nlot of the shortfall's points is added when the provider confirms the\ndebit, ending after the bought-points expiry. Answers 201 with the\npurchase: `paid`, `pending` while the provider has not confirmed (poll\n`GET /points/shortfall/{id}`; it is never sent again) or `failed` when\nnothing moved. The same Idempotency-Key and body answer the first result\nagain (`Idempotent-Replayed: true`) without checking the PIN. Refused with\nnothing taken and the key given back: `422 points_cap_reached` (buying points would not\nlet the job run), `409 points_not_short` (the person has enough now),\n`409 quote_changed` with the new quote (the balance, the rate or the\nexpiry moved), `409 wallet_not_open`.",
+        "summary": "Buys exactly the shortfall of one job from the wallet, once (PT3). The\nbody is the job as it was quoted plus `wallet.payment.totalKobo` and\n`wallet.payment.quoteToken`; the PIN is in `X-Transaction-Pin`. One\nlot of the shortfall's points is added when the provider confirms the\ndebit, and it never ends (bought points never expire, R-101 point 7). Answers 201 with the\npurchase: `paid`, `pending` while the provider has not confirmed (poll\n`GET /points/shortfall/{id}`; it is never sent again) or `failed` when\nnothing moved. The same Idempotency-Key and body answer the first result\nagain (`Idempotent-Replayed: true`) without checking the PIN. Refused with\nnothing taken and the key given back: `422 points_cap_reached` (buying points would not\nlet the job run), `409 points_not_short` (the person has enough now),\n`409 quote_changed` with the new quote (the balance, the rate or the\nexpiry moved), `409 wallet_not_open`.",
         "tags": [
           "PointsSpend"
         ],
@@ -44696,6 +44717,27 @@
           "blockedWawuId"
         ]
       },
+      "PriceListView": {
+        "type": "object",
+        "properties": {
+          "prices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriceListItem"
+            }
+          },
+          "tips": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PriceListItem"
+            }
+          }
+        },
+        "required": [
+          "prices",
+          "tips"
+        ]
+      },
       "ResolveAccountDto": {
         "type": "object",
         "properties": {
@@ -46773,8 +46815,10 @@
               "question_already_waiting",
               "points_cap_reached",
               "points_not_short",
+              "points_not_cashable",
               "tier_required",
               "pack_not_allowed",
+              "price_not_on_list",
               "add_money_unavailable",
               "fx_switched_off",
               "quote_expired",
@@ -46912,7 +46956,7 @@
           },
           "balancePoints": {
             "type": "integer",
-            "description": "below_minimum, insufficient_points: the points the person has now."
+            "description": "below_minimum, insufficient_points, points_not_cashable: the points the person has now."
           },
           "neededPoints": {
             "type": "integer",
@@ -46921,6 +46965,20 @@
           "shortfallPoints": {
             "type": "integer",
             "description": "insufficient_points: neededPoints minus balancePoints."
+          },
+          "nearestLowerNaira": {
+            "type": "integer",
+            "nullable": true,
+            "description": "price_not_on_list (R-101): the highest list price below the price sent, in whole naira; null when the price is under the lowest."
+          },
+          "nearestHigherNaira": {
+            "type": "integer",
+            "nullable": true,
+            "description": "price_not_on_list (R-101): the lowest list price above the price sent, in whole naira; null when the price is over the highest."
+          },
+          "cashablePoints": {
+            "type": "integer",
+            "description": "points_not_cashable (POINTS-BOUGHT): the points the person can turn into cash now (earned and bonus points)."
           },
           "cap": {
             "description": "points_cap_reached (POINTS-03): which cap stopped the job.",
@@ -57822,7 +57880,11 @@
             "type": "string"
           },
           "expiresAt": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
+          },
+          "cashable": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -57831,7 +57893,8 @@
           "granted",
           "source",
           "label",
-          "expiresAt"
+          "expiresAt",
+          "cashable"
         ]
       },
       "PointMovementView": {
@@ -57877,6 +57940,9 @@
           "balance": {
             "type": "number"
           },
+          "cashablePoints": {
+            "type": "number"
+          },
           "nextExpiry": {
             "allOf": [
               {
@@ -57903,6 +57969,7 @@
         },
         "required": [
           "balance",
+          "cashablePoints",
           "nextExpiry",
           "lots",
           "lotCount",
@@ -61472,6 +61539,21 @@
           "mediaJobId",
           "createdAt",
           "updatedAt"
+        ]
+      },
+      "PriceListItem": {
+        "type": "object",
+        "properties": {
+          "priceNaira": {
+            "type": "number"
+          },
+          "priceKobo": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "priceNaira",
+          "priceKobo"
         ]
       },
       "DmSendInitResponse": {
@@ -74578,7 +74660,8 @@
             "type": "integer"
           },
           "expiryDays": {
-            "type": "integer"
+            "type": "integer",
+            "nullable": true
           },
           "paymentKind": {
             "type": "string",
@@ -74963,7 +75046,8 @@
             "type": "integer"
           },
           "expiresAt": {
-            "type": "string"
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -76369,6 +76453,9 @@
           "balancePoints": {
             "type": "number"
           },
+          "cashablePoints": {
+            "type": "number"
+          },
           "minimumPoints": {
             "type": "number"
           },
@@ -76411,7 +76498,8 @@
             "enum": [
               "below_minimum",
               "insufficient_points",
-              "above_maximum"
+              "above_maximum",
+              "not_cashable"
             ],
             "nullable": true
           },
@@ -76425,6 +76513,7 @@
         "required": [
           "currency",
           "balancePoints",
+          "cashablePoints",
           "minimumPoints",
           "maximumPoints",
           "rate",
@@ -76700,7 +76789,8 @@
                 "type": "number"
               },
               "expiresAt": {
-                "type": "string"
+                "type": "string",
+                "nullable": true
               }
             },
             "required": [

@@ -153,6 +153,7 @@ describe('POINTS-01: GET /me/points (contract)', () => {
       message: 'OK',
       data: {
         balance: 0,
+        cashablePoints: 0,
         nextExpiry: null,
         lots: [],
         lotCount: 0,
@@ -180,7 +181,7 @@ describe('POINTS-01: GET /me/points (contract)', () => {
       laterLot = (
         await points.grant({
           wawuUserId: PLAIN,
-          source: 'pack',
+          source: 'tier_bonus',
           sourceRef: ref('pack'),
           points: 1000,
           expiresAt: inDays(120),
@@ -217,7 +218,8 @@ describe('POINTS-01: GET /me/points (contract)', () => {
         view.lots.map((l) => [l.id, l.points, l.granted, l.source, l.label]),
       ).toEqual([
         [soonLot, 60, 100, 'tier_bonus', 'Tier bonus'],
-        [laterLot, 1000, 1000, 'pack', 'Bought points'],
+        // A bonus lot here (it was a 'pack' lot before R-101 point 7: bought points never end).
+        [laterLot, 1000, 1000, 'tier_bonus', 'Tier bonus'],
       ]);
       const stored = await prisma.pointLot.findUniqueOrThrow({
         where: { id: soonLot },
@@ -328,7 +330,7 @@ describe('POINTS-01: GET /me/points (contract)', () => {
     for (let i = 0; i < 5; i += 1) {
       await points.grant({
         wawuUserId: PRO,
-        source: 'pack',
+        source: 'tier_bonus',
         sourceRef: ref(`d1-late-${i}`),
         points: 100,
         expiresAt: inDays(100),

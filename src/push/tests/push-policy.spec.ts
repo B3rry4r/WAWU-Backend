@@ -59,6 +59,8 @@ describe('which notifications reach a phone', () => {
       'legal_quote_ready',
       'paid_dm_paused',
       'paid_dm_warning',
+      // Updated for R-101 (lead ruling): a moved price is told in the app only, never pushed.
+      'price_moved',
       'verify_reminder',
     ]);
   });

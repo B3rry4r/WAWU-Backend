@@ -13,6 +13,15 @@ import {
   POINTS_LIMITS,
   POINTS_VIEW,
 } from './points-config';
+import {
+  BOUGHT_POINT_SOURCES,
+  isBoughtSource,
+  isCashableSource,
+  endOf,
+  NOT_CASHABLE_WORDS,
+  POINTS_NEVER_EXPIRES,
+  POINTS_SPEND_ORDER,
+} from './points-bought';
 import { lockPersonPoints } from './points-lock';
 import { PointsError } from './points-error';
 import { POINT_LOT_LABELS, pointMovementLabel } from './points-labels';
@@ -28,7 +37,12 @@ export interface PointGrantInput {
   sourceRef: string;
   /** A whole number of points above zero. */
   points: number;
-  /** When the lot ends; must be after now. */
+  /**
+   * When the lot ends; must be after now and before `POINTS_NEVER_EXPIRES`.
+   * Ignored for points a person bought (`pack`, `bump`, `shortfall`): those
+   * never end, so such a lot is stored with `POINTS_NEVER_EXPIRES` whatever is
+   * given here (R-101 point 7).
+   */
   expiresAt: Date;
 }
 
@@ -37,6 +51,7 @@ export interface PointGrantOutcome {
   /** False when this source and reference had already granted the lot. */
   granted: boolean;
   points: number;
+  /** The lot's stored end; `POINTS_NEVER_EXPIRES` for bought points (`endOf` turns it into null). */
   expiresAt: Date;
 }
 
@@ -124,17 +139,25 @@ export class PointsService {
     requirePerson(input.wawuUserId);
     requireReference(input.sourceRef);
     requirePoints(input.points);
+    // Bought points never end (R-101 point 7): the one end they get is the
+    // "never" date, so no caller can make a bought lot that expires.
+    const bought = isBoughtSource(input.source);
+    const expiresAt = bought ? POINTS_NEVER_EXPIRES : input.expiresAt;
     if (
-      !(input.expiresAt instanceof Date) ||
-      Number.isNaN(input.expiresAt.getTime()) ||
-      input.expiresAt.getTime() <= now.getTime()
+      !(expiresAt instanceof Date) ||
+      Number.isNaN(expiresAt.getTime()) ||
+      expiresAt.getTime() <= now.getTime()
     ) {
       throw new PointsError('points_invalid', 'Points must end in the future.');
     }
     // The migration's CHECK holds the same bound: an end Postgres can store
     // but JavaScript cannot read back (after the year 9999) never gets in, so
-    // no person's points view can fail on a stored date.
-    if (input.expiresAt.getTime() >= POINTS_LATEST_END.getTime()) {
+    // no person's points view can fail on a stored date. A lot that ends must
+    // end before the "never" date, or it would be taken for one that never does.
+    if (
+      expiresAt.getTime() >=
+      (bought ? POINTS_LATEST_END : POINTS_NEVER_EXPIRES).getTime()
+    ) {
       throw new PointsError('points_invalid', 'That end date is too far away.');
     }
 
@@ -152,7 +175,7 @@ export class PointsService {
             sourceRef: input.sourceRef,
             quantity: input.points,
             remaining: input.points,
-            expiresAt: input.expiresAt,
+            expiresAt,
           },
         ],
         skipDuplicates: true,
@@ -196,7 +219,7 @@ export class PointsService {
         lotId,
         granted: true,
         points: input.points,
-        expiresAt: input.expiresAt,
+        expiresAt,
       };
     });
   }
@@ -204,9 +227,13 @@ export class PointsService {
   /**
    * Takes points from the person's live lots, the soonest-expiring first
    * (then the oldest grant, then the lot id, so the order is total), one
-   * ledger row per lot touched. More than the balance is
-   * `insufficient_points` with the balance and the shortfall, and nothing is
-   * written. Idempotent on (purpose, reference): the same hold again returns
+   * ledger row per lot touched. Points a person bought never end, so they come
+   * last (oldest first): nobody loses earned points to an end date while
+   * holding bought ones (POINTS_SPEND_ORDER). A hold to turn points into cash
+   * (`cash_out`) takes only earned and bonus points: more than those, with
+   * bought points making up the rest, is `points_not_cashable`. More than the
+   * balance is `insufficient_points` with the balance and the shortfall, and
+   * nothing is written. Idempotent on (purpose, reference): the same hold again returns
    * the first one in whatever state it is now; another person or amount is
    * `points_hold_conflict`.
    */
@@ -252,10 +279,27 @@ export class PointsService {
           remaining: { gt: 0 },
           expiresAt: { gt: now },
         },
-        select: { id: true, remaining: true },
-        orderBy: [{ expiresAt: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true, remaining: true, source: true },
+        orderBy: [...POINTS_SPEND_ORDER],
       });
       const balance = lots.reduce((sum, lot) => sum + lot.remaining, 0);
+      if (input.purpose === 'cash_out') {
+        // Under the person's lock, so what is cashable now is what is held.
+        const cashable = lots
+          .filter((lot) => isCashableSource(lot.source))
+          .reduce((sum, lot) => sum + lot.remaining, 0);
+        if (balance >= input.points && cashable < input.points) {
+          throw new PointsError('points_not_cashable', NOT_CASHABLE_WORDS, {
+            balancePoints: balance,
+            cashablePoints: cashable,
+            neededPoints: input.points,
+          });
+        }
+        // The lots this hold may take from: the cashable ones only.
+        for (let i = lots.length - 1; i >= 0; i -= 1) {
+          if (!isCashableSource(lots[i].source)) lots.splice(i, 1);
+        }
+      }
       if (balance < input.points) {
         throw new PointsError(
           'insufficient_points',
@@ -498,6 +542,27 @@ export class PointsService {
   }
 
   /**
+   * The points a person can turn into cash now: their earned and bonus lots
+   * that have points and have not ended. Points they bought are never counted
+   * (R-101 point 7). A read, never a lock; the hold checks again under it.
+   */
+  async cashableBalanceOf(
+    wawuUserId: string,
+    now: Date = new Date(),
+  ): Promise<number> {
+    const sum = await this.prisma.pointLot.aggregate({
+      where: {
+        wawuUserId,
+        remaining: { gt: 0 },
+        expiresAt: { gt: now },
+        source: { notIn: [...BOUGHT_POINT_SOURCES] },
+      },
+      _sum: { remaining: true },
+    });
+    return sum._sum.remaining ?? 0;
+  }
+
+  /**
    * PT5: the caller's balance, their live lots soonest-expiring first, the
    * soonest points to end, and the last 20 ledger rows, newest first. Only
    * the given person's rows are read.
@@ -513,30 +578,35 @@ export class PointsService {
     };
     // One snapshot, so the balance, the lots and the movements agree with
     // each other even while a hold or a grant lands.
-    const [sum, lotCount, soonestEnd, lots, rows] =
+    const [sum, cashableSum, lotCount, soonestEnd, lots, rows] =
       await this.prisma.$transaction(
         [
           this.prisma.pointLot.aggregate({
             where: live,
             _sum: { remaining: true },
           }),
+          // Earned and bonus points only: bought points are never cashable.
+          this.prisma.pointLot.aggregate({
+            where: { ...live, source: { notIn: [...BOUGHT_POINT_SOURCES] } },
+            _sum: { remaining: true },
+          }),
           this.prisma.pointLot.count({ where: live }),
           // The soonest end and every point that ends then, over all of the
-          // person's live lots, not only the ones listed.
+          // person's live lots that end, not only the ones listed. A lot that
+          // never ends (bought points) has no end to show.
           this.prisma.pointLot.groupBy({
             by: ['expiresAt'],
-            where: live,
+            where: {
+              ...live,
+              expiresAt: { gt: now, lt: POINTS_NEVER_EXPIRES },
+            },
             _sum: { remaining: true },
             orderBy: { expiresAt: 'asc' },
             take: 1,
           }),
           this.prisma.pointLot.findMany({
             where: live,
-            orderBy: [
-              { expiresAt: 'asc' },
-              { createdAt: 'asc' },
-              { id: 'asc' },
-            ],
+            orderBy: [...POINTS_SPEND_ORDER],
             take: POINTS_VIEW.lots,
           }),
           this.prisma.pointLedger.findMany({
@@ -575,6 +645,7 @@ export class PointsService {
 
     return {
       balance: sum._sum.remaining ?? 0,
+      cashablePoints: cashableSum._sum.remaining ?? 0,
       nextExpiry,
       lots: lots.map((lot) => ({
         id: lot.id,
@@ -582,7 +653,8 @@ export class PointsService {
         granted: lot.quantity,
         source: lot.source,
         label: POINT_LOT_LABELS[lot.source],
-        expiresAt: lot.expiresAt.toISOString(),
+        expiresAt: endOf(lot.expiresAt),
+        cashable: isCashableSource(lot.source),
       })),
       lotCount,
       movements,

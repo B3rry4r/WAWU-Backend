@@ -251,6 +251,9 @@ export const MONEY_ERROR_CODES = [
   // has enough points, so there is no shortfall to buy.
   'points_cap_reached',
   'points_not_short',
+  // Turning points into cash (POINTS-BOUGHT, R-101): more points asked than the
+  // person's earned and bonus points; points they bought cannot be cashed out.
+  'points_not_cashable',
   // Adding products needs a tier that is running (TIER-04, VF13): the person
   // has none, or it ended. Also the code of the publishing gate (TIER-02), in
   // its own richer body on the routes that publish.
@@ -258,6 +261,9 @@ export const MONEY_ERROR_CODES = [
   // The pack of extra products is not sold to this person: their tier may not
   // buy it, or they hold the most packs a profile can (PACK-CAP, R-100).
   'pack_not_allowed',
+  // A price a person set is not on the price list (PRICE-LIST, R-101): a piece,
+  // a paid question, a community pass or an event ticket. Nothing is saved.
+  'price_not_on_list',
   // Adding money by card, Apple Pay, USSD or a bank checkout (WALLET-25, WALLET-26):
   // the way asked for is switched off, or the provider has not switched it on.
   'add_money_unavailable',

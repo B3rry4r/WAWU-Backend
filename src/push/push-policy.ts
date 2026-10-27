@@ -92,6 +92,8 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   // it is the state of their account and no Z3 switch is agreed to cover it,
   // so it is held until the owner answers (G-265). It reaches the in-app list.
   identity_review: 'hold',
+  // PRICE-LIST (R-101, lead ruling): a price the migration moved is told in the app only, never pushed.
+  price_moved: 'hold',
 };
 
 /**

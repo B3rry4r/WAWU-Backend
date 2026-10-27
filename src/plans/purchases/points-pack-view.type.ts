@@ -42,8 +42,8 @@ export interface PointsPackGrantView {
   bonusPoints: number;
   /** `points` plus `bonusPoints`: the size of the lot. */
   totalPoints: number;
-  /** The lot ends at this moment (ISO 8601). */
-  expiresAt: string;
+  /** The lot ends at this moment (ISO 8601); null: points you buy never expire (R-101 point 7). */
+  expiresAt: string | null;
 }
 
 /** One points pack purchase, from the moment it is asked for to the points being added. */
@@ -92,8 +92,8 @@ export interface PointsPackQuoteView {
   bonusPoints: number;
   /** `points` plus `bonusPoints`. */
   totalPoints: number;
-  /** How many days the points last once added. */
-  expiryDays: number;
+  /** How many days the points last once added; null: points you buy never expire (R-101 point 7). */
+  expiryDays: number | null;
   /** The wallet payment's kind to send with the quote token. */
   paymentKind: typeof POINTS_PACK_KIND;
   /** The wallet payment quote: price, the provider's charge, total, balance, shortfall and its token. */

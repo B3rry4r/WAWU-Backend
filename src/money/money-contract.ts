@@ -129,12 +129,20 @@ export const MONEY_ERROR_STATUS: Record<MoneyErrorCode, number> = {
   // buy, as wallet_already_open).
   points_cap_reached: 422,
   points_not_short: 409,
+  // POINTS-BOUGHT (R-101 point 7). Default (agent), owner may override: 422, as
+  // below_minimum and points_cap_reached: the request is understood, the amount
+  // is the problem (bought points are not cashable).
+  points_not_cashable: 422,
   // TIER-04. 402, as the publishing gate answers the same code (TIER-02,
   // CONVENTIONS section 23): the person has to pay for a tier first.
   tier_required: 402,
   // PACK-CAP (R-100). Default (agent), owner may override: 409, as
   // target_not_payable: the request is understood; the rule does not allow it.
   pack_not_allowed: 409,
+  // PRICE-LIST (R-101). Default (agent), owner may override: 400, the way a
+  // malformed field is refused: the price sent is the problem, and the body
+  // names the list prices either side of it.
+  price_not_on_list: 400,
   // WALLET-25, WALLET-26. Default (agent), owner may override: 409, as
   // currency_not_supported: the request is understood; this way cannot be used now.
   add_money_unavailable: 409,
