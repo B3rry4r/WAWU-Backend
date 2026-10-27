@@ -184,10 +184,23 @@ export class StoreCut30Service {
     let row: StoreCut30Switch;
     try {
       row = await this.prisma.$transaction(async (tx) => {
-        const before = await tx.storePlatformSetting.findUnique({
-          where: { platform },
-          select: { storeFeeBps: true },
+        // The cut the store had before it ever moved to 30%. When an earlier
+        // switch of this store is still open (never switched back), the fee is
+        // already 3000 and the cut from before is that switch's, which this one
+        // inherits: shares stay on the original cut, and one switch back
+        // restores it.
+        const earlier = await tx.storeCut30Switch.findFirst({
+          where: { platform, backAt: null },
+          orderBy: [{ year: 'asc' }],
+          select: { priorFeeBps: true },
         });
+        const before =
+          earlier !== null
+            ? { storeFeeBps: earlier.priorFeeBps }
+            : await tx.storePlatformSetting.findUnique({
+                where: { platform },
+                select: { storeFeeBps: true },
+              });
         const made = await tx.storeCut30Switch.create({
           data: {
             platform,
@@ -340,25 +353,28 @@ export class StoreCut30Service {
     platform: StorePlatform,
     adminId: string,
   ): Promise<StoreCut30SwitchBackView> {
-    const open = await this.prisma.storeCut30Switch.findFirst({
+    // Every open switch of the store, oldest first: the oldest holds the cut from
+    // before the store first moved (later ones inherit it), and all are closed.
+    const opens = await this.prisma.storeCut30Switch.findMany({
       where: { platform, backAt: null },
-      orderBy: [{ year: 'desc' }],
+      orderBy: [{ year: 'asc' }],
     });
-    if (open === null)
+    if (opens.length === 0)
       throw new ConflictException('That store is already on the 15% prices.');
+    const original = opens[0].priorFeeBps;
     await this.prisma.$transaction(async (tx) => {
       const marked = await tx.storeCut30Switch.updateMany({
-        where: { id: open.id, backAt: null },
+        where: { id: { in: opens.map((o) => o.id) }, backAt: null },
         data: { backAt: new Date(), backByAdminId: adminId },
       });
       if (marked.count === 0)
         throw new ConflictException('That store is already on the 15% prices.');
       await this.setPrices(tx, platform, STORE_LADDER);
-      // The cut the store had before the switch is put back (none: the
+      // The cut the store had before the first switch is put back (none: the
       // config's, 15% unless the server sets another).
       await tx.storePlatformSetting.updateMany({
         where: { platform, storeFeeBps: CUT30_FEE_BPS },
-        data: { storeFeeBps: open.priorFeeBps, updatedBy: adminId },
+        data: { storeFeeBps: original, updatedBy: adminId },
       });
     });
     const sync = await this.sync.apply(platform, STORE_LADDER);

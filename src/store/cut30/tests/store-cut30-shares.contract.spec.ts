@@ -206,7 +206,9 @@ describe('STORE-CUT30 patch: a store at 30% leaves every creator and host share 
       await prisma.storeProceedsEntry.deleteMany({
         where: { createdAt: { gte: startedAt } },
       });
-      await prisma.storeCut30Switch.deleteMany({ where: { year } });
+      await prisma.storeCut30Switch.deleteMany({
+        where: { year: { in: [year, year + 1] } },
+      });
       await prisma.creditPurchase.deleteMany({ where: { userWawuId: BUYER } });
       await prisma.creditsState.deleteMany({ where: { userWawuId: BUYER } });
       await prisma.storePurchase.deleteMany({ where: { wawuUserId: BUYER } });
@@ -296,5 +298,70 @@ describe('STORE-CUT30 patch: a store at 30% leaves every creator and host share 
       shareFeeBps: null,
     });
     expect(d.lot.grossKobo).toBe(85_000);
+  });
+
+  it("V-SP-9: a second crossing next year, with this year's switch never switched back, keeps the cut from before and the switch back closes both", async () => {
+    // The store had its own cut (1800) before it ever moved to 30%.
+    await prisma.planSetting.upsert({
+      where: { key: CUT30_THRESHOLD_KEY },
+      create: { key: CUT30_THRESHOLD_KEY, value: 1 },
+      update: { value: 1 },
+    });
+    await settings.refresh();
+    await prisma.storeCut30Switch.deleteMany({
+      where: { platform: 'android' },
+    });
+    await prisma.storePlatformSetting.upsert({
+      where: { platform: 'android' },
+      create: { platform: 'android', storeFeeBps: 1800 },
+      update: { storeFeeBps: 1800 },
+    });
+    const sale = (when: Date) =>
+      prisma.storePurchase.create({
+        data: {
+          wawuUserId: null,
+          platform: 'android',
+          storeTransactionId: `y2-${randomUUID()}`,
+          productId: productIds[0],
+          storeProductId: sku,
+          kind: 'credits',
+          environment: 'production',
+          grant: {},
+          referenceKobo: 150_000,
+          storeFeeBps: 0,
+          netKobo: 150_000, // one US dollar at the stood-in rate
+          purchasedAt: when,
+        },
+      });
+    await sale(new Date());
+    await cut.sweep();
+    const first = await prisma.storeCut30Switch.findFirstOrThrow({
+      where: { platform: 'android', year },
+    });
+    expect(first.priorFeeBps).toBe(1800);
+    expect((await catalog.availability('android')).feeBps).toBe(3000);
+
+    // Next year: two sales dated then, and the sweep run then. The switch was never switched back.
+    const next = year + 1;
+    await sale(new Date(`${next}-03-01T10:00:00.000Z`));
+    await sale(new Date(`${next}-03-01T11:00:00.000Z`));
+    await cut.sweep(new Date(`${next}-03-02T10:00:00.000Z`));
+    const second = await prisma.storeCut30Switch.findFirstOrThrow({
+      where: { platform: 'android', year: next },
+    });
+    // It inherits the cut from before the first switch, not the 3000 the first switch left.
+    expect(second.priorFeeBps).toBe(1800);
+    const a = await catalog.availability('android');
+    expect(a).toMatchObject({ feeBps: 3000, shareFeeBps: 1800 });
+
+    // The switch back restores the original cut and closes every open switch of the store.
+    await cut.switchBack('android', 'admin-9');
+    expect((await catalog.availability('android')).feeBps).toBe(1800);
+    expect(
+      await prisma.storeCut30Switch.count({
+        where: { platform: 'android', backAt: null },
+      }),
+    ).toBe(0);
+    await expect(cut.switchBack('android', 'admin-9')).rejects.toThrow();
   });
 });
