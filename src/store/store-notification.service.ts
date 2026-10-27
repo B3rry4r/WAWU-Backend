@@ -38,7 +38,13 @@ import { StorePurchaseService, hashOf } from './store-purchase.service';
 import type { StoreWebhookAck } from './store-view.type';
 
 type Outcome =
-  'granted' | 'taken_back' | 'lapsed' | 'ignored' | 'duplicate' | 'unknown';
+  | 'granted'
+  | 'taken_back'
+  | 'restored'
+  | 'lapsed'
+  | 'ignored'
+  | 'duplicate'
+  | 'unknown';
 
 /** Google's subscription notification types that matter here (Real-time developer notifications). */
 const GOOGLE_SUB = {
@@ -276,6 +282,22 @@ export class StoreNotificationService {
             ? 'taken_back'
             : 'duplicate';
         }
+        case 'REFUND_REVERSED': {
+          // Apple reversed a refund (G-IAP-01-5): what the refund took is put
+          // back. Only a ladder purchase is restored (STORE-BUY-HUB); every
+          // other kind stays as it was, ignored as before.
+          const found = await this.prisma.storePurchase.findUnique({
+            where: {
+              platform_storeTransactionId: {
+                platform: 'ios',
+                storeTransactionId: t.storeTransactionId,
+              },
+            },
+          });
+          if (found === null) return 'unknown';
+          if (found.kind !== 'buy') return 'ignored';
+          return (await this.restorePurchase(found)) ? 'restored' : 'duplicate';
+        }
         case 'EXPIRED':
         case 'GRACE_PERIOD_EXPIRED':
           return t.subscriptionKey === null
@@ -384,7 +406,49 @@ export class StoreNotificationService {
           status,
           endedAt: now,
           endReason: reason,
-          takenBack: taken as never,
+          // A purchase refunded, reversed and refunded again keeps what the
+          // first refund took.
+          takenBack: (row.takenBack === null
+            ? taken
+            : { ...taken, earlier: row.takenBack }) as never,
+          ...(needsReview(taken)
+            ? { flag: 'earning_review', flaggedAt: now }
+            : {}),
+        },
+      });
+      return true;
+    });
+  }
+
+  /**
+   * Puts a refunded ladder purchase back because Apple reversed the refund
+   * (REFUND_REVERSED): under the same lock a grant and a take-back take, only a
+   * `refunded` one is restored, so the notice twice restores once. A
+   * `revoked` purchase is not reversed by this notice.
+   */
+  async restorePurchase(purchase: StorePurchase): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-purchase:${purchase.platform}:${purchase.storeTransactionId}`}, 0))`;
+      const row = await tx.storePurchase.findUnique({
+        where: { id: purchase.id },
+      });
+      if (row === null || row.status !== 'refunded') return false;
+      const now = new Date();
+      const restored = await this.grants.restore(tx, row, now);
+      await tx.storePurchase.update({
+        where: { id: row.id },
+        data: {
+          status: 'granted',
+          endedAt: null,
+          endReason: null,
+          takenBack: {
+            ...((row.takenBack ?? {}) as Record<string, unknown>),
+            restoredAt: now.toISOString(),
+            restored,
+          } as never,
+          ...(needsReview(restored)
+            ? { flag: 'earning_review', flaggedAt: now }
+            : {}),
         },
       });
       return true;
@@ -455,6 +519,12 @@ export class StoreNotificationService {
       `store notification ${platform} ${hashOf(externalId)}: ${kind} -> ${outcome}`,
     );
   }
+}
+
+/** True when a take-back or restore left an earning a person has to look at. */
+function needsReview(result: Record<string, unknown>): boolean {
+  const earning = result.earning as { earning?: string } | undefined;
+  return earning?.earning === 'review';
 }
 
 function ack(outcome: Outcome): StoreWebhookAck {

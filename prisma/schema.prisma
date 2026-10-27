@@ -5767,7 +5767,12 @@ model EarningMove {
 model EarningDeduction {
   id              String                 @id @default(uuid())
   payeeWawuUserId String
-  passRefundId    String                 @unique
+  /// Exactly one of `passRefundId` and `storePurchaseId` is set (STORE-BUY-HUB).
+  passRefundId    String?                @unique
+  /// A store refund of an earning that had already been paid (STORE-BUY-HUB,
+  /// R-101 point 5): the creator's 85% of the list price, taken from their next
+  /// daily move. One per store purchase.
+  storePurchaseId String?                @unique
   amountKobo      BigInt
   /// The provider whose moves it comes out of (the passes' own).
   provider        String                 @default("fintava")
@@ -8304,6 +8309,29 @@ enum StoreProductKind {
   tier
   pass
   extra_products
+  /// The price ladder (STORE-BUY-HUB, R-101): one consumable per list price,
+  /// `wawu.buy.<naira>`, bought to unlock a piece, send a tip or get a
+  /// community pass. What it buys is named by the person's intent, not by the
+  /// product, so one product serves all three.
+  buy
+}
+
+/// What a ladder purchase is for (STORE-BUY-HUB, R-101): a piece (`content`), a
+/// tip (`tip`) or a community pass (`pass`).
+enum StoreIntentKind {
+  content
+  tip
+  pass
+}
+
+/// open: the store sheet may be opened for it. used: a store purchase was
+/// granted against it. replaced: the same person asked again for the same thing
+/// at another price or in the other store. expired: its time ran out unused.
+enum StoreIntentStatus {
+  open
+  used
+  replaced
+  expired
 }
 
 /// granted: the purchase gave what it sold. refunded: the store paid the
@@ -8333,6 +8361,12 @@ model StoreProduct {
   /// from this less the platform's store fee. Null for points and tiers,
   /// which pay no creator.
   referenceKobo  Int?
+  /// What the store charges in Nigeria for this product, in kobo (STORE-BUY-HUB,
+  /// R-101): the list price plus the store's cut and VAT, rounded up to the
+  /// store's next price step. Set on the `buy` products; null on every other
+  /// kind. Display and the price list only: the person is charged the store's
+  /// own price in their own currency, and the grant never reads this.
+  storePriceKobo Int?
   active         Boolean          @default(true)
   sortOrder      Int              @default(0)
   /// The admin who last wrote the row (their id).
@@ -8392,6 +8426,12 @@ model StorePurchase {
   /// paying it needs WAWU's store proceeds in the merchant account (BACKEND_GAPS).
   creatorWawuUserId  String?
   creatorShareKobo   Int?
+  /// A ladder purchase (STORE-BUY-HUB): the intent it was made against, what it
+  /// was for, and the piece, creator or room that names. Null on every other
+  /// kind. `intentId` is unique, so one intent is one purchase.
+  intentId           String?             @unique
+  buyKind            StoreIntentKind?
+  targetId           String?
   /// What the store charged, in the buyer's own currency (display only).
   currency           String?
   priceMicros        BigInt?
@@ -8462,6 +8502,80 @@ model StoreAccountToken {
   wawuUserId String   @id
   token      String   @unique
   createdAt  DateTime @default(now())
+}
+
+/// What a ladder purchase is for, recorded BEFORE the store sheet opens
+/// (STORE-BUY-HUB, R-101): the person, the thing (a piece, a creator to tip, a
+/// room's pass), the list price and the one `wawu.buy.<naira>` product that
+/// sells it. The store purchase is then made against this row, so the Hub knows
+/// what it was for without trusting the app's word. One OPEN intent per person,
+/// kind and target (a partial unique index, see the migration). It expires: an
+/// intent is judged at the time of the store sale, not the time of the post, so
+/// a sale that was slow to reach the Hub is never lost.
+model StorePurchaseIntent {
+  id             String            @id @default(uuid())
+  wawuUserId     String
+  platform       StorePlatform
+  kind           StoreIntentKind
+  /// The piece's id, the creator's WAWU id, or the room's id.
+  targetId       String
+  /// The list price in whole naira and kobo (the store product is worth this).
+  listPriceNaira Int
+  listPriceKobo  Int
+  productId      String
+  storeProductId String
+  status         StoreIntentStatus @default(open)
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@index([wawuUserId, kind, targetId])
+  @@index([status, expiresAt])
+}
+
+/// The creator's 85% of a store sale (STORE-BUY-HUB, R-101 points 2 and 4): 85%
+/// of the LIST price, not of what the store paid. WAWU keeps the rest. Recorded
+/// when the purchase is granted, with the day it may be paid: the sale plus 3
+/// working days (Lagos time, Monday to Friday). WAWU pays it from its own
+/// wallet, and is repaid when Apple or Google pay (STORE-PAYOUT, later).
+///
+/// This table is NOT `EarningSettlement`: the daily mover reads only that
+/// table, so nothing here can be paid early. `status` is owed (recorded, not
+/// paid), paid (STORE-PAYOUT paid it out) or cancelled (the store paid the
+/// buyer back first). A refund of a paid earning is a debt in
+/// `EarningDeduction` (`storePurchaseId`), which the creator's next daily move
+/// takes. `role` is `sale`, or `restore` for the part of a debt that had
+/// already been taken when the store reversed its refund. No foreign key to the
+/// purchase, so a buyer's account deletion never blocks on a creator's record.
+model StoreEarning {
+  id              String    @id @default(uuid())
+  storePurchaseId String
+  role            String    @default("sale")
+  source          String    @default("store")
+  /// The creator (a piece's maker, the person tipped, a room's host).
+  payeeWawuUserId String
+  /// The payment kind it counts as in the earnings streams: content_unlock, tip or community_pass.
+  kind            String
+  targetId        String
+  title           String
+  earnedAt        DateTime
+  listPriceKobo   BigInt
+  amountKobo      BigInt
+  /// The sale plus 3 working days, Lagos time. Not before this.
+  availableAt     DateTime
+  /// The wallet provider that will pay it (the one the Hub runs).
+  provider        String
+  status          String    @default("owed")
+  paidAt          DateTime?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([storePurchaseId, role])
+  @@index([payeeWawuUserId, status])
+  @@index([status, availableAt])
 }
 
 /// ─────────────────────────────────────────────────────────────────────────

@@ -3,7 +3,9 @@ import { AdminAuthModule } from '../admin/auth/admin-auth.module';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { PlansModule } from '../plans/plans.module';
+import { NotificationModule } from '../notification/notification.module';
 import { PointsModule } from '../points/points.module';
+import { PriceListModule } from '../price-list/price-list.module';
 import { RealAppStoreClient } from './clients/app-store.client';
 import { RealGooglePlayClient } from './clients/google-play.client';
 import { APP_STORE_CLIENT, GOOGLE_PLAY_CLIENT } from './clients/store-clients';
@@ -15,7 +17,10 @@ import {
 } from './store-config';
 import { StoreAccountService } from './store-account.service';
 import { StoreAdminService } from './store-admin.service';
+import { StoreBuyTargetService } from './store-buy-target.service';
 import { StoreCatalogService } from './store-catalog.service';
+import { StoreEarningService } from './store-earning.service';
+import { StoreIntentService } from './store-intent.service';
 import { StoreGrantService } from './store-grant.service';
 import { StoreNotificationService } from './store-notification.service';
 import { StorePurchaseService } from './store-purchase.service';
@@ -36,6 +41,11 @@ import { StoreWebhookController } from './store-webhook.controller';
     PlansModule,
     PointsModule,
     BlockedAccountModule,
+    // PriceListModule's notice service emits notifications, which are global in
+    // the app and, as the module's own note says, listed by the module that needs
+    // them so a spec built from this module alone resolves them.
+    NotificationModule,
+    PriceListModule,
   ],
   controllers: [StoreController, StoreWebhookController, AdminStoreController],
   providers: [
@@ -53,8 +63,11 @@ import { StoreWebhookController } from './store-webhook.controller';
       inject: [STORE_CONFIG],
     },
     StoreAccountService,
+    StoreBuyTargetService,
     StoreCatalogService,
+    StoreEarningService,
     StoreGrantService,
+    StoreIntentService,
     StorePurchaseService,
     StoreNotificationService,
     StoreAdminService,

@@ -4,13 +4,16 @@ import type {
   Prisma,
   StoreProduct,
   StorePurchase,
+  StorePurchaseIntent,
 } from '../../generated/prisma/client';
+import type { StoreIntentKind } from '../../generated/prisma/enums';
 import { addCreditsWithLot } from '../credit-purchase/credit-grant';
 import { PACK_TABLE } from '../credit-purchase/credit-packs';
 import {
   grantPassPeriod,
   storePassReference,
 } from '../community/pass/community-pass-grant';
+import { PASS_PERIOD_DAYS } from '../community/pass/community-pass-rules';
 import { PAYEE_SHARE_BPS } from '../money/payments/payment-config';
 import { MakerTierService } from '../plans/maker-tier.service';
 import {
@@ -34,9 +37,21 @@ import { pricePack } from '../plans/purchases/points-pack-rules';
 import { PurchaseRefusal } from '../plans/purchases/plan-purchase-rules';
 import { POINTS_NEVER_EXPIRES } from '../points/points-bought';
 import { PointsService } from '../points/points.service';
+import type { BuyTarget } from './store-buy-target.service';
+import { StoreEarningService } from './store-earning.service';
 import { grantsConfigOf } from './store-grants';
 import { StoreError } from './store-error';
 import type { StoreGrantedView } from './store-view.type';
+
+/** The commission snapshotted on a ladder purchase's row: the one split, 85/15 (R-5), as the wallet path writes it. */
+const BUY_COMMISSION_RATE = 0.15;
+
+/** What a ladder purchase is made against: its intent and what the intent names, checked just before the grant. */
+export interface BuyContext {
+  intent: StorePurchaseIntent;
+  /** Null when the piece, creator or room can no longer be bought: the purchase is recorded and nothing is given. */
+  target: BuyTarget | null;
+}
 
 const DAY_MS = 86_400_000;
 
@@ -76,7 +91,11 @@ export interface StoreGrantSnapshot {
   /** Products an upload pack added to the tier row (IAP-03). */
   extraProducts?: number;
   communityId?: string;
-  /** Set when the purchase was recorded and nothing was given: `member_removed`, or `pack_not_allowed` (R-100). */
+  /** A ladder purchase (STORE-BUY-HUB): what it was for, the piece, creator or room, and the creator's earning. */
+  buyKind?: StoreIntentKind;
+  targetId?: string;
+  earningId?: string;
+  /** Set when the purchase was recorded and nothing was given: `member_removed`, `pack_not_allowed` (R-100) or `target_unavailable` (a ladder purchase whose piece, creator or room can no longer be bought). */
   skipped?: string;
 }
 
@@ -105,6 +124,7 @@ export class StoreGrantService {
     private readonly points: PointsService,
     private readonly tierGrants: TierGrantService,
     private readonly tiers: MakerTierService,
+    private readonly earnings: StoreEarningService,
   ) {}
 
   /**
@@ -117,6 +137,7 @@ export class StoreGrantService {
     purchase: StorePurchase,
     product: StoreProduct,
     now: Date,
+    buy: BuyContext | null = null,
   ): Promise<StoreGrantSnapshot> {
     const grants = grantsConfigOf(product.grants);
     const userId = purchase.wawuUserId;
@@ -297,6 +318,11 @@ export class StoreGrantService {
           });
         return { kind: 'extra_products', extraProducts: count };
       }
+      case 'buy': {
+        if (buy === null)
+          throw new Error(`Purchase ${purchase.id} has no intent.`);
+        return this.giveBuy(tx, purchase, buy, now);
+      }
       case 'pass': {
         const days = grants.days ?? 0;
         const communityId = purchase.communityId;
@@ -419,51 +445,217 @@ export class StoreGrantService {
           });
         return { extraProducts: taken, grantedExtraProducts: given };
       }
-      case 'pass': {
-        const reference = storePassReference(purchase.id);
-        const pass = await tx.communityPass.findUnique({
-          where: { walletPaymentId: reference },
-        });
-        if (pass === null) return { passEnded: false };
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`community-pass:${pass.communityId}:${userId}`}))`;
-        let daysRemoved = 0;
-        if (pass.endsAt.getTime() > now.getTime()) {
-          const startsBefore = pass.startsAt.getTime() < now.getTime();
-          // What this purchase had left to give: the unexpired part of its period.
-          const leftMs =
-            pass.endsAt.getTime() -
-            Math.max(now.getTime(), pass.startsAt.getTime());
-          await tx.communityPass.update({
-            where: { id: pass.id },
-            data: {
-              endsAt: now,
-              ...(startsBefore
-                ? {}
-                : { startsAt: new Date(now.getTime() - 1) }),
-            },
-          });
-          // A pass is bought once, so renewing stacks a later period behind this
-          // one. Those periods move up by what this purchase had left, or the
-          // person would keep its days (access follows the latest end) after the
-          // store paid them back.
-          await tx.$executeRaw`
-            UPDATE "CommunityPass"
-               SET "startsAt" = "startsAt" - (${leftMs}::double precision * interval '1 millisecond'),
-                   "endsAt" = "endsAt" - (${leftMs}::double precision * interval '1 millisecond')
-             WHERE "communityId" = ${pass.communityId}
-               AND "userWawuId" = ${userId}
-               AND "id" <> ${pass.id}
-               AND "refundId" IS NULL
-               AND "startsAt" >= ${pass.endsAt}`;
-          daysRemoved = Math.round(leftMs / DAY_MS);
+      case 'pass':
+        return this.takeBackPass(tx, purchase, now);
+      case 'buy': {
+        // What the ladder purchase gave is taken back by what it was for, and
+        // the creator's 85% with it (R-101 point 5). A tip has no access to
+        // take away; its record stops counting as one.
+        let given: Record<string, unknown> = {};
+        if (snap.skipped === undefined) {
+          if (purchase.buyKind === 'content' || purchase.buyKind === 'tip') {
+            const { count } = await tx.purchase.updateMany({
+              where: { flutterwaveTxRef: ref, status: 'completed' },
+              data: { status: 'failed' },
+            });
+            given = { purchaseRowsEnded: count };
+          } else if (purchase.buyKind === 'pass') {
+            given = await this.takeBackPass(tx, purchase, now);
+          }
         }
-        return {
-          passEnded: true,
-          communityId: pass.communityId,
-          daysRemoved,
-        };
+        const earning = await this.earnings.takeBack(tx, purchase, now);
+        return { ...given, earning };
       }
     }
+  }
+
+  /**
+   * Ends every pass period a store purchase gave (the purchase's own, and any
+   * a reversed refund gave back), now, and moves the periods stacked behind
+   * them up by what they had left.
+   */
+  private async takeBackPass(
+    tx: Prisma.TransactionClient,
+    purchase: StorePurchase,
+    now: Date,
+  ): Promise<Record<string, unknown>> {
+    const userId = purchase.wawuUserId;
+    const reference = storePassReference(purchase.id);
+    const rows = await tx.communityPass.findMany({
+      where: {
+        OR: [
+          { walletPaymentId: reference },
+          { walletPaymentId: { startsWith: `${reference}:restored:` } },
+        ],
+      },
+      orderBy: { startsAt: 'asc' },
+    });
+    if (rows.length === 0) return { passEnded: false };
+    let daysRemoved = 0;
+    for (const pass of rows) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`community-pass:${pass.communityId}:${userId}`}))`;
+      if (pass.endsAt.getTime() <= now.getTime()) continue;
+      const startsBefore = pass.startsAt.getTime() < now.getTime();
+      // What this purchase had left to give: the unexpired part of its period.
+      const leftMs =
+        pass.endsAt.getTime() -
+        Math.max(now.getTime(), pass.startsAt.getTime());
+      await tx.communityPass.update({
+        where: { id: pass.id },
+        data: {
+          endsAt: now,
+          ...(startsBefore ? {} : { startsAt: new Date(now.getTime() - 1) }),
+        },
+      });
+      // A pass is bought once, so renewing stacks a later period behind this
+      // one. Those periods move up by what this purchase had left, or the
+      // person would keep its days (access follows the latest end) after the
+      // store paid them back.
+      await tx.$executeRaw`
+        UPDATE "CommunityPass"
+           SET "startsAt" = "startsAt" - (${leftMs}::double precision * interval '1 millisecond'),
+               "endsAt" = "endsAt" - (${leftMs}::double precision * interval '1 millisecond')
+         WHERE "communityId" = ${pass.communityId}
+           AND "userWawuId" = ${userId}
+           AND "id" <> ${pass.id}
+           AND "refundId" IS NULL
+           AND "startsAt" >= ${pass.endsAt}`;
+      daysRemoved += Math.round(leftMs / DAY_MS);
+    }
+    return {
+      passEnded: true,
+      communityId: rows[0].communityId,
+      daysRemoved,
+    };
+  }
+
+  /**
+   * Puts back what a refund took, because Apple reversed it (REFUND_REVERSED,
+   * G-IAP-01-5). Only a ladder purchase is restored (STORE-BUY-HUB): the other
+   * kinds' take-backs are partial (a spent point stays spent), so a reversal
+   * of those is left to a person.
+   */
+  async restore(
+    tx: Prisma.TransactionClient,
+    purchase: StorePurchase,
+    now: Date,
+  ): Promise<Record<string, unknown>> {
+    const snap = (purchase.grant ?? {}) as unknown as StoreGrantSnapshot;
+    const ref = storeRef(purchase.id);
+    if (purchase.kind !== 'buy' || snap.skipped !== undefined)
+      return { restored: false };
+    let given: Record<string, unknown> = {};
+    if (purchase.buyKind === 'content' || purchase.buyKind === 'tip') {
+      const { count } = await tx.purchase.updateMany({
+        where: { flutterwaveTxRef: ref, status: 'failed' },
+        data: { status: 'completed' },
+      });
+      given = { purchaseRowsRestored: count };
+    } else if (purchase.buyKind === 'pass' && purchase.communityId !== null) {
+      // The days the refund took are given again, from the later of now and
+      // the end of whatever the person holds, as one more period.
+      const taken = (purchase.takenBack ?? {}) as { daysRemoved?: number };
+      const days = Math.floor(taken.daysRemoved ?? 0);
+      let granted = false;
+      if (days > 0) {
+        const rows = await tx.$queryRaw<{ status: string }[]>`
+          SELECT "status"::text AS "status" FROM "CommunityMembership"
+          WHERE "userWawuId" = ${purchase.wawuUserId} AND "communityId" = ${purchase.communityId}
+          FOR UPDATE`;
+        if (rows[0]?.status !== 'pending')
+          granted = await grantPassPeriod(tx, {
+            communityId: purchase.communityId,
+            userWawuId: purchase.wawuUserId,
+            reference: `${storePassReference(purchase.id)}:restored:${now.getTime()}`,
+            priceKobo: BigInt(purchase.referenceKobo ?? 1),
+            days,
+            now,
+          });
+      }
+      given = { passDaysRestored: granted ? days : 0 };
+    }
+    const earning = await this.earnings.restore(tx, purchase, now);
+    return { ...given, earning };
+  }
+
+  /** Gives a ladder purchase what its intent names, once, and records the creator's 85%. */
+  private async giveBuy(
+    tx: Prisma.TransactionClient,
+    purchase: StorePurchase,
+    buy: BuyContext,
+    now: Date,
+  ): Promise<StoreGrantSnapshot> {
+    const { intent, target } = buy;
+    const userId = purchase.wawuUserId;
+    const base = {
+      kind: 'buy' as const,
+      buyKind: intent.kind,
+      targetId: intent.targetId,
+    };
+    // The piece, creator or room cannot be bought any more (taken down, the
+    // person blocked, the pass withdrawn). The store has the payment: it is
+    // recorded and flagged for an admin, and nothing is given or earned.
+    if (target === null) return { ...base, skipped: 'target_unavailable' };
+    let extra: Partial<StoreGrantSnapshot> = {};
+    if (intent.kind === 'content' || intent.kind === 'tip') {
+      // The same row the wallet path writes (UnlockWalletService, TipWalletService),
+      // so every access check, the creator's tip and sale lists and the admin
+      // finance streams read it as they read a wallet's.
+      await tx.purchase.createMany({
+        data: [
+          {
+            contentId: intent.kind === 'content' ? intent.targetId : null,
+            type: intent.kind,
+            buyerWawuId: userId,
+            creatorWawuId: target.creatorWawuId,
+            amount: intent.listPriceNaira,
+            commissionRate: BUY_COMMISSION_RATE,
+            flutterwaveTxRef: storeRef(purchase.id),
+            flutterwaveTxId: null,
+            status: 'completed',
+            note: null,
+          },
+        ],
+        skipDuplicates: true,
+      });
+    } else {
+      // A member the host removed (a pending row) is not let back in by a
+      // payment: recorded, flagged, nothing given. The row is locked, so a
+      // removal landing now waits for this decision.
+      const rows = await tx.$queryRaw<{ status: string }[]>`
+        SELECT "status"::text AS "status" FROM "CommunityMembership"
+        WHERE "userWawuId" = ${userId} AND "communityId" = ${intent.targetId}
+        FOR UPDATE`;
+      if (rows[0]?.status === 'pending')
+        return { ...base, skipped: 'member_removed' };
+      await grantPassPeriod(tx, {
+        communityId: intent.targetId,
+        userWawuId: userId,
+        reference: storePassReference(purchase.id),
+        priceKobo: BigInt(intent.listPriceKobo),
+        days: PASS_PERIOD_DAYS,
+        now,
+      });
+      const pass = await tx.communityPass.findUniqueOrThrow({
+        where: { walletPaymentId: storePassReference(purchase.id) },
+        select: { endsAt: true },
+      });
+      extra = {
+        communityId: intent.targetId,
+        days: PASS_PERIOD_DAYS,
+        until: pass.endsAt.toISOString(),
+      };
+    }
+    const earningId = await this.earnings.record(tx, {
+      purchase,
+      payeeWawuUserId: target.creatorWawuId,
+      buyKind: intent.kind,
+      targetId: intent.targetId,
+      title: target.title,
+      listPriceKobo: intent.listPriceKobo,
+      soldAt: purchase.purchasedAt,
+    });
+    return { ...base, ...extra, earningId };
   }
 
   /** What a purchase gave, for the app. */
@@ -478,6 +670,12 @@ export class StoreGrantService {
       extraProducts: snap.extraProducts ?? null,
       until: snap.until ?? null,
       communityId: snap.communityId ?? communityId,
+      ...(snap.buyKind === undefined
+        ? {}
+        : {
+            contentId: snap.buyKind === 'content' ? snap.targetId : null,
+            creatorWawuId: snap.buyKind === 'tip' ? snap.targetId : null,
+          }),
     };
   }
 }

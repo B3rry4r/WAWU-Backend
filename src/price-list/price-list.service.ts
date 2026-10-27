@@ -97,6 +97,7 @@ export class PriceListService {
     const item = (priceNaira: number): PriceListItem => ({
       priceNaira,
       priceKobo: priceNaira * KOBO,
+      storePriceNaira: null,
     });
     return { prices: this.list().map(item), tips: this.tipList().map(item) };
   }
@@ -116,6 +117,13 @@ export class PriceListItem {
   priceNaira!: number;
   /** The same price in kobo. */
   priceKobo!: number;
+  /**
+   * What the store charges in Nigeria for this list price, in naira (the list
+   * price plus the store's cut and VAT, rounded up to the store's next price
+   * step; R-101 point 2), or null when no store product sells it. Information:
+   * the app shows the store's own price in the person's currency.
+   */
+  storePriceNaira!: number | null;
 }
 
 /** GET /prices: the lists every price picker draws. */

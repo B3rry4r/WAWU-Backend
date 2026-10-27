@@ -211,6 +211,25 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // bought through a store, and name no counterparty.
   { model: 'StoreSubscription', column: 'wawuUserId', disposition: 'OWNED' },
   { model: 'StoreAccountToken', column: 'wawuUserId', disposition: 'OWNED' },
+  // What a ladder purchase was for, said before the store sheet opened
+  // (STORE-BUY-HUB, R-101): the person, the thing and the list price. OWNED: it
+  // exists only because this account asked to buy, and names no counterparty
+  // beyond a target id. No foreign key points at it.
+  {
+    model: 'StorePurchaseIntent',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+  // A creator's 85% of somebody else's store sale (STORE-BUY-HUB, R-101): the
+  // buyer's purchase and the share it owes survive, like a wallet sale's
+  // earning (EarningSettlement). Kept when the creator's account goes: it is the
+  // record of what WAWU owed or paid. It has no foreign key to the purchase, so
+  // the buyer's own deletion never waits on it.
+  {
+    model: 'StoreEarning',
+    column: 'payeeWawuUserId',
+    disposition: 'COUNTERPARTY',
+  },
   // More products this account bought on its tier (TIER-04): how many and what
   // it cost. OWNED, like MakerPurchase above: the row exists only because this
   // account bought something and names no counterparty. The money's record is

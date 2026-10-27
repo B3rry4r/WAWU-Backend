@@ -1,5 +1,6 @@
 import type {
   CreditPack,
+  StoreIntentKind,
   StorePlatform,
   StoreProductKind,
   StorePurchaseStatus,
@@ -40,6 +41,10 @@ export interface StoreProductView {
   /** True for a tier, which the store renews; false for a points, credits, upload pack or pass (a pass is bought once). */
   subscription: boolean;
   grants: StoreGrantsView;
+  /** A `buy` (ladder) product: the list price it sells, in kobo. Null on every other kind. */
+  listPriceKobo?: number | null;
+  /** A `buy` product: what the store charges in Nigeria, in kobo (the app shows the store's own price in the person's currency). Null on every other kind. */
+  storePriceKobo?: number | null;
 }
 
 /** Why a store is not on sale. */
@@ -72,6 +77,10 @@ export interface StoreGrantedView {
   /** When the tier or pass now ends (ISO 8601). */
   until: string | null;
   communityId: string | null;
+  /** A ladder purchase of a piece: the piece unlocked (STORE-BUY-HUB). Absent on the other kinds. */
+  contentId?: string | null;
+  /** A ladder tip: the creator tipped. Absent on the other kinds. */
+  creatorWawuId?: string | null;
 }
 
 /** `POST /store/purchases`. */
@@ -87,8 +96,26 @@ export interface StorePurchaseView {
   purchasedAt: string;
   /** When the subscription period ends as the store said; null for anything bought once (points, credits, an upload pack, a pass). */
   expiresAt: string | null;
-  /** `member_removed` when the purchase was recorded but the pass was not given because the host removed the person; `pack_not_allowed` when the upload pack was recorded and nothing was added because the person's tier may not buy it or they hold the most packs (R-100). Null otherwise. */
+  /** `member_removed` when the purchase was recorded but the pass was not given because the host removed the person; `pack_not_allowed` when the upload pack was recorded and nothing was added because the person's tier may not buy it or they hold the most packs (R-100); `target_unavailable` when a ladder purchase was recorded and nothing was given because the piece, creator or room can no longer be bought (STORE-BUY-HUB); `earning_review` when a store refund of an already-paid earning needs a person. Null otherwise. */
   flag: string | null;
+  /** A ladder purchase: what it was for (`content`, `tip` or `pass`). Absent on the other kinds. */
+  buyKind?: StoreIntentKind | null;
+  /** A ladder purchase: the intent it was made against. Absent on the other kinds. */
+  intentId?: string | null;
+  /** A ladder purchase: the piece, creator or room. Absent on the other kinds. */
+  targetId?: string | null;
+}
+
+/** `POST /store/intents`: what to hand the store when the sheet opens. */
+export interface StoreIntentView {
+  /** Send it back on `POST /store/purchases` as `intentId`. */
+  intentId: string;
+  /** The store product to buy: `wawu.buy.<naira>`. */
+  productId: string;
+  /** The person's account token: hand it to the store as `obfuscatedAccountIdAndroid` / `appAccountToken`, as for every store purchase. */
+  accountToken: string;
+  /** When the intent stops being open (ISO 8601): 60 minutes after it was made. A sale made before then still counts however late it is posted. */
+  expiresAt: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,8 +145,10 @@ export interface AdminStoreProductView {
   grants: StoreProductGrantsConfig;
   /** What the grant gives right now, resolved from the plan (display). */
   resolved: StoreGrantsView;
-  /** Kobo one purchase is worth before the store's share; null for points, tiers and upload packs. */
+  /** Kobo one purchase is worth before the store's share; null for points, tiers and upload packs. For a `buy` product, the list price. */
   referenceKobo: number | null;
+  /** A `buy` product: what the store charges in Nigeria, in kobo. Null on every other kind. */
+  storePriceKobo?: number | null;
   active: boolean;
   sortOrder: number;
   updatedBy: string | null;
@@ -157,6 +186,10 @@ export interface AdminStorePurchaseView {
   environment: string;
   storeTransactionId: string;
   communityId: string | null;
+  /** A ladder purchase: what it was for, the intent, and the piece, creator or room. */
+  buyKind?: StoreIntentKind | null;
+  intentId?: string | null;
+  targetId?: string | null;
   /** What the store charged, in the buyer's own currency, as the store said. */
   currency: string | null;
   priceMicros: string | null;
@@ -191,6 +224,6 @@ export interface AdminStorePurchasePageView {
 /** What a store webhook answers: the delivery was read, and what the Hub did with it. */
 export interface StoreWebhookAck {
   received: true;
-  /** `granted`, `taken_back`, `lapsed`, `ignored`, `duplicate` or `unknown`. */
+  /** `granted`, `taken_back`, `restored`, `lapsed`, `ignored`, `duplicate` or `unknown`. */
   outcome: string;
 }

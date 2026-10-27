@@ -135,6 +135,9 @@ export function adminPurchaseView(
     environment: r.environment,
     storeTransactionId: r.storeTransactionId,
     communityId: r.communityId,
+    ...(r.kind === 'buy'
+      ? { buyKind: r.buyKind, intentId: r.intentId, targetId: r.targetId }
+      : {}),
     currency: r.currency,
     priceMicros: r.priceMicros === null ? null : r.priceMicros.toString(),
     referenceKobo: r.referenceKobo,

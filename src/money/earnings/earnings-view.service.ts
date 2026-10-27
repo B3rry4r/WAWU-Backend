@@ -65,6 +65,7 @@ function kobo(text: string | null | undefined): number {
  *   hold service's plain release) is landed when the move is confirmed. A
  *   hold whose owner has not decided is `held`, not earned; a refunded one is
  *   the payer's.
+ * - a store sale (STORE-BUY-HUB): a `StoreEarning`, waiting until it is paid.
  * `at` is when it was earned: the sale's completion, or the release.
  */
 function earned(person: string): Prisma.Sql {
@@ -74,6 +75,14 @@ function earned(person: string): Prisma.Sql {
            (s."status" = 'landed') AS "landed"
       FROM "EarningSettlement" s
      WHERE s."payeeWawuUserId" = ${person}::text
+    UNION ALL
+    -- A creator's 85% of a store sale (STORE-BUY-HUB, R-101): earned at the sale,
+    -- waiting until WAWU pays it (3 working days on, STORE-PAYOUT). A cancelled
+    -- one (the store paid the buyer back first) is not earned.
+    SELECT se."kind", se."targetId", se."title", se."earnedAt", se."amountKobo",
+           (se."status" = 'paid')
+      FROM "StoreEarning" se
+     WHERE se."payeeWawuUserId" = ${person}::text AND se."status" <> 'cancelled'
     UNION ALL
     SELECT h."kind", h."targetId", h."title", h."actionAt", h."payeeShareKobo",
            (h."status" = 'released')

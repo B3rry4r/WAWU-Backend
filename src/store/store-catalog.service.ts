@@ -7,6 +7,7 @@ import type {
 import type { AdminUserView } from '../admin/auth/admin-user-view.type';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { PLANS_CONFIG, type PlansConfig } from '../plans/plans-config';
+import { PriceListService } from '../price-list/price-list.service';
 import { isUniqueViolation } from '../money/prisma-unique';
 import {
   checkProduct,
@@ -16,7 +17,11 @@ import {
 } from './store-grants';
 import { STORE_CONFIG, type StoreConfig } from './store-config';
 import { StoreAccountService } from './store-account.service';
-import { StoreError } from './store-error';
+import {
+  DISABLED_MESSAGE,
+  NOT_CONFIGURED_MESSAGE,
+  StoreError,
+} from './store-error';
 import type {
   CreateStoreProductDto,
   UpdateStoreProductDto,
@@ -56,6 +61,7 @@ export class StoreCatalogService {
     @Inject(STORE_CONFIG) private readonly config: StoreConfig,
     @Inject(PLANS_CONFIG) private readonly plans: PlansConfig,
     private readonly accounts: StoreAccountService,
+    private readonly priceList: PriceListService,
   ) {}
 
   /** True when the Hub holds everything it needs to ask this store. */
@@ -77,6 +83,14 @@ export class StoreCatalogService {
       feeOverridden: row?.storeFeeBps != null,
       updatedAt: row?.updatedAt ?? null,
     };
+  }
+
+  /** The store switch and credentials, as the routes answer them. */
+  async assertOpen(platform: StorePlatform): Promise<void> {
+    const a = await this.availability(platform);
+    if (!a.configured)
+      throw new StoreError('store_not_configured', NOT_CONFIGURED_MESSAGE);
+    if (!a.enabled) throw new StoreError('store_disabled', DISABLED_MESSAGE);
   }
 
   /** Why a store cannot be bought from now; null when it can. */
@@ -109,8 +123,10 @@ export class StoreCatalogService {
         grantsConfigOf(r.grants),
         this.plans,
       );
-      // A product whose plan entry was removed gives nothing to show: it is not sold.
+      // A product whose plan entry was removed gives nothing to show: it is not
+      // sold. A ladder product grants nothing by itself, and is always shown.
       if (
+        r.kind !== 'buy' &&
         grants.points === null &&
         grants.credits === null &&
         grants.tierId === null &&
@@ -135,6 +151,12 @@ export class StoreCatalogService {
       title: r.title,
       subscription: isSubscriptionKind(r.kind),
       grants,
+      ...(r.kind === 'buy'
+        ? {
+            listPriceKobo: r.referenceKobo,
+            storePriceKobo: r.storePriceKobo,
+          }
+        : {}),
     };
   }
 
@@ -152,6 +174,22 @@ export class StoreCatalogService {
         'That product is not for sale.',
       );
     return row;
+  }
+
+  /** The active ladder product that sells a list price in a store, or null when there is none. */
+  activeBuyProduct(
+    platform: StorePlatform,
+    listPriceKobo: number,
+  ): Promise<StoreProduct | null> {
+    return this.prisma.storeProduct.findFirst({
+      where: {
+        platform,
+        kind: 'buy',
+        active: true,
+        referenceKobo: listPriceKobo,
+      },
+      orderBy: { storeProductId: 'asc' },
+    });
   }
 
   /** A product by the store's id, active or not: a refund of a product since switched off still has to be read. */
@@ -189,6 +227,7 @@ export class StoreCatalogService {
       dto.referenceKobo ?? null,
       this.plans,
     );
+    this.checkLadder(dto.kind, checked.referenceKobo, dto.storePriceKobo);
     try {
       const row = await this.prisma.storeProduct.create({
         data: {
@@ -198,6 +237,9 @@ export class StoreCatalogService {
           title: dto.title,
           grants: checked.grants as unknown as Prisma.InputJsonValue,
           referenceKobo: checked.referenceKobo,
+          ...(dto.storePriceKobo === undefined
+            ? {}
+            : { storePriceKobo: dto.storePriceKobo }),
           active: dto.active ?? true,
           sortOrder: dto.sortOrder ?? 0,
           updatedBy: admin.id,
@@ -235,18 +277,57 @@ export class StoreCatalogService {
       dto.referenceKobo ?? row.referenceKobo,
       this.plans,
     );
+    this.checkLadder(
+      row.kind,
+      checked.referenceKobo,
+      dto.storePriceKobo,
+      dto.referenceKobo !== undefined,
+    );
     const updated = await this.prisma.storeProduct.update({
       where: { id },
       data: {
         ...(dto.title === undefined ? {} : { title: dto.title }),
         grants: checked.grants as unknown as Prisma.InputJsonValue,
         referenceKobo: checked.referenceKobo,
+        ...(dto.storePriceKobo === undefined
+          ? {}
+          : { storePriceKobo: dto.storePriceKobo }),
         ...(dto.active === undefined ? {} : { active: dto.active }),
         ...(dto.sortOrder === undefined ? {} : { sortOrder: dto.sortOrder }),
         updatedBy: admin.id,
       },
     });
     return this.adminView(updated);
+  }
+
+  /**
+   * A ladder product sells a list price (STORE-BUY-HUB): its reference must be
+   * on the price list when it is set, and only a ladder product has a store
+   * price.
+   */
+  private checkLadder(
+    kind: StoreProduct['kind'],
+    referenceKobo: number | null,
+    storePriceKobo: number | undefined,
+    referenceChanged = true,
+  ): void {
+    if (kind !== 'buy') {
+      if (storePriceKobo !== undefined)
+        throw new StoreError(
+          'store_product_invalid',
+          'Only a ladder product has a store price.',
+        );
+      return;
+    }
+    if (
+      referenceChanged &&
+      referenceKobo !== null &&
+      !this.priceList.isOnList(referenceKobo / 100)
+    )
+      throw new StoreError(
+        'store_product_invalid',
+        'A ladder product must sell a price on the price list.',
+      );
   }
 
   private adminView(r: StoreProduct): AdminStoreProductView {
@@ -260,6 +341,7 @@ export class StoreCatalogService {
       grants,
       resolved: resolveGrants(r.kind, grants, this.plans),
       referenceKobo: r.referenceKobo,
+      storePriceKobo: r.storePriceKobo,
       active: r.active,
       sortOrder: r.sortOrder,
       updatedBy: r.updatedBy,

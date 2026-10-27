@@ -907,7 +907,20 @@
     "/api/hub/prices": {
       "get": {
         "operationId": "PriceListController_read",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "platform",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "android",
+                "ios"
+              ]
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -44172,6 +44185,43 @@
         ]
       }
     },
+    "/api/hub/store/intents": {
+      "post": {
+        "operationId": "StoreController_intent",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StoreIntentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreIntentView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Says what a ladder purchase is for, BEFORE the store sheet opens\n(STORE-BUY-HUB, R-101): a piece to unlock, a creator to tip or a room's\ncommunity pass, at a price on the price list. Nothing is charged or given\nhere. The answer is the store product to buy (`wawu.buy.<naira>`), the\nperson's account token (hand it to the store as for every purchase) and the\nintent's id, which `POST /store/purchases` then carries as `intentId`. One\nopen intent per person, kind and target: asking again for the same thing\nreturns the same intent. It stays open 60 minutes; a sale made before then\nstill counts however late it is posted.\n\nRefusals carry `reason.code`: `price_not_on_list` (400, with the nearest\nlist prices), `store_not_configured` (503), `store_disabled` (409),\n`store_product_unknown` (404, no store product sells that price),\n`store_intent_target_not_found` (404), `store_intent_not_payable` (409: free,\ntheir own, already theirs, no pass, removed) and `store_intent_price_changed`\n(409: the piece's or room's price is not the one named).",
+        "tags": [
+          "Store"
+        ]
+      }
+    },
     "/api/hub/store/purchases": {
       "post": {
         "operationId": "StoreController_buy",
@@ -44203,7 +44253,7 @@
             "wawu-id": []
           }
         ],
-        "summary": "Hands the Hub a purchase the store has just completed. The Hub asks the\nstore's own server about it (the app's word is never taken), then gives\nwhat was bought, once per store transaction: the same call again, a\nrestore, or the store's own notice arriving first all answer the same\npurchase with `alreadyGranted: true`. Send `purchaseToken` on `android`,\n`transactionId` on `ios`, and `communityId` for a pass.\n\nRefusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,\n`store_product_unknown` (404), `store_receipt_missing` (400),\n`store_purchase_invalid` (422), `store_purchase_pending`,\n`store_purchase_taken` (that purchase, or that subscription, was already used on another account, or was made with another account's token), `store_purchase_other_room` (409, a pass payment was first given to another room), `store_account_token_missing` (422, the purchase carries no account token),\n`store_pass_not_available`, `store_unreachable` (503, safe to repeat) and `store_grant_failed` (500, the store has the payment but the Hub could not finish; ask again).",
+        "summary": "Hands the Hub a purchase the store has just completed. The Hub asks the\nstore's own server about it (the app's word is never taken), then gives\nwhat was bought, once per store transaction: the same call again, a\nrestore, or the store's own notice arriving first all answer the same\npurchase with `alreadyGranted: true`. Send `purchaseToken` on `android`,\n`transactionId` on `ios`, and `communityId` for a pass.\n\nRefusals carry `reason.code`: `store_not_configured` (503), `store_disabled`,\n`store_product_unknown` (404), `store_receipt_missing` (400),\n`store_purchase_invalid` (422), `store_purchase_pending`,\n`store_purchase_taken` (that purchase, or that subscription, was already used on another account, or was made with another account's token), `store_purchase_other_room` (409, a pass payment was first given to another room), `store_account_token_missing` (422, the purchase carries no account token),\n`store_pass_not_available`, `store_unreachable` (503, safe to repeat) and `store_grant_failed` (500, the store has the payment but the Hub could not finish; ask again).\n\nA ladder product (`wawu.buy.<naira>`) also needs `intentId` from `POST\n/store/intents`; the Hub checks the product is the intent's and the account\ntoken is the person's, and grants what the intent names once per store\ntransaction. Further codes: `store_intent_not_found` (404), `store_intent_expired`\n(409, the store sale was after the intent's time), `store_intent_used` (409) and\n`store_purchase_other_intent` (409, this store transaction was already given for\nanother intent). When the piece, creator or room can no longer be bought the\npurchase is recorded with `flag: target_unavailable` and nothing is given.",
         "tags": [
           "Store"
         ]
@@ -44440,7 +44490,8 @@
                 "credits",
                 "tier",
                 "pass",
-                "extra_products"
+                "extra_products",
+                "buy"
               ]
             }
           },
@@ -44537,7 +44588,8 @@
                 "credits",
                 "tier",
                 "pass",
-                "extra_products"
+                "extra_products",
+                "buy"
               ]
             }
           },
@@ -51859,6 +51911,54 @@
           "type"
         ]
       },
+      "StoreIntentDto": {
+        "type": "object",
+        "properties": {
+          "platform": {
+            "description": "The store the app runs on.",
+            "enum": [
+              "android",
+              "ios"
+            ],
+            "type": "string"
+          },
+          "kind": {
+            "description": "`content` (unlock a piece), `tip` (tip a creator) or `pass` (a community pass).",
+            "enum": [
+              "content",
+              "tip",
+              "pass"
+            ],
+            "type": "string"
+          },
+          "contentId": {
+            "type": "string",
+            "description": "The piece to unlock. Required for `content`.",
+            "format": "uuid"
+          },
+          "creatorWawuId": {
+            "type": "string",
+            "description": "The creator to tip. Required for `tip`.",
+            "format": "uuid"
+          },
+          "communityId": {
+            "type": "string",
+            "description": "The room whose pass to buy. Required for `pass`.",
+            "format": "uuid"
+          },
+          "listPriceNaira": {
+            "type": "integer",
+            "description": "The price in whole naira. Must be on the price list (`GET /prices`); a tip\nmust be on the tip list. A piece's or room's price must equal it.",
+            "minimum": 1,
+            "maximum": 1000000000
+          }
+        },
+        "required": [
+          "platform",
+          "kind",
+          "listPriceNaira"
+        ]
+      },
       "StorePurchaseDto": {
         "type": "object",
         "properties": {
@@ -51892,6 +51992,11 @@
           "communityId": {
             "type": "string",
             "description": "The room a community pass is bought for. Required for a pass product, refused for any other.",
+            "format": "uuid"
+          },
+          "intentId": {
+            "type": "string",
+            "description": "The intent this purchase was made against (`POST /store/intents`). Required\nfor a ladder product (`wawu.buy.<naira>`), refused for any other.",
             "format": "uuid"
           }
         },
@@ -51963,7 +52068,8 @@
               "credits",
               "tier",
               "pass",
-              "extra_products"
+              "extra_products",
+              "buy"
             ],
             "type": "string"
           },
@@ -51977,7 +52083,13 @@
           },
           "referenceKobo": {
             "type": "integer",
-            "description": "Kobo one purchase is worth before the store's share. Needed for credits and pass products.",
+            "description": "Kobo one purchase is worth before the store's share. Needed for credits, pass and `buy` (ladder) products; a ladder product's must be a list price.",
+            "minimum": 1,
+            "maximum": 2000000000
+          },
+          "storePriceKobo": {
+            "type": "integer",
+            "description": "What the store charges in Nigeria, in kobo. Only for a `buy` (ladder) product.",
             "minimum": 1,
             "maximum": 2000000000
           },
@@ -52011,6 +52123,12 @@
           },
           "referenceKobo": {
             "type": "integer",
+            "minimum": 1,
+            "maximum": 2000000000
+          },
+          "storePriceKobo": {
+            "type": "integer",
+            "description": "What the store charges in Nigeria, in kobo. Only for a `buy` (ladder) product.",
             "minimum": 1,
             "maximum": 2000000000
           },
@@ -61549,11 +61667,16 @@
           },
           "priceKobo": {
             "type": "integer"
+          },
+          "storePriceNaira": {
+            "type": "number",
+            "nullable": true
           }
         },
         "required": [
           "priceNaira",
-          "priceKobo"
+          "priceKobo",
+          "storePriceNaira"
         ]
       },
       "DmSendInitResponse": {
@@ -79446,7 +79569,8 @@
               "extra_products",
               "credits",
               "points",
-              "pass"
+              "pass",
+              "buy"
             ]
           },
           "title": {
@@ -79459,6 +79583,10 @@
             "$ref": "#/components/schemas/StoreGrantsView"
           },
           "referenceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "storePriceKobo": {
             "type": "integer",
             "nullable": true
           },
@@ -79581,7 +79709,8 @@
               "extra_products",
               "credits",
               "points",
-              "pass"
+              "pass",
+              "buy"
             ]
           },
           "status": {
@@ -79599,6 +79728,23 @@
             "type": "string"
           },
           "communityId": {
+            "type": "string",
+            "nullable": true
+          },
+          "buyKind": {
+            "type": "string",
+            "enum": [
+              "tip",
+              "content",
+              "pass"
+            ],
+            "nullable": true
+          },
+          "intentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetId": {
             "type": "string",
             "nullable": true
           },
@@ -79730,7 +79876,8 @@
               "extra_products",
               "credits",
               "points",
-              "pass"
+              "pass",
+              "buy"
             ]
           },
           "title": {
@@ -79741,6 +79888,14 @@
           },
           "grants": {
             "$ref": "#/components/schemas/StoreGrantsView"
+          },
+          "listPriceKobo": {
+            "type": "integer",
+            "nullable": true
+          },
+          "storePriceKobo": {
+            "type": "integer",
+            "nullable": true
           }
         },
         "required": [
@@ -79792,6 +79947,29 @@
           "products"
         ]
       },
+      "StoreIntentView": {
+        "type": "object",
+        "properties": {
+          "intentId": {
+            "type": "string"
+          },
+          "productId": {
+            "type": "string"
+          },
+          "accountToken": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "intentId",
+          "productId",
+          "accountToken",
+          "expiresAt"
+        ]
+      },
       "StoreGrantedView": {
         "type": "object",
         "properties": {
@@ -79816,6 +79994,14 @@
             "nullable": true
           },
           "communityId": {
+            "type": "string",
+            "nullable": true
+          },
+          "contentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "creatorWawuId": {
             "type": "string",
             "nullable": true
           }
@@ -79852,7 +80038,8 @@
               "extra_products",
               "credits",
               "points",
-              "pass"
+              "pass",
+              "buy"
             ]
           },
           "status": {
@@ -79877,6 +80064,23 @@
             "nullable": true
           },
           "flag": {
+            "type": "string",
+            "nullable": true
+          },
+          "buyKind": {
+            "type": "string",
+            "enum": [
+              "tip",
+              "content",
+              "pass"
+            ],
+            "nullable": true
+          },
+          "intentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "targetId": {
             "type": "string",
             "nullable": true
           }

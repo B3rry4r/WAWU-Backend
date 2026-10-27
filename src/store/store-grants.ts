@@ -76,6 +76,10 @@ const bad = (message: string) =>
  *    reference is required: the room's price is the host's, but a store sells
  *    fixed price points, so the admin states what this product is worth. One
  *    product per price point (`wawu.pass.30.a`, `wawu.pass.30.b`, and so on).
+ *  - buy (STORE-BUY-HUB, R-101): the price ladder, `wawu.buy.<naira>`. It
+ *    grants nothing by itself: what it buys is named by the person's intent.
+ *    The reference is the list price it sells, in whole naira (the catalog also
+ *    checks it is on the price list).
  *  - extra_products (IAP-03): `extraProducts`, a whole number of products the
  *    pack adds to the tier. It defaults to the plan's count (R-65, 5) when the
  *    admin sends none, and is stored as a number so a later change to the
@@ -137,6 +141,21 @@ export function checkProduct(
         throw bad('A pass product needs the kobo one period is worth.');
       return { grants: { ...EMPTY, days: grants.days }, referenceKobo };
     }
+    case 'buy': {
+      only('days');
+      if (grants.days !== null)
+        throw bad('A ladder product gives nothing under grants.');
+      if (
+        referenceKobo === null ||
+        !Number.isInteger(referenceKobo) ||
+        referenceKobo < 100 ||
+        referenceKobo % 100 !== 0
+      )
+        throw bad(
+          'A ladder product needs the list price it sells, in whole naira, as referenceKobo.',
+        );
+      return { grants: { ...EMPTY }, referenceKobo };
+    }
     case 'extra_products': {
       only('extraProducts');
       const count = grants.extraProducts ?? plans.extraProducts.count;
@@ -186,6 +205,8 @@ export function resolveGrants(
     }
     case 'pass':
       return { ...none, days: grants.days };
+    case 'buy':
+      return none;
     case 'extra_products':
       return { ...none, extraProducts: grants.extraProducts ?? null };
   }

@@ -8,6 +8,7 @@ import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { PriceListController } from './price-list.controller';
 import { PriceListService } from './price-list.service';
 import { PriceMoveNoticeService } from './price-move-notice.service';
+import { StorePriceService } from './store-price.service';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 
 /**
@@ -19,7 +20,7 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 @Module({
   imports: [PlanSettingsModule, WawuAuthModule],
   controllers: [PriceListController],
-  providers: [PriceListService, PriceMoveNoticeService],
+  providers: [PriceListService, PriceMoveNoticeService, StorePriceService],
   exports: [PriceListService],
 })
 export class PriceListModule implements NestModule {
