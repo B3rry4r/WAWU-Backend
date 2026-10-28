@@ -76,6 +76,16 @@ const dump = (v: unknown): string =>
     typeof x === 'bigint' ? x.toString() : x,
   );
 
+/**
+ * A random reference or id is hex, so it can hold any three digits by chance (`wawu-card-3828a67312fe` holds the CVV 731). The
+ * secrets check reads the text without them; a CVV in a field of its own is still found.
+ */
+const withoutIds = (text: string): string =>
+  text.replace(
+    /wawu-card-[0-9a-f]+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9A-Za-z]{20,}/g,
+    '<id>',
+  );
+
 type Envelope<T> = {
   statusCode: number;
   data: T | null;
@@ -610,8 +620,8 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
     // Nothing of the card's secrets is in the answer, the row or the log.
     const everything = dump([res.body, row, logger.lines]);
     expect(everything).not.toContain(PAN);
-    expect(everything).not.toContain(CVV);
-    expect(everything).not.toContain(PAN.slice(-4));
+    expect(withoutIds(everything)).not.toContain(CVV);
+    expect(withoutIds(everything)).not.toContain(PAN.slice(-4));
   });
 
   it('answers the same Idempotency-Key and body again without a second card or a PIN check', async () => {
@@ -687,7 +697,7 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
       logger.lines,
     ]);
     expect(everything).not.toContain(PAN);
-    expect(everything).not.toContain(CVV);
+    expect(withoutIds(everything)).not.toContain(CVV);
   });
 
   it('freezes without a PIN, unfreezes only behind one, and Nuvion reads the entity from the body', async () => {
@@ -1178,5 +1188,21 @@ describe('WALLET-31: the WAWU card on Nuvion', () => {
     }
     // Safe to run again.
     await purge.beforeErase(p.id);
+  });
+});
+
+describe('NF-V3: the secrets check is not fooled by a random reference', () => {
+  it('a reference that holds the CVV digits is not a leak; a CVV in a field of its own, or in a log line, still is', () => {
+    const reference = 'wawu-card-3828a67312fe';
+    expect(reference).toContain(CVV);
+    expect(
+      withoutIds(
+        dump([{ reference }, 'created 4f7d2b1c-0a31-4b7e-9c55-731a2b3c4d5e']),
+      ),
+    ).not.toContain(CVV);
+    expect(withoutIds(dump([{ reference, cvv: CVV }]))).toContain(CVV);
+    expect(
+      withoutIds(dump({ reference, line: `card details ${CVV}` })),
+    ).toContain(CVV);
   });
 });
