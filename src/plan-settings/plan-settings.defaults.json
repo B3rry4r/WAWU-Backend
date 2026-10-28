@@ -19,7 +19,8 @@
     "ABROAD-FOREIGN-FEE": "WALLET-42: R-10 says the user pays the provider's fee plus WAWU's on top, from config, and no ruling names WAWU's fee for a send from a foreign account. None until the owner names it (a fee of 0 per currency and way). It is taken from the same foreign account the money leaves, in that currency, for everyone (lead ruling, owner may override): the fee follows the source account, and a send from the naira wallet keeps the naira fee above.",
     "ABROAD-LIMITS": "NUV-11: no ruling or board names a most per send or per day for sending abroad. None until the owner names them (the provider's own limits still apply); an admin may set one per currency.",
     "ABROAD-CORRIDORS": "NUV-11: on 24 Oct 2026 Nuvion's dev server refused a transfer to Uganda, Mexico, Singapore and Hong Kong (\"not supported for currency yet\"). They are listed as not available until an admin empties this list, which is the day Nuvion switches them on.",
-    "CAPITAL-ENABLED": "CAPITAL-OFF (R-97, owner, 26 Oct 2026): WAWU offers no investments, so Capital (fixed returns and shares, NUV-12) is OFF by default. An admin can still switch it on here (1). Off, new orders are closed (the product list, a reservation and a confirmation answer that Capital is not available) and a person who holds nothing never sees Capital; what a person already holds can still be read and withdrawn. Before R-97 the default was on (R-84, 24 Oct 2026)."
+    "CAPITAL-ENABLED": "CAPITAL-OFF (R-97, owner, 26 Oct 2026): WAWU offers no investments, so Capital (fixed returns and shares, NUV-12) is OFF by default. An admin can still switch it on here (1). Off, new orders are closed (the product list, a reservation and a confirmation answer that Capital is not available) and a person who holds nothing never sees Capital; what a person already holds can still be read and withdrawn. Before R-97 the default was on (R-84, 24 Oct 2026).",
+    "ADD-MONEY-NGN-OFF": "NUVION-FIX (Nuvion's answers, 27 Oct 2026): Nuvion takes no naira by card, mobile money or open banking, and card acquiring is suspended in production, so adding money by card, Apple Pay, USSD and the bank checkout is OFF by default. An admin can switch each on here (1) the day Nuvion says it works. Open banking is never offered for naira, whatever this says. A switch an admin had saved as on was set to 0 by migration 20261219090000_nuvion_fix. Before this the default was on (R-84, 24 Oct 2026)."
   },
   "values": {
     "ai.sfx_max_seconds": 30,
@@ -156,8 +157,8 @@
     "points.job_max_run_minutes": 30,
     "ai.voiceover_chars_per_minute": 900,
     "ai.quick_voice_chars_per_minute": 900,
-    "money.add_money_card_on": 1,
-    "money.add_money_ussd_on": 1,
+    "money.add_money_card_on": 0,
+    "money.add_money_ussd_on": 0,
     "voice.intro_max_chars": 500,
     "voice_intro.sample_min_seconds": 15,
     "voice_intro.sample_max_seconds": 30,

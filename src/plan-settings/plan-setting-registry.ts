@@ -955,21 +955,23 @@ export function buildRegistry(
   );
   // WALLET-25 and WALLET-26 (R-84, owner-asked controls): add money by card
   // and Apple Pay, and by USSD and the bank checkout, each on or off without
-  // a deploy. 1 is on (the default), 0 is off: the route answers 409
-  // add_money_unavailable and the app draws the rail as not available.
+  // a deploy. 1 is on, 0 is off: the route answers 409 add_money_unavailable
+  // and the app draws the rail as not available. NUVION-FIX 1.1: both are OFF
+  // by default (Nuvion takes no naira by card or mobile money, and card
+  // acquiring is suspended in production).
   for (const [key, label, usedBy] of [
     [
       'money.add_money_card_on',
-      'Add money by card and Apple Pay (1 is on, 0 is off)',
+      'Add money by card and Apple Pay (1 is on, 0 is off; off by default, Nuvion takes no naira by card yet)',
       'GET /money/add-money/options, POST /money/add-money (W15, WALLET-25)',
     ],
     [
       'money.add_money_ussd_on',
-      'Add money by USSD and the bank checkout (1 is on, 0 is off)',
+      'Add money by USSD (1 is on, 0 is off; off by default, Nuvion takes no naira by mobile money yet)',
       'GET /money/add-money/options, POST /money/add-money (W15, WALLET-26)',
     ],
   ] as const) {
-    other(key, label, 'count', [usedBy], whole(0, 1));
+    other(key, label, 'count', [usedBy], whole(0, 1), 'ADD-MONEY-NGN-OFF');
   }
   // AITOOLS-03: the limits of the two prompt tools. The description's length
   // starts at the plan's own per-job character cap (not a new figure); the

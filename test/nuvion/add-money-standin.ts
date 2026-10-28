@@ -91,6 +91,19 @@ export class NuvionAddMoneyStandin {
   cardFee = 75;
   /** Dev's answer for naira: cards `error_acquiring_currency_not_supported`, funding sessions 503. */
   refuseNaira = false;
+  /**
+   * Production (27 Oct 2026): card acquiring is SUSPENDED. The card routes answer 403 `error_acquiring_service_suspended`, and a
+   * funding session a 403 `error_auth_permission_denied` whose words say the service is suspended.
+   */
+  suspended = false;
+  /**
+   * NUVION-FIX NF-V2: an error to answer a call with, by call: `create` (the payment intent, or the funding session) or
+   * `confirm` (the intent action). For the refusals that are about the person or the card, not the service.
+   */
+  forced: {
+    create?: { status: number; type: string; message: string };
+    confirm?: { status: number; type: string; message: string };
+  } = {};
   /** Every body of POST /intent-actions, for the spec to prove no card text is kept (it is only read here). */
   readonly confirmBodies: unknown[] = [];
 
@@ -260,8 +273,28 @@ export class NuvionAddMoneyStandin {
     };
   }
 
+  private forcedAnswer(f: {
+    status: number;
+    type: string;
+    message: string;
+  }): StandinAnswer {
+    return { status: f.status, body: errorBody(f.type, f.message) };
+  }
+
+  private suspendedCard(): StandinAnswer {
+    return {
+      status: 403,
+      body: errorBody(
+        'error_acquiring_service_suspended',
+        'Card acquiring is suspended.',
+      ),
+    };
+  }
+
   private createIntent(req: StandinRequest): StandinAnswer {
     const b = (req.body ?? {}) as Record<string, unknown>;
+    if (this.forced.create) return this.forcedAnswer(this.forced.create);
+    if (this.suspended) return this.suspendedCard();
     const reference = typeof b.reference === 'string' ? b.reference : '';
     if (
       [...this.intents.values()].some(
@@ -318,6 +351,8 @@ export class NuvionAddMoneyStandin {
         ),
       };
     }
+    if (this.forced.confirm) return this.forcedAnswer(this.forced.confirm);
+    if (this.suspended) return this.suspendedCard();
     if (this.refuseNaira && i.currency === 'NGN') {
       return {
         status: 400,
@@ -412,6 +447,16 @@ export class NuvionAddMoneyStandin {
 
   private createSession(req: StandinRequest): StandinAnswer {
     const b = (req.body ?? {}) as Body;
+    if (this.forced.create) return this.forcedAnswer(this.forced.create);
+    if (this.suspended) {
+      return {
+        status: 403,
+        body: errorBody(
+          'error_auth_permission_denied',
+          'Funding sessions are suspended for this account.',
+        ),
+      };
+    }
     if (this.refuseNaira && b.currency === 'NGN') {
       return {
         status: 503,

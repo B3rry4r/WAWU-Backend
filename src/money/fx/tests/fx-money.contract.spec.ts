@@ -26,11 +26,14 @@ import type {
   IdempotencyScope,
   IdempotencyService,
 } from '../../payments/idempotency';
+import type { FxAccount } from '../../../../generated/prisma/client';
+import { NotificationService } from '../../../notification/notification.service';
 import { FxAccountsService } from '../fx-accounts.service';
 import { FxAdminService } from '../fx-admin.service';
 import { FxOperationsService, lagosDay } from '../fx-operations.service';
 import { FxPort } from '../fx-provider';
 import { FxSettings } from '../fx-settings';
+import { accountView } from '../fx-views';
 
 /**
  * WALLET-21: the foreign-account services over the real database and the
@@ -331,7 +334,7 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
     });
   });
 
-  it("says why an account has no details, in the provider's words, and asks again on the next read (verifier M2: CAD and AED answered 503 on dev)", async () => {
+  it("says why an account has no details, in the provider's words, and asks again once 5 minutes have passed (verifier M2: CAD and AED answered 503 on dev)", async () => {
     fx.detailsMode = 'unavailable';
     const cad = await accounts.open(WALLET, { currency: 'CAD' });
     expect(cad.details).toBeNull();
@@ -345,6 +348,11 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
     expect(listed).toMatchObject({ detailsStatus: 'unavailable' });
     expect(listed.detailsNote).toMatch(/temporarily unavailable/);
     expect(JSON.stringify(listed)).not.toMatch(/on their way|[\u2013\u2014]/);
+    // NUVION-FIX 9.5: the details are asked for at most every 5 minutes, so the next ask is 5 minutes on.
+    await prisma.fxAccount.update({
+      where: { id: cad.id },
+      data: { detailsAskedAt: new Date(Date.now() - 6 * 60_000) },
+    });
     fx.detailsMode = 'pending';
     const pending = await accounts.get(WALLET, cad.id);
     expect(pending).toMatchObject({
@@ -361,6 +369,164 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
     });
     const usd = await openUsd();
     expect(usd).toMatchObject({ detailsStatus: 'ready', detailsNote: null });
+  });
+
+  // -------------------------------------------------------------------------
+  // NUVION-FIX (Nuvion's answers, 27 Oct 2026): account details come later (5 to 30 minutes)
+  // -------------------------------------------------------------------------
+
+  const detailPosts = () =>
+    standin.seen.filter(
+      (r) => r.method === 'POST' && r.path === '/account-details',
+    ).length;
+  const SECOND: OpenWallet = { ...WALLET, wawuUserId: 'b18fx-user-95' };
+
+  it('9.4: an account with no details record and no refusal is pending, not unavailable; a refusal keeps its words', () => {
+    const row = {
+      id: 'r1',
+      wawuUserId: USER,
+      provider: 'nuvion',
+      currency: 'USD',
+      chain: '',
+      providerCustomerId: FX_ENTITY,
+      providerAccountId: 'acc-1',
+      ban: null,
+      detailsId: null,
+      status: 'open',
+      frozenAt: null,
+      frozenReason: null,
+      detailsAskedAt: null,
+      detailsReadyAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as unknown as FxAccount;
+    expect(accountView(row, settings, null, null, null)).toMatchObject({
+      detailsStatus: 'pending',
+      detailsNote: null,
+    });
+    expect(accountView(row, settings, null, null)).toMatchObject({
+      detailsStatus: 'pending',
+    });
+    expect(
+      accountView(row, settings, null, null, 'The provider said no.'),
+    ).toMatchObject({
+      detailsStatus: 'unavailable',
+      detailsNote: 'The provider said no.',
+    });
+  });
+
+  it('9.5: the details are asked for at most every 5 minutes, however often the wallet is read', async () => {
+    fx.detailsMode = 'unavailable';
+    const before = detailPosts();
+    const cad = await accounts.open(SECOND, { currency: 'CAD' });
+    expect(detailPosts()).toBe(before + 1);
+    await accounts.list(SECOND);
+    await accounts.get(SECOND, cad.id);
+    await accounts.list(SECOND);
+    expect(detailPosts()).toBe(before + 1);
+    // The refusal is still told while the ask is waited out.
+    expect(
+      (await accounts.list(SECOND)).accounts.find((a) => a.id === cad.id),
+    ).toMatchObject({ detailsStatus: 'unavailable' });
+    await prisma.fxAccount.update({
+      where: { id: cad.id },
+      data: { detailsAskedAt: new Date(Date.now() - 6 * 60_000) },
+    });
+    await accounts.list(SECOND);
+    expect(detailPosts()).toBe(before + 2);
+    await accounts.get(SECOND, cad.id);
+    expect(detailPosts()).toBe(before + 2);
+  });
+
+  describe("9.6: the person is told when a foreign account's details are ready", () => {
+    const told: Array<{ kind: string; userWawuId: string }> = [];
+    function handlerOf(): NuvionFxHandler {
+      const provider = new NuvionWalletProvider(
+        new NuvionClient(
+          standin.settings(),
+          'nv_test_sk_NVFIX96handlerKEY0000000000',
+        ),
+      );
+      const notifications = {
+        emitOrThrow: (event: { kind: string; userWawuId: string }) => {
+          told.push(event);
+          return Promise.resolve({});
+        },
+      };
+      const moduleRef = {
+        get: (token: unknown) => {
+          if (token === WALLET_PROVIDER) return provider;
+          if (token === NotificationService) return notifications;
+          if (token === FxOperationsService) return ops;
+          throw new Error('not here');
+        },
+      };
+      return new NuvionFxHandler(prisma, moduleRef as never);
+    }
+    const delivery = (providerAccountId: string, detailsId: string) => ({
+      id: 'd96',
+      eventId: `ev-96-${detailsId}-${told.length}-${Math.random()}`,
+      event: 'account_details.updated',
+      resourceId: detailsId,
+      entityId: FX_ENTITY,
+      data: {
+        id: detailsId,
+        entity_id: FX_ENTITY,
+        account_id: providerAccountId,
+        status: 'active',
+      },
+      receivedAt: new Date(),
+      attempts: 1,
+    });
+    beforeEach(() => {
+      told.length = 0;
+    });
+    const detailsOf = async (accountId: string) => {
+      const id = await provId(accountId);
+      return { id, record: fx.details.get(id)! };
+    };
+
+    it('says nothing while the record still reads pending, then tells the person once when it is active', async () => {
+      fx.detailsMode = 'pending';
+      const usd = await accounts.open(SECOND, { currency: 'USD' });
+      const { id, record } = await detailsOf(usd.id);
+      const handler = handlerOf();
+      // The delivery says active; the record, read back, says pending.
+      const early = await handler.handle(delivery(id, String(record.id)));
+      expect(early.outcome).toBe('done');
+      expect(told).toEqual([]);
+      record.status = 'active';
+      const ready = await handler.handle(delivery(id, String(record.id)));
+      expect(ready.outcome).toBe('done');
+      expect(told).toEqual([
+        { kind: 'wallet_ready', userWawuId: SECOND.wawuUserId },
+      ]);
+      await handler.handle(delivery(id, String(record.id)));
+      expect(told).toHaveLength(1);
+      const row = await prisma.fxAccount.findUniqueOrThrow({
+        where: { id: usd.id },
+      });
+      expect(row.detailsReadyAt).not.toBeNull();
+    });
+
+    it('says nothing for details the person already saw ready: active when the account was opened, or active on a read', async () => {
+      fx.detailsMode = 'active';
+      const gbp = await accounts.open(SECOND, { currency: 'GBP' });
+      const g = await detailsOf(gbp.id);
+      await handlerOf().handle(delivery(g.id, String(g.record.id)));
+      expect(told).toEqual([]);
+
+      fx.detailsMode = 'pending';
+      const eur = await accounts.open(SECOND, { currency: 'EUR' });
+      const e = await detailsOf(eur.id);
+      e.record.status = 'active';
+      // The person's own read finds it ready first.
+      expect(await accounts.get(SECOND, eur.id)).toMatchObject({
+        detailsStatus: 'ready',
+      });
+      await handlerOf().handle(delivery(e.id, String(e.record.id)));
+      expect(told).toEqual([]);
+    });
   });
 
   it('refuses to open when an admin switched the currency or the product off', async () => {

@@ -66,7 +66,6 @@ describe('GET admin/money/fx/currencies', () => {
   it('lists the nine currencies with the places, switch, fee and limit in force', () => {
     const view = fxAdmin(
       {
-        FX_DECIMALS_USDT: '6',
         FX_SWAP_FEE_USD_MINOR: '150',
         FX_FEE_COLLECTOR_USD_BAN: 'ACC1234567',
         FX_SEND_FEE_USDT_MINOR: '250000',
@@ -90,10 +89,10 @@ describe('GET admin/money/fx/currencies', () => {
       'RLUSD',
     ]);
     const by = Object.fromEntries(view.currencies.map((c) => [c.code, c]));
-    // A coin counts the places the Hub is configured with, not a guess.
+    // A coin counts 2 places like every other currency (Nuvion, 27 Oct 2026; NUVION-FIX 10.1): no setting changes it.
     expect(by.USDT).toMatchObject({
       currency: 'USDT',
-      decimals: 6,
+      decimals: 2,
       kind: 'stablecoin',
       sendFeeMinor: 250000,
       enabled: true,

@@ -3,10 +3,13 @@ import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { tellWalletReady } from '../../money/opening/wallet-ready-notice';
+import { NotificationService } from '../../notification/notification.service';
 import {
   WALLET_PROVIDER,
   type WalletProvider,
 } from '../../wallet-provider/wallet-provider.interface';
+import { NuvionAccountsArea } from '../areas/accounts';
 import { NuvionWalletProvider } from '../nuvion-wallet-provider';
 import type { NuvionWebhookEventName } from '../nuvion.interface';
 import { NuvionWebhookStore } from '../webhook/nuvion-webhook.service';
@@ -16,6 +19,7 @@ import {
   NuvionSubscriptionCheck,
   type NuvionSubscriptionOutcome,
 } from './reconcile-checks';
+import { NuvionAccountRecorder } from './accounts';
 import { readReconcileSettings } from './reconcile-config';
 import { NuvionReconcileFindings } from './reconcile-findings';
 import {
@@ -28,6 +32,19 @@ import type {
 } from './nuvion-handler.interface';
 
 const HOUR = 3_600_000;
+/** Account details still requested or pending this long are read again by the sweep (NUVION-FIX 9.1). */
+export const NUVION_DETAILS_REREAD_AFTER_MS = 5 * 60_000;
+/** Rows of waiting account details read again in one pass. */
+const DETAILS_BATCH = 100;
+
+/** What one re-read of waiting account details did. Counts only. */
+export interface NuvionDetailsRereadReport {
+  checked: number;
+  /** Rows whose details moved: the number is now recorded (active), or the details are now known (pending). */
+  recorded: number;
+  /** Rows that could not be read, or whose details need a person to look. */
+  unreadable: number;
+}
 
 /**
  * Reconciliation with Nuvion (task NUV-08): the missed-delivery sweep, the
@@ -115,6 +132,15 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
         sweepMinutes: settings.sweepMinutes,
       },
     ).run(now);
+    // NUVION-FIX 9.1: Nuvion stops retrying a delivery after 15 minutes and makes account details 5 to 30 minutes after they are
+    // asked for, so a lost `account_details.updated` is found here.
+    const details = await this.guarded('account details', () =>
+      this.rereadAccountDetails(now),
+    );
+    if (details && details.unreadable > 0) {
+      report.unreadable += details.unreadable;
+      report.incomplete.push('account details could not be read again');
+    }
     const findings = new NuvionReconcileFindings(this.prisma);
     if (report.incomplete.length > 0) {
       await findings.report({
@@ -124,6 +150,76 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
       });
     } else {
       await findings.resolve('sweep_incomplete', 'sweep');
+    }
+    return report;
+  }
+
+  /**
+   * Reads again the account details of every person whose request is still `requested` or `pending` after 5 minutes, and
+   * records what Nuvion now shows (NUVION-FIX 9.1). Null when Nuvion is not the running provider, or the notification
+   * service is not mounted (a wallet is never recorded without its "ready" notice, as the delivery handler does).
+   */
+  async rereadAccountDetails(
+    now = new Date(),
+  ): Promise<NuvionDetailsRereadReport | null> {
+    const provider = this.nuvion();
+    if (!provider) return null;
+    const notifications = this.find<NotificationService>(NotificationService);
+    if (!notifications) return null;
+    const recorder = new NuvionAccountRecorder(
+      this.prisma,
+      new NuvionAccountsArea(provider.client),
+      provider.client.settings,
+      (tx, wawuUserId) => tellWalletReady(notifications, tx, wawuUserId),
+    );
+    const rows = await this.prisma.nuvionEntity.findMany({
+      where: {
+        accountDetailsStatus: { in: ['requested', 'pending'] },
+        accountId: { not: null },
+        entityId: { not: null },
+        updatedAt: {
+          lt: new Date(now.getTime() - NUVION_DETAILS_REREAD_AFTER_MS),
+        },
+      },
+      select: {
+        entityId: true,
+        accountId: true,
+        accountDetailsId: true,
+        accountDetailsStatus: true,
+      },
+      orderBy: { updatedAt: 'asc' },
+      take: DETAILS_BATCH,
+    });
+    const report: NuvionDetailsRereadReport = {
+      checked: 0,
+      recorded: 0,
+      unreadable: 0,
+    };
+    for (const row of rows) {
+      if (row.entityId === null || row.accountId === null) continue;
+      report.checked += 1;
+      const result = await recorder.rereadDetails(
+        row.entityId,
+        row.accountId,
+        row.accountDetailsId,
+      );
+      if (result.outcome === 'failed') {
+        report.unreadable += 1;
+      } else if (result.outcome === 'done') {
+        const after = await this.prisma.nuvionEntity.findUnique({
+          where: { entityId: row.entityId },
+          select: { accountDetailsId: true, accountDetailsStatus: true },
+        });
+        if (
+          after &&
+          (after.accountDetailsStatus !== row.accountDetailsStatus ||
+            after.accountDetailsId !== row.accountDetailsId)
+        ) {
+          report.recorded += 1;
+        }
+      } else if (/could not be asked/.test(result.note)) {
+        report.unreadable += 1;
+      }
     }
     return report;
   }
@@ -144,12 +240,16 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
     return new NuvionFeeCheck(new NuvionReconcileFindings(this.prisma)).run();
   }
 
-  private async guarded(what: string, run: () => Promise<unknown>) {
+  private async guarded<T>(
+    what: string,
+    run: () => Promise<T>,
+  ): Promise<T | null> {
     try {
-      await run();
+      return await run();
     } catch (e) {
       // The name only: a message can quote what Nuvion sent.
       this.logger.error(`${what} stopped (${(e as Error).name ?? 'Error'})`);
+      return null;
     }
   }
 

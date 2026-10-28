@@ -60,10 +60,37 @@ function whole(o: Record<string, unknown>, key: string): number | null {
   return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null;
 }
 
-/** Nuvion's own types that say "not this currency, not this rail": a refusal, not a failure of the call. */
+/** Nuvion's own types that say "not this currency, not this rail": a refusal, not a failure of the call (a suspended service is `isServiceRefusal`'s). */
 const NOT_SERVED_TYPES: readonly string[] = [
   'error_acquiring_currency_not_supported',
 ];
+
+/**
+ * Nuvion's refusal of the service itself, not of this payment (NUVION-FIX 1.2, NF-V2): card acquiring is SUSPENDED in
+ * production (27 Oct 2026). A rail is hidden for everyone on this, so it is decided on Nuvion's `type` and the call alone,
+ * never on its words, and only for the call that makes the payment (the payment intent, the funding session):
+ * - the known type for a currency Nuvion does not take (any call: dev answers it when the intent is confirmed);
+ * - on the creating call, an acquiring or service type that says suspended, not supported or not available;
+ * - on the creating call, a 403 whose type is not about an entity, an account or a review (those are about one person).
+ * An entity or account that is suspended, a card issuer's refusal on confirm and a review's 422 are about one person or one
+ * card and fail that attempt only.
+ */
+export function isServiceRefusal(e: NuvionError): boolean {
+  const type = e.nuvionType ?? '';
+  if (NOT_SERVED_TYPES.includes(type)) return true;
+  if (e.operation !== 'start add money') return false;
+  if (/^error_(entity|account|kyc)_/.test(type)) return false;
+  if (e.httpStatus === 403) return true;
+  const status = e.httpStatus ?? 0;
+  return (
+    status >= 400 &&
+    status < 500 &&
+    status !== 429 &&
+    /^error_(acquiring|service)_.*(suspend|not_supported|not_available)/.test(
+      type,
+    )
+  );
+}
 
 /** The state a payment intent or its action is in, in the seam's words. */
 export function intentState(
@@ -480,16 +507,14 @@ export class NuvionAddMoneyArea implements AddMoneyProvider {
 
   /** Nuvion's "not this currency" is a refusal of the rail (`not_supported`); every other failure is as it came. */
   private refusal(e: unknown): unknown {
-    if (
-      e instanceof NuvionError &&
-      e.nuvionType !== null &&
-      NOT_SERVED_TYPES.includes(e.nuvionType)
-    ) {
+    if (e instanceof NuvionError && isServiceRefusal(e)) {
       return new NuvionError({
         kind: 'not_supported',
         operation: e.operation,
         httpStatus: e.httpStatus,
-        messages: [`${AREA}: Nuvion does not take naira on this rail yet`],
+        messages: [
+          `${AREA}: Nuvion does not take naira on this rail (not supported, or suspended)`,
+        ],
         recordMayExist: false,
         requestId: e.requestId,
         nuvionType: e.nuvionType,

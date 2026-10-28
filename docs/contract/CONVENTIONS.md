@@ -149,9 +149,9 @@ stablecoins USDT, USDC and RLUSD) is the same idea with its own unit:
   from or ends in the naira wallet, and there the figure is kobo, in a field
   that still ends `Minor` because the pair of fields is one rule.
 - How many decimals the unit has is `decimals` on the currency (2 for a
-  dollar). It is data: the app formats from it and never hard-codes it. The
-  stablecoins' `decimals` is read from config (BACKEND_GAPS G-WALLET-21-1:
-  Nuvion's docs say six places, its dev server counts cents).
+  dollar). It is data: the app formats from it and never hard-codes it. It is
+  2 for every currency, stablecoins included (Nuvion's answer of 27 Oct 2026:
+  100 is 1.00; its docs' six places are a typo), and no setting changes it.
 - A `...Minor` field is `"type": "integer"` in `contract/openapi.json`
   (`scripts/enrich-contract.js` writes every number under `src/money/fx/` as an
   integer; `src/money/fx/tests/fx-contract.spec.ts` checks it).
