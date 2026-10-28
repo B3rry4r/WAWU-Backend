@@ -165,14 +165,15 @@ export interface FxQuoteView {
   /** The provider's rate in smallest units: `amountToMinor / amountFromMinor`. */
   rate: string;
   /**
-   * The provider's charge, if its quote names one (null: it names none, and
-   * the receipt shows what it charged). A book transfer between a person's own
-   * accounts has cost 0 on dev.
+   * The provider's charge on the quote, shown before the PIN: the quote's own figure if the provider names one, else the
+   * configured one (`FX_SWAP_PROVIDER_FEE_<CODE>_MINOR`, 0 unless set; a book transfer between a person's own accounts cost 0
+   * on dev). Every quote the Hub makes now carries a number (WALK4-FIX L-1); the type stays nullable for a quote saved before.
+   * The receipt carries what the provider really charged.
    */
   providerFeeMinor: number | null;
   /** WAWU's fee on top, in `fromCurrency`'s smallest unit (config, R-10; 0 until the owner names it). */
   wawuFeeMinor: number;
-  /** What leaves the `from` account: the amount plus WAWU's fee. */
+  /** What leaves the `from` account: the amount plus the bank's charge (if named) plus WAWU's fee. */
   totalFromMinor: number;
   /** When the provider stops honouring the rate. */
   expiresAt: string;

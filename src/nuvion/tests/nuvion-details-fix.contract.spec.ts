@@ -391,7 +391,10 @@ describe('NUVION-FIX: account details are read again, and a create answer is rea
       expect(posts()).toBe(before);
     });
 
-    it('a request Nuvion lists nothing for is left as it is: the sweep reads, it does not ask', async () => {
+    it('a request Nuvion lists nothing for, past the resend window, is asked again by the sweep: it lists first, claims, and makes no account', async () => {
+      // WALK4-FIX patch round 1, LEAD RULING: this assertion pinned NUVION-FIX 9.1's "the sweep reads, it does not ask". A request that
+      // died with an unknown outcome (timeout, 5xx, no connection) leaves a `requested` claim and no details; if nothing re-asked,
+      // the account would be stranded. The sweep now takes a `requested` row with no details id once it is past the resend window.
       const p = await approved();
       const account = nuv.addAccount(p.entityId);
       await prisma.nuvionEntity.update({
@@ -405,8 +408,15 @@ describe('NUVION-FIX: account details are read again, and a create answer is rea
       const before = posts();
       await aged(p, 8);
       await reconcile.rereadAccountDetails(new Date());
-      expect(posts()).toBe(before);
-      expect((await entity(p)).accountDetailsStatus).toBe('requested');
+      expect(posts()).toBe(before + 1);
+      expect(await entity(p)).toMatchObject({
+        accountDetailsStatus: 'pending',
+      });
+      expect((await entity(p)).accountDetailsId).not.toBeNull();
+      // Again: the details exist now, so nothing is asked twice.
+      await aged(p, 30);
+      await reconcile.rereadAccountDetails(new Date());
+      expect(posts()).toBe(before + 1);
     });
 
     it("the whole sweep (the 15 minute clock's pass) does it too", async () => {

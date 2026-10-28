@@ -14,6 +14,7 @@ import {
 import { NuvionFxArea } from '../../../nuvion/areas/fx';
 import { NuvionClient } from '../../../nuvion/nuvion-client';
 import { NuvionFxHandler } from '../../../nuvion/handlers/fx.handler';
+import { NuvionReconcileHandler } from '../../../nuvion/handlers/reconcile.handler';
 import { NuvionWalletProvider } from '../../../nuvion/nuvion-wallet-provider';
 import { WalletProviderError } from '../../../wallet-provider/wallet-provider-error';
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
@@ -34,6 +35,7 @@ import { FxOperationsService, lagosDay } from '../fx-operations.service';
 import { FxPort } from '../fx-provider';
 import { FxSettings } from '../fx-settings';
 import { accountView } from '../fx-views';
+import { creditSourceOf } from '../../money-in-notice/money-in-sources';
 
 /**
  * WALLET-21: the foreign-account services over the real database and the
@@ -51,6 +53,19 @@ const WALLET: OpenWallet = {
 /** WAWU's own (operational) account number, as the provider says it. */
 const PLATFORM = '0099990001';
 const ADMIN = { id: 'adm-1', email: 'fin@wawu.test', role: 'finance' } as never;
+
+/** WALK4-FIX M-2: every "ready" notice written by the services in this file (the webhook handler, the person's read, the sweep). */
+const told: Array<{ kind: string; userWawuId: string; currency?: string }> = [];
+const notifier = {
+  emitOrThrow: (event: {
+    kind: string;
+    userWawuId: string;
+    currency?: string;
+  }) => {
+    told.push(event);
+    return Promise.resolve({});
+  },
+};
 
 const code = async (p: Promise<unknown>) =>
   p.then(
@@ -149,7 +164,12 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
         }),
     } as unknown as WalletProvider;
     const port = new FxPort(provider);
-    accounts = new FxAccountsService(port, prisma, settings);
+    accounts = new FxAccountsService(
+      port,
+      prisma,
+      settings,
+      notifier as unknown as NotificationService,
+    );
     const idem = {
       attach: () => Promise.resolve(),
       finish: (s: IdempotencyScope) => {
@@ -242,6 +262,7 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
     for (const k of Object.keys(env)) delete env[k];
     off.clear();
     ledgerRows.length = 0;
+    told.length = 0;
     nairaLegs.length = 0;
     nairaMode = 'ok';
     keys.calls.length = 0;
@@ -439,30 +460,38 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
   });
 
   describe("9.6: the person is told when a foreign account's details are ready", () => {
-    const told: Array<{ kind: string; userWawuId: string }> = [];
-    function handlerOf(): NuvionFxHandler {
-      const provider = new NuvionWalletProvider(
+    function providerOf() {
+      return new NuvionWalletProvider(
         new NuvionClient(
           standin.settings(),
           'nv_test_sk_NVFIX96handlerKEY0000000000',
         ),
       );
-      const notifications = {
-        emitOrThrow: (event: { kind: string; userWawuId: string }) => {
-          told.push(event);
-          return Promise.resolve({});
-        },
-      };
-      const moduleRef = {
+    }
+    function moduleRefOf(provider = providerOf()) {
+      return {
         get: (token: unknown) => {
           if (token === WALLET_PROVIDER) return provider;
-          if (token === NotificationService) return notifications;
+          if (token === NotificationService) return notifier;
           if (token === FxOperationsService) return ops;
           throw new Error('not here');
         },
       };
-      return new NuvionFxHandler(prisma, moduleRef as never);
     }
+    function handlerOf(): NuvionFxHandler {
+      return new NuvionFxHandler(prisma, moduleRefOf() as never);
+    }
+    /** The 15 minute sweep (NuvionReconcileHandler), over the same stand-in. */
+    function sweeperOf(): NuvionReconcileHandler {
+      return new NuvionReconcileHandler(prisma, moduleRefOf() as never);
+    }
+    /** Makes an account look as if it were opened this many minutes ago (the sweep leaves a young one alone). */
+    const opened = (accountId: string, minutes: number) =>
+      prisma.fxAccount.update({
+        where: { id: accountId },
+        data: { createdAt: new Date(Date.now() - minutes * 60_000) },
+      });
+    const toldTo = (user: string) => told.filter((e) => e.userWawuId === user);
     const delivery = (providerAccountId: string, detailsId: string) => ({
       id: 'd96',
       eventId: `ev-96-${detailsId}-${told.length}-${Math.random()}`,
@@ -478,15 +507,12 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
       receivedAt: new Date(),
       attempts: 1,
     });
-    beforeEach(() => {
-      told.length = 0;
-    });
     const detailsOf = async (accountId: string) => {
       const id = await provId(accountId);
       return { id, record: fx.details.get(id)! };
     };
 
-    it('says nothing while the record still reads pending, then tells the person once when it is active', async () => {
+    it('says nothing while the record still reads pending, then tells the person once when it is active, with the currency in the words', async () => {
       fx.detailsMode = 'pending';
       const usd = await accounts.open(SECOND, { currency: 'USD' });
       const { id, record } = await detailsOf(usd.id);
@@ -498,8 +524,13 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
       record.status = 'active';
       const ready = await handler.handle(delivery(id, String(record.id)));
       expect(ready.outcome).toBe('done');
+      // WALK4-FIX M-2: the notice names the currency; this assertion had no currency field.
       expect(told).toEqual([
-        { kind: 'wallet_ready', userWawuId: SECOND.wawuUserId },
+        {
+          kind: 'wallet_ready',
+          userWawuId: SECOND.wawuUserId,
+          currency: 'USD',
+        },
       ]);
       await handler.handle(delivery(id, String(record.id)));
       expect(told).toHaveLength(1);
@@ -509,23 +540,171 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
       expect(row.detailsReadyAt).not.toBeNull();
     });
 
-    it('says nothing for details the person already saw ready: active when the account was opened, or active on a read', async () => {
+    it('says nothing for details that were active in the response that opened the account: the person is looking at them', async () => {
       fx.detailsMode = 'active';
       const gbp = await accounts.open(SECOND, { currency: 'GBP' });
       const g = await detailsOf(gbp.id);
       await handlerOf().handle(delivery(g.id, String(g.record.id)));
-      expect(told).toEqual([]);
+      await accounts.get(SECOND, gbp.id);
+      await sweeperOf().rereadForeignDetails(new Date());
+      expect(toldTo(SECOND.wawuUserId)).toEqual([]);
+    });
 
+    it('M-2: details the person finds active on their own read are told once (this used to be marked seen and never told)', async () => {
+      fx.detailsMode = 'pending';
+      const eur = await accounts.open(SECOND, { currency: 'EUR' });
+      const e = await detailsOf(eur.id);
+      await accounts.get(SECOND, eur.id);
+      expect(told).toEqual([]);
+      e.record.status = 'active';
+      // The person's own read finds it ready first: they are told, once.
+      expect(await accounts.get(SECOND, eur.id)).toMatchObject({
+        detailsStatus: 'ready',
+      });
+      expect(told).toEqual([
+        {
+          kind: 'wallet_ready',
+          userWawuId: SECOND.wawuUserId,
+          currency: 'EUR',
+        },
+      ]);
+      // Reading again, the list, a late delivery and a sweep write nothing more.
+      await accounts.get(SECOND, eur.id);
+      await accounts.list(SECOND);
+      await handlerOf().handle(delivery(e.id, String(e.record.id)));
+      await opened(eur.id, 10);
+      await sweeperOf().rereadForeignDetails(new Date());
+      expect(toldTo(SECOND.wawuUserId)).toHaveLength(1);
+    });
+
+    it('M-2: the sweep finds details that turned active with the delivery lost and the owner away, and tells once', async () => {
+      fx.detailsMode = 'pending';
+      const aed = await accounts.open(SECOND, { currency: 'AED' });
+      const a = await detailsOf(aed.id);
+      const sweep = sweeperOf();
+      // Young, and pending: left alone.
+      await sweep.rereadForeignDetails(new Date());
+      expect(toldTo(SECOND.wawuUserId)).toEqual([]);
+      a.record.status = 'active';
+      // Active but young (under 5 minutes): not read yet.
+      await sweep.rereadForeignDetails(new Date());
+      expect(toldTo(SECOND.wawuUserId)).toEqual([]);
+      await opened(aed.id, 10);
+      const first = await sweep.rereadForeignDetails(new Date());
+      expect(first?.told).toBeGreaterThanOrEqual(1);
+      expect(toldTo(SECOND.wawuUserId)).toEqual([
+        {
+          kind: 'wallet_ready',
+          userWawuId: SECOND.wawuUserId,
+          currency: 'AED',
+        },
+      ]);
+      // Again, the whole sweep, a late delivery and the person's read: nothing more.
+      await sweep.rereadForeignDetails(new Date());
+      await sweep.sweep(new Date());
+      await handlerOf().handle(delivery(a.id, String(a.record.id)));
+      await accounts.get(SECOND, aed.id);
+      expect(toldTo(SECOND.wawuUserId)).toHaveLength(1);
+    });
+
+    it("M-2 race: the delivery, the person's read and two sweeps at the same moment write one notice", async () => {
+      fx.detailsMode = 'pending';
+      const ghs = await accounts.open(SECOND, { currency: 'GHS' });
+      const c = await detailsOf(ghs.id);
+      c.record.status = 'active';
+      await opened(ghs.id, 10);
+      const sweepA = sweeperOf();
+      const sweepB = sweeperOf();
+      await Promise.all([
+        handlerOf().handle(delivery(c.id, String(c.record.id))),
+        accounts.get(SECOND, ghs.id),
+        sweepA.rereadForeignDetails(new Date()),
+        sweepB.rereadForeignDetails(new Date()),
+        accounts.list(SECOND),
+      ]);
+      expect(toldTo(SECOND.wawuUserId)).toEqual([
+        {
+          kind: 'wallet_ready',
+          userWawuId: SECOND.wawuUserId,
+          currency: 'GHS',
+        },
+      ]);
+      const row = await prisma.fxAccount.findUniqueOrThrow({
+        where: { id: ghs.id },
+      });
+      expect(row.detailsReadyAt).not.toBeNull();
+    });
+
+    it('patch round 1: an account opened over 3 days ago and found active on its first read is marked seen, not told late', async () => {
       fx.detailsMode = 'pending';
       const eur = await accounts.open(SECOND, { currency: 'EUR' });
       const e = await detailsOf(eur.id);
       e.record.status = 'active';
-      // The person's own read finds it ready first.
+      await opened(eur.id, 5 * 24 * 60);
       expect(await accounts.get(SECOND, eur.id)).toMatchObject({
         detailsStatus: 'ready',
       });
-      await handlerOf().handle(delivery(e.id, String(e.record.id)));
+      expect(toldTo(SECOND.wawuUserId)).toEqual([]);
+      expect(
+        (await prisma.fxAccount.findUniqueOrThrow({ where: { id: eur.id } }))
+          .detailsReadyAt,
+      ).not.toBeNull();
+      await accounts.list(SECOND);
+      await sweeperOf().rereadForeignDetails(new Date());
+      expect(toldTo(SECOND.wawuUserId)).toEqual([]);
+    });
+
+    it('patch round 1: accounts whose details stay pending do not starve a newer account that is active: the sweep pages past them', async () => {
+      await clean();
+      fx.detailsMode = 'pending';
+      const gbp = await accounts.open(SECOND, { currency: 'GBP' });
+      const usd = await accounts.open(SECOND, { currency: 'USD' });
+      const u = await detailsOf(usd.id);
+      u.record.status = 'active';
+      await opened(gbp.id, 40);
+      await opened(usd.id, 10);
+      const sweep = sweeperOf();
+      sweep.detailsBatchSize = 1;
+      await sweep.rereadForeignDetails(new Date());
+      expect(toldTo(SECOND.wawuUserId)).toEqual([
+        {
+          kind: 'wallet_ready',
+          userWawuId: SECOND.wawuUserId,
+          currency: 'USD',
+        },
+      ]);
+    });
+
+    it('M-2: a notice that cannot be written leaves the account unmarked, so the next path tells', async () => {
+      fx.detailsMode = 'pending';
+      const usdt = await accounts.open(SECOND, {
+        currency: 'USDT',
+        chain: 'eth',
+      });
+      const u = await detailsOf(usdt.id);
+      u.record.status = 'active';
+      await opened(usdt.id, 10);
+      const emit = notifier.emitOrThrow;
+      notifier.emitOrThrow = () => Promise.reject(new Error('down'));
+      try {
+        await accounts.get(SECOND, usdt.id);
+        await sweeperOf().rereadForeignDetails(new Date());
+      } finally {
+        notifier.emitOrThrow = emit;
+      }
       expect(told).toEqual([]);
+      expect(
+        (await prisma.fxAccount.findUniqueOrThrow({ where: { id: usdt.id } }))
+          .detailsReadyAt,
+      ).toBeNull();
+      await sweeperOf().rereadForeignDetails(new Date());
+      expect(toldTo(SECOND.wawuUserId)).toEqual([
+        {
+          kind: 'wallet_ready',
+          userWawuId: SECOND.wawuUserId,
+          currency: 'USDT',
+        },
+      ]);
     });
   });
 
@@ -576,7 +755,10 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
       amountToMinor: 74,
       wawuFeeMinor: 0,
       totalFromMinor: 100_000,
-      providerFeeMinor: null,
+      // WALK4-FIX L-1: this assertion pinned the defect (null: the review said "Shown on your receipt" before the PIN). Nuvion's
+      // quote carries no fee and its swaps charge none (applicable_fee 0 on dev), so the Hub names the configured bank charge,
+      // 0 unless set, as a figure.
+      providerFeeMinor: 0,
       fromDecimals: 2,
       toDecimals: 2,
     });
@@ -608,6 +790,54 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
     expect(keys.calls.some((c) => c.startsWith('finish'))).toBe(true);
   });
 
+  it('L-1: the quote names the bank charge as a figure before the PIN: 0 by default, the configured one when set, and the funds check counts it', async () => {
+    const usd = await openUsd();
+    const dollars = {
+      fromCurrency: 'USD' as const,
+      toCurrency: 'NGN' as const,
+      fromAccountId: usd.id,
+    };
+    // Default: a figure, never null.
+    const plain = await ops.quote(WALLET, { ...dollars, amountFromMinor: 10 });
+    expect(plain.providerFeeMinor).toBe(0);
+    expect(plain.totalFromMinor).toBe(10);
+    // The bank charge of the sending currency, from config (R-10), counted in the total.
+    env.FX_SWAP_PROVIDER_FEE_NGN_MINOR = '300';
+    env.FX_SWAP_FEE_NGN_MINOR = '500';
+    build();
+    const naira = await ops.quote(WALLET, {
+      fromCurrency: 'NGN',
+      toCurrency: 'USD',
+      toAccountId: usd.id,
+      amountFromMinor: 100_000,
+    });
+    expect(naira).toMatchObject({
+      providerFeeMinor: 300,
+      wawuFeeMinor: 500,
+      totalFromMinor: 100_800,
+    });
+    // The wallet holds 790,921: 790,700 and WAWU's 500 fit, the bank's 300 on top does not.
+    const edge = await ops.quote(WALLET, {
+      fromCurrency: 'NGN',
+      toCurrency: 'USD',
+      toAccountId: usd.id,
+      amountFromMinor: 790_300,
+    });
+    expect(edge.totalFromMinor).toBe(791_100);
+    const err = await ops
+      .swap(WALLET, scope(), { quoteId: edge.id })
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MoneyError);
+    expect((err as MoneyError).getResponse()).toMatchObject({
+      reason: {
+        code: 'insufficient_funds',
+        balanceMinor: 790_921,
+        totalMinor: 791_100,
+        shortfallMinor: 179,
+      },
+    });
+  });
+
   it('swaps dollars back to naira and writes the naira credit', async () => {
     const usd = await openUsd();
     const prov = [...fx.accounts.values()]
@@ -626,6 +856,22 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
       direction: 'in',
       amountKobo: 131_544,
     });
+    // WALK4-FIX L-2: what the swap writes is what the money-in notice reads back as a swap, never as a person.
+    const row = ledgerRows[0] as {
+      category: string;
+      counterparty: { kind: 'wawu'; name: string };
+    };
+    expect(row.counterparty.name).toBe('Swap from USD');
+    expect(
+      creditSourceOf({
+        category: row.category,
+        linkKind: null,
+        counterpartyKind: row.counterparty.kind,
+        counterpartyName: row.counterparty.name,
+        counterpartyAccountNumber: null,
+        counterpartyBankName: null,
+      }),
+    ).toMatchObject({ source: 'swap', senderName: null });
   });
 
   it('refuses a quote whose real expiry has passed, before anything is sent', async () => {

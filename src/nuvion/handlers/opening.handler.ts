@@ -9,6 +9,7 @@ import {
   EXPIRED_STATE,
 } from '../../money/opening/bvn-claim';
 import { noteDocumentRefusals } from '../../money/opening/document-refusals';
+import { tellWalletReady } from '../../money/opening/wallet-ready-notice';
 import { WorldWalletService } from '../../money/world/world-wallet.service';
 import {
   type DecisionNotice,
@@ -26,6 +27,7 @@ import {
   type WalletProvider,
 } from '../../wallet-provider/wallet-provider.interface';
 import { WalletProviderError } from '../../wallet-provider/wallet-provider-error';
+import { NuvionAccountsArea } from '../areas/accounts';
 import {
   NUVION_OPENING_SEARCH,
   type NuvionEntityReading,
@@ -34,6 +36,7 @@ import {
 } from '../areas/opening';
 import { NuvionWalletProvider } from '../nuvion-wallet-provider';
 import type { NuvionWebhookEventName } from '../nuvion.interface';
+import { NuvionAccountRecorder } from './accounts';
 import type {
   NuvionDelivery,
   NuvionEventHandler,
@@ -533,7 +536,7 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
       await release();
       return wait(`the account list could not be read (${kindOf(e)})`);
     }
-    if (found) return this.recordAccount(entityId, found, 'found');
+    if (found) return this.recordAccount(entityId, found, 'found', nuvion);
 
     let made: NuvionNairaAccount;
     try {
@@ -544,7 +547,8 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
         // nothing is sent again before the resend window has passed.
         try {
           const again = await area.findNairaAccount(entityId);
-          if (again) return this.recordAccount(entityId, again, 'found');
+          if (again)
+            return this.recordAccount(entityId, again, 'found', nuvion);
         } catch {
           // The list tells nothing now; the claim stands.
         }
@@ -559,13 +563,14 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
       });
       return wait(`the account request was refused (${kindOf(e)})`);
     }
-    return this.recordAccount(entityId, made, 'opened');
+    return this.recordAccount(entityId, made, 'opened', nuvion);
   }
 
   private async recordAccount(
     entityId: string,
     account: NuvionNairaAccount,
     how: 'found' | 'opened',
+    nuvion: NuvionWalletProvider,
   ): Promise<NuvionHandlerResult> {
     try {
       const recorded = await this.prisma.nuvionEntity.updateMany({
@@ -587,7 +592,49 @@ export class NuvionOpeningHandler implements NuvionEventHandler {
       };
     }
     this.logger.log(`nuvion opening: naira account ${how} and recorded`);
+    await this.requestDetails(nuvion, entityId, account.accountId);
     return done(`approved; naira account ${how}`);
+  }
+
+  /**
+   * WALK4-FIX M-1. The account number is asked for here, right after the account is recorded, and not only when Nuvion's one
+   * `accounts.created` delivery arrives: a lost delivery left "on its way" for good. The request is the same one that delivery
+   * makes (NuvionAccountRecorder.ensureDetails): the details are listed first, the ask is claimed with a conditional update, so
+   * this path, the delivery and the sweep on any server ask once, and it never makes an account. A step that cannot finish now
+   * does not undo the account or fail the opening: the sweep asks for the details of an account that has none after 5 minutes.
+   * Without the notification service the number would be recorded with no notice, so then nothing is asked here.
+   */
+  private async requestDetails(
+    nuvion: NuvionWalletProvider,
+    entityId: string,
+    accountId: string,
+  ): Promise<void> {
+    let notifications: NotificationService;
+    try {
+      notifications = this.moduleRef.get(NotificationService, {
+        strict: false,
+      });
+    } catch {
+      this.logger.warn(
+        'nuvion opening: no notification service here; the account number is asked for by the sweep',
+      );
+      return;
+    }
+    try {
+      const recorder = new NuvionAccountRecorder(
+        this.prisma,
+        new NuvionAccountsArea(nuvion.client),
+        nuvion.client.settings,
+        (tx, wawuUserId) => tellWalletReady(notifications, tx, wawuUserId),
+      );
+      const asked = await recorder.ensureDetails(null, entityId, accountId);
+      this.logger.log(`nuvion opening: account details ${asked.outcome}`);
+    } catch (e) {
+      // The name only: a message can quote what Nuvion sent.
+      this.logger.warn(
+        `nuvion opening: the account details could not be asked for now (${(e as Error).name ?? 'Error'}); the sweep asks later`,
+      );
+    }
   }
 }
 

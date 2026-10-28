@@ -31,9 +31,15 @@ export async function tellWalletReady(
   notifications: Pick<NotificationService, 'emitOrThrow'>,
   tx: Prisma.TransactionClient,
   wawuUserId: string,
+  /** WALK4-FIX M-2: a foreign account's currency code, so the notice says which account is ready. Left out: the naira wallet's. */
+  currency?: string,
 ): Promise<void> {
   await notifications.emitOrThrow(
-    { kind: 'wallet_ready', userWawuId: wawuUserId },
+    {
+      kind: 'wallet_ready',
+      userWawuId: wawuUserId,
+      ...(currency ? { currency } : {}),
+    },
     tx,
   );
 }

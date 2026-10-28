@@ -32,6 +32,7 @@ import {
   fxCurrency,
   type FxQuoteCode,
 } from './fx-currencies';
+import { swapLedgerName } from './fx-ledger-words';
 import { FxPort, providerFailure } from './fx-provider';
 import { FxSettings } from './fx-settings';
 import { num, quoteView, sendQuoteView, sendView, swapView } from './fx-views';
@@ -70,8 +71,6 @@ const SWEEP_GIVE_UP_MS = 48 * 3_600_000;
 export function lagosDay(now: Date): string {
   return new Date(now.getTime() + 3_600_000).toISOString().slice(0, 10);
 }
-
-const NGN_LEDGER = 'Swap';
 
 /**
  * Quotes, swaps and crypto sends (task WALLET-21, R-83, R-84), through
@@ -144,7 +143,10 @@ export class FxOperationsService {
         amountFromMinor: q.amountFromMinor,
         amountToMinor: q.amountToMinor,
         rate: q.rate,
-        providerFeeMinor: q.feeMinor,
+        // WALK4-FIX L-1: the bank charge is a figure before the PIN. A provider whose quote names a fee wins; Nuvion's names none,
+        // so it is the configured one (0 unless set).
+        providerFeeMinor:
+          q.feeMinor ?? this.settings.swapProviderFeeMinor(dto.fromCurrency),
         wawuFeeMinor: this.settings.swapFeeMinor(dto.fromCurrency),
         expiresAt: q.expiresAt,
       },
@@ -188,10 +190,11 @@ export class FxOperationsService {
     );
     const to = await this.side(wallet, toCode, quote.toAccountId ?? undefined);
     const wawuFee = quote.wawuFeeMinor;
+    // The total the review showed: the amount, the bank's charge when the quote named one, and WAWU's fee (WALK4-FIX L-1).
     await this.requireFunds(
       wallet,
       from,
-      quote.amountFromMinor + wawuFee,
+      quote.amountFromMinor + (quote.providerFeeMinor ?? 0n) + wawuFee,
       fromCode,
     );
     const op = await this.claim(scope, wallet, {
@@ -524,9 +527,9 @@ export class FxOperationsService {
       feeKobo: out ? num(op.providerFeeMinor ?? 0n) : 0,
       counterparty: {
         kind: 'wawu',
-        name: `${NGN_LEDGER} ${out ? 'to' : 'from'} ${other}`,
+        name: swapLedgerName(out, other),
       },
-      note: `${NGN_LEDGER} ${out ? 'to' : 'from'} ${other}`,
+      note: swapLedgerName(out, other),
       references: {
         customerReference: op.reference,
         ...(op.providerTransferId

@@ -1088,10 +1088,14 @@ describe('NUV-02: opening a wallet on Nuvion', () => {
         outcome: 'done',
         note: 'approved; naira account opened',
       });
+      // WALK4-FIX M-1: this assertion pinned the defect (the opening path asked Nuvion for nothing after the account, so the
+      // account number depended on one delivery). The details are looked for right after the account is recorded; this
+      // spec's stand-in serves no account-details routes, so the request stops at the listing and the sweep asks later.
       expect(standin.seen.map((s) => `${s.method} ${s.path}`)).toEqual([
         `GET /entities/${e.id}`,
         'GET /accounts',
         'POST /accounts',
+        'GET /account-details',
       ]);
       expect(standin.seen[0].query).toEqual({ entity_id: e.id });
       expect(sent('POST', '/accounts')[0].body).toEqual({
