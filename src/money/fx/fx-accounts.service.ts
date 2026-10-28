@@ -1,6 +1,12 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import type { FxAccount } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { NotificationService } from '../../notification/notification.service';
 import type { OpenWallet } from '../gate/wallet-gate';
 import { MoneyError } from '../money-error';
 import { isUniqueViolation } from '../prisma-unique';
@@ -9,6 +15,7 @@ import { WalletProviderError } from '../../wallet-provider/wallet-provider-error
 import type { OpenFxAccountDto } from './dto/fx-request.dto';
 import { FX_CURRENCIES, fxCurrency } from './fx-currencies';
 import { nameOwnLines } from './fx-own-lines';
+import { tellForeignDetailsReady } from './fx-details-ready';
 import { FxPort, providerFailure } from './fx-provider';
 import { FxSettings } from './fx-settings';
 import { accountView, num } from './fx-views';
@@ -93,6 +100,8 @@ export class FxAccountsService {
     private readonly port: FxPort,
     private readonly prisma: PrismaService,
     private readonly settings: FxSettings,
+    /** WALK4-FIX M-2: tells the person once when an account's details become ready on their own read. Absent in a spec that does not care. */
+    @Optional() private readonly notifications?: NotificationService,
   ) {}
 
   currencies(): FxCurrenciesView {
@@ -315,15 +324,21 @@ export class FxAccountsService {
         })
         .catch(() => undefined);
     }
-    // NUVION-FIX 9.6: details the person sees ready on their own read are not news later (the ready notice is written once, by
-    // whoever sees them active first, in src/nuvion/handlers/fx.handler.ts).
-    if (details?.status === 'active' && row.detailsReadyAt === null) {
-      await this.prisma.fxAccount
-        .updateMany({
-          where: { id: row.id, detailsReadyAt: null },
-          data: { detailsReadyAt: new Date() },
-        })
-        .catch(() => undefined);
+    // WALK4-FIX M-2: details seen active on the person's own read are told once, as on the webhook and the sweep: whoever sees
+    // them active first writes the one "ready" notice (src/money/fx/fx-details-ready.ts). A failure leaves the account unmarked
+    // so the next read, delivery or sweep tries again; it never breaks the read. Without the notification service nothing is
+    // marked, so a path that has it still tells the person.
+    if (
+      details?.status === 'active' &&
+      row.detailsReadyAt === null &&
+      this.notifications
+    ) {
+      await tellForeignDetailsReady(this.prisma, this.notifications, row).catch(
+        (e: unknown) =>
+          this.logger.warn(
+            `fx account ${row.id}: the ready notice could not be written (${e instanceof Error ? e.name : 'error'})`,
+          ),
+      );
     }
     if (ensure || details) this.rememberRefusal(row, details, read.refusal);
     const refusal = read.refusal ?? (details ? null : this.remembered(row.id));

@@ -180,9 +180,14 @@ export class NuvionAccountRecorder {
         );
   }
 
-  /** Requests the account's details once, or adopts the ones Nuvion has. */
+  /**
+   * Requests the account's details once, or adopts the ones Nuvion has. Idempotent and safe when servers race: the details are
+   * listed first, the request is claimed with a conditional update, and a lost claim is looked for before it is sent again. It
+   * never makes an account. `d` is the delivery that asked (its age bounds the wait); null from the opening path and the sweep
+   * (WALK4-FIX M-1), which are retried by the clock and not by a delivery.
+   */
   async ensureDetails(
-    d: NuvionDelivery,
+    d: NuvionDelivery | null,
     entityId: string,
     accountId: string,
   ): Promise<NuvionHandlerResult> {

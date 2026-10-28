@@ -31,6 +31,8 @@ const CONFIGURABLE: readonly string[] = [
  * - `FX_FEE_COLLECTOR_<CODE>_BAN`: where the fee is paid (a Nuvion account in
  *   that currency). Required for a nonzero fee outside naira; a naira fee goes
  *   to WAWU's operational account, as a naira send's does.
+ * - `FX_SWAP_PROVIDER_FEE_<CODE>_MINOR`: the provider's charge on a swap out of that currency, in its smallest unit, shown on the
+ *   quote before the PIN and counted in the total and the funds check (WALK4-FIX L-1). Default 0: Nuvion names none on dev.
  * - `PAYMENT_FX_FEE_<CODE>_MINOR`: WAWU's conversion fee when a buyer pays a
  *   naira price from that currency (PAY-FX, R-91), charged on top in that
  *   currency and paid to `FX_FEE_COLLECTOR_<CODE>_BAN`. Default 0 (Default
@@ -51,6 +53,7 @@ const CONFIGURABLE: readonly string[] = [
 export class FxSettings {
   private readonly logger = new Logger(FxSettings.name);
   private readonly swapFee = new Map<string, bigint>();
+  private readonly swapProviderFee = new Map<string, bigint>();
   private readonly sendFee = new Map<string, bigint>();
   private readonly paymentFee = new Map<string, bigint>();
   private readonly paymentProviderFee = new Map<string, bigint>();
@@ -75,6 +78,11 @@ export class FxSettings {
     };
     for (const code of CONFIGURABLE) {
       const sw = int(`FX_SWAP_FEE_${code}_MINOR`, 0, Number.MAX_SAFE_INTEGER);
+      const spf = int(
+        `FX_SWAP_PROVIDER_FEE_${code}_MINOR`,
+        0,
+        Number.MAX_SAFE_INTEGER,
+      );
       const sd = int(`FX_SEND_FEE_${code}_MINOR`, 0, Number.MAX_SAFE_INTEGER);
       const pf = int(
         `PAYMENT_FX_FEE_${code}_MINOR`,
@@ -93,6 +101,7 @@ export class FxSettings {
         Number.MAX_SAFE_INTEGER,
       );
       if (sw) this.swapFee.set(code, BigInt(sw));
+      if (spf) this.swapProviderFee.set(code, BigInt(spf));
       if (sd) this.sendFee.set(code, BigInt(sd));
       if (pf) this.paymentFee.set(code, BigInt(pf));
       if (ppf) this.paymentProviderFee.set(code, BigInt(ppf));
@@ -123,6 +132,16 @@ export class FxSettings {
 
   swapFeeMinor(code: FxQuoteCode): bigint {
     return this.swapFee.get(code) ?? 0n;
+  }
+
+  /**
+   * WALK4-FIX L-1. The provider's charge on a swap out of this currency, as the review shows it before the PIN (R-10: the person
+   * pays it, plus WAWU's), from config; 0 unless set. Nuvion's quote carries no fee and its swaps charged none on dev
+   * (applicable_fee 0, 24 and 26 Oct 2026), so 0 is the figure, said as a figure ("₦0.00"), not "shown on your receipt". A
+   * provider whose quote names its own fee wins (the quote's).
+   */
+  swapProviderFeeMinor(code: FxQuoteCode): bigint {
+    return this.swapProviderFee.get(code) ?? 0n;
   }
 
   /** WAWU's conversion fee on a naira price paid from this currency (PAY-FX); 0 unless set. */

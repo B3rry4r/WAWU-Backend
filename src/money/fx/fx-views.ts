@@ -118,7 +118,9 @@ export function quoteView(
     rate: q.rate,
     providerFeeMinor: numOrNull(q.providerFeeMinor),
     wawuFeeMinor: num(q.wawuFeeMinor),
-    totalFromMinor: num(q.amountFromMinor + q.wawuFeeMinor),
+    totalFromMinor: num(
+      q.amountFromMinor + (q.providerFeeMinor ?? 0n) + q.wawuFeeMinor,
+    ),
     expiresAt: q.expiresAt.toISOString(),
     validForSeconds: Math.max(
       0,

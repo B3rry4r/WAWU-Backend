@@ -3417,6 +3417,24 @@ so `GET /money/fx/sends/quote` has `providerFeeMinor: null` and the receipt
 carries what was charged. WAWU's fee per currency comes from config and is 0
 until the owner names it (R-10).
 
+**The bank charge on a swap quote** (WALK4-FIX L-1). `POST /money/fx/quotes`
+answers `providerFeeMinor` as a figure on every quote: the provider's own if its
+quote names one, else `FX_SWAP_PROVIDER_FEE_<CODE>_MINOR` for the sending
+currency (0 unless set; Nuvion's quote carries no fee and its swaps charged none
+on dev). The app draws it before the PIN ("Bank charge", `₦0.00` at zero). When it
+is above 0, `totalFromMinor` includes it and the swap's funds check counts it.
+The receipt carries what the provider really charged. Nothing is renamed or
+retyped: the field was already `number | null`.
+
+**The "ready" notice of a foreign account** (WALK4-FIX M-2). When an account's
+details first read `active`, the person gets one `wallet_ready` notification,
+"Your USD account is ready" (the currency code of the account), whichever of
+Nuvion's `account_details.updated` delivery, the person's own read of
+`GET /money/fx/accounts` and the 15 minute sweep sees them first; exactly one
+per account however they race or repeat. Details already active in the response
+that opened the account are not news. The naira wallet's notice is unchanged
+("Your account number is ready").
+
 **Where an account's details stand** (fix round 1, verifier M2). Each account has
 `detailsStatus`: `ready` (issued and active), `pending` (the provider is issuing
 them) or `unavailable` (the provider would not issue them just now), and

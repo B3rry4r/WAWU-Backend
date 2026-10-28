@@ -1025,7 +1025,11 @@ export function composeNotification(
     case 'wallet_ready':
       return {
         ...base,
-        title: 'Your account number is ready',
+        // WALK4-FIX M-2: a foreign account's notice names its currency ("Your USD account is ready"); the naira wallet's
+        // says "Your account number is ready" as it always did.
+        title: /^[A-Z0-9]{2,8}$/.test(event.currency ?? '')
+          ? `Your ${event.currency} account is ready`
+          : 'Your account number is ready',
         body: 'Tap to see it in your wallet.',
         tone: 'success',
         amount: null,
@@ -1210,6 +1214,13 @@ function moneyInWords(
         taken: `The ${amount} you received from ${who} was reversed.`,
       };
     }
+    case 'swap':
+      // WALK4-FIX L-2: the person's own swap into naira, in the swap's own words. No account, no other person, no dash.
+      return {
+        title: 'Swap complete',
+        received: `Swap: ${amount} added to your wallet.`,
+        taken: `The ${amount} added to your wallet by your swap was reversed.`,
+      };
     case 'earning':
       return {
         title: 'Earnings received',
@@ -1380,7 +1391,8 @@ interface MoneyInEvent {
   /**
    * WALLET-39 (R-54): where the money came from. Left out it is `bank`, which
    * is every WALLET-10 caller. `transfer` is another person's send (the copy
-   * names them as "Tolu B."), `earning` is earnings landing, `points` is a
+   * names them as "Tolu B."), `swap` is the person's own swap into naira
+   * (WALK4-FIX L-2), `earning` is earnings landing, `points` is a
    * points cash-out landing, `refund` is a refund.
    */
   source?: MoneyInSource;
@@ -1390,7 +1402,7 @@ interface MoneyInEvent {
 
 /** Where a credit came from, as the copy says it (WALLET-39). */
 export type MoneyInSource =
-  'bank' | 'transfer' | 'earning' | 'points' | 'refund';
+  'bank' | 'transfer' | 'swap' | 'earning' | 'points' | 'refund';
 
 /**
  * WALLET-39. A credit the person was told about ("You received ...") was
@@ -1420,6 +1432,11 @@ interface MoneyInReversedEvent {
 interface WalletReadyEvent {
   kind: 'wallet_ready';
   userWawuId: string;
+  /**
+   * WALK4-FIX M-2 (money walk 4): the currency code of a foreign account whose details became ready ("USD"), once per account,
+   * whichever of the webhook, the person's own read or the sweep sees them active first. Left out it is the naira wallet's.
+   */
+  currency?: string | null;
 }
 
 /**

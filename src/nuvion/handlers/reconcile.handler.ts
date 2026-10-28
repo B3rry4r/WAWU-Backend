@@ -20,6 +20,7 @@ import {
   type NuvionSubscriptionOutcome,
 } from './reconcile-checks';
 import { NuvionAccountRecorder } from './accounts';
+import { lookAtForeignDetails } from './fx-details-ready';
 import { readReconcileSettings } from './reconcile-config';
 import { NuvionReconcileFindings } from './reconcile-findings';
 import {
@@ -36,13 +37,29 @@ const HOUR = 3_600_000;
 export const NUVION_DETAILS_REREAD_AFTER_MS = 5 * 60_000;
 /** Rows of waiting account details read again in one pass. */
 const DETAILS_BATCH = 100;
+/**
+ * WALK4-FIX M-2: a foreign account whose details are still not active this long after it was opened is left to the person's
+ * own reads and to Nuvion's delivery; the sweep stops asking about it (it would be read every pass for good).
+ */
+const FOREIGN_DETAILS_SWEEP_DAYS = 3;
 
 /** What one re-read of waiting account details did. Counts only. */
 export interface NuvionDetailsRereadReport {
   checked: number;
   /** Rows whose details moved: the number is now recorded (active), or the details are now known (pending). */
   recorded: number;
+  /** Accounts that had no details and were asked for (WALK4-FIX M-1), or whose details Nuvion already held and were adopted. */
+  requested: number;
   /** Rows that could not be read, or whose details need a person to look. */
+  unreadable: number;
+}
+
+/** What one look at the foreign accounts still waiting for their details did (WALK4-FIX M-2). Counts only. */
+export interface NuvionForeignDetailsReport {
+  checked: number;
+  /** Accounts whose details were found active and whose one "ready" notice this pass wrote. */
+  told: number;
+  /** Accounts the provider could not be asked about. */
   unreadable: number;
 }
 
@@ -141,6 +158,14 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
       report.unreadable += details.unreadable;
       report.incomplete.push('account details could not be read again');
     }
+    // WALK4-FIX M-2: a foreign account whose details turned active with the delivery lost, and whose owner has not looked.
+    const foreign = await this.guarded('foreign account details', () =>
+      this.rereadForeignDetails(now),
+    );
+    if (foreign && foreign.unreadable > 0) {
+      report.unreadable += foreign.unreadable;
+      report.incomplete.push('foreign account details could not be read again');
+    }
     const findings = new NuvionReconcileFindings(this.prisma);
     if (report.incomplete.length > 0) {
       await findings.report({
@@ -156,8 +181,15 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
 
   /**
    * Reads again the account details of every person whose request is still `requested` or `pending` after 5 minutes, and
-   * records what Nuvion now shows (NUVION-FIX 9.1). Null when Nuvion is not the running provider, or the notification
-   * service is not mounted (a wallet is never recorded without its "ready" notice, as the delivery handler does).
+   * records what Nuvion now shows (NUVION-FIX 9.1). Reads only for those.
+   *
+   * WALK4-FIX M-1: an account recorded more than 5 minutes ago that has no details at all, and whose request was never made
+   * (no id, no `requested` claim), is asked for here: Nuvion's one `accounts.created` delivery may have been lost. The ask is
+   * the delivery's own (NuvionAccountRecorder.ensureDetails): the account's details are listed first and adopted if they
+   * exist, the request is claimed with a conditional update so servers racing ask once, and no account is ever made.
+   *
+   * Null when Nuvion is not the running provider, or the notification service is not mounted (a wallet is never recorded
+   * without its "ready" notice, as the delivery handler does).
    */
   async rereadAccountDetails(
     now = new Date(),
@@ -193,8 +225,42 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
     const report: NuvionDetailsRereadReport = {
       checked: 0,
       recorded: 0,
+      requested: 0,
       unreadable: 0,
     };
+    const unasked = await this.prisma.nuvionEntity.findMany({
+      where: {
+        accountId: { not: null },
+        entityId: { not: null },
+        accountDetailsId: null,
+        accountDetailsStatus: null,
+        accountNumber: null,
+        updatedAt: {
+          lt: new Date(now.getTime() - NUVION_DETAILS_REREAD_AFTER_MS),
+        },
+      },
+      select: { entityId: true, accountId: true },
+      orderBy: { updatedAt: 'asc' },
+      take: DETAILS_BATCH,
+    });
+    for (const row of unasked) {
+      if (row.entityId === null || row.accountId === null) continue;
+      report.checked += 1;
+      const result = await recorder.ensureDetails(
+        null,
+        row.entityId,
+        row.accountId,
+      );
+      if (result.outcome === 'done') {
+        report.requested += 1;
+      } else if (
+        result.outcome === 'failed' ||
+        !/request is out/.test(result.note)
+      ) {
+        // 'request is out': another server holds the claim and is asking; nothing is wrong.
+        report.unreadable += 1;
+      }
+    }
     for (const row of rows) {
       if (row.entityId === null || row.accountId === null) continue;
       report.checked += 1;
@@ -219,6 +285,63 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
         }
       } else if (/could not be asked/.test(result.note)) {
         report.unreadable += 1;
+      }
+    }
+    return report;
+  }
+
+  /**
+   * WALK4-FIX M-2. Reads again the details of the foreign accounts that are open, were opened over 5 minutes ago (and within
+   * the last 3 days) and have not been told ready, and writes the one "Your {currency} account is ready" notice for each the
+   * provider now shows active. Reads only; the notice is claimed with a conditional write (src/money/fx/fx-details-ready.ts), so
+   * the delivery, the person's own read and servers sweeping at once write one. Null when Nuvion is not the running provider,
+   * the adapter holds no foreign accounts, or the notification service is not mounted.
+   */
+  async rereadForeignDetails(
+    now = new Date(),
+  ): Promise<NuvionForeignDetailsReport | null> {
+    const provider = this.nuvion();
+    const fx = provider?.fx;
+    if (!provider || !fx) return null;
+    const notifications = this.find<NotificationService>(NotificationService);
+    if (!notifications) return null;
+    const rows = await this.prisma.fxAccount.findMany({
+      where: {
+        provider: 'nuvion',
+        status: 'open',
+        providerAccountId: { not: null },
+        detailsReadyAt: null,
+        createdAt: {
+          gt: new Date(now.getTime() - FOREIGN_DETAILS_SWEEP_DAYS * 24 * HOUR),
+          lt: new Date(now.getTime() - NUVION_DETAILS_REREAD_AFTER_MS),
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: DETAILS_BATCH,
+    });
+    const report: NuvionForeignDetailsReport = {
+      checked: 0,
+      told: 0,
+      unreadable: 0,
+    };
+    for (const row of rows) {
+      report.checked += 1;
+      try {
+        const look = await lookAtForeignDetails(
+          this.prisma,
+          notifications,
+          fx,
+          row,
+        );
+        if (look === 'told') report.told += 1;
+        else if (look === 'unread') report.unreadable += 1;
+      } catch (e) {
+        // One account's failure (its notice could not be written) does not stop the others; its claim was rolled back with
+        // the notice, so the next pass tries it again. The name only: a message can quote what Nuvion sent.
+        report.unreadable += 1;
+        this.logger.error(
+          `foreign account details: one account could not be told (${(e as Error).name ?? 'Error'})`,
+        );
       }
     }
     return report;
