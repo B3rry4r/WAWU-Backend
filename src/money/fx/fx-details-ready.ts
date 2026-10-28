@@ -4,6 +4,13 @@ import type { NotificationService } from '../../notification/notification.servic
 import { tellWalletReady } from '../opening/wallet-ready-notice';
 
 /**
+ * A foreign account is told ready only within this many days of being opened (Nuvion makes details in 5 to 30 minutes). The sweep
+ * stops looking after it, and the person's own read marks an older account seen without a notice, so a deploy never sends a late
+ * "ready" for an account opened long ago (patch round 1).
+ */
+export const FOREIGN_DETAILS_NOTICE_DAYS = 3;
+
+/**
  * WALK4-FIX M-2 (money walk 4): the one place a foreign account's "your {currency} account is ready" notice is written.
  *
  * The provider makes an account's details later (5 to 30 minutes), and the Hub learns they are active on three paths: Nuvion's

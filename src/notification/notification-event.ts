@@ -1192,7 +1192,10 @@ export function moneyInShortName(
  * What a money-in notice (and its correction) say, from one set of facts.
  * `received` is the notice, `taken` is the correction. Both name the amount
  * and where it came from, never a whole account number, never a dash, and no
- * wallet, balance or cash-out language (WALLET-10), so a lock screen is safe.
+ * balance or cash-out language (WALLET-10), so a lock screen is safe. The one
+ * place "wallet" is said is the swap's own words, "added to your wallet"
+ * (WALK4-FIX L-2): a swap is the person's own money changing currency, and it
+ * names no balance, no account number and no other person.
  */
 interface MoneyInWords {
   title: string;
@@ -1271,7 +1274,7 @@ function moneyInWords(
  * from Tolu B." from another person, "You received ₦2,550 in earnings.", "You
  * received a refund of ₦1,200.". The number is only ever shown with a name
  * beside it, masked to its last four digits: a lock screen shows this text.
- * No wallet, balance or cash-out language, no dash.
+ * No balance or cash-out language, no dash (a swap says "added to your wallet", WALK4-FIX L-2).
  *
  * `amount` (whole naira, an Int column) is set only when the credit is a
  * whole number of naira that fits: a credit with kobo in it is told in the

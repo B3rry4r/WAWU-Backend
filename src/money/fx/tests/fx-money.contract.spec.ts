@@ -635,6 +635,46 @@ describe('foreign accounts, swaps and sends (WALLET-21)', () => {
       expect(row.detailsReadyAt).not.toBeNull();
     });
 
+    it('patch round 1: an account opened over 3 days ago and found active on its first read is marked seen, not told late', async () => {
+      fx.detailsMode = 'pending';
+      const eur = await accounts.open(SECOND, { currency: 'EUR' });
+      const e = await detailsOf(eur.id);
+      e.record.status = 'active';
+      await opened(eur.id, 5 * 24 * 60);
+      expect(await accounts.get(SECOND, eur.id)).toMatchObject({
+        detailsStatus: 'ready',
+      });
+      expect(toldTo(SECOND.wawuUserId)).toEqual([]);
+      expect(
+        (await prisma.fxAccount.findUniqueOrThrow({ where: { id: eur.id } }))
+          .detailsReadyAt,
+      ).not.toBeNull();
+      await accounts.list(SECOND);
+      await sweeperOf().rereadForeignDetails(new Date());
+      expect(toldTo(SECOND.wawuUserId)).toEqual([]);
+    });
+
+    it('patch round 1: accounts whose details stay pending do not starve a newer account that is active: the sweep pages past them', async () => {
+      await clean();
+      fx.detailsMode = 'pending';
+      const gbp = await accounts.open(SECOND, { currency: 'GBP' });
+      const usd = await accounts.open(SECOND, { currency: 'USD' });
+      const u = await detailsOf(usd.id);
+      u.record.status = 'active';
+      await opened(gbp.id, 40);
+      await opened(usd.id, 10);
+      const sweep = sweeperOf();
+      sweep.detailsBatchSize = 1;
+      await sweep.rereadForeignDetails(new Date());
+      expect(toldTo(SECOND.wawuUserId)).toEqual([
+        {
+          kind: 'wallet_ready',
+          userWawuId: SECOND.wawuUserId,
+          currency: 'USD',
+        },
+      ]);
+    });
+
     it('M-2: a notice that cannot be written leaves the account unmarked, so the next path tells', async () => {
       fx.detailsMode = 'pending';
       const usdt = await accounts.open(SECOND, {

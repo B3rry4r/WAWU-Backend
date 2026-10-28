@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { ModuleRef } from '@nestjs/core';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { FOREIGN_DETAILS_NOTICE_DAYS } from '../../money/fx/fx-details-ready';
 import { tellWalletReady } from '../../money/opening/wallet-ready-notice';
 import { NotificationService } from '../../notification/notification.service';
 import {
@@ -19,7 +20,7 @@ import {
   NuvionSubscriptionCheck,
   type NuvionSubscriptionOutcome,
 } from './reconcile-checks';
-import { NuvionAccountRecorder } from './accounts';
+import { ACCOUNT_DETAILS_REQUESTED, NuvionAccountRecorder } from './accounts';
 import { lookAtForeignDetails } from './fx-details-ready';
 import { readReconcileSettings } from './reconcile-config';
 import { NuvionReconcileFindings } from './reconcile-findings';
@@ -35,13 +36,10 @@ import type {
 const HOUR = 3_600_000;
 /** Account details still requested or pending this long are read again by the sweep (NUVION-FIX 9.1). */
 export const NUVION_DETAILS_REREAD_AFTER_MS = 5 * 60_000;
-/** Rows of waiting account details read again in one pass. */
+/** Rows of waiting account details read again in one page of a pass. */
 const DETAILS_BATCH = 100;
-/**
- * WALK4-FIX M-2: a foreign account whose details are still not active this long after it was opened is left to the person's
- * own reads and to Nuvion's delivery; the sweep stops asking about it (it would be read every pass for good).
- */
-const FOREIGN_DETAILS_SWEEP_DAYS = 3;
+/** Pages in one pass: a stuck page is skipped, never allowed to hide the accounts behind it (patch round 1). */
+const DETAILS_MAX_PAGES = 10;
 
 /** What one re-read of waiting account details did. Counts only. */
 export interface NuvionDetailsRereadReport {
@@ -92,6 +90,9 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
   private running = false;
   private lastSweepAt: number | null = null;
   private feeCheckDone = false;
+  /** Rows of waiting account details read in one page of a pass, and pages in a pass. Fields so a spec can make them small. */
+  detailsBatchSize = DETAILS_BATCH;
+  detailsMaxPages = DETAILS_MAX_PAGES;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -204,64 +205,87 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
       provider.client.settings,
       (tx, wawuUserId) => tellWalletReady(notifications, tx, wawuUserId),
     );
-    const rows = await this.prisma.nuvionEntity.findMany({
-      where: {
-        accountDetailsStatus: { in: ['requested', 'pending'] },
-        accountId: { not: null },
-        entityId: { not: null },
-        updatedAt: {
-          lt: new Date(now.getTime() - NUVION_DETAILS_REREAD_AFTER_MS),
+    const waiting = (tried: string[]) =>
+      this.prisma.nuvionEntity.findMany({
+        where: {
+          // Details Nuvion made (an id is kept) and that are not active yet: read only.
+          OR: [
+            { accountDetailsStatus: 'pending' },
+            {
+              accountDetailsStatus: 'requested',
+              accountDetailsId: { not: null },
+            },
+          ],
+          accountId: { not: null },
+          AND: [{ entityId: { not: null } }, { entityId: { notIn: tried } }],
+          updatedAt: {
+            lt: new Date(now.getTime() - NUVION_DETAILS_REREAD_AFTER_MS),
+          },
         },
-      },
-      select: {
-        entityId: true,
-        accountId: true,
-        accountDetailsId: true,
-        accountDetailsStatus: true,
-      },
-      orderBy: { updatedAt: 'asc' },
-      take: DETAILS_BATCH,
-    });
+        select: {
+          entityId: true,
+          accountId: true,
+          accountDetailsId: true,
+          accountDetailsStatus: true,
+        },
+        orderBy: { updatedAt: 'asc' },
+        take: this.detailsBatchSize,
+      });
     const report: NuvionDetailsRereadReport = {
       checked: 0,
       recorded: 0,
       requested: 0,
       unreadable: 0,
     };
-    const unasked = await this.prisma.nuvionEntity.findMany({
-      where: {
-        accountId: { not: null },
-        entityId: { not: null },
-        accountDetailsId: null,
-        accountDetailsStatus: null,
-        accountNumber: null,
-        updatedAt: {
-          lt: new Date(now.getTime() - NUVION_DETAILS_REREAD_AFTER_MS),
+    // Accounts with no details record: never asked for, or asked for with an answer that never came back. `ensureDetails`
+    // lists first, claims with a conditional update (a `requested` claim only once it is past the resend window) and never
+    // creates an account, so asking again is safe. Patch round 1 (lead ruling) added the `requested` case: a request that died
+    // with an unknown outcome (timeout, 5xx, no connection) must not strand the account.
+    const unasked = (tried: string[]) =>
+      this.prisma.nuvionEntity.findMany({
+        where: {
+          accountId: { not: null },
+          AND: [{ entityId: { not: null } }, { entityId: { notIn: tried } }],
+          accountDetailsId: null,
+          OR: [
+            { accountDetailsStatus: null },
+            { accountDetailsStatus: ACCOUNT_DETAILS_REQUESTED },
+          ],
+          accountNumber: null,
+          updatedAt: {
+            lt: new Date(now.getTime() - NUVION_DETAILS_REREAD_AFTER_MS),
+          },
         },
-      },
-      select: { entityId: true, accountId: true },
-      orderBy: { updatedAt: 'asc' },
-      take: DETAILS_BATCH,
-    });
-    for (const row of unasked) {
+        select: { entityId: true, accountId: true },
+        orderBy: { updatedAt: 'asc' },
+        take: this.detailsBatchSize,
+      });
+    for await (const row of this.eachRow(unasked, (r) => r.entityId ?? '')) {
       if (row.entityId === null || row.accountId === null) continue;
       report.checked += 1;
-      const result = await recorder.ensureDetails(
-        null,
-        row.entityId,
-        row.accountId,
-      );
-      if (result.outcome === 'done') {
-        report.requested += 1;
-      } else if (
-        result.outcome === 'failed' ||
-        !/request is out/.test(result.note)
-      ) {
-        // 'request is out': another server holds the claim and is asking; nothing is wrong.
+      try {
+        const result = await recorder.ensureDetails(
+          null,
+          row.entityId,
+          row.accountId,
+        );
+        if (result.outcome === 'done') {
+          report.requested += 1;
+        } else if (
+          result.outcome === 'failed' ||
+          !/request is out/.test(result.note)
+        ) {
+          // 'request is out': another server holds the claim and is asking; nothing is wrong.
+          report.unreadable += 1;
+        }
+      } catch (e) {
         report.unreadable += 1;
+        this.logger.error(
+          `account details: one account could not be asked for (${(e as Error).name ?? 'Error'})`,
+        );
       }
     }
-    for (const row of rows) {
+    for await (const row of this.eachRow(waiting, (r) => r.entityId ?? '')) {
       if (row.entityId === null || row.accountId === null) continue;
       report.checked += 1;
       const result = await recorder.rereadDetails(
@@ -305,26 +329,30 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
     if (!provider || !fx) return null;
     const notifications = this.find<NotificationService>(NotificationService);
     if (!notifications) return null;
-    const rows = await this.prisma.fxAccount.findMany({
-      where: {
-        provider: 'nuvion',
-        status: 'open',
-        providerAccountId: { not: null },
-        detailsReadyAt: null,
-        createdAt: {
-          gt: new Date(now.getTime() - FOREIGN_DETAILS_SWEEP_DAYS * 24 * HOUR),
-          lt: new Date(now.getTime() - NUVION_DETAILS_REREAD_AFTER_MS),
+    const waiting = (tried: string[]) =>
+      this.prisma.fxAccount.findMany({
+        where: {
+          provider: 'nuvion',
+          status: 'open',
+          providerAccountId: { not: null },
+          detailsReadyAt: null,
+          id: { notIn: tried },
+          createdAt: {
+            gt: new Date(
+              now.getTime() - FOREIGN_DETAILS_NOTICE_DAYS * 24 * HOUR,
+            ),
+            lt: new Date(now.getTime() - NUVION_DETAILS_REREAD_AFTER_MS),
+          },
         },
-      },
-      orderBy: { createdAt: 'asc' },
-      take: DETAILS_BATCH,
-    });
+        orderBy: { createdAt: 'asc' },
+        take: this.detailsBatchSize,
+      });
     const report: NuvionForeignDetailsReport = {
       checked: 0,
       told: 0,
       unreadable: 0,
     };
-    for (const row of rows) {
+    for await (const row of this.eachRow(waiting, (r) => r.id)) {
       report.checked += 1;
       try {
         const look = await lookAtForeignDetails(
@@ -345,6 +373,26 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
       }
     }
     return report;
+  }
+
+  /**
+   * The rows of one waiting list, a page at a time, each row once. A page is fetched again with the rows already tried left out,
+   * so a page of accounts that cannot be read now (Nuvion down for them, a notice that will not write) never hides the accounts
+   * behind it; at most `detailsMaxPages` pages a pass, so one pass is bounded (patch round 1).
+   */
+  private async *eachRow<T>(
+    fetch: (tried: string[]) => Promise<T[]>,
+    keyOf: (row: T) => string,
+  ): AsyncGenerator<T> {
+    const tried: string[] = [];
+    for (let page = 0; page < this.detailsMaxPages; page += 1) {
+      const rows = await fetch(tried);
+      for (const row of rows) {
+        tried.push(keyOf(row));
+        yield row;
+      }
+      if (rows.length < this.detailsBatchSize) return;
+    }
   }
 
   /** The subscription check now. Null when Nuvion is not the running provider. */

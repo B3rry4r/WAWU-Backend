@@ -15,7 +15,10 @@ import { WalletProviderError } from '../../wallet-provider/wallet-provider-error
 import type { OpenFxAccountDto } from './dto/fx-request.dto';
 import { FX_CURRENCIES, fxCurrency } from './fx-currencies';
 import { nameOwnLines } from './fx-own-lines';
-import { tellForeignDetailsReady } from './fx-details-ready';
+import {
+  FOREIGN_DETAILS_NOTICE_DAYS,
+  tellForeignDetailsReady,
+} from './fx-details-ready';
 import { FxPort, providerFailure } from './fx-provider';
 import { FxSettings } from './fx-settings';
 import { accountView, num } from './fx-views';
@@ -327,18 +330,30 @@ export class FxAccountsService {
     // WALK4-FIX M-2: details seen active on the person's own read are told once, as on the webhook and the sweep: whoever sees
     // them active first writes the one "ready" notice (src/money/fx/fx-details-ready.ts). A failure leaves the account unmarked
     // so the next read, delivery or sweep tries again; it never breaks the read. Without the notification service nothing is
-    // marked, so a path that has it still tells the person.
-    if (
-      details?.status === 'active' &&
-      row.detailsReadyAt === null &&
-      this.notifications
-    ) {
-      await tellForeignDetailsReady(this.prisma, this.notifications, row).catch(
-        (e: unknown) =>
+    // marked, so a path that has it still tells the person. Patch round 1: an account opened over 3 days ago is marked seen
+    // without a notice (the same window as the sweep), so no late "ready" follows a deploy.
+    if (details?.status === 'active' && row.detailsReadyAt === null) {
+      if (
+        row.createdAt.getTime() <
+        Date.now() - FOREIGN_DETAILS_NOTICE_DAYS * 86_400_000
+      ) {
+        await this.prisma.fxAccount
+          .updateMany({
+            where: { id: row.id, detailsReadyAt: null },
+            data: { detailsReadyAt: new Date() },
+          })
+          .catch(() => undefined);
+      } else if (this.notifications) {
+        await tellForeignDetailsReady(
+          this.prisma,
+          this.notifications,
+          row,
+        ).catch((e: unknown) =>
           this.logger.warn(
             `fx account ${row.id}: the ready notice could not be written (${e instanceof Error ? e.name : 'error'})`,
           ),
-      );
+        );
+      }
     }
     if (ensure || details) this.rememberRefusal(row, details, read.refusal);
     const refusal = read.refusal ?? (details ? null : this.remembered(row.id));

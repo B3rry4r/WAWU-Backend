@@ -557,6 +557,101 @@ describe('WALK4-FIX M-1: the account number is asked for by the opening path and
       expect((await entity(p)).accountDetailsId).not.toBeNull();
     });
 
+    it('a request that dies with an unknown outcome (503 once) and a lost delivery does not strand the account: the sweep ends with details', async () => {
+      // Patch round 1 (lead ruling): the verifier's case. The opening path's request gets a 503; nothing else ever asks.
+      const p = await approved();
+      standin.on('POST', '/account-details', (req) => {
+        nuv.detailRequests.push(req.body);
+        return {
+          status: 503,
+          body: errorBody('error_system_internal_error', 'Unavailable.'),
+        };
+      });
+      expect((await opening.handle(openingDelivery(p))).outcome).toBe('done');
+      expect(await entity(p)).toMatchObject({
+        accountDetailsId: null,
+        accountDetailsStatus: 'requested',
+      });
+      expect(detailPosts(p)).toBe(1);
+      // Back to Nuvion's normal answers; the claim is young, so the sweep leaves it alone.
+      nuv.install();
+      installEntities();
+      await reconcile.rereadAccountDetails(new Date());
+      expect(detailPosts(p)).toBe(1);
+      await aged(p, 8);
+      const report = await reconcile.rereadAccountDetails(new Date());
+      expect(report?.requested).toBeGreaterThanOrEqual(1);
+      expect(detailPosts(p)).toBe(2);
+      expect(accountPosts(p)).toBe(1);
+      const e = await entity(p);
+      expect(e).toMatchObject({ accountDetailsStatus: 'pending' });
+      expect(e.accountDetailsId).not.toBeNull();
+      // Nuvion makes the number; its delivery is lost too; the next sweep records it and tells once.
+      nuv.activate(e.accountDetailsId!, nuban());
+      await aged(p, 8);
+      await reconcile.rereadAccountDetails(new Date());
+      expect(await wallet(p)).not.toBeNull();
+      expect(
+        await prisma.notification.count({
+          where: { userWawuId: p.id, kind: 'wallet_ready' },
+        }),
+      ).toBe(1);
+    });
+
+    it('a batch of accounts Nuvion cannot be asked about does not starve a newer one: the sweep pages past them', async () => {
+      const stuck = new Set<string>();
+      standin.on('GET', '/account-details', (req) => {
+        if (stuck.has(req.query.entity_id)) {
+          return {
+            status: 500,
+            body: errorBody('error_system_internal_error', 'Down.'),
+          };
+        }
+        const rows = [...nuv.details.values()].filter(
+          (d) =>
+            d.entity_id === req.query.entity_id &&
+            (!req.query.account_id || d.account_id === req.query.account_id),
+        );
+        return {
+          status: 200,
+          body: envelope({
+            data: rows,
+            meta: {
+              pagination: {
+                limit: 20,
+                total_count: rows.length,
+                has_next: false,
+                has_previous: false,
+                next_cursor: null,
+                previous_cursor: null,
+              },
+            },
+          }),
+        };
+      });
+      const old: Person[] = [];
+      for (let i = 0; i < 3; i += 1) {
+        const { p } = await accountWithoutDetails();
+        stuck.add(p.entityId);
+        await aged(p, 40 + i);
+        old.push(p);
+      }
+      const { p: fresh } = await accountWithoutDetails();
+      await aged(fresh, 10);
+      const savedSize = reconcile.detailsBatchSize;
+      reconcile.detailsBatchSize = 2;
+      try {
+        await reconcile.rereadAccountDetails(new Date());
+      } finally {
+        reconcile.detailsBatchSize = savedSize;
+        nuv.install();
+        installEntities();
+      }
+      expect(detailPosts(fresh)).toBe(1);
+      expect((await entity(fresh)).accountDetailsId).not.toBeNull();
+      for (const p of old) expect(detailPosts(p)).toBe(0);
+    });
+
     it('a request Nuvion refuses is counted as unread, the claim is let go, and the next sweep asks again', async () => {
       const { p } = await accountWithoutDetails();
       standin.on('POST', '/account-details', (req) => {
