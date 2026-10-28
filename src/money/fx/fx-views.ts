@@ -84,13 +84,15 @@ export function accountView(
           : 'opening',
     balance: balanceView(code, balance),
     details: detailsView(details),
+    // NUVION-FIX 9.4: the provider makes the details later (5 to 30 minutes). An account with no record and no refusal is
+    // pending, never unavailable; only a refusal, in the provider's words, says unavailable.
     detailsStatus: details
       ? details.status === 'active'
         ? 'ready'
         : 'pending'
-      : row.status === 'opening'
-        ? 'pending'
-        : 'unavailable',
+      : row.status !== 'opening' && refusal !== null
+        ? 'unavailable'
+        : 'pending',
     detailsNote: details || row.status === 'opening' ? null : refusal,
     openedAt: row.createdAt.toISOString(),
   };

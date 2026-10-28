@@ -51,11 +51,9 @@ export interface FxCurrencyDef {
 const ALL_CHAINS: readonly FxChain[] = FX_CHAINS;
 
 /**
- * Stablecoin decimals: Nuvion's transfers page says 100000000 is 100.00 USDC
- * (six decimals), but the dev FX quotes and balances count a stablecoin in
- * cents (NGN 3,000 became 219 UST, "2.19 UST" in the dev refusal). Production
- * is not known, so the default here is what dev does and `FX_DECIMALS_<CODE>`
- * overrides it (src/money/fx/fx-settings.ts). BACKEND_GAPS G-WALLET-21-1.
+ * Stablecoin decimals: 2, like every currency. Nuvion's transfers page said six (100000000 is 100.00 USDC) and the dev quotes
+ * counted cents; Nuvion answered on 27 Oct 2026 that all amounts use 2 decimals in minor units (100 is 1.00) and that the docs
+ * are wrong. There is no setting to change it (NUVION-FIX 10.1; BACKEND_GAPS G-WALLET-21-1 is closed).
  */
 export const FX_COIN_DEFAULT_DECIMALS = 2;
 

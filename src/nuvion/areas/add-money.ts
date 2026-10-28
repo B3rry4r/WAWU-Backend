@@ -60,10 +60,27 @@ function whole(o: Record<string, unknown>, key: string): number | null {
   return typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null;
 }
 
-/** Nuvion's own types that say "not this currency, not this rail": a refusal, not a failure of the call. */
+/** Nuvion's own types that say "not this currency, not this rail": a refusal, not a failure of the call (a suspended service is `isServiceRefusal`'s). */
 const NOT_SERVED_TYPES: readonly string[] = [
   'error_acquiring_currency_not_supported',
 ];
+
+/**
+ * Nuvion's refusal of the service itself, not of this payment (NUVION-FIX 1.2): card acquiring is SUSPENDED in production
+ * (27 Oct 2026). Its type or its words say so on a 4xx; a person's own account being suspended (`error_account_*`) is not this.
+ */
+export function isServiceRefusal(e: NuvionError): boolean {
+  const type = e.nuvionType ?? '';
+  if (NOT_SERVED_TYPES.includes(type)) return true;
+  const status = e.httpStatus ?? 0;
+  if (status < 400 || status >= 500 || status === 429) return false;
+  if (type.startsWith('error_account_')) return false;
+  return (
+    /suspend/i.test(type) ||
+    /^error_acquiring_.*(not_supported|not_available)/.test(type) ||
+    e.messages.some((m) => /suspend/i.test(m))
+  );
+}
 
 /** The state a payment intent or its action is in, in the seam's words. */
 export function intentState(
@@ -480,16 +497,14 @@ export class NuvionAddMoneyArea implements AddMoneyProvider {
 
   /** Nuvion's "not this currency" is a refusal of the rail (`not_supported`); every other failure is as it came. */
   private refusal(e: unknown): unknown {
-    if (
-      e instanceof NuvionError &&
-      e.nuvionType !== null &&
-      NOT_SERVED_TYPES.includes(e.nuvionType)
-    ) {
+    if (e instanceof NuvionError && isServiceRefusal(e)) {
       return new NuvionError({
         kind: 'not_supported',
         operation: e.operation,
         httpStatus: e.httpStatus,
-        messages: [`${AREA}: Nuvion does not take naira on this rail yet`],
+        messages: [
+          `${AREA}: Nuvion does not take naira on this rail (not supported, or suspended)`,
+        ],
         recordMayExist: false,
         requestId: e.requestId,
         nuvionType: e.nuvionType,

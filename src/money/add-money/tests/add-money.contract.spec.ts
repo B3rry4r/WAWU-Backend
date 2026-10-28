@@ -49,6 +49,8 @@ import {
 import { WALLET_PROVIDER } from '../../../wallet-provider/wallet-provider.interface';
 import { MoneyModule } from '../../money.module';
 import {
+  ADD_MONEY_CARD_SETTING,
+  ADD_MONEY_USSD_SETTING,
   AddMoneyService,
   REFUSAL_MEMORY_MS,
   ussdNumber,
@@ -298,7 +300,7 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
       NUVION_ENCRYPTION_PUBLIC_KEY: publicKey.replace(/\n/g, '\\n'),
       ADD_MONEY_RETURN_URL:
         'https://hub.test.example/api/hub/money/add-money/return',
-      ADD_MONEY_USSD_CHANNEL: 'KE-SAFARICOM-C2B',
+      ADD_MONEY_USSD_CHANNEL: 'NG-MTN-C2B',
       ADMIN_JWT_SECRET: 'wallet25-admin-access-secret-0123456789abcdef',
       ADMIN_JWT_REFRESH_SECRET:
         'wallet25-admin-refresh-secret-0123456789abcdef',
@@ -363,6 +365,16 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
     await app.init();
     await app.listen(0, '127.0.0.1');
     prisma = moduleRef.get(PrismaService);
+    // NUVION-FIX 1.1: the two switches read 0 by default (naira cannot be added by card or USSD at Nuvion), so this suite, which
+    // exercises the rails against the stand-in, switches them on the way an admin would.
+    for (const key of [ADD_MONEY_CARD_SETTING, ADD_MONEY_USSD_SETTING]) {
+      await prisma.planSetting.upsert({
+        where: { key },
+        create: { key, value: 1 },
+        update: { value: 1 },
+      });
+    }
+    await moduleRef.get(PlanSettingsService, { strict: false }).refresh();
     service = moduleRef.get(AddMoneyService);
     dispatcher = moduleRef.get(NuvionWebhookDispatcher);
     const issuer = moduleRef.get(AdminTokenService);
@@ -440,6 +452,13 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
       });
       await prisma.adminUser.deleteMany({ where: { id: { in: adminIds } } });
     }
+    if (prisma) {
+      await prisma.planSetting.deleteMany({
+        where: {
+          key: { in: [ADD_MONEY_CARD_SETTING, ADD_MONEY_USSD_SETTING] },
+        },
+      });
+    }
     if (app) await app.close();
     await standin.stop();
     await wawuId.stop();
@@ -461,6 +480,7 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
     (service as unknown as { refused: Map<string, unknown> }).refused.clear();
     nuv.cardMode = 'frictionless';
     nuv.refuseNaira = false;
+    nuv.suspended = false;
     nuv.cardFee = CARD_FEE;
     book.mode = 'successful';
   });
@@ -477,12 +497,12 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
     });
     expect(by('apple_pay')).toMatchObject({ available: true, hosted: true });
     expect(by('ussd')).toMatchObject({ available: true });
-    // Nuvion's charge for the bank checkout is not set: it is not offered, and the reason is plain.
+    // NUVION-FIX 1.3: Nuvion takes no naira by open banking, so the bank checkout is never offered, and the reason is plain.
     expect(by('open_banking')).toMatchObject({
       available: false,
       hosted: true,
     });
-    expect(by('open_banking').reason).toBe('This is not available yet.');
+    expect(by('open_banking').reason).toBe('This is not available.');
     expect(o.cardPublicKey).toContain('BEGIN PUBLIC KEY');
     expect(o.limits).toEqual({
       minKobo: 10000,
@@ -691,9 +711,8 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
     nuv.refuseNaira = true;
     const card = view(await start(me, cardBody()).expect(201));
     expect(card).toMatchObject({ status: 'failed' });
-    expect(card.failureMessage).toBe(
-      'This is not switched on for naira yet. It shows here as soon as it is.',
-    );
+    // NUVION-FIX 1.4: no promise that it will appear.
+    expect(card.failureMessage).toBe('This is not available.');
     const ussd = view(
       await start(me, {
         rail: 'ussd',
@@ -739,9 +758,76 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
     ).toBe(true);
   });
 
+  it('NUVION-FIX 1.2: where Nuvion says an acquiring route is suspended the attempt says so, the rail is hidden and remembered as refused', async () => {
+    const me = await person();
+    nuv.suspended = true;
+    const card = view(await start(me, cardBody()).expect(201));
+    expect(card).toMatchObject({
+      status: 'failed',
+      failureMessage: 'This is not available.',
+    });
+    expect(await row(card.id)).toMatchObject({ failureCode: 'not_supported' });
+    // Not an outage: no "could not reach", and nothing was left open at Nuvion.
+    expect(JSON.stringify(card)).not.toMatch(/could not reach/);
+    expect(
+      [...nuv.intents.values()].filter((i) => i.status === 'requires_action'),
+    ).toHaveLength(0);
+    const o = data<Options>(await get(me, '/options').expect(200));
+    const by = (r: string) => o.rails.find((x) => x.rail === r)!;
+    for (const rail of ['card', 'apple_pay']) {
+      expect(by(rail)).toMatchObject({
+        available: false,
+        reason: 'This is not available.',
+      });
+    }
+    expect(o.cardPublicKey).toBeNull();
+    const again = await get(me, `/quote?rail=card&amountKobo=${AMOUNT}`).expect(
+      409,
+    );
+    expect(refusal(again)).toMatchObject({
+      code: 'add_money_unavailable',
+      message: 'This is not available.',
+    });
+    // The USSD prompt is refused the same way (Nuvion words it as a refusal of the service).
+    const ussd = view(
+      await start(me, {
+        rail: 'ussd',
+        amountKobo: AMOUNT,
+        chargeKobo: AMOUNT + WAWU_FEE,
+      }).expect(201),
+    );
+    expect(ussd).toMatchObject({
+      status: 'failed',
+      failureMessage: 'This is not available.',
+    });
+    expect(
+      data<Options>(await get(me, '/options').expect(200)).rails.find(
+        (x) => x.rail === 'ussd',
+      ),
+    ).toMatchObject({ available: false, reason: 'This is not available.' });
+  });
+
+  it('NUVION-FIX 5.1: a paid card waits 8 days for its inflow before a person is asked to look (card settlements take 6 days), and says so', async () => {
+    const me = await person();
+    const v = view(await start(me, cardBody()).expect(201));
+    expect(v.status).toBe('processing');
+    expect(v.message).toContain(
+      'Card payments reach your wallet in about 6 days.',
+    );
+    const day = 24 * 60 * 60_000;
+    await service.sweep(new Date(Date.now() + 4 * day));
+    await service.sweep(new Date(Date.now() + 7 * day));
+    expect((await row(v.id)).reviewNote).toBeNull();
+    await service.sweep(new Date(Date.now() + 9 * day));
+    expect((await row(v.id)).reviewNote).toBe(
+      'paid at Nuvion, no inflow after 8 days',
+    );
+  });
+
   it('USSD asks Nuvion for a mobile money prompt on the phone and the person answers it; a failed prompt ends with plain words', async () => {
     const me = await person();
-    // Nuvion lists only Tanzanian and Kenyan mobile money channels: the channel is a setting, and the phone is the person's own.
+    // Nuvion lists only Tanzanian and Kenyan mobile money channels and takes no naira by it; the channel is a setting that must
+    // start NG- (NUVION-FIX 1.3), and the phone is the person's own.
     const res = await start(me, {
       rail: 'ussd',
       amountKobo: AMOUNT,
@@ -755,7 +841,7 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
     const session = nuv.sessions.get(s.providerRef!)!;
     expect(session.meta).toEqual({
       msisdn: '2348012345678',
-      channel: 'KE-SAFARICOM-C2B',
+      channel: 'NG-MTN-C2B',
     });
     expect(session.funding_type).toBe('momo');
     nuv.setSessionStatus(s.reference, 'failed', 'payment_failed');
@@ -1011,8 +1097,11 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
       const blocked = await start(me, cardBody());
       expect(blocked.status).toBe(409);
     } finally {
-      await prisma.planSetting.deleteMany({
+      // Back to on (the suite's own setting; the default is off since NUVION-FIX 1.1).
+      await prisma.planSetting.upsert({
         where: { key: 'money.add_money_card_on' },
+        create: { key: 'money.add_money_card_on', value: 1 },
+        update: { value: 1 },
       });
       await settings.refresh();
     }

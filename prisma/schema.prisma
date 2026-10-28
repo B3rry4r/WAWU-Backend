@@ -1771,6 +1771,17 @@ model NotificationRefundNoticeBackup {
   savedAt        DateTime @default(now())
 }
 
+/// NUVION-FIX 1.1. The saved value of each add-money switch (`money.add_money_card_on`, `money.add_money_ussd_on`) that migration
+/// 20261219090000_nuvion_fix set to 0, as it was (and the admin who saved it), so that migration's rollback.sql can put it back.
+/// Written by that migration only; nothing in the code reads or writes it. Holds a setting and an admin's id, no person's.
+/// To be dropped, as its own task, after two weeks with no rollback.
+model PlanSettingNuvionFixBackup {
+  key              String   @id
+  value            Json
+  updatedByAdminId String?
+  savedAt          DateTime @default(now())
+}
+
 /// ME-10. What one notification is about, so opening it opens that thing
 /// (M31: Reply, See why, a piece, a person). Written by NotificationService.emit()
 /// in the same insert as its notification, from the event that caused it;
@@ -8804,6 +8815,12 @@ model FxAccount {
   status             String    @default("opening")
   frozenAt           DateTime?
   frozenReason       String?
+  /// NUVION-FIX 9.5: when the Hub last asked the provider to make this account's details (`POST /account-details`). They are
+  /// made later (5 to 30 minutes), so they are asked for at most every 5 minutes. Null: never asked. Throttle state only.
+  detailsAskedAt     DateTime?
+  /// NUVION-FIX 9.6: when the details were first seen ready, by the person's own read or by the ready notice. Written once
+  /// (a conditional update), so the notice goes out once. Null: not yet seen ready. Notice state only.
+  detailsReadyAt     DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 

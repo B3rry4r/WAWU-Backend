@@ -41,8 +41,9 @@ const CONFIGURABLE: readonly string[] = [
  * - `FX_DAILY_LIMIT_<CODE>_MINOR`: the most one person may move out of that
  *   currency in a Lagos day, swaps and sends together. Unset is no limit of
  *   WAWU's own (the provider's limits stand).
- * - `FX_DECIMALS_<CODE>`: places in the smallest unit, to override the
- *   catalogue (a stablecoin's, BACKEND_GAPS G-WALLET-21-1).
+ * There is no setting for the places in a smallest unit: every currency, stablecoins included, counts 2 (Nuvion, 27 Oct 2026,
+ * NUVION-FIX 10.1; BACKEND_GAPS G-WALLET-21-1 is closed). A knob that could move one off 2 could make every amount 10,000 times
+ * too big or too small.
  * From the admin settings (plan-settings registry, on by default): the
  * switch of each currency and of each product.
  */
@@ -55,7 +56,6 @@ export class FxSettings {
   private readonly paymentProviderFee = new Map<string, bigint>();
   private readonly collector = new Map<string, string>();
   private readonly dailyLimit = new Map<string, bigint>();
-  private readonly decimals = new Map<string, number>();
 
   constructor(
     config: ConfigService,
@@ -92,7 +92,6 @@ export class FxSettings {
         1,
         Number.MAX_SAFE_INTEGER,
       );
-      const dec = int(`FX_DECIMALS_${code}`, 0, 12);
       if (sw) this.swapFee.set(code, BigInt(sw));
       if (sd) this.sendFee.set(code, BigInt(sd));
       if (pf) this.paymentFee.set(code, BigInt(pf));
@@ -106,7 +105,6 @@ export class FxSettings {
         this.collector.set(code, ban);
       }
       if (lim !== null) this.dailyLimit.set(code, BigInt(lim));
-      if (dec !== null) this.decimals.set(code, dec);
       // The naira fee is paid to WAWU's operational account, as a naira send's
       // is (the provider says which); every other currency needs a collector.
       if ((sw || sd || pf) && !ban && code !== 'NGN') {
@@ -117,10 +115,10 @@ export class FxSettings {
     }
   }
 
-  /** Places in the currency's smallest unit; NGN is 2. */
+  /** Places in the currency's smallest unit: 2 for every currency (Nuvion's answer 10, 27 Oct 2026). */
   decimalsOf(code: FxQuoteCode): number {
     if (code === 'NGN') return 2;
-    return this.decimals.get(code) ?? fxCurrency(code)!.decimals;
+    return fxCurrency(code)!.decimals;
   }
 
   swapFeeMinor(code: FxQuoteCode): bigint {

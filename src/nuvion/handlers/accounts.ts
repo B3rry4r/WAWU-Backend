@@ -264,7 +264,56 @@ export class NuvionAccountRecorder {
         `Nuvion refused the account details request (${e.kind})`,
       );
     }
-    return this.recordDetails(entityId, accountId, created);
+    // NUVION-FIX 9.2: the create answer is not recorded on its own word. Nuvion makes the number later (5 to 30 minutes), and the
+    // record it keeps is the truth: read it back first. If it cannot be read back the claim stays, and the next look
+    // (the dispatcher's retry or the sweep) lists the account's details before anything is sent again.
+    let fresh: NuvionAccountDetailsReading;
+    try {
+      fresh = await this.area.getAccountDetails(entityId, created.id);
+    } catch (e) {
+      if (e instanceof WalletProviderError) {
+        return this.waitOrFail(
+          d,
+          `the account details were made but could not be read back yet (${e.kind}); looked for again before any second request`,
+        );
+      }
+      throw e;
+    }
+    return this.recordDetails(entityId, accountId, fresh);
+  }
+
+  /**
+   * NUVION-FIX 9.1. Reads one person's details again, for the sweep: details still `requested` or `pending` are looked up at
+   * Nuvion (by their id when kept, else by listing the account's) and recorded as a delivery would record them. Reads only; it
+   * never asks Nuvion to make details. Idempotent: the same details again change nothing, and the person's wallet and its
+   * "ready" notice are written once, in the transaction that records the wallet.
+   */
+  async rereadDetails(
+    entityId: string,
+    accountId: string,
+    detailsId: string | null,
+  ): Promise<NuvionHandlerResult> {
+    let found: NuvionAccountDetailsReading | null;
+    try {
+      found = detailsId
+        ? await this.area.getAccountDetails(entityId, detailsId)
+        : await this.area.findAccountDetails(entityId, accountId);
+    } catch (e) {
+      if (e instanceof WalletProviderError) {
+        return {
+          outcome: 'wait',
+          note: `Nuvion could not be asked about the account details (${e.kind})`,
+        };
+      }
+      throw e;
+    }
+    if (!found) {
+      return {
+        outcome: 'wait',
+        note: 'Nuvion lists no details for the account yet',
+      };
+    }
+    return this.recordDetails(entityId, accountId, found);
   }
 
   // -------------------------------------------------------------------------

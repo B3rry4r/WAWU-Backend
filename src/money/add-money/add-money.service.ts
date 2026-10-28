@@ -54,7 +54,7 @@ export function addMoneyBody(view: AddMoneyView): string {
 /** The route key the Idempotency-Key is kept under. */
 export const ADD_MONEY_ROUTE = 'money/add-money';
 
-/** The plan settings that switch the two products on or off (1 on, 0 off; default 1). */
+/** The plan settings that switch the two products on or off (1 on, 0 off; default 0 since NUVION-FIX 1.1: Nuvion takes no naira by card or USSD). */
 export const ADD_MONEY_CARD_SETTING = 'money.add_money_card_on';
 export const ADD_MONEY_USSD_SETTING = 'money.add_money_ussd_on';
 
@@ -70,8 +70,11 @@ export const REFUSAL_MEMORY_MS = 15 * MINUTE;
 const LOST_START_AFTER_MS = 2 * MINUTE;
 /** A hosted page or a prompt left alone this long is ended on our side. */
 const WAITING_ENDS_AFTER_MS = 2 * 60 * MINUTE;
-/** A paid attempt whose inflow has not landed after this long is marked for a person. */
-const PAID_REVIEW_AFTER_MS = 3 * 24 * 60 * MINUTE;
+/**
+ * A paid attempt whose inflow has not landed after this long is marked for a person. Card settlements take 6 days (Nuvion,
+ * 27 Oct 2026), so a person is asked to look only after 8 (NUVION-FIX 5.1).
+ */
+export const PAID_REVIEW_AFTER_MS = 8 * 24 * 60 * MINUTE;
 const SWEEP_BATCH = 25;
 const CHECK_EVERY_MS = 20_000;
 
@@ -83,8 +86,10 @@ const LABEL: Record<AddMoneyRail, string> = {
 };
 const NOT_AVAILABLE = 'This is not available yet.';
 const OFF_NOW = 'This is switched off for now.';
-const NOT_SWITCHED_ON =
-  'This is not switched on for naira yet. It shows here as soon as it is.';
+/** Nuvion refused the rail for naira (not supported, or suspended): a plain no, with no promise that it will appear. */
+const NOT_SWITCHED_ON = 'This is not available.';
+/** Open banking: Nuvion takes no naira by it, whatever is configured (NUVION-FIX 1.3). */
+const NOT_FOR_NAIRA = 'This is not available.';
 const DOWN_NOW =
   'This is not available right now. Nothing was charged. Try again later.';
 const UNREACHABLE =
@@ -129,7 +134,10 @@ export function statusLine(s: {
         ? 'Check your phone and answer the prompt to pay.'
         : 'Finish the payment on the page that opened.';
     case 'processing':
-      return 'Paid. Your wallet is being topped up. This can take a little while.';
+      // Card settlements take 6 days (NUVION-FIX 5.1); the other ways are quick.
+      return s.rail === 'card' || s.rail === 'apple_pay'
+        ? 'Paid. Card payments reach your wallet in about 6 days.'
+        : 'Paid. Your wallet is being topped up. This can take a little while.';
     case 'settled':
       return 'The money is in your wallet.';
     case 'cancelled':
@@ -244,13 +252,13 @@ export class AddMoneyService implements OnModuleInit {
   railProblem(rail: AddMoneyRail, now = Date.now()): string | null {
     const p = this.addMoney;
     if (!p || !p.addMoneyRails.includes(rail)) return NOT_AVAILABLE;
+    // NUVION-FIX 1.3: Nuvion takes no naira by open banking (a funding session in EUR or GBP only), whatever else is set.
+    if (rail === 'open_banking') return NOT_FOR_NAIRA;
     const setting =
-      rail === 'ussd' || rail === 'open_banking'
-        ? ADD_MONEY_USSD_SETTING
-        : ADD_MONEY_CARD_SETTING;
+      rail === 'ussd' ? ADD_MONEY_USSD_SETTING : ADD_MONEY_CARD_SETTING;
     if (this.planSettings.number(setting) !== 1) return OFF_NOW;
     if (rail === 'card' && !this.settings.cardPublicKey) return NOT_AVAILABLE;
-    if (rail !== 'card' && rail !== 'ussd' && !this.settings.returnUrl) {
+    if (rail === 'apple_pay' && !this.settings.returnUrl) {
       return NOT_AVAILABLE;
     }
     if (rail === 'card' && !this.settings.returnUrl) return NOT_AVAILABLE;
@@ -877,7 +885,7 @@ export class AddMoneyService implements OnModuleInit {
         age > PAID_REVIEW_AFTER_MS &&
         !fresh.reviewNote
       ) {
-        await this.note(fresh.id, 'paid at Nuvion, no inflow after 3 days');
+        await this.note(fresh.id, 'paid at Nuvion, no inflow after 8 days');
       }
     }
     const owed = await this.prisma.addMoneySession.findMany({
@@ -1106,7 +1114,14 @@ export class AddMoneyService implements OnModuleInit {
     if (e.kind === 'not_supported' || e.kind === 'unavailable') {
       // The provider said no for naira (not switched on, or its partner is down): shown as such for a while, then tried again.
       const reason = e.kind === 'not_supported' ? NOT_SWITCHED_ON : DOWN_NOW;
-      this.refused.set(rail, { until: Date.now() + REFUSAL_MEMORY_MS, reason });
+      // A card and Apple Pay are one route at Nuvion (a payment intent): a no for one is a no for both. The rail is hidden
+      // and remembered as refused for a while (NUVION-FIX 1.2).
+      const until = Date.now() + REFUSAL_MEMORY_MS;
+      for (const r of rail === 'card' || rail === 'apple_pay'
+        ? (['card', 'apple_pay'] as const)
+        : [rail]) {
+        this.refused.set(r, { until, reason });
+      }
       await this.fail(id, e.kind, reason);
     } else if (e.kind === 'outcome_unknown' || e.kind === 'not_confirmed') {
       // The answer was lost: the attempt may exist at the provider. It stays open; the sweep and the webhook find it by our reference.

@@ -29,6 +29,11 @@ const PAGE_LINES = 100;
 /** How long the operational account's name is remembered, and how soon it is asked for again when the provider could not say. */
 const OPERATIONAL_NAME_MS = 5 * 60_000;
 const OPERATIONAL_NAME_RETRY_MS = 30_000;
+/**
+ * NUVION-FIX 9.5: the provider makes an account's details later (5 to 30 minutes), so they are asked for at most this often,
+ * however often the wallet is read. Reading what exists is not limited.
+ */
+export const DETAILS_ASK_EVERY_MS = 5 * 60_000;
 
 /** What an account's details say when the provider could not be asked at all. */
 export const DETAILS_UNREAD_MESSAGE =
@@ -78,6 +83,11 @@ function decodeCursor(raw: string): FxHistoryCursor {
 @Injectable()
 export class FxAccountsService {
   private readonly logger = new Logger(FxAccountsService.name);
+  /** The last refusal of each account's details, told while the next ask is waited out (this server only; null-safe on any other). */
+  private readonly refusals = new Map<
+    string,
+    { note: string; until: number }
+  >();
 
   constructor(
     private readonly port: FxPort,
@@ -233,6 +243,7 @@ export class FxAccountsService {
       }
       throw providerFailure(e);
     }
+    const asked = new Date();
     const saved = await this.prisma.fxAccount.update({
       where: { id: row.id },
       data: {
@@ -240,8 +251,15 @@ export class FxAccountsService {
         ban: opened.account.ban,
         detailsId: opened.details?.detailsId ?? null,
         status: 'open',
+        // The details were asked for in the call above (NUVION-FIX 9.5), and a number ready at once is seen by the person
+        // here, so it is not news later (9.6).
+        detailsAskedAt: asked,
+        ...(opened.details?.status === 'active'
+          ? { detailsReadyAt: asked }
+          : {}),
       },
     });
+    this.rememberRefusal(saved, opened.details, opened.detailsRefusal);
     return accountView(
       saved,
       this.settings,
@@ -263,9 +281,12 @@ export class FxAccountsService {
     const person = this.port.person(wallet);
     // Details never seen for this account are asked for (made, if the
     // provider holds none) so the app can say exactly where they stand: an
-    // account whose details the provider refused is told so, in its words,
-    // and is tried again on the next read (dev: CAD and AED, 503).
-    const ensure = ensureDetails || row.detailsId === null;
+    // account whose details the provider refused is told so, in its words.
+    // NUVION-FIX 9.5: asked for at most every 5 minutes (a conditional write is
+    // the claim, so two reads at once ask once); between asks the details are
+    // only read, and the last refusal is still told.
+    const ensure =
+      (ensureDetails || row.detailsId === null) && (await this.claimAsk(row));
     const [balance, read] = await Promise.all([
       fx
         .readAccount(person, row.providerAccountId)
@@ -294,7 +315,64 @@ export class FxAccountsService {
         })
         .catch(() => undefined);
     }
-    return accountView(row, this.settings, balance, details, read.refusal);
+    // NUVION-FIX 9.6: details the person sees ready on their own read are not news later (the ready notice is written once, by
+    // whoever sees them active first, in src/nuvion/handlers/fx.handler.ts).
+    if (details?.status === 'active' && row.detailsReadyAt === null) {
+      await this.prisma.fxAccount
+        .updateMany({
+          where: { id: row.id, detailsReadyAt: null },
+          data: { detailsReadyAt: new Date() },
+        })
+        .catch(() => undefined);
+    }
+    if (ensure || details) this.rememberRefusal(row, details, read.refusal);
+    const refusal = read.refusal ?? (details ? null : this.remembered(row.id));
+    return accountView(row, this.settings, balance, details, refusal);
+  }
+
+  /** One ask per account per 5 minutes: true for the read that wins the claim. */
+  private async claimAsk(row: FxAccount): Promise<boolean> {
+    const now = new Date();
+    const claimed = await this.prisma.fxAccount.updateMany({
+      where: {
+        id: row.id,
+        OR: [
+          { detailsAskedAt: null },
+          {
+            detailsAskedAt: {
+              lt: new Date(now.getTime() - DETAILS_ASK_EVERY_MS),
+            },
+          },
+        ],
+      },
+      data: { detailsAskedAt: now },
+    });
+    return claimed.count === 1;
+  }
+
+  private rememberRefusal(
+    row: Pick<FxAccount, 'id'>,
+    details: unknown,
+    refusal: string | null,
+  ): void {
+    if (details || refusal === null) {
+      this.refusals.delete(row.id);
+      return;
+    }
+    this.refusals.set(row.id, {
+      note: refusal,
+      until: Date.now() + DETAILS_ASK_EVERY_MS,
+    });
+  }
+
+  private remembered(id: string): string | null {
+    const r = this.refusals.get(id);
+    if (!r) return null;
+    if (r.until <= Date.now()) {
+      this.refusals.delete(id);
+      return null;
+    }
+    return r.note;
   }
 
   private unread(row: FxAccount, what: string, e: unknown): null {

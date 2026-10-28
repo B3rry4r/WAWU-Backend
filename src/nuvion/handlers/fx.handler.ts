@@ -1,11 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
+import type { FxAccount } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { FxOperationsService } from '../../money/fx/fx-operations.service';
+import { tellWalletReady } from '../../money/opening/wallet-ready-notice';
+import { NotificationService } from '../../notification/notification.service';
 import {
   WALLET_PROVIDER,
   type WalletProvider,
 } from '../../wallet-provider/wallet-provider.interface';
+import type { ProviderFxChain } from '../../wallet-provider/wallet-provider-fx';
 import { readNuvionTransfer } from '../nuvion-ledger-delivery';
 import { NuvionWalletProvider } from '../nuvion-wallet-provider';
 import type { NuvionWebhookEventName } from '../nuvion.interface';
@@ -100,10 +104,7 @@ export class NuvionFxHandler implements NuvionEventHandler {
           data: { detailsId },
         });
       }
-      return {
-        outcome: 'done',
-        note: `${account.currency} account details noted`,
-      };
+      return this.tellReady(d, fx, account);
     }
 
     const read = readNuvionTransfer(d.data);
@@ -220,6 +221,78 @@ export class NuvionFxHandler implements NuvionEventHandler {
     return {
       outcome: 'done',
       note: `${account.currency} ${direction} recorded`,
+    };
+  }
+
+  /**
+   * NUVION-FIX 9.6: the person is told once when a foreign account's details are ready (5 to 30 minutes after they were asked
+   * for). Never on the delivery's word: the details are read back from the provider first. The notice is the wallet's own
+   * ("Your account number is ready", `wallet_ready`; the tap opens Wallet) and is written in the transaction that sets
+   * `detailsReadyAt` with a conditional write, so a repeated or racing delivery, and a person who already saw the details ready,
+   * never get a second one.
+   */
+  private async tellReady(
+    d: NuvionDelivery,
+    fx: NonNullable<NuvionWalletProvider['fx']>,
+    account: FxAccount,
+  ): Promise<NuvionHandlerResult> {
+    const noted = {
+      outcome: 'done' as const,
+      note: `${account.currency} account details noted`,
+    };
+    if (account.detailsReadyAt) return noted;
+    const notifications = this.find<NotificationService>(NotificationService);
+    if (!notifications) {
+      return {
+        outcome: 'wait',
+        note: 'the notification service is not mounted',
+      };
+    }
+    let active: boolean;
+    try {
+      const wallet = await this.prisma.fintavaWallet.findUnique({
+        where: { wawuUserId: account.wawuUserId },
+        select: { walletId: true },
+      });
+      const read = await fx.readDetails(
+        {
+          customerId: account.providerCustomerId,
+          walletId: wallet?.walletId ?? '',
+        },
+        {
+          accountId: account.providerAccountId ?? '',
+          currency: account.currency,
+          chain: (account.chain || null) as ProviderFxChain | null,
+        },
+        false,
+      );
+      active = read.details?.status === 'active';
+    } catch {
+      return {
+        outcome: 'wait',
+        note: 'the account details could not be read back yet',
+      };
+    }
+    if (!active) {
+      return {
+        outcome: 'done',
+        note: `${account.currency} account details noted; still pending`,
+      };
+    }
+    const told = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.fxAccount.updateMany({
+        where: { id: account.id, detailsReadyAt: null },
+        data: { detailsReadyAt: new Date() },
+      });
+      if (claimed.count !== 1) return false;
+      await tellWalletReady(notifications, tx, account.wawuUserId);
+      return true;
+    });
+    return {
+      outcome: 'done',
+      note: told
+        ? `${account.currency} account details ready; the person is told`
+        : `${account.currency} account details noted`,
     };
   }
 

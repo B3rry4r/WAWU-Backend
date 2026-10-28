@@ -29,11 +29,14 @@ import type { AddMoneyRail } from '../../wallet-provider/add-money';
  *   ADD_MONEY_RETURN_URL
  *       The https address of the Hub's return page, where Nuvion's hosted pages
  *       send the person back (`<base>/money/add-money/return`). Unset: the
- *       hosted rails (3-D Secure, Apple Pay, the bank checkout) are not offered.
+ *       hosted rails (3-D Secure, Apple Pay) are not offered. The bank checkout
+ *       (open banking) is never offered for naira: Nuvion takes none.
  *   ADD_MONEY_USSD_CHANNEL
- *       Nuvion's mobile money channel for the person's phone. Nuvion lists
- *       only Tanzanian and Kenyan channels (guides__funding-session); there is
- *       no Nigerian one to default to. Unset: USSD is not offered for naira.
+ *       Nuvion's mobile money channel for the person's phone, one that starts
+ *       `NG-`. Nuvion lists only Tanzanian and Kenyan channels
+ *       (guides__funding-session) and takes no naira by mobile money (its
+ *       answer of 27 Oct 2026), so there is none to default to. Unset, or a
+ *       channel of another country: USSD is not offered for naira.
  *
  * Read when the server starts: a value that is set and unusable stops it,
  * naming the setting (as the fee settings do).
@@ -155,11 +158,10 @@ export class AddMoneySettings {
     this.returnUrl = readReturnUrl(get(K.returnUrl));
     const channel = get(K.ussdChannel)?.trim() ?? '';
     if (channel !== '' && !/^[A-Z]{2}-[A-Z0-9-]{3,30}$/.test(channel)) {
-      throw new FeeConfigError(
-        `${K.ussdChannel} must look like KE-SAFARICOM-C2B.`,
-      );
+      throw new FeeConfigError(`${K.ussdChannel} must look like NG-MTN-C2B.`);
     }
-    this.ussdChannel = channel === '' ? null : channel;
+    // NUVION-FIX 1.3: a channel of another country (KE-, TZ-) cannot take naira, so it is never used for it: USSD is not offered.
+    this.ussdChannel = /^NG-/.test(channel) ? channel : null;
   }
 
   /** The two fees on `amountKobo`, or the setting that is unset. */
