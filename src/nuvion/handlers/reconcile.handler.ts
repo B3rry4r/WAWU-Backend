@@ -288,27 +288,36 @@ export class NuvionReconcileHandler implements NuvionEventHandler {
     for await (const row of this.eachRow(waiting, (r) => r.entityId ?? '')) {
       if (row.entityId === null || row.accountId === null) continue;
       report.checked += 1;
-      const result = await recorder.rereadDetails(
-        row.entityId,
-        row.accountId,
-        row.accountDetailsId,
-      );
-      if (result.outcome === 'failed') {
-        report.unreadable += 1;
-      } else if (result.outcome === 'done') {
-        const after = await this.prisma.nuvionEntity.findUnique({
-          where: { entityId: row.entityId },
-          select: { accountDetailsId: true, accountDetailsStatus: true },
-        });
-        if (
-          after &&
-          (after.accountDetailsStatus !== row.accountDetailsStatus ||
-            after.accountDetailsId !== row.accountDetailsId)
-        ) {
-          report.recorded += 1;
+      // One row's failure (its ready notice will not write, so recording its wallet throws and rolls back) does not stop the
+      // rows behind it, as in the two loops around this one; it is tried again next pass (patch round 2).
+      try {
+        const result = await recorder.rereadDetails(
+          row.entityId,
+          row.accountId,
+          row.accountDetailsId,
+        );
+        if (result.outcome === 'failed') {
+          report.unreadable += 1;
+        } else if (result.outcome === 'done') {
+          const after = await this.prisma.nuvionEntity.findUnique({
+            where: { entityId: row.entityId },
+            select: { accountDetailsId: true, accountDetailsStatus: true },
+          });
+          if (
+            after &&
+            (after.accountDetailsStatus !== row.accountDetailsStatus ||
+              after.accountDetailsId !== row.accountDetailsId)
+          ) {
+            report.recorded += 1;
+          }
+        } else if (/could not be asked/.test(result.note)) {
+          report.unreadable += 1;
         }
-      } else if (/could not be asked/.test(result.note)) {
+      } catch (e) {
         report.unreadable += 1;
+        this.logger.error(
+          `account details: one account could not be read again (${(e as Error).name ?? 'Error'})`,
+        );
       }
     }
     return report;

@@ -29,6 +29,7 @@ import { PrismaModule } from '../../common/prisma/prisma.module';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { HUB_APP_OPTIONS } from '../../hub-app-options';
 import { MoneyModule } from '../../money/money.module';
+import { NotificationService } from '../../notification/notification.service';
 import { WALLET_PROVIDER } from '../../wallet-provider/wallet-provider.interface';
 import { NuvionClient } from '../nuvion-client';
 import { NuvionWalletProvider } from '../nuvion-wallet-provider';
@@ -650,6 +651,56 @@ describe('WALK4-FIX M-1: the account number is asked for by the opening path and
       expect(detailPosts(fresh)).toBe(1);
       expect((await entity(fresh)).accountDetailsId).not.toBeNull();
       for (const p of old) expect(detailPosts(p)).toBe(0);
+    });
+
+    it('round 2: a waiting row whose ready notice will not write does not stop the rows behind it, and is tried again on the next pass', async () => {
+      // The verifier's attack: row A sorts first (older), its recordDetails throws inside the transaction. The pass used to stop
+      // there, skipping B, and A blocked B on every later pass.
+      // Both accounts get their details requested first; only then does Nuvion make both numbers (so no pass before the spy
+      // records either one).
+      const make = async () => {
+        const { p } = await accountWithoutDetails();
+        await aged(p, 10);
+        await reconcile.rereadAccountDetails(new Date());
+        return p;
+      };
+      const a = await make();
+      const b = await make();
+      for (const [p, minutes] of [
+        [a, 30],
+        [b, 20],
+      ] as const) {
+        nuv.activate((await entity(p)).accountDetailsId!, nuban());
+        await aged(p, minutes);
+      }
+      const spy = jest
+        .spyOn(NotificationService.prototype, 'emitOrThrow')
+        .mockImplementation((event: { userWawuId: string }) => {
+          if (event.userWawuId === a.id) {
+            return Promise.reject(new Error('notice will not write'));
+          }
+          return Promise.resolve({} as never);
+        });
+      let report: Awaited<ReturnType<typeof reconcile.rereadAccountDetails>>;
+      try {
+        report = await reconcile.rereadAccountDetails(new Date());
+      } finally {
+        spy.mockRestore();
+      }
+      expect(report?.unreadable).toBeGreaterThanOrEqual(1);
+      // B, behind A, got its wallet in the same pass; A's wallet and notice rolled back together.
+      expect(await wallet(b)).not.toBeNull();
+      expect(await wallet(a)).toBeNull();
+      expect((await entity(a)).accountDetailsStatus).toBe('pending');
+      // The next pass tries A again, and tells once.
+      await aged(a, 30);
+      await reconcile.rereadAccountDetails(new Date());
+      expect(await wallet(a)).not.toBeNull();
+      expect(
+        await prisma.notification.count({
+          where: { userWawuId: a.id, kind: 'wallet_ready' },
+        }),
+      ).toBe(1);
     });
 
     it('a request Nuvion refuses is counted as unread, the claim is let go, and the next sweep asks again', async () => {
