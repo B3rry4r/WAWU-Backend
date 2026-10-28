@@ -66,19 +66,29 @@ const NOT_SERVED_TYPES: readonly string[] = [
 ];
 
 /**
- * Nuvion's refusal of the service itself, not of this payment (NUVION-FIX 1.2): card acquiring is SUSPENDED in production
- * (27 Oct 2026). Its type or its words say so on a 4xx; a person's own account being suspended (`error_account_*`) is not this.
+ * Nuvion's refusal of the service itself, not of this payment (NUVION-FIX 1.2, NF-V2): card acquiring is SUSPENDED in
+ * production (27 Oct 2026). A rail is hidden for everyone on this, so it is decided on Nuvion's `type` and the call alone,
+ * never on its words, and only for the call that makes the payment (the payment intent, the funding session):
+ * - the known type for a currency Nuvion does not take (any call: dev answers it when the intent is confirmed);
+ * - on the creating call, an acquiring or service type that says suspended, not supported or not available;
+ * - on the creating call, a 403 whose type is not about an entity, an account or a review (those are about one person).
+ * An entity or account that is suspended, a card issuer's refusal on confirm and a review's 422 are about one person or one
+ * card and fail that attempt only.
  */
 export function isServiceRefusal(e: NuvionError): boolean {
   const type = e.nuvionType ?? '';
   if (NOT_SERVED_TYPES.includes(type)) return true;
+  if (e.operation !== 'start add money') return false;
+  if (/^error_(entity|account|kyc)_/.test(type)) return false;
+  if (e.httpStatus === 403) return true;
   const status = e.httpStatus ?? 0;
-  if (status < 400 || status >= 500 || status === 429) return false;
-  if (type.startsWith('error_account_')) return false;
   return (
-    /suspend/i.test(type) ||
-    /^error_acquiring_.*(not_supported|not_available)/.test(type) ||
-    e.messages.some((m) => /suspend/i.test(m))
+    status >= 400 &&
+    status < 500 &&
+    status !== 429 &&
+    /^error_(acquiring|service)_.*(suspend|not_supported|not_available)/.test(
+      type,
+    )
   );
 }
 

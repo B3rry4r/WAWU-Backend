@@ -481,6 +481,7 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
     nuv.cardMode = 'frictionless';
     nuv.refuseNaira = false;
     nuv.suspended = false;
+    nuv.forced = {};
     nuv.cardFee = CARD_FEE;
     book.mode = 'successful';
   });
@@ -805,6 +806,89 @@ describe('Add money by card, Apple Pay, USSD and the bank checkout (WALLET-25, W
         (x) => x.rail === 'ussd',
       ),
     ).toMatchObject({ available: false, reason: 'This is not available.' });
+  });
+
+  it('NF-V2: a refusal about one person or one card (an entity 403, a card issuer 422 on confirm, a review 422) fails that attempt and hides no rail from anyone', async () => {
+    const me = await person();
+    const other = await person();
+    const cases = [
+      {
+        name: 'an entity 403',
+        rail: 'card',
+        forced: {
+          create: {
+            status: 403,
+            type: 'error_entity_suspended',
+            message: 'This entity is suspended.',
+          },
+        },
+      },
+      {
+        name: "a card issuer's 422 on confirm",
+        rail: 'card',
+        forced: {
+          confirm: {
+            status: 422,
+            type: 'error_acquiring_card_suspended',
+            message: 'The card is suspended.',
+          },
+        },
+      },
+      {
+        name: 'a review 422',
+        rail: 'card',
+        forced: {
+          create: {
+            status: 422,
+            type: 'error_kyc_under_compliance_review',
+            message: 'Your account is suspended pending review.',
+          },
+        },
+      },
+      {
+        name: 'an entity 403 on a USSD prompt',
+        rail: 'ussd',
+        forced: {
+          create: {
+            status: 403,
+            type: 'error_entity_suspended',
+            message: 'This entity is suspended.',
+          },
+        },
+      },
+    ] as const;
+    for (const c of cases) {
+      nuv.forced = { ...c.forced };
+      const body =
+        c.rail === 'ussd'
+          ? {
+              rail: 'ussd',
+              amountKobo: AMOUNT,
+              chargeKobo: AMOUNT + WAWU_FEE,
+            }
+          : cardBody();
+      const v = view(await start(me, body).expect(201));
+      expect([c.name, v.status]).toEqual([c.name, 'failed']);
+      expect([c.name, v.failureMessage]).not.toEqual([
+        c.name,
+        'This is not available.',
+      ]);
+      expect(await row(v.id)).not.toMatchObject({
+        failureCode: 'not_supported',
+      });
+      // Nobody is told the rail is gone: not the person, and not anyone else.
+      nuv.forced = {};
+      for (const who of [me, other]) {
+        const o = data<Options>(await get(who, '/options').expect(200));
+        for (const rail of ['card', 'apple_pay', 'ussd']) {
+          expect([
+            c.name,
+            rail,
+            o.rails.find((x) => x.rail === rail)!.available,
+          ]).toEqual([c.name, rail, true]);
+        }
+      }
+    }
   });
 
   it('NUVION-FIX 5.1: a paid card waits 8 days for its inflow before a person is asked to look (card settlements take 6 days), and says so', async () => {

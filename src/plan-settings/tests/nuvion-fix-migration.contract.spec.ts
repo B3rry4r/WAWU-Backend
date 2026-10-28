@@ -200,9 +200,10 @@ describe('NUVION-FIX 1.1: the migration turns a saved "on" off and keeps what it
       await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT refusal');
       const still = await all(tx);
       const keptStill = await backups(tx);
-      // The admin decides the card, and removes the USSD row: the rollback now passes and puts nothing over their choice.
+      // The admin keeps their card choice (leaves that key out of the backup, as rollback.sql says) and removes the USSD row:
+      // the rollback now passes and puts nothing over their choice.
       await tx.$executeRawUnsafe(
-        `UPDATE "PlanSetting" SET "value" = to_jsonb(0) WHERE "key" = '${CARD}'`,
+        `DELETE FROM "PlanSettingNuvionFixBackup" WHERE "key" = '${CARD}'`,
       );
       await tx.$executeRawUnsafe(
         `DELETE FROM "PlanSetting" WHERE "key" = '${USSD}'`,
@@ -216,7 +217,49 @@ describe('NUVION-FIX 1.1: the migration turns a saved "on" off and keeps what it
     expect(by(r.still)).toEqual({ [CARD]: 1, [USSD]: 0 });
     expect(r.keptStill).toHaveLength(2);
     expect(r.after).toEqual([
-      { key: CARD, value: 1, updatedByAdminId: 'adm1' },
+      { key: CARD, value: 1, updatedByAdminId: 'adm7' },
+    ]);
+  });
+
+  it('NF-V1: its rollback also refuses when an admin saved 0 after the migration, and their 0 is not overwritten by the old 1', async () => {
+    const r = await inRolledBackTx(async (tx) => {
+      await clear(tx);
+      await tx.$executeRawUnsafe('DELETE FROM "PlanSettingNuvionFixBackup"');
+      await put(tx, CARD, 1, 'adm1');
+      await put(tx, USSD, 1, 'adm2');
+      await tx.$executeRawUnsafe(MIGRATE);
+      // Later an admin saved the card switch as 0 on purpose: the value is the migration's, the author is not.
+      await tx.$executeRawUnsafe(
+        `UPDATE "PlanSetting" SET "value" = to_jsonb(0), "updatedByAdminId" = 'adm8' WHERE "key" = '${CARD}'`,
+      );
+      let refused = '';
+      await tx.$executeRawUnsafe('SAVEPOINT refusal');
+      try {
+        await tx.$executeRawUnsafe(ROLLBACK);
+      } catch (e) {
+        refused = e instanceof Error ? e.message : String(e);
+      }
+      await tx.$executeRawUnsafe('ROLLBACK TO SAVEPOINT refusal');
+      const still = await all(tx);
+      const keptStill = await backups(tx);
+      // They decide: leave the card out of the backup. The USSD row the migration set is still the migration's, so it is restored.
+      await tx.$executeRawUnsafe(
+        `DELETE FROM "PlanSettingNuvionFixBackup" WHERE "key" = '${CARD}'`,
+      );
+      await tx.$executeRawUnsafe(ROLLBACK);
+      const after = await all(tx);
+      return { refused, still, keptStill, after };
+    });
+    expect(r.refused).toContain('NUVION-FIX rollback');
+    expect(r.refused).toContain('Nothing was changed');
+    expect(r.still).toEqual([
+      { key: CARD, value: 0, updatedByAdminId: 'adm8' },
+      { key: USSD, value: 0, updatedByAdminId: null },
+    ]);
+    expect(r.keptStill).toHaveLength(2);
+    expect(r.after).toEqual([
+      { key: CARD, value: 0, updatedByAdminId: 'adm8' },
+      { key: USSD, value: 1, updatedByAdminId: 'adm2' },
     ]);
   });
 });

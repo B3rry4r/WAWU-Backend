@@ -5,6 +5,8 @@ import { loadPlanSettingsDefaults } from '../../../plan-settings/plan-settings-d
 import { buildRegistry } from '../../../plan-settings/plan-setting-registry';
 import type { PrismaService } from '../../../common/prisma/prisma.service';
 import type { WalletProvider } from '../../../wallet-provider/wallet-provider.interface';
+import { isServiceRefusal } from '../../../nuvion/areas/add-money';
+import { NuvionError } from '../../../nuvion/nuvion-error';
 import { AddMoneySettings } from '../add-money-config';
 import {
   AddMoneyService,
@@ -156,5 +158,100 @@ describe('NUVION-FIX 5.1: a card settles in 6 days, so the review waits 8', () =
     ).toBe(
       'Paid. Your wallet is being topped up. This can take a little while.',
     );
+  });
+});
+
+describe('NF-V2: a refusal of the service hides a rail; a refusal about a person or a card does not', () => {
+  const err = (
+    operation: string,
+    httpStatus: number,
+    nuvionType: string,
+    messages: string[] = [],
+  ) =>
+    new NuvionError({
+      kind: 'refused',
+      operation,
+      httpStatus,
+      nuvionType,
+      messages,
+    });
+  const START = 'start add money';
+  const CONFIRM = 'confirm add money';
+
+  it('the service itself: an acquiring or service type, a 403 from the call that makes the payment, the known currency refusal', () => {
+    expect(
+      isServiceRefusal(err(START, 403, 'error_acquiring_service_suspended')),
+    ).toBe(true);
+    expect(
+      isServiceRefusal(err(START, 400, 'error_acquiring_service_suspended')),
+    ).toBe(true);
+    expect(
+      isServiceRefusal(err(START, 400, 'error_service_not_available')),
+    ).toBe(true);
+    expect(
+      isServiceRefusal(err(START, 403, 'error_auth_permission_denied')),
+    ).toBe(true);
+    expect(
+      isServiceRefusal(
+        err(START, 400, 'error_acquiring_currency_not_supported'),
+      ),
+    ).toBe(true);
+    // Nuvion's dev says the currency is not supported when the intent is confirmed: that known type stands.
+    expect(
+      isServiceRefusal(
+        err(CONFIRM, 400, 'error_acquiring_currency_not_supported'),
+      ),
+    ).toBe(true);
+  });
+
+  it('a person or a card: never decided on words, never on the confirm call, never on an entity, account or review type', () => {
+    expect(
+      isServiceRefusal(
+        err(START, 403, 'error_entity_suspended', [
+          'This entity is suspended.',
+        ]),
+      ),
+    ).toBe(false);
+    expect(
+      isServiceRefusal(
+        err(START, 403, 'error_account_suspended', [
+          'The account is suspended.',
+        ]),
+      ),
+    ).toBe(false);
+    expect(
+      isServiceRefusal(
+        err(START, 422, 'error_kyc_under_compliance_review', [
+          'Your account is suspended pending review.',
+        ]),
+      ),
+    ).toBe(false);
+    expect(
+      isServiceRefusal(
+        err(CONFIRM, 422, 'error_acquiring_card_suspended', [
+          'The card is suspended.',
+        ]),
+      ),
+    ).toBe(false);
+    expect(
+      isServiceRefusal(err(CONFIRM, 403, 'error_auth_permission_denied')),
+    ).toBe(false);
+    // Words alone decide nothing.
+    expect(
+      isServiceRefusal(
+        err(START, 400, 'error_validation_error', ['Funding is suspended.']),
+      ),
+    ).toBe(false);
+    expect(
+      isServiceRefusal(
+        err(START, 422, 'error_acquiring_card_expired', ['suspended']),
+      ),
+    ).toBe(false);
+    expect(
+      isServiceRefusal(err(START, 429, 'error_auth_rate_limit_exceeded')),
+    ).toBe(false);
+    expect(
+      isServiceRefusal(err(START, 503, 'error_system_dependency_unavailable')),
+    ).toBe(false);
   });
 });
