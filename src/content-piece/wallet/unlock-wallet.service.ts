@@ -18,6 +18,8 @@ import {
 } from '../../money/payments/payable-registry';
 import { WalletPaymentService } from '../../money/payments/wallet-payment.service';
 import { NotificationService } from '../../notification/notification.service';
+import { NoticeFacts } from '../../notice-mail/notice-facts';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import { StorageService } from '../../storage/storage.service';
 import type { UnlockWalletDto } from './unlock-wallet.dto';
 import type {
@@ -85,6 +87,8 @@ export class UnlockWalletService implements OnModuleInit {
     private readonly notifications: NotificationService,
     private readonly storage: StorageService,
     private readonly wawuId: WawuIdClient,
+    private readonly mail: NoticeMailer,
+    private readonly facts: NoticeFacts,
   ) {}
 
   onModuleInit(): void {
@@ -306,7 +310,52 @@ export class UnlockWalletService implements OnModuleInit {
         );
       }
     }
+    if (result.granted) this.emailSale(payment, creatorId);
     this.logger.log(`payment ${payment.paymentId}: access given`);
+  }
+
+  /**
+   * EMAIL-02: after the access is committed, once (only the call that wrote
+   * the purchase gets here): the creator is told of the sale and the buyer
+   * gets the receipt. The figures are the payment's own row.
+   */
+  private emailSale(payment: CompletedPayment, creatorId: string): void {
+    this.mail.later(async () => {
+      const paid = await this.facts.payment(payment.paymentId);
+      if (!paid) return;
+      const piece = await this.prisma.contentPiece.findUnique({
+        where: { id: payment.targetId },
+        select: { title: true },
+      });
+      const title = piece?.title ?? '';
+      const [buyerName, paidWhen] = await Promise.all([
+        this.facts.nameOf(payment.payerWawuUserId),
+        this.facts.paidWhen(creatorId, 'wallet'),
+      ]);
+      this.mail.notify(
+        creatorId,
+        'sale_made',
+        {
+          itemTitle: title,
+          buyerName,
+          earnedMinor: paid.payeeShareKobo,
+          currency: 'NGN',
+          paidWhen,
+        },
+        noticeKey('sale_made', payment.paymentId),
+      );
+      this.mail.notify(
+        payment.payerWawuUserId,
+        'purchase_receipt',
+        {
+          itemTitle: title,
+          paidMinor: paid.priceKobo,
+          currency: 'NGN',
+          reference: paid.reference,
+        },
+        noticeKey('purchase_receipt', payment.paymentId),
+      );
+    });
   }
 
   // -------------------------------------------------------------------------

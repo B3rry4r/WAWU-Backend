@@ -17,6 +17,8 @@ import {
   type PayableTarget,
 } from '../../money/payments/payable-registry';
 import { WalletPaymentService } from '../../money/payments/wallet-payment.service';
+import { NoticeFacts } from '../../notice-mail/notice-facts';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import { NotificationService } from '../../notification/notification.service';
 import { MAX_TIP_KOBO, MIN_TIP_KOBO } from './tip-wallet.dto';
 import type { TipWalletDto, TipWalletQuoteQueryDto } from './tip-wallet.dto';
@@ -85,6 +87,8 @@ export class TipWalletService implements OnModuleInit {
     private readonly blocked: BlockedAccountService,
     private readonly notifications: NotificationService,
     private readonly wawuId: WawuIdClient,
+    private readonly mail: NoticeMailer,
+    private readonly facts: NoticeFacts,
   ) {}
 
   onModuleInit(): void {
@@ -271,6 +275,29 @@ export class TipWalletService implements OnModuleInit {
           `payment ${payment.paymentId}: the tip notification failed (${e instanceof Error ? e.name : 'error'})`,
         );
       }
+    }
+    if (result.granted) {
+      // EMAIL-02: once, after the tip is committed (only the call that wrote
+      // the purchase gets here). The figure is the payment's own row.
+      this.mail.later(async () => {
+        const paid = await this.facts.payment(payment.paymentId);
+        if (!paid) return;
+        const [fromName, paidWhen] = await Promise.all([
+          this.facts.nameOf(payment.payerWawuUserId),
+          this.facts.paidWhen(creatorId, 'wallet'),
+        ]);
+        this.mail.notify(
+          creatorId,
+          'tip_received',
+          {
+            earnedMinor: paid.payeeShareKobo,
+            currency: 'NGN',
+            fromName,
+            paidWhen,
+          },
+          noticeKey('tip_received', payment.paymentId),
+        );
+      });
     }
     this.logger.log(`payment ${payment.paymentId}: tip recorded`);
   }

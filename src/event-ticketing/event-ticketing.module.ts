@@ -1,3 +1,4 @@
+import { NoticeMailModule } from '../notice-mail/notice-mail.module';
 import { Module } from '@nestjs/common';
 import { PriceListModule } from '../price-list/price-list.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
@@ -35,6 +36,7 @@ import { PlansModule } from '../plans/plans.module';
  */
 @Module({
   imports: [
+    NoticeMailModule,
     WawuAuthModule,
     DirectMessageModule,
     BlockedAccountModule,

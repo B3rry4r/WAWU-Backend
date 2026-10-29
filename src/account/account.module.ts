@@ -11,9 +11,12 @@ import { PointsModule } from '../points/points.module';
 import { AccountPurgeModule } from '../account-purge/account-purge.module';
 import { IdDocsRetentionModule } from '../account-purge/id-docs-retention.module';
 import { WalletProviderModule } from '../wallet-provider/wallet-provider.module';
+import { NoticeMailModule } from '../notice-mail/notice-mail.module';
 
 @Module({
   imports: [
+    // EMAIL-02: the deletion emails.
+    NoticeMailModule,
     // INBOX-03: a deletion asked for forgets the person's phones at once.
     PushModule,
     // SETTINGS-06: the wallet is looked at and frozen through the provider

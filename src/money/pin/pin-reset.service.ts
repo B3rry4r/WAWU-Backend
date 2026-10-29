@@ -3,6 +3,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import {
   OTP_SENDER,
   type OtpSender,
@@ -140,6 +141,7 @@ export class PinResetService {
     private readonly prisma: PrismaService,
     @Inject(OTP_SENDER) private readonly otp: OtpSender,
     private readonly settings: PinResetSettings,
+    private readonly mail: NoticeMailer,
   ) {}
 
   /**
@@ -309,13 +311,15 @@ export class PinResetService {
     }
 
     const pinHash = await argon2.hash(dto.newPin, { type: argon2.argon2id });
-    return this.prisma.$transaction(async (tx) => {
+    let setAt = new Date();
+    const view = await this.prisma.$transaction(async (tx) => {
       // The person's lock first, the one start() and a PIN change take
       // (WALLET-06 round 2, D2): this took the reset row and then the PIN row
       // while a change took the PIN row and then the reset rows, and one of
       // the two could be refused as a deadlock.
       await lockPinPerson(tx, wawuUserId);
       const now = new Date();
+      setAt = now;
       // A code works once: of two right codes at the same moment, one wins.
       const used = await tx.transactionPinReset.updateMany({
         where: { id: claimed.id, wawuUserId, usedAt: null, supersededAt: null },
@@ -339,6 +343,15 @@ export class PinResetService {
       await inTransaction?.(tx);
       return pinStateView(row, now);
     });
+    // EMAIL-02: told once per reset (its id is the key), after the new PIN is
+    // committed.
+    this.mail.notify(
+      wawuUserId,
+      'pin_changed',
+      { at: setAt.toISOString() },
+      noticeKey('pin_changed', 'reset', claimed.id),
+    );
+    return view;
   }
 
   /**

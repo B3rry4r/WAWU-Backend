@@ -5,9 +5,12 @@ import {
   Logger,
   NotFoundException,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import type { Prisma } from '../../../generated/prisma/client';
 import { WawuIdClient } from '../../common/auth/wawu-id.client';
+import { NoticeFacts } from '../../notice-mail/notice-facts';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import { BlockedAccountService } from '../../blocked-account/blocked-account.service';
@@ -174,6 +177,9 @@ export class EventWalletOrderService implements OnModuleInit {
     private readonly blocked: BlockedAccountService,
     private readonly wawuId: WawuIdClient,
     private readonly settings: PlanSettingsService,
+    /** Optional so the specs that build this by hand need no mailer; the module always provides both. */
+    @Optional() private readonly mail?: NoticeMailer,
+    @Optional() private readonly facts?: NoticeFacts,
   ) {}
 
   onModuleInit(): void {
@@ -839,7 +845,11 @@ export class EventWalletOrderService implements OnModuleInit {
         : null;
     if (reason === null) {
       try {
-        if (await this.issue(order, payment)) return;
+        if (await this.issue(order, payment)) {
+          // EMAIL-02: once, by the delivery that issued the tickets.
+          this.emailTicket(order, payment);
+          return;
+        }
         // Another delivery got to the order first. If it was this payment's,
         // the tickets exist; if not, this payment is one the order cannot use.
         const now = await this.prisma.eventOrder.findUnique({
@@ -876,6 +886,29 @@ export class EventWalletOrderService implements OnModuleInit {
       FAILED_REFUND_REASON,
       RETURN_ALL,
     );
+  }
+
+  /** EMAIL-02: the buyer's "you are going" email, after the tickets are committed. */
+  private emailTicket(order: OrderRow, payment: CompletedPayment): void {
+    const { mail, facts } = this;
+    if (!mail || !facts) return;
+    mail.later(async () => {
+      const paid = await facts.payment(payment.paymentId);
+      if (!paid) return;
+      mail.notify(
+        order.buyerWawuId,
+        'ticket_confirmed',
+        {
+          eventTitle: order.event.name,
+          startsAt: order.event.startsAt.toISOString(),
+          place: order.event.venueName ?? order.event.location ?? null,
+          paidMinor: paid.totalKobo,
+          currency: 'NGN',
+          ticketRef: paid.reference,
+        },
+        noticeKey('ticket_confirmed', order.id),
+      );
+    });
   }
 
   /**

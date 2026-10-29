@@ -1,3 +1,4 @@
+import { NoticeMailModule } from '../../notice-mail/notice-mail.module';
 import { Module } from '@nestjs/common';
 import { AccountPurgeModule } from '../../account-purge/account-purge.module';
 import { BlockedAccountModule } from '../../blocked-account/blocked-account.module';
@@ -40,6 +41,7 @@ import { EventWalletOrderService } from './event-wallet-order.service';
  */
 @Module({
   imports: [
+    NoticeMailModule,
     WawuAuthModule,
     MoneyModule,
     BlockedAccountModule,

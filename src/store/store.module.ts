@@ -1,3 +1,4 @@
+import { NoticeMailModule } from '../notice-mail/notice-mail.module';
 import { Module } from '@nestjs/common';
 import { AdminAuthModule } from '../admin/auth/admin-auth.module';
 import { BlockedAccountModule } from '../blocked-account/blocked-account.module';
@@ -43,6 +44,7 @@ import { StoreWebhookController } from './store-webhook.controller';
  */
 @Module({
   imports: [
+    NoticeMailModule,
     WawuAuthModule,
     AdminAuthModule,
     PlansModule,

@@ -26,6 +26,8 @@ import {
 } from '../../money/payments/payable-registry';
 import { WalletPaymentService } from '../../money/payments/wallet-payment.service';
 import { isUniqueViolationOn } from '../../money/prisma-unique';
+import { NoticeFacts } from '../../notice-mail/notice-facts';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import { NotificationService } from '../../notification/notification.service';
 import { replyTimesFor } from '../../professional/professional-reply-time';
 import {
@@ -137,6 +139,8 @@ export class PaidDmWalletService implements OnModuleInit {
     private readonly notifications: NotificationService,
     private readonly wawuId: WawuIdClient,
     @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
+    private readonly mail: NoticeMailer,
+    private readonly facts: NoticeFacts,
   ) {}
 
   onModuleInit(): void {
@@ -334,7 +338,13 @@ export class PaidDmWalletService implements OnModuleInit {
         tx,
       ): Promise<
         | { outcome: 'sent'; created: false }
-        | { outcome: 'sent'; created: true; amount: number; id: string }
+        | {
+            outcome: 'sent';
+            created: true;
+            amount: number;
+            id: string;
+            deadlineAt: Date;
+          }
         | { outcome: 'refund'; why: string }
       > => {
         await tx.$queryRaw`SELECT "id" FROM "WalletPayment" WHERE "id" = ${payment.paymentId} FOR UPDATE`;
@@ -389,7 +399,13 @@ export class PaidDmWalletService implements OnModuleInit {
             responseWindowHours: draft.responseWindowHours,
           },
         });
-        return { outcome: 'sent', created: true, amount, id: draft.id };
+        return {
+          outcome: 'sent',
+          created: true,
+          amount,
+          id: draft.id,
+          deadlineAt: deadlineOf(sentAt, draft.responseWindowHours),
+        };
       },
     );
     if (decided.outcome === 'refund') {
@@ -402,6 +418,24 @@ export class PaidDmWalletService implements OnModuleInit {
       return;
     }
     if (decided.created) {
+      // EMAIL-02: once, after the question is committed (only the call that
+      // wrote it gets here). The creator's share is the payment's own row.
+      this.mail.later(async () => {
+        const paid = await this.facts.payment(payment.paymentId);
+        if (!paid) return;
+        const fromName = await this.facts.nameOf(payment.payerWawuUserId);
+        this.mail.notify(
+          creatorId,
+          'paid_message_received',
+          {
+            fromName,
+            earnedMinor: paid.payeeShareKobo,
+            currency: 'NGN',
+            replyBy: decided.deadlineAt.toISOString(),
+          },
+          noticeKey('paid_message_received', decided.id),
+        );
+      });
       try {
         await this.notifications.emit({
           kind: 'dm_received',
@@ -649,6 +683,23 @@ export class PaidDmWalletService implements OnModuleInit {
         // Only the caller that wrote the mark tells the payer.
         if (count === 1) {
           told += 1;
+          // EMAIL-02: the same single moment; the sum is what the payment
+          // took, all of which comes back.
+          this.mail.later(async () => {
+            const paymentId = paymentIdOfTxRef(r.ref);
+            const paid = paymentId ? await this.facts.payment(paymentId) : null;
+            this.mail.notify(
+              r.sender,
+              'refund_processed',
+              {
+                what: 'Your paid question',
+                amountMinor: paid?.totalKobo ?? r.amount * 100,
+                currency: 'NGN',
+                returnedTo: 'wallet',
+              },
+              noticeKey('refund_processed', 'dm', r.id),
+            );
+          });
           await this.notifications
             .emit({
               kind: 'dm_refunded',

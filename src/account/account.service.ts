@@ -6,6 +6,7 @@ import {
 import type { Prisma } from '../../generated/prisma/client';
 import { ContentStatus } from '../../generated/prisma/enums';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { noticeKey, NoticeMailer } from '../notice-mail/notice-mailer';
 import type { AccountDeletionResponse } from '../common/types';
 import { PushTokenService } from '../push/push-token.service';
 import {
@@ -51,6 +52,8 @@ type DeleteContext = {
 type Promoted = {
   outcome: 'scheduled' | 'purging' | 'lost';
   purgeAfter: Date;
+  /** True only for the request that moved the row from `freezing` to `scheduled` (EMAIL-02: the email is once). */
+  fresh?: boolean;
 };
 
 const CONTENT_STATUSES: ReadonlySet<string> = new Set(
@@ -128,6 +131,8 @@ export class AccountService {
     private readonly pushTokens: PushTokenService,
     private readonly money: AccountDeletionMoneyService,
     private readonly identity: AccountDeletionIdentityService,
+    /** EMAIL-02: the person is emailed once when their deletion is scheduled. */
+    private readonly mail: NoticeMailer,
   ) {}
 
   /** `reason`: why the person is leaving (Z7, SETTINGS-05), kept on the deletion row; absent when they did not say. */
@@ -308,6 +313,21 @@ export class AccountService {
     }
     if (promoted.outcome === 'scheduled') {
       await this.stopPushAndTell(wawuUserId, promoted.purgeAfter);
+      // EMAIL-02: once, by the request that scheduled it (a repeat request,
+      // or the one that lost the race, sends nothing); the key is the
+      // deletion's own start, so a repeat is a replay at WAWU ID.
+      if (promoted.fresh === true) {
+        this.mail.notify(
+          wawuUserId,
+          'account_deletion_started',
+          { deleteOn: promoted.purgeAfter.toISOString() },
+          noticeKey(
+            'account_deletion_started',
+            wawuUserId,
+            scheduledAt.getTime(),
+          ),
+        );
+      }
     }
     return { deletionScheduledAt: promoted.purgeAfter.toISOString() };
   }
@@ -520,7 +540,7 @@ export class AccountService {
           where: { wawuUserId, status: 'freezing', scheduledAt: f.scheduledAt },
         });
         if (mine !== 1) return { outcome: 'lost', purgeAfter: f.purgeAfter };
-        await tx.accountDeletion.updateMany({
+        const moved = await tx.accountDeletion.updateMany({
           where: { wawuUserId, status: 'freezing' },
           data: {
             status: 'scheduled',
@@ -530,7 +550,11 @@ export class AccountService {
           },
         });
         await this.hideContent(tx, wawuUserId);
-        return { outcome: 'scheduled', purgeAfter: f.purgeAfter };
+        return {
+          outcome: 'scheduled',
+          purgeAfter: f.purgeAfter,
+          fresh: moved.count === 1,
+        };
       }
       const row = await tx.accountDeletion.findUnique({
         where: { wawuUserId },

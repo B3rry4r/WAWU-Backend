@@ -1,3 +1,5 @@
+import { NoticeFacts } from '../../notice-mail/notice-facts';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -63,6 +65,8 @@ export class EventCallOffRefundService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly holds: WalletHoldService,
     private readonly hooks: EventCancelHooks,
+    private readonly mail: NoticeMailer,
+    private readonly facts: NoticeFacts,
   ) {}
 
   onModuleInit(): void {
@@ -236,7 +240,7 @@ export class EventCallOffRefundService implements OnModuleInit {
 
   /** The order says its price is going back to the buyer, and its tickets can no longer be scanned. */
   private async markRefunded(orderId: string): Promise<void> {
-    await this.prisma.$transaction([
+    const [marked] = await this.prisma.$transaction([
       this.prisma.eventOrder.updateMany({
         where: { id: orderId, status: 'paid' },
         data: { status: 'refunded', failureReason: CALLED_OFF_REASON },
@@ -246,6 +250,37 @@ export class EventCallOffRefundService implements OnModuleInit {
         data: { status: 'void' },
       }),
     ]);
+    // EMAIL-02: told once, by the call that marked the order (a sweep that
+    // finds it refunded does not tell again).
+    if (marked.count === 1) this.emailRefund(orderId);
+  }
+
+  /** The buyer is told their price is back: everything the payment took (the charge too). */
+  private emailRefund(orderId: string): void {
+    this.mail.later(async () => {
+      const order = await this.prisma.eventOrder.findUnique({
+        where: { id: orderId },
+        select: {
+          buyerWawuId: true,
+          walletPaymentId: true,
+          event: { select: { name: true } },
+        },
+      });
+      if (!order?.walletPaymentId) return;
+      const paid = await this.facts.payment(order.walletPaymentId);
+      if (!paid) return;
+      this.mail.notify(
+        order.buyerWawuId,
+        'refund_processed',
+        {
+          what: order.event.name,
+          amountMinor: paid.totalKobo,
+          currency: 'NGN',
+          returnedTo: 'wallet',
+        },
+        noticeKey('refund_processed', 'event', orderId),
+      );
+    });
   }
 
   /** The price cannot go back by itself: the order keeps `paid` and says why, for a person. */

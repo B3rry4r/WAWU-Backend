@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { NoticeMailModule } from '../../notice-mail/notice-mail.module';
 import { NotificationModule } from '../../notification/notification.module';
 import { WalletProviderModule } from '../../wallet-provider/wallet-provider.module';
 import { MoneyInNoticeService } from './money-in-notice.service';
@@ -12,7 +13,12 @@ import { MoneyInNoticeService } from './money-in-notice.service';
  * (MONEY-20), and the notification only through NotificationService.emit().
  */
 @Module({
-  imports: [ConfigModule, WalletProviderModule, NotificationModule],
+  imports: [
+    ConfigModule,
+    WalletProviderModule,
+    NotificationModule,
+    NoticeMailModule,
+  ],
   providers: [MoneyInNoticeService],
   exports: [MoneyInNoticeService],
 })

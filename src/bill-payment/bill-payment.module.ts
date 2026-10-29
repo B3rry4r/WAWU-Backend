@@ -1,3 +1,4 @@
+import { NoticeMailModule } from '../notice-mail/notice-mail.module';
 import { Module } from '@nestjs/common';
 import { PrismaModule } from '../common/prisma/prisma.module';
 import { BillsCatalogueModule } from '../bills-catalogue/bills-catalogue.module';
@@ -19,6 +20,7 @@ import { BillPaymentOpsController } from './bill-payment-ops.controller';
  */
 @Module({
   imports: [
+    NoticeMailModule,
     PrismaModule,
     AdminAuthModule,
     AdminOpsAuditModule,

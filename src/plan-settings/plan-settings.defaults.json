@@ -142,6 +142,7 @@
     "fx.product.swap.on": 1,
     "fx.product.crypto_send.on": 1,
     "world.open.on": 1,
+    "notifications.money_emails_on": 1,
     "cards.enabled": 1,
     "popular_community_min_members": 10,
     "community_credit_cost_photo": 1,

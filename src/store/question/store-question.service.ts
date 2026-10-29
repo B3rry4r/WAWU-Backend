@@ -1,3 +1,5 @@
+import { NoticeFacts } from '../../notice-mail/notice-facts';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { Prisma } from '../../../generated/prisma/client';
@@ -14,6 +16,7 @@ import {
   storeQuestionRef,
 } from '../../direct-message/store-question-ref';
 import { deadlineOf } from '../../direct-message/wallet/paid-dm-wallet-rules';
+import { creatorShareOfList } from '../store-buy-rules';
 import { NotificationService } from '../../notification/notification.service';
 import { StoreSaleNoticeService } from '../notice/store-sale-notice.service';
 import { StoreEarningService } from '../store-earning.service';
@@ -74,6 +77,8 @@ export class StoreQuestionService implements OnModuleInit {
     private readonly notifications: NotificationService,
     private readonly target: StoreQuestionTargetService,
     private readonly answered: DmAnsweredHooks,
+    private readonly mail: NoticeMailer,
+    private readonly facts: NoticeFacts,
   ) {}
 
   onModuleInit(): void {
@@ -131,6 +136,24 @@ export class StoreQuestionService implements OnModuleInit {
       where: { id: intent.id },
       data: { questionText: null },
     });
+    // EMAIL-02: the creator is emailed that a paid question arrived, once,
+    // after the sale commits (the store purchase wraps its transaction in
+    // `NoticeMailer.within`). The share is the 85% of the list price.
+    const deadline = deadlineOf(now, intent.questionWindowHours);
+    this.mail.later(async () => {
+      const fromName = await this.facts.nameOf(asker);
+      this.mail.notify(
+        creator,
+        'paid_message_received',
+        {
+          fromName,
+          earnedMinor: creatorShareOfList(intent.listPriceNaira * 100),
+          currency: 'NGN',
+          replyBy: deadline.toISOString(),
+        },
+        noticeKey('paid_message_received', intent.id),
+      );
+    });
     await this.notifications.emitOrThrow(
       {
         kind: 'dm_received',
@@ -169,49 +192,55 @@ export class StoreQuestionService implements OnModuleInit {
       where: { id: purchaseId },
     });
     if (found === null) return;
-    await this.prisma.$transaction(async (tx) => {
-      await this.lock(tx, found);
-      const purchase = await tx.storePurchase.findUnique({
-        where: { id: purchaseId },
-      });
-      if (purchase === null || purchase.status !== 'granted') return;
-      const dm = await tx.directMessage.findUnique({
-        where: { id: message.id },
-      });
-      if (
-        dm === null ||
-        dm.status !== 'responded' ||
-        dm.flutterwaveTxRef !== message.flutterwaveTxRef
-      )
-        return;
-      const have = await tx.storeEarning.findUnique({
-        where: {
-          storePurchaseId_role: { storePurchaseId: purchase.id, role: 'sale' },
-        },
-        select: { id: true },
-      });
-      if (have !== null) return;
-      const listPriceKobo = purchase.referenceKobo ?? dm.amount * 100;
-      await this.earnings.record(tx, {
-        purchase,
-        payeeWawuUserId: dm.creatorWawuId,
-        buyKind: 'question',
-        targetId: dm.id,
-        title: QUESTION_EARNING_TITLE,
-        listPriceKobo,
-        soldAt: purchase.purchasedAt,
-        // Earned when answered, so 3 working days count from the answer.
-        earnedAt: dm.respondedAt ?? new Date(),
-      });
-      await this.notices.told(tx, {
-        kind: 'question',
-        creatorWawuId: dm.creatorWawuId,
-        buyerWawuId: purchase.wawuUserId,
-        targetId: dm.id,
-        title: QUESTION_EARNING_TITLE,
-        listPriceKobo,
-      });
-    });
+    await this.mail.within(() =>
+      this.prisma.$transaction(async (tx) => {
+        await this.lock(tx, found);
+        const purchase = await tx.storePurchase.findUnique({
+          where: { id: purchaseId },
+        });
+        if (purchase === null || purchase.status !== 'granted') return;
+        const dm = await tx.directMessage.findUnique({
+          where: { id: message.id },
+        });
+        if (
+          dm === null ||
+          dm.status !== 'responded' ||
+          dm.flutterwaveTxRef !== message.flutterwaveTxRef
+        )
+          return;
+        const have = await tx.storeEarning.findUnique({
+          where: {
+            storePurchaseId_role: {
+              storePurchaseId: purchase.id,
+              role: 'sale',
+            },
+          },
+          select: { id: true },
+        });
+        if (have !== null) return;
+        const listPriceKobo = purchase.referenceKobo ?? dm.amount * 100;
+        await this.earnings.record(tx, {
+          purchase,
+          payeeWawuUserId: dm.creatorWawuId,
+          buyKind: 'question',
+          targetId: dm.id,
+          title: QUESTION_EARNING_TITLE,
+          listPriceKobo,
+          soldAt: purchase.purchasedAt,
+          // Earned when answered, so 3 working days count from the answer.
+          earnedAt: dm.respondedAt ?? new Date(),
+        });
+        await this.notices.told(tx, {
+          purchaseId: purchase.id,
+          kind: 'question',
+          creatorWawuId: dm.creatorWawuId,
+          buyerWawuId: purchase.wawuUserId,
+          targetId: dm.id,
+          title: QUESTION_EARNING_TITLE,
+          listPriceKobo,
+        });
+      }),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -267,27 +296,33 @@ export class StoreQuestionService implements OnModuleInit {
       where: { id: purchaseId },
     });
     if (found === null) return false;
-    return this.prisma.$transaction(async (tx) => {
-      await this.lock(tx, found);
-      const purchase = await tx.storePurchase.findUnique({
-        where: { id: purchaseId },
-      });
-      if (purchase === null || purchase.status !== 'granted') return false;
-      // The whole decision: a reply that committed first left the question
-      // `responded` and this matches nothing; the reply's own check (status and
-      // deadline in its WHERE) is the other half.
-      const { count } = await tx.directMessage.updateMany({
-        where: {
-          id: dmId,
-          status: 'awaiting_response',
-          deadlineAt: { lt: now },
-        },
-        data: { status: 'refunded', refundStatus: 'settled', refundedAt: now },
-      });
-      if (count === 0) return false;
-      await this.creditUnanswered(tx, purchase, dm, now);
-      return true;
-    });
+    return this.mail.within(() =>
+      this.prisma.$transaction(async (tx) => {
+        await this.lock(tx, found);
+        const purchase = await tx.storePurchase.findUnique({
+          where: { id: purchaseId },
+        });
+        if (purchase === null || purchase.status !== 'granted') return false;
+        // The whole decision: a reply that committed first left the question
+        // `responded` and this matches nothing; the reply's own check (status and
+        // deadline in its WHERE) is the other half.
+        const { count } = await tx.directMessage.updateMany({
+          where: {
+            id: dmId,
+            status: 'awaiting_response',
+            deadlineAt: { lt: now },
+          },
+          data: {
+            status: 'refunded',
+            refundStatus: 'settled',
+            refundedAt: now,
+          },
+        });
+        if (count === 0) return false;
+        await this.creditUnanswered(tx, purchase, dm, now, true, true);
+        return true;
+      }),
+    );
   }
 
   /**
@@ -302,6 +337,7 @@ export class StoreQuestionService implements OnModuleInit {
     dm: DirectMessage,
     now: Date,
     countsAsMiss = true,
+    email = false,
   ): Promise<void> {
     const asker = purchase.wawuUserId;
     // The asker's account is gone: there is no one to credit.
@@ -335,6 +371,21 @@ export class StoreQuestionService implements OnModuleInit {
     });
     // The asker is told once. A question a refund withdrew did not go unanswered,
     // so the notice's words ("did not reply in time") would be false: none is sent.
+    // EMAIL-02: the credit is emailed once, with the notice, when the deadline
+    // sweep made it (the caller wraps the transaction in `NoticeMailer.within`).
+    if (count > 0 && countsAsMiss && email) {
+      this.mail.notify(
+        asker,
+        'refund_processed',
+        {
+          what: 'Your paid question',
+          amountMinor: amountKobo,
+          currency: 'NGN',
+          returnedTo: 'question_credit',
+        },
+        noticeKey('refund_processed', 'credit', purchase.id),
+      );
+    }
     if (count > 0 && countsAsMiss)
       await this.notifications.emitOrThrow(
         {
