@@ -22,7 +22,13 @@ import {
   type Biller,
 } from './flutterwave-bills.client';
 import type { InitBillDto, RecordRefundDto } from './dto/bill.dto';
-import { NO_DELIVERY, readDelivery, type BillDelivery } from './bill-delivery';
+import {
+  NO_DELIVERY,
+  isPowerBill,
+  mergeDelivery,
+  readDelivery,
+  type BillDelivery,
+} from './bill-delivery';
 
 /**
  * How long a bill may sit in `paid` — money taken, biller not yet called —
@@ -49,6 +55,12 @@ const PROCESSING_STUCK_AFTER_MINUTES = 30;
  * 10 seconds, so about every other read reaches the provider and two readers at once reach it once.
  */
 const STATUS_READ_RECHECK_SECONDS = 20;
+
+/**
+ * BILLS-09 round 1: a delivered power bill that still has no token is asked about again by the buyer's status read (under the
+ * same 20 second claim) for this long after it was delivered. A read of the provider, never a purchase.
+ */
+const TOKEN_REREAD_HOURS = 24;
 
 /**
  * WAWUPay.
@@ -367,12 +379,11 @@ export class BillPaymentService {
       };
     }
 
-    const result = await this.bills.billStatus(record.flutterwaveTxRef);
-    const providerStatus = readProviderStatus(result);
+    const { providerStatus, delivery } = await this.readProviderAnswer(record);
     const settled = await this.settleFromProviderStatus(
       record,
       providerStatus,
-      readDelivery(result),
+      delivery,
     );
 
     if (settled.changed) {
@@ -483,12 +494,12 @@ export class BillPaymentService {
     let settledCount = 0;
     for (const record of rows) {
       try {
-        const result = await this.bills.billStatus(record.flutterwaveTxRef);
-        const providerStatus = readProviderStatus(result);
+        const { providerStatus, delivery } =
+          await this.readProviderAnswer(record);
         const settled = await this.settleFromProviderStatus(
           record,
           providerStatus,
-          readDelivery(result),
+          delivery,
         );
         if (settled.changed) settledCount += 1;
       } catch (e) {
@@ -585,7 +596,9 @@ export class BillPaymentService {
       throw new NotFoundException('Bill payment not found.');
     }
     if (record.status === 'processing') {
-      record = await this.askProviderOnce(record);
+      record = await this.askProviderOnce(record, 'settle');
+    } else if (this.awaitsToken(record)) {
+      record = await this.askProviderOnce(record, 'token');
     }
     return {
       id: record.id,
@@ -596,14 +609,64 @@ export class BillPaymentService {
     };
   }
 
-  private async askProviderOnce(record: BillPayment): Promise<BillPayment> {
+  /** A delivered power bill with no token, within 24 hours of its delivery (BILLS-09 round 1). */
+  private awaitsToken(record: BillPayment): boolean {
+    if (
+      record.status !== 'delivered' ||
+      record.token ||
+      !isPowerBill(record.category)
+    ) {
+      return false;
+    }
+    const since = (record.deliveredAt ?? record.createdAt).getTime();
+    return Date.now() - since < TOKEN_REREAD_HOURS * 3_600_000;
+  }
+
+  /**
+   * What the provider says about a bill: its status and any token or units. The verbose answer carries the status; the token is
+   * only in the plain shape, so a successful power bill with no token yet also reads that (a plain read that fails or has none
+   * changes nothing). Throws only when the verbose read itself fails.
+   */
+  private async readProviderAnswer(
+    record: BillPayment,
+    force = false,
+  ): Promise<{
+    providerStatus: 'successful' | 'failed' | 'unknown';
+    delivery: BillDelivery;
+  }> {
+    const answer = await this.bills.billStatus(record.flutterwaveTxRef);
+    const providerStatus = readProviderStatus(answer);
+    let delivery = readDelivery(answer);
+    const wantsPlain =
+      (providerStatus === 'successful' || force) &&
+      isPowerBill(record.category) &&
+      !record.token &&
+      !delivery.token;
+    if (wantsPlain) {
+      try {
+        const plain = await this.bills.billStatusPlain(record.flutterwaveTxRef);
+        delivery = mergeDelivery(delivery, readDelivery(plain));
+      } catch (e) {
+        this.logger.warn(
+          `Could not read the plain status of bill ${record.id}: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+    return { providerStatus, delivery };
+  }
+
+  private async askProviderOnce(
+    record: BillPayment,
+    mode: 'settle' | 'token',
+  ): Promise<BillPayment> {
     const staleBefore = new Date(
       Date.now() - STATUS_READ_RECHECK_SECONDS * 1_000,
     );
     const claimed = await this.prisma.billPayment.updateMany({
       where: {
         id: record.id,
-        status: 'processing',
+        status: record.status,
+        ...(mode === 'token' ? { token: null } : {}),
         OR: [
           { providerCheckedAt: null },
           { providerCheckedAt: { lt: staleBefore } },
@@ -620,11 +683,31 @@ export class BillPaymentService {
     }
 
     try {
-      const answer = await this.bills.billStatus(record.flutterwaveTxRef);
+      const { providerStatus, delivery } = await this.readProviderAnswer(
+        record,
+        mode === 'token',
+      );
+      if (mode === 'token') {
+        // A delivered bill stays delivered whatever the provider says now: only the token and units are kept.
+        await this.prisma.billPayment.updateMany({
+          where: { id: record.id, status: 'delivered', token: null },
+          data: {
+            ...(delivery.token ? { token: delivery.token } : {}),
+            ...(delivery.units && !record.units
+              ? { units: delivery.units }
+              : {}),
+          },
+        });
+        return (
+          (await this.prisma.billPayment.findUnique({
+            where: { id: record.id },
+          })) ?? record
+        );
+      }
       const settled = await this.settleFromProviderStatus(
         record,
-        readProviderStatus(answer),
-        readDelivery(answer),
+        providerStatus,
+        delivery,
       );
       return settled.record;
     } catch (e) {

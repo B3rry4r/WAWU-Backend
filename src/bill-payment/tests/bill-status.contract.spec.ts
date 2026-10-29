@@ -80,6 +80,7 @@ describe('BILLS-09: bill status, token and units (contract)', () => {
   const createdIds: string[] = [];
   const statusAnswer = jest.fn<Promise<unknown>, [string]>();
   const payAnswer = jest.fn<Promise<unknown>, []>();
+  const plainAnswer = jest.fn<Promise<unknown>, [string]>();
 
   const http = () => request(app.getHttpServer() as Server);
   const auth = (t: { token: string }) => ({
@@ -124,6 +125,7 @@ describe('BILLS-09: bill status, token and units (contract)', () => {
       .overrideProvider(FlutterwaveBillsClient)
       .useValue({
         billStatus: (ref: string) => statusAnswer(ref),
+        billStatusPlain: (ref: string) => plainAnswer(ref),
         payBill: () => payAnswer(),
         availableNgn: () => Promise.resolve(null),
       })
@@ -151,6 +153,7 @@ describe('BILLS-09: bill status, token and units (contract)', () => {
   beforeEach(() => {
     statusAnswer.mockReset();
     payAnswer.mockReset();
+    plainAnswer.mockReset();
   });
 
   afterAll(async () => {
@@ -299,6 +302,62 @@ describe('BILLS-09: bill status, token and units (contract)', () => {
         token: TOKEN,
       });
       expect(statusAnswer).toHaveBeenCalledTimes(1);
+    });
+
+    it('a delivered power bill with no token is asked again: the plain shape carries it, five reads at once ask once', async () => {
+      const bill = await seed('delivered', {
+        deliveredAt: new Date(Date.now() - 10 * 60_000),
+        providerCheckedAt: new Date(Date.now() - 60_000),
+      });
+      statusAnswer.mockImplementation(async () => {
+        await new Promise((r) => setTimeout(r, 40));
+        return { status: 'successful', extra: null };
+      });
+      plainAnswer.mockResolvedValue({ token: TOKEN, extra: 'Units: 45.2' });
+
+      const reads = await Promise.all(
+        [1, 2, 3, 4, 5].map(() =>
+          http().get(`/api/hub/bills/${bill.id}/status`).set(auth(buyer)),
+        ),
+      );
+
+      for (const r of reads) {
+        expect(r.status).toBe(200);
+        expect(one(r).status).toBe('delivered');
+      }
+      expect(statusAnswer).toHaveBeenCalledTimes(1);
+      expect(plainAnswer).toHaveBeenCalledTimes(1);
+      expect(payAnswer).not.toHaveBeenCalled();
+      const row = await prisma.billPayment.findUnique({
+        where: { id: bill.id },
+      });
+      expect(row).toMatchObject({
+        status: 'delivered',
+        token: TOKEN,
+        units: '45.2',
+      });
+      const later = await http()
+        .get(`/api/hub/bills/${bill.id}/status`)
+        .set(auth(buyer))
+        .expect(200);
+      expect(one(later)).toMatchObject({
+        status: 'delivered',
+        token: TOKEN,
+        units: '45.2',
+      });
+      expect(statusAnswer).toHaveBeenCalledTimes(1);
+    });
+
+    it('a delivered power bill older than 24 hours with no token is answered from the record', async () => {
+      const bill = await seed('delivered', {
+        deliveredAt: new Date(Date.now() - 25 * 3_600_000),
+      });
+      const res = await http()
+        .get(`/api/hub/bills/${bill.id}/status`)
+        .set(auth(buyer))
+        .expect(200);
+      expect(one(res)).toMatchObject({ status: 'delivered', token: null });
+      expect(statusAnswer).not.toHaveBeenCalled();
     });
 
     it('a provider that cannot be reached is answered from the record with a 200', async () => {

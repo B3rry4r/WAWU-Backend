@@ -21,6 +21,21 @@ export interface BillDelivery {
 
 export const NO_DELIVERY: BillDelivery = { token: null, units: null };
 
+/** What one answer has, filled in from a second (the first one's fields win). */
+export function mergeDelivery(a: BillDelivery, b: BillDelivery): BillDelivery {
+  return { token: a.token ?? b.token, units: a.units ?? b.units };
+}
+
+/**
+ * A bill that can carry a prepaid token. The row's `category` is what the client sent at `init`: the provider's code ("POWER",
+ * "UTILITYBILLS") or its display name ("Utility Bills", "Electricity"). Airtime, data, cable and internet never carry one.
+ */
+export function isPowerBill(category: string | null | undefined): boolean {
+  return (
+    typeof category === 'string' && /power|electric|utilit/i.test(category)
+  );
+}
+
 const TOKEN_KEYS = ['recharge_token', 'token', 'rechargeToken'] as const;
 const UNIT_KEYS = ['units', 'unit', 'units_purchased', 'kwh'] as const;
 

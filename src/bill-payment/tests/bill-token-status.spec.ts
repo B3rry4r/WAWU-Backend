@@ -343,7 +343,11 @@ describe('BILLS-09: GET /bills/:id/status', () => {
   it.each(['pending', 'paid', 'delivered', 'failed', 'refunded'])(
     'a %s bill is read from the record and the provider is not asked',
     async (status) => {
-      const { service, billStatus } = build([row({ status })]);
+      // Round 1 (lead ruling): a delivered power bill with NO token is asked again for 24 hours (bill-token-reread.spec.ts), so this
+      // row carries its token: the provider is not asked about a delivered bill that has everything.
+      const { service, billStatus } = build([
+        row({ status, ...(status === 'delivered' ? { token: TOKEN } : {}) }),
+      ]);
       const out = await service.statusOf('buyer-1', 'bill-1');
       expect(out.status).toBe(status);
       expect(billStatus).not.toHaveBeenCalled();
