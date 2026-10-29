@@ -163,6 +163,17 @@ export class FlutterwaveBillsClient {
   }
 
   /**
+   * BILLS-09: the same status call in its plain shape (`verbose=0`). Flutterwave's "Get status of a bill payment" page shows
+   * `token` only in its default ("Ok") example; the verbose example carries `extra` and `product_details` and no `token`.
+   * A successful power bill's token is read from here when the verbose answer has none.
+   */
+  billStatusPlain(reference: string): Promise<Record<string, unknown>> {
+    return this.call<Record<string, unknown>>(
+      `/bills/${encodeURIComponent(reference)}?verbose=0`,
+    );
+  }
+
+  /**
    * WAWU's own NGN float, in naira.
    *
    * Bills are paid out of the merchant AVAILABLE balance, not the customer's

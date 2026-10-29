@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseUUIDPipe,
   Post,
   Query,
   UseGuards,
@@ -74,5 +75,20 @@ export class BillPaymentController {
   @Get('mine')
   mine(@CurrentUser() user: WawuJwtClaims) {
     return this.bills.listMine(user.sub, 1, 50);
+  }
+
+  /**
+   * BILLS-09 (R-102): where a bill stands, with its token and units. The buyer's
+   * own bills only. A `processing` bill is asked about at the provider at most
+   * once in 20 seconds. The id is a UUID so `GET /bills/wallet/status` and the
+   * like keep answering exactly what the wallet bill route answered before this
+   * route existed (the same 400 from the same pipe on `id`).
+   */
+  @Get(':id/status')
+  status(
+    @CurrentUser() user: WawuJwtClaims,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.bills.statusOf(user.sub, id);
   }
 }
