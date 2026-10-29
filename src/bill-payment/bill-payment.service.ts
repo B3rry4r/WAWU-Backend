@@ -22,6 +22,7 @@ import {
   type Biller,
 } from './flutterwave-bills.client';
 import type { InitBillDto, RecordRefundDto } from './dto/bill.dto';
+import { NO_DELIVERY, readDelivery, type BillDelivery } from './bill-delivery';
 
 /**
  * How long a bill may sit in `paid` — money taken, biller not yet called —
@@ -41,6 +42,13 @@ const STUCK_AFTER_MINUTES = 15;
  * with rows that are still genuinely in flight.
  */
 const PROCESSING_STUCK_AFTER_MINUTES = 30;
+
+/**
+ * BILLS-09: the buyer's status read asks Flutterwave about a `processing` bill only when the last look at the provider
+ * (the purchase answer, the sweep, an operator's reconcile or an earlier read) is older than this. The app reads every
+ * 10 seconds, so about every other read reaches the provider and two readers at once reach it once.
+ */
+const STATUS_READ_RECHECK_SECONDS = 20;
 
 /**
  * WAWUPay.
@@ -208,7 +216,7 @@ export class BillPaymentService {
       throw new NotFoundException('Bill payment not found.');
     }
     if (record.status !== 'pending') {
-      return this.toResponse(record);
+      return this.toBuyerResponse(record);
     }
 
     const verified = await this.verifier.verify({
@@ -233,7 +241,7 @@ export class BillPaymentService {
       const settled = await this.prisma.billPayment.findUnique({
         where: { id: record.id },
       });
-      return this.toResponse(settled ?? record);
+      return this.toBuyerResponse(settled ?? record);
     }
 
     try {
@@ -251,6 +259,9 @@ export class BillPaymentService {
       // "delivered" receipt, and never actually receive the airtime when the
       // async step subsequently failed with nothing anywhere set up to catch
       // it. `processing` is the honest state: accepted, not yet confirmed.
+      // BILLS-09: a prepaid electricity purchase may already carry its token (`recharge_token`); whatever it carries is
+      // kept, and the purchase counts as the first look at the provider.
+      const delivery = readDelivery(result);
       const processing = await this.prisma.billPayment.update({
         where: { id: record.id },
         data: {
@@ -258,9 +269,12 @@ export class BillPaymentService {
           providerReference: result.reference ?? result.tx_ref ?? null,
           providerStatus: result.code ?? null,
           fee: Math.round(Number(result.fee ?? 0)),
+          providerCheckedAt: new Date(),
+          ...(delivery.token ? { token: delivery.token } : {}),
+          ...(delivery.units ? { units: delivery.units } : {}),
         },
       });
-      return this.toResponse(processing);
+      return this.toBuyerResponse(processing);
     } catch (e) {
       const reason = e instanceof Error ? e.message : 'Delivery failed';
       this.logger.error(
@@ -355,7 +369,11 @@ export class BillPaymentService {
 
     const result = await this.bills.billStatus(record.flutterwaveTxRef);
     const providerStatus = readProviderStatus(result);
-    const settled = await this.settleFromProviderStatus(record, providerStatus);
+    const settled = await this.settleFromProviderStatus(
+      record,
+      providerStatus,
+      readDelivery(result),
+    );
 
     if (settled.changed) {
       await this.audit.record(admin, {
@@ -379,43 +397,61 @@ export class BillPaymentService {
 
   /**
    * The write half of reconciliation, shared between an operator's manual
-   * `reconcile()` call and the automated sweep below. Pure state transition,
-   * no audit trail — callers that need one (a human acting) record it
-   * themselves; the sweep (nothing human decided anything) does not.
+   * `reconcile()` call, the automated sweep below and the buyer's status read.
+   * Pure state transition, no audit trail — callers that need one (a human
+   * acting) record it themselves; the sweep (nothing human decided anything)
+   * does not.
+   *
+   * BILLS-09: every provider answer also stamps `providerCheckedAt` and keeps a
+   * token or units it carries (the first one kept is never replaced). The write
+   * is conditional on the status the caller read: if the row moved meanwhile (a
+   * sweep, an operator's refund, another reader) nothing is written over it and
+   * the current row comes back unchanged, so two readers settle a bill once.
    */
   private async settleFromProviderStatus(
     record: BillPayment,
     providerStatus: 'successful' | 'failed' | 'unknown',
+    delivery: BillDelivery = NO_DELIVERY,
   ): Promise<{ record: BillPayment; changed: boolean }> {
+    const kept = {
+      providerCheckedAt: new Date(),
+      ...(delivery.token && !record.token ? { token: delivery.token } : {}),
+      ...(delivery.units && !record.units ? { units: delivery.units } : {}),
+    };
+
+    let data: Record<string, unknown>;
     if (providerStatus === 'successful') {
-      const delivered = await this.prisma.billPayment.update({
-        where: { id: record.id },
-        data: {
-          status: 'delivered',
-          providerStatus,
-          deliveredAt: record.deliveredAt ?? new Date(),
-        },
-      });
-      return { record: delivered, changed: true };
+      data = {
+        ...kept,
+        status: 'delivered',
+        providerStatus,
+        deliveredAt: record.deliveredAt ?? new Date(),
+      };
+    } else if (providerStatus === 'failed') {
+      data = {
+        ...kept,
+        status: 'failed',
+        providerStatus,
+        failureReason:
+          record.failureReason ?? 'The biller reported the payment as failed.',
+      };
+    } else {
+      // Still in flight, or a shape we do not recognise. The status is left
+      // alone rather than guessed at — the row stays visible in listStuck().
+      data = kept;
     }
 
-    if (providerStatus === 'failed') {
-      const failed = await this.prisma.billPayment.update({
-        where: { id: record.id },
-        data: {
-          status: 'failed',
-          providerStatus,
-          failureReason:
-            record.failureReason ??
-            'The biller reported the payment as failed.',
-        },
-      });
-      return { record: failed, changed: true };
-    }
-
-    // Still in flight, or a shape we do not recognise. Left alone rather than
-    // guessed at — the row stays visible in listStuck().
-    return { record, changed: false };
+    const written = await this.prisma.billPayment.updateMany({
+      where: { id: record.id, status: record.status },
+      data,
+    });
+    const current = await this.prisma.billPayment.findUnique({
+      where: { id: record.id },
+    });
+    return {
+      record: current ?? record,
+      changed: written.count > 0 && providerStatus !== 'unknown',
+    };
   }
 
   /**
@@ -452,6 +488,7 @@ export class BillPaymentService {
         const settled = await this.settleFromProviderStatus(
           record,
           providerStatus,
+          readDelivery(result),
         );
         if (settled.changed) settledCount += 1;
       } catch (e) {
@@ -525,6 +562,85 @@ export class BillPaymentService {
     return this.toResponse(refunded);
   }
 
+  /**
+   * BILLS-09: `GET /bills/:id/status`, the buyer's own bill only (another
+   * person's is "not found", the same as one that does not exist).
+   *
+   * Answers from the record. A `processing` bill whose last look at the
+   * provider is older than 20 seconds is asked about once and settled the way
+   * the sweep settles it. This is a read of the provider, never a purchase:
+   * nothing here can call the biller, so a bill is never delivered twice.
+   *
+   * Safe when readers race: the right to ask is taken with one conditional
+   * write on `providerCheckedAt`, so of any number of readers at once exactly
+   * one asks the provider and the rest answer from the record; the settling
+   * write is conditional on the status that was read, so the bill settles
+   * once. Nothing is held across the provider call.
+   */
+  async statusOf(buyerWawuId: string, billPaymentId: string) {
+    let record = await this.prisma.billPayment.findUnique({
+      where: { id: billPaymentId },
+    });
+    if (!record || record.buyerWawuId !== buyerWawuId) {
+      throw new NotFoundException('Bill payment not found.');
+    }
+    if (record.status === 'processing') {
+      record = await this.askProviderOnce(record);
+    }
+    return {
+      id: record.id,
+      status: record.status,
+      token: record.token ?? null,
+      units: record.units ?? null,
+      providerReference: record.providerReference,
+    };
+  }
+
+  private async askProviderOnce(record: BillPayment): Promise<BillPayment> {
+    const staleBefore = new Date(
+      Date.now() - STATUS_READ_RECHECK_SECONDS * 1_000,
+    );
+    const claimed = await this.prisma.billPayment.updateMany({
+      where: {
+        id: record.id,
+        status: 'processing',
+        OR: [
+          { providerCheckedAt: null },
+          { providerCheckedAt: { lt: staleBefore } },
+        ],
+      },
+      data: { providerCheckedAt: new Date() },
+    });
+    if (claimed.count === 0) {
+      return (
+        (await this.prisma.billPayment.findUnique({
+          where: { id: record.id },
+        })) ?? record
+      );
+    }
+
+    try {
+      const answer = await this.bills.billStatus(record.flutterwaveTxRef);
+      const settled = await this.settleFromProviderStatus(
+        record,
+        readProviderStatus(answer),
+        readDelivery(answer),
+      );
+      return settled.record;
+    } catch (e) {
+      // A provider that cannot be reached is not the buyer's problem and not a
+      // failed bill: the record is answered and the next read tries again.
+      this.logger.warn(
+        `Could not read the status of bill ${record.id}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return (
+        (await this.prisma.billPayment.findUnique({
+          where: { id: record.id },
+        })) ?? record
+      );
+    }
+  }
+
   async listMine(buyerWawuId: string, page: number, perPage: number) {
     const where = { buyerWawuId };
     const [items, total] = await this.prisma.$transaction([
@@ -537,10 +653,24 @@ export class BillPaymentService {
       this.prisma.billPayment.count({ where }),
     ]);
     return {
-      items: items.map((i) => this.toResponse(i)),
+      items: items.map((i) => this.toBuyerResponse(i)),
       currentPage: page,
       perPage,
       total,
+    };
+  }
+
+  /** What the buyer is served: the record plus the token and units, null when the bill has none (BILLS-09). */
+  private toBuyerResponse(
+    r: Parameters<BillPaymentService['toResponse']>[0] & {
+      token?: string | null;
+      units?: string | null;
+    },
+  ) {
+    return {
+      ...this.toResponse(r),
+      token: r.token ?? null,
+      units: r.units ?? null,
     };
   }
 

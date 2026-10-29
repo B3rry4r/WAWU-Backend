@@ -1800,6 +1800,14 @@
                 "schema": {
                   "type": "object",
                   "properties": {
+                    "token": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "units": {
+                      "type": "string",
+                      "nullable": true
+                    },
                     "id": {
                       "type": "string"
                     },
@@ -1846,6 +1854,8 @@
                     }
                   },
                   "required": [
+                    "token",
+                    "units",
                     "id",
                     "category",
                     "billerName",
@@ -1887,6 +1897,14 @@
                       "items": {
                         "type": "object",
                         "properties": {
+                          "token": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "units": {
+                            "type": "string",
+                            "nullable": true
+                          },
                           "id": {
                             "type": "string"
                           },
@@ -1933,6 +1951,8 @@
                           }
                         },
                         "required": [
+                          "token",
+                          "units",
                           "id",
                           "category",
                           "billerName",
@@ -1970,6 +1990,72 @@
             }
           }
         },
+        "tags": [
+          "BillPayment"
+        ]
+      }
+    },
+    "/api/hub/bills/{id}/status": {
+      "get": {
+        "operationId": "BillPaymentController_status",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "pending",
+                        "failed",
+                        "refunded",
+                        "processing",
+                        "paid",
+                        "delivered"
+                      ]
+                    },
+                    "token": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "units": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "providerReference": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "status",
+                    "token",
+                    "units",
+                    "providerReference"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "BILLS-09 (R-102): where a bill stands, with its token and units. The buyer's\nown bills only. A `processing` bill is asked about at the provider at most\nonce in 20 seconds. The id is a UUID so `GET /bills/wallet/status` and the\nlike keep answering exactly what the wallet bill route answered before this\nroute existed (the same 400 from the same pipe on `id`).",
         "tags": [
           "BillPayment"
         ]

@@ -2299,6 +2299,17 @@ model BillPayment {
   providerStatus    String?
   failureReason     String?
 
+  /// BILLS-09 (R-102): what the provider handed back for a prepaid electricity
+  /// bill, read from its purchase answer and its bill status answer. Null for
+  /// every bill that has none (airtime, data, cable, and every bill before
+  /// BILLS-09). `units` is the provider's own text for the units bought.
+  token String?
+  units String?
+  /// When the provider was last asked about this bill (the purchase answer, the
+  /// sweep, an operator's reconcile or the buyer's status read). A status read
+  /// asks again only when this is older than 20 seconds.
+  providerCheckedAt DateTime?
+
   status      FulfilmentStatus @default(pending)
   createdAt   DateTime         @default(now())
   deliveredAt DateTime?
