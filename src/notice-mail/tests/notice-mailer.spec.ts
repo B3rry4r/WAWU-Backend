@@ -209,6 +209,19 @@ describe('what leaves the Hub', () => {
         refundMinor: null,
         currency: null,
       },
+      pass_sold: {
+        communityName: 'Lagos Writers',
+        buyerName: 'Ada O.',
+        earnedMinor: 85_000,
+        currency: 'NGN',
+        paidWhen: 'in_3_working_days',
+      },
+      question_earned: {
+        fromName: null,
+        earnedMinor: 85_000,
+        currency: 'NGN',
+        paidWhen: 'now',
+      },
       bill_paid: {
         billerName: 'IKEDC',
         customerRef: '45012345678',

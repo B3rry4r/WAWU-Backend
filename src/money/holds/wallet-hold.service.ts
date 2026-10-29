@@ -1,3 +1,5 @@
+import { NoticeFacts } from '../../notice-mail/notice-facts';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type { Prisma, WalletPaymentFx } from '../../../generated/prisma/client';
@@ -125,6 +127,9 @@ export class WalletHoldService {
     private readonly fees: FeeQuoteService,
     private readonly settings: PaymentSettings,
     @Optional() private readonly foreign?: PaymentFxService,
+    /** EMAIL-02: optional so the specs that build this by hand need no mailer; the module provides both. */
+    @Optional() private readonly mail?: NoticeMailer,
+    @Optional() private readonly facts?: NoticeFacts,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -279,7 +284,7 @@ export class WalletHoldService {
     reason?: string,
   ): Promise<void> {
     const now = new Date();
-    await this.prisma.$transaction(async (tx) => {
+    const won = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.walletHold.updateMany({
         where: { id: hold.id, status: 'held', action: null },
         data: {
@@ -290,7 +295,7 @@ export class WalletHoldService {
           settledAt: now,
         },
       });
-      if (count === 0) return;
+      if (count === 0) return false;
       await tx.earningSettlement.create({
         data: {
           paymentId: hold.paymentId,
@@ -305,6 +310,34 @@ export class WalletHoldService {
           customerReference: earningReference(hold.paymentId, 1),
         },
       });
+      return true;
+    });
+    // EMAIL-02: the creator's earning of an answered question arises here,
+    // once: only the call whose conditional write moved the hold gets `won`.
+    if (won && hold.kind === 'paid_dm') this.emailQuestionEarned(hold);
+  }
+
+  /** The creator is told the answered question's share is theirs (their own payment row's figures). */
+  private emailQuestionEarned(hold: HoldRow): void {
+    const { mail, facts } = this;
+    if (!mail || !facts || !hold.payeeWawuUserId) return;
+    const creator = hold.payeeWawuUserId;
+    mail.later(async () => {
+      const [fromName, paidWhen] = await Promise.all([
+        facts.nameOf(hold.payerWawuUserId),
+        facts.paidWhen(creator, 'wallet'),
+      ]);
+      mail.notify(
+        creator,
+        'question_earned',
+        {
+          fromName,
+          earnedMinor: Number(hold.payeeShareKobo),
+          currency: 'NGN',
+          paidWhen,
+        },
+        noticeKey('question_earned', hold.paymentId),
+      );
     });
   }
 

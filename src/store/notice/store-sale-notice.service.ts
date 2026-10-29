@@ -47,39 +47,68 @@ export class StoreSaleNoticeService {
   ) {}
 
   /**
-   * EMAIL-02: the creator's sale email, held until the sale's transaction
-   * commits (the caller wraps it in `NoticeMailer.within`). A piece is a sale
-   * and a tip is a tip; a community pass has no email kind, and a question is
-   * emailed when it arrives (store-question), not again when it is answered.
+   * EMAIL-02: the creator's email for a store sale, held until the sale's
+   * transaction commits (the caller wraps it in `NoticeMailer.within`): a
+   * piece is `sale_made`, a tip `tip_received`, a community pass `pass_sold`,
+   * and an answered question `question_earned` (the creator was told the
+   * question arrived by `paid_message_received`; this is the earning, at the
+   * moment it arises).
    */
   private email(sale: SaleNotice): void {
-    if (sale.kind !== 'content' && sale.kind !== 'tip') return;
     this.mail.later(async () => {
       const [buyerName, paidWhen] = await Promise.all([
         this.facts.nameOf(sale.buyerWawuId),
         this.facts.paidWhen(sale.creatorWawuId, 'store'),
       ]);
       const earnedMinor = creatorShareOfList(sale.listPriceKobo);
-      if (sale.kind === 'content') {
-        this.mail.notify(
-          sale.creatorWawuId,
-          'sale_made',
-          {
-            itemTitle: sale.title,
-            buyerName,
-            earnedMinor,
-            currency: 'NGN',
-            paidWhen,
-          },
-          noticeKey('sale_made', sale.purchaseId),
-        );
-      } else {
-        this.mail.notify(
-          sale.creatorWawuId,
-          'tip_received',
-          { earnedMinor, currency: 'NGN', fromName: buyerName, paidWhen },
-          noticeKey('tip_received', sale.purchaseId),
-        );
+      switch (sale.kind) {
+        case 'content':
+          this.mail.notify(
+            sale.creatorWawuId,
+            'sale_made',
+            {
+              itemTitle: sale.title,
+              buyerName,
+              earnedMinor,
+              currency: 'NGN',
+              paidWhen,
+            },
+            noticeKey('sale_made', sale.purchaseId),
+          );
+          return;
+        case 'tip':
+          this.mail.notify(
+            sale.creatorWawuId,
+            'tip_received',
+            { earnedMinor, currency: 'NGN', fromName: buyerName, paidWhen },
+            noticeKey('tip_received', sale.purchaseId),
+          );
+          return;
+        case 'pass': {
+          const communityName = await this.facts.communityName(sale.targetId);
+          if (communityName === null) return;
+          this.mail.notify(
+            sale.creatorWawuId,
+            'pass_sold',
+            {
+              communityName,
+              buyerName,
+              earnedMinor,
+              currency: 'NGN',
+              paidWhen,
+            },
+            noticeKey('pass_sold', sale.purchaseId),
+          );
+          return;
+        }
+        case 'question':
+          this.mail.notify(
+            sale.creatorWawuId,
+            'question_earned',
+            { fromName: buyerName, earnedMinor, currency: 'NGN', paidWhen },
+            noticeKey('question_earned', sale.purchaseId),
+          );
+          return;
       }
     });
   }

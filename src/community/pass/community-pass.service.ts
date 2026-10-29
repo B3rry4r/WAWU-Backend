@@ -1,3 +1,5 @@
+import { NoticeFacts } from '../../notice-mail/notice-facts';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import {
   Injectable,
   Logger,
@@ -95,6 +97,8 @@ export class CommunityPassService implements OnModuleInit {
     private readonly blocked: BlockedAccountService,
     private readonly wawuId: WawuIdClient,
     private readonly access: CommunityPassAccess,
+    private readonly mail: NoticeMailer,
+    private readonly facts: NoticeFacts,
   ) {}
 
   onModuleInit(): void {
@@ -341,6 +345,32 @@ export class CommunityPassService implements OnModuleInit {
         `payment ${payment.paymentId}: the pass could not be given (${result.why}); everything paid is going back`,
       );
       return;
+    }
+    // EMAIL-02: once, after the pass is committed (only the call that wrote
+    // the pass row is `granted`; a repeat writes nothing). The host's share is
+    // the payment's own row.
+    if (result.granted) {
+      this.mail.later(async () => {
+        const paid = await this.facts.payment(payment.paymentId);
+        const communityName = await this.facts.communityName(communityId);
+        if (!paid || communityName === null) return;
+        const [buyerName, paidWhen] = await Promise.all([
+          this.facts.nameOf(userId),
+          this.facts.paidWhen(hostId, 'wallet'),
+        ]);
+        this.mail.notify(
+          hostId,
+          'pass_sold',
+          {
+            communityName,
+            buyerName,
+            earnedMinor: paid.payeeShareKobo,
+            currency: 'NGN',
+            paidWhen,
+          },
+          noticeKey('pass_sold', payment.paymentId),
+        );
+      });
     }
     this.logger.log(`payment ${payment.paymentId}: pass given`);
   }

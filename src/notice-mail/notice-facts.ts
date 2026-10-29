@@ -60,6 +60,15 @@ export class NoticeFacts {
     };
   }
 
+  /** A room's name, from its own row; null when the room is gone. */
+  async communityName(communityId: string): Promise<string | null> {
+    const room = await this.prisma.community.findUnique({
+      where: { id: communityId },
+      select: { name: true },
+    });
+    return room?.name ?? null;
+  }
+
   /**
    * "Ada O.": the first name and the first letter of the last, as the app's
    * own notices name a buyer. Null when WAWU ID does not answer or the person

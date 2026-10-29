@@ -9,7 +9,9 @@ import { BillPaymentService } from '../../bill-payment/bill-payment.service';
 import { EventTicketingService } from '../../event-ticketing/event-ticketing.service';
 import { EventCallOffRefundService } from '../../event-ticketing/wallet/event-call-off-refund.service';
 import { EventWalletOrderService } from '../../event-ticketing/wallet/event-wallet-order.service';
+import { CommunityPassService } from '../../community/pass/community-pass.service';
 import { UnlockWalletService } from '../../content-piece/wallet/unlock-wallet.service';
+import { WalletHoldService } from '../../money/holds/wallet-hold.service';
 import { MoneyInNoticeService } from '../../money/money-in-notice/money-in-notice.service';
 import { PinResetService } from '../../money/pin/pin-reset.service';
 import { TransactionPinService } from '../../money/pin/transaction-pin.service';
@@ -59,6 +61,7 @@ function factsFor(over: Partial<Record<keyof NoticeFacts, unknown>> = {}) {
     }),
     nameOf: async (id: string | null) => (id ? 'Ada O.' : null),
     paidWhen: async () => 'now',
+    communityName: async () => 'Lagos Writers',
     ...over,
   } as unknown as NoticeFacts;
 }
@@ -514,7 +517,7 @@ describe('sale_made and tip_received (a store sale)', () => {
     });
   });
 
-  it('a sale that rolls back sends none; a pass or an answered question sends none here', async () => {
+  it('a sale that rolls back sends none', async () => {
     const mail = mailer();
     await expect(
       mail.within(async () => {
@@ -522,15 +525,83 @@ describe('sale_made and tip_received (a store sale)', () => {
         throw new Error('rolled back');
       }),
     ).rejects.toThrow();
-    await mail.within(async () => {
-      await notices(mail).told(
-        { community: { findUnique: async () => null } } as never,
-        { ...sale, kind: 'pass' },
-      );
-      await notices(mail).told({} as never, { ...sale, kind: 'question' });
-    });
     await mail.settled();
     expect(double.requests).toHaveLength(0);
+  });
+
+  it('a pass sold in the store tells the host 85% of the list price, the room, and when it is paid (R-101)', async () => {
+    const mail = mailer();
+    await mail.within(() =>
+      notices(mail).told(
+        {
+          community: { findUnique: async () => ({ name: 'Lagos Writers' }) },
+        } as never,
+        { ...sale, kind: 'pass', targetId: 'room-0001' },
+      ),
+    );
+    await mail.settled();
+    expect(double.sent).toHaveLength(1);
+    expect(double.sent[0].body).toMatchObject({
+      wawuId: 'user-creator-1',
+      kind: 'pass_sold',
+      data: {
+        communityName: 'Lagos Writers',
+        buyerName: 'Ada O.',
+        earnedMinor: 85_000,
+        currency: 'NGN',
+        paidWhen: 'in_3_working_days',
+      },
+    });
+    expect(double.sent[0].body.idempotencyKey).toBe('pass_sold-purchase-0001');
+    expectNoAddressOrMarkup();
+  });
+
+  it('an answered store question tells the creator the earning, with no wallet it waits (R-11)', async () => {
+    const mail = mailer();
+    await mail.within(() =>
+      notices(mail, 'when_wallet_opens').told({} as never, {
+        ...sale,
+        kind: 'question',
+      }),
+    );
+    await mail.settled();
+    expect(double.sent[0].body).toMatchObject({
+      wawuId: 'user-creator-1',
+      kind: 'question_earned',
+      data: {
+        fromName: 'Ada O.',
+        earnedMinor: 85_000,
+        currency: 'NGN',
+        paidWhen: 'when_wallet_opens',
+      },
+    });
+  });
+
+  it('a pass or a question sale that rolls back sends none, and a replay is one email (same key)', async () => {
+    const mail = mailer();
+    const room = {
+      community: { findUnique: async () => ({ name: 'Lagos Writers' }) },
+    } as never;
+    await expect(
+      mail.within(async () => {
+        await notices(mail).told(room, { ...sale, kind: 'pass' });
+        await notices(mail).told(room, { ...sale, kind: 'question' });
+        throw new Error('rolled back');
+      }),
+    ).rejects.toThrow();
+    await mail.settled();
+    expect(double.requests).toHaveLength(0);
+    for (let i = 0; i < 2; i += 1) {
+      await mail.within(async () => {
+        await notices(mail).told(room, { ...sale, kind: 'pass' });
+        await notices(mail).told(room, { ...sale, kind: 'question' });
+      });
+    }
+    await mail.settled();
+    expect(double.sent.map((r) => r.body.kind).sort()).toEqual([
+      'pass_sold',
+      'question_earned',
+    ]);
   });
 
   it('the same sale told twice is one email at WAWU ID (same key)', async () => {
@@ -793,6 +864,150 @@ describe('sale_made and purchase_receipt (a wallet sale), ticket_confirmed, refu
         units: '23.5',
         reference: 'WAWU-BILL-1',
       },
+    });
+  });
+});
+
+describe('pass_sold (a wallet pass) and question_earned (a wallet question)', () => {
+  const payment = {
+    paymentId: 'pay-pass-0001',
+    payerWawuUserId: 'user-buyer-6',
+    payeeWawuUserId: 'user-host-6',
+    kind: 'community_pass',
+    targetId: 'room-0006',
+    priceKobo: 100_000,
+    terms: { periodDays: 30 },
+  };
+
+  function passService(mail: NoticeMailer, created: number[]) {
+    const tx = {
+      $queryRaw: async () => [],
+      $executeRaw: async () => 1,
+      walletHold: { findUnique: async () => null },
+      community: {
+        findUnique: async () => ({
+          hostWawuId: 'user-host-6',
+          passPrice: { communityId: 'room-0006' },
+        }),
+      },
+      communityPass: {
+        aggregate: async () => ({ _max: { endsAt: null } }),
+        createMany: async () => ({ count: created.shift() ?? 0 }),
+      },
+      communityMembership: { createMany: async () => ({ count: 1 }) },
+    };
+    const svc = Object.create(
+      CommunityPassService.prototype,
+    ) as CommunityPassService;
+    Object.assign(svc, {
+      mail,
+      facts: factsFor(),
+      logger: new Logger('test'),
+      blocked: { isBlockedEitherWay: async () => false },
+      holds: { refund: async () => undefined },
+      prisma: {
+        $transaction: async (cb: (t: unknown) => Promise<unknown>) => cb(tx),
+      },
+    });
+    return svc;
+  }
+  const deliver = (svc: unknown) =>
+    priv<{ deliver: (p: unknown) => Promise<void> }>(svc).deliver(payment);
+
+  it('a wallet pass is told to the host once, from the payment row; a replay and a race ask once', async () => {
+    const mail = mailer();
+    const svc = passService(mail, [1, 0, 0]);
+    await Promise.all([deliver(svc), deliver(svc)]);
+    await deliver(svc);
+    await mail.settled();
+    expect(double.requests).toHaveLength(1);
+    expect(double.sent[0].body).toMatchObject({
+      wawuId: 'user-host-6',
+      kind: 'pass_sold',
+      data: {
+        communityName: 'Lagos Writers',
+        buyerName: 'Ada O.',
+        earnedMinor: 85_000,
+        currency: 'NGN',
+        paidWhen: 'now',
+      },
+    });
+    expect(double.sent[0].body.idempotencyKey).toBe('pass_sold-pay-pass-0001');
+    expectNoAddressOrMarkup();
+  });
+
+  it('a pass that is paid back (nothing granted) is not told', async () => {
+    const mail = mailer();
+    const svc = passService(mail, [0]);
+    await deliver(svc);
+    await mail.settled();
+    expect(double.requests).toHaveLength(0);
+  });
+
+  function holdService(mail: NoticeMailer, wins: number[], paidWhen = 'now') {
+    const svc = Object.create(WalletHoldService.prototype) as WalletHoldService;
+    Object.assign(svc, {
+      mail,
+      facts: factsFor({ paidWhen: async () => paidWhen }),
+      prisma: {
+        $transaction: async (cb: (t: unknown) => Promise<unknown>) =>
+          cb({
+            walletHold: {
+              updateMany: async () => ({ count: wins.shift() ?? 0 }),
+            },
+            earningSettlement: { create: async () => ({}) },
+          }),
+      },
+    });
+    return svc;
+  }
+  const hold = (over: Record<string, unknown> = {}) => ({
+    id: 'hold-0001',
+    paymentId: 'pay-q-0001',
+    kind: 'paid_dm',
+    payerWawuUserId: 'user-asker-7',
+    payeeWawuUserId: 'user-creator-7',
+    payeeShareKobo: 85_000n,
+    ...over,
+  });
+  const release = (svc: unknown, h: unknown) =>
+    priv<{ releaseAsEarning: (h: unknown, r: string) => Promise<void> }>(
+      svc,
+    ).releaseAsEarning(h, 'answered');
+
+  it('an answered wallet question tells the creator the earning, once, whoever asks to release it and however often', async () => {
+    const mail = mailer();
+    const svc = holdService(mail, [1, 0, 0]);
+    await Promise.all([release(svc, hold()), release(svc, hold())]);
+    await release(svc, hold());
+    await mail.settled();
+    expect(double.requests).toHaveLength(1);
+    expect(double.sent[0].body).toMatchObject({
+      wawuId: 'user-creator-7',
+      kind: 'question_earned',
+      data: {
+        fromName: 'Ada O.',
+        earnedMinor: 85_000,
+        currency: 'NGN',
+        paidWhen: 'now',
+      },
+    });
+    expect(double.sent[0].body.idempotencyKey).toBe(
+      'question_earned-pay-q-0001',
+    );
+  });
+
+  it('a creator with no wallet is told the money waits; an event ticket release is not a question', async () => {
+    const mail = mailer();
+    await release(holdService(mail, [1], 'when_wallet_opens'), hold());
+    await release(
+      holdService(mail, [1]),
+      hold({ kind: 'event_ticket', paymentId: 'pay-t-0001' }),
+    );
+    await mail.settled();
+    expect(double.requests).toHaveLength(1);
+    expect(double.sent[0].body.data).toMatchObject({
+      paidWhen: 'when_wallet_opens',
     });
   });
 });

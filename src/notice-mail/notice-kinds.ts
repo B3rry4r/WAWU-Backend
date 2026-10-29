@@ -22,6 +22,8 @@ export const NOTICE_KINDS = [
   'ticket_confirmed',
   'event_cancelled',
   'bill_paid',
+  'pass_sold',
+  'question_earned',
 ] as const;
 export type NoticeKind = (typeof NOTICE_KINDS)[number];
 
@@ -110,6 +112,19 @@ export interface NoticeData {
     eventTitle: string;
     refundMinor: number | null;
     currency: string | null;
+  };
+  pass_sold: {
+    communityName: string;
+    buyerName: string | null;
+    earnedMinor: number;
+    currency: string;
+    paidWhen: PaidWhen;
+  };
+  question_earned: {
+    fromName: string | null;
+    earnedMinor: number;
+    currency: string;
+    paidWhen: PaidWhen;
   };
   bill_paid: {
     billerName: string;
@@ -209,6 +224,19 @@ export const NOTICE_FIELDS: Record<NoticeKind, Record<string, FieldRule>> = {
     eventTitle: text(200),
     refundMinor: minorOrNull,
     currency: currencyOrNull,
+  },
+  pass_sold: {
+    communityName: text(120),
+    buyerName: text(120, true),
+    earnedMinor: minor,
+    currency,
+    paidWhen: { t: 'enum', of: PAID_WHEN },
+  },
+  question_earned: {
+    fromName: text(120, true),
+    earnedMinor: minor,
+    currency,
+    paidWhen: { t: 'enum', of: PAID_WHEN },
   },
   bill_paid: {
     billerName: text(120),

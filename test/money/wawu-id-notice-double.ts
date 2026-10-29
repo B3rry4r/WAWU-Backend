@@ -40,6 +40,14 @@ export const CONTRACT_FIELDS: Record<string, string[]> = {
     'ticketRef',
   ],
   event_cancelled: ['eventTitle', 'refundMinor', 'currency'],
+  pass_sold: [
+    'communityName',
+    'buyerName',
+    'earnedMinor',
+    'currency',
+    'paidWhen',
+  ],
+  question_earned: ['fromName', 'earnedMinor', 'currency', 'paidWhen'],
   bill_paid: [
     'billerName',
     'customerRef',
