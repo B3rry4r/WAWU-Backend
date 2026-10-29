@@ -5,11 +5,13 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type { BillPayment } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { noticeKey, NoticeMailer } from '../notice-mail/notice-mailer';
 import {
   AdminOpsAuditService,
   type AdminActor,
@@ -92,6 +94,8 @@ export class BillPaymentService {
     private readonly bills: FlutterwaveBillsClient,
     private readonly verifier: FlutterwaveCheckoutVerifier,
     private readonly audit: AdminOpsAuditService,
+    /** Optional so the specs that build this by hand need no mailer; the module always provides it. */
+    @Optional() private readonly mail?: NoticeMailer,
   ) {}
 
   listCategories(country = 'NG'): Promise<BillCategory[]> {
@@ -459,6 +463,31 @@ export class BillPaymentService {
     const current = await this.prisma.billPayment.findUnique({
       where: { id: record.id },
     });
+    // EMAIL-02: the buyer is told the bill is paid, once, by the call that
+    // moved it to `delivered` (the write names the status it read, so a reader
+    // that finds it delivered writes nothing new). The token and units are in
+    // the email only when this answer had them.
+    if (
+      providerStatus === 'successful' &&
+      written.count > 0 &&
+      record.status !== 'delivered' &&
+      current?.status === 'delivered'
+    ) {
+      this.mail?.notify(
+        current.buyerWawuId,
+        'bill_paid',
+        {
+          billerName: current.billerName,
+          customerRef: current.customerRef,
+          amountMinor: current.amount * 100,
+          currency: 'NGN',
+          token: current.token,
+          units: current.units,
+          reference: current.flutterwaveTxRef,
+        },
+        noticeKey('bill_paid', current.id),
+      );
+    }
     return {
       record: current ?? record,
       changed: written.count > 0 && providerStatus !== 'unknown',

@@ -1,3 +1,4 @@
+import { NoticeMailModule } from '../notice-mail/notice-mail.module';
 import { Module } from '@nestjs/common';
 import { DirectMessageController } from './direct-message.controller';
 import { DirectMessageService } from './direct-message.service';
@@ -43,6 +44,7 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
  */
 @Module({
   imports: [
+    NoticeMailModule,
     NotificationModule,
     BlockedAccountModule,
     WawuAuthModule,
@@ -68,10 +70,7 @@ import { WawuAuthModule } from '../common/auth/wawu-auth.module';
       useFactory: (
         mock: MockFlutterwaveAdapter,
         real: RealFlutterwaveAdapter,
-      ) =>
-        shouldUseMockFlutterwave()
-          ? mock
-          : real,
+      ) => (shouldUseMockFlutterwave() ? mock : real),
       inject: [MockFlutterwaveAdapter, RealFlutterwaveAdapter],
     },
   ],

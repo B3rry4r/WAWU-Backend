@@ -1,5 +1,6 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { noticeKey, NoticeMailer } from '../notice-mail/notice-mailer';
 import { NotificationService } from '../notification/notification.service';
 import {
   FLUTTERWAVE_CLIENT,
@@ -59,6 +60,8 @@ export class DmRefundService {
     private readonly prisma: PrismaService,
     @Inject(FLUTTERWAVE_CLIENT) private readonly flutterwave: FlutterwaveClient,
     private readonly notifications: NotificationService,
+    /** Optional so the specs that build this by hand need no mailer; the module always provides it. */
+    @Optional() private readonly mail?: NoticeMailer,
   ) {}
 
   /**
@@ -250,6 +253,19 @@ export class DmRefundService {
     // settling the same refund cannot both announce it.
     if (updated.count === 0) return;
 
+    // EMAIL-02: the same single moment (the guard above). The web paid by
+    // Flutterwave, so the money went back to the account it came from.
+    this.mail?.notify(
+      dm.senderWawuId,
+      'refund_processed',
+      {
+        what: 'Your paid question',
+        amountMinor: dm.amount * 100,
+        currency: 'NGN',
+        returnedTo: 'source_account',
+      },
+      noticeKey('refund_processed', 'dm', dm.id),
+    );
     await this.notifications.emit({
       kind: 'dm_refunded',
       userWawuId: dm.senderWawuId,

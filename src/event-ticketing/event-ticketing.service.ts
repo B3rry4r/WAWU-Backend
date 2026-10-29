@@ -1,3 +1,4 @@
+import { noticeKey, NoticeMailer } from '../notice-mail/notice-mailer';
 import { randomBytes, randomUUID } from 'crypto';
 import { PriceListService } from '../price-list/price-list.service';
 import {
@@ -110,6 +111,7 @@ export class EventTicketingService {
     private readonly events: EventService,
     private readonly cancelHooks: EventCancelHooks,
     private readonly priceList: PriceListService,
+    private readonly mail: NoticeMailer,
   ) {}
 
   /* ------------------------------------------------------------------ *
@@ -912,6 +914,7 @@ export class EventTicketingService {
       return true;
     });
     if (!won) throw new ConflictException('This event is already cancelled.');
+    this.emailCalledOff(eventId, event.name);
 
     // EVENTS-07: orders paid from the wallet are not Flutterwave charges. Their
     // price sits in a hold, and EVENTS-10 refunds them through it (the step
@@ -995,6 +998,39 @@ export class EventTicketingService {
     return wallet.leftToSweep
       ? { ...answer, ordersLeftToSweep: wallet.leftToSweep }
       : answer;
+  }
+
+  /**
+   * EMAIL-02: every buyer of a ticket is told the event is off, once (only
+   * the cancel that won gets here). A buyer who paid is told what is coming
+   * back (the sum of the prices they paid); a free ticket has no sum.
+   */
+  private emailCalledOff(eventId: string, eventTitle: string): void {
+    this.mail.later(async () => {
+      const orders = await this.prisma.eventOrder.findMany({
+        where: { eventId, status: { in: ['paid', 'refunded'] } },
+        select: { buyerWawuId: true, amountNaira: true },
+      });
+      const owed = new Map<string, number>();
+      for (const o of orders) {
+        owed.set(
+          o.buyerWawuId,
+          (owed.get(o.buyerWawuId) ?? 0) + o.amountNaira * 100,
+        );
+      }
+      for (const [buyer, kobo] of owed) {
+        this.mail.notify(
+          buyer,
+          'event_cancelled',
+          {
+            eventTitle,
+            refundMinor: kobo > 0 ? kobo : null,
+            currency: kobo > 0 ? 'NGN' : null,
+          },
+          noticeKey('event_cancelled', eventId, buyer),
+        );
+      }
+    });
   }
 }
 

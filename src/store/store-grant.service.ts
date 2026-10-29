@@ -1008,6 +1008,7 @@ export class StoreGrantService {
     });
     // The creator is told of the sale, once, with the earning (STORE-SALE-NOTICE).
     await this.notices.told(tx, {
+      purchaseId: purchase.id,
       kind: intent.kind,
       creatorWawuId: target.creatorWawuId,
       buyerWawuId: userId,

@@ -1348,6 +1348,15 @@ export function buildRegistry(
     onOff,
   );
 
+  // ---- Money and account emails (EMAIL-02) ----
+  other(
+    'notifications.money_emails_on',
+    'The money and account emails (a PIN change, a deletion, money in, a bank send, a sale, a tip, a refund, a receipt, a ticket, a bill): 1 is on, 0 is off',
+    'count',
+    ['The Hub asks WAWU ID to email each one (EMAIL-02)'],
+    onOff,
+  );
+
   // ---- Prices come from a list (PRICE-LIST, R-101) ----
   // Whole naira, as lines of digits, lowest first. The seed holds the launch
   // lists; the cross-check that every tip is also a price is in the service

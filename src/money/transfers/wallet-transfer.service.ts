@@ -4,6 +4,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import type { Prisma } from '../../../generated/prisma/client';
 import { WawuIdClient } from '../../common/auth/wawu-id.client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import {
   BANK_SEND_REFERENCE_PREFIX,
   type ProviderReconciliation,
@@ -324,6 +325,8 @@ export class WalletTransferService implements OnModuleInit {
     private readonly wawuId: WawuIdClient,
     /** Keeps a bank send's payee ids on the saved place it went to (WALLET-09). */
     private readonly saved: SavedAccountTargetService,
+    /** EMAIL-02: the final state of a bank send is emailed once. */
+    private readonly mail: NoticeMailer,
   ) {}
 
   onModuleInit(): void {
@@ -702,7 +705,7 @@ export class WalletTransferService implements OnModuleInit {
       this.logger.warn(
         `send ${transfer.id}: ${this.provider.label} could not be reached (the request was not sent); the key is given back`,
       );
-      await this.markFailed(transfer, TRANSFER_FAILED_REASON);
+      await this.markFailed(transfer, TRANSFER_FAILED_REASON, true, false);
       await this.keys.release(scope);
       throw refusal.toHttpException();
     }
@@ -718,7 +721,13 @@ export class WalletTransferService implements OnModuleInit {
       );
       return this.answer(scope, await this.reload(transfer));
     }
-    const failed = await this.markFailed(transfer, TRANSFER_FAILED_REASON);
+    // The person is answered in this request, so the final state is not emailed.
+    const failed = await this.markFailed(
+      transfer,
+      TRANSFER_FAILED_REASON,
+      true,
+      false,
+    );
     if (
       RELEASED.includes(refusal.kind) ||
       refusal instanceof WalletProviderLimitError
@@ -956,7 +965,7 @@ export class WalletTransferService implements OnModuleInit {
       this.logger.error(`send ${t.id}: ${figures.note}; flagged for review`);
     }
     const now = new Date();
-    await this.prisma.walletTransfer.updateMany({
+    const completed = await this.prisma.walletTransfer.updateMany({
       where: { id: t.id, status: 'pending' },
       data: {
         status: 'completed',
@@ -982,9 +991,13 @@ export class WalletTransferService implements OnModuleInit {
           : {}),
       },
     });
-    return this.prisma.walletTransfer.findUniqueOrThrow({
+    const done = await this.prisma.walletTransfer.findUniqueOrThrow({
       where: { id: t.id },
     });
+    // Only the call that moved it out of `pending` tells the person: a replay,
+    // a sweep and a delivery that find it completed do not.
+    if (completed.count === 1) this.tellEnded(done, 'completed');
+    return done;
   }
 
   // -------------------------------------------------------------------------
@@ -2502,12 +2515,63 @@ export class WalletTransferService implements OnModuleInit {
     t: TransferRow,
     status: TransferStatus,
     data: Prisma.WalletTransferUpdateManyMutationInput,
+    tell = true,
   ): Promise<TransferRow> {
-    await this.prisma.walletTransfer.updateMany({
+    const moved = await this.prisma.walletTransfer.updateMany({
       where: { id: t.id, status: 'pending' },
       data: { ...data, status },
     });
-    return this.reload(t);
+    const row = await this.reload(t);
+    if (
+      tell &&
+      moved.count === 1 &&
+      (status === 'failed' || status === 'reversed')
+    ) {
+      this.tellEnded(row, 'failed');
+    }
+    return row;
+  }
+
+  /**
+   * EMAIL-02: the final state of a BANK send, emailed to the sender once
+   * (the key is the send's id and its end). Called only by the call that
+   * moved the send out of `pending`, after that write is committed. A send
+   * to another WAWU user has its own receipt in the app and no email.
+   * `returnedMinor` is what the person was quoted for the send (amount and
+   * fees): all of it comes back, the fee with the rest (FIX-52).
+   */
+  private tellEnded(row: TransferRow, how: 'completed' | 'failed'): void {
+    if (row.kind !== 'bank_account' || !row.payerWawuUserId) return;
+    if (how === 'completed') {
+      const account = row.bankAccountNumber ?? '';
+      this.mail.notify(
+        row.payerWawuUserId,
+        'bank_send_completed',
+        {
+          amountMinor: koboNumber(row.amountKobo),
+          feeMinor:
+            koboNumber(row.providerFeeKobo) + koboNumber(row.wawuFeeKobo),
+          currency: 'NGN',
+          recipientName: row.bankAccountName ?? '',
+          bankName: row.bankName ?? '',
+          accountLast4: account.slice(-4),
+          reference: row.customerReference,
+        },
+        noticeKey('bank_send_completed', row.id),
+      );
+      return;
+    }
+    this.mail.notify(
+      row.payerWawuUserId,
+      'bank_send_failed',
+      {
+        amountMinor: koboNumber(row.amountKobo),
+        returnedMinor: koboNumber(row.totalKobo),
+        currency: 'NGN',
+        reference: row.customerReference,
+      },
+      noticeKey('bank_send_failed', row.id),
+    );
   }
 
   private reload(t: Pick<TransferRow, 'id'>): Promise<TransferRow> {
@@ -2647,12 +2711,18 @@ export class WalletTransferService implements OnModuleInit {
     t: TransferRow,
     reason: string,
     writeLedger = true,
+    tell = true,
   ): Promise<TransferRow> {
-    const row = await this.transition(t, 'failed', {
-      failureReason: reason,
-      failedAt: new Date(),
-      nextCheckAt: null,
-    });
+    const row = await this.transition(
+      t,
+      'failed',
+      {
+        failureReason: reason,
+        failedAt: new Date(),
+        nextCheckAt: null,
+      },
+      tell,
+    );
     if (row.status === 'failed' && !t.reviewSince) await this.owe(row);
     if (writeLedger && row.status === 'failed') {
       try {

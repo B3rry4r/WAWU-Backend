@@ -18,6 +18,7 @@ import { WawuIdMailRelay } from '../admin/notifications/email/email-provider';
 import { LedgerModule } from './ledger/ledger.module';
 import { MoneyInNoticeModule } from './money-in-notice/money-in-notice.module';
 import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
+import { NoticeMailModule } from '../notice-mail/notice-mail.module';
 import { WalletBalanceService } from './balance/wallet-balance.service';
 import { FeeSettings } from './fees/fee-config';
 import { FeeQuoteService } from './fees/fee-quote.service';
@@ -290,6 +291,8 @@ import { WalletCardService } from './cards/wallet-card.service';
 @Module({
   imports: [
     ConfigModule,
+    // EMAIL-02: the money and account notices WAWU ID emails.
+    NoticeMailModule,
     // Only the admin guards, for the unswept-sales list (WALLET-16).
     AdminAuthModule,
     WalletProviderModule,

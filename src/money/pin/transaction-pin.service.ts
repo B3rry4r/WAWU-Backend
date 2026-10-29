@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import * as argon2 from 'argon2';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import type { ChangePinDto, SetPinDto } from '../dto/money-request.dto';
 import { MoneyError } from '../money-error';
 import { isUniqueViolation } from '../prisma-unique';
@@ -142,6 +143,7 @@ export class TransactionPinService {
   constructor(
     private readonly prisma: PrismaService,
     config: ConfigService,
+    private readonly mail: NoticeMailer,
   ) {
     this.lockMs =
       pinLockMinutes(config.get<string>(PIN_LOCK_MINUTES_KEY)) * 60_000;
@@ -202,13 +204,15 @@ export class TransactionPinService {
       // One transaction: the new PIN and the end of every reset still open
       // (BACKEND_GAPS G-50). A code texted before this change must not work
       // afterwards: confirming it would overwrite the PIN just chosen.
-      return await this.prisma.$transaction(async (tx) => {
+      let changedAt = new Date();
+      const view = await this.prisma.$transaction(async (tx) => {
         // The person's lock first, the one a reset's start and confirm take
         // (WALLET-06 round 2, D2): without it this took the PIN row and then
         // the reset rows while a confirm took them the other way round, and
         // one of the two could be refused as a deadlock.
         await lockPinPerson(tx, wawuUserId);
         const now = new Date();
+        changedAt = now;
         const changed = await tx.transactionPin.update({
           where: { wawuUserId },
           data: { pinHash, failedTries: 0, lockedUntil: null, setAt: now },
@@ -220,6 +224,15 @@ export class TransactionPinService {
         await inTransaction?.(tx);
         return pinStateView(changed, new Date());
       });
+      // EMAIL-02: told once, after the new PIN is committed. A replay of the
+      // request (the same Idempotency-Key) never reaches here.
+      this.mail.notify(
+        wawuUserId,
+        'pin_changed',
+        { at: changedAt.toISOString() },
+        noticeKey('pin_changed', 'change', wawuUserId, changedAt.getTime()),
+      );
+      return view;
     } catch (err) {
       if (isNoMatch(err)) throw new MoneyError('pin_not_set', NOT_SET_MESSAGE);
       throw err;

@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '../../../generated/prisma/client';
 import type { StoreIntentKind } from '../../../generated/prisma/enums';
+import { NoticeFacts } from '../../notice-mail/notice-facts';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import { NotificationService } from '../../notification/notification.service';
 import { creatorShareOfList } from '../store-buy-rules';
 
@@ -15,6 +17,8 @@ export interface SaleNotice {
   targetId: string;
   /** A piece's title; unused for the others. */
   title: string;
+  /** The store purchase's id: the sale's own id, for the email's key. */
+  purchaseId: string;
   /** The LIST price, whole kobo: the notice shows the creator's 85% of it, never what the store charged. */
   listPriceKobo: number;
 }
@@ -36,10 +40,82 @@ export interface SaleNotice {
  */
 @Injectable()
 export class StoreSaleNoticeService {
-  constructor(private readonly notifications: NotificationService) {}
+  constructor(
+    private readonly notifications: NotificationService,
+    private readonly mail: NoticeMailer,
+    private readonly facts: NoticeFacts,
+  ) {}
+
+  /**
+   * EMAIL-02: the creator's email for a store sale, held until the sale's
+   * transaction commits (the caller wraps it in `NoticeMailer.within`): a
+   * piece is `sale_made`, a tip `tip_received`, a community pass `pass_sold`,
+   * and an answered question `question_earned` (the creator was told the
+   * question arrived by `paid_message_received`; this is the earning, at the
+   * moment it arises).
+   */
+  private email(sale: SaleNotice): void {
+    this.mail.later(async () => {
+      const [buyerName, paidWhen] = await Promise.all([
+        this.facts.nameOf(sale.buyerWawuId),
+        this.facts.paidWhen(sale.creatorWawuId, 'store'),
+      ]);
+      const earnedMinor = creatorShareOfList(sale.listPriceKobo);
+      switch (sale.kind) {
+        case 'content':
+          this.mail.notify(
+            sale.creatorWawuId,
+            'sale_made',
+            {
+              itemTitle: sale.title,
+              buyerName,
+              earnedMinor,
+              currency: 'NGN',
+              paidWhen,
+            },
+            noticeKey('sale_made', sale.purchaseId),
+          );
+          return;
+        case 'tip':
+          this.mail.notify(
+            sale.creatorWawuId,
+            'tip_received',
+            { earnedMinor, currency: 'NGN', fromName: buyerName, paidWhen },
+            noticeKey('tip_received', sale.purchaseId),
+          );
+          return;
+        case 'pass': {
+          const communityName = await this.facts.communityName(sale.targetId);
+          if (communityName === null) return;
+          this.mail.notify(
+            sale.creatorWawuId,
+            'pass_sold',
+            {
+              communityName,
+              buyerName,
+              earnedMinor,
+              currency: 'NGN',
+              paidWhen,
+            },
+            noticeKey('pass_sold', sale.purchaseId),
+          );
+          return;
+        }
+        case 'question':
+          this.mail.notify(
+            sale.creatorWawuId,
+            'question_earned',
+            { fromName: buyerName, earnedMinor, currency: 'NGN', paidWhen },
+            noticeKey('question_earned', sale.purchaseId),
+          );
+          return;
+      }
+    });
+  }
 
   async told(tx: Prisma.TransactionClient, sale: SaleNotice): Promise<void> {
     // List prices are whole hundreds of naira, so 85% is a whole naira figure.
+    this.email(sale);
     const netAmount = creatorShareOfList(sale.listPriceKobo) / 100;
     const actorWawuId = sale.buyerWawuId;
     const userWawuId = sale.creatorWawuId;

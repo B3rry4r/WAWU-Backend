@@ -1,9 +1,11 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Interval } from '@nestjs/schedule';
 import type { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationService } from '../../notification/notification.service';
+import type { NoticeData } from '../../notice-mail/notice-kinds';
+import { noticeKey, NoticeMailer } from '../../notice-mail/notice-mailer';
 import { rowsOf } from '../../wallet-provider/provider-rows';
 import {
   WALLET_PROVIDER,
@@ -51,6 +53,12 @@ class NoticeNotWritten extends Error {
 }
 
 const MINUTE = 60_000;
+
+/** What the email of one told credit is made from, held until its transaction commits. */
+interface MoneyInMail {
+  wawuId: string;
+  data: NoticeData['money_in'];
+}
 
 /**
  * The ledger rows that are money in, told or not: an `in` row of a money-in
@@ -166,6 +174,8 @@ export class MoneyInNoticeService {
     @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
     private readonly notifications: NotificationService,
     config: ConfigService,
+    /** Optional so the specs that build this by hand need no mailer; the module always provides it. */
+    @Optional() private readonly mail?: NoticeMailer,
   ) {
     this.windowMs = moneyInNoticeWindowMs(
       config.get<string>(MONEY_IN_NOTICE_CONFIG_KEYS.windowHours),
@@ -251,11 +261,24 @@ export class MoneyInNoticeService {
     now = new Date(),
   ): Promise<MoneyInNoticeOutcome> {
     try {
+      const emailed: { facts: MoneyInMail | null } = { facts: null };
       const outcome = await this.prisma.$transaction(
-        (tx) => this.tell(tx, entryId),
+        (tx) => this.tell(tx, entryId, emailed),
         { maxWait: 5_000, timeout: 15_000 },
       );
       this.retryAt.delete(entryId);
+      // EMAIL-02: after the notice and its mark are committed, so a row told
+      // twice (two sightings, two servers) is one email, and a rolled-back
+      // pass sends none. The mark makes the notice once; the key makes the
+      // email once.
+      if (outcome === 'sent' && emailed.facts !== null) {
+        this.mail?.notify(
+          emailed.facts.wawuId,
+          'money_in',
+          emailed.facts.data,
+          noticeKey('money_in', entryId),
+        );
+      }
       return outcome;
     } catch (e) {
       // The key was taken between the read and the write: another process
@@ -273,6 +296,7 @@ export class MoneyInNoticeService {
   private async tell(
     tx: Prisma.TransactionClient,
     entryId: string,
+    emailed: { facts: MoneyInMail | null },
   ): Promise<'sent' | 'muted' | 'skipped'> {
     // The row, locked. A writer holding it (a merge, a status check) is not
     // waited for: this row is read again on the next pass.
@@ -314,6 +338,20 @@ export class MoneyInNoticeService {
       if (written) {
         outcome = 'sent';
         notificationId = written.id;
+        // Money from a bank or from another person is emailed; earnings,
+        // refunds, swaps and points have their own emails or are the
+        // person's own money moving (EMAIL-02, Default (lead)).
+        const from = creditSourceOf(row);
+        if (from.source === 'bank' || from.source === 'transfer') {
+          emailed.facts = {
+            wawuId: row.wawuUserId,
+            data: {
+              amountMinor: Number(row.amountKobo),
+              currency: 'NGN',
+              senderName: from.senderName,
+            },
+          };
+        }
       } else if (
         await this.notifications.isSwitchOff(row.wawuUserId, 'moneyIn', tx)
       ) {

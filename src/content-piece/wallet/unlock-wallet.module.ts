@@ -1,3 +1,4 @@
+import { NoticeMailModule } from '../../notice-mail/notice-mail.module';
 import { Module } from '@nestjs/common';
 import { BlockedAccountModule } from '../../blocked-account/blocked-account.module';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
@@ -18,7 +19,13 @@ import { UnlockWalletService } from './unlock-wallet.service';
  * entry).
  */
 @Module({
-  imports: [WawuAuthModule, MoneyModule, BlockedAccountModule, StorageModule],
+  imports: [
+    NoticeMailModule,
+    WawuAuthModule,
+    MoneyModule,
+    BlockedAccountModule,
+    StorageModule,
+  ],
   controllers: [UnlockWalletController],
   providers: [UnlockWalletService],
 })

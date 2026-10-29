@@ -1,3 +1,4 @@
+import { NoticeMailModule } from '../../notice-mail/notice-mail.module';
 import { Module } from '@nestjs/common';
 import { BlockedAccountModule } from '../../blocked-account/blocked-account.module';
 import { WawuAuthModule } from '../../common/auth/wawu-auth.module';
@@ -16,7 +17,12 @@ import { TipWalletService } from './tip-wallet.service';
  * entry).
  */
 @Module({
-  imports: [WawuAuthModule, MoneyModule, BlockedAccountModule],
+  imports: [
+    NoticeMailModule,
+    WawuAuthModule,
+    MoneyModule,
+    BlockedAccountModule,
+  ],
   controllers: [TipWalletController],
   providers: [TipWalletService],
 })

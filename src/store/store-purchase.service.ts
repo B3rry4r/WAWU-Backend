@@ -1,3 +1,4 @@
+import { NoticeMailer } from '../notice-mail/notice-mailer';
 import { createHash } from 'node:crypto';
 import {
   HttpException,
@@ -114,6 +115,8 @@ export class StorePurchaseService {
     @Optional()
     @Inject(APP_STORE_CLIENT)
     private readonly apple: AppStoreClient | null,
+    /** EMAIL-02: the sale emails raised in the grant wait for its commit. */
+    private readonly mail: NoticeMailer,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -285,102 +288,112 @@ export class StorePurchaseService {
               ? creatorShareOf(netOf(referenceKobo, shareFee))
               : null;
       try {
-        return await this.prisma.$transaction(async (tx) => {
-          if (holderKey !== null) {
-            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-subscription:${platform}:${subscriptionKey}`}, 0))`;
-            const holder = await tx.storeSubscription.findUnique({
-              where: holderKey,
-            });
-            if (holder !== null && holder.wawuUserId !== userId) throw taken();
-          }
-          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-purchase:${platform}:${verified.storeTransactionId}`}, 0))`;
-          const again = await tx.storePurchase.findUnique({ where: key });
-          if (again !== null) return heldBy(again, userId, communityId, intent);
-          // One intent, one purchase: a second store transaction against an
-          // intent already used is not refused (the store has the money): it is
-          // recorded and credited, linked to no intent.
-          let lateInTx = args.late ?? null;
-          if (intent !== null && lateInTx === null) {
-            const rows = await tx.$queryRaw<{ status: string }[]>`
+        return await this.mail.within(() =>
+          this.prisma.$transaction(async (tx) => {
+            if (holderKey !== null) {
+              await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-subscription:${platform}:${subscriptionKey}`}, 0))`;
+              const holder = await tx.storeSubscription.findUnique({
+                where: holderKey,
+              });
+              if (holder !== null && holder.wawuUserId !== userId)
+                throw taken();
+            }
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`store-purchase:${platform}:${verified.storeTransactionId}`}, 0))`;
+            const again = await tx.storePurchase.findUnique({ where: key });
+            if (again !== null)
+              return heldBy(again, userId, communityId, intent);
+            // One intent, one purchase: a second store transaction against an
+            // intent already used is not refused (the store has the money): it is
+            // recorded and credited, linked to no intent.
+            let lateInTx = args.late ?? null;
+            if (intent !== null && lateInTx === null) {
+              const rows = await tx.$queryRaw<{ status: string }[]>`
               SELECT "status"::text AS "status" FROM "StorePurchaseIntent"
               WHERE "id" = ${intent.id} FOR UPDATE`;
-            if (rows[0]?.status === 'used') lateInTx = 'used';
-          }
-          const linked = intent !== null && lateInTx === null;
-          const grantBuy: BuyContext | null =
-            lateInTx !== null
-              ? { intent: null, target: null, late: lateInTx }
-              : buy;
-          if (holderKey !== null && subscriptionKey !== null)
-            await tx.storeSubscription.upsert({
-              where: holderKey,
-              create: {
-                platform,
-                subscriptionKey,
+              if (rows[0]?.status === 'used') lateInTx = 'used';
+            }
+            const linked = intent !== null && lateInTx === null;
+            const grantBuy: BuyContext | null =
+              lateInTx !== null
+                ? { intent: null, target: null, late: lateInTx }
+                : buy;
+            if (holderKey !== null && subscriptionKey !== null)
+              await tx.storeSubscription.upsert({
+                where: holderKey,
+                create: {
+                  platform,
+                  subscriptionKey,
+                  wawuUserId: userId,
+                  // A subscription is a tier's; a pass is bought once and has no holder row.
+                  communityId: null,
+                },
+                update: {},
+              });
+            const now = new Date();
+            const row = await tx.storePurchase.create({
+              data: {
                 wawuUserId: userId,
-                // A subscription is a tier's; a pass is bought once and has no holder row.
-                communityId: null,
+                platform,
+                storeTransactionId: verified.storeTransactionId,
+                subscriptionKey: verified.subscriptionKey,
+                productId: product.id,
+                storeProductId: product.storeProductId,
+                kind: product.kind,
+                environment: verified.environment,
+                communityId: linked
+                  ? intent.kind === 'pass'
+                    ? intent.targetId
+                    : null
+                  : product.kind === 'pass'
+                    ? communityId
+                    : null,
+                ...(linked
+                  ? {
+                      intentId: intent.id,
+                      buyKind: intent.kind,
+                      targetId: intent.targetId,
+                    }
+                  : {}),
+                grant: {},
+                referenceKobo,
+                storeFeeBps: fee,
+                ...(shareFee === fee ? {} : { shareFeeBps: shareFee }),
+                netKobo,
+                creatorWawuUserId,
+                creatorShareKobo,
+                currency: verified.currency,
+                priceMicros: verified.priceMicros,
+                purchasedAt: verified.purchasedAt,
+                expiresAt: verified.expiresAt,
               },
-              update: {},
             });
-          const now = new Date();
-          const row = await tx.storePurchase.create({
-            data: {
-              wawuUserId: userId,
-              platform,
-              storeTransactionId: verified.storeTransactionId,
-              subscriptionKey: verified.subscriptionKey,
-              productId: product.id,
-              storeProductId: product.storeProductId,
-              kind: product.kind,
-              environment: verified.environment,
-              communityId: linked
-                ? intent.kind === 'pass'
-                  ? intent.targetId
-                  : null
-                : product.kind === 'pass'
-                  ? communityId
-                  : null,
-              ...(linked
-                ? {
-                    intentId: intent.id,
-                    buyKind: intent.kind,
-                    targetId: intent.targetId,
-                  }
-                : {}),
-              grant: {},
-              referenceKobo,
-              storeFeeBps: fee,
-              ...(shareFee === fee ? {} : { shareFeeBps: shareFee }),
-              netKobo,
-              creatorWawuUserId,
-              creatorShareKobo,
-              currency: verified.currency,
-              priceMicros: verified.priceMicros,
-              purchasedAt: verified.purchasedAt,
-              expiresAt: verified.expiresAt,
-            },
-          });
-          const snap = await this.grants.give(tx, row, product, now, grantBuy);
-          if (linked)
-            await tx.storePurchaseIntent.update({
-              where: { id: intent.id },
-              data: { status: 'used', usedAt: now },
+            const snap = await this.grants.give(
+              tx,
+              row,
+              product,
+              now,
+              grantBuy,
+            );
+            if (linked)
+              await tx.storePurchaseIntent.update({
+                where: { id: intent.id },
+                data: { status: 'used', usedAt: now },
+              });
+            const done = await tx.storePurchase.update({
+              where: { id: row.id },
+              data: {
+                grant: snap as unknown as Prisma.InputJsonValue,
+                // Paid but not given (a pass renewal for a removed member, a ladder
+                // purchase whose target is gone, which became a store credit), or
+                // given at the intent's price after the price moved: an admin looks.
+                ...(snap.skipped === undefined && snap.note === undefined
+                  ? {}
+                  : { flag: snap.skipped ?? snap.note, flaggedAt: now }),
+              },
             });
-          const done = await tx.storePurchase.update({
-            where: { id: row.id },
-            data: {
-              grant: snap as unknown as Prisma.InputJsonValue,
-              // Paid but not given (a pass renewal for a removed member, a ladder
-              // purchase whose target is gone, which became a store credit), or
-              // given at the intent's price after the price moved: an admin looks.
-              ...(snap.skipped === undefined && snap.note === undefined
-                ? {}
-                : { flag: snap.skipped ?? snap.note, flaggedAt: now }),
-            },
-          });
-          return { purchase: done, alreadyGranted: false };
-        });
+            return { purchase: done, alreadyGranted: false };
+          }),
+        );
       } catch (e) {
         // A racing grant of the same store transaction won; read it next time round.
         if (isUniqueViolation(e) && attempt === 0) continue;

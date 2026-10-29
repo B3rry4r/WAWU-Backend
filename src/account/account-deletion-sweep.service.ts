@@ -3,6 +3,7 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { AccountPurgeService } from '../account-purge/account-purge.service';
 import { purgeNoteOf } from '../account-purge/purge-files';
 import { PrismaService } from '../common/prisma/prisma.service';
+import { noticeKey, NoticeMailer } from '../notice-mail/notice-mailer';
 import { PointsService } from '../points/points.service';
 import {
   FREEZING_STALE_MS,
@@ -178,6 +179,8 @@ export class AccountDeletionSweepService {
     private readonly identity: AccountDeletionIdentityService,
     @Inject(WAWU_ID_ACCOUNT_GATEWAY)
     private readonly wawuId: WawuIdAccountGateway,
+    /** EMAIL-02: the person is emailed once when the Hub has deleted their data. */
+    private readonly mail: NoticeMailer,
   ) {}
 
   /** The cron entry: one pass at a time in this process (round 7, verifier R6-2). */
@@ -697,6 +700,17 @@ export class AccountDeletionSweepService {
       return 'blocked';
     }
 
+    // EMAIL-02: the Hub's data is gone; the person is told BEFORE WAWU ID
+    // anonymises the account, because WAWU ID finds the address from the
+    // account and the anonymised one has none. Asked and waited for (it
+    // never throws and gives up after its retries); a repeat on a later pass
+    // is a replay at WAWU ID.
+    await this.mail.notifyNow(
+      id,
+      'account_deleted',
+      {},
+      noticeKey('account_deleted', id),
+    );
     // The Hub's side is done. Only now is WAWU ID asked to anonymise.
     try {
       await this.wawuId.finalizeAccountDeletion(id);
