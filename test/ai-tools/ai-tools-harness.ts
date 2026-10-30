@@ -500,6 +500,12 @@ export interface BootOptions {
   voices?: string;
   /** Boots the Audiobook, the Podcast maker and the Receptionist too (AITOOLS-13, AITOOLS-06). Needs `media: true`. */
   studio3?: boolean;
+  /**
+   * Listens on a port the system picks (127.0.0.1) before the first request. Without it supertest listens on the first
+   * request and closes the server when that request ends, so requests that overlap (polling loops run together) reach a
+   * closing server and get ECONNRESET. A spec that sends requests at the same time sets it.
+   */
+  listen?: boolean;
 }
 
 export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
@@ -607,6 +613,7 @@ export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
   app.useGlobalFilters(new AllExceptionsFilter());
   app.useGlobalInterceptors(new ResponseInterceptor());
   await app.init();
+  if (boot.listen) await app.listen(0, '127.0.0.1');
 
   const prisma = moduleRef.get(PrismaService);
   const points = moduleRef.get(PointsService);

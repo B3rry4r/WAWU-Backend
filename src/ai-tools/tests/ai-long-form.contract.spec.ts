@@ -844,6 +844,8 @@ describe('AITOOLS-13: the Audiobook and the Podcast maker (contract)', () => {
       const slow = data<AiJobView>(
         await makeCast(PLAIN, { source: { text: 'Hello there [[never]]' } }),
       );
+      // The job's own run writes the project id to its row in the background: let it finish before the follower's clock moves.
+      await h.jobs.drain();
       await h.podcasts.pass();
       const out = await h.podcasts.pass(new Date(Date.now() + 901 * 1000));
       expect(out.failed).toBe(1);

@@ -126,7 +126,7 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
   });
 
   beforeAll(async () => {
-    h = await bootAiTools({ media: true, studio3: true });
+    h = await bootAiTools({ media: true, studio3: true, listen: true });
     settings = h.get<PlanSettingsService>(PlanSettingsService);
   });
   afterAll(async () => {
@@ -893,12 +893,14 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
       const open = h.standin.openConversations();
       const ok = data<AiJobView>(await say(PLAIN, 'Hello'));
       await h.finish(PLAIN, ok.id);
+      await h.jobs.drain();
       expect(standin().deletedConversations).toHaveLength(1);
       expect(h.standin.openConversations()).toBe(open);
       expect(await ref(ok.id)).toBeNull();
       // The agent fails mid chat: the points go back and the chat the provider started is deleted too.
       const bad = data<AiJobView>(await say(PLAIN, 'Hello [[fail]]'));
       const failed = (await h.finish(PLAIN, bad.id)) as unknown as AiJobView;
+      await h.jobs.drain();
       expect(failed.state).toBe('failed');
       expect(standin().deletedConversations).toHaveLength(2);
       expect(h.standin.openConversations()).toBe(open);
@@ -911,6 +913,7 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
       standin().conversationDeleteRefusals = 1;
       const job = data<AiJobView>(await say(PLAIN, 'Hello'));
       await h.finish(PLAIN, job.id);
+      await h.jobs.drain();
       expect(h.standin.openConversations()).toBe(open + 1);
       expect(await ref(job.id)).toMatch(/^conversation:convo-\d+$/);
       expect(await copies().sweep(later())).toEqual({ cleared: 1, pending: 0 });
@@ -923,6 +926,7 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
       const open = h.standin.openConversations();
       const job = data<AiJobView>(await say(PLAIN, 'Hello'));
       await h.finish(PLAIN, job.id);
+      await h.jobs.drain();
       expect(standin().deletedConversations).toHaveLength(1);
       expect(h.standin.openConversations()).toBe(open);
       expect(await ref(job.id)).toBeNull();
@@ -975,6 +979,7 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
       standin().conversationDeleteRefusals = 1;
       const job = data<AiJobView>(await say(PLAIN, 'Hello'));
       await h.finish(PLAIN, job.id);
+      await h.jobs.drain();
       expect(h.standin.openConversations()).toBe(open + 1);
       standin().conversationDeleteRefusals = 1;
       const first = await h
@@ -992,12 +997,108 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
       expect(await ref(job.id)).toBeNull();
     });
 
+    it('clearing the Receptionist during an open talk leaves the talk alone: the real minutes are kept when the app ends it, then its conversation is deleted', async () => {
+      await setUp(PLAIN);
+      const before = await h.balance(PLAIN);
+      const open = h.standin.openConversations();
+      const session = data<VoiceSessionView>(await talk(PLAIN));
+      const first = await h
+        .http()
+        .delete('/ai-tools/receptionist')
+        .set(auth(PLAIN));
+      // The talk is still going: nothing of it is deleted, its note stays, and the answer is pending.
+      expect(data<ReceptionistRemovedView>(first).atProvider).toBe('pending');
+      expect(standin().deletedConversations).toEqual([]);
+      expect(await ref(session.id)).toBe(`convo:${session.conversationId}`);
+      // The app ends a 40 second talk: one minute is kept, as if nobody had cleared anything.
+      h.standin.setConversation(session.conversationId!, {
+        status: 'done',
+        seconds: 40,
+      });
+      expect(
+        data<VoiceSessionView>(await end(PLAIN, session.id)),
+      ).toMatchObject({ state: 'done', minutes: 1, keptPoints: VOICE });
+      expect(await h.balance(PLAIN)).toBe(before - VOICE);
+      // Only now is the conversation deleted, and asking again finishes the clearing.
+      expect(standin().deletedConversations).toEqual([session.conversationId]);
+      expect(await ref(session.id)).toBeNull();
+      const again = await h
+        .http()
+        .delete('/ai-tools/receptionist')
+        .set(auth(PLAIN));
+      expect(data<ReceptionistRemovedView>(again).atProvider).toBe('gone');
+      expect(h.standin.openConversations()).toBe(open);
+    });
+
+    it('clearing the Receptionist after the app ended a talk the provider has not closed gives every point back, as before, and deletes the conversation after', async () => {
+      await setUp(PLAIN);
+      const before = await h.balance(PLAIN);
+      const open = h.standin.openConversations();
+      const session = data<VoiceSessionView>(await talk(PLAIN));
+      h.standin.setConversation(session.conversationId!, {
+        status: 'initiated',
+        seconds: null,
+      });
+      expect(data<VoiceSessionView>(await end(PLAIN, session.id)).state).toBe(
+        'working',
+      );
+      const first = await h
+        .http()
+        .delete('/ai-tools/receptionist')
+        .set(auth(PLAIN));
+      expect(data<ReceptionistRemovedView>(first).atProvider).toBe('pending');
+      expect(standin().deletedConversations).toEqual([]);
+      expect(await ref(session.id)).toBe(
+        `convo:${session.conversationId}:ended`,
+      );
+      // The sweep, past its minutes, ends the talk as timed out with nothing charged, and only then deletes the conversation.
+      const maxRun = settings.number('points.job_max_run_minutes');
+      const late = new Date(Date.now() + (maxRun + 1) * 60_000);
+      expect(await h.receptionist.settleSessions(late)).toBe(1);
+      expect(
+        await h.prisma.aiToolJob.findUnique({
+          where: { id: session.id },
+          select: { state: true, failureCode: true },
+        }),
+      ).toEqual({ state: 'failed', failureCode: 'timed_out' });
+      expect(await h.balance(PLAIN)).toBe(before);
+      expect(standin().deletedConversations).toEqual([session.conversationId]);
+      expect(await ref(session.id)).toBeNull();
+      const again = await h
+        .http()
+        .delete('/ai-tools/receptionist')
+        .set(auth(PLAIN));
+      expect(data<ReceptionistRemovedView>(again).atProvider).toBe('gone');
+      expect(h.standin.openConversations()).toBe(open);
+    });
+
+    it('waits for an open talk when the account goes: the purge stops while it is open, then deletes its conversation once it has ended', async () => {
+      await setUp(PLAIN);
+      const before = await h.balance(PLAIN);
+      const open = h.standin.openConversations();
+      const session = data<VoiceSessionView>(await talk(PLAIN));
+      const purge = h.get<AiToolsPurgeService>(AiToolsPurgeService);
+      await expect(purge.beforeErase(PLAIN)).rejects.toThrow();
+      expect(standin().deletedConversations).toEqual([]);
+      expect(await ref(session.id)).toBe(`convo:${session.conversationId}`);
+      h.standin.setConversation(session.conversationId!, {
+        status: 'done',
+        seconds: 40,
+      });
+      await end(PLAIN, session.id);
+      expect(await h.balance(PLAIN)).toBe(before - VOICE);
+      await purge.beforeErase(PLAIN);
+      expect(h.standin.openConversations()).toBe(open);
+      expect(stood()).toEqual({ agents: 0, docs: 0 });
+    });
+
     it('deletes every conversation still kept when the account goes', async () => {
       await setUp(PLAIN);
       const open = h.standin.openConversations();
       standin().conversationDeleteRefusals = 1;
       const job = data<AiJobView>(await say(PLAIN, 'Hello'));
       await h.finish(PLAIN, job.id);
+      await h.jobs.drain();
       expect(h.standin.openConversations()).toBe(open + 1);
       await h.get<AiToolsPurgeService>(AiToolsPurgeService).beforeErase(PLAIN);
       expect(h.standin.openConversations()).toBe(open);

@@ -513,9 +513,12 @@ export class ReceptionistService {
 
   /**
    * Deletes every conversation the Hub still has a note of for this person: `conversation:<id>` (a text chat, or a talk
-   * once it ended) and `convo:<id>` (a talk, whatever state it is in; a talk still open ends later with its points
-   * given back, since its agent goes with it). Answers true while one is left. A 404 counts as gone only once the row
-   * is older than `NOT_STORED_YET_MS` (the provider may answer 404 for a conversation it has not stored yet).
+   * once it ended) and `convo:<id>` (a talk that ended but whose note was not yet swapped). A row whose job is still
+   * `working` (a talk in progress, or an answer not yet given) is left alone and counts as left: its conversation is the
+   * only read of the talk's real length, so deleting it would make the settle step charge the longest talk, or a talk
+   * the provider never closed. The settle step (or the end of the job) ends it and deletes its conversation, and asking
+   * again then finds nothing. Answers true while one is left. A 404 counts as gone only once the row is older than
+   * `NOT_STORED_YET_MS` (the provider may answer 404 for a conversation it has not stored yet).
    */
   private async deleteKeptConversations(wawuUserId: string): Promise<boolean> {
     let pending = false;
@@ -533,6 +536,7 @@ export class ReceptionistService {
       select: {
         id: true,
         providerRef: true,
+        state: true,
         createdAt: true,
         finishedAt: true,
       },
@@ -540,6 +544,10 @@ export class ReceptionistService {
       take: SETTLE_PAGE * SETTLE_MAX_PAGES,
     });
     for (const row of rows) {
+      if (row.state === 'working') {
+        pending = true;
+        continue;
+      }
       const id = row.providerRef?.startsWith('conversation:')
         ? row.providerRef.slice('conversation:'.length)
         : conversationOf(row.providerRef);
