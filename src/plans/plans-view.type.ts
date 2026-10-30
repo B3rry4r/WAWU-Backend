@@ -156,8 +156,11 @@ export interface MyTierView {
  */
 export interface TierOfferView {
   /**
-   * True once per person: a creator account (professionals are creator
-   * accounts) who has not been shown the offer and holds no running tier.
+   * True for a person the Hub has a profile for, of any account type, who
+   * holds no running tier (R-105: the Hub lets any account hold a tier). With
+   * the admin setting `tier_offer.every_start_on` on (the default) that is on
+   * every ask; with it off it is once per person: not after the app has said
+   * the offer was drawn.
    */
   show: boolean;
   /**

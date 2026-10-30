@@ -1198,6 +1198,22 @@ export function buildRegistry(
     default: extra('tier_offer.close_button_on', 1),
     parse: whole(0, 1),
   });
+  // STORE-SEED (R-105, owner, 30 Oct 2026): the offer comes on every app start for
+  // a signed-in person who holds no running tier, until they hold one. 1 is that
+  // (the default); 0 offers it once per person, as R-94 first ruled.
+  add({
+    key: 'tier_offer.every_start_on',
+    group: 'Tier offer',
+    label:
+      'Show the tier offer on every app start (1 is on, 0 shows it to a person once)',
+    unit: 'count',
+    usedBy: [
+      'GET /me/tier-offer (show), the tier offer screen (STORE-SEED, R-105)',
+    ],
+    provisional: null,
+    default: extra('tier_offer.every_start_on', 1),
+    parse: whole(0, 1),
+  });
   other(
     'voice.intro_max_chars',
     'Characters a Voice Intro script can have',
