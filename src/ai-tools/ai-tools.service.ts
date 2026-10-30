@@ -4,18 +4,22 @@ import { PlanSettingsService } from '../plan-settings/plan-settings.service';
 import { PointsQuoteService } from '../points/spend/points-quote.service';
 import { AiToolError, UNAVAILABLE_MESSAGE } from './ai-tools-error';
 import { AiInputService } from './input/ai-input-files';
-import type { AiTool } from './tools/ai-tool';
+import { isMediaSpec, type AiTool, type MediaInputSpec } from './tools/ai-tool';
 import type {
   AiFileQuoteView,
+  AiSpeechQuoteView,
+  AiToolOptionsView,
   AiToolsView,
   AiToolView,
 } from './ai-tools-view.type';
 import {
   AI_INPUT_FOLDERS,
+  AI_INPUT_IMAGE_FOLDER,
+  AI_INPUT_IMAGE_MAX_BYTES,
   AI_INPUT_MAX_BYTES_SETTING,
   FOLDER_CONTENT_TYPES,
 } from '../storage/dto/presign-upload.dto';
-import { AI_TOOLS } from './tools';
+import { ALL_AI_TOOLS } from './tools';
 import { DUBBING_LANGUAGES_SETTING } from './tools/dubbing.tool';
 import { dubLanguagesOf } from './dub/dub-support';
 import {
@@ -72,6 +76,58 @@ export class AiToolsService {
     };
   }
 
+  /**
+   * The points quote for a Talking photo's voice (AITOOLS-10): the Hub has read
+   * the voice's length itself (`AiJobService.openSpeech`) and prices the seconds
+   * from that, so the phone sends no length. The same quote `POST /points/quote`
+   * hands back. Nothing is held.
+   */
+  async quoteSpeech(
+    wawuUserId: string,
+    tool: AiTool,
+    seconds: number,
+  ): Promise<AiSpeechQuoteView> {
+    if (
+      !tool.enabled(this.voice) ||
+      (tool.listingSetting && this.settings.number(tool.listingSetting) !== 1)
+    )
+      throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
+    const units = Math.max(1, Math.ceil(seconds));
+    const quote = await this.quotes.quote(wawuUserId, {
+      action: tool.action,
+      units,
+    });
+    return { ...quote, speech: { seconds: units } };
+  }
+
+  /** What a Studio picture or video tool takes beyond its description, from the tool and its settings (AITOOLS-09, AITOOLS-10). */
+  private optionsOf(spec: MediaInputSpec): AiToolOptionsView {
+    return {
+      shapes: [...spec.shapes],
+      ...(spec.lengths ? { lengths: [...spec.lengths] } : {}),
+      ...(spec.photo !== 'none'
+        ? {
+            photo: {
+              use: spec.photo,
+              folder: AI_INPUT_IMAGE_FOLDER,
+              accepts: [...FOLDER_CONTENT_TYPES[AI_INPUT_IMAGE_FOLDER]],
+              maxBytes: AI_INPUT_IMAGE_MAX_BYTES,
+            },
+          }
+        : {}),
+      ...(spec.speech
+        ? {
+            speech: {
+              audioFolder: AI_INPUT_FOLDERS[0],
+              accepts: ['audio/mpeg', 'audio/wav'],
+              maxSeconds: this.settings.number(spec.speech.maxSecondsSetting),
+              fromJob: true,
+            },
+          }
+        : {}),
+    };
+  }
+
   async list(): Promise<AiToolsView> {
     const plan = this.plan;
     // AITOOLS-07: a link to a short sample of each voice, when the provider has one.
@@ -84,12 +140,46 @@ export class AiToolsService {
       ...(samples.has(v.id) ? { sampleUrl: voiceSamplePath(v.id) } : {}),
     }));
     const tools: AiToolView[] = [];
-    for (const tool of AI_TOOLS) {
+    for (const tool of ALL_AI_TOOLS) {
       const action = plan.actions.find((a) => a.id === tool.action);
       if (!action) continue;
       const enabled = tool.enabled(this.voice);
       if (!enabled && !tool.listedWhenOff) continue;
+      // AITOOLS-08: a new tool is listed only while its own switch is on, so
+      // the live app never sees a tool before its screen ships.
+      if (
+        tool.listingSetting &&
+        this.settings.number(tool.listingSetting) !== 1
+      )
+        continue;
       const spec = tool.input;
+      if (isMediaSpec(spec)) {
+        // Every entry is whole (id, name, cost, enabled): the live app refuses a whole list for one malformed entry.
+        const maxCharacters =
+          spec.maxCharactersSetting === null
+            ? 0
+            : Math.min(
+                this.settings.number(spec.maxCharactersSetting),
+                plan.caps.maxCharsPerJob,
+              );
+        tools.push({
+          id: tool.id,
+          action: action.id,
+          name: tool.name,
+          description: tool.description,
+          unit: tool.unit,
+          costPointsPerUnit: action.points,
+          enabled,
+          input: {
+            kind: spec.kind,
+            maxCharacters,
+            charactersPerUnit: maxCharacters,
+            options: this.optionsOf(spec),
+          },
+          voices: [],
+        });
+        continue;
+      }
       if (spec.kind === 'file') {
         tools.push({
           id: tool.id,

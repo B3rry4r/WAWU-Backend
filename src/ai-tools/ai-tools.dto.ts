@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   Length,
   Matches,
   Max,
@@ -259,4 +260,131 @@ export class OwnVoiceConsentDto {
   @IsString({ message: 'line must be text.' })
   @Length(1, 500)
   line!: string;
+}
+
+/** The shape of an aspect ratio a picture or video route reads (`1:1`, `16:9`); the tool checks it against its own list. */
+const SHAPE = /^\d{1,2}:\d{1,2}$/;
+
+/**
+ * `POST /ai-tools/image/jobs` (AITOOLS-09, R-109). The Idempotency-Key is a
+ * header. The description is never stored: the job keeps only how long it was.
+ */
+export class CreateImageJobDto {
+  /** What the picture shows, in words. */
+  @ApiProperty({ minLength: 1, maxLength: MOST_PROMPT_CHARACTERS })
+  @MinLength(1, { message: 'Describe what you want to see.' })
+  @MaxLength(MOST_PROMPT_CHARACTERS, {
+    message: 'That description is too long.',
+  })
+  @IsString({ message: 'prompt must be text.' })
+  prompt!: string;
+
+  /** The shape: one of `input.options.shapes` from `GET /ai-tools` (`1:1`, `4:5`, `9:16`, `16:9`). Left out: square. */
+  @ApiPropertyOptional({ pattern: '^\\d{1,2}:\\d{1,2}$' })
+  @IsOptional()
+  @Matches(SHAPE, { message: 'shape must look like 1:1 or 16:9.' })
+  @IsString({ message: 'shape must be text.' })
+  shape?: string;
+
+  /** `quoteToken` from the `POST /points/quote` the person saw (action `image_per_use`, units 1). A different cost now is `409 quote_changed`. */
+  @ApiProperty()
+  @IsString({ message: 'quoteToken must be text.' })
+  @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
+  quoteToken!: string;
+}
+
+/**
+ * `POST /ai-tools/photo-edit/jobs` (AITOOLS-09): the same description, shape
+ * and quote as Make an image, with the person's own photo.
+ */
+export class CreatePhotoEditJobDto extends CreateImageJobDto {
+  /** The `key` `POST /uploads/presign` gave for the person's photo (folder `ai/input-image`). Another person's key is `404 not_found`. */
+  @ApiProperty({ minLength: 1, maxLength: MOST_KEY_CHARACTERS })
+  @IsString({ message: 'photoKey must be text.' })
+  @Length(1, MOST_KEY_CHARACTERS, { message: 'Send the photo you uploaded.' })
+  photoKey!: string;
+}
+
+/** `POST /ai-tools/video/jobs` (AITOOLS-10, R-109). The Idempotency-Key is a header. */
+export class CreateVideoJobDto {
+  /** What happens in the clip, in words. */
+  @ApiProperty({ minLength: 1, maxLength: MOST_PROMPT_CHARACTERS })
+  @MinLength(1, { message: 'Describe what you want to see.' })
+  @MaxLength(MOST_PROMPT_CHARACTERS, {
+    message: 'That description is too long.',
+  })
+  @IsString({ message: 'prompt must be text.' })
+  prompt!: string;
+
+  /** Wide (`16:9`) or tall (`9:16`): one of `input.options.shapes`. Left out: wide. */
+  @ApiPropertyOptional({ pattern: '^\\d{1,2}:\\d{1,2}$' })
+  @IsOptional()
+  @Matches(SHAPE, { message: 'shape must look like 16:9 or 9:16.' })
+  @IsString({ message: 'shape must be text.' })
+  shape?: string;
+
+  /** How long the clip is, in whole seconds: one of `input.options.lengths` (4, 6 or 8). It prices the job. */
+  @ApiProperty({ type: 'integer', minimum: 1, maximum: MOST_SECONDS })
+  @Max(MOST_SECONDS, { message: 'That length is too long.' })
+  @Min(1, { message: 'Pick a length.' })
+  @IsInt({ message: 'seconds must be a whole number of seconds.' })
+  seconds!: number;
+
+  /** The `key` of a photo to start from (folder `ai/input-image`). Left out: the clip is made from the words alone. */
+  @ApiPropertyOptional({ minLength: 1, maxLength: MOST_KEY_CHARACTERS })
+  @IsOptional()
+  @IsString({ message: 'photoKey must be text.' })
+  @Length(1, MOST_KEY_CHARACTERS, { message: 'Send the photo you uploaded.' })
+  photoKey?: string;
+
+  /** `quoteToken` from the `POST /points/quote` the person saw (action `video_per_sec`, units = `seconds`). */
+  @ApiProperty()
+  @IsString({ message: 'quoteToken must be text.' })
+  @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
+  quoteToken!: string;
+}
+
+/** `POST /ai-tools/talking-photo/quote` (AITOOLS-10): the voice to price. Exactly one of the two. */
+export class QuoteTalkingPhotoDto {
+  /** The `key` of a voice recording the person uploaded (folder `ai/input-audio`, MP3 or WAV). */
+  @ApiPropertyOptional({ minLength: 1, maxLength: MOST_KEY_CHARACTERS })
+  @IsOptional()
+  @IsString({ message: 'audioKey must be text.' })
+  @Length(1, MOST_KEY_CHARACTERS, {
+    message: 'Send the recording you uploaded.',
+  })
+  audioKey?: string;
+
+  /** The id of one of the person's own finished voice results whose audio is the voice. */
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID('all', {
+    message: 'sourceJobId must be the id of a finished result.',
+  })
+  sourceJobId?: string;
+}
+
+/** `POST /ai-tools/talking-photo/jobs` (AITOOLS-10). The Idempotency-Key is a header. */
+export class CreateTalkingPhotoJobDto extends QuoteTalkingPhotoDto {
+  /** The `key` of the person's photo (folder `ai/input-image`). */
+  @ApiProperty({ minLength: 1, maxLength: MOST_KEY_CHARACTERS })
+  @IsString({ message: 'photoKey must be text.' })
+  @Length(1, MOST_KEY_CHARACTERS, { message: 'Send the photo you uploaded.' })
+  photoKey!: string;
+
+  /** `quoteToken` from `POST /ai-tools/talking-photo/quote` (sent with the same voice). A different cost now is `409 quote_changed`. */
+  @ApiProperty()
+  @IsString({ message: 'quoteToken must be text.' })
+  @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
+  quoteToken!: string;
+}
+
+/** `POST /ai-tools/jobs/{id}/piece` (AITOOLS-08): which output of the finished job becomes a piece. */
+export class MakePieceDto {
+  /** The place of the output in the job's `outputs`, from 0. */
+  @ApiProperty({ type: 'integer', minimum: 0, maximum: 20 })
+  @Max(20, { message: 'outputIndex is not one of the job’s outputs.' })
+  @Min(0, { message: 'outputIndex is not one of the job’s outputs.' })
+  @IsInt({ message: 'outputIndex must be a whole number.' })
+  outputIndex!: number;
 }

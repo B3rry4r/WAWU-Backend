@@ -7,6 +7,7 @@ import {
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
+import { assetIdsOf } from '../flow/flow-support';
 import {
   AI_VOICE_PROVIDER,
   type AiVoiceProvider,
@@ -54,7 +55,7 @@ export type CopyTry = 'gone' | 'not_found' | 'absent' | 'keep';
 
 /**
  * What a job's `providerRef` holds while the provider's copy is not yet
- * confirmed deleted: `transcript:<id>`, `isolation:<id>` or `voice:<id>` (AITOOLS-07); for a transcript
+ * confirmed deleted: `transcript:<id>`, `isolation:<id>`, `voice:<id>` (AITOOLS-07) or `asset:<id>+<id>` (AITOOLS-09); for a transcript
  * that has answered 404 once after the confirm window opened, `@<ms>` is added
  * (when that first 404 was read), and a later read of the copy removes it.
  */
@@ -83,7 +84,9 @@ export function copyOfMarker(marker: string | null): NotedCopy | null {
     (kind !== 'transcript' &&
       kind !== 'isolation' &&
       kind !== 'voice' &&
-      kind !== 'dub') ||
+      kind !== 'dub' &&
+      // AITOOLS-09, AITOOLS-10: the person's photo or voice sent up for a run, ids joined with `+`.
+      kind !== 'asset') ||
     id === ''
   )
     return null;
@@ -231,6 +234,15 @@ export class ProviderCopyService implements OnModuleDestroy {
       const removed = await this.voice.deleteOwnVoice(copy.id);
       return removed === 'failed' ? 'keep' : 'gone';
     }
+    if (copy.kind === 'asset') {
+      // AITOOLS-09, AITOOLS-10: the Hub knows each asset exists (the provider named
+      // it), so a 404 means it is already gone; any other failure is tried again.
+      let allGone = true;
+      for (const id of assetIdsOf(copy)) {
+        if ((await this.voice.removeAsset(id)) === 'failed') allGone = false;
+      }
+      return allGone ? 'gone' : 'keep';
+    }
     if (copy.kind === 'isolation') {
       const removed = await this.voice.deleteIsolation(copy.id);
       return removed === 'deleted'
@@ -277,7 +289,11 @@ export class ProviderCopyService implements OnModuleDestroy {
       copy,
       age >= afterMs || absentSince !== null,
     );
-    if (copy.kind === 'voice' || copy.kind === 'isolation') {
+    if (
+      copy.kind === 'voice' ||
+      copy.kind === 'isolation' ||
+      copy.kind === 'asset'
+    ) {
       if (
         outcome === 'gone' ||
         (outcome === 'not_found' && age >= NOT_STORED_YET_MS)
@@ -380,6 +396,7 @@ export class ProviderCopyService implements OnModuleDestroy {
                 { providerRef: { startsWith: 'isolation:' } },
                 { providerRef: { startsWith: 'voice:' } },
                 { providerRef: { startsWith: 'dub:' } },
+                { providerRef: { startsWith: 'asset:' } },
               ],
             },
             {

@@ -225,7 +225,14 @@ export type NotificationCategory = 'money' | 'messages' | 'content' | 'other';
  * wallet transaction: the id `GET /money/transactions/{id}` answers.
  */
 export interface NotificationTargetView {
-  kind: 'content' | 'paid_question' | 'community' | 'profile' | 'transaction';
+  kind:
+    | 'content'
+    | 'paid_question'
+    | 'community'
+    | 'profile'
+    | 'transaction'
+    // AITOOLS-08: a Studio job; the id is the one `GET /ai-tools/jobs/{id}` answers for its owner.
+    | 'ai_job';
   id: string;
   /** The piece's title or the room's name, as it is now; null for a question or a person. */
   title: string | null;

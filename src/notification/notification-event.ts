@@ -88,7 +88,10 @@ type CoreNotificationKind =
   /** A paid question bought in a store was answered. Recipient: the creator, who earns 85% of the list price. */
   | 'question_answered'
   /** A paid question bought in a store was not answered in time. Recipient: the asker, who has a question credit. */
-  | 'question_credit';
+  | 'question_credit'
+  // AITOOLS-08 (R-109): a Studio job that ran long has ended.
+  /** A Studio job that ran longer than the setting `ai.job_ready_notice_seconds` has ended. Recipient: the person who ran it. The tap opens the job. */
+  | 'ai_job_ready';
 
 /** Exactly the union in WAWU-Web/src/types/notification.ts. */
 export type NotificationTone =
@@ -369,7 +372,18 @@ type NotificationEventCore =
    * price, never cash. Told once, in the transaction that makes the credit.
    * Recipient: the asker. `amount` is whole naira.
    */
-  | { kind: 'question_credit'; userWawuId: string; amount: number };
+  | { kind: 'question_credit'; userWawuId: string; amount: number }
+  /**
+   * AITOOLS-08 (R-109). A Studio job that ran longer than the setting has ended: the result is ready, or it did not
+   * work and no points were taken. Written once, by the one write that ended the job. `what` is a plain label for the
+   * result ("Video", "Edited photo", "Dubbed audio"); the words name no price, no provider and no model (R-68, R-47).
+   */
+  | {
+      kind: 'ai_job_ready';
+      userWawuId: string;
+      what: string;
+      outcome: 'done' | 'failed';
+    };
 
 /** A pass's last day as the reminder writes it: "12 Nov 2026", Lagos time. */
 function passEndDay(endsAt: Date): string {
@@ -983,6 +997,24 @@ export function composeNotification(
         ...NO_RICH_MEDIA,
       };
 
+    case 'ai_job_ready':
+      return {
+        ...base,
+        title:
+          event.outcome === 'done'
+            ? `Your ${event.what.toLowerCase()} is ready`
+            : `Your ${event.what.toLowerCase()} did not work`,
+        body:
+          event.outcome === 'done'
+            ? 'It took a little while. Open it to see the result.'
+            : 'No points were taken. Open it to try again.',
+        tone: event.outcome === 'done' ? 'success' : 'warning',
+        amount: null,
+        creditsCount: null,
+        actionLabel: null,
+        ...NO_RICH_MEDIA,
+      };
+
     case 'community_pass_refunded':
       return {
         ...base,
@@ -1457,7 +1489,9 @@ export type NotificationTargetKind =
   | 'tgif_day'
   // WALLET-39: a wallet transaction; the id is the ledger row's, the one
   // `GET /money/transactions/{id}` answers for its owner.
-  | 'transaction';
+  | 'transaction'
+  // AITOOLS-08: a Studio job; the id is the job's, the one `GET /ai-tools/jobs/{id}` answers for its owner.
+  | 'ai_job';
 
 /**
  * ME-10. Optional on every event: the thing it is about and the other person
@@ -1514,6 +1548,8 @@ export const NOTIFICATION_CATEGORY: Record<
   pass_sold: 'money',
   question_answered: 'money',
   question_credit: 'money',
+  // AITOOLS-08 (R-109). Default (lead), owner may override: under "Other", beside the Studio.
+  ai_job_ready: 'other',
   content_published: 'content',
   content_rejected: 'content',
   review_received: 'content',

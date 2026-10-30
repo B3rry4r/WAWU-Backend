@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -36,10 +37,16 @@ import {
   type UnsentChatSweepResult,
 } from './unsent-chat-sweep';
 import { ConfigService } from '@nestjs/config';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join as joinPath } from 'node:path';
 import { Transform, pipeline, type Readable } from 'node:stream';
+import { pipeline as pipelineAsync } from 'node:stream/promises';
 import {
   S3Client,
+  CopyObjectCommand,
   PutObjectCommand,
   GetObjectCommand,
   HeadObjectCommand,
@@ -86,6 +93,16 @@ const UPLOAD_URL_SECONDS = 300;
 
 /** How long the long-lived read link lives (`readUrlFor`): seven days. A caller that wants a shorter one passes its own. */
 const READ_URL_SECONDS = 604800;
+/** Copies of one Studio result into content that the person may have made and released (AITOOLS-08). */
+const COPY_ATTEMPTS = 10;
+/**
+ * The storage client bounds every call to `STORAGE_REQUEST_TIMEOUT_MS` (10
+ * seconds), which fits a HEAD or a DELETE of one key. A video of hundreds of MB
+ * sent from the Hub, and a copy of one inside the bucket, take longer, so these
+ * two calls carry their own bound (AITOOLS-08).
+ */
+const STREAM_PUT_TIMEOUT_MS = 10 * 60_000;
+const COPY_TIMEOUT_MS = 2 * 60_000;
 
 /**
  * Extra time after a given-up upload's link has expired before the sweep looks
@@ -255,6 +272,9 @@ export const GENERATED_KEY_FOLDERS = [
   'ai/music',
   'ai/clean-audio',
   'ai/dubbing',
+  // R-109 (AITOOLS-08): the pictures and videos the Studio tools make.
+  'ai/image',
+  'ai/video',
 ] as const;
 
 /**
@@ -798,6 +818,279 @@ export class StorageService {
       },
     });
     return key;
+  }
+
+  /**
+   * Stores a file the Hub made itself for a person, like `putGenerated`, from a
+   * STREAM (AITOOLS-08, R-109): a 100 MB video never sits in memory. The stream
+   * is written to a temporary file as it arrives (stopped the moment it passes
+   * `maxBytes`, or ends empty), then sent to the bucket from that file with its
+   * exact length, then the temporary file is deleted. Memory stays at the
+   * stream's own buffers whatever the size. The object is recorded as a
+   * confirmed `StorageObject` of the person, outside the R-7 allowance (its
+   * folder is not creator content). A network call: the caller holds no
+   * transaction and no lock. Writing the same name again replaces the file.
+   */
+  async putGeneratedStream(
+    wawuId: string,
+    folder: string,
+    name: string,
+    body: Readable,
+    contentType: string,
+    maxBytes: number,
+  ): Promise<{ key: string; bytes: number }> {
+    if (!this.client) {
+      body.destroy();
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const ext = EXTENSION_FOR_CONTENT_TYPE[contentType];
+    if (!ext || !/^[A-Za-z0-9._~-]+$/.test(name) || /^\.+$/.test(name)) {
+      body.destroy();
+      throw new Error(
+        'putGeneratedStream: a file type or name the Hub does not serve',
+      );
+    }
+    const key = `${folder}/${wawuId}/${name}.${ext}`;
+    const dir = await mkdtemp(joinPath(tmpdir(), 'wawu-gen-'));
+    const file = joinPath(dir, 'body');
+    try {
+      let seen = 0;
+      const counter = new Transform({
+        transform(chunk: Buffer, _enc, done) {
+          seen += chunk.length;
+          if (seen > maxBytes)
+            return done(new Error('putGeneratedStream: the file is too big'));
+          done(null, chunk);
+        },
+      });
+      await pipelineAsync(body, counter, createWriteStream(file));
+      const bytes = (await stat(file)).size;
+      if (bytes <= 0) throw new Error('putGeneratedStream: the file is empty');
+      await this.client.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          Body: createReadStream(file),
+          ContentType: contentType,
+          ContentLength: bytes,
+        }),
+        { requestTimeout: STREAM_PUT_TIMEOUT_MS },
+      );
+      const now = new Date();
+      await this.prisma.storageObject.upsert({
+        where: { key },
+        create: {
+          wawuUserId: wawuId,
+          key,
+          bytes,
+          contentType,
+          folder,
+          status: 'confirmed',
+          confirmedAt: now,
+        },
+        update: {
+          bytes,
+          contentType,
+          status: 'confirmed',
+          confirmedAt: now,
+          releasedAt: null,
+        },
+      });
+      return { key, bytes };
+    } finally {
+      body.destroy();
+      await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  /**
+   * A link that saves the file under a plain name (AITOOLS-08): the same read
+   * link as `readUrlFor` but served as an attachment named `fileName`. The
+   * name is cleaned to letters, digits, dots and dashes. Short-lived by
+   * default (an hour): the app fetches a fresh one with the next read of the job.
+   */
+  async downloadUrlFor(
+    key: string,
+    fileName: string,
+    expiresInSeconds = 3600,
+  ): Promise<string> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const plain = fileName.replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 100);
+    return getSignedUrl(
+      this.client,
+      new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        ResponseContentType: serveAs(key).contentType,
+        ResponseContentDisposition: `attachment; filename="${plain}"`,
+      }),
+      { expiresIn: expiresInSeconds },
+    );
+  }
+
+  /**
+   * The key of the `attempt`th copy of a Studio result into a person's own
+   * content folder (AITOOLS-08): `content/full/<wawuId>/<uuid>.<ext>`, the shape
+   * the presign writes, with a uuid made from the seed so the same result is
+   * always found again. A copy the person released is a later attempt.
+   */
+  contentCopyKey(
+    wawuId: string,
+    seed: string,
+    attempt: number,
+    contentType: string,
+  ): string {
+    const ext = EXTENSION_FOR_CONTENT_TYPE[contentType];
+    if (!ext) throw new Error('contentCopyKey: a type the Hub does not serve');
+    const h = createHash('sha256')
+      .update(`wawu-content-copy.v1\n${wawuId}\n${seed}\n${attempt}`)
+      .digest('hex');
+    const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
+    const id = `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
+    return `content/full/${wawuId}/${id}.${ext}`;
+  }
+
+  /**
+   * Copies a file the Hub made for a person (a Studio result) into the
+   * person's own `content/full` folder as a confirmed upload counted like any
+   * upload (AITOOLS-08, R-109, R-7). The same gate and the same room check as
+   * the presign for that folder run first: a person who may not publish gets the
+   * tier answer, one with no room gets the storage-full answer, and nothing is
+   * copied. The copy is made inside the bucket (no bytes pass through the Hub).
+   * The same `seed` finds the same copy again until the person releases it
+   * (`POST /uploads/release`); then a new copy is made.
+   */
+  async copyIntoContent(
+    wawuId: string,
+    sourceKey: string,
+    seed: string,
+  ): Promise<{
+    key: string;
+    fileUrl: string;
+    bytes: number;
+    contentType: string;
+    replayed: boolean;
+  }> {
+    if (!this.client) {
+      throw new ServiceUnavailableException(
+        'File uploads are not available on this environment yet.',
+      );
+    }
+    const source = await this.prisma.storageObject.findUnique({
+      where: { key: sourceKey },
+    });
+    if (
+      !source ||
+      source.wawuUserId !== wawuId ||
+      source.status !== 'confirmed' ||
+      !(GENERATED_KEY_FOLDERS as readonly string[]).includes(source.folder)
+    )
+      throw new NotFoundException('We could not find that file.');
+    const contentType = source.contentType;
+    const bytes = Number(source.bytes);
+    await this.gate.assertRoomForProduct(wawuId);
+    await this.reconcileStale(wawuId);
+    // The first copy of this seed that the person has not released.
+    let key = '';
+    for (let attempt = 0; attempt < COPY_ATTEMPTS; attempt++) {
+      const candidate = this.contentCopyKey(wawuId, seed, attempt, contentType);
+      const row = await this.prisma.storageObject.findUnique({
+        where: { key: candidate },
+      });
+      if (!row) {
+        key = candidate;
+        break;
+      }
+      const live =
+        row.wawuUserId === wawuId &&
+        row.status !== 'abandoned' &&
+        !row.releasedAt &&
+        !row.removingAt;
+      if (live && row.status === 'confirmed')
+        return {
+          key: candidate,
+          fileUrl: await this.readUrlFor(candidate),
+          bytes: Number(row.bytes),
+          contentType: row.contentType,
+          replayed: true,
+        };
+      if (live) {
+        // A copy another call of this person is making: wait for its result
+        // instead of making a second one.
+        throw new ConflictException(
+          'That is being copied right now. Try again in a moment.',
+        );
+      }
+    }
+    if (key === '')
+      throw new ConflictException(
+        'That result was copied and given up too many times. Make it again.',
+      );
+    // Reserve the room under the person's lock (the same one a presign's
+    // reservation, a confirm and a release take), then copy holding nothing.
+    await inPersonsTurn(wawuId, () =>
+      this.prisma.$transaction(async (tx) => {
+        await lockStorageQuota(tx, wawuId);
+        const { usage, tickHeld } = await this.readUsage(
+          wawuId,
+          tx,
+          tx,
+          CONTENT_FOLDERS,
+        );
+        if (usage.usedBytes + bytes > usage.limitBytes)
+          throw this.storageFullRefusal(bytes, usage, tickHeld);
+        await tx.storageObject.create({
+          data: {
+            wawuUserId: wawuId,
+            key,
+            bytes,
+            contentType,
+            folder: 'content/full',
+            status: 'pending',
+          },
+        });
+      }, LOCKED_TX),
+    );
+    try {
+      await this.client.send(
+        new CopyObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          CopySource: `${this.bucket}/${sourceKey
+            .split('/')
+            .map(encodeURIComponent)
+            .join('/')}`,
+          ContentType: contentType,
+          MetadataDirective: 'REPLACE',
+        }),
+        { requestTimeout: COPY_TIMEOUT_MS },
+      );
+    } catch (err) {
+      this.logger.warn(`Could not copy a result into content: ${String(err)}`);
+      await this.prisma.storageObject
+        .deleteMany({ where: { key, status: 'pending' } })
+        .catch(() => undefined);
+      throw new ServiceUnavailableException(
+        'We could not copy that right now. Try again in a moment.',
+      );
+    }
+    await this.prisma.storageObject.updateMany({
+      where: { key, releasedAt: null, removingAt: null },
+      data: { status: 'confirmed', confirmedAt: new Date() },
+    });
+    return {
+      key,
+      fileUrl: await this.readUrlFor(key),
+      bytes,
+      contentType,
+      replayed: false,
+    };
   }
 
   /**

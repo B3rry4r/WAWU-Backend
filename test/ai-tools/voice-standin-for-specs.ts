@@ -78,12 +78,44 @@ export interface StandinHandle {
     }[];
     dubKeyLeaks: number;
     deletedDubs: string[];
+    /** Each asset upload (AITOOLS-09, AITOOLS-10): the id, bytes, type and plain name; never the file. */
+    assets: { id: string; bytes: number; type: string | null; name: string }[];
+    deletedAssets: string[];
+    /** Each picture start: the model, shape, size, the assets named and the description's length. */
+    images: {
+      model: string;
+      shape: string | null;
+      resolution: string | null;
+      assetIds: string[];
+      promptChars: number;
+    }[];
+    /** Each video start: a clip or a talking photo, with what it asked for and the assets named. */
+    videos: {
+      kind: 'clip' | 'talking';
+      model: string;
+      shape?: string | null;
+      seconds?: string;
+      resolution: string | null;
+      withSound?: boolean | null;
+      assetIds: string[];
+      promptChars?: number;
+    }[];
+    genReads: {
+      id: string;
+      status: number;
+      answered?: string;
+      reason?: string;
+    }[];
+    genDownloads: { id: string; status: number; leaked: boolean }[];
+    genKeyLeaks: number;
   };
   /** Transcripts and cleaned recordings the provider still holds. */
   openTranscripts: () => number;
   openIsolations: () => number;
   /** Dub projects the provider still holds (AITOOLS-05). */
   openDubs: () => number;
+  /** Assets (a person's photo or voice) the provider still holds (AITOOLS-09, AITOOLS-10). */
+  openAssets: () => number;
   /** Voices the stand-in made for a person's own sample and has not yet had removed. */
   openClones: () => number;
   /** Lets the voices a `[[remove-fail]]` sample made be deleted from now on. */
@@ -95,12 +127,13 @@ type StandinModule = {
     port: number;
     key: string;
     dubDelayMs?: number;
+    genDelayMs?: number;
   }) => Promise<StandinHandle>;
 };
 
 export function startStandin(
   key: string,
-  opts: { dubDelayMs?: number } = {},
+  opts: { dubDelayMs?: number; genDelayMs?: number } = {},
 ): Promise<StandinHandle> {
   /* eslint-disable @typescript-eslint/no-require-imports */
   const mod = require('../../scripts/dev/voice-standin.cjs') as StandinModule;

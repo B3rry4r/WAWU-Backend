@@ -44,6 +44,10 @@ export const ACTION_TITLES: Record<PlanActionId, string> = {
   dub_premium_per_min_lang: 'Premium dubbing',
   receptionist_message: 'Receptionist',
   receptionist_voice_per_min: 'Receptionist voice',
+  image_per_use: 'Make an image',
+  photo_edit_per_use: 'Edit a photo',
+  video_per_sec: 'Make a video',
+  talking_photo_per_sec: 'Talking photo',
 };
 
 export const UNKNOWN_ACTION_MESSAGE = 'We could not find that AI tool.';

@@ -4,11 +4,13 @@ import {
   Inject,
   Injectable,
   Logger,
+  Optional,
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { Prisma, type AiToolJob } from '../../generated/prisma/client';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { isUniqueViolation } from '../money/prisma-unique';
+import { NotificationService } from '../notification/notification.service';
 import { PlanSettingsService } from '../plan-settings/plan-settings.service';
 import { PLANS_CONFIG, type PlansConfig } from '../plans/plans-config';
 import { PointsError } from '../points/points-error';
@@ -25,6 +27,23 @@ import {
 } from './audio/ai-audio-store';
 import { AiInputService } from './input/ai-input-files';
 import { endMarkerOf, parseFollowRef } from './dub/dub-support';
+import { copyOfFlow, parseFlowRef } from './flow/flow-support';
+import { minutesOf, readSeconds } from './input/media-length';
+import {
+  AI_IMAGE_CONTENT_TYPES,
+  AI_MEDIA_MAX_BYTES,
+  AI_MEDIA_STORE,
+  AI_VIDEO_CONTENT_TYPES,
+  dayText,
+  downloadNameFor,
+  pieceFormatFor,
+  type AiMediaStore,
+} from './media/ai-media-store';
+import {
+  AI_INPUT_IMAGE_MAX_BYTES,
+  EXTENSION_FOR_CONTENT_TYPE,
+  serveAs,
+} from '../storage/dto/presign-upload.dto';
 import { OWN_VOICE_ID } from './own-voice/own-voice-id';
 import { OwnVoiceService } from './own-voice/own-voice.service';
 import { markerOf, ProviderCopyService } from './voice/provider-copy.service';
@@ -37,6 +56,8 @@ import {
   OWN_VOICE_RECORDING_REQUIRED_MESSAGE,
   KEY_REQUIRED_MESSAGE,
   KEY_REUSED_MESSAGE,
+  NO_FORMAT_MESSAGE,
+  PROMPT_EMPTY_MEDIA_MESSAGE,
   PROMPT_EMPTY_MESSAGE,
   QUOTE_CHANGED_MESSAGE,
   TEXT_EMPTY_MESSAGE,
@@ -53,16 +74,28 @@ import type {
   CreateCaptionsJobDto,
   CreateCleanAudioJobDto,
   CreateDubbingJobDto,
+  CreateImageJobDto,
   CreateMusicJobDto,
+  CreatePhotoEditJobDto,
   CreateSoundEffectJobDto,
+  CreateTalkingPhotoJobDto,
+  CreateVideoJobDto,
   CreateVoiceoverJobDto,
 } from './ai-tools.dto';
-import type {
-  AiTool,
-  AiToolRequest,
-  AiToolRunInput,
-  AiToolRunResult,
+import {
+  isMediaSpec,
+  NO_FILE,
+  type AiTool,
+  type AiToolRequest,
+  type AiToolRunInput,
+  type AiToolRunResult,
+  type MediaJobRequest,
 } from './tools/ai-tool';
+import {
+  IMAGE_MODERATED_MESSAGE,
+  SPEECH_UNREADABLE_MESSAGE,
+  VIDEO_MODERATED_MESSAGE,
+} from './tools/media-limits';
 import { toolForAction } from './tools';
 import {
   CHARS_PER_MINUTE_SETTING,
@@ -74,9 +107,14 @@ import {
   AiVoiceProviderError,
   type AiVoiceProvider,
   type ProviderCopy,
+  type StreamedFile,
 } from './voice/ai-voice-provider';
+import type { AiPieceView } from './ai-tools-view.type';
 
 export { CHARS_PER_MINUTE_SETTING, VOICEOVER_ACTION };
+
+/** The setting: seconds a job must have run for the person to be told when it ends (AITOOLS-08). */
+export const JOB_READY_NOTICE_SETTING = 'ai.job_ready_notice_seconds';
 
 /** The body of any job route: words, a description or a file, by the tool's input kind. */
 type AiJobRequestBody =
@@ -85,13 +123,18 @@ type AiJobRequestBody =
   | CreateMusicJobDto
   | CreateCaptionsJobDto
   | CreateCleanAudioJobDto
-  | CreateDubbingJobDto;
+  | CreateDubbingJobDto
+  | CreateImageJobDto
+  | CreatePhotoEditJobDto
+  | CreateVideoJobDto
+  | CreateTalkingPhotoJobDto;
 
 const KEY_FORMAT = /^[A-Za-z0-9_-]{8,128}$/;
 /** The only try a job's hold has: a failed job is never retried, a new job (and key) is. */
 const ATTEMPT = 1;
 const CURSOR_PREFIX = 'j1.';
 export const BAD_CURSOR_MESSAGE = 'cursor is not one this list gave.';
+const RESULT_NOT_FOUND_MESSAGE = "We couldn't find that result.";
 
 export interface CreatedJob {
   job: AiJobView;
@@ -99,11 +142,14 @@ export interface CreatedJob {
   replayed: boolean;
 }
 
-/** What the job row keeps of a run's outputs (`outputs` column): a stored key for audio, the words for text. */
+/** What the job row keeps of a run's outputs (`outputs` column): a stored key for a file, the words for text. */
 interface StoredOutput {
   kind: AiJobOutputView['kind'];
   key?: string;
   text?: string;
+  /** AITOOLS-08: a Studio result's type and size, kept with the key (an older audio output has neither). */
+  contentType?: string;
+  bytes?: number;
 }
 
 /**
@@ -146,7 +192,20 @@ export class AiJobService {
     private readonly input: AiInputService,
     private readonly copies: ProviderCopyService,
     private readonly own: OwnVoiceService,
+    // R-109 (AITOOLS-08): where the pictures and videos are kept and copied from. Absent in a spec that builds only the older tools.
+    @Optional()
+    @Inject(AI_MEDIA_STORE)
+    private readonly media?: AiMediaStore,
+    // R-109 (AITOOLS-08): tells the person when a long job ends. Absent in a spec that builds no notifications.
+    @Optional() private readonly notices?: NotificationService,
   ) {}
+
+  /** Whether the tool's listing switch is on (AITOOLS-08): a tool with no switch, one of the seven older ones, is always listed. */
+  private listed(tool: AiTool): boolean {
+    return (
+      !tool.listingSetting || this.settings.number(tool.listingSetting) === 1
+    );
+  }
 
   /** Characters that make one minute of VoiceOver, from the settings. */
   charsPerMinute(): number {
@@ -194,7 +253,7 @@ export class AiJobService {
     const earlier = await this.prisma.aiToolJob.findUnique({ where: { id } });
     if (earlier) return this.replay(earlier, requestHash);
 
-    if (!tool.enabled(this.voice))
+    if (!tool.enabled(this.voice) || !this.listed(tool))
       throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
     // A tool's own checks of the words of the request (Dubbing: a language
     // that is not on the list), before the person's file is read.
@@ -211,6 +270,17 @@ export class AiJobService {
     } else if (req.kind === 'prompt') {
       if (req.prompt === '')
         throw new AiToolError('ai_prompt_empty', PROMPT_EMPTY_MESSAGE);
+    } else if (req.kind === 'media') {
+      // A Studio tool (AITOOLS-09, AITOOLS-10): its description, then the
+      // person's photo and voice opened and measured by the Hub, before
+      // anything is priced or held. Another person's key is not found.
+      if (
+        isMediaSpec(tool.input) &&
+        tool.input.maxCharactersSetting !== null &&
+        req.prompt === ''
+      )
+        throw new AiToolError('ai_prompt_empty', PROMPT_EMPTY_MEDIA_MESSAGE);
+      req = await this.openMedia(wawuUserId, req);
     } else {
       // The person's own file: opened and measured by the Hub, before
       // anything is priced or held. Another person's key is not found.
@@ -280,7 +350,12 @@ export class AiJobService {
         units,
         costPoints: held.costPoints,
         holdId: held.holdId,
-        inputRef: req.kind === 'file' ? req.fileKey : null,
+        inputRef:
+          req.kind === 'file'
+            ? req.fileKey
+            : req.kind === 'media'
+              ? inputRefOf(req)
+              : null,
       },
       requestHash,
     );
@@ -397,8 +472,15 @@ export class AiJobService {
     });
     if (kept.count > 0) return;
     const parsed = parseFollowRef(ref);
-    if (!parsed) return;
-    const copy: ProviderCopy = { kind: 'dub', id: parsed.projectId };
+    // AITOOLS-09 and -10: a picture or video whose row has ended already: the
+    // person's assets at the provider are deleted at once (noted, then tried).
+    const flow = parsed ? null : parseFlowRef(ref);
+    const copy: ProviderCopy | null = parsed
+      ? { kind: 'dub', id: parsed.projectId }
+      : flow
+        ? copyOfFlow(flow)
+        : null;
+    if (!copy) return;
     await this.copies.note(job.id, copy);
     await this.dropInput(job);
     await this.copies.discard(job.id, copy).catch(() => undefined);
@@ -412,17 +494,21 @@ export class AiJobService {
    */
   async completeFollowed(
     jobId: string,
-    result: AiToolRunResult & { endCopy: ProviderCopy },
+    result: AiToolRunResult,
   ): Promise<void> {
     const job = await this.prisma.aiToolJob.findUnique({
       where: { id: jobId },
     });
     const tool = job ? toolForAction(job.tool) : null;
-    if (!job || !tool || job.state !== 'working' || !job.holdId) return;
+    if (!job || !tool || job.state !== 'working' || !job.holdId) {
+      // Nothing will keep the result (the job ended another way): the stream is given back.
+      result.media?.close();
+      return;
+    }
     try {
       await this.finish(tool, job, job.holdId, result);
     } finally {
-      await this.discardIfEnded(jobId, result.endCopy);
+      if (result.endCopy) await this.discardIfEnded(jobId, result.endCopy);
     }
   }
 
@@ -570,7 +656,57 @@ export class AiJobService {
     // file's real length, and never holds the file whole. A Hub too busy to
     // take it now ends the job at once and gives every point back.
     let input: AiToolRunInput | undefined;
-    if (req.kind === 'file') {
+    /** The provider's copy of a person's voice or photo, noted on the job the moment it exists (AITOOLS-07, AITOOLS-09). */
+    let noted: ProviderCopy | null = null;
+    /** The Studio files opened for this run, so every place at the read gate goes back however the call ended. */
+    const opened: StreamedFile[] = [];
+    if (req.kind === 'media') {
+      // AITOOLS-09, AITOOLS-10: the person's photo and voice, streamed to the
+      // provider as assets for this one run, behind the same read gate. They
+      // are opened one at a time, when the tool asks (the gate gives an account
+      // one place at a time). A Hub too busy to take one now ends the job and
+      // gives every point back.
+      const lazy = (open: () => Promise<StreamedFile>) => async () => {
+        const file = await open();
+        opened.push(file);
+        return file;
+      };
+      const photoKey = req.photoKey;
+      const speech = req.speech;
+      const media: NonNullable<AiToolRunInput['media']> = {
+        ...(photoKey
+          ? {
+              photo: lazy(() =>
+                this.input.openForRun(
+                  job.wawuUserId,
+                  photoKey,
+                  AI_INPUT_IMAGE_MAX_BYTES,
+                ),
+              ),
+            }
+          : {}),
+        ...(speech
+          ? {
+              speech: lazy(() =>
+                speech.source === 'upload'
+                  ? this.input.openForRun(job.wawuUserId, speech.key)
+                  : this.openJobSpeech(speech.key),
+              ),
+            }
+          : {}),
+      };
+      if (photoKey || speech)
+        input = {
+          file: NO_FILE,
+          media,
+          // Notes the provider's copies of the person's photo and voice on the job as soon as they exist, so a server that dies still knows to delete them.
+          noteCopy: async (copy) => {
+            if (!(await this.copies.note(job.id, copy))) return false;
+            noted = copy;
+            return true;
+          },
+        };
+    } else if (req.kind === 'file') {
       try {
         input = {
           file: await this.input.openForRun(job.wawuUserId, req.fileKey),
@@ -592,7 +728,6 @@ export class AiJobService {
     // row while their agreement stands, goes to the provider for this one run; the
     // voice it makes is noted on the job the moment it exists, so a server that
     // dies still knows to remove it, and is removed when the job ends.
-    let noted: ProviderCopy | null = null;
     if (tool.id === 'voiceover' && job.voiceId === OWN_VOICE_ID) {
       let sample: Awaited<ReturnType<OwnVoiceService['sampleFor']>>;
       try {
@@ -622,9 +757,11 @@ export class AiJobService {
       result = await tool.run(this.voice, job, req, input);
     } catch (e) {
       const code =
-        e instanceof AiVoiceProviderError && e.kind === 'rejected'
-          ? 'provider_failed'
-          : 'provider_unavailable';
+        e instanceof ServiceUnavailableException
+          ? 'busy' // a Studio file the Hub was too busy to open (AITOOLS-09)
+          : e instanceof AiVoiceProviderError && e.kind === 'rejected'
+            ? 'provider_failed'
+            : 'provider_unavailable';
       // The provider's HTTP status (401 for a key, 402 for a plan, 422 for a
       // refused prompt) goes in the log line only, so a lead can tell a key or
       // plan refusal from a bad prompt. It is never written to the job (the
@@ -646,6 +783,7 @@ export class AiJobService {
     } finally {
       // The file's place at the read gate goes back however the call ended.
       if (input && 'stream' in input.file) input.file.sent();
+      for (const file of opened) file.sent();
     }
     // A followed tool (Dubbing): the provider took the work on. The job stays
     // `working`; the row keeps the provider's ids so the follower (also after a
@@ -678,6 +816,20 @@ export class AiJobService {
     holdId: string,
     result: AiToolRunResult,
   ): Promise<void> {
+    try {
+      await this.finishInner(tool, job, holdId, result);
+    } finally {
+      // A result that came as a stream is given back however the job ended.
+      result.media?.close();
+    }
+  }
+
+  private async finishInner(
+    tool: AiTool,
+    job: AiToolJob,
+    holdId: string,
+    result: AiToolRunResult,
+  ): Promise<void> {
     const endRef = result.endCopy ? markerOf(result.endCopy) : undefined;
     if (result.failure) {
       await this.fail(job, holdId, result.failure, endRef);
@@ -685,6 +837,8 @@ export class AiJobService {
     }
     const outputs: StoredOutput[] = [];
     let key: string | null = null;
+    /** The key of a picture or video (not an audio key: `audioKey` holds audio only). */
+    let mediaKey: string | null = null;
     try {
       if (result.audio) {
         key = await this.audio.put(
@@ -695,6 +849,37 @@ export class AiJobService {
           tool.audioFolder ?? undefined,
         );
         outputs.push({ kind: 'audio', key });
+      }
+      if (result.media) {
+        // A type the Hub does not serve for this kind fails the job: nothing is
+        // stored and every held point goes back (AITOOLS-08).
+        const served: readonly string[] =
+          result.media.kind === 'image'
+            ? AI_IMAGE_CONTENT_TYPES
+            : AI_VIDEO_CONTENT_TYPES;
+        if (
+          !this.media ||
+          !tool.mediaFolder ||
+          !served.includes(result.media.contentType)
+        ) {
+          await this.fail(job, holdId, 'output_type', endRef);
+          return;
+        }
+        const stored = await this.media.put(
+          job.wawuUserId,
+          job.id,
+          result.media.stream,
+          result.media.contentType,
+          tool.mediaFolder,
+          AI_MEDIA_MAX_BYTES[result.media.kind],
+        );
+        mediaKey = stored.key;
+        outputs.push({
+          kind: result.media.kind,
+          key: stored.key,
+          contentType: result.media.contentType,
+          bytes: stored.bytes,
+        });
       }
     } catch {
       await this.fail(job, holdId, 'store_failed', endRef);
@@ -722,6 +907,7 @@ export class AiJobService {
     } catch (e) {
       if (e instanceof PointsError && e.code === 'points_hold_settled') {
         if (key) await this.audio.remove(key);
+        if (mediaKey) await this.media?.remove(mediaKey);
         // The sweep (or a read that reconciled the job) may have ended it
         // already, after the words were written above: they are cleared from
         // a failed row whoever ended it.
@@ -739,12 +925,13 @@ export class AiJobService {
       }
       throw e;
     }
-    await this.mark(job.id, 'done', {
+    const changed = await this.mark(job.id, 'done', {
       ...made,
       audioKey: key,
       ...(endRef ? { providerRef: endRef } : {}),
     });
     await this.dropInput(job);
+    if (changed) await this.noticeEnded(job.id, 'done');
   }
 
   /**
@@ -764,10 +951,11 @@ export class AiJobService {
     providerRef?: string,
   ): Promise<void> {
     const end = { failureCode, ...(providerRef ? { providerRef } : {}) };
+    let changed = false;
     try {
       await this.prisma.$transaction(async (tx) => {
         await this.spend.release(holdId, { tx });
-        await this.mark(job.id, 'failed', end, tx);
+        changed = await this.mark(job.id, 'failed', end, tx);
       });
     } catch (e) {
       if (!(e instanceof PointsError && e.code === 'points_hold_settled')) {
@@ -780,9 +968,10 @@ export class AiJobService {
       }
       // The hold was already settled (the sweep gave it back, or a run
       // committed it): the job still ends as failed, as it always has.
-      await this.mark(job.id, 'failed', end);
+      changed = await this.mark(job.id, 'failed', end);
     }
     await this.dropInput(job);
+    if (changed) await this.noticeEnded(job.id, 'failed');
   }
 
   /** The job has ended: the person's uploaded file is deleted (it was read for this one run). Never throws. */
@@ -790,10 +979,14 @@ export class AiJobService {
     job: Pick<AiToolJob, 'id' | 'inputRef'>,
   ): Promise<void> {
     if (!job.inputRef) return;
-    try {
-      await this.input.remove(job.inputRef);
-    } catch {
-      this.logger.warn(`ai job ${job.id}: the uploaded file was not removed`);
+    // A Talking photo keeps two (the photo, then the recording), one per line.
+    for (const key of job.inputRef.split('\n')) {
+      if (key === '') continue;
+      try {
+        await this.input.remove(key);
+      } catch {
+        this.logger.warn(`ai job ${job.id}: the uploaded file was not removed`);
+      }
     }
   }
 
@@ -808,11 +1001,52 @@ export class AiJobService {
       providerRef?: string | null;
     },
     db: Pick<Prisma.TransactionClient, 'aiToolJob'> = this.prisma,
-  ): Promise<void> {
-    await db.aiToolJob.updateMany({
+  ): Promise<boolean> {
+    const written = await db.aiToolJob.updateMany({
       where: { id, state: 'working' },
       data: { state, finishedAt: new Date(), ...data },
     });
+    // True only for the one write that really ended the job (a replay, the sweep and a late finish cannot all say so).
+    return written.count > 0;
+  }
+
+  /**
+   * A job that ran longer than `ai.job_ready_notice_seconds` tells the person
+   * when it ends (AITOOLS-08, kind `ai_job_ready`, target the job). Called only
+   * by the one write that ended the job, so it is told once. A short job tells
+   * nothing. Never throws: a notice is a side effect of the end, not the end.
+   */
+  private async noticeEnded(
+    jobId: string,
+    outcome: 'done' | 'failed',
+  ): Promise<void> {
+    if (!this.notices) return;
+    try {
+      const row = await this.prisma.aiToolJob.findUnique({
+        where: { id: jobId },
+        select: {
+          wawuUserId: true,
+          tool: true,
+          createdAt: true,
+          finishedAt: true,
+        },
+      });
+      const tool = row ? toolForAction(row.tool) : null;
+      if (!row || !tool) return;
+      const ranMs =
+        (row.finishedAt ?? new Date()).getTime() - row.createdAt.getTime();
+      if (ranMs <= this.settings.number(JOB_READY_NOTICE_SETTING) * 1000)
+        return;
+      await this.notices.emit({
+        kind: 'ai_job_ready',
+        userWawuId: row.wawuUserId,
+        what: outputLabelOf(tool.id),
+        outcome,
+        about: { target: { kind: 'ai_job', id: jobId } },
+      });
+    } catch {
+      this.logger.warn(`ai job ${jobId}: the notice was not written`);
+    }
   }
 
   /**
@@ -833,7 +1067,7 @@ export class AiJobService {
       const folder = toolForAction(job.tool)?.audioFolder;
       const stored = storedOutputsOf(job).find((o) => o.kind === 'audio');
       const tool = toolForAction(job.tool);
-      await this.mark(job.id, 'done', {
+      const changedDone = await this.mark(job.id, 'done', {
         audioKey:
           stored?.key ??
           (folder === null
@@ -849,8 +1083,9 @@ export class AiJobService {
           ? { providerRef: endMarkerOf(job.providerRef) }
           : {}),
       });
-    } else
-      await this.mark(job.id, 'failed', {
+      if (changedDone) await this.noticeEnded(job.id, 'done');
+    } else {
+      const changedFailed = await this.mark(job.id, 'failed', {
         failureCode: 'timed_out',
         // A run may have written its words just before the sweep gave the
         // points back: a failed job keeps none.
@@ -859,6 +1094,8 @@ export class AiJobService {
           ? { providerRef: endMarkerOf(job.providerRef) }
           : {}),
       });
+      if (changedFailed) await this.noticeEnded(job.id, 'failed');
+    }
     await this.dropInput(job);
     return (
       (await this.prisma.aiToolJob.findUnique({ where: { id: job.id } })) ?? job
@@ -870,11 +1107,20 @@ export class AiJobService {
     const outputs: AiJobOutputView[] = [];
     let audioUrl: string | null = null;
     if (job.state === 'done') {
-      for (const out of storedOutputsOf(job)) {
+      const stored = storedOutputsOf(job);
+      const sizes = await this.sizesOf(stored);
+      for (const out of stored) {
         if (out.key) {
+          const isMedia = out.kind === 'image' || out.kind === 'video';
+          if (isMedia && !this.media) continue;
           try {
-            const url = await this.audio.urlFor(out.key);
-            outputs.push({ kind: out.kind, url });
+            const url = isMedia
+              ? await this.media!.urlFor(out.key)
+              : await this.audio.urlFor(out.key);
+            const item: AiJobOutputView = { kind: out.kind, url };
+            if (this.media)
+              Object.assign(item, await this.fileFields(job, tool, out, sizes));
+            outputs.push(item);
             if (out.kind === 'audio' && audioUrl === null) audioUrl = url;
           } catch {
             // The job is done and its points are kept; the link comes on the next read.
@@ -898,12 +1144,257 @@ export class AiJobService {
       costPoints: job.costPoints,
       audioUrl,
       outputs,
-      message: job.state === 'failed' ? JOB_FAILED_MESSAGE : null,
+      message: job.state === 'failed' ? failedMessage(job, tool) : null,
       saved: job.savedAt !== null,
       createdAt: job.createdAt.toISOString(),
       finishedAt: job.finishedAt ? job.finishedAt.toISOString() : null,
     };
   }
+
+  /** The real sizes of the stored files an older job kept no size for (one read for the page of outputs). */
+  private async sizesOf(
+    stored: readonly StoredOutput[],
+  ): Promise<Map<string, number>> {
+    const sizes = new Map<string, number>();
+    if (!this.media) return sizes;
+    const keys = stored
+      .filter((o) => o.key && o.bytes === undefined)
+      .map((o) => o.key as string);
+    if (keys.length === 0) return sizes;
+    const rows = await this.prisma.storageObject.findMany({
+      where: { key: { in: keys } },
+      select: { key: true, bytes: true },
+    });
+    for (const r of rows) sizes.set(r.key, Number(r.bytes));
+    return sizes;
+  }
+
+  /** AITOOLS-08: what an output that is a file says about itself, beside its link. */
+  private async fileFields(
+    job: AiToolJob,
+    tool: AiTool | null,
+    out: StoredOutput,
+    sizes: ReadonlyMap<string, number>,
+  ): Promise<
+    Pick<
+      AiJobOutputView,
+      'contentType' | 'bytes' | 'name' | 'downloadUrl' | 'pieceFormat'
+    >
+  > {
+    const key = out.key as string;
+    const contentType = out.contentType ?? serveAs(key).contentType;
+    const bytes = out.bytes ?? sizes.get(key);
+    const ext =
+      EXTENSION_FOR_CONTENT_TYPE[contentType] ?? key.split('.').pop() ?? 'bin';
+    return {
+      contentType,
+      ...(bytes !== undefined ? { bytes } : {}),
+      name: outputLabelOf(tool?.id),
+      downloadUrl: await this.media!.downloadUrlFor(
+        key,
+        downloadNameFor(
+          tool?.id ?? 'result',
+          job.finishedAt ?? job.createdAt,
+          ext,
+        ),
+      ),
+      pieceFormat: pieceFormatFor(contentType),
+    };
+  }
+
+  /**
+   * The Studio result becomes a piece (`POST /ai-tools/jobs/{id}/piece`,
+   * AITOOLS-08, R-109): the Hub copies the finished output into the person's
+   * own `content/full` folder as an upload counted like any upload, and answers
+   * what Create's draft holds. Only the person's own finished job; an output no
+   * Create format takes is `409 no_format`; a person with no room or no way to
+   * publish is refused as the presign refuses (nothing is copied). The same call
+   * again finds the same copy until the person releases it. Nothing is
+   * published: `POST /content` and its gates run as today.
+   */
+  async makePiece(
+    wawuUserId: string,
+    id: string,
+    outputIndex: number,
+    idempotencyKey: string | undefined,
+  ): Promise<{ piece: AiPieceView; replayed: boolean }> {
+    if (!idempotencyKey || !KEY_FORMAT.test(idempotencyKey))
+      throw new AiToolError('idempotency_key_required', KEY_REQUIRED_MESSAGE);
+    const found = await this.prisma.aiToolJob.findUnique({ where: { id } });
+    if (!found || found.wawuUserId !== wawuUserId)
+      throw new AiToolError('not_found', JOB_NOT_FOUND_MESSAGE);
+    const row = await this.reconcile(found);
+    if (row.state !== 'done')
+      throw new AiToolError('job_not_ready', JOB_NOT_READY_MESSAGE);
+    const out = storedOutputsOf(row)[outputIndex];
+    if (!out) throw new AiToolError('not_found', RESULT_NOT_FOUND_MESSAGE);
+    // Words and subtitles are kept in the row and have no file to copy.
+    if (!out.key) throw new AiToolError('no_format', NO_FORMAT_MESSAGE);
+    const contentType = out.contentType ?? serveAs(out.key).contentType;
+    const format = pieceFormatFor(contentType);
+    if (!format) throw new AiToolError('no_format', NO_FORMAT_MESSAGE);
+    if (!this.media)
+      throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
+    const copy = await this.media.copyIntoContent(
+      wawuUserId,
+      out.key,
+      `${row.id}:${outputIndex}`,
+    );
+    const tool = toolForAction(row.tool);
+    const at = row.finishedAt ?? row.createdAt;
+    const ext = EXTENSION_FOR_CONTENT_TYPE[copy.contentType] ?? 'bin';
+    const day = dayText(at);
+    return {
+      replayed: copy.replayed,
+      piece: {
+        format,
+        full: {
+          key: copy.key,
+          fileUrl: copy.fileUrl,
+          contentType: copy.contentType,
+          bytes: copy.bytes,
+          name: downloadNameFor(tool?.id ?? 'result', at, ext),
+        },
+        suggestedTitle: `${outputLabelOf(tool?.id)}, ${day.day} ${
+          day.month.charAt(0).toUpperCase() + day.month.slice(1)
+        } ${day.year}`,
+      },
+    };
+  }
+
+  /**
+   * A Talking photo's voice, opened and measured by the Hub before anything is
+   * priced or held (AITOOLS-10): the person's own recording (an MP3 or WAV in
+   * `ai/input-audio`), or the audio of one of their own finished voice results.
+   * Another person's key or job is not found; a result that is not finished is
+   * `409 job_not_ready`; anything else the Hub cannot read the length of is
+   * `422 ai_speech_unreadable`.
+   */
+  async openSpeech(
+    wawuUserId: string,
+    ask: { audioKey?: string | null; sourceJobId?: string | null },
+  ): Promise<NonNullable<MediaJobRequest['speech']>> {
+    if (ask.audioKey) {
+      const opened = await this.input.open(wawuUserId, ask.audioKey);
+      if (
+        opened.contentType !== 'audio/mpeg' &&
+        opened.contentType !== 'audio/wav'
+      )
+        throw new AiToolError(
+          'ai_speech_unreadable',
+          SPEECH_UNREADABLE_MESSAGE,
+        );
+      return {
+        source: 'upload',
+        key: opened.key,
+        seconds: opened.seconds,
+        bytes: opened.bytes,
+        contentType: opened.contentType,
+      };
+    }
+    const jobId = ask.sourceJobId;
+    if (!jobId)
+      throw new AiToolError('ai_speech_required', SPEECH_UNREADABLE_MESSAGE);
+    const found = await this.prisma.aiToolJob.findUnique({
+      where: { id: jobId },
+    });
+    if (!found || found.wawuUserId !== wawuUserId)
+      throw new AiToolError('not_found', JOB_NOT_FOUND_MESSAGE);
+    const row = await this.reconcile(found);
+    if (row.state !== 'done')
+      throw new AiToolError('job_not_ready', JOB_NOT_READY_MESSAGE);
+    const out = storedOutputsOf(row).find(
+      (o) => o.kind === 'audio' && o.key && /\.(mp3|wav)$/.test(o.key),
+    );
+    if (!out?.key || !this.media)
+      throw new AiToolError('ai_speech_unreadable', SPEECH_UNREADABLE_MESSAGE);
+    let seconds: number | null;
+    let contentType: string;
+    let bytes: number;
+    try {
+      const read = await this.media.read(out.key, this.input.maxBytes());
+      bytes = read.audio.length;
+      contentType = read.contentType;
+      seconds = await readSeconds(read.audio, { transfer: true });
+    } catch {
+      seconds = null;
+      contentType = '';
+      bytes = 0;
+    }
+    if (seconds === null)
+      throw new AiToolError('ai_speech_unreadable', SPEECH_UNREADABLE_MESSAGE);
+    return { source: 'job', key: out.key, seconds, bytes, contentType };
+  }
+
+  /** The Studio request with the person's photo and voice opened: their real types, sizes and the voice's length (the seconds that price a Talking photo). */
+  private async openMedia(
+    wawuUserId: string,
+    req: MediaJobRequest,
+  ): Promise<MediaJobRequest> {
+    let photo: MediaJobRequest['photo'] = null;
+    if (req.photoKey) {
+      const opened = await this.input.openPhoto(wawuUserId, req.photoKey);
+      photo = { bytes: opened.bytes, contentType: opened.contentType };
+    }
+    let speech: MediaJobRequest['speech'] = null;
+    let seconds = req.seconds;
+    if (req.audioKey || req.sourceJobId) {
+      speech = await this.openSpeech(wawuUserId, req);
+      seconds = Math.max(
+        1,
+        minutesOf(speech.seconds) > 0 ? Math.ceil(speech.seconds) : 1,
+      );
+    }
+    return { ...req, photo, speech, seconds };
+  }
+
+  /** A finished result's audio opened to be streamed to the provider as the voice of a Talking photo. */
+  private async openJobSpeech(key: string): Promise<StreamedFile> {
+    if (!this.media)
+      throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
+    const opened = await this.media.open(key, this.input.maxBytes());
+    return {
+      bytes: opened.bytes,
+      contentType: opened.contentType,
+      stream: opened.stream,
+      sent: () => opened.stream.destroy(),
+    };
+  }
+}
+
+/** What a failed job says (PT2c): the Hub's own sentence, the content refusal in its own words. */
+function failedMessage(job: AiToolJob, tool: AiTool | null): string {
+  if (job.failureCode === 'moderated')
+    return tool?.id === 'video' || tool?.id === 'talking-photo'
+      ? VIDEO_MODERATED_MESSAGE
+      : IMAGE_MODERATED_MESSAGE;
+  return JOB_FAILED_MESSAGE;
+}
+
+/** A plain label for what a tool made, never a provider or model name (R-68). */
+const OUTPUT_LABELS: Readonly<Record<string, string>> = {
+  voiceover: 'Voice over',
+  'quick-voice': 'Quick voice',
+  'sound-effect': 'Sound effect',
+  music: 'Music track',
+  'clean-audio': 'Cleaned audio',
+  dubbing: 'Dubbed audio',
+  image: 'Image',
+  'photo-edit': 'Edited photo',
+  video: 'Video',
+  'talking-photo': 'Talking photo',
+};
+function outputLabelOf(toolId: string | undefined): string {
+  return (toolId && OUTPUT_LABELS[toolId]) || 'Result';
+}
+
+/** The keys of the person's own files a Studio job keeps until it ends: the photo, then the recording (one per line). */
+function inputRefOf(req: MediaJobRequest): string | null {
+  const keys = [
+    req.photoKey,
+    req.speech?.source === 'upload' ? req.speech.key : null,
+  ].filter((k): k is string => k !== null);
+  return keys.length > 0 ? keys.join('\n') : null;
 }
 
 /** The outputs a done job keeps: its `outputs` column, or its audio key for a job written before the column. */
@@ -913,12 +1404,22 @@ function storedOutputsOf(job: AiToolJob): StoredOutput[] {
     const out: StoredOutput[] = [];
     for (const item of raw as unknown[]) {
       const o = (item ?? {}) as Record<string, unknown>;
-      if (o.kind !== 'audio' && o.kind !== 'text' && o.kind !== 'subtitles')
+      if (
+        o.kind !== 'audio' &&
+        o.kind !== 'text' &&
+        o.kind !== 'subtitles' &&
+        o.kind !== 'image' &&
+        o.kind !== 'video'
+      )
         continue;
       out.push({
         kind: o.kind,
         ...(typeof o.key === 'string' ? { key: o.key } : {}),
         ...(typeof o.text === 'string' ? { text: o.text } : {}),
+        ...(typeof o.contentType === 'string'
+          ? { contentType: o.contentType }
+          : {}),
+        ...(typeof o.bytes === 'number' ? { bytes: o.bytes } : {}),
       });
     }
     return out;
@@ -1031,6 +1532,43 @@ function requestOf(
       voiceId: '',
       same: [languageCode],
       hashText: d.fileKey,
+    };
+  }
+  if (isMediaSpec(spec)) {
+    const d = dto as Partial<
+      CreateImageJobDto &
+        CreatePhotoEditJobDto &
+        CreateVideoJobDto &
+        CreateTalkingPhotoJobDto
+    >;
+    const prompt = (d.prompt ?? '').trim();
+    const shape = d.shape ?? null;
+    const secondsAsked = d.seconds ?? null;
+    return {
+      req: {
+        kind: 'media',
+        prompt,
+        shape,
+        seconds: secondsAsked,
+        photoKey: d.photoKey ?? null,
+        audioKey: d.audioKey ?? null,
+        sourceJobId: d.sourceJobId ?? null,
+        // Set by the tool's precheck from the settings, and by the Hub when it opens the files.
+        model: '',
+        resolution: '',
+        withSound: false,
+        photo: null,
+        speech: null,
+      },
+      voiceId: '',
+      same: [
+        shape,
+        secondsAsked,
+        d.photoKey ?? null,
+        d.audioKey ?? null,
+        d.sourceJobId ?? null,
+      ],
+      hashText: prompt,
     };
   }
   const d = dto as CreateSoundEffectJobDto & CreateMusicJobDto;

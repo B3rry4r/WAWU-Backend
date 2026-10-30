@@ -41137,6 +41137,236 @@
         "x-wawu-built-by": "AITOOLS-05"
       }
     },
+    "/api/hub/ai-tools/image/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createImage",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateImageJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Make an image job (AITOOLS-09, R-109): a `prompt`, an optional\n`shape` (one of `input.options.shapes` from `GET /ai-tools`) and the\n`quoteToken` of the `POST /points/quote` for the action `image_per_use`\n(units 1). Priced flat, one picture. The points are held and the job\nanswers `202 working` at once; the picture is made in the background, so\nthe app polls `GET /ai-tools/jobs/{id}` and may leave. Done, `outputs` hold\nthe picture (`kind: image`, with `contentType`, `bytes`, `name`,\n`downloadUrl` and `pieceFormat: image`). The points are kept only on\nsuccess; a refused or failed picture gives every point back with the Hub's\nown sentence. The request, the answer and the `Idempotency-Key` rule are\nthose of `POST /ai-tools/sound-effect/jobs`, plus `422 ai_shape_unsupported`.\nThe tool is listed, and the route answers, only while its switch\n`ai.listed.image` is on.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-09"
+      }
+    },
+    "/api/hub/ai-tools/photo-edit/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createPhotoEdit",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePhotoEditJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts an Edit a photo job (AITOOLS-09, R-109): the same body as Make an\nimage plus the `photoKey` of the person's own photo (`POST /uploads/presign`\nwith the folder `ai/input-image`, then `POST /uploads/confirm`; a JPEG, PNG\nor WebP picture up to 25 MB). The quote is for the action\n`photo_edit_per_use`. Another person's key is `404 not_found`; a file the\nHub cannot open as a picture is `422 ai_photo_unreadable`; each with nothing\nheld. The photo is deleted when the job ends, and the provider's copy of it\ntoo.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-09"
+      }
+    },
+    "/api/hub/ai-tools/video/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createVideo",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVideoJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Make a video job (AITOOLS-10, R-109): a `prompt`, an optional\n`shape` (wide or tall), the clip's `seconds` (one of `input.options.lengths`:\n4, 6 or 8), an optional `photoKey` to start from and the `quoteToken` of the\n`POST /points/quote` for the action `video_per_sec` (units = `seconds`).\nPriced by the second. A clip takes minutes: the job answers `202 working`,\nthe app polls `GET /ai-tools/jobs/{id}`, and a job that ran long writes an\n`ai_job_ready` notification when it ends. Done, `outputs` hold the clip\n(`kind: video`, `pieceFormat: video`). The request, the answer and the\nrefusals are those of `POST /ai-tools/photo-edit/jobs`, plus\n`422 ai_length_unsupported`.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-10"
+      }
+    },
+    "/api/hub/ai-tools/talking-photo/quote": {
+      "post": {
+        "operationId": "AiToolsController_quoteTalkingPhoto",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteTalkingPhotoDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiSpeechQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The points quote for a Talking photo's voice (AITOOLS-10): the `audioKey` of\na recording the person uploaded (`ai/input-audio`, MP3 or WAV) or the\n`sourceJobId` of one of their own finished voice results. The Hub reads the\nvoice's length itself and prices the seconds from that, so the phone sends no\nlength. Answers the same quote `POST /points/quote` does (with its\n`quoteToken`, to send to the job route with the same voice), plus\n`speech.seconds`. Nothing is held. `404 not_found`, `409 job_not_ready`,\n`422 ai_speech_unreadable`, `422 ai_length_too_long` over the setting.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-10"
+      }
+    },
+    "/api/hub/ai-tools/talking-photo/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createTalkingPhoto",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTalkingPhotoJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Talking photo job (AITOOLS-10, R-109): the `photoKey` of the\nperson's photo and exactly one voice, an `audioKey` or a `sourceJobId`, with\nthe `quoteToken` from `POST /ai-tools/talking-photo/quote` for the same\nvoice. Priced by the seconds of speech the Hub read; a voice longer than\n`input.options.speech.maxSeconds` is `422 ai_length_too_long`, with nothing\nheld. The photo and the recording are deleted when the job ends, and the\nprovider's copies too. The request, the answer and the other refusals are\nthose of `POST /ai-tools/video/jobs`.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-10"
+      }
+    },
     "/api/hub/ai-tools/jobs": {
       "get": {
         "operationId": "AiToolsController_listJobs",
@@ -41397,6 +41627,82 @@
           "AiTools"
         ],
         "x-wawu-built-by": "AITOOLS-07"
+      }
+    },
+    "/api/hub/ai-tools/jobs/{id}/piece": {
+      "post": {
+        "operationId": "AiToolsPieceController_makePiece",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MakePieceDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiPieceView"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "reason.code: tier_required, product_limit_reached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TierGateErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "reason.code: identity_paused",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdentityPausedErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "\"Make it a piece\": copies the chosen output of a finished job into the\nperson's own content folder (`content/full/<id>/...`) and answers what\nCreate's draft holds: `{ format, full: { key, fileUrl, contentType, bytes,\nname }, suggestedTitle }`. Send `full` as the draft's file (`fullAsset`) and\nthe format as the piece's format; `POST /content` and its tier and place\ngates run as today. Nothing is published, and no preview is made: the\npreview stays the person's own step in Create.\n\nOnly the person's own finished job (`404 not_found` for another person's,\n`409 job_not_ready` for one still working or failed). An output no Create\nformat takes (a FLAC dub, an AAC clip, words) is `409 no_format`. A person\nwho may not publish gets the presign's `402 tier_required`; one with no room\ngets its `413 storage_limit_reached`, and nothing is copied. Needs an\n`Idempotency-Key`; the same call again answers the same key (header\n`Idempotent-Replayed: true`) until the person releases it with `POST\n/uploads/release`, as for any abandoned upload.",
+        "tags": [
+          "AiToolsPiece"
+        ],
+        "x-wawu-built-by": "AITOOLS-08"
       }
     },
     "/api/hub/ai-tools/voices/{voiceId}/sample": {
@@ -45122,7 +45428,8 @@
               "profile/work",
               "voice/sample",
               "ai/input-audio",
-              "ai/input-video"
+              "ai/input-video",
+              "ai/input-image"
             ]
           },
           "contentType": {
@@ -51373,7 +51680,11 @@
               "dub_standard_per_min_lang",
               "dub_premium_per_min_lang",
               "receptionist_message",
-              "receptionist_voice_per_min"
+              "receptionist_voice_per_min",
+              "image_per_use",
+              "photo_edit_per_use",
+              "video_per_sec",
+              "talking_photo_per_sec"
             ]
           },
           "units": {
@@ -51418,7 +51729,11 @@
               "dub_standard_per_min_lang",
               "dub_premium_per_min_lang",
               "receptionist_message",
-              "receptionist_voice_per_min"
+              "receptionist_voice_per_min",
+              "image_per_use",
+              "photo_edit_per_use",
+              "video_per_sec",
+              "talking_photo_per_sec"
             ]
           },
           "units": {
@@ -51676,6 +51991,152 @@
           "quoteToken"
         ]
       },
+      "CreateImageJobDto": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "What the picture shows, in words.",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "shape": {
+            "type": "string",
+            "description": "The shape: one of `input.options.shapes` from `GET /ai-tools` (`1:1`, `4:5`, `9:16`, `16:9`). Left out: square.",
+            "pattern": "^\\d{1,2}:\\d{1,2}$"
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (action `image_per_use`, units 1). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "prompt",
+          "quoteToken"
+        ]
+      },
+      "CreatePhotoEditJobDto": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "What the picture shows, in words.",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "shape": {
+            "type": "string",
+            "description": "The shape: one of `input.options.shapes` from `GET /ai-tools` (`1:1`, `4:5`, `9:16`, `16:9`). Left out: square.",
+            "pattern": "^\\d{1,2}:\\d{1,2}$"
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (action `image_per_use`, units 1). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "photoKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's photo (folder `ai/input-image`). Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "prompt",
+          "quoteToken",
+          "photoKey"
+        ]
+      },
+      "CreateVideoJobDto": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "What happens in the clip, in words.",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "shape": {
+            "type": "string",
+            "description": "Wide (`16:9`) or tall (`9:16`): one of `input.options.shapes`. Left out: wide.",
+            "pattern": "^\\d{1,2}:\\d{1,2}$"
+          },
+          "seconds": {
+            "type": "integer",
+            "description": "How long the clip is, in whole seconds: one of `input.options.lengths` (4, 6 or 8). It prices the job.",
+            "minimum": 1,
+            "maximum": 3600
+          },
+          "photoKey": {
+            "type": "string",
+            "description": "The `key` of a photo to start from (folder `ai/input-image`). Left out: the clip is made from the words alone.",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (action `video_per_sec`, units = `seconds`).",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "prompt",
+          "seconds",
+          "quoteToken"
+        ]
+      },
+      "QuoteTalkingPhotoDto": {
+        "type": "object",
+        "properties": {
+          "audioKey": {
+            "type": "string",
+            "description": "The `key` of a voice recording the person uploaded (folder `ai/input-audio`, MP3 or WAV).",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "sourceJobId": {
+            "type": "string",
+            "description": "The id of one of the person's own finished voice results whose audio is the voice.",
+            "format": "uuid"
+          }
+        }
+      },
+      "CreateTalkingPhotoJobDto": {
+        "type": "object",
+        "properties": {
+          "audioKey": {
+            "type": "string",
+            "description": "The `key` of a voice recording the person uploaded (folder `ai/input-audio`, MP3 or WAV).",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "sourceJobId": {
+            "type": "string",
+            "description": "The id of one of the person's own finished voice results whose audio is the voice.",
+            "format": "uuid"
+          },
+          "photoKey": {
+            "type": "string",
+            "description": "The `key` of the person's photo (folder `ai/input-image`).",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from `POST /ai-tools/talking-photo/quote` (sent with the same voice). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "photoKey",
+          "quoteToken"
+        ]
+      },
       "OwnVoiceConsentDto": {
         "type": "object",
         "properties": {
@@ -51687,6 +52148,20 @@
         },
         "required": [
           "line"
+        ]
+      },
+      "MakePieceDto": {
+        "type": "object",
+        "properties": {
+          "outputIndex": {
+            "type": "integer",
+            "description": "The place of the output in the job's `outputs`, from 0.",
+            "minimum": 0,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "outputIndex"
         ]
       },
       "NamePreviewDto": {
@@ -58691,7 +59166,8 @@
               "minute",
               "track",
               "message",
-              "minute_per_language"
+              "minute_per_language",
+              "second"
             ]
           }
         },
@@ -74776,7 +75252,8 @@
               "content",
               "transaction",
               "profile",
-              "paid_question"
+              "paid_question",
+              "ai_job"
             ]
           },
           "id": {
@@ -77285,7 +77762,8 @@
               "minute",
               "track",
               "message",
-              "minute_per_language"
+              "minute_per_language",
+              "second"
             ]
           },
           "units": {
@@ -77524,6 +78002,85 @@
           "languageCode"
         ]
       },
+      "AiToolOptionsView": {
+        "type": "object",
+        "properties": {
+          "shapes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "lengths": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "nullable": true
+          },
+          "photo": {
+            "type": "object",
+            "properties": {
+              "use": {
+                "type": "string",
+                "enum": [
+                  "required",
+                  "optional"
+                ]
+              },
+              "folder": {
+                "type": "string"
+              },
+              "accepts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxBytes": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "use",
+              "folder",
+              "accepts",
+              "maxBytes"
+            ],
+            "nullable": true
+          },
+          "speech": {
+            "type": "object",
+            "properties": {
+              "audioFolder": {
+                "type": "string"
+              },
+              "accepts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "maxSeconds": {
+                "type": "number"
+              },
+              "fromJob": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "audioFolder",
+              "accepts",
+              "maxSeconds",
+              "fromJob"
+            ],
+            "nullable": true
+          }
+        },
+        "required": [
+          "shapes"
+        ]
+      },
       "AiVoiceView": {
         "type": "object",
         "properties": {
@@ -77553,13 +78110,17 @@
           "id": {
             "type": "string",
             "enum": [
+              "video",
+              "image",
               "music",
               "voiceover",
               "quick-voice",
               "sound-effect",
               "captions",
               "clean-audio",
-              "dubbing"
+              "dubbing",
+              "photo-edit",
+              "talking-photo"
             ]
           },
           "action": {
@@ -77576,7 +78137,8 @@
             "enum": [
               "use",
               "minute",
-              "track"
+              "track",
+              "second"
             ]
           },
           "costPointsPerUnit": {
@@ -77592,8 +78154,12 @@
                 "type": "string",
                 "enum": [
                   "text",
+                  "video",
+                  "image",
+                  "chat",
                   "file",
-                  "prompt"
+                  "prompt",
+                  "dialogue"
                 ]
               },
               "maxCharacters": {
@@ -77608,6 +78174,10 @@
               },
               "file": {
                 "$ref": "#/components/schemas/AiToolFileView",
+                "nullable": true
+              },
+              "options": {
+                "$ref": "#/components/schemas/AiToolOptionsView",
                 "nullable": true
               }
             },
@@ -77680,7 +78250,9 @@
             "type": "string",
             "enum": [
               "text",
+              "video",
               "audio",
+              "image",
               "subtitles"
             ]
           },
@@ -77690,6 +78262,31 @@
           },
           "text": {
             "type": "string",
+            "nullable": true
+          },
+          "contentType": {
+            "type": "string",
+            "nullable": true
+          },
+          "bytes": {
+            "type": "number",
+            "nullable": true
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "downloadUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "pieceFormat": {
+            "type": "string",
+            "enum": [
+              "video",
+              "audio",
+              "image"
+            ],
             "nullable": true
           }
         },
@@ -77706,13 +78303,17 @@
           "tool": {
             "type": "string",
             "enum": [
+              "video",
+              "image",
               "music",
               "voiceover",
               "quick-voice",
               "sound-effect",
               "captions",
               "clean-audio",
-              "dubbing"
+              "dubbing",
+              "photo-edit",
+              "talking-photo"
             ]
           },
           "state": {
@@ -77812,7 +78413,8 @@
               "minute",
               "track",
               "message",
-              "minute_per_language"
+              "minute_per_language",
+              "second"
             ]
           },
           "units": {
@@ -77857,6 +78459,96 @@
         },
         "required": [
           "file",
+          "action",
+          "title",
+          "per",
+          "units",
+          "languages",
+          "perUnitPoints",
+          "costPoints",
+          "balancePoints",
+          "shortfallPoints",
+          "useWallet",
+          "quoteToken",
+          "canRun",
+          "cap",
+          "wallet",
+          "walletNote"
+        ]
+      },
+      "AiSpeechQuoteView": {
+        "type": "object",
+        "properties": {
+          "speech": {
+            "type": "object",
+            "properties": {
+              "seconds": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "seconds"
+            ]
+          },
+          "action": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "per": {
+            "type": "string",
+            "enum": [
+              "use",
+              "minute",
+              "track",
+              "message",
+              "minute_per_language",
+              "second"
+            ]
+          },
+          "units": {
+            "type": "number"
+          },
+          "languages": {
+            "type": "number"
+          },
+          "perUnitPoints": {
+            "type": "number"
+          },
+          "costPoints": {
+            "type": "number"
+          },
+          "balancePoints": {
+            "type": "number"
+          },
+          "shortfallPoints": {
+            "type": "number"
+          },
+          "useWallet": {
+            "type": "boolean"
+          },
+          "quoteToken": {
+            "type": "string"
+          },
+          "canRun": {
+            "type": "boolean"
+          },
+          "cap": {
+            "$ref": "#/components/schemas/PointsCapView",
+            "nullable": true
+          },
+          "wallet": {
+            "$ref": "#/components/schemas/PointsShortfallOfferView",
+            "nullable": true
+          },
+          "walletNote": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "required": [
+          "speech",
           "action",
           "title",
           "per",
@@ -77945,6 +78637,54 @@
         "required": [
           "own",
           "atProvider"
+        ]
+      },
+      "AiPieceView": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "video",
+              "audio",
+              "image"
+            ]
+          },
+          "full": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "fileUrl": {
+                "type": "string"
+              },
+              "contentType": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": "number"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "fileUrl",
+              "contentType",
+              "bytes",
+              "name"
+            ]
+          },
+          "suggestedTitle": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "format",
+          "full",
+          "suggestedTitle"
         ]
       },
       "MovieCardView": {

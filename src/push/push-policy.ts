@@ -77,6 +77,8 @@ export const PUSH_RULE: Record<NotificationKind, PushRule> = {
   pass_sold: 'send',
   question_answered: 'send',
   question_credit: 'send',
+  // AITOOLS-08 (R-109): the person left a long Studio job and is waiting for it, so the end is pushed. No switch covers it (SETTINGS_GATE has none for a job the person started themselves).
+  ai_job_ready: 'send',
   // The state of the person's own account or a marketing send, with no switch
   // that is agreed to cover them. Held until the owner answers (G-265).
   paid_dm_warning: 'hold',

@@ -36,6 +36,20 @@ export type AiToolErrorCode =
   | 'own_voice_name_required'
   /** AITOOLS-07: a result that is not finished (or failed) cannot be saved or used. */
   | 'job_not_ready'
+  /** AITOOLS-09: a shape the picture or video tool does not offer. Nothing is held. */
+  | 'ai_shape_unsupported'
+  /** AITOOLS-10: a video length the tool does not offer (4, 6 or 8 seconds). Nothing is held. */
+  | 'ai_length_unsupported'
+  /** AITOOLS-09, AITOOLS-10: a tool that needs a photo was given none. Nothing is held. */
+  | 'ai_photo_required'
+  /** AITOOLS-09, AITOOLS-10: a photo the Hub cannot open as a picture, or a type it does not take. Nothing is held. */
+  | 'ai_photo_unreadable'
+  /** AITOOLS-10: Talking photo was given no voice, or two. Nothing is held. */
+  | 'ai_speech_required'
+  /** AITOOLS-10: a voice the Hub cannot read the length of, or a type the tool does not take. Nothing is held. */
+  | 'ai_speech_unreadable'
+  /** AITOOLS-08: a result no Create format takes (a FLAC dub, an AAC clip) cannot become a piece. */
+  | 'no_format'
   | 'not_found';
 
 export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
@@ -56,6 +70,13 @@ export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
   own_voice_consent_line_changed: HttpStatus.CONFLICT,
   own_voice_name_required: HttpStatus.CONFLICT,
   job_not_ready: HttpStatus.CONFLICT,
+  ai_shape_unsupported: HttpStatus.UNPROCESSABLE_ENTITY,
+  ai_length_unsupported: HttpStatus.UNPROCESSABLE_ENTITY,
+  ai_photo_required: HttpStatus.BAD_REQUEST,
+  ai_photo_unreadable: HttpStatus.UNPROCESSABLE_ENTITY,
+  ai_speech_required: HttpStatus.BAD_REQUEST,
+  ai_speech_unreadable: HttpStatus.UNPROCESSABLE_ENTITY,
+  no_format: HttpStatus.CONFLICT,
   not_found: HttpStatus.NOT_FOUND,
 };
 
@@ -113,3 +134,9 @@ export const OWN_VOICE_NAME_REQUIRED_MESSAGE =
   'Add your name to your profile first, so we can say who agrees.';
 export const JOB_NOT_READY_MESSAGE =
   'Only a finished result can be saved or used.';
+
+/** AITOOLS-08: a description box for a picture or video tool with nothing in it. */
+export const PROMPT_EMPTY_MEDIA_MESSAGE = 'Describe what you want to see.';
+/** AITOOLS-08: a result no Create format takes. No price, no provider (R-68). */
+export const NO_FORMAT_MESSAGE =
+  'That result cannot become a piece. Save it or download it instead.';

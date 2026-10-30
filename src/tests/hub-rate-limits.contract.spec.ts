@@ -344,6 +344,8 @@ describe('Rate limits behind nginx (OPS-11)', () => {
       // stays inside 120 in 10 minutes. `short` keeps its 20 a second.
       expect(uses(/^\s*@Throttle\(/gm)).toEqual({
         'admin/auth/admin-auth.controller.ts': 2,
+        // AITOOLS-08 (R-109): "Make it a piece" copies a file inside the bucket, so it is held to 30 a minute per address.
+        'ai-tools/ai-tools-piece.controller.ts': 1,
         'admin/notifications/email/email-unsubscribe.controller.ts': 2,
         'money/identity/money-identity.controller.ts': 2,
         'money/receipts/money-receipt.controller.ts': 2,

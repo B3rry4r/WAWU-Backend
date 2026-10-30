@@ -26,6 +26,19 @@ import { PointsShortfallService } from '../../src/points/spend/points-shortfall.
 import { PointsSpendService } from '../../src/points/spend/points-spend.service';
 import { AiJobService } from '../../src/ai-tools/ai-job.service';
 import { AiToolsController } from '../../src/ai-tools/ai-tools.controller';
+import { AiToolsPieceController } from '../../src/ai-tools/ai-tools-piece.controller';
+import { AiFlowService } from '../../src/ai-tools/flow/ai-flow.service';
+import {
+  AI_MEDIA_STORE,
+  type AiMediaStore,
+  type AiMediaFolder,
+  pieceFormatFor,
+} from '../../src/ai-tools/media/ai-media-store';
+import { NotificationService } from '../../src/notification/notification.service';
+import { PlansService } from '../../src/plans/plans.service';
+import { PublishingAllowanceService } from '../../src/plans/publishing-allowance.service';
+import { EXTENSION_FOR_CONTENT_TYPE } from '../../src/storage/dto/presign-upload.dto';
+import { createHash } from 'node:crypto';
 import { AiVoiceSamplesController } from '../../src/ai-tools/ai-voice-samples.controller';
 import { AiToolsService } from '../../src/ai-tools/ai-tools.service';
 import {
@@ -144,6 +157,139 @@ export class MemoryAudioStore implements AiAudioStore {
     return Promise.resolve();
   }
 }
+
+/**
+ * The pictures and videos of a spec (AITOOLS-08 to -10), kept in memory. A
+ * result is read as a stream and only its length and first bytes are kept, so a
+ * spec can store 60 MB with the Hub's memory flat. It reads the audio store's
+ * files too (a Talking photo reads a finished voice result), and copies a
+ * result into content the way `StorageService.copyIntoContent` does: a key made
+ * from the seed, the same key again until it is released.
+ */
+export class MemoryMediaStore implements AiMediaStore {
+  readonly files = new Map<
+    string,
+    { bytes: number; contentType: string; head: Buffer; wawuUserId: string }
+  >();
+  readonly removed: string[] = [];
+  /** Content copies by key: who owns it, which result it was made from, and whether it was released. */
+  readonly copies = new Map<
+    string,
+    {
+      wawuUserId: string;
+      source: string;
+      released: boolean;
+      contentType: string;
+      bytes: number;
+    }
+  >();
+  failPut = false;
+  /** A refusal for the next copies (the presign's tier or storage answer). */
+  copyRefusal: Error | null = null;
+  /** The audio store whose files a read may also find. */
+  audio: MemoryAudioStore | null = null;
+  /** Peak of the bytes held by a `put` at any moment (a stream is counted chunk by chunk). */
+  async put(
+    wawuUserId: string,
+    jobId: string,
+    stream: Readable,
+    contentType: string,
+    folder: AiMediaFolder,
+    maxBytes: number,
+  ): Promise<{ key: string; bytes: number }> {
+    if (this.failPut) {
+      stream.destroy();
+      throw new Error('store down');
+    }
+    let bytes = 0;
+    let head = Buffer.alloc(0);
+    for await (const chunk of stream) {
+      const c = chunk as Buffer;
+      bytes += c.length;
+      if (bytes > maxBytes) throw new Error('too big');
+      if (head.length < 64) head = Buffer.concat([head, c]).subarray(0, 64);
+    }
+    if (bytes === 0) throw new Error('empty');
+    const ext = EXTENSION_FOR_CONTENT_TYPE[contentType] ?? 'bin';
+    const key = `${folder}/${wawuUserId}/${jobId}.${ext}`;
+    this.files.set(key, { bytes, contentType, head, wawuUserId });
+    return { key, bytes };
+  }
+  urlFor(key: string): Promise<string> {
+    return Promise.resolve(`https://media.example.test/${key}`);
+  }
+  downloadUrlFor(key: string, fileName: string): Promise<string> {
+    return Promise.resolve(
+      `https://media.example.test/${key}?download=${fileName}`,
+    );
+  }
+  remove(key: string): Promise<void> {
+    this.files.delete(key);
+    this.removed.push(key);
+    return Promise.resolve();
+  }
+  read(key: string): Promise<{ audio: Buffer; contentType: string }> {
+    const f = this.audio?.files.get(key);
+    if (!f) return Promise.reject(new Error('no such file'));
+    return Promise.resolve({
+      audio: Buffer.from(new Uint8Array(f)),
+      contentType: key.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg',
+    });
+  }
+  open(
+    key: string,
+  ): Promise<{ stream: Readable; bytes: number; contentType: string }> {
+    const f = this.audio?.files.get(key);
+    if (!f) return Promise.reject(new Error('no such file'));
+    return Promise.resolve({
+      stream: Readable.from([f], { objectMode: false }),
+      bytes: f.length,
+      contentType: key.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg',
+    });
+  }
+  copyIntoContent(wawuUserId: string, sourceKey: string, seed: string) {
+    if (this.copyRefusal) return Promise.reject(this.copyRefusal);
+    const f = this.files.get(sourceKey);
+    const a = this.audio?.files.get(sourceKey);
+    if (!f && !a) return Promise.reject(new Error('no such result'));
+    const contentType =
+      f?.contentType ??
+      (sourceKey.endsWith('.wav') ? 'audio/wav' : 'audio/mpeg');
+    const bytes = f?.bytes ?? a!.length;
+    for (let n = 0; n < 10; n++) {
+      const h = createHash('sha256')
+        .update(`${wawuUserId}\n${seed}\n${n}`)
+        .digest('hex');
+      const key = `content/full/${wawuUserId}/${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}.${EXTENSION_FOR_CONTENT_TYPE[contentType] ?? 'bin'}`;
+      const existing = this.copies.get(key);
+      if (existing && !existing.released)
+        return Promise.resolve({
+          key,
+          fileUrl: `https://media.example.test/${key}`,
+          bytes,
+          contentType,
+          replayed: true,
+        });
+      if (existing) continue;
+      this.copies.set(key, {
+        wawuUserId,
+        source: sourceKey,
+        released: false,
+        contentType,
+        bytes,
+      });
+      return Promise.resolve({
+        key,
+        fileUrl: `https://media.example.test/${key}`,
+        bytes,
+        contentType,
+        replayed: false,
+      });
+    }
+    return Promise.reject(new Error('too many copies'));
+  }
+}
+export { pieceFormatFor };
 
 /**
  * The person's uploaded files of a spec (AITOOLS-04), kept in memory: it
@@ -277,6 +423,9 @@ export interface AiHarness {
   tokens: PointsJobQuoteToken;
   quotes: PointsQuoteService;
   store: MemoryAudioStore;
+  /** AITOOLS-08 to -10: set when the harness is booted with `media: true`. */
+  media: MemoryMediaStore;
+  flows: AiFlowService;
   inputs: MemoryInputFiles;
   voiceFiles: MemoryVoiceFiles;
   standin: Standin;
@@ -302,7 +451,12 @@ export interface AiHarness {
   close(): Promise<void>;
 }
 
-export async function bootAiTools(): Promise<AiHarness> {
+export interface BootOptions {
+  /** Boots the Studio picture and video tools too (AITOOLS-08 to -10): the media store, the follower, notifications and the piece route. */
+  media?: boolean;
+}
+
+export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
   let mock: ChildProcess | undefined;
   if (!(await waitForHealth(`${MOCK_BASE}/health`, 1000))) {
     mock = spawn('node', ['server.js'], {
@@ -327,6 +481,8 @@ export async function bootAiTools(): Promise<AiHarness> {
   process.env.FEE_QUOTE_KEY ??= 'ai01-spec-fee-quote-key-0123456789abcdef';
 
   const store = new MemoryAudioStore();
+  const mediaStore = new MemoryMediaStore();
+  mediaStore.audio = store;
   const inputs = new MemoryInputFiles();
   const voiceFiles = new MemoryVoiceFiles();
   const moduleRef: TestingModule = await Test.createTestingModule({
@@ -338,7 +494,12 @@ export async function bootAiTools(): Promise<AiHarness> {
       PointsModule,
     ],
     // AppController: GET /health, so a spec can show the Hub answers while a hostile file is being read.
-    controllers: [AiToolsController, AiVoiceSamplesController, AppController],
+    controllers: [
+      AiToolsController,
+      AiVoiceSamplesController,
+      AppController,
+      ...(boot.media ? [AiToolsPieceController] : []),
+    ],
     providers: [
       FeeSettings,
       PointsSpendService,
@@ -370,6 +531,16 @@ export async function bootAiTools(): Promise<AiHarness> {
       AccountPurgeHooks,
       AccountPurgeService,
       AiToolsPurgeService,
+      ...(boot.media
+        ? [
+            { provide: AI_MEDIA_STORE, useValue: mediaStore },
+            AiFlowService,
+            NotificationService,
+            // The gate's offers are only read when a tier answer is thrown; a spec that needs them uses the real module.
+            { provide: PlansService, useValue: {} },
+            { provide: PublishingAllowanceService, useValue: {} },
+          ]
+        : []),
     ],
   }).compile();
   const app = moduleRef.createNestApplication();
@@ -397,6 +568,8 @@ export async function bootAiTools(): Promise<AiHarness> {
     tokens,
     quotes: moduleRef.get(PointsQuoteService),
     store,
+    media: mediaStore,
+    flows: boot.media ? moduleRef.get(AiFlowService) : (undefined as never),
     inputs,
     voiceFiles,
     standin,
@@ -419,6 +592,8 @@ export async function bootAiTools(): Promise<AiHarness> {
     },
     finish: async (who, id) => {
       for (let i = 0; i < 100; i++) {
+        // The Studio tools are followed, not awaited: one pass of the follower each time round.
+        if (boot.media) await moduleRef.get(AiFlowService).pass();
         const res = await http()
           .get(`/ai-tools/jobs/${id}`)
           .set('Authorization', `Bearer ${tokensOf[who]}`);
@@ -441,6 +616,9 @@ export async function bootAiTools(): Promise<AiHarness> {
     },
     balance: (who) => points.balanceOf(who),
     clean: async () => {
+      await prisma.notification.deleteMany({
+        where: { userWawuId: { in: SEEDED }, kind: 'ai_job_ready' },
+      });
       await prisma.aiToolJob.deleteMany({
         where: { wawuUserId: { in: SEEDED } },
       });
