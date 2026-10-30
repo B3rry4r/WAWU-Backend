@@ -1,14 +1,19 @@
 import type { AiTool, AiToolId } from './ai-tool';
 import { CAPTIONS_TOOL } from './captions.tool';
 import { CLEAN_AUDIO_TOOL } from './clean-audio.tool';
+import { DIALOGUE_TOOL } from './dialogue.tool';
 import { DUBBING_TOOL } from './dubbing.tool';
 import { IMAGE_TOOL } from './image.tool';
 import { MUSIC_TOOL } from './music.tool';
+import { MY_VOICE_TOOL } from './my-voice.tool';
 import { PHOTO_EDIT_TOOL } from './photo-edit.tool';
 import { QUICK_VOICE_TOOL } from './quick-voice.tool';
 import { SOUND_EFFECT_TOOL } from './sound-effect.tool';
+import { STEMS_TOOL } from './stems.tool';
 import { TALKING_PHOTO_TOOL } from './talking-photo.tool';
+import { VIDEO_MUSIC_TOOL } from './video-music.tool';
 import { VIDEO_TOOL } from './video.tool';
+import { VOICE_CHANGER_TOOL } from './voice-changer.tool';
 import { VOICEOVER_TOOL } from './voiceover.tool';
 
 /**
@@ -38,6 +43,12 @@ export const AI_STUDIO2_TOOLS: readonly AiTool[] = [
   PHOTO_EDIT_TOOL,
   VIDEO_TOOL,
   TALKING_PHOTO_TOOL,
+  // AITOOLS-11, AITOOLS-12: Voice changer, Dialogue, Clone your own voice, Music for a video, Split a song.
+  VOICE_CHANGER_TOOL,
+  DIALOGUE_TOOL,
+  MY_VOICE_TOOL,
+  VIDEO_MUSIC_TOOL,
+  STEMS_TOOL,
 ];
 
 /** Every tool the Hub can run, in the order Studio lists them: the pipeline, the catalogue and the follower read this. */

@@ -1,7 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
   IsBoolean,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -13,6 +17,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 
 /**
@@ -387,4 +392,101 @@ export class MakePieceDto {
   @Min(0, { message: 'outputIndex is not one of the job’s outputs.' })
   @IsInt({ message: 'outputIndex must be a whole number.' })
   outputIndex!: number;
+}
+
+/** The same body for every tool that takes a file and a quote: the key of the person's own file and the quote they saw. */
+class FileJobBase {
+  /** The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`. */
+  @ApiProperty({ minLength: 1, maxLength: MOST_KEY_CHARACTERS })
+  @IsString({ message: 'fileKey must be text.' })
+  @Length(1, MOST_KEY_CHARACTERS, { message: 'Send the file you uploaded.' })
+  fileKey!: string;
+
+  /** `quoteToken` from the quote route of the tool (sent with the same `fileKey`). A different cost now is `409 quote_changed`. */
+  @ApiProperty()
+  @IsString({ message: 'quoteToken must be text.' })
+  @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
+  quoteToken!: string;
+}
+
+/** `POST /ai-tools/voice-changer/jobs` (AITOOLS-11, R-109). The Idempotency-Key is a header. */
+export class CreateVoiceChangerJobDto extends FileJobBase {
+  /** The voice to hear it in: an id from `GET /ai-tools` (`voices`), `own` for the person's saved voice when `GET /ai-tools/my-voice` says `ready`. */
+  @ApiProperty()
+  @IsString({ message: 'voiceId must be text.' })
+  @Matches(/^[a-z0-9_-]{1,40}$/, {
+    message: 'Pick one of the voices on the list.',
+  })
+  voiceId!: string;
+}
+
+/** One line of a scene: the words and the voice that says them. */
+export class DialogueLineDto {
+  /** The words. A line with no words in it is refused by the Hub with its own sentence and nothing held. */
+  @ApiProperty({ minLength: 0, maxLength: MOST_CHARACTERS })
+  @Length(0, MOST_CHARACTERS, { message: 'That line is too long.' })
+  @IsString({ message: 'text must be text.' })
+  text!: string;
+
+  /** A voice id from `GET /ai-tools` (`voices`), or `own` for the person's saved voice. */
+  @ApiProperty()
+  @IsString({ message: 'voiceId must be text.' })
+  @Matches(/^[a-z0-9_-]{1,40}$/, {
+    message: 'Pick one of the voices on the list.',
+  })
+  voiceId!: string;
+}
+
+/** `POST /ai-tools/dialogue/jobs` (AITOOLS-11, R-109). The Idempotency-Key is a header. */
+export class CreateDialogueJobDto {
+  /** The lines of the scene, in order, up to 10 different voices and the character limit in `GET /ai-tools` (`input.maxCharacters`). */
+  @ApiProperty({ type: () => [DialogueLineDto], minItems: 1, maxItems: 200 })
+  @ArrayMaxSize(200, { message: 'That is too many lines.' })
+  @ArrayMinSize(1, { message: 'Write at least one line.' })
+  @ValidateNested({ each: true })
+  @Type(() => DialogueLineDto)
+  @IsArray({ message: 'lines must be a list.' })
+  lines!: DialogueLineDto[];
+
+  /** `quoteToken` from the `POST /points/quote` the person saw (action `dialogue_per_min`, units = the minutes the characters make). */
+  @ApiProperty()
+  @IsString({ message: 'quoteToken must be text.' })
+  @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
+  quoteToken!: string;
+}
+
+/** `POST /ai-tools/my-voice` (AITOOLS-11, R-109). The Idempotency-Key is a header. */
+export class CreateMyVoiceJobDto extends FileJobBase {
+  /** The name the person gives their voice. It stays on the Hub; the provider is told a plain name. */
+  @ApiProperty({ minLength: 1, maxLength: 60 })
+  @Length(1, 60, { message: 'Give your voice a name of 1 to 60 characters.' })
+  @IsString({ message: 'name must be text.' })
+  name!: string;
+
+  /** The words the person agreed to: `consent.line` from `GET /ai-tools/my-voice`, sent back unchanged. Any other words are `409 own_voice_consent_line_changed`. */
+  @ApiProperty({ maxLength: 500 })
+  @Length(1, 500, { message: 'Send the words you agreed to.' })
+  @IsString({ message: 'consentLine must be text.' })
+  consentLine!: string;
+}
+
+/** `POST /ai-tools/video-music/jobs` (AITOOLS-12, R-109). The Idempotency-Key is a header. */
+export class CreateVideoMusicJobDto extends FileJobBase {
+  /** The mood in words, up to the limit in `GET /ai-tools`. Left out: the music follows the video alone. */
+  @ApiPropertyOptional({ maxLength: MOST_PROMPT_CHARACTERS })
+  @IsOptional()
+  @MaxLength(MOST_PROMPT_CHARACTERS, {
+    message: 'That description is too long.',
+  })
+  @IsString({ message: 'description must be text.' })
+  description?: string;
+}
+
+/** `POST /ai-tools/stems/jobs` (AITOOLS-12, R-109). The Idempotency-Key is a header. */
+export class CreateStemsJobDto extends FileJobBase {
+  /** Two parts (the voice and the rest) or six. Left out: two. */
+  @ApiPropertyOptional({ enum: [2, 6] })
+  @IsOptional()
+  @IsIn([2, 6], { message: 'parts must be 2 or 6.' })
+  parts?: 2 | 6;
 }

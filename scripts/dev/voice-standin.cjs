@@ -156,6 +156,31 @@
 //     state.images and state.videos list each start (model, shape, size,
 //     length, the assets named; never the words), state.genReads each read and
 //     state.genDownloads each fetch of a link.
+//   POST /v1/speech-to-speech/<provider voice id>   (AITOOLS-11, Voice changer)
+//     header xi-api-key, multipart (audio, model_id?, remove_background_noise?)  ->  200 audio/mpeg (silent MP3
+//     frames of the file's length). The voice is stand-in-ada, stand-in-tunde or a clone this stand-in made (404
+//     otherwise). What the FILE can ask of it (found in its bytes): [[fail]] 500, [[reject]] 422, [[moderated]] 422
+//     (the detail says moderated), [[status:402]] (any 400 to 599), [[html]] 200 with a web page, [[slow:1500]] wait,
+//     [[octet]] answer application/octet-stream (as the provider's file types it). state.voiceChanges lists each call
+//     (voice, model, bytes, noise switch; never the file).
+//   POST /v1/text-to-dialogue?output_format=mp3_44100_128   (AITOOLS-11, Dialogue)
+//     header xi-api-key, JSON { inputs: [{ text, voice_id }], model_id? }  ->  200 audio/mpeg. More than 10 different
+//     voices, no inputs, an empty text or an unknown voice is 422 / 404. The same markers in the TEXT of any line.
+//     state.dialogues lists each call (model, lines, voices, characters; never the words).
+//   POST /v1/voices/add also takes, in the SAMPLE: [[sample-slots]] 400 voice_limit_reached (the plan's voice slots
+//     are full), and keeps the name asked (state.cloneNames).
+//   POST /v1/music/video-to-music   (AITOOLS-12, Music for a video)
+//     header xi-api-key, multipart (videos, description?, model_id?)  ->  200 audio/mpeg (10 seconds of silent
+//     frames). Markers in the VIDEO bytes, as above, and [[plan]] 403 { detail: "Subscription required" }.
+//     state.videoMusic lists each call (bytes, type, description length, model).
+//   POST /v1/music/stem-separation?output_format=mp3_44100_128   (AITOOLS-12, Split a song)
+//     header xi-api-key, multipart (file, stem_variation_id: two_stems_v1 | six_stems_v1)  ->  200 a ZIP with one
+//     MP3 per stem (vocals + instrumental, or vocals, drums, bass, guitar, piano, other: the real names are NOT
+//     KNOWN, these are this stand-in's guess). Markers in the SONG bytes, as above, and [[plan]] 403, plus the
+//     archive's own: [[zip-names:a,b]] the base names of the entries, [[zip-escape]] one entry named ../evil.mp3,
+//     [[zip-many]] 20 entries, [[zip-bomb]] an entry whose header declares 50 MB for a few bytes, [[zip-lie]] an
+//     entry that inflates to more than it declares, [[zip-corrupt]] a wrong CRC, [[zip-nonaudio]] entries that are
+//     not MP3, [[zip-notzip]] an answer that is not a ZIP. state.stems lists each call (variation, bytes).
 //   GET /__standin/state lists the calls so far (never the text).
 // Nothing of a real provider beyond these. The Hub never sees a control route.
 // Nothing here leaves 127.0.0.1.
@@ -229,6 +254,16 @@ function startVoiceStandin({
     /** Each fetch of a generation's link, the status, and whether it carried the provider's key. */
     genDownloads: [],
     genKeyLeaks: 0,
+    /** Each Voice changer call (AITOOLS-11): the voice, the model, the file's bytes and the noise switch. */
+    voiceChanges: [],
+    /** Each Dialogue call: the model, the number of lines, the different voices and the characters. */
+    dialogues: [],
+    /** The name each voice add asked for (the Hub sends a plain name, never the person's own). */
+    cloneNames: [],
+    /** Each Music for a video call (AITOOLS-12): the file's bytes and type, the description's length and the model. */
+    videoMusic: [],
+    /** Each Split a song call: the variation asked and the file's bytes. */
+    stems: [],
   };
   // asset id -> { bytes, type, marks }.
   const assets = new Map();
@@ -824,6 +859,10 @@ function startVoiceStandin({
     if (!text.includes('name="files"'))
       return json(res, 400, { detail: 'no file' });
     state.cloned += 1;
+    const askedName = /name="name"\r\n\r\n([^\r]*)/.exec(text);
+    if (askedName) state.cloneNames.push(askedName[1]);
+    if (text.includes('[[sample-slots]]'))
+      return json(res, 400, { detail: { status: 'voice_limit_reached' } });
     if (text.includes('[[sample-fail]]'))
       return json(res, 500, { detail: 'down' });
     if (text.includes('[[sample-reject]]'))
@@ -1093,6 +1132,202 @@ function startVoiceStandin({
     res.end(Buffer.concat(Array.from({ length: 8 }, () => frame)));
   }
 
+  // ---- Voice changer, Dialogue, Music for a video, Split a song (AITOOLS-11, AITOOLS-12) -----------------------------
+
+  const crcTable = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  const crc32 = (buf) => {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) c = crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+
+  /**
+   * A ZIP archive from entries { name, data, method: 'store' | 'deflate', declared?: the size the header claims,
+   * crc?: the CRC the header claims, packed?: the packed bytes to write instead of the data's }.
+   */
+  function zipOf(entries) {
+    const zlib = require('node:zlib');
+    const locals = [];
+    const centrals = [];
+    let offset = 0;
+    for (const e of entries) {
+      const name = Buffer.from(e.name, 'utf8');
+      const packed =
+        e.packed ?? (e.method === 'deflate' ? zlib.deflateRawSync(e.data) : e.data);
+      const method = e.method === 'deflate' ? 8 : 0;
+      const size = e.declared ?? e.data.length;
+      const crc = e.crc ?? crc32(e.data);
+      const local = Buffer.alloc(30);
+      local.writeUInt32LE(0x04034b50, 0);
+      local.writeUInt16LE(20, 4);
+      local.writeUInt16LE(0x800, 6);
+      local.writeUInt16LE(method, 8);
+      local.writeUInt32LE(crc, 14);
+      local.writeUInt32LE(packed.length, 18);
+      local.writeUInt32LE(size, 22);
+      local.writeUInt16LE(name.length, 26);
+      locals.push(local, name, packed);
+      const central = Buffer.alloc(46);
+      central.writeUInt32LE(0x02014b50, 0);
+      central.writeUInt16LE(20, 4);
+      central.writeUInt16LE(20, 6);
+      central.writeUInt16LE(0x800, 8);
+      central.writeUInt16LE(method, 10);
+      central.writeUInt32LE(crc, 16);
+      central.writeUInt32LE(packed.length, 20);
+      central.writeUInt32LE(size, 24);
+      central.writeUInt16LE(name.length, 28);
+      central.writeUInt32LE(offset, 42);
+      centrals.push(central, name);
+      offset += 30 + name.length + packed.length;
+    }
+    const cd = Buffer.concat(centrals);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(entries.length, 8);
+    end.writeUInt16LE(entries.length, 10);
+    end.writeUInt32LE(cd.length, 12);
+    end.writeUInt32LE(offset, 16);
+    return Buffer.concat([...locals, cd, end]);
+  }
+
+  /** The stems of a split song as a ZIP, or something else when the song asks for a broken archive. */
+  function stemArchive(variation, marks, seconds) {
+    if (marks.includes('[[zip-notzip]]')) return Buffer.from('this is not a zip archive at all');
+    const named = /\[\[zip-names:([^\]]+)\]\]/.exec(marks);
+    const base = variation === 'two_stems_v1'
+      ? ['vocals', 'instrumental']
+      : ['vocals', 'drums', 'bass', 'guitar', 'piano', 'other'];
+    const names = named ? named[1].split(',') : base;
+    const audio = silence(Math.min(5, Math.max(1, seconds)));
+    const stem = marks.includes('[[zip-nonaudio]]') ? Buffer.from('not audio at all, just words') : audio;
+    const entries = names.map((n) => ({ name: `${n}.mp3`, data: stem, method: 'store' }));
+    if (marks.includes('[[zip-many]]'))
+      for (let i = 0; i < 20; i++) entries.push({ name: `extra${i}.mp3`, data: stem, method: 'store' });
+    if (marks.includes('[[zip-escape]]'))
+      entries.push({ name: '../evil.mp3', data: stem, method: 'store' });
+    if (marks.includes('[[zip-bomb]]'))
+      entries.push({ name: 'bomb.mp3', data: Buffer.alloc(1024), method: 'deflate', declared: 50 * 1024 * 1024 });
+    if (marks.includes('[[zip-lie]]'))
+      entries.push({ name: 'lie.mp3', data: Buffer.alloc(5 * 1024 * 1024), method: 'deflate', declared: 64 });
+    if (marks.includes('[[zip-corrupt]]'))
+      entries[0] = { ...entries[0], crc: 12345 };
+    return zipOf(entries);
+  }
+
+  /**
+   * The four routes (AITOOLS-11, AITOOLS-12): counted as calls like the others, one handler and a `kind`. Markers are
+   * read from the bytes of the file (or the text of a dialogue's lines).
+   */
+  function newRoute(kind) {
+    return async (req, res, m, raw) => {
+      state.calls += 1;
+      state.active += 1;
+      state.maxActive = Math.max(state.maxActive, state.active);
+      const done = (status, type, body) => {
+        state.active -= 1;
+        if (status === 200) state.ok += 1;
+        else state.failed += 1;
+        res.statusCode = status;
+        res.setHeader('content-type', type);
+        res.end(body);
+      };
+      try {
+        if (req.headers['xi-api-key'] !== key)
+          return done(401, 'application/json', '{"detail":"bad key"}');
+        let marks = '';
+        let seconds = 10;
+        let variation = null;
+        if (kind === 'dialogue') {
+          let body;
+          try {
+            body = JSON.parse(raw.toString('utf8'));
+          } catch {
+            return done(400, 'application/json', '{"detail":"bad body"}');
+          }
+          const inputs = body.inputs;
+          if (!Array.isArray(inputs) || inputs.length === 0)
+            return done(422, 'application/json', '{"detail":"no inputs"}');
+          const voices = new Set();
+          let chars = 0;
+          for (const i of inputs) {
+            if (typeof i?.text !== 'string' || i.text === '' || typeof i?.voice_id !== 'string')
+              return done(422, 'application/json', '{"detail":"bad input"}');
+            if (!VOICES.has(i.voice_id) && !clones.has(i.voice_id))
+              return done(404, 'application/json', '{"detail":"no such voice"}');
+            voices.add(i.voice_id);
+            chars += i.text.length;
+            marks += `${i.text}\n`;
+          }
+          if (voices.size > 10)
+            return done(422, 'application/json', '{"detail":"too many voices"}');
+          state.dialogues.push({
+            model: typeof body.model_id === 'string' ? body.model_id : null,
+            lines: inputs.length,
+            voices: [...voices],
+            chars,
+          });
+          seconds = Math.max(2, chars / 15);
+        } else {
+          const form = parseMultipart(req.headers['content-type'], raw);
+          const field = kind === 'speech-to-speech' ? 'audio' : kind === 'video-music' ? 'videos' : 'file';
+          const file = form?.get(field);
+          if (!form || !file || file.data.length === 0)
+            return done(400, 'application/json', '{"detail":"no file"}');
+          marks = file.data.toString('latin1');
+          if (kind === 'speech-to-speech') {
+            const voice = decodeURIComponent(m[1]);
+            if (!VOICES.has(voice) && !clones.has(voice))
+              return done(404, 'application/json', '{"detail":"no such voice"}');
+            seconds = lengthOf(file.data);
+            state.voiceChanges.push({
+              voice,
+              model: form.get('model_id')?.data.toString('utf8') ?? null,
+              bytes: file.data.length,
+              fileType: file.type,
+              removeNoise: form.get('remove_background_noise')?.data.toString('utf8') ?? null,
+            });
+          } else if (kind === 'video-music') {
+            state.videoMusic.push({
+              bytes: file.data.length,
+              fileType: file.type,
+              descriptionChars: (form.get('description')?.data.toString('utf8') ?? '').length,
+              model: form.get('model_id')?.data.toString('utf8') ?? null,
+            });
+          } else {
+            variation = form.get('stem_variation_id')?.data.toString('utf8') ?? 'six_stems_v1';
+            if (variation !== 'two_stems_v1' && variation !== 'six_stems_v1')
+              return done(422, 'application/json', '{"detail":"bad variation"}');
+            seconds = lengthOf(file.data);
+            state.stems.push({ variation, bytes: file.data.length, fileType: file.type });
+          }
+        }
+        const slow = /\[\[slow:(\d{1,6})\]\]/.exec(marks);
+        const wait = slow ? Number(slow[1]) : delayMs;
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        if (marks.includes('[[fail]]')) return done(500, 'application/json', '{"detail":"down"}');
+        if (marks.includes('[[reject]]')) return done(422, 'application/json', '{"detail":"refused"}');
+        if (marks.includes('[[moderated]]')) return done(422, 'application/json', '{"detail":"moderated"}');
+        if (marks.includes('[[plan]]')) return done(403, 'application/json', '{"detail":"Subscription required"}');
+        const status = /\[\[status:(4\d\d|5\d\d)\]\]/.exec(marks);
+        if (status) return done(Number(status[1]), 'application/json', '{"detail":"no"}');
+        if (marks.includes('[[html]]')) return done(200, 'text/html', '<html>not audio</html>');
+        if (kind === 'stems') return done(200, 'application/octet-stream', stemArchive(variation, marks, seconds));
+        return done(200, marks.includes('[[octet]]') ? 'application/octet-stream' : 'audio/mpeg', silence(seconds));
+      } catch {
+        return done(500, 'application/json', '{"detail":"stand-in fault"}');
+      }
+    };
+  }
+
   // One entry per provider route the Hub calls: method, path pattern, handler
   // (req, res, match, raw body). A later tool adds its route here.
   const ROUTES = [
@@ -1173,6 +1408,26 @@ function startVoiceStandin({
       method: 'GET',
       path: /^\/__standin\/gen-out\/([^/]+)$/,
       handle: genOut,
+    },
+    {
+      method: 'POST',
+      path: /^\/v1\/speech-to-speech\/([^/]+)$/,
+      handle: newRoute('speech-to-speech'),
+    },
+    {
+      method: 'POST',
+      path: /^\/v1\/text-to-dialogue$/,
+      handle: newRoute('dialogue'),
+    },
+    {
+      method: 'POST',
+      path: /^\/v1\/music\/video-to-music$/,
+      handle: newRoute('video-music'),
+    },
+    {
+      method: 'POST',
+      path: /^\/v1\/music\/stem-separation$/,
+      handle: newRoute('stems'),
     },
     { method: 'POST', path: /^\/v1\/voices\/add$/, handle: addVoice },
     { method: 'DELETE', path: /^\/v1\/voices\/([^/]+)$/, handle: removeVoice },

@@ -50,6 +50,12 @@ export type AiToolErrorCode =
   | 'ai_speech_unreadable'
   /** AITOOLS-08: a result no Create format takes (a FLAC dub, an AAC clip) cannot become a piece. */
   | 'no_format'
+  /** AITOOLS-11: a scene with more different voices than the provider takes. Nothing is held. */
+  | 'ai_voices_too_many'
+  /** AITOOLS-11: a recording too short to make a clone from. Nothing is held. */
+  | 'ai_length_too_short'
+  /** AITOOLS-11: the person already keeps a clone of their voice (or is making one). Nothing is held. */
+  | 'clone_exists'
   | 'not_found';
 
 export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
@@ -77,6 +83,9 @@ export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
   ai_speech_required: HttpStatus.BAD_REQUEST,
   ai_speech_unreadable: HttpStatus.UNPROCESSABLE_ENTITY,
   no_format: HttpStatus.CONFLICT,
+  ai_voices_too_many: HttpStatus.UNPROCESSABLE_ENTITY,
+  ai_length_too_short: HttpStatus.UNPROCESSABLE_ENTITY,
+  clone_exists: HttpStatus.CONFLICT,
   not_found: HttpStatus.NOT_FOUND,
 };
 
@@ -140,3 +149,14 @@ export const PROMPT_EMPTY_MEDIA_MESSAGE = 'Describe what you want to see.';
 /** AITOOLS-08: a result no Create format takes. No price, no provider (R-68). */
 export const NO_FORMAT_MESSAGE =
   'That result cannot become a piece. Save it or download it instead.';
+
+/** AITOOLS-11. No message names the provider (R-68) or holds a long dash (R-5). */
+export const CLONE_EXISTS_MESSAGE =
+  'You already keep a copy of your voice. Remove it first to make a new one. No points were taken.';
+export const CLONE_FULL_MESSAGE =
+  "Saving a voice isn't available right now. No points were taken.";
+export const CLONE_NAME_REQUIRED_MESSAGE =
+  'Give your voice a name first. No points were taken.';
+/** AITOOLS-12: the provider's plan does not cover the route (a 403 `Subscription required`). */
+export const UNAVAILABLE_NOW_MESSAGE =
+  "This isn't available right now. No points were taken.";

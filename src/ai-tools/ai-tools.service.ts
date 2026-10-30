@@ -1,9 +1,11 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { PLANS_CONFIG, type PlansConfig } from '../plans/plans-config';
 import { PlanSettingsService } from '../plan-settings/plan-settings.service';
 import { PointsQuoteService } from '../points/spend/points-quote.service';
 import { AiToolError, UNAVAILABLE_MESSAGE } from './ai-tools-error';
 import { AiInputService } from './input/ai-input-files';
+import { AiCloneService } from './own-voice/ai-clone.service';
+import { OWN_VOICE_ID } from './own-voice/own-voice-id';
 import { isMediaSpec, type AiTool, type MediaInputSpec } from './tools/ai-tool';
 import type {
   AiFileQuoteView,
@@ -50,6 +52,8 @@ export class AiToolsService {
     @Inject(AI_VOICE_PROVIDER) private readonly voice: AiVoiceProvider,
     private readonly input: AiInputService,
     private readonly quotes: PointsQuoteService,
+    // AITOOLS-11: the person's saved clone, which joins the voices of the tools that speak (for its owner only).
+    @Optional() private readonly clones?: AiCloneService,
   ) {}
 
   /**
@@ -63,12 +67,18 @@ export class AiToolsService {
     tool: AiTool,
     fileKey: string,
   ): Promise<AiFileQuoteView> {
-    if (!tool.enabled(this.voice))
+    if (
+      !tool.enabled(this.voice) ||
+      (tool.listingSetting && this.settings.number(tool.listingSetting) !== 1)
+    )
       throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
     const opened = await this.input.open(wawuUserId, fileKey);
+    // AITOOLS-11 and -12: the tool's own look at what the Hub read (a video where audio is needed, a length over its
+    // setting), so the quote says no before the person runs it. The job makes the same check.
+    tool.checkFile?.(opened, this.settings);
     const quote = await this.quotes.quote(wawuUserId, {
       action: tool.action,
-      units: opened.minutes,
+      units: tool.quoteUnits ? tool.quoteUnits(opened) : opened.minutes,
     });
     return {
       ...quote,
@@ -128,17 +138,33 @@ export class AiToolsService {
     };
   }
 
-  async list(): Promise<AiToolsView> {
+  async list(wawuUserId?: string): Promise<AiToolsView> {
     const plan = this.plan;
     // AITOOLS-07: a link to a short sample of each voice, when the provider has one.
     const samples = await this.voice.samples();
-    const voices = this.voice.voices().map((v) => ({
+    const hubVoices = this.voice.voices().map((v) => ({
       id: v.id,
       name: v.name,
       description: v.description,
       // The Hub's own path (the app adds its address): the provider's link never leaves the adapter.
       ...(samples.has(v.id) ? { sampleUrl: voiceSamplePath(v.id) } : {}),
     }));
+    // AITOOLS-11: the person's SAVED clone joins the voices of the tools that speak, for its owner only, as the first
+    // row "Your voice" (the same row the Voice Intro voice is; the saved clone wins).
+    const keeps =
+      wawuUserId !== undefined && this.clones
+        ? (await this.clones.activeFor(wawuUserId)) !== null
+        : false;
+    const voices = keeps
+      ? [
+          {
+            id: OWN_VOICE_ID,
+            name: 'Your voice',
+            description: 'Your own voice, kept for your voice tools.',
+          },
+          ...hubVoices,
+        ]
+      : hubVoices;
     const tools: AiToolView[] = [];
     for (const tool of ALL_AI_TOOLS) {
       const action = plan.actions.find((a) => a.id === tool.action);
@@ -180,6 +206,32 @@ export class AiToolsService {
         });
         continue;
       }
+      if (spec.kind === 'dialogue') {
+        // AITOOLS-11: a scene is priced on its characters, like VoiceOver; the voices are the Hub's and the owner's own.
+        const maxCharacters = Math.min(
+          this.settings.number(spec.maxCharactersSetting),
+          plan.caps.maxCharsPerJob,
+        );
+        tools.push({
+          id: tool.id,
+          action: action.id,
+          name: tool.name,
+          description: tool.description,
+          unit: tool.unit,
+          costPointsPerUnit: action.points,
+          enabled,
+          input: {
+            kind: 'dialogue',
+            maxCharacters,
+            charactersPerUnit: this.settings.number(
+              spec.charactersPerUnitSetting,
+            ),
+            dialogue: { maxVoices: spec.maxVoices },
+          },
+          voices,
+        });
+        continue;
+      }
       if (spec.kind === 'file') {
         tools.push({
           id: tool.id,
@@ -206,6 +258,23 @@ export class AiToolsService {
               maxBytes: this.settings.number(AI_INPUT_MAX_BYTES_SETTING),
               maxMinutes: plan.caps.maxAudioMinPerJob,
               languageCode: spec.languageCode,
+              // AITOOLS-11 and -12: what the newer file tools take beyond the file.
+              ...(spec.only ? { only: spec.only } : {}),
+              ...(spec.maxSecondsSetting
+                ? { maxSeconds: this.settings.number(spec.maxSecondsSetting) }
+                : {}),
+              ...(spec.voice ? { voice: true as const } : {}),
+              ...(spec.clone ? { clone: true as const } : {}),
+              ...(spec.description
+                ? {
+                    description: {
+                      maxCharacters: this.settings.number(
+                        spec.description.maxCharactersSetting,
+                      ),
+                    },
+                  }
+                : {}),
+              ...(spec.parts ? { parts: [...spec.parts] } : {}),
               ...(spec.dubbing
                 ? {
                     dubbing: {
@@ -217,7 +286,7 @@ export class AiToolsService {
                 : {}),
             },
           },
-          voices: [],
+          voices: spec.voice ? voices : [],
         });
         continue;
       }

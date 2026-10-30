@@ -25,14 +25,19 @@ import {
   OwnVoiceConsentDto,
   CreateCaptionsJobDto,
   CreateCleanAudioJobDto,
+  CreateDialogueJobDto,
   CreateDubbingJobDto,
   CreateImageJobDto,
   CreateMusicJobDto,
+  CreateMyVoiceJobDto,
   CreatePhotoEditJobDto,
   CreateQuickVoiceJobDto,
   CreateSoundEffectJobDto,
+  CreateStemsJobDto,
   CreateTalkingPhotoJobDto,
   CreateVideoJobDto,
+  CreateVideoMusicJobDto,
+  CreateVoiceChangerJobDto,
   CreateVoiceoverJobDto,
   QuoteFileDto,
   QuoteTalkingPhotoDto,
@@ -44,13 +49,21 @@ import type {
   AiJobView,
   AiSpeechQuoteView,
   AiToolsView,
+  SavedVoiceRemovedView,
+  SavedVoiceView,
   OwnVoiceRemovedView,
   OwnVoiceView,
 } from './ai-tools-view.type';
+import { AiCloneService } from './own-voice/ai-clone.service';
 import { OwnVoiceService } from './own-voice/own-voice.service';
 import { personName } from '../voice-intro/voice-profile.service';
 import { CAPTIONS_TOOL } from './tools/captions.tool';
 import { CLEAN_AUDIO_TOOL } from './tools/clean-audio.tool';
+import { DIALOGUE_TOOL } from './tools/dialogue.tool';
+import { MY_VOICE_TOOL } from './tools/my-voice.tool';
+import { STEMS_TOOL } from './tools/stems.tool';
+import { VIDEO_MUSIC_TOOL } from './tools/video-music.tool';
+import { VOICE_CHANGER_TOOL } from './tools/voice-changer.tool';
 import { DUBBING_TOOL } from './tools/dubbing.tool';
 import { IMAGE_TOOL } from './tools/image.tool';
 import { MUSIC_TOOL } from './tools/music.tool';
@@ -74,6 +87,7 @@ export class AiToolsController {
     private readonly tools: AiToolsService,
     private readonly jobs: AiJobService,
     private readonly own: OwnVoiceService,
+    private readonly clones: AiCloneService,
   ) {}
 
   /**
@@ -84,8 +98,9 @@ export class AiToolsController {
   @Get()
   @Header('Cache-Control', 'no-store')
   @BuiltBy('AITOOLS-01')
-  list(): Promise<AiToolsView> {
-    return this.tools.list();
+  list(@CurrentUser() user: WawuJwtClaims): Promise<AiToolsView> {
+    // AITOOLS-11: the person's own saved voice joins the voices of the tools that speak, for its owner only.
+    return this.tools.list(user.sub);
   }
 
   /**
@@ -582,6 +597,273 @@ export class AiToolsController {
   ): Promise<AiJobView> {
     const { job, replayed } = await this.jobs.createJob(
       TALKING_PHOTO_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * The points quote for a Voice changer recording (AITOOLS-11, R-109): exactly `POST /ai-tools/captions/quote`, for the
+   * action `voice_changer_per_min`. The Hub reads the recording's length itself. A video, or a file it cannot read, is
+   * refused with nothing held. `503 ai_tool_unavailable` while the tool's switch `ai.listed.voice-changer` is off.
+   */
+  @Post('voice-changer/quote')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-11')
+  quoteVoiceChanger(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: QuoteFileDto,
+  ): Promise<AiFileQuoteView> {
+    return this.tools.quoteFile(user.sub, VOICE_CHANGER_TOOL, dto.fileKey);
+  }
+
+  /**
+   * Starts a Voice changer job (AITOOLS-11, R-109): the `fileKey` of a recording the person uploaded (`ai/input-audio`),
+   * the `voiceId` to hear it in (a voice from `GET /ai-tools`, or `own` for their saved voice) and the `quoteToken`
+   * for the action `voice_changer_per_min`. The same words, timing and feeling come back in the new voice: the done
+   * job's `audioUrl` and its `audio` output (`pieceFormat: audio`). Priced by the minute of the recording as the Hub
+   * reads it. The request, the answer and every refusal are those of `POST /ai-tools/captions/jobs`, plus
+   * `400 ai_voice_unknown`. The recording is deleted when the job ends.
+   */
+  @Post('voice-changer/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-11')
+  async createVoiceChanger(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateVoiceChangerJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      VOICE_CHANGER_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * Starts a Dialogue job (AITOOLS-11, R-109): `lines`, each `{ text, voiceId }` (a voice from `GET /ai-tools`, or `own`
+   * for the person's saved voice), and the `quoteToken` of the `POST /points/quote` for the action `dialogue_per_min`
+   * (units = the minutes the characters make, `characters` the total). At most 10 different voices and the character
+   * limit in `GET /ai-tools` (`input.maxCharacters`); an empty line, too many voices, too many characters or a voice not on
+   * the person's list is refused with the reason and nothing held. The done job's `audioUrl` is the whole scene.
+   */
+  @Post('dialogue/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-11')
+  async createDialogue(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateDialogueJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      DIALOGUE_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * "Clone your own voice" (AITOOLS-11, R-109): whether the person keeps a clone of their voice (`state`: `none`,
+   * `making`, `ready`), its name, the words they agree to (`consent.line`, with their own name) and what the recording
+   * must be. Read-only. `available` is false while the tool's switch `ai.listed.my-voice` is off.
+   */
+  @Get('my-voice')
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-11')
+  myVoice(@CurrentUser() user: WawuJwtClaims): Promise<SavedVoiceView> {
+    return this.clones.view(user.sub, personName(user));
+  }
+
+  /** The points quote for the recording a clone is made from (AITOOLS-11): exactly `POST /ai-tools/captions/quote`, priced once (units 1), for the action `voice_clone_once`. A recording that is too short or too long is refused here. */
+  @Post('my-voice/quote')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-11')
+  quoteMyVoice(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: QuoteFileDto,
+  ): Promise<AiFileQuoteView> {
+    return this.tools.quoteFile(user.sub, MY_VOICE_TOOL, dto.fileKey);
+  }
+
+  /**
+   * Makes the clone (AITOOLS-11, R-109): the `fileKey` of the person's own recording (`ai/input-audio`), a `name` for
+   * the voice, the `consentLine` they agreed to (`consent.line` from `GET /ai-tools/my-voice`, sent back unchanged) and
+   * the `quoteToken` for the action `voice_clone_once`. One clone a person: a second is `409 clone_exists` with nothing
+   * held, and two taps at once make one. The points are held and the job answers `202 working`; poll `GET
+   * /ai-tools/jobs/{id}` and `GET /ai-tools/my-voice`. Done, "Your voice" (`own`) is a choice in the voice tools for
+   * its owner only. The points are kept only when the clone is made. The recording is deleted when the job ends.
+   * Refusals with nothing held: `409 own_voice_consent_line_changed`, `409 own_voice_name_required`, `422
+   * ai_length_too_short`, `422 ai_length_too_long`, `422 ai_file_unreadable`.
+   */
+  @Post('my-voice')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-11')
+  async createMyVoice(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateMyVoiceJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    // The words agreed to are the ones the Hub served for THIS person, with their own name.
+    this.clones.assertConsent(personName(user), dto.consentLine);
+    const { job, replayed } = await this.jobs.createJob(
+      MY_VOICE_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * Removes the person's saved voice (AITOOLS-11): "Your voice" leaves every list at once, the agreement goes with it
+   * and the Hub deletes the provider's copy. Always works (also while the tool's switch is off). `gone`: the provider
+   * holds none; `pending`: the Hub is still removing it and keeps trying. Nothing is charged or given back.
+   */
+  @Delete('my-voice')
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-11')
+  async removeMyVoice(
+    @CurrentUser() user: WawuJwtClaims,
+  ): Promise<SavedVoiceRemovedView> {
+    const atProvider = await this.clones.remove(user.sub);
+    return {
+      myVoice: await this.clones.view(user.sub, personName(user)),
+      atProvider,
+    };
+  }
+
+  /** The points quote for the video Music for a video is made for (AITOOLS-12, R-109): exactly `POST /ai-tools/captions/quote`, priced flat (units 1), for the action `video_music_per_track`. An audio file, a video over the length setting or over 200 MB is refused here. */
+  @Post('video-music/quote')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-12')
+  quoteVideoMusic(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: QuoteFileDto,
+  ): Promise<AiFileQuoteView> {
+    return this.tools.quoteFile(user.sub, VIDEO_MUSIC_TOOL, dto.fileKey);
+  }
+
+  /**
+   * Starts a Music for a video job (AITOOLS-12, R-109): the `fileKey` of the person's own video (`ai/input-video`), an
+   * optional `description` (the mood in words) and the `quoteToken` for the action `video_music_per_track`. Priced flat,
+   * one track. The result is MUSIC as an audio file: the Hub does not put it on the video (the provider returns music
+   * only), and the screen says so. A long job: the app polls `GET /ai-tools/jobs/{id}`. The request, the answer and
+   * the refusals are those of `POST /ai-tools/captions/jobs`, plus `422 ai_length_too_long`, `422 ai_file_too_large` and
+   * `422 ai_prompt_too_long`. If the provider's plan does not cover the route the job fails with "This isn't available
+   * right now. No points were taken." The video is deleted when the job ends.
+   */
+  @Post('video-music/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-12')
+  async createVideoMusic(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateVideoMusicJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      VIDEO_MUSIC_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /** The points quote for the song Split a song takes (AITOOLS-12, R-109): exactly `POST /ai-tools/captions/quote`, priced flat (units 1), for the action `stems_per_song`. */
+  @Post('stems/quote')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @BuiltBy('AITOOLS-12')
+  quoteStems(
+    @CurrentUser() user: WawuJwtClaims,
+    @Body() dto: QuoteFileDto,
+  ): Promise<AiFileQuoteView> {
+    return this.tools.quoteFile(user.sub, STEMS_TOOL, dto.fileKey);
+  }
+
+  /**
+   * Starts a Split a song job (AITOOLS-12, R-109): the `fileKey` of the person's own song (`ai/input-audio`), `parts`
+   * (2: the voice and the rest, or 6; left out: 2) and the `quoteToken` for the action `stems_per_song`. Priced flat,
+   * one song. Done, `outputs` hold one `audio` file for each part with its plain `name` ("Voice", "Drums"), each with
+   * `pieceFormat: audio`; `POST /ai-tools/jobs/{id}/piece` takes the `outputIndex` of the part the person picks. A long
+   * job: the app polls `GET /ai-tools/jobs/{id}`. The request, the answer and the refusals are those of `POST
+   * /ai-tools/video-music/jobs`. An answer from the provider the Hub cannot open safely fails the job and gives every
+   * point back. The song is deleted when the job ends.
+   */
+  @Post('stems/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-12')
+  async createStems(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateStemsJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      STEMS_TOOL,
       user.sub,
       key,
       dto,

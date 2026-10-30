@@ -623,6 +623,9 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // AI tool jobs (AITOOLS-01): what a person ran, how long and what it cost. No text is
   // kept. The audio is a StorageObject of the person's, removed with the rest of their files.
   { model: 'AiToolJob', column: 'wawuUserId', disposition: 'OWNED' },
+  // AITOOLS-11: the saved clone of the person's own voice (the name they gave it and the words they agreed to). The
+  // provider's copy is deleted first (AiToolsPurgeService); the row goes with the person.
+  { model: 'AiClonedVoice', column: 'wawuUserId', disposition: 'OWNED' },
   // VOICE-01: the person's voice (spelling, script, consent, sample and intro
   // audio keys), the tries at making an intro, and the count of free previews.
   { model: 'VoiceProfile', column: 'wawuUserId', disposition: 'OWNED' },

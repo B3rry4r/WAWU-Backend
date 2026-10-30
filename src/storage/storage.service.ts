@@ -275,6 +275,11 @@ export const GENERATED_KEY_FOLDERS = [
   // R-109 (AITOOLS-08): the pictures and videos the Studio tools make.
   'ai/image',
   'ai/video',
+  // R-109 (AITOOLS-11, AITOOLS-12): the audio Voice changer, Dialogue, Music for a video and Split a song make.
+  'ai/voice-changer',
+  'ai/dialogue',
+  'ai/video-music',
+  'ai/stems',
 ] as const;
 
 /**

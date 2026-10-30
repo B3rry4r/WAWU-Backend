@@ -20,6 +20,14 @@ export const AI_DUBBING_FOLDER = 'ai/dubbing';
 export const AI_IMAGE_FOLDER = 'ai/image';
 /** A video job's file (AITOOLS-10, R-109), under its own folder. */
 export const AI_VIDEO_FOLDER = 'ai/video';
+/** A Voice changer job's audio (AITOOLS-11, R-109), under its own folder. */
+export const AI_VOICE_CHANGER_FOLDER = 'ai/voice-changer';
+/** A Dialogue job's audio (AITOOLS-11, R-109). */
+export const AI_DIALOGUE_FOLDER = 'ai/dialogue';
+/** A Music for a video job's audio (AITOOLS-12, R-109). */
+export const AI_VIDEO_MUSIC_FOLDER = 'ai/video-music';
+/** A Split a song job's parts (AITOOLS-12, R-109): one file for each part. */
+export const AI_STEMS_FOLDER = 'ai/stems';
 /** The audio types the Hub stores and serves for a tool's result (its `putGenerated` list). */
 export const AI_AUDIO_CONTENT_TYPES = [
   'audio/mpeg',
@@ -47,6 +55,10 @@ export const AI_AUDIO_FOLDERS = [
   AI_DUBBING_FOLDER,
   AI_IMAGE_FOLDER,
   AI_VIDEO_FOLDER,
+  AI_VOICE_CHANGER_FOLDER,
+  AI_DIALOGUE_FOLDER,
+  AI_VIDEO_MUSIC_FOLDER,
+  AI_STEMS_FOLDER,
 ] as const;
 export type AiAudioFolder = (typeof AI_AUDIO_FOLDERS)[number];
 

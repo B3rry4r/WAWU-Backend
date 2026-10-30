@@ -156,6 +156,22 @@ export const FILE_KINDS: Readonly<Record<string, FileKind>> = {
     decision: 'DELETE',
     what: 'The video the Hub made for the person: a Make a video or Talking photo job (AiToolJob.outputs, AITOOLS-10). A copy made into their content folder is an upload of theirs and follows the content rules.',
   },
+  'ai/voice-changer': {
+    decision: 'DELETE',
+    what: 'The audio the Hub made for the person: a Voice changer job (AiToolJob.outputs, AITOOLS-11). A copy made into their content folder is an upload of theirs and follows the content rules.',
+  },
+  'ai/dialogue': {
+    decision: 'DELETE',
+    what: 'The audio the Hub made for the person: a Dialogue job (AiToolJob.outputs, AITOOLS-11). A copy made into their content folder is an upload of theirs and follows the content rules.',
+  },
+  'ai/video-music': {
+    decision: 'DELETE',
+    what: 'The music the Hub made for the person: a Music for a video job (AiToolJob.outputs, AITOOLS-12). A copy made into their content folder is an upload of theirs and follows the content rules.',
+  },
+  'ai/stems': {
+    decision: 'DELETE',
+    what: 'The parts of a song the Hub made for the person: a Split a song job, one file for each part (AiToolJob.outputs, AITOOLS-12). A copy made into their content folder is an upload of theirs and follows the content rules.',
+  },
   'voice/sample': {
     decision: 'DELETE',
     what: 'The 30 second recording of the person’s own voice (VoiceProfile.sampleKey, VOICE-01).',
