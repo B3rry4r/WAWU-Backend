@@ -87,6 +87,8 @@ export interface AiAudioStore {
   urlFor(key: string): Promise<string>;
   /** Drops the audio of a job that did not keep its points. Never throws. */
   remove(key: string): Promise<void>;
+  /** Keeps the words of a job as a private file of the person's (`ai/input-doc`, AITOOLS-13: an audiobook's text); answers its key. */
+  putText(wawuUserId: string, name: string, text: string): Promise<string>;
   /** The keys of the person's files in `folder` whose name starts with `namePrefix` (AITOOLS-13: the chapters of an audiobook). */
   list(
     wawuUserId: string,
@@ -122,6 +124,16 @@ export class StorageAiAudioStore implements AiAudioStore {
 
   remove(key: string): Promise<void> {
     return this.storage.removeGenerated(key);
+  }
+
+  putText(wawuUserId: string, name: string, text: string): Promise<string> {
+    return this.storage.putGenerated(
+      wawuUserId,
+      'ai/input-doc',
+      name,
+      Buffer.from(text, 'utf8'),
+      'text/plain',
+    );
   }
 
   list(

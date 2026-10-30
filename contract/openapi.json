@@ -41811,6 +41811,102 @@
         "x-wawu-built-by": "AITOOLS-12"
       }
     },
+    "/api/hub/ai-tools/audiobook/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createAudiobook",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAudiobookJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts an Audiobook job (AITOOLS-13, R-109): the `text` (or the `fileKey` of a plain text file uploaded to\n`ai/input-doc`), a `voiceId` from `GET /ai-tools` and the `quoteToken` for the action `audiobook_per_min` (units = the\nminutes the characters make, `characters` the total). The points for the whole text are held up front; the Hub speaks\nthe chapters one after the other and joins them into one audio file: poll `GET /ai-tools/jobs/{id}`; the done job's\n`audioUrl` is the whole book (`pieceFormat: audio`, one piece). An empty text, a text over the limit in `GET\n/ai-tools` (`input.maxCharacters`), a voice off the list and a file that is not text are refused with the reason and\nnothing held; the day's cap stops a longer book (`points_cap_reached`, with the reset time). `503\nai_tool_unavailable` while the tool's switch `ai.listed.audiobook` is off.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-13"
+      }
+    },
+    "/api/hub/ai-tools/podcast/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createPodcast",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePodcastJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Podcast maker job (AITOOLS-13, R-109): a `source` (`text`, or an `https` `url` of at most 2,000 characters,\nwhich the Hub never opens), a `mode` (`conversation` with two `voiceIds`, `bulletin` with one), a `duration` (`short`,\n`standard` or `long`, each its own plan action: the `quoteToken` is for that action, units 1) and a `language` from\n`GET /ai-tools` (`input.podcast.languages`). The provider works for minutes: poll `GET /ai-tools/jobs/{id}`; the done\njob's `audioUrl` is the podcast (`pieceFormat: audio`). A link that is not `https`, one over the limit, two voices that\nare the same and a language off the list are refused with the reason and nothing held. If the provider does not take\nour account (its Studio API is open to allowlisted accounts only) the job fails with \"This isn't available right now.\nNo points were taken.\" The tool is listed only while `ai.listed.podcast` and `ai.podcast_studio_api_ok` are both on.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-13"
+      }
+    },
     "/api/hub/ai-tools/jobs": {
       "get": {
         "operationId": "AiToolsController_listJobs",
@@ -42179,6 +42275,304 @@
           "AiVoiceSamples"
         ],
         "x-wawu-built-by": "AITOOLS-07"
+      }
+    },
+    "/api/hub/ai-tools/receptionist": {
+      "get": {
+        "operationId": "ReceptionistController_read",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceptionistView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The caller's Receptionist: whether it is set up, its details, what it knows, and the limits and voices the screen draws. Read-only.",
+        "tags": [
+          "Receptionist"
+        ],
+        "x-wawu-built-by": "AITOOLS-06"
+      },
+      "put": {
+        "operationId": "ReceptionistController_save",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveReceptionistDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceptionistView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Sets up or changes the Receptionist (`businessName`, `offer`, optional `replyStyle`, `language`, `voiceId`). The\nfirst save makes the agent; later saves edit it. A language or voice off the lists, or an empty name or offer, is\nrefused and nothing is created. `503` when it cannot be reached, with nothing changed.",
+        "tags": [
+          "Receptionist"
+        ],
+        "x-wawu-built-by": "AITOOLS-06"
+      },
+      "delete": {
+        "operationId": "ReceptionistController_clear",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceptionistRemovedView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Clears the Receptionist: the agent, every document it knew and the earlier messages. `atProvider: pending` means the\nHub is still removing a copy: ask again. Always works, also while the tool is off.",
+        "tags": [
+          "Receptionist"
+        ],
+        "x-wawu-built-by": "AITOOLS-06"
+      }
+    },
+    "/api/hub/ai-tools/receptionist/knowledge": {
+      "post": {
+        "operationId": "ReceptionistController_addKnowledge",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddKnowledgeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceptionistView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Adds something it knows: `kind: text` (`text`), `url` (`url`, an `https` page) or `file` (`fileKey` of a text or PDF\nuploaded to `ai/input-doc`), with a `name`. At most the limit in `GET /ai-tools/receptionist` (`limits.docsMax`);\na text, document or link over its limit, a link that is not `https`, a file type off the list and another person's\nkey are refused with the reason and nothing is created. The profile and listings are NOT read: what it knows is what\nthe person adds.",
+        "tags": [
+          "Receptionist"
+        ],
+        "x-wawu-built-by": "AITOOLS-06"
+      }
+    },
+    "/api/hub/ai-tools/receptionist/knowledge/{id}": {
+      "delete": {
+        "operationId": "ReceptionistController_removeKnowledge",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceptionistView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Makes it forget one thing: deleted at the provider, then the row. `404 not_found` for another person's.",
+        "tags": [
+          "Receptionist"
+        ],
+        "x-wawu-built-by": "AITOOLS-06"
+      }
+    },
+    "/api/hub/ai-tools/receptionist/messages": {
+      "post": {
+        "operationId": "ReceptionistController_message",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per message.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReceptionistMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Sends it a text message: `message` and the `quoteToken` of the `POST /points/quote` for the action\n`receptionist_message` (units 1). The points are held; the job answers `202 working`; poll `GET /ai-tools/jobs/{id}`:\nthe reply is the done job's `text` output, the points are kept only then and every point goes back on a failure.\nThe same Idempotency-Key twice sends one message. `409 receptionist_not_set_up` before the first save.",
+        "tags": [
+          "Receptionist"
+        ],
+        "x-wawu-built-by": "AITOOLS-06"
+      }
+    },
+    "/api/hub/ai-tools/receptionist/voice-sessions": {
+      "post": {
+        "operationId": "ReceptionistController_startVoice",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per session.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartVoiceSessionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceSessionView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a talking session: holds the points for the longest session (`limits.voiceMaxMinutes`, the quote is\n`POST /points/quote` for `receptionist_voice_per_min` with that many units) and answers `{ id, signedUrl,\nconversationId, maxSeconds }`. The phone talks to the provider on `signedUrl` (used once); the Hub carries no audio.\nCall `end` when the talk is over.",
+        "tags": [
+          "Receptionist"
+        ],
+        "x-wawu-built-by": "AITOOLS-06"
+      }
+    },
+    "/api/hub/ai-tools/receptionist/voice-sessions/{id}/end": {
+      "post": {
+        "operationId": "ReceptionistController_endVoice",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VoiceSessionView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Ends a talking session: the Hub reads how long it was, keeps the real minutes (rounded up, at most what was held)\nand gives the rest back. `state: working` means the provider has not closed the conversation yet and the Hub settles\nit within a minute. A second `end` changes nothing. A session nobody ends is settled at the longest by the sweep.",
+        "tags": [
+          "Receptionist"
+        ],
+        "x-wawu-built-by": "AITOOLS-06"
       }
     },
     "/api/hub/me/voice": {
@@ -45873,7 +46267,8 @@
               "voice/sample",
               "ai/input-audio",
               "ai/input-video",
-              "ai/input-image"
+              "ai/input-image",
+              "ai/input-doc"
             ]
           },
           "contentType": {
@@ -52133,7 +52528,11 @@
               "dialogue_per_min",
               "voice_clone_once",
               "video_music_per_track",
-              "stems_per_song"
+              "stems_per_song",
+              "audiobook_per_min",
+              "podcast_short",
+              "podcast_standard",
+              "podcast_long"
             ]
           },
           "units": {
@@ -52187,7 +52586,11 @@
               "dialogue_per_min",
               "voice_clone_once",
               "video_music_per_track",
-              "stems_per_song"
+              "stems_per_song",
+              "audiobook_per_min",
+              "podcast_short",
+              "podcast_standard",
+              "podcast_long"
             ]
           },
           "units": {
@@ -52752,6 +53155,109 @@
           "quoteToken"
         ]
       },
+      "CreateAudiobookJobDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The words to read. Never stored beyond the job: the Hub keeps them in a private file until the job ends.",
+            "minLength": 1,
+            "maxLength": 200000
+          },
+          "fileKey": {
+            "type": "string",
+            "description": "Instead of `text`: the key of a plain text file the person uploaded (`POST /uploads/presign` with the folder `ai/input-doc`, then `POST /uploads/confirm`).",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "voiceId": {
+            "type": "string",
+            "description": "A voice id from `GET /ai-tools`.",
+            "pattern": "^[a-z0-9_-]{1,40}$"
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (action `audiobook_per_min`, units = the minutes the characters make).",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "voiceId",
+          "quoteToken"
+        ]
+      },
+      "PodcastSourceDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200000
+          },
+          "url": {
+            "type": "string",
+            "description": "A web link: `https` only, at most 2,000 characters. The Hub never opens it.",
+            "maxLength": 4000
+          }
+        }
+      },
+      "CreatePodcastJobDto": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/PodcastSourceDto"
+          },
+          "mode": {
+            "description": "`conversation`: two voices talk it over. `bulletin`: one host reads it.",
+            "enum": [
+              "conversation",
+              "bulletin"
+            ],
+            "type": "string"
+          },
+          "voiceIds": {
+            "description": "Voice ids from `GET /ai-tools`: one for a bulletin, two for a conversation (host, then guest).",
+            "minItems": 1,
+            "maxItems": 2,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z0-9_-]{1,40}$"
+            }
+          },
+          "duration": {
+            "description": "How long: `short` (under 3 minutes), `standard` (about 3 to 7) or `long` (over 7).",
+            "enum": [
+              "short",
+              "standard",
+              "long"
+            ],
+            "type": "string"
+          },
+          "language": {
+            "type": "string",
+            "description": "Two letters from the list in `GET /ai-tools` (`input.podcast.languages`).",
+            "pattern": "^[A-Za-z]{2}$",
+            "minLength": 2,
+            "maxLength": 2
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (the action for the length chosen, units 1).",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "source",
+          "mode",
+          "voiceIds",
+          "duration",
+          "language",
+          "quoteToken"
+        ]
+      },
       "OwnVoiceConsentDto": {
         "type": "object",
         "properties": {
@@ -52777,6 +53283,113 @@
         },
         "required": [
           "outputIndex"
+        ]
+      },
+      "SaveReceptionistDto": {
+        "type": "object",
+        "properties": {
+          "businessName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "offer": {
+            "type": "string",
+            "description": "What the business offers, in the person's own words.",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "replyStyle": {
+            "type": "string",
+            "description": "How it should reply (tone, length). Optional.",
+            "maxLength": 1000
+          },
+          "language": {
+            "type": "string",
+            "description": "A code from `limits.languages`; English when left out.",
+            "pattern": "^[A-Za-z]{2}$",
+            "minLength": 2,
+            "maxLength": 2
+          },
+          "voiceId": {
+            "type": "string",
+            "description": "A voice id from `voices`; the first when left out.",
+            "pattern": "^[a-z0-9_-]{1,40}$"
+          }
+        },
+        "required": [
+          "businessName",
+          "offer"
+        ]
+      },
+      "AddKnowledgeDto": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "text",
+              "url",
+              "file"
+            ],
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 400000
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 4000
+          },
+          "fileKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        },
+        "required": [
+          "kind",
+          "name"
+        ]
+      },
+      "CreateReceptionistMessageDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "The person's message. Never logged by the Hub.",
+            "minLength": 1,
+            "maxLength": 20000
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (action `receptionist_message`, units 1).",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "message",
+          "quoteToken"
+        ]
+      },
+      "StartVoiceSessionDto": {
+        "type": "object",
+        "properties": {
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (action `receptionist_voice_per_min`, units = `limits.voiceMaxMinutes`).",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "quoteToken"
         ]
       },
       "NamePreviewDto": {
@@ -78735,6 +79348,79 @@
           "shapes"
         ]
       },
+      "AiToolPodcastView": {
+        "type": "object",
+        "properties": {
+          "modes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "conversation",
+                "bulletin"
+              ]
+            }
+          },
+          "maxVoices": {
+            "type": "number"
+          },
+          "durations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "enum": [
+                    "short",
+                    "standard",
+                    "long"
+                  ]
+                },
+                "action": {
+                  "type": "string"
+                },
+                "costPoints": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "id",
+                "action",
+                "costPoints"
+              ]
+            }
+          },
+          "maxLinkCharacters": {
+            "type": "number"
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "name"
+              ]
+            }
+          }
+        },
+        "required": [
+          "modes",
+          "maxVoices",
+          "durations",
+          "maxLinkCharacters",
+          "languages"
+        ]
+      },
       "AiVoiceView": {
         "type": "object",
         "properties": {
@@ -78779,7 +79465,10 @@
               "dialogue",
               "my-voice",
               "video-music",
-              "stems"
+              "stems",
+              "audiobook",
+              "podcast",
+              "receptionist"
             ]
           },
           "action": {
@@ -78797,6 +79486,7 @@
               "use",
               "minute",
               "track",
+              "message",
               "second"
             ]
           },
@@ -78818,6 +79508,7 @@
                   "chat",
                   "file",
                   "dialogue",
+                  "podcast",
                   "prompt"
                 ]
               },
@@ -78849,6 +79540,10 @@
                 "required": [
                   "maxVoices"
                 ],
+                "nullable": true
+              },
+              "podcast": {
+                "$ref": "#/components/schemas/AiToolPodcastView",
                 "nullable": true
               }
             },
@@ -78989,7 +79684,10 @@
               "dialogue",
               "my-voice",
               "video-music",
-              "stems"
+              "stems",
+              "audiobook",
+              "podcast",
+              "receptionist"
             ]
           },
           "state": {
@@ -79453,6 +80151,209 @@
           "format",
           "full",
           "suggestedTitle"
+        ]
+      },
+      "ReceptionistKnowledgeView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "text",
+              "file",
+              "url"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "bytes",
+          "createdAt"
+        ]
+      },
+      "ReceptionistView": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "setUp": {
+            "type": "boolean"
+          },
+          "details": {
+            "type": "object",
+            "properties": {
+              "businessName": {
+                "type": "string"
+              },
+              "offer": {
+                "type": "string"
+              },
+              "replyStyle": {
+                "type": "string"
+              },
+              "language": {
+                "type": "string"
+              },
+              "voiceId": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "businessName",
+              "offer",
+              "replyStyle",
+              "language",
+              "voiceId"
+            ],
+            "nullable": true
+          },
+          "knowledge": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReceptionistKnowledgeView"
+            }
+          },
+          "limits": {
+            "type": "object",
+            "properties": {
+              "docsMax": {
+                "type": "number"
+              },
+              "docMaxBytes": {
+                "type": "number"
+              },
+              "textMaxChars": {
+                "type": "number"
+              },
+              "messageMaxChars": {
+                "type": "number"
+              },
+              "voiceMaxMinutes": {
+                "type": "number"
+              },
+              "languages": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "name"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "docsMax",
+              "docMaxBytes",
+              "textMaxChars",
+              "messageMaxChars",
+              "voiceMaxMinutes",
+              "languages"
+            ]
+          },
+          "voices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiVoiceView"
+            }
+          }
+        },
+        "required": [
+          "available",
+          "setUp",
+          "details",
+          "knowledge",
+          "limits",
+          "voices"
+        ]
+      },
+      "ReceptionistRemovedView": {
+        "type": "object",
+        "properties": {
+          "receptionist": {
+            "$ref": "#/components/schemas/ReceptionistView"
+          },
+          "atProvider": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "gone"
+            ]
+          }
+        },
+        "required": [
+          "receptionist",
+          "atProvider"
+        ]
+      },
+      "VoiceSessionView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "failed",
+              "done",
+              "working"
+            ]
+          },
+          "signedUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "conversationId": {
+            "type": "string",
+            "nullable": true
+          },
+          "maxSeconds": {
+            "type": "number"
+          },
+          "heldPoints": {
+            "type": "number"
+          },
+          "keptPoints": {
+            "type": "number"
+          },
+          "minutes": {
+            "type": "number",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "state",
+          "signedUrl",
+          "conversationId",
+          "maxSeconds",
+          "heldPoints",
+          "keptPoints",
+          "minutes"
         ]
       },
       "MovieCardView": {

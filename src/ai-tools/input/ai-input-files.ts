@@ -63,8 +63,6 @@ export interface AiInputFiles {
     key: string,
     maxBytes: number,
   ): Promise<{ stream: Readable; bytes: number; contentType: string }>;
-  /** Keeps words the Hub holds for a job as a private file of the person's (AITOOLS-13); answers its key. */
-  putText?(wawuUserId: string, name: string, text: string): Promise<string>;
   /** Drops the file. Never throws. */
   remove(key: string): Promise<void>;
 }
@@ -131,16 +129,6 @@ export class StorageAiInputFiles implements AiInputFiles {
   ): Promise<{ stream: Readable; bytes: number; contentType: string }> {
     const o = await this.storage.openStored(key, maxBytes);
     return { stream: o.body, bytes: o.length, contentType: o.contentType };
-  }
-
-  putText(wawuUserId: string, name: string, text: string): Promise<string> {
-    return this.storage.putGenerated(
-      wawuUserId,
-      AI_INPUT_DOC_FOLDER,
-      name,
-      Buffer.from(text, 'utf8'),
-      'text/plain',
-    );
   }
 
   remove(key: string): Promise<void> {
@@ -424,12 +412,6 @@ export class AiInputService {
       releaseAccount();
       throw e;
     }
-  }
-
-  /** Keeps words for a job as a private file (AITOOLS-13); answers its key. */
-  keepText(wawuUserId: string, name: string, text: string): Promise<string> {
-    if (!this.files.putText) throw new Error('no place to keep words');
-    return this.files.putText(wawuUserId, name, text);
   }
 
   /** Reads words kept for a job. Throws when they cannot be read. */

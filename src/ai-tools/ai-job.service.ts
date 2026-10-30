@@ -742,7 +742,7 @@ export class AiJobService {
     jobId: string,
     text: string,
   ): Promise<string> {
-    return this.input.keepText(wawuUserId, `${jobId}-text`, text);
+    return this.audio.putText(wawuUserId, `${jobId}-text`, text);
   }
 
   /**

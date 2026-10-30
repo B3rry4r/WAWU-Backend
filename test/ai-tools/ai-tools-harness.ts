@@ -129,6 +129,12 @@ async function login(identifier: string): Promise<string> {
 /** The audio store of a spec: kept in memory, and it remembers what was put and removed. */
 export class MemoryAudioStore implements AiAudioStore {
   readonly files = new Map<string, Buffer>();
+  /** The input files whose `ai/input-doc` folder the kept words land in (AITOOLS-13). */
+  inputs: MemoryInputFiles | null = null;
+  putText(wawuUserId: string, name: string, text: string): Promise<string> {
+    if (!this.inputs) return Promise.reject(new Error('no input files'));
+    return Promise.resolve(this.inputs.keepNamed(wawuUserId, name, text));
+  }
   readonly removed: string[] = [];
   failPut = false;
   put(
@@ -404,9 +410,9 @@ export class MemoryInputFiles implements AiInputFiles {
     this.removed.push(key);
     return Promise.resolve();
   }
-  /** Words kept for a job as a private file (AITOOLS-13). */
-  putText(wawuUserId: string, name: string, text: string): Promise<string> {
-    return Promise.resolve(this.addNamed(wawuUserId, name, text));
+  /** Words kept for a job as a private file (AITOOLS-13), as the audio store writes them. */
+  keepNamed(wawuUserId: string, name: string, text: string): string {
+    return this.addNamed(wawuUserId, name, text);
   }
   private addNamed(wawuUserId: string, name: string, text: string): string {
     const key = `ai/input-doc/${wawuUserId}/${name}.txt`;
@@ -524,6 +530,7 @@ export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
   const mediaStore = new MemoryMediaStore();
   mediaStore.audio = store;
   const inputs = new MemoryInputFiles();
+  store.inputs = inputs;
   const voiceFiles = new MemoryVoiceFiles();
   const moduleRef: TestingModule = await Test.createTestingModule({
     imports: [

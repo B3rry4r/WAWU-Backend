@@ -256,8 +256,8 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     why: "a person's own text file sent to the Audiobook (AITOOLS-13), uploaded to ai/input-doc through the presign; deleted when the job ends, nothing is published",
   },
   'POST ai-tools/podcast/jobs': {
-    files: ['url'],
-    why: 'a web page the Podcast maker is made from (AITOOLS-13): an https link the provider reads, never a file of the person\'s and never opened by the Hub; nothing is published',
+    files: ['source.url'],
+    why: "a web page the Podcast maker is made from (AITOOLS-13): an https link the provider reads, never a file of the person's and never opened by the Hub; nothing is published",
   },
   'POST ai-tools/receptionist/knowledge': {
     files: ['fileKey', 'url'],
