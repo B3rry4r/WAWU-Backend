@@ -168,11 +168,15 @@ export interface StandinHandle {
       textOnlyOverride: boolean;
       promptChars: number;
       promptHasGuardrail: boolean;
+      /** REC-PRIVACY: `platform_settings.privacy` as sent (null when none was). */
+      privacy: Record<string, unknown> | null;
     }[];
     agentPatches: {
       id: string;
       knowledge: string[];
       language: string | null;
+      /** REC-PRIVACY: `platform_settings.privacy` as sent (null when none was). */
+      privacy?: Record<string, unknown> | null;
     }[];
     deletedAgents: string[];
     knowledge: {
@@ -193,6 +197,8 @@ export interface StandinHandle {
       pongs: number;
     }[];
     deletedConversations: string[];
+    /** REC-PRIVACY: how many of the next conversation deletes the provider refuses with a 500. */
+    conversationDeleteRefusals: number;
   };
   /** Podcast projects, agents, documents and conversations the provider still holds (AITOOLS-13, AITOOLS-06). */
   openPodcasts: () => number;

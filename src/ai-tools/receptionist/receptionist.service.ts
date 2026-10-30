@@ -33,6 +33,11 @@ import {
 } from '../tools/receptionist.tool';
 import { podcastLinkOk } from '../tools/podcast.tool';
 import {
+  markerOf,
+  NOT_STORED_YET_MS,
+  ProviderCopyService,
+} from '../voice/provider-copy.service';
+import {
   AI_VOICE_PROVIDER,
   AiVoiceProviderError,
   type AiVoiceProvider,
@@ -124,6 +129,8 @@ export class ReceptionistService {
     private readonly spend: PointsSpendService,
     private readonly points: PointsService,
     private readonly quotes: PointsJobQuoteToken,
+    // REC-PRIVACY: a conversation the provider keeps is deleted by the same note-and-retry path as every other copy.
+    private readonly copies: ProviderCopyService,
   ) {}
 
   /** True while the tool is listed and the provider is set up. */
@@ -484,6 +491,9 @@ export class ReceptionistService {
         where: { id: d.id },
       });
     }
+    // REC-PRIVACY: every conversation of the person's the provider may still keep (a text chat or a talk whose delete did
+    // not go through) is deleted too; one that cannot be leaves its note on the row and answers `pending`.
+    if (await this.deleteKeptConversations(wawuUserId)) pending = true;
     const agent = await this.prisma.receptionistAgent.findUnique({
       where: { wawuUserId },
     });
@@ -499,6 +509,66 @@ export class ReceptionistService {
       receptionist: await this.view(wawuUserId),
       atProvider: pending ? 'pending' : 'gone',
     };
+  }
+
+  /**
+   * Deletes every conversation the Hub still has a note of for this person: `conversation:<id>` (a text chat, or a talk
+   * once it ended) and `convo:<id>` (a talk that ended but whose note was not yet swapped). A row whose job is still
+   * `working` (a talk in progress, or an answer not yet given) is left alone and counts as left: its conversation is the
+   * only read of the talk's real length, so deleting it would make the settle step charge the longest talk, or a talk
+   * the provider never closed. The settle step (or the end of the job) ends it and deletes its conversation, and asking
+   * again then finds nothing. Answers true while one is left. A 404 counts as gone only once the row is older than
+   * `NOT_STORED_YET_MS` (the provider may answer 404 for a conversation it has not stored yet).
+   */
+  private async deleteKeptConversations(wawuUserId: string): Promise<boolean> {
+    let pending = false;
+    const rows = await this.prisma.aiToolJob.findMany({
+      where: {
+        wawuUserId,
+        OR: [
+          { providerRef: { startsWith: 'conversation:' } },
+          {
+            tool: RECEPTIONIST_VOICE_ACTION,
+            providerRef: { startsWith: 'convo:' },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        providerRef: true,
+        state: true,
+        createdAt: true,
+        finishedAt: true,
+      },
+      orderBy: { createdAt: 'asc' },
+      take: SETTLE_PAGE * SETTLE_MAX_PAGES,
+    });
+    for (const row of rows) {
+      if (row.state === 'working') {
+        pending = true;
+        continue;
+      }
+      const id = row.providerRef?.startsWith('conversation:')
+        ? row.providerRef.slice('conversation:'.length)
+        : conversationOf(row.providerRef);
+      if (!id || !/^[A-Za-z0-9_-]{1,100}$/.test(id)) continue;
+      const out = await this.voice.deleteConversation(id);
+      const age = Date.now() - (row.finishedAt ?? row.createdAt).getTime();
+      if (
+        out === 'failed' ||
+        (out === 'not_found' && age < NOT_STORED_YET_MS)
+      ) {
+        pending = true;
+        continue;
+      }
+      await this.prisma.aiToolJob
+        .updateMany({
+          where: { id: row.id, providerRef: row.providerRef },
+          data: { providerRef: null },
+        })
+        .catch(() => undefined);
+    }
+    return pending;
   }
 
   /** Account deletion: every agent and document of the person is deleted at the provider first; throws while one is left (the purge then tries again). */
@@ -779,6 +849,7 @@ export class ReceptionistService {
         if (read.status === 'failed') {
           // The provider never ran a talk: nothing is kept.
           await this.endWithoutCharge(job, 'provider_failed');
+          await this.dropConversation(job.id, convo);
           return;
         }
         if (read.status !== 'done' || read.seconds === null) {
@@ -799,9 +870,38 @@ export class ReceptionistService {
       );
       return;
     }
-    // The provider keeps none of the person's words (best effort; the account purge covers the rest).
-    if (convo)
-      await this.voice.deleteConversation(convo).catch(() => undefined);
+    // The provider keeps none of the person's words.
+    if (convo) await this.dropConversation(job.id, convo);
+  }
+
+  /**
+   * The provider keeps none of the person's words (REC-PRIVACY): a talk that has ended (settled or failed) is noted on
+   * its row as a conversation to delete (`conversation:<id>`, in place of the talk's own `convo:<id>` note), deleted now,
+   * tried again over the next minute and then every minute by the copy sweep, until it is gone; DELETE /receptionist and
+   * the account purge delete any still noted. Never throws. A row still open is left alone (its note is the talk's own).
+   */
+  private async dropConversation(jobId: string, convo: string): Promise<void> {
+    try {
+      const copy = { kind: 'conversation' as const, id: convo };
+      await this.prisma.aiToolJob.updateMany({
+        where: {
+          id: jobId,
+          state: { not: 'working' },
+          providerRef: { startsWith: 'convo:' },
+        },
+        data: { providerRef: markerOf(copy) },
+      });
+      const row = await this.prisma.aiToolJob.findUnique({
+        where: { id: jobId },
+        select: { state: true },
+      });
+      if (!row || row.state === 'working') return;
+      await this.copies.discard(jobId, copy);
+    } catch {
+      this.logger.warn(
+        `receptionist session ${jobId}: its conversation was not noted for deletion yet`,
+      );
+    }
   }
 
   /** The held points become the real minutes: the rest goes back, all in one transaction. */
@@ -883,9 +983,9 @@ export class ReceptionistService {
         where: { id: job.id },
         select: { state: true },
       });
-      // The provider keeps none of the person's words (best effort, as after a settle).
+      // The provider keeps none of the person's words (noted, tried again, as after a settle).
       if (after && after.state !== 'working')
-        await this.voice.deleteConversation(convo).catch(() => undefined);
+        await this.dropConversation(job.id, convo);
     }
   }
 
@@ -984,6 +1084,22 @@ export class ReceptionistService {
         }
         if (rows.length < SETTLE_PAGE) break;
         last = rows[rows.length - 1];
+      }
+      // REC-PRIVACY: a talk that ended but whose conversation was not yet noted for deletion (the Hub stopped between the
+      // two steps) is noted and deleted now.
+      const ended = await this.prisma.aiToolJob.findMany({
+        where: {
+          tool: RECEPTIONIST_VOICE_ACTION,
+          state: { not: 'working' },
+          providerRef: { startsWith: 'convo:' },
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: SETTLE_PAGE,
+        select: { id: true, providerRef: true },
+      });
+      for (const row of ended) {
+        const convo = conversationOf(row.providerRef);
+        if (convo) await this.dropConversation(row.id, convo);
       }
     } finally {
       this.settling = false;

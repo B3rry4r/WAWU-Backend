@@ -904,7 +904,16 @@ export class AiJobService {
         await this.fail(job, holdId, 'provider_failed');
         return;
       }
-      input = { file: NO_FILE, chat };
+      input = {
+        file: NO_FILE,
+        chat,
+        // REC-PRIVACY: the chat's conversation is noted on the job as soon as the provider names it, so a run that dies
+        // still knows to delete it; `noted` is set even when the note did not reach the row, so the end of the job tries.
+        noteCopy: async (copy) => {
+          noted = copy;
+          return this.copies.note(job.id, copy);
+        },
+      };
     } else if (req.kind === 'file') {
       try {
         input = {

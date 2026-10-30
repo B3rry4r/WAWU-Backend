@@ -291,6 +291,8 @@ function startVoiceStandin({
     signedUrls: 0,
     chats: [],
     deletedConversations: [],
+    /** REC-PRIVACY: how many of the next conversation deletes the provider refuses with a 500 (a spec sets it). */
+    conversationDeleteRefusals: 0,
   };
   // AITOOLS-13: project id -> { readyAt, marks }.
   const podcastProjects = new Map();
@@ -1495,6 +1497,9 @@ function startVoiceStandin({
     voice: body.conversation_config?.tts?.voice_id ?? null,
     knowledge: (body.conversation_config?.agent?.prompt?.knowledge_base ?? []).map((k) => k.id),
     textOnlyOverride: body.platform_settings?.overrides?.conversation_config_override?.conversation?.text_only === true,
+    // REC-PRIVACY: the privacy settings as last sent (null when none were); `socketId` marks an agent whose link names no conversation.
+    privacy: body.platform_settings?.privacy ?? null,
+    socketId: /\[\[socket-id\]\]/.test(`${body.name ?? ''} ${body.conversation_config?.agent?.prompt?.prompt ?? ''}`),
   });
   function agentCreate(req, res, _m, raw) {
     if (!authed(req, res)) return;
@@ -1521,7 +1526,7 @@ function startVoiceStandin({
     const shape = agentShape(body);
     if (`${shape.name} ${shape.prompt}`.includes('[[fail]]')) return reply(res, 500, 'application/json', '{"detail":"down"}');
     agentsById.set(id, shape);
-    state.agentPatches.push({ id, knowledge: shape.knowledge, language: shape.language });
+    state.agentPatches.push({ id, knowledge: shape.knowledge, language: shape.language, privacy: shape.privacy });
     return reply(res, 200, 'application/json', JSON.stringify({ agent_id: id }));
   }
   function agentDelete(req, res, m) {
@@ -1586,7 +1591,8 @@ function startVoiceStandin({
     const agent = url.searchParams.get('agent_id');
     if (!agent || !agentsById.has(agent)) return reply(res, 404, 'application/json', '{"detail":"no such agent"}');
     state.signedUrls += 1;
-    const withId = url.searchParams.get('include_conversation_id') === 'true';
+    // An agent marked [[socket-id]] names its conversation on the socket only (the link carries none).
+    const withId = url.searchParams.get('include_conversation_id') === 'true' && !agentsById.get(agent).socketId;
     const convo = `convo-${++convoSeq}`;
     if (withId) conversations.set(convo, { agent, status: 'in-progress', seconds: null });
     const q = new URLSearchParams({ agent_id: agent, sig: `sig-${convoSeq}` });
@@ -1608,6 +1614,10 @@ function startVoiceStandin({
   function conversationDelete(req, res, m) {
     if (!authed(req, res)) return;
     const id = decodeURIComponent(m[1]);
+    if (state.conversationDeleteRefusals > 0) {
+      state.conversationDeleteRefusals -= 1;
+      return reply(res, 500, 'application/json', '{"detail":"try again"}');
+    }
     if (!conversations.has(id)) return reply(res, 404, 'application/json', '{"detail":"no such conversation"}');
     conversations.delete(id);
     state.deletedConversations.push(id);
@@ -1644,7 +1654,12 @@ function startVoiceStandin({
       if (event.type === 'conversation_initiation_client_data') {
         textOnly = event.conversation_config_override?.conversation?.text_only === true;
         record.textOnly = textOnly && Boolean(agent?.textOnlyOverride);
-        ws.send(JSON.stringify({ type: 'conversation_initiation_metadata', conversation_initiation_metadata_event: { conversation_id: 'x' } }));
+        let convo = url.searchParams.get('conversation_id');
+        if (!convo && agent?.socketId) {
+          convo = `convo-${++convoSeq}`;
+          conversations.set(convo, { agent: agentId, status: 'in-progress', seconds: null });
+        }
+        ws.send(JSON.stringify({ type: 'conversation_initiation_metadata', conversation_initiation_metadata_event: { conversation_id: convo ?? 'x' } }));
       } else if (event.type === 'user_message') {
         const text = String(event.text ?? '');
         record.chars = text.length;

@@ -33,6 +33,7 @@ import {
   type StartedPodcast,
   type StartPodcastRequest,
   type VoiceSessionLink,
+  AGENT_PRIVACY,
   type CopyPresence,
   type CopyRemoval,
   type DubOutputs,
@@ -154,6 +155,8 @@ export function sampleLinksFrom(
 const DUB_LANGUAGE_TAG = /^[a-z]{2,3}(?:-[A-Za-z]{2,4})?$/;
 /** The shape of an id the provider gives (a project, a language): kept to this before it is put in a path or a note. */
 const PROVIDER_ID = /^[A-Za-z0-9_-]{1,100}$/;
+/** What one text chat with a Receptionist answers (REC-PRIVACY: with the conversation the provider now keeps). */
+type Asked = { reply: string; conversationId: string };
 /** The most a subtitle file may be: a request bound, not a product figure. */
 const MAX_SUBTITLE_BYTES = 2 * 1024 * 1024;
 const DUB_STATUSES: readonly DubStatus[] = [
@@ -1990,6 +1993,8 @@ export class HttpVoiceProvider implements AiVoiceProvider {
         overrides: {
           conversation_config_override: { conversation: { text_only: true } },
         },
+        // REC-PRIVACY: the provider keeps nothing longer than it must (sent on every create and every update).
+        privacy: { ...AGENT_PRIVACY },
       },
     };
   }
@@ -2148,11 +2153,25 @@ export class HttpVoiceProvider implements AiVoiceProvider {
 
   async askAgent(
     req: { agentId: string; message: string; earlier: readonly ChatTurn[] },
-    opts: { signal?: AbortSignal } = {},
-  ): Promise<{ reply: string }> {
+    opts: {
+      signal?: AbortSignal;
+      onConversation?: (conversationId: string) => void | Promise<void>;
+    } = {},
+  ): Promise<{ reply: string; conversationId: string }> {
     if (!this.agentsConfigured || !PROVIDER_ID.test(req.agentId))
       throw new AiVoiceProviderError('rejected', 'agents are not available');
-    const link = await this.signedLink(req.agentId, false, opts.signal);
+    // REC-PRIVACY: the link is asked for with the conversation's id (the API file: `include_conversation_id`), so the Hub
+    // can delete the chat afterwards. A provider that names none here may still name it on the socket (below).
+    const link = await this.signedLink(req.agentId, true, opts.signal, true);
+    let conversationId = link.conversationId;
+    const told = async (id: string): Promise<void> => {
+      try {
+        await opts.onConversation?.(id);
+      } catch {
+        // noting a conversation must never stop the chat
+      }
+    };
+    if (conversationId !== '') await told(conversationId);
     const url = this.socketUrl(link.signedUrl);
     // The earlier messages go on with the new one as plain words: the socket takes one `user_message` at a time.
     const text =
@@ -2161,13 +2180,13 @@ export class HttpVoiceProvider implements AiVoiceProvider {
         : `${req.earlier
             .map((t) => `${t.role === 'person' ? 'Person' : 'You'}: ${t.text}`)
             .join('\n')}\n\nThe person now writes: ${req.message}`;
-    return new Promise<{ reply: string }>((resolve, reject) => {
+    return new Promise<Asked>((resolve, reject) => {
       let settled = false;
       const socket = new WebSocket(url, {
         handshakeTimeout: 15_000,
         maxPayload: 1 << 20,
       });
-      const end = (out: { reply: string } | AiVoiceProviderError) => {
+      const end = (out: Asked | AiVoiceProviderError) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
@@ -2194,7 +2213,9 @@ export class HttpVoiceProvider implements AiVoiceProvider {
         socket.send(
           JSON.stringify({
             type: 'conversation_initiation_client_data',
-            conversation_config_override: { conversation: { text_only: true } },
+            conversation_config_override: {
+              conversation: { text_only: true },
+            },
           }),
         );
       });
@@ -2219,6 +2240,19 @@ export class HttpVoiceProvider implements AiVoiceProvider {
             ?.event_id;
           socket.send(JSON.stringify({ type: 'pong', event_id: id }));
         } else if (event.type === 'conversation_initiation_metadata') {
+          // A provider that did not name the conversation with the link names it here.
+          const named = (
+            event.conversation_initiation_metadata_event as
+              { conversation_id?: unknown } | undefined
+          )?.conversation_id;
+          if (
+            conversationId === '' &&
+            typeof named === 'string' &&
+            PROVIDER_ID.test(named)
+          ) {
+            conversationId = named;
+            void told(named);
+          }
           ask();
         } else if (event.type === 'agent_response') {
           const reply = (
@@ -2226,7 +2260,7 @@ export class HttpVoiceProvider implements AiVoiceProvider {
               { agent_response?: unknown } | undefined
           )?.agent_response;
           if (typeof reply === 'string' && reply.trim() !== '')
-            end({ reply: reply.trim() });
+            end({ reply: reply.trim(), conversationId });
           else end(new AiVoiceProviderError('unavailable', 'empty reply'));
         } else if (event.type === 'error') {
           end(new AiVoiceProviderError('rejected', 'the agent refused'));
@@ -2239,6 +2273,8 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     agentId: string,
     withConversation: boolean,
     outer?: AbortSignal,
+    /** A text chat can still go on without the id on the link: the socket names it (askAgent). */
+    idOptional = false,
   ): Promise<VoiceSessionLink> {
     const raw = (await this.jsonCall(
       'GET',
@@ -2258,11 +2294,12 @@ export class HttpVoiceProvider implements AiVoiceProvider {
         id = undefined;
       }
     }
-    if (withConversation && (typeof id !== 'string' || !PROVIDER_ID.test(id)))
+    const named = typeof id === 'string' && PROVIDER_ID.test(id);
+    if (withConversation && !named && !idOptional)
       throw new AiVoiceProviderError('unavailable', 'no conversation id');
     return {
       signedUrl: raw.signed_url,
-      conversationId: typeof id === 'string' ? id : '',
+      conversationId: named ? (id as string) : '',
     };
   }
 
