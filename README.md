@@ -764,6 +764,17 @@ before that date may carry none. A tier also belongs to whoever bought it first,
 order id (`StoreSubscription`, unique per platform and Google purchase token or Apple
 `originalTransactionId`), and the stores' notices follow that holder.
 
+`GET /store/products` lists only the rows of `StoreProduct`, so a product that is not a row is not
+sold. The tiers, points packs, credits packs and the upload pack are rows of migration
+`20261221090000_store_seed_products` (STORE-SEED, 30 Oct 2026), ten products under the same ids
+in both stores, each `active`: `wawu.tier.verify|plus|founding` (kind `tier`, `grants.tierId`),
+`wawu.points.s|m|l` (`points`, `grants.packId`), `wawu.credits.starter|popular|pro` (`credits`,
+`grants.pack`, `referenceKobo` the pack's wallet price) and `wawu.more.products.5`
+(`extra_products`, `grants.extraProducts` 5). Points, credits and tiers store the plan entry's id,
+so the count each gives is read from the live plan. Edit them in `admin/store/products`; the
+migration leaves a row that already exists as it is, and its `rollback.sql` removes only the rows
+it made that no purchase names and no admin has touched.
+
 The grant is the wallet paths' own code (`PointsService.grant`, `TierGrantService`,
 `addCreditsWithLot`, `grantPassPeriod`), run in one short transaction keyed by
 `(platform, storeTransactionId)`. A refund or revocation takes back what is unspent. The

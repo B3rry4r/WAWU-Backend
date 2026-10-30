@@ -1136,15 +1136,16 @@ PROVISIONAL `DV2-BOARD-FIGURE`) times the minutes. The premium dub is not built
   the read gate, and the provider run streams the file behind the same gate (about
   64 KB held a job, one place per account).
 
-## 15. The tier offer after sign-up (TIER-OFFER, R-94)
+## 15. The tier offer (TIER-OFFER, R-94; every start, R-105)
 
-A full screen that offers the three tiers (R-89) once, right after sign-up, before the person reaches Home. The Hub decides who is shown it and remembers that it was shown, so it is once across phones. The tiers, prices and lengths on the screen are `GET /plans`; the offer adds no figure.
+A full screen that offers the three tiers (R-89) right after sign-up, before the person reaches Home, and then on every app start until they hold a tier (R-105, owner, 30 Oct 2026; the setting below turns that off for once-per-person, R-94's first ruling). The Hub decides who is shown it and remembers that it was shown, so with the setting off it is once across phones. The tiers, prices and lengths on the screen are `GET /plans`; the offer adds no figure.
 
 | Route | Answers |
 |---|---|
 | `GET /me/tier-offer` | `{ show, closeButton }`. `no-store`. Signed in only; the person is the token's. |
 | `POST /me/tier-offer/seen` | `{ seenAt }`. The app calls it when the offer is drawn. The first write wins; a second one (another phone, a retry) returns the same `seenAt`. |
 
-- `show` is true when the person has a creator account (a professional is a creator account), has not been shown the offer, and holds no running tier (`active` or `ending`). A fan or buyer account, and a person the Hub has no profile for yet, get false and are not marked: they are asked again, and a profile written later is then shown the offer. A tier that has `ended` does not stop it.
+- `show` is true when the Hub has a profile for the person (any account type: the Hub lets any account hold a tier, so a fan or buyer account is offered it like a creator or a professional) and they hold no running tier (`active` or `ending`). With `tier_offer.every_start_on` ON (the default) that is the whole rule: it is true on every ask, whether or not the person was shown the offer before, until a tier runs. With it OFF the person must also not have been shown the offer (`POST /me/tier-offer/seen` was never called for them). A person the Hub has no profile for yet gets false and is not marked: they are asked again, and a profile written later is then shown the offer. A tier that has `ended` does not stop it.
 - `closeButton` is the admin setting `tier_offer.close_button_on`, "Show the close button on the tier offer" (1 is on, 0 is off; default 1; group "Tier offer" in the dashboard's Settings). On: the app draws the close X, top right. Off: it draws a "Not now" text button at the bottom instead. The screen always has one of the two. It is sent whatever `show` says.
+- `tier_offer.every_start_on` is the admin setting "Show the tier offer on every app start" (1 is on, 0 shows it to a person once; default 1; group "Tier offer" in the dashboard's Settings), next to the close-button setting. `POST /me/tier-offer/seen` writes the row whichever way it is set.
 - Stored in `TierOfferSeen` (migration `20261208090000_tier_offer_seen`): one row per person, `seenAt`. A table of its own because `GET /users/me` returns the whole `UserProfile` row. OWNED in the purge map and in the person's data export. Its rollback refuses while any row exists.

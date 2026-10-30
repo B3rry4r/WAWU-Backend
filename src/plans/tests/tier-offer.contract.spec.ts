@@ -22,12 +22,20 @@ import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import { PLANS_CONFIG, type PlansConfig } from '../plans-config';
 import { PlansModule } from '../plans.module';
 import type { TierOfferSeenView, TierOfferView } from '../plans-view.type';
-import { TIER_OFFER_CLOSE_SETTING } from '../tier-offer.service';
+import {
+  TIER_OFFER_CLOSE_SETTING,
+  TIER_OFFER_EVERY_START_SETTING,
+} from '../tier-offer.service';
 
 /**
  * TIER-OFFER (R-94) over HTTP: GET /me/tier-offer and POST /me/tier-offer/seen on the real PlansModule, a real database and real
  * RS256 tokens. Who is shown the offer (a creator account that was never shown it and holds no running tier), that "shown" is
  * written once and holds for the person on any phone, and that the admin setting decides how the offer closes.
+ *
+ * STORE-SEED (R-105, owner, 30 Oct 2026) changes two things R-94 ruled, and the specs below say so where they moved:
+ * the offer comes on every app start until the person holds a tier (the admin setting `tier_offer.every_start_on`, on by
+ * default; the "shown once" specs run with it off), and it goes to every account type, because the Hub lets any account
+ * hold a tier.
  */
 
 const DAY = 86_400_000;
@@ -121,6 +129,21 @@ describe('the tier offer (TIER-OFFER, R-94) over HTTP', () => {
     await settings.refresh();
   };
 
+  const setEvery = async (value: number | null) => {
+    if (value === null) {
+      await prisma.planSetting.deleteMany({
+        where: { key: TIER_OFFER_EVERY_START_SETTING },
+      });
+    } else {
+      await prisma.planSetting.upsert({
+        where: { key: TIER_OFFER_EVERY_START_SETTING },
+        create: { key: TIER_OFFER_EVERY_START_SETTING, value },
+        update: { value },
+      });
+    }
+    await settings.refresh();
+  };
+
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
@@ -149,11 +172,13 @@ describe('the tier offer (TIER-OFFER, R-94) over HTTP', () => {
     settings = app.get(PlanSettingsService);
     config = app.get<PlansConfig>(PLANS_CONFIG);
     await setClose(null);
+    await setEvery(null);
   });
 
   afterAll(async () => {
     const where = { wawuUserId: { in: users } };
     await setClose(null);
+    await setEvery(null);
     await prisma.tierOfferSeen.deleteMany({ where });
     await prisma.makerTier.deleteMany({ where });
     await prisma.userProfile.deleteMany({ where });
@@ -175,8 +200,12 @@ describe('the tier offer (TIER-OFFER, R-94) over HTTP', () => {
       expect(await offer(id)).toEqual({ show: true, closeButton: true });
     });
 
-    it('a fan or buyer account is never shown it (tiers unlock selling)', async () => {
+    // R-105 replaces R-94's "creator accounts only": the Hub lets any account hold a tier (a tier row is keyed on the person
+    // alone and no tier route checks the account type), so a fan or buyer account is offered it like anyone else.
+    it('a fan or buyer account is shown it like a creator, until they hold a running tier (R-105)', async () => {
       const id = await person(AccountType.user);
+      expect(await offer(id)).toEqual({ show: true, closeButton: true });
+      await holdTier(id, 300);
       expect(await offer(id)).toEqual({ show: false, closeButton: true });
     });
 
@@ -209,7 +238,14 @@ describe('the tier offer (TIER-OFFER, R-94) over HTTP', () => {
     });
   });
 
-  describe('shown once, across devices', () => {
+  describe('shown once, across devices (tier_offer.every_start_on off, R-94)', () => {
+    beforeAll(async () => {
+      await setEvery(0);
+    });
+    afterAll(async () => {
+      await setEvery(null);
+    });
+
     it('after the app says it was drawn, the Hub never offers it again, whichever phone asks', async () => {
       const id = await person();
       expect((await offer(id)).show).toBe(true);
@@ -233,7 +269,7 @@ describe('the tier offer (TIER-OFFER, R-94) over HTTP', () => {
       expect((await offer(b)).show).toBe(true);
     });
 
-    it('a fan who is marked as having seen it is still only a fan: nothing else changes', async () => {
+    it('a fan or buyer who is marked as having seen it is not offered it again either', async () => {
       const id = await person(AccountType.user);
       await seen(id);
       expect(await offer(id)).toEqual({ show: false, closeButton: true });
@@ -256,8 +292,14 @@ describe('the tier offer (TIER-OFFER, R-94) over HTTP', () => {
 
     it('is told to a person who is not shown the offer too, so the answer never depends on who asks', async () => {
       await setClose(0);
-      const fan = await person(AccountType.user);
-      expect(await offer(fan)).toEqual({ show: false, closeButton: false });
+      const noProfile = await person(null);
+      expect(await offer(noProfile)).toEqual({
+        show: false,
+        closeButton: false,
+      });
+      const holder = await person();
+      await holdTier(holder, 300);
+      expect(await offer(holder)).toEqual({ show: false, closeButton: false });
     });
 
     it('is a registry setting an admin can change, 1 or 0 only, listed by the admin view', () => {
@@ -272,6 +314,106 @@ describe('the tier offer (TIER-OFFER, R-94) over HTTP', () => {
         (d) => d.key === TIER_OFFER_CLOSE_SETTING,
       );
       expect(registered?.default).toBe(1);
+      const parse = (raw: unknown) => registered!.parse(raw);
+      expect(parse(0)).toBe(0);
+      expect(parse(1)).toBe(1);
+      for (const bad of [2, -1, 0.5, '1', null, true]) {
+        expect(() => parse(bad)).toThrow(SettingInvalid);
+      }
+    });
+  });
+
+  describe('on every app start, until a tier is held (STORE-SEED, R-105)', () => {
+    afterEach(async () => {
+      await setEvery(null);
+    });
+
+    it('is on by default: a person who was shown the offer is offered it again, start after start', async () => {
+      const id = await person();
+      expect(await offer(id)).toEqual({ show: true, closeButton: true });
+      await seen(id);
+      // The app has drawn it once; the next start asks again, and again.
+      expect((await offer(id)).show).toBe(true);
+      await seen(id);
+      expect((await offer(id)).show).toBe(true);
+      // The row is still written, once, and nothing else reads it differently.
+      expect(
+        await prisma.tierOfferSeen.count({ where: { wawuUserId: id } }),
+      ).toBe(1);
+    });
+
+    it('stops the moment a tier runs, and comes back when it has ended', async () => {
+      const id = await person();
+      await seen(id);
+      expect((await offer(id)).show).toBe(true);
+      await holdTier(id, 300);
+      expect((await offer(id)).show).toBe(false);
+      await prisma.makerTier.update({
+        where: { wawuUserId: id },
+        data: { activeUntil: new Date(Date.now() - DAY) },
+      });
+      expect((await offer(id)).show).toBe(true);
+    });
+
+    it('goes to every account type: a creator and a buyer, both after they were shown it', async () => {
+      const creator = await person(AccountType.creator);
+      const buyer = await person(AccountType.user);
+      await seen(creator);
+      await seen(buyer);
+      expect((await offer(creator)).show).toBe(true);
+      expect((await offer(buyer)).show).toBe(true);
+    });
+
+    it('still asks nothing of a person the Hub has no profile for, and marks nothing', async () => {
+      const id = await person(null);
+      expect((await offer(id)).show).toBe(false);
+      expect(
+        await prisma.tierOfferSeen.findUnique({ where: { wawuUserId: id } }),
+      ).toBeNull();
+    });
+
+    it("switched off, it is once per person again (today's R-94 behaviour), and switching it on brings the offer back", async () => {
+      const id = await person();
+      await setEvery(0);
+      expect((await offer(id)).show).toBe(true);
+      await seen(id);
+      expect((await offer(id)).show).toBe(false);
+      await setEvery(1);
+      expect((await offer(id)).show).toBe(true);
+    });
+
+    it('does not change how the offer closes: both settings are read on their own', async () => {
+      const id = await person();
+      await setClose(0);
+      try {
+        await seen(id);
+        expect(await offer(id)).toEqual({ show: true, closeButton: false });
+        await setEvery(0);
+        expect(await offer(id)).toEqual({ show: false, closeButton: false });
+      } finally {
+        await setClose(null);
+      }
+    });
+
+    it('is a registry setting an admin can change, 1 or 0 only, in the "Tier offer" group beside the close button, on by default', () => {
+      const described = settings.describe().settings;
+      const def = described.find(
+        (s) => s.key === TIER_OFFER_EVERY_START_SETTING,
+      );
+      expect(TIER_OFFER_EVERY_START_SETTING).toBe('tier_offer.every_start_on');
+      expect(def).toBeDefined();
+      expect(def?.label).toContain('Show the tier offer on every app start');
+      expect(def?.value).toBe(1);
+      expect(def?.group).toBe('Tier offer');
+      expect(
+        described.find((s) => s.key === TIER_OFFER_CLOSE_SETTING)?.group,
+      ).toBe('Tier offer');
+      const seed = loadPlanSettingsDefaults();
+      const registered = buildRegistry(seed.plans, seed.extras).find(
+        (d) => d.key === TIER_OFFER_EVERY_START_SETTING,
+      );
+      expect(registered?.default).toBe(1);
+      expect(registered?.label).not.toContain('\u2014');
       const parse = (raw: unknown) => registered!.parse(raw);
       expect(parse(0)).toBe(0);
       expect(parse(1)).toBe(1);

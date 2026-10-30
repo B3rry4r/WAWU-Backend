@@ -34,6 +34,9 @@ export class TierOfferController {
   @Post('seen')
   @HttpCode(HttpStatus.OK)
   seen(@CurrentUser() user: WawuJwtClaims): Promise<TierOfferSeenView> {
+    // R-105: the row is written whichever way `tier_offer.every_start_on` is set. Only with it off does the row
+    // stop the offer; with it on (the default) the offer comes on every start. The summary above is the
+    // contract's published text (a fenced file), so it is left as it was.
     return this.offer.markSeen(user.sub);
   }
 }
