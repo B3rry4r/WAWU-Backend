@@ -11,7 +11,7 @@ import {
 import { checkFileLimits } from './file-limits';
 import { requireAtMostSeconds, requireKind } from './file-checks';
 
-/** The plan's action a Split a song job is priced by (a flat price a song, PROVISIONAL `STUDIO2-PLACEHOLDER`). */
+/** The plan's action a Split a song job is priced by (a flat price a song, PROVISIONAL, the owner sets it). */
 export const STEMS_ACTION = 'stems_per_song';
 export const STEMS_MAX_SECONDS_SETTING = 'ai.stems_max_seconds';
 

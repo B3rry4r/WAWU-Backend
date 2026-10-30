@@ -1580,10 +1580,11 @@ const OUTPUT_LABELS: Readonly<Record<string, string>> = {
   'photo-edit': 'Edited photo',
   video: 'Video',
   'talking-photo': 'Talking photo',
-  'voice-changer': 'Voice changer',
+  'voice-changer': 'Changed voice',
   dialogue: 'Dialogue',
   'video-music': 'Music for a video',
-  stems: 'Song part',
+  stems: 'Split song',
+  'my-voice': 'Saved voice',
 };
 function outputLabelOf(toolId: string | undefined): string {
   return (toolId && OUTPUT_LABELS[toolId]) || 'Result';

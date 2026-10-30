@@ -278,7 +278,7 @@ export interface SavedVoiceView {
   /** The words the person agrees to, with their own name. `POST /ai-tools/my-voice` takes them back unchanged as `consentLine`. */
   consent: { line: string };
   /** How to send the recording (through `POST /uploads/presign` with this folder, then `POST /uploads/confirm`) and what it must be. */
-  sample: {
+  recording: {
     folder: string;
     accepts: string[];
     minSeconds: number;

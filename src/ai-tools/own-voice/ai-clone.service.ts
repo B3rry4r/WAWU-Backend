@@ -11,10 +11,10 @@ import {
   OWN_VOICE_NAME_REQUIRED_MESSAGE,
 } from '../ai-tools-error';
 import type { SavedVoiceView } from '../ai-tools-view.type';
-import { CLONE_SAMPLE_MAX_BYTES } from '../tools/file-checks';
+import { CLONE_RECORDING_MAX_BYTES } from '../tools/file-checks';
 import {
-  CLONE_SAMPLE_MAX_SECONDS_SETTING,
-  CLONE_SAMPLE_MIN_SECONDS_SETTING,
+  CLONE_RECORDING_MAX_SECONDS_SETTING,
+  CLONE_RECORDING_MIN_SECONDS_SETTING,
 } from '../tools/my-voice.tool';
 import {
   AI_VOICE_PROVIDER,
@@ -104,12 +104,12 @@ export class AiCloneService {
       name: row ? row.name : null,
       createdAt: row?.providerVoiceId ? row.createdAt.toISOString() : null,
       consent: { line: cloneConsentLineFor(name) },
-      sample: {
+      recording: {
         folder: 'ai/input-audio',
         accepts: [...FOLDER_CONTENT_TYPES['ai/input-audio']],
-        minSeconds: this.settings.number(CLONE_SAMPLE_MIN_SECONDS_SETTING),
-        maxSeconds: this.settings.number(CLONE_SAMPLE_MAX_SECONDS_SETTING),
-        maxBytes: CLONE_SAMPLE_MAX_BYTES,
+        minSeconds: this.settings.number(CLONE_RECORDING_MIN_SECONDS_SETTING),
+        maxSeconds: this.settings.number(CLONE_RECORDING_MAX_SECONDS_SETTING),
+        maxBytes: CLONE_RECORDING_MAX_BYTES,
       },
     };
   }

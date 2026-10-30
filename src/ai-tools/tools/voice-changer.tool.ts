@@ -5,7 +5,7 @@ import { asFile, type AiTool, type FileInputSpec } from './ai-tool';
 import { checkFileLimits } from './file-limits';
 import { requireKind } from './file-checks';
 
-/** The plan's action a Voice changer job is priced by (a price a minute of the recording, PROVISIONAL `STUDIO2-PLACEHOLDER`). */
+/** The plan's action a Voice changer job is priced by (a price a minute of the recording, PROVISIONAL, the owner sets it). */
 export const VOICE_CHANGER_ACTION = 'voice_changer_per_min';
 /** The setting: the model Voice changer asks for. The provider's default; the multilingual model's id is NOT KNOWN. */
 export const VOICE_CHANGER_MODEL_SETTING = 'ai.voice_changer_model';

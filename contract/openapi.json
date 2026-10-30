@@ -79275,7 +79275,7 @@
               "line"
             ]
           },
-          "sample": {
+          "recording": {
             "type": "object",
             "properties": {
               "folder": {
@@ -79312,7 +79312,7 @@
           "name",
           "createdAt",
           "consent",
-          "sample"
+          "recording"
         ]
       },
       "SavedVoiceRemovedView": {

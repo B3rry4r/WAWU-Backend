@@ -1,25 +1,27 @@
 import { asFile, type AiTool, type FileInputSpec } from './ai-tool';
 import {
-  CLONE_SAMPLE_MAX_BYTES,
+  CLONE_RECORDING_MAX_BYTES,
   requireAtMostBytes,
   requireAtMostSeconds,
   requireKind,
 } from './file-checks';
 import { AiToolError } from '../ai-tools-error';
 
-/** The plan's action a Clone your own voice job is priced by (a price once, PROVISIONAL `STUDIO2-PLACEHOLDER`). */
+/** The plan's action a Clone your own voice job is priced by (a price once, PROVISIONAL, the owner sets it). */
 export const MY_VOICE_ACTION = 'voice_clone_once';
 /** The name a clone is kept under at the provider: plain, the same for everyone, never the person's own words. */
 export const CLONE_PROVIDER_NAME = 'wawu-voice';
-export const CLONE_SAMPLE_MIN_SECONDS_SETTING = 'ai.clone_sample_min_seconds';
-export const CLONE_SAMPLE_MAX_SECONDS_SETTING = 'ai.clone_sample_max_seconds';
+export const CLONE_RECORDING_MIN_SECONDS_SETTING =
+  'ai.clone_sample_min_seconds';
+export const CLONE_RECORDING_MAX_SECONDS_SETTING =
+  'ai.clone_sample_max_seconds';
 
 const INPUT: FileInputSpec = {
   kind: 'file',
   languageCode: false,
   only: 'audio',
   clone: true,
-  maxSecondsSetting: CLONE_SAMPLE_MAX_SECONDS_SETTING,
+  maxSecondsSetting: CLONE_RECORDING_MAX_SECONDS_SETTING,
 };
 
 /**
@@ -43,14 +45,14 @@ export const MY_VOICE_TOOL: AiTool = {
   enabled: (provider) => provider.fileToolsConfigured,
   checkFile: (opened, settings) => {
     requireKind(opened, 'audio');
-    requireAtMostBytes(opened, CLONE_SAMPLE_MAX_BYTES);
+    requireAtMostBytes(opened, CLONE_RECORDING_MAX_BYTES);
     requireAtMostSeconds(
       opened,
       settings,
-      CLONE_SAMPLE_MAX_SECONDS_SETTING,
+      CLONE_RECORDING_MAX_SECONDS_SETTING,
       'recording for your voice',
     );
-    const min = settings.number(CLONE_SAMPLE_MIN_SECONDS_SETTING);
+    const min = settings.number(CLONE_RECORDING_MIN_SECONDS_SETTING);
     if (opened.seconds < min)
       throw new AiToolError(
         'ai_length_too_short',

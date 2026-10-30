@@ -14,7 +14,7 @@ export const VIDEO_ONLY_MESSAGE =
 /** The most a video sent to Music for a video may be: the provider takes 200 MB in all, whatever `ai.input_max_bytes` says. */
 export const PROVIDER_VIDEO_MAX_BYTES = 200 * 1024 * 1024;
 /** The most a recording a clone is made from may be: a request bound, not a product figure (the length is the setting). */
-export const CLONE_SAMPLE_MAX_BYTES = 20 * 1024 * 1024;
+export const CLONE_RECORDING_MAX_BYTES = 20 * 1024 * 1024;
 
 export interface OpenedFileFacts {
   contentType: string;

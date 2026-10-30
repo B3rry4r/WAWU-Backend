@@ -9,7 +9,7 @@ import {
   type DialogueJobRequest,
 } from './ai-tool';
 
-/** The plan's action a Dialogue job is priced by (a price a minute, counted in characters, PROVISIONAL `STUDIO2-PLACEHOLDER`). */
+/** The plan's action a Dialogue job is priced by (a price a minute, counted in characters, PROVISIONAL, the owner sets it). */
 export const DIALOGUE_ACTION = 'dialogue_per_min';
 export const DIALOGUE_CHARS_PER_MINUTE_SETTING = 'ai.dialogue_chars_per_minute';
 export const DIALOGUE_MAX_CHARS_SETTING = 'ai.dialogue_max_chars';

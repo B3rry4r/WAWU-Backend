@@ -10,7 +10,7 @@ import {
 } from './file-checks';
 import { AI_INPUT_MAX_BYTES_SETTING } from '../../storage/dto/presign-upload.dto';
 
-/** The plan's action a Music for a video job is priced by (a flat price a track, PROVISIONAL `STUDIO2-PLACEHOLDER`). */
+/** The plan's action a Music for a video job is priced by (a flat price a track, PROVISIONAL, the owner sets it). */
 export const VIDEO_MUSIC_ACTION = 'video_music_per_track';
 export const VIDEO_MUSIC_MAX_SECONDS_SETTING = 'ai.video_music_max_seconds';
 export const VIDEO_MUSIC_MAX_PROMPT_CHARS_SETTING =

@@ -333,7 +333,7 @@ describe('AITOOLS-11: Voice changer, Dialogue and a saved clone of your own voic
       expect(out).toMatchObject({
         kind: 'audio',
         contentType: 'audio/mpeg',
-        name: 'Voice changer',
+        name: 'Changed voice',
         pieceFormat: 'audio',
       });
       expect(out.downloadUrl).toMatch(
@@ -356,7 +356,7 @@ describe('AITOOLS-11: Voice changer, Dialogue and a saved clone of your own voic
       const view = data<AiPieceView>(piece);
       expect(view.format).toBe('audio');
       expect(view.full.key).toMatch(new RegExp(`^content/full/${PLAIN}/`));
-      expect(view.suggestedTitle).toMatch(/^Voice changer, \d+ /);
+      expect(view.suggestedTitle).toMatch(/^Changed voice, \d+ /);
       expect(view.suggestedTitle).not.toMatch(LONG_DASH);
     });
 
@@ -416,6 +416,28 @@ describe('AITOOLS-11: Voice changer, Dialogue and a saved clone of your own voic
         expect(h.inputs.removed).toContain(fileKey);
       }
       expect(h.store.files.size).toBe(0);
+    });
+
+    it('tells the person when a long job ends while the tool is listed, once, and nobody when the switch went off first (lead ruling, 30 Oct)', async () => {
+      await h.grant(PLAIN, 5000);
+      await set('ai.job_ready_notice_seconds', 1);
+      const notices = () =>
+        h.prisma.notification.count({
+          where: { userWawuId: PLAIN, kind: 'ai_job_ready' },
+        });
+      const first = await run(
+        await change(PLAIN, voiceFile(PLAIN, 20, '[[slow:1300]]')),
+      );
+      expect((await readJob(PLAIN, first)).state).toBe('done');
+      expect(await notices()).toBe(1);
+      const quick = await run(await change(PLAIN, voiceFile(PLAIN, 20)));
+      expect((await readJob(PLAIN, quick)).state).toBe('done');
+      expect(await notices()).toBe(1);
+      const res = await change(PLAIN, voiceFile(PLAIN, 20, '[[slow:1300]]'));
+      expect(res.status).toBe(202);
+      await set('ai.listed.voice-changer', null);
+      await h.jobs.drain();
+      expect(await notices()).toBe(1);
     });
 
     it('runs one job for one Idempotency-Key and never takes points below zero for two at once', async () => {
@@ -575,7 +597,7 @@ describe('AITOOLS-11: Voice changer, Dialogue and a saved clone of your own voic
         available: true,
         state: 'none',
         name: null,
-        sample: {
+        recording: {
           folder: 'ai/input-audio',
           minSeconds: 10,
           maxSeconds: 180,
