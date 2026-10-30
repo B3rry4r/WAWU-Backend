@@ -1011,8 +1011,9 @@ export class AiJobService {
   }
 
   /**
-   * A job that ran longer than `ai.job_ready_notice_seconds` tells the person
-   * when it ends (AITOOLS-08, kind `ai_job_ready`, target the job). Called only
+   * A job of a Studio 2 tool (one with a listing switch, while the switch is on)
+   * that ran longer than `ai.job_ready_notice_seconds` tells the person when it
+   * ends (AITOOLS-08, kind `ai_job_ready`, target the job). Called only
    * by the one write that ended the job, so it is told once. A short job tells
    * nothing. Never throws: a notice is a side effect of the end, not the end.
    */
@@ -1033,6 +1034,15 @@ export class AiJobService {
       });
       const tool = row ? toolForAction(row.tool) : null;
       if (!row || !tool) return;
+      // Lead ruling (30 Oct 2026): nothing new reaches live users before the
+      // owner reviews Studio 2. The notice is only for a tool that has a
+      // listing switch (the new Studio 2 tools), and only while that switch is
+      // on; the seven launch tools (Dubbing, Music and the rest) never write it.
+      if (
+        !tool.listingSetting ||
+        this.settings.number(tool.listingSetting) !== 1
+      )
+        return;
       const ranMs =
         (row.finishedAt ?? new Date()).getTime() - row.createdAt.getTime();
       if (ranMs <= this.settings.number(JOB_READY_NOTICE_SETTING) * 1000)

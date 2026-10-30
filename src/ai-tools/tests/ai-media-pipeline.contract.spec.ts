@@ -33,6 +33,7 @@ import {
   PRO,
 } from '../../../test/ai-tools/ai-tools-harness';
 import { wavFile } from '../../../test/ai-tools/media-fixtures';
+import { AiDubService } from '../dub/ai-dub.service';
 import { AiFlowService } from '../flow/ai-flow.service';
 import { AiToolsPurgeService } from '../ai-tools-purge.service';
 import {
@@ -1267,6 +1268,81 @@ describe('AITOOLS-08 to AITOOLS-10: the Studio media pipeline (contract)', () =>
       });
       expect(bad.title).toBe('Your video did not work');
       expect(bad.body).toBe('No points were taken. Open it to try again.');
+    });
+
+    // Lead ruling (30 Oct 2026): nothing new reaches live users before the
+    // owner reviews Studio 2. Only a tool with a listing switch writes the
+    // notice, and only while the switch is on.
+    const notices = () =>
+      h.prisma.notification.count({
+        where: { userWawuId: PLAIN, kind: 'ai_job_ready' },
+      });
+
+    it('a long Dubbing job, a launch tool, writes no ai_job_ready notice', async () => {
+      await h.grant(PLAIN, 5000);
+      await set('ai.job_ready_notice_seconds', 1);
+      await set('ai.dubbing_languages', ['yo Yoruba', 'en English']);
+      const dubs = new AiDubService(
+        h.prisma,
+        settings,
+        h.get<AiVoiceProvider>(AI_VOICE_PROVIDER),
+        h.jobs,
+      );
+      const fileKey = h.inputs.add(
+        PLAIN,
+        wavFile(30, '[[dub-delay:1300]]'),
+        'audio/wav',
+        'ai/input-audio',
+      );
+      const res = await post(
+        PLAIN,
+        'dubbing/jobs',
+        'dub_standard_per_min_lang',
+        cost('dub_standard_per_min_lang'),
+        { fileKey, targetLanguage: 'yo' },
+      );
+      expect(res.status).toBe(202);
+      await h.jobs.drain();
+      const id = data<AiJobView>(res).id;
+      let state = 'working';
+      for (let i = 0; i < 100 && state === 'working'; i++) {
+        await dubs.pass();
+        state = (await readJob(PLAIN, id)).state;
+        await sleep(60);
+      }
+      expect(state).toBe('done');
+      const ranMs =
+        (await row(id)).finishedAt!.getTime() -
+        (await row(id)).createdAt.getTime();
+      expect(ranMs).toBeGreaterThan(1000); // it ran longer than the setting
+      expect(await notices()).toBe(0);
+    });
+
+    it('a long VoiceOver job, a launch tool, writes none either', async () => {
+      await h.grant(PLAIN, 5000);
+      await set('ai.job_ready_notice_seconds', 1);
+      const res = await h.create(PLAIN, {
+        text: 'Hello [[slow:1300]]',
+        voiceId: 'ada',
+        quoteToken: h.quote(PLAIN, 250),
+      });
+      expect(res.status).toBe(202);
+      const done = await h.finish(PLAIN, data<AiJobView>(res).id);
+      expect(done.state).toBe('done');
+      expect(await notices()).toBe(0);
+    });
+
+    it('a long image job writes one while ai.listed.image is on, and none when the switch went off before it ended', async () => {
+      await h.grant(PLAIN, 5000);
+      await set('ai.job_ready_notice_seconds', 1);
+      const on = await run(await makeImage(PLAIN, 'a long one [[slow:1300]]'));
+      expect((await follow(PLAIN, on)).state).toBe('done');
+      expect(await notices()).toBe(1);
+      // The owner has not released the tool: the switch is off, so a job that ends now tells nobody.
+      const off = await run(await makeImage(PLAIN, 'another [[slow:1300]]'));
+      await set('ai.listed.image', null);
+      expect((await follow(PLAIN, off)).state).toBe('done');
+      expect(await notices()).toBe(1);
     });
   });
 
