@@ -140,7 +140,16 @@ const RECONCILE_MAX_BATCHES = 10;
 export const CONTENT_FOLDERS: readonly string[] = [
   'content/preview',
   'content/full',
+  // CONTENT-COVER (R-114): the optional cover picture of a piece. Counted in the person's storage like a preview or a
+  // full file. It is not a product, so the presign gate asks it only whether the person may publish (PRODUCT_FOLDERS).
+  'content/cover',
 ];
+
+/** The folder a piece's cover picture is uploaded to (CONTENT-COVER, R-114). */
+export const COVER_FOLDER = 'content/cover';
+
+/** The content folders whose files are a product, so a presign asks for a free place (a cover is not one). */
+const PRODUCT_FOLDERS: readonly string[] = ['content/preview', 'content/full'];
 
 /**
  * The folders whose bytes count toward a person's storage on the CHAT path
@@ -635,8 +644,10 @@ export class StorageService {
     // folders are not products and are never asked: an identity document,
     // an avatar or a chat picture must work without a tier, or nobody could
     // open a wallet to buy one.
-    if (CONTENT_FOLDERS.includes(folder))
+    if (PRODUCT_FOLDERS.includes(folder))
       await this.gate.assertRoomForProduct(wawuId);
+    // CONTENT-COVER: a cover belongs to a listing the person can publish, but it takes no place of its own.
+    else if (folder === COVER_FOLDER) await this.gate.assertMayUpload(wawuId);
     const { usage, tickHeld } = await this.usageAndTick(
       wawuId,
       countedAgainst(folder),
@@ -767,6 +778,15 @@ export class StorageService {
       );
       return stored;
     }
+  }
+
+  /**
+   * CONTENT-COVER (R-114): a fresh read link for a piece's cover, from the key stored on the piece. Null when the piece
+   * has none. The key is signed on every read, so a cover served a year after upload opens as it did on day one.
+   */
+  async coverUrlFor(key: string | null | undefined): Promise<string | null> {
+    if (!key) return null;
+    return this.freshUrlFor(key);
   }
 
   /**

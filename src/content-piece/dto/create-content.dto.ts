@@ -93,6 +93,16 @@ export class CreateContentDto {
   fullAsset: string;
 
   /**
+   * CONTENT-COVER (R-114): the piece's optional cover picture, as the `key` (or `fileUrl`) `POST /uploads/presign`
+   * answered for the folder `content/cover` (png, jpeg or webp, at most 5 MB). Left out, the piece has no cover.
+   * It must be the caller's own upload (400 otherwise).
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(2048)
+  coverAsset?: string;
+
+  /**
    * FIX-111 (H24): the creator's own course this piece comes from ("From the course VFX for Beginners"). Optional, and only for a
    * piece that is not itself a course; the course must be the creator's, live or in review. Stored on the piece's side row.
    */

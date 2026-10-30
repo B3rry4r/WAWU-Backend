@@ -83,6 +83,8 @@ export async function isClaimed(
         OR: [
           { previewAssetUrl: { contains: key } },
           { fullAssetUrl: { contains: key } },
+          // CONTENT-COVER (R-114): a piece's cover is a claim on the file too.
+          { coverKey: key },
         ],
       },
       select: { id: true },

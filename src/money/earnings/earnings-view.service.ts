@@ -1,4 +1,9 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  Optional,
+} from '@nestjs/common';
 import { Prisma } from '../../../generated/prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { isRowOf } from '../../wallet-provider/provider-rows';
@@ -6,6 +11,7 @@ import {
   WALLET_PROVIDER,
   type WalletProvider,
 } from '../../wallet-provider/wallet-provider.interface';
+import { CoverLinkService } from '../../storage/cover-link';
 import { PAYMENT_KINDS, type PaymentKind } from '../dto/money-enums';
 import type { EarningContentQueryDto } from '../dto/money-request.dto';
 import type {
@@ -123,7 +129,31 @@ export class EarningsViewService {
   constructor(
     private readonly prisma: PrismaService,
     @Inject(WALLET_PROVIDER) private readonly provider: WalletProvider,
+    // CONTENT-COVER (R-114): signs the covers of the pieces a row is for. Absent in a spec that builds the service by hand.
+    @Optional() private readonly covers?: CoverLinkService,
   ) {}
+
+  /** The cover links of the content pieces among `rows` (a row of kind `content_unlock` names its piece), by piece id. */
+  private async coversOf(
+    rows: ReadonlyArray<{ kind: string; targetId: string }>,
+  ): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const ids = [
+      ...new Set(
+        rows.filter((r) => r.kind === 'content_unlock').map((r) => r.targetId),
+      ),
+    ];
+    if (ids.length === 0 || !this.covers) return out;
+    const pieces = await this.prisma.contentPiece.findMany({
+      where: { id: { in: ids }, coverKey: { not: null } },
+      select: { id: true, coverKey: true },
+    });
+    for (const p of pieces) {
+      const link = await this.covers.linkFor(p.coverKey);
+      if (link) out.set(p.id, link);
+    }
+    return out;
+  }
 
   async summary(
     wawuUserId: string,
@@ -193,10 +223,12 @@ export class EarningsViewService {
       orderBy: [{ availableAt: 'asc' }, { id: 'asc' }],
       take: 50,
     });
+    const covers = await this.coversOf(rows);
     return rows.map((r) => ({
       kind: r.kind as PaymentKind,
       targetId: r.targetId,
       title: r.title,
+      coverUrl: covers.get(r.targetId) ?? null,
       amountKobo: kobo(r.amountKobo.toString()),
       earnedAt: r.earnedAt.toISOString(),
       availableAt: r.availableAt.toISOString(),
@@ -275,10 +307,12 @@ export class EarningsViewService {
     `);
     const page = rows.slice(0, limit);
     const last = page[page.length - 1];
+    const covers = await this.coversOf(page);
     const items: EarningContentView[] = page.map((r) => ({
       kind: r.kind as PaymentKind,
       targetId: r.targetId,
       title: r.title,
+      coverUrl: covers.get(r.targetId) ?? null,
       earnedKobo: kobo(r.kobo),
       sales: kobo(r.n),
       lastAt: r.lastAt.toISOString(),

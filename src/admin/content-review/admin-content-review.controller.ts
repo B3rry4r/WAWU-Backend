@@ -77,6 +77,17 @@ export class AdminContentReviewController {
   }
 
   /**
+   * CONTENT-COVER (R-114): the piece's own cover picture, as a short-lived link (15 minutes, like the other assets), so
+   * a reviewer sees the picture they approve with the piece. Its own route and not a field of `queue` or `:id`, which the
+   * dashboard reads as they are; `coverUrl` is null when the piece has no cover.
+   */
+  @AdminRoles(AdminRole.superadmin, AdminRole.reviewer, AdminRole.support)
+  @Get(':id/cover')
+  cover(@Param('id', ParseUUIDPipe) id: string) {
+    return this.service.cover(id);
+  }
+
+  /**
    * pending → live. The first write of 'live' this backend has ever had: from
    * here the piece is visible on every existing public read path.
    *

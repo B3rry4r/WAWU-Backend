@@ -373,6 +373,8 @@ any value but `app` (compared without case), behaviour is exactly as before.
   draft publish, `PUT /events/{id}/tickets`, `POST /events` (`ticketTypes`; a
   free tier is 0 and passes). `PATCH /content/{id}`, `PUT /paid-dm/settings` and
   `POST /communities/rooms` are the app's alone and always apply it.
+- Routes that gain a field **only with the header**: the piece's `coverUrl` on the
+  routes the website also calls (CONTENT-COVER, R-114; `COVERS.md`).
 - CORS: `app.enableCors({ origin, credentials })` sets no `allowedHeaders`, so
   the preflight reflects the headers the browser asks for and `X-Wawu-Client`
   is allowed with no change (`price-list-app-client.spec.ts` pins it; an explicit

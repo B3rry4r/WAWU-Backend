@@ -20,6 +20,10 @@ import {
 export const UPLOAD_FOLDERS = [
   'content/preview',
   'content/full',
+  // CONTENT-COVER (R-114). The optional cover picture of a piece. Its own prefix: a cover is a picture whatever the
+  // format of the piece (a video, an audio clip, a pdf), it is public like the preview, and it is counted in the
+  // person's storage like any content file but is not a product, so it never asks for a free place.
+  'content/cover',
   'kyc/id-document',
   'service-application/document',
   // A practising licence or qualification supporting a professional-profile
@@ -161,6 +165,8 @@ const OFFICE = [
 export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   'content/preview': [...IMAGE, ...DOC, 'video/mp4'],
   'content/full': [...IMAGE, ...DOC, ...AV, ...OFFICE],
+  // CONTENT-COVER. Pictures only, deliberately: png, jpeg and webp (no gif, no svg).
+  'content/cover': IMAGE,
   'kyc/id-document': [...IMAGE, ...DOC],
   'service-application/document': [...IMAGE, ...DOC],
   'professional/document': [...IMAGE, ...DOC],
@@ -209,6 +215,9 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
  * media): 100MB.
  */
 export const FOLDER_MAX_BYTES: Partial<Record<UploadFolder, number>> = {
+  // CONTENT-COVER (R-114). A cover is a picture shown on a card or a row, so 5 MB is generous; the file is counted in the
+  // person's storage (CONTENT_FOLDERS), so this is only the ceiling of one.
+  'content/cover': 5 * 1024 * 1024,
   'profile/work': 100 * 1024 * 1024,
   // PROVISIONAL(COMMUNITY-MEDIA-MAX-BYTES, owner=YOU, why=R-62 prices a video and a voice note in a community but no ruling sizes the file; the allowance counts only content/preview and content/full, so without a cap one message could be 512MB): 100MB for a video, 25MB for a voice note.
   'community/message-video': 100 * 1024 * 1024,

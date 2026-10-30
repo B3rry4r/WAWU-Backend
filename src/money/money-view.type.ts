@@ -762,6 +762,8 @@ export interface StoreEarningWaitingView {
   kind: PaymentKind;
   targetId: string;
   title: string;
+  /** CONTENT-COVER (R-114): a fresh link to the sold piece's cover picture; null when it has none or the row is not a piece. */
+  coverUrl?: string | null;
   amountKobo: number;
   /** When the sale was made (ISO 8601). */
   earnedAt: string;
@@ -781,6 +783,8 @@ export interface EarningContentView {
   targetId: string;
   /** The item as it was named when it was sold. */
   title: string;
+  /** CONTENT-COVER (R-114): a fresh link to the sold piece's cover picture; null when it has none or the row is not a content piece. */
+  coverUrl?: string | null;
   earnedKobo: number;
   sales: number;
   /** The latest sale counted, ISO 8601. */

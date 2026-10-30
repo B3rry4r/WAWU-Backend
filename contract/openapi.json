@@ -6904,6 +6904,46 @@
         ]
       }
     },
+    "/api/hub/admin/content/{id}/cover": {
+      "get": {
+        "operationId": "AdminContentReviewController_cover",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "coverUrl": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "coverUrl"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "summary": "CONTENT-COVER (R-114): the piece's own cover picture, as a short-lived link (15 minutes, like the other assets), so\na reviewer sees the picture they approve with the piece. Its own route and not a field of `queue` or `:id`, which the\ndashboard reads as they are; `coverUrl` is null when the piece has no cover.",
+        "tags": [
+          "AdminContentReview"
+        ]
+      }
+    },
     "/api/hub/admin/content/{id}/approve": {
       "post": {
         "operationId": "AdminContentReviewController_approve",
@@ -46251,6 +46291,7 @@
             "enum": [
               "content/preview",
               "content/full",
+              "content/cover",
               "kyc/id-document",
               "service-application/document",
               "professional/document",
@@ -47269,6 +47310,11 @@
             "type": "string",
             "format": "uri"
           },
+          "coverAsset": {
+            "type": "string",
+            "description": "CONTENT-COVER (R-114): the piece's optional cover picture, as the `key` (or `fileUrl`) `POST /uploads/presign`\nanswered for the folder `content/cover` (png, jpeg or webp, at most 5 MB). Left out, the piece has no cover.\nIt must be the caller's own upload (400 otherwise).",
+            "maxLength": 2048
+          },
           "parentCourseId": {
             "type": "string",
             "description": "FIX-111 (H24): the creator's own course this piece comes from (\"From the course VFX for Beginners\"). Optional, and only for a\npiece that is not itself a course; the course must be the creator's, live or in review. Stored on the piece's side row.",
@@ -47362,6 +47408,12 @@
           "fullAsset": {
             "type": "string",
             "format": "uri"
+          },
+          "coverAsset": {
+            "type": "string",
+            "nullable": true,
+            "description": "CONTENT-COVER (R-114): the key (or `fileUrl`) of a cover uploaded to the folder `content/cover`, which replaces the\nold one (the old file is deleted); `null` takes the cover off. Left out, the cover stays as it is.",
+            "maxLength": 2048
           }
         }
       },
@@ -47670,6 +47722,11 @@
           "fullAsset": {
             "type": "string",
             "format": "uri"
+          },
+          "coverAsset": {
+            "type": "string",
+            "description": "CONTENT-COVER (R-114): the optional cover, as `POST /content` takes it.",
+            "maxLength": 2048
           }
         },
         "required": [
@@ -55956,6 +56013,10 @@
           "title": {
             "type": "string"
           },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
           "amountKobo": {
             "type": "integer"
           },
@@ -56042,6 +56103,10 @@
           },
           "title": {
             "type": "string"
+          },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
           },
           "earnedKobo": {
             "type": "integer"
@@ -62527,6 +62592,10 @@
           },
           "fullAssetLocked": {
             "type": "boolean"
+          },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
           }
         },
         "required": [
@@ -62656,6 +62725,10 @@
           "fullAssetLocked": {
             "type": "boolean"
           },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
           "salesCount": {
             "type": "number"
           },
@@ -62693,6 +62766,7 @@
           "likes",
           "fullAssetUrl",
           "fullAssetLocked",
+          "coverUrl",
           "salesCount",
           "rejectionReason",
           "rejectedAt"
@@ -63004,6 +63078,10 @@
           "fullAssetLocked": {
             "type": "boolean"
           },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
           "likedByMe": {
             "type": "boolean"
           },
@@ -63047,6 +63125,7 @@
           "likes",
           "fullAssetUrl",
           "fullAssetLocked",
+          "coverUrl",
           "likedByMe",
           "savedByMe",
           "followsCreator",
@@ -63125,6 +63204,10 @@
             "type": "string",
             "nullable": true
           },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
           "durationLabel": {
             "type": "string",
             "nullable": true
@@ -63148,6 +63231,7 @@
           "locked",
           "title",
           "thumbnailUrl",
+          "coverUrl",
           "durationLabel",
           "pageCount",
           "frameCount",
@@ -63417,6 +63501,10 @@
             "type": "number"
           },
           "previewAssetUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "coverUrl": {
             "type": "string",
             "nullable": true
           }
@@ -76053,6 +76141,10 @@
             "type": "string",
             "nullable": true
           },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
           "bought": {
             "type": "boolean"
           },
@@ -76067,6 +76159,7 @@
           "accessType",
           "priceKobo",
           "thumbnailUrl",
+          "coverUrl",
           "bought",
           "creator"
         ]
@@ -76278,6 +76371,10 @@
             "type": "string",
             "nullable": true
           },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
           "creator": {
             "$ref": "#/components/schemas/FeedCreator"
           }
@@ -76287,6 +76384,7 @@
           "title",
           "contentType",
           "thumbnailUrl",
+          "coverUrl",
           "creator"
         ]
       },
@@ -78109,6 +78207,10 @@
           "priceKobo": {
             "type": "integer"
           },
+          "coverUrl": {
+            "type": "string",
+            "nullable": true
+          },
           "payment": {
             "$ref": "#/components/schemas/PaymentQuoteView"
           }
@@ -78118,6 +78220,7 @@
           "title",
           "creator",
           "priceKobo",
+          "coverUrl",
           "payment"
         ]
       },
