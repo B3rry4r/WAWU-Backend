@@ -1237,13 +1237,15 @@ shape (`docs/elevenlabs/API-FACTS.md`).
   `Idempotent-Replayed: true`) until the key is released with `POST
   /uploads/release`, then a new copy is made. No preview is made and nothing is
   published: `POST /content` and its gates run as today.
-- **A long job tells the person.** A job that ran longer than
-  `ai.job_ready_notice_seconds` (60) writes one notification of the new kind
-  `ai_job_ready` when it ends (target kind `ai_job`, the job's id), through the
-  ordinary notification writer, pushed. "Your video is ready", or "Your video did
-  not work" with "No points were taken." Written by the one write that ended the
-  job, so a replay writes nothing more. It applies to every tool, Music track and
-  Dubbing included.
+- **A long job tells the person.** A job of a new Studio tool (one with an
+  `ai.listed.<tool>` switch) that ran longer than `ai.job_ready_notice_seconds`
+  (60) writes one notification of the new kind `ai_job_ready` when it ends
+  (target kind `ai_job`, the job's id), through the ordinary notification
+  writer, pushed, but only while that tool's switch is on. "Your video is
+  ready", or "Your video did not work" with "No points were taken." Written by
+  the one write that ended the job, so a replay writes nothing more. The seven
+  launch tools (Dubbing, Music track and the rest) never write it (lead ruling,
+  30 Oct 2026: nothing new reaches live users before the owner reviews Studio 2).
 
 ### Voice changer, Dialogue, your own saved voice, Music for a video and Split a song (AITOOLS-11, -12; R-109)
 
