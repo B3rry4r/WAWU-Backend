@@ -962,17 +962,21 @@ export class AiJobService {
     } catch (e) {
       // AITOOLS-12: a 403 from the music routes means the provider's plan does not cover them. The person reads "This
       // isn't available right now. No points were taken."; the owner reads the log line (an owner item, not a bug).
+      // VIDEO-DUR: a 402 (paid_plan_required) on any Studio tool reads and logs the same way.
       const planRefused =
         e instanceof AiVoiceProviderError &&
-        e.status === 403 &&
-        (tool.id === 'video-music' ||
-          tool.id === 'stems' ||
-          tool.id === 'podcast');
+        (e.status === 402 ||
+          (e.status === 403 &&
+            (tool.id === 'video-music' ||
+              tool.id === 'stems' ||
+              tool.id === 'podcast')));
       if (planRefused)
         this.logger.error(
-          tool.id === 'podcast'
-            ? `OWNER ITEM: ai job ${job.id} (${job.tool}): the provider answered 403, so our account is not allowlisted for its Studio API (the Podcast maker stays unlisted until the allowlist is granted)`
-            : `OWNER ITEM: ai job ${job.id} (${job.tool}): the provider answered 403, so its plan does not cover the music routes (Subscription required)`,
+          e.status === 402
+            ? `OWNER ITEM: ai job ${job.id} (${job.tool}): the provider answered 402, so its plan does not cover this tool (a higher plan is needed)`
+            : tool.id === 'podcast'
+              ? `OWNER ITEM: ai job ${job.id} (${job.tool}): the provider answered 403, so our account is not allowlisted for its Studio API (the Podcast maker stays unlisted until the allowlist is granted)`
+              : `OWNER ITEM: ai job ${job.id} (${job.tool}): the provider answered 403, so its plan does not cover the music routes (Subscription required)`,
         );
       const code = planRefused
         ? 'provider_plan'

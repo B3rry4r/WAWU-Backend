@@ -14,7 +14,7 @@ process.env.DATABASE_URL =
   'postgresql://postgres:postgres@localhost:5432/wawu_hub_test?schema=public';
 
 import { randomUUID } from 'node:crypto';
-import { PayloadTooLargeException } from '@nestjs/common';
+import { Logger, PayloadTooLargeException } from '@nestjs/common';
 import { AdminRole } from '../../../generated/prisma/enums';
 import type { AdminActor } from '../../common/audit/admin-ops-audit.service';
 import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
@@ -852,7 +852,7 @@ describe('AITOOLS-08 to AITOOLS-10: the Studio media pipeline (contract)', () =>
         expect.objectContaining({
           kind: 'clip',
           model: 'veo-3.1-fast-generate-001',
-          seconds: '4',
+          seconds: 4,
           shape: '9:16',
           resolution: '720p',
           withSound: true,
@@ -889,7 +889,7 @@ describe('AITOOLS-08 to AITOOLS-10: the Studio media pipeline (contract)', () =>
       await set('ai.video_with_sound', 0);
       await run(await makeVideo(PLAIN, 'a ball', 6));
       expect(standin().videos[1]).toMatchObject({
-        seconds: '6',
+        seconds: 6,
         withSound: false,
       });
     });
@@ -918,6 +918,37 @@ describe('AITOOLS-08 to AITOOLS-10: the Studio media pipeline (contract)', () =>
       await h.flows.pass(new Date(began.getTime() + 601_000));
       expect((await readJob(PLAIN, stuck)).state).toBe('failed');
       expect(await h.balance(PLAIN)).toBe(8000);
+    });
+
+    it('a 402 from the provider (its plan) on a picture, an edit or a clip says "This isn\'t available right now", gives every point back and logs an owner item', async () => {
+      await h.grant(PLAIN, 8000);
+      const error = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => undefined);
+      try {
+        for (const make of [
+          () => makeImage(PLAIN, 'a ball [[status:402]]'),
+          () =>
+            makeEdit(PLAIN, 'make it blue', photoKey(PLAIN, '[[status:402]]')),
+          () => makeVideo(PLAIN, 'a ball [[status:402]]', 8),
+        ]) {
+          const id = await run(await make());
+          const job = await readJob(PLAIN, id);
+          expect(job.state).toBe('failed');
+          expect(job.message).toBe(
+            "This isn't available right now. No points were taken.",
+          );
+          expect((await row(id)).failureCode).toBe('provider_plan');
+          expect(await h.balance(PLAIN)).toBe(8000);
+        }
+        expect(h.standin.openAssets()).toBe(0);
+        const owner = error.mock.calls
+          .map((c) => String(c[0]))
+          .filter((l) => /OWNER ITEM.*402/.test(l));
+        expect(owner).toHaveLength(3);
+      } finally {
+        error.mockRestore();
+      }
     });
 
     it("photo to video sends the person's photo as the first frame and deletes the asset and the photo when the job ends", async () => {

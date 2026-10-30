@@ -328,7 +328,7 @@ describe('AITOOLS-04: Captions and Clean audio (contract)', () => {
       ['[[fail]]', 'captions', 'provider_unavailable'],
       ['[[reject]]', 'captions', 'provider_failed'],
       ['[[html]]', 'captions', 'provider_unavailable'],
-      ['[[status:402]]', 'clean-audio', 'provider_failed'],
+      ['[[status:402]]', 'clean-audio', 'provider_plan'],
       ['[[html]]', 'clean-audio', 'provider_unavailable'],
     ];
     for (const [marker, route, code] of cases) {

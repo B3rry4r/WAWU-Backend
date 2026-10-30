@@ -94,7 +94,7 @@ export interface StandinHandle {
       kind: 'clip' | 'talking';
       model: string;
       shape?: string | null;
-      seconds?: string;
+      seconds?: number;
       resolution: string | null;
       withSound?: boolean | null;
       assetIds: string[];

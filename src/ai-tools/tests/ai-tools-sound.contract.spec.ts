@@ -1102,8 +1102,12 @@ describe('AITOOLS-03: Sound effect and Music track (contract)', () => {
       expect(jobs.map((j) => j.providerRef)).toEqual([null, null, null, null]);
       expect(JSON.stringify(jobs)).not.toContain('http_');
       await expectRollbackNotBlockedBy(jobs.map((j) => j.id));
-      // 402 and 401 are refusals this key or plan will make again: not retryable.
-      expect(jobs.every((j) => j.failureCode === 'provider_failed')).toBe(true);
+      // 402 and 401 are refusals this key or plan will make again: not retryable. A 402 is the plan (VIDEO-DUR:
+      // "This isn't available right now" and an owner item); a 401 is the key.
+      for (const m of made)
+        expect(jobs.find((j) => j.id === m.id)!.failureCode).toBe(
+          m.status === 402 ? 'provider_plan' : 'provider_failed',
+        );
       const lines = warn.mock.calls.map((c) => String(c[0]));
       expect(
         lines.filter((l) => /ai job .* answered 402/.test(l)),
@@ -1153,7 +1157,7 @@ describe('AITOOLS-03: Sound effect and Music track (contract)', () => {
       });
       expect(row.state).toBe('failed');
       expect(row.failureCode).toBe(
-        m.mark === '[[fail]]' ? 'provider_unavailable' : 'provider_failed',
+        m.mark === '[[fail]]' ? 'provider_unavailable' : 'provider_plan',
       );
       expect(row.providerRef).toBe(`prov-${m.id}`);
     }
