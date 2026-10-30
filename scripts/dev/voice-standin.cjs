@@ -133,7 +133,7 @@
 //     An unknown model, an empty prompt, a shape or size outside the model's
 //     lists, or an image that names an asset the stand-in does not hold is 422.
 //   POST /v1/flows/video   (AITOOLS-10)
-//     Veo: { model_id, prompt, duration_secs: "4" | "6" | "8", aspect_ratio?,
+//     Clip models: { model_id, prompt, duration_secs: a NUMBER the model makes (Veo 4, 6 or 8; Seedance 4 to 15, v2.5 4 to 30), aspect_ratio?,
 //     resolution?, generate_audio?, start_frame? }. Aurora: { model_id,
 //     image: { type: asset, asset_id }, audio: { type: asset, asset_id },
 //     resolution? }.  ->  200 { id, status: pending }.
@@ -947,7 +947,16 @@ function startVoiceStandin({
     'auto', '1:1', '2:3', '3:2', '3:4', '4:3', '4:5', '5:4', '9:16', '16:9', '21:9', '1:4', '4:1', '1:8', '8:1',
   ]);
   const IMAGE_SIZES = new Set(['512', '1K', '2K', '4K']);
-  const VIDEO_MODELS = new Set(['veo-3.1-fast-generate-001', 'veo-3.1-generate-001', 'creatify-aurora']);
+  const upTo = (max) => Array.from({ length: max - 3 }, (_, i) => i + 4);
+  const VIDEO_LENGTHS = {
+    'veo-3.1-fast-generate-001': [4, 6, 8],
+    'veo-3.1-generate-001': [4, 6, 8],
+    'bytedance-seedance-v2': upTo(15),
+    'bytedance-seedance-v2-fast': upTo(15),
+    'bytedance-seedance-v2-mini': upTo(15),
+    'bytedance-seedance-v2.5': upTo(30),
+  };
+  const VIDEO_MODELS = new Set([...Object.keys(VIDEO_LENGTHS), 'creatify-aurora']);
 
   function assetUpload(req, res, _m, raw) {
     if (req.headers['xi-api-key'] !== key) return json(res, 401, { detail: 'bad key' });
@@ -1034,7 +1043,8 @@ function startVoiceStandin({
         record = { kind: 'talking', model: body.model_id, resolution: body.resolution ?? null, assetIds: named };
       } else {
         if (typeof body.prompt !== 'string' || body.prompt === '') return bad('prompt');
-        if (!['4', '6', '8'].includes(body.duration_secs)) return bad('duration_secs');
+        // The live provider takes a NUMBER (a string, as its downloaded reference says, answers 422: 30 Oct 2026).
+        if (!(VIDEO_LENGTHS[body.model_id] ?? []).includes(body.duration_secs)) return bad('duration_secs');
         if (body.aspect_ratio !== undefined && !['16:9', '9:16'].includes(body.aspect_ratio)) return bad('aspect_ratio');
         if (body.resolution !== undefined && !['720p', '1080p', '4K'].includes(body.resolution)) return bad('resolution');
         if (body.start_frame !== undefined && body.start_frame !== null && !take(body.start_frame)) return bad('start_frame');

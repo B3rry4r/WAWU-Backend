@@ -188,6 +188,27 @@ export interface StartImageRequest {
   assetIds: string[];
 }
 
+const upTo = (max: number) => Array.from({ length: max - 3 }, (_, i) => i + 4);
+
+/**
+ * The whole seconds each clip model makes (the provider's API reference, `duration_secs`). The wire takes a NUMBER:
+ * the downloaded reference says a string for the Veo models, the live provider refused that (422, 30 Oct 2026), and
+ * the live answer wins. `creatify-aurora` makes a talking photo and takes no length, so it is not here.
+ */
+export const VIDEO_MODEL_LENGTHS: Readonly<Record<string, readonly number[]>> =
+  {
+    'veo-3.1-fast-generate-001': [4, 6, 8],
+    'veo-3.1-generate-001': [4, 6, 8],
+    'bytedance-seedance-v2': upTo(15),
+    'bytedance-seedance-v2-fast': upTo(15),
+    'bytedance-seedance-v2-mini': upTo(15),
+    'bytedance-seedance-v2.5': upTo(30),
+  };
+
+/** False when the provider's reference names the model and the length is not one it makes (a model it does not name is the Hub's own lengths alone). */
+export const clipLengthFits = (model: string, seconds: number): boolean =>
+  VIDEO_MODEL_LENGTHS[model]?.includes(seconds) ?? true;
+
 /** A clip or a talking photo to make (AITOOLS-10). */
 export type StartVideoRequest =
   | {
@@ -195,7 +216,7 @@ export type StartVideoRequest =
       model: string;
       prompt: string;
       shape: string;
-      /** Whole seconds: 4, 6 or 8. */
+      /** Whole seconds, one of `VIDEO_MODEL_LENGTHS[model]`. */
       seconds: number;
       resolution: string;
       withSound: boolean;

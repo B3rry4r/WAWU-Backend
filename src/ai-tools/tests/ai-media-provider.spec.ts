@@ -1,5 +1,8 @@
 import { ConfigService } from '@nestjs/config';
-import { AiVoiceProviderError } from '../voice/ai-voice-provider';
+import {
+  AiVoiceProviderError,
+  VIDEO_MODEL_LENGTHS,
+} from '../voice/ai-voice-provider';
 import {
   HttpVoiceProvider,
   parseGenerationProgress,
@@ -19,7 +22,7 @@ import { endMarkerOf } from '../dub/dub-support';
 import { sniffImage } from '../input/image-sniff';
 import { IMAGE_TOOL } from '../tools/image.tool';
 import { TALKING_PHOTO_TOOL } from '../tools/talking-photo.tool';
-import { VIDEO_TOOL } from '../tools/video.tool';
+import { VIDEO_LENGTHS, VIDEO_TOOL } from '../tools/video.tool';
 
 /**
  * The adapter's picture and video calls (AITOOLS-09, AITOOLS-10) against the
@@ -137,7 +140,7 @@ describe('AITOOLS-09, AITOOLS-10: the AI provider seam, pictures and video', () 
     expect(standin.state.assets).toHaveLength(0);
   });
 
-  it('sends a clip with the length as a string, the shape, the sound and the first frame; and a talking photo with its photo and voice and no words', async () => {
+  it('sends a clip with the length as a number, the shape, the sound and the first frame; and a talking photo with its photo and voice and no words', async () => {
     const p = provider();
     const frame = await p.uploadAsset({ file: photo(), kind: 'photo' });
     await p.startVideo({
@@ -153,7 +156,7 @@ describe('AITOOLS-09, AITOOLS-10: the AI provider seam, pictures and video', () 
     expect(standin.state.videos[0]).toMatchObject({
       kind: 'clip',
       model: 'veo-3.1-fast-generate-001',
-      seconds: '4',
+      seconds: 4,
       shape: '16:9',
       resolution: '720p',
       withSound: false,
@@ -178,6 +181,72 @@ describe('AITOOLS-09, AITOOLS-10: the AI provider seam, pictures and video', () 
       assetIds: [frame.assetId, speech.assetId],
     });
     expect(standin.state.videos[1]).not.toHaveProperty('promptChars');
+  });
+
+  it('VIDEO-DUR: every clip model gets duration_secs as a NUMBER on the wire (the live provider refuses the string), and a length the model does not make never leaves the Hub', async () => {
+    const real = globalThis.fetch;
+    const wire: Record<string, unknown>[] = [];
+    const spy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation((url, init) => {
+        wire.push(JSON.parse(init?.body as string) as Record<string, unknown>);
+        return real(url, init);
+      });
+    try {
+      const p = provider();
+      const clip = (model: string, seconds: number) =>
+        p.startVideo({
+          kind: 'clip',
+          model,
+          prompt: 'a red ball rolls',
+          shape: '16:9',
+          seconds,
+          resolution: '720p',
+          withSound: false,
+          startFrameAssetId: null,
+        });
+      for (const [model, lengths] of Object.entries(VIDEO_MODEL_LENGTHS)) {
+        // Every length the Hub offers, and the longest the model makes.
+        for (const seconds of new Set([...VIDEO_LENGTHS, lengths.at(-1)!])) {
+          wire.length = 0;
+          await clip(model, seconds);
+          expect([model, typeof wire[0].duration_secs]).toEqual([
+            model,
+            'number',
+          ]);
+          expect(wire[0]).toMatchObject({
+            model_id: model,
+            duration_secs: seconds,
+          });
+        }
+        // One second past the longest, and one short of the shortest: refused before anything is sent.
+        wire.length = 0;
+        for (const seconds of [lengths[0] - 1, lengths.at(-1)! + 1])
+          await expect(clip(model, seconds)).rejects.toMatchObject({
+            kind: 'rejected',
+          });
+        expect(wire).toHaveLength(0);
+      }
+      // Veo makes 4, 6 and 8 and nothing between.
+      for (const seconds of [5, 7])
+        await expect(
+          clip('veo-3.1-fast-generate-001', seconds),
+        ).rejects.toMatchObject({ kind: 'rejected' });
+      expect(wire).toHaveLength(0);
+    } finally {
+      spy.mockRestore();
+    }
+    // The stand-in answers as the live provider did: a string length is a 422.
+    const raw = await fetch(`http://127.0.0.1:${standin.port}/v1/flows/video`, {
+      method: 'POST',
+      headers: { 'xi-api-key': 'spec-key', 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model_id: 'veo-3.1-fast-generate-001',
+        prompt: 'x',
+        duration_secs: '4',
+      }),
+    });
+    expect(raw.status).toBe(422);
   });
 
   it('a refused start is rejected (trying again will not help), a start the provider fails is unavailable, and the words never reach the error', async () => {

@@ -1,7 +1,9 @@
 import { AI_VIDEO_FOLDER } from '../media/ai-media-store';
 import { startWithAssets } from '../media/media-run';
 import { asMedia, type AiTool, type MediaInputSpec } from './ai-tool';
-import { checkMediaLimits } from './media-limits';
+import { AiToolError } from '../ai-tools-error';
+import { clipLengthFits } from '../voice/ai-voice-provider';
+import { checkMediaLimits, LENGTH_UNSUPPORTED_MESSAGE } from './media-limits';
 
 /** The plan's action a Make a video job is priced by (a price for each second, PROVISIONAL `STUDIO2-PLACEHOLDER`). */
 export const VIDEO_ACTION = 'video_per_sec';
@@ -55,7 +57,16 @@ export const VIDEO_TOOL: AiTool = {
       withSound: settings.number(VIDEO_WITH_SOUND_SETTING) === 1,
     };
   },
-  check: (req, settings) => checkMediaLimits(INPUT, req, settings),
+  check: (req, settings) => {
+    checkMediaLimits(INPUT, req, settings);
+    // The length must also be one the model in the settings makes (provider truth), before anything is held.
+    const r = asMedia(req);
+    if (r.seconds !== null && !clipLengthFits(r.model, r.seconds))
+      throw new AiToolError(
+        'ai_length_unsupported',
+        LENGTH_UNSUPPORTED_MESSAGE,
+      );
+  },
   price: (req) => {
     const r = asMedia(req);
     return { units: r.seconds ?? 1, characters: Array.from(r.prompt).length };

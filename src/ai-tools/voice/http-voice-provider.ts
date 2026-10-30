@@ -14,6 +14,7 @@ import { ZIP_LIMITS } from '../music/zip-reader';
 import { looksLikeMp3 } from '../music/stem-names';
 import {
   AiVoiceProviderError,
+  clipLengthFits,
   type AiVoice,
   type ChangeVoiceRequest,
   type ClonedVoice,
@@ -1399,7 +1400,8 @@ export class HttpVoiceProvider implements AiVoiceProvider {
       if (
         (req.startFrameAssetId !== null &&
           !PROVIDER_ID.test(req.startFrameAssetId)) ||
-        !Number.isInteger(req.seconds)
+        !Number.isInteger(req.seconds) ||
+        !clipLengthFits(req.model, req.seconds)
       )
         throw new AiVoiceProviderError('rejected', 'request');
       return this.startGeneration(
@@ -1407,8 +1409,8 @@ export class HttpVoiceProvider implements AiVoiceProvider {
         {
           model_id: req.model,
           prompt: req.prompt,
-          // The provider takes the length as a string ("4", "6", "8").
-          duration_secs: String(req.seconds),
+          // A number: the live provider refuses the string its downloaded reference names (VIDEO_MODEL_LENGTHS).
+          duration_secs: req.seconds,
           aspect_ratio: req.shape,
           resolution: req.resolution,
           generate_audio: req.withSound,
