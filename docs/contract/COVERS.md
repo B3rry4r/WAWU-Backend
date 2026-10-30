@@ -31,11 +31,13 @@ field keep their values.
 
 Views that carry it:
 
-- The piece (`ContentPieceResponse`: `GET /content`, `GET /content/{id}`, `GET /content/mine`, `GET /content/purchases`,
+- The piece (`ContentPieceResponse`: `GET /content`, `GET /content/{id}`, `GET /content/mine`,
   `POST /content`, `PATCH /content/{id}`), the feed (`FeedItem`), My content (`MyContentItem`), the creator cards' works
   (`CardWork`), search content rows, the parent course on a lesson (`ParentCourse`), the pieces a person saved
   (`SavedContentView`) and bought (`PurchasedPieceView`), the pay sheet's quote (`UnlockWalletQuoteView`), and the earnings
   rows (`EarningContentView`, `StoreEarningWaitingView`).
+  `GET /content/purchases` returns purchase records, not pieces, so it carries no `coverUrl`; a bought piece's cover comes
+  on `GET /me/purchases` (`PurchasedPieceView`).
 - The admin review: `GET /admin/content/{id}/cover` answers `{ "coverUrl": string | null }`, a link good for 15 minutes,
   so a reviewer sees the picture they approve with the piece. It is its own route: `queue` and `:id` answer as they did.
 

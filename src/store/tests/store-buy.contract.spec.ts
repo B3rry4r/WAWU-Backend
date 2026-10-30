@@ -1856,6 +1856,8 @@ describe('STORE-BUY-HUB: buying through the price ladder (stand-in stores)', () 
           kind: 'content_unlock',
           targetId: piece,
           title: expect.any(String) as string,
+          // CONTENT-COVER (R-114, lead ruling): the earnings rows gain coverUrl, null for a piece with no cover.
+          coverUrl: null,
           amountKobo: 85_000,
           earnedAt: row.earnedAt.toISOString(),
           availableAt: row.availableAt.toISOString(),

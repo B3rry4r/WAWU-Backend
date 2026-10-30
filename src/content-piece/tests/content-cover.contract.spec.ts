@@ -451,6 +451,43 @@ describe('A piece carries an optional cover picture (CONTENT-COVER, R-114, contr
     expect(row?.coverKey).toBeNull();
   });
 
+  it('four replaces at once leave exactly one cover, no orphan file, and storage counts one', async () => {
+    const first = await landed(MAKER, 'content/cover', 'image/jpeg');
+    const piece = data<Piece>(await created201({ coverAsset: first.fileUrl }));
+    const base = (await storage.usageFor(MAKER)).usedBytes;
+    const racers = [];
+    for (let i = 0; i < 4; i++)
+      racers.push(await landed(MAKER, 'content/cover', 'image/webp'));
+    const answers = await Promise.all(
+      racers.map((r) =>
+        request(server())
+          .patch(`/content/${piece.id}`)
+          .set('Authorization', bearer(MAKER))
+          .send({ coverAsset: r.key }),
+      ),
+    );
+    answers.forEach((a) => expect([200, 429]).toContain(a.status));
+    // A refused racer (429 storage_busy) never named its cover: that upload is still the person's own, unlisted.
+    const named = [
+      first,
+      ...racers.filter((_, i) => answers[i].status === 200),
+    ];
+    const kept = (
+      await prisma.contentPiece.findUniqueOrThrow({ where: { id: piece.id } })
+    ).coverKey;
+    expect(named.map((n) => n.key)).toContain(kept);
+    for (const n of named.filter((c) => c.key !== kept)) {
+      expect(deleted).toContain(n.key);
+      expect(inBucket.has(n.key)).toBe(false);
+    }
+    expect(inBucket.has(kept as string)).toBe(true);
+    const unlisted = racers.length + 1 - named.length;
+    // The cover that was there at the start was counted in `base`; what is held now is the kept one and the unlisted.
+    expect((await storage.usageFor(MAKER)).usedBytes - base).toBe(
+      200_000 * unlisted,
+    );
+  });
+
   it('a rejected piece keeps its cover for the resend', async () => {
     const cover = await landed(MAKER, 'content/cover', 'image/png');
     const piece = data<Piece>(await created201({ coverAsset: cover.key }));

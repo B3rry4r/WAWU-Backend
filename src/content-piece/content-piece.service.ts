@@ -1207,7 +1207,7 @@ export class ContentPieceService {
 
     // Conditional on the status read above: a reviewer approving the piece
     // at this instant must win, and the edit must not land on a live piece.
-    const written = await inPersonsTurn(creatorWawuId, () =>
+    const { written, oldCover } = await inPersonsTurn(creatorWawuId, () =>
       this.prisma.$transaction(async (tx) => {
         // A file this edit names must still be the person's (ME-04 round 4).
         await this.assertFilesNotGivenUp(tx, creatorWawuId, [
@@ -1216,7 +1216,20 @@ export class ContentPieceService {
           dto.coverAsset,
         ]);
         await this.assertCoverUsable(tx, creatorWawuId, dto.coverAsset);
-        return tx.contentPiece.updateMany({
+        // The cover this edit replaces is read under the person's lock, so a burst of replaces each frees the cover
+        // the one before it wrote (read before the lock, the others' covers were never freed).
+        let oldCover: string | null = null;
+        if (coverKey !== undefined) {
+          await lockStorageQuota(tx, creatorWawuId);
+          oldCover =
+            (
+              await tx.contentPiece.findUnique({
+                where: { id },
+                select: { coverKey: true },
+              })
+            )?.coverKey ?? null;
+        }
+        const written = await tx.contentPiece.updateMany({
           where: {
             id,
             creatorWawuId,
@@ -1224,6 +1237,7 @@ export class ContentPieceService {
           },
           data: changes,
         });
+        return { written, oldCover };
       }, LOCKED_TX),
     );
     if (written.count === 0) {
@@ -1234,7 +1248,7 @@ export class ContentPieceService {
     await this.stampUpdated(this.prisma, id);
     // Replacing a cover, or taking it off, deletes the old file (CONTENT-COVER).
     if (coverKey !== undefined)
-      await this.releaseOldCover(creatorWawuId, existing.coverKey, coverKey);
+      await this.releaseOldCover(creatorWawuId, oldCover, coverKey);
     return this.getMyPiece(id, creatorWawuId);
   }
 
