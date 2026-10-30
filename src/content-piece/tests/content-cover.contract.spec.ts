@@ -500,6 +500,41 @@ describe('A piece carries an optional cover picture (CONTENT-COVER, R-114, contr
       .expect(403);
   });
 
+  it('a course’s cover shows in the “from the course” row on the app’s request, and the same page answers the web’s request as before', async () => {
+    const courseCover = await landed(MAKER, 'content/cover', 'image/png');
+    const course = await prisma.contentPiece.create({
+      data: {
+        slug: `cover-course-${crypto.randomUUID()}`,
+        creatorWawuId: MAKER,
+        contentType: 'course',
+        title: 'CONTENT-COVER spec course',
+        description: 'A course with its own cover picture',
+        category: 'business_entrepreneurship',
+        accessType: 'paid',
+        price: 8000,
+        previewAssetUrl: 'https://cdn.example.com/p.jpg',
+        fullAssetUrl: 'https://cdn.example.com/f.mp4',
+        coverKey: courseCover.key,
+        status: 'live',
+      },
+    });
+    const made = data<Piece>(await created201({ parentCourseId: course.id }));
+    await goLive(made.id);
+    type Seen = { parentCourse: { id: string; coverUrl?: string | null } };
+    const app = await request(server())
+      .get(`/content/${made.id}/detail`)
+      .set('Authorization', bearer(MAKER))
+      .set(APP)
+      .expect(200);
+    expect(data<Seen>(app).parentCourse.id).toBe(course.id);
+    expect(data<Seen>(app).parentCourse.coverUrl).toContain(courseCover.key);
+    const web = await request(server())
+      .get(`/content/${made.id}/detail`)
+      .set('Authorization', bearer(MAKER))
+      .expect(200);
+    expect(Object.keys(data<Seen>(web).parentCourse)).not.toContain('coverUrl');
+  });
+
   it('a cover is counted in the person’s storage like any upload', async () => {
     const before = await storage.usageFor(MAKER);
     await landed(MAKER, 'content/cover', 'image/png');

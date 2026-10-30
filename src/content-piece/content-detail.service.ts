@@ -14,6 +14,7 @@ import { readHidden } from './deletion-hid';
 import { FeedCardsService, type FeedCreator } from './feed-cards.service';
 import { freeLessonCount } from './course-lessons.service';
 import { StorageService } from '../storage/storage.service';
+import { isAppRequest } from '../price-list/app-client';
 
 /** The one wording for a piece that is missing, hidden or not the caller's. */
 const NOT_FOUND = 'Content not found';
@@ -48,8 +49,11 @@ export interface ParentCourse {
   price: number;
   /** The course's public preview picture or clip (a fresh link), for the row's picture. */
   previewAssetUrl: string | null;
-  /** CONTENT-COVER (R-114): a fresh link to the course's own cover picture; null when it has none. */
-  coverUrl: string | null;
+  /**
+   * CONTENT-COVER (R-114): a fresh link to the course's own cover picture; null when it has none. Served on the app's
+   * requests (`X-Wawu-Client: app`) only: the page that carries this row answers other requests exactly as before.
+   */
+  coverUrl?: string | null;
 }
 
 export type CannotRateReason = 'own_content' | 'not_purchased';
@@ -186,6 +190,7 @@ export class ContentDetailService {
     creatorWawuId: string,
   ): Promise<ParentCourse | null> {
     if (!parentCourseId) return null;
+    const withCover = isAppRequest();
     const parent = await this.prisma.contentPiece.findUnique({
       where: { id: parentCourseId },
       select: {
@@ -214,7 +219,9 @@ export class ContentDetailService {
       lessonCount: parent._count.lessons,
       price: parent.price,
       previewAssetUrl: await this.storage.freshUrlFor(parent.previewAssetUrl),
-      coverUrl: await this.storage.coverUrlFor(parent.coverKey),
+      ...(withCover
+        ? { coverUrl: await this.storage.coverUrlFor(parent.coverKey) }
+        : {}),
     };
   }
 

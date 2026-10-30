@@ -63514,8 +63514,7 @@
           "title",
           "lessonCount",
           "price",
-          "previewAssetUrl",
-          "coverUrl"
+          "previewAssetUrl"
         ]
       },
       "RatingState": {
