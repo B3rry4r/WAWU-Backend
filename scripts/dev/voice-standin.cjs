@@ -182,11 +182,25 @@
 //     entry that inflates to more than it declares, [[zip-corrupt]] a wrong CRC, [[zip-nonaudio]] entries that are
 //     not MP3, [[zip-notzip]] an answer that is not a ZIP. state.stems lists each call (variation, bytes).
 //   GET /__standin/state lists the calls so far (never the text).
+// AUDIOBOOK, PODCAST MAKER, RECEPTIONIST (AITOOLS-13, AITOOLS-06):
+//   The speech route above also records previous_text and next_text lengths (state.speechContext).
+//   POST /v1/studio/podcasts (Studio API), GET /v1/studio/projects/<id>, GET .../snapshots, POST
+//     .../snapshots/<sid>/stream, DELETE /v1/studio/projects/<id>. Markers in the source text: [[allowlist]] a 403 (the
+//     account is not allowlisted), [[fail]] 500, [[reject]] 422, [[slow:n]] ready after n ms, [[never]] never ready,
+//     [[notaudio]] the stream answers a page, [[nosnap]] no snapshot. state.podcasts lists each start (mode, source type,
+//     length, voices, model; never the words), state.podcastReads each read, state.deletedPodcasts the ids deleted.
+//   POST /v1/convai/agents/create, PATCH and DELETE /v1/convai/agents/<id>; POST /v1/convai/knowledge-base/text|url|file;
+//     DELETE /v1/convai/knowledge-base/<id>; GET /v1/convai/conversation/get-signed-url; the agent socket at
+//     /__standin/agent-socket (user_message -> agent_response; [[fail]] closes it; [[ping]] asks for a pong first);
+//     GET and DELETE /v1/convai/conversations/<id> (length set with setConversation). Markers in an agent's name or
+//     prompt, a document's name or words and a message: [[fail]] 500, [[reject]] 422. state.agents, state.agentPatches,
+//     state.knowledge, state.chats (text-only or not, whether earlier messages came, never the words), state.signedUrls.
 // Nothing of a real provider beyond these. The Hub never sees a control route.
 // Nothing here leaves 127.0.0.1.
 'use strict';
 
 const http = require('node:http');
+const { WebSocketServer } = require('ws');
 
 const args = process.argv.slice(2);
 const opt = (name, fallback) => {
@@ -264,7 +278,31 @@ function startVoiceStandin({
     videoMusic: [],
     /** Each Split a song call: the variation asked and the file's bytes. */
     stems: [],
+    /** Each speech call's text length and the lengths of the words said to come before and after it (AITOOLS-13). */
+    speechContext: [],
+    podcasts: [],
+    podcastReads: [],
+    deletedPodcasts: [],
+    agents: [],
+    agentPatches: [],
+    deletedAgents: [],
+    knowledge: [],
+    deletedKnowledge: [],
+    signedUrls: 0,
+    chats: [],
+    deletedConversations: [],
   };
+  // AITOOLS-13: project id -> { readyAt, marks }.
+  const podcastProjects = new Map();
+  let podcastSeq = 0;
+  // AITOOLS-06: agent id -> its config; document id -> what it is; conversation id -> its state.
+  const agentsById = new Map();
+  let agentSeq = 0;
+  const docsById = new Map();
+  let docSeq = 0;
+  const conversations = new Map();
+  let convoSeq = 0;
+  let listenPort = 0;
   // asset id -> { bytes, type, marks }.
   const assets = new Map();
   let assetSeq = 0;
@@ -317,6 +355,11 @@ function startVoiceStandin({
         const body = JSON.parse(raw.toString('utf8'));
         text = String(body.text ?? '');
         model = typeof body.model_id === 'string' ? body.model_id : null;
+        state.speechContext.push({
+          chars: text.length,
+          previous: typeof body.previous_text === 'string' ? body.previous_text.length : null,
+          next: typeof body.next_text === 'string' ? body.next_text.length : null,
+        });
       } catch {
         return done(400, 'application/json', '{"detail":"bad body"}');
       }
@@ -1328,6 +1371,289 @@ function startVoiceStandin({
     };
   }
 
+
+  // ---- Podcast maker (AITOOLS-13) ------------------------------------------------------------------------------------
+  const reply = (res, status, type, body) => {
+    res.statusCode = status;
+    res.setHeader('content-type', type);
+    res.end(body);
+  };
+  const authed = (req, res) => {
+    if (req.headers['xi-api-key'] === key) return true;
+    reply(res, 401, 'application/json', '{"detail":"bad key"}');
+    return false;
+  };
+
+  async function podcastStart(req, res, _m, raw) {
+    if (!authed(req, res)) return;
+    let body;
+    try {
+      body = JSON.parse(raw.toString('utf8'));
+    } catch {
+      return reply(res, 400, 'application/json', '{"detail":"bad body"}');
+    }
+    const src = body.source ?? {};
+    const marks = `${src.text ?? ''} ${src.url ?? ''}`;
+    const mode = body.mode?.type;
+    const host = mode === 'conversation' ? body.mode.conversation?.host_voice_id : body.mode?.bulletin?.host_voice_id;
+    const guest = mode === 'conversation' ? body.mode.conversation?.guest_voice_id : null;
+    state.calls += 1;
+    if (marks.includes('[[allowlist]]'))
+      return reply(res, 403, 'application/json', '{"detail":"Only specifically whitelisted accounts can access the Studio API."}');
+    if (marks.includes('[[fail]]')) return reply(res, 500, 'application/json', '{"detail":"down"}');
+    if (marks.includes('[[reject]]')) return reply(res, 422, 'application/json', '{"detail":"refused"}');
+    if (!['conversation', 'bulletin'].includes(mode) || !VOICES.has(host) || (mode === 'conversation' && !VOICES.has(guest)))
+      return reply(res, 422, 'application/json', '{"detail":"bad voices"}');
+    if (typeof src.text !== 'string' && typeof src.url !== 'string')
+      return reply(res, 422, 'application/json', '{"detail":"no source"}');
+    const slow = /\[\[slow:(\d{1,6})\]\]/.exec(marks);
+    const id = `pod-${++podcastSeq}`;
+    podcastProjects.set(id, {
+      readyAt: marks.includes('[[never]]') ? Infinity : Date.now() + (slow ? Number(slow[1]) : 0),
+      marks,
+      chars: (src.text ?? '').length,
+    });
+    state.podcasts.push({
+      id,
+      mode,
+      source: typeof src.url === 'string' ? 'url' : 'text',
+      chars: (src.text ?? '').length,
+      urlChars: (src.url ?? '').length,
+      host,
+      guest,
+      model: body.model_id ?? null,
+      duration: body.duration_scale ?? null,
+      language: body.language ?? null,
+      quality: body.quality_preset ?? null,
+    });
+    return reply(res, 200, 'application/json', JSON.stringify({ project: { project_id: id, can_be_downloaded: false } }));
+  }
+  function podcastRead(req, res, m) {
+    if (!authed(req, res)) return;
+    const id = decodeURIComponent(m[1]);
+    const p = podcastProjects.get(id);
+    state.podcastReads.push({ id, status: p ? 200 : 404 });
+    if (!p) return reply(res, 404, 'application/json', '{"detail":"no such project"}');
+    return reply(res, 200, 'application/json', JSON.stringify({ project_id: id, can_be_downloaded: Date.now() >= p.readyAt }));
+  }
+  function podcastSnapshots(req, res, m) {
+    if (!authed(req, res)) return;
+    const id = decodeURIComponent(m[1]);
+    const p = podcastProjects.get(id);
+    if (!p) return reply(res, 404, 'application/json', '{"detail":"no such project"}');
+    const snaps = p.marks.includes('[[nosnap]]')
+      ? []
+      : [
+          { project_snapshot_id: `${id}-old`, project_id: id, created_at_unix: 1, name: 'old' },
+          { project_snapshot_id: `${id}-snap`, project_id: id, created_at_unix: 2, name: 'new' },
+        ];
+    return reply(res, 200, 'application/json', JSON.stringify({ snapshots: snaps }));
+  }
+  function podcastStream(req, res, m) {
+    if (!authed(req, res)) return;
+    const id = decodeURIComponent(m[1]);
+    const p = podcastProjects.get(id);
+    if (!p || decodeURIComponent(m[2]) !== `${id}-snap`)
+      return reply(res, 404, 'application/json', '{"detail":"no such snapshot"}');
+    if (p.marks.includes('[[notaudio]]')) return reply(res, 200, 'text/event-stream', '<html>not audio</html>');
+    // The provider's file types the stream text/event-stream; the bytes are the audio.
+    return reply(res, 200, 'text/event-stream', silence(Math.max(2, Math.min(60, p.chars / 15))));
+  }
+  function podcastDelete(req, res, m) {
+    if (!authed(req, res)) return;
+    const id = decodeURIComponent(m[1]);
+    if (!podcastProjects.has(id)) return reply(res, 404, 'application/json', '{"detail":"no such project"}');
+    podcastProjects.delete(id);
+    state.deletedPodcasts.push(id);
+    return reply(res, 200, 'application/json', '{"status":"ok"}');
+  }
+
+  // ---- Receptionist (AITOOLS-06) --------------------------------------------------------------------------------------
+  const readJson = (raw) => {
+    try {
+      return JSON.parse(raw.toString('utf8'));
+    } catch {
+      return null;
+    }
+  };
+  const agentShape = (body) => ({
+    name: body.name ?? '',
+    prompt: body.conversation_config?.agent?.prompt?.prompt ?? '',
+    llm: body.conversation_config?.agent?.prompt?.llm ?? null,
+    language: body.conversation_config?.agent?.language ?? null,
+    firstMessage: body.conversation_config?.agent?.first_message ?? '',
+    voice: body.conversation_config?.tts?.voice_id ?? null,
+    knowledge: (body.conversation_config?.agent?.prompt?.knowledge_base ?? []).map((k) => k.id),
+    textOnlyOverride: body.platform_settings?.overrides?.conversation_config_override?.conversation?.text_only === true,
+  });
+  function agentCreate(req, res, _m, raw) {
+    if (!authed(req, res)) return;
+    const body = readJson(raw);
+    if (!body || typeof body.conversation_config !== 'object')
+      return reply(res, 422, 'application/json', '{"detail":"bad body"}');
+    const shape = agentShape(body);
+    const marks = `${shape.name} ${shape.prompt}`;
+    if (marks.includes('[[fail]]')) return reply(res, 500, 'application/json', '{"detail":"down"}');
+    if (marks.includes('[[reject]]')) return reply(res, 422, 'application/json', '{"detail":"refused"}');
+    if (shape.voice !== null && !VOICES.has(shape.voice))
+      return reply(res, 422, 'application/json', '{"detail":"no such voice"}');
+    const id = `agent-${++agentSeq}`;
+    agentsById.set(id, shape);
+    state.agents.push({ id, ...shape, prompt: undefined, promptChars: shape.prompt.length, promptHasGuardrail: /never invent/i.test(shape.prompt) });
+    return reply(res, 200, 'application/json', JSON.stringify({ agent_id: id }));
+  }
+  function agentPatch(req, res, m, raw) {
+    if (!authed(req, res)) return;
+    const id = decodeURIComponent(m[1]);
+    if (!agentsById.has(id)) return reply(res, 404, 'application/json', '{"detail":"no such agent"}');
+    const body = readJson(raw);
+    if (!body) return reply(res, 400, 'application/json', '{"detail":"bad body"}');
+    const shape = agentShape(body);
+    if (`${shape.name} ${shape.prompt}`.includes('[[fail]]')) return reply(res, 500, 'application/json', '{"detail":"down"}');
+    agentsById.set(id, shape);
+    state.agentPatches.push({ id, knowledge: shape.knowledge, language: shape.language });
+    return reply(res, 200, 'application/json', JSON.stringify({ agent_id: id }));
+  }
+  function agentDelete(req, res, m) {
+    if (!authed(req, res)) return;
+    const id = decodeURIComponent(m[1]);
+    if (!agentsById.has(id)) return reply(res, 404, 'application/json', '{"detail":"no such agent"}');
+    agentsById.delete(id);
+    state.deletedAgents.push(id);
+    return reply(res, 200, 'application/json', '{}');
+  }
+  function knowledgeAdd(kind) {
+    return (req, res, _m, raw) => {
+      if (!authed(req, res)) return;
+      let name = '';
+      let words = '';
+      let bytes = 0;
+      if (kind === 'file') {
+        const form = parseMultipart(req.headers['content-type'], raw);
+        const file = form?.get('file');
+        if (!form || !file || file.data.length === 0)
+          return reply(res, 400, 'application/json', '{"detail":"no file"}');
+        name = form.get('name')?.data.toString('utf8') ?? '';
+        words = file.data.toString('latin1');
+        bytes = file.data.length;
+        state.knowledge.push({ kind, name, bytes, fileType: file.type, seq: docSeq + 1 });
+      } else {
+        const body = readJson(raw);
+        if (!body) return reply(res, 400, 'application/json', '{"detail":"bad body"}');
+        name = body.name ?? '';
+        words = `${body.text ?? ''} ${body.url ?? ''}`;
+        bytes = (body.text ?? '').length;
+        if (kind === 'url' && !/^https:\/\//.test(body.url ?? ''))
+          return reply(res, 422, 'application/json', '{"detail":"bad url"}');
+        state.knowledge.push({ kind, name, bytes, seq: docSeq + 1 });
+      }
+      if (`${name} ${words}`.includes('[[fail]]')) {
+        state.knowledge.pop();
+        return reply(res, 500, 'application/json', '{"detail":"down"}');
+      }
+      if (`${name} ${words}`.includes('[[reject]]')) {
+        state.knowledge.pop();
+        return reply(res, 422, 'application/json', '{"detail":"refused"}');
+      }
+      const id = `doc-${++docSeq}`;
+      docsById.set(id, { kind, name, bytes });
+      return reply(res, 200, 'application/json', JSON.stringify({ id, name, folder_path: [] }));
+    };
+  }
+  function knowledgeDelete(req, res, m) {
+    if (!authed(req, res)) return;
+    const id = decodeURIComponent(m[1]);
+    if (!docsById.has(id)) return reply(res, 404, 'application/json', '{"detail":"no such document"}');
+    docsById.delete(id);
+    // With force=true the document also leaves every agent that used it.
+    for (const a of agentsById.values()) a.knowledge = a.knowledge.filter((k) => k !== id);
+    state.deletedKnowledge.push(id);
+    return reply(res, 200, 'application/json', '{}');
+  }
+  function signedUrl(req, res) {
+    if (!authed(req, res)) return;
+    const url = new URL(req.url, 'http://127.0.0.1');
+    const agent = url.searchParams.get('agent_id');
+    if (!agent || !agentsById.has(agent)) return reply(res, 404, 'application/json', '{"detail":"no such agent"}');
+    state.signedUrls += 1;
+    const withId = url.searchParams.get('include_conversation_id') === 'true';
+    const convo = `convo-${++convoSeq}`;
+    if (withId) conversations.set(convo, { agent, status: 'in-progress', seconds: null });
+    const q = new URLSearchParams({ agent_id: agent, sig: `sig-${convoSeq}` });
+    if (withId) q.set('conversation_id', convo);
+    return reply(res, 200, 'application/json', JSON.stringify({ signed_url: `ws://127.0.0.1:${listenPort}/__standin/agent-socket?${q}` }));
+  }
+  function conversationRead(req, res, m) {
+    if (!authed(req, res)) return;
+    const id = decodeURIComponent(m[1]);
+    const c = conversations.get(id);
+    if (!c) return reply(res, 404, 'application/json', '{"detail":"no such conversation"}');
+    return reply(
+      res,
+      200,
+      'application/json',
+      JSON.stringify({ conversation_id: id, status: c.status, metadata: { call_duration_secs: c.seconds ?? 0 } }),
+    );
+  }
+  function conversationDelete(req, res, m) {
+    if (!authed(req, res)) return;
+    const id = decodeURIComponent(m[1]);
+    if (!conversations.has(id)) return reply(res, 404, 'application/json', '{"detail":"no such conversation"}');
+    conversations.delete(id);
+    state.deletedConversations.push(id);
+    return reply(res, 200, 'application/json', '{}');
+  }
+  // The agent socket: the text-only chat the Hub holds for a message.
+  const sockets = new WebSocketServer({ noServer: true });
+  sockets.on('connection', (ws, req) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    const agentId = url.searchParams.get('agent_id');
+    const agent = agentsById.get(agentId);
+    let textOnly = false;
+    let needPong = false;
+    let pending = null;
+    const record = { agent: agentId, textOnly: false, earlier: false, chars: 0, keyLeak: false, pongs: 0 };
+    record.keyLeak = Boolean(req.headers['xi-api-key']);
+    state.chats.push(record);
+    const answer = (text) => {
+      if (/\[\[fail\]\]/.test(text)) return ws.close(1011, 'down');
+      const docs = (agent?.knowledge ?? []).map((id) => docsById.get(id)?.name).filter(Boolean);
+      const slow = /\[\[slow:(\d{1,6})\]\]/.exec(text);
+      setTimeout(() => {
+        ws.send(
+          JSON.stringify({
+            type: 'agent_response',
+            agent_response_event: { agent_response: `I know ${docs.length} things${docs.length ? `: ${docs.join(', ')}` : ''}.` },
+          }),
+        );
+      }, slow ? Number(slow[1]) : 0);
+    };
+    ws.on('message', (data) => {
+      const event = readJson(data);
+      if (!event) return;
+      if (event.type === 'conversation_initiation_client_data') {
+        textOnly = event.conversation_config_override?.conversation?.text_only === true;
+        record.textOnly = textOnly && Boolean(agent?.textOnlyOverride);
+        ws.send(JSON.stringify({ type: 'conversation_initiation_metadata', conversation_initiation_metadata_event: { conversation_id: 'x' } }));
+      } else if (event.type === 'user_message') {
+        const text = String(event.text ?? '');
+        record.chars = text.length;
+        record.earlier = /\nThe person now writes: /.test(text);
+        if (text.includes('[[ping]]') && !needPong) {
+          needPong = true;
+          pending = text;
+          ws.send(JSON.stringify({ type: 'ping', ping_event: { event_id: 7, ping_ms: 5 } }));
+          return;
+        }
+        answer(text);
+      } else if (event.type === 'pong' && needPong) {
+        needPong = false;
+        record.pongs += 1;
+        answer(pending ?? '');
+      }
+    });
+  });
+
   // One entry per provider route the Hub calls: method, path pattern, handler
   // (req, res, match, raw body). A later tool adds its route here.
   const ROUTES = [
@@ -1430,6 +1756,21 @@ function startVoiceStandin({
       handle: newRoute('stems'),
     },
     { method: 'POST', path: /^\/v1\/voices\/add$/, handle: addVoice },
+    { method: 'POST', path: /^\/v1\/studio\/podcasts$/, handle: podcastStart },
+    { method: 'GET', path: /^\/v1\/studio\/projects\/([^/]+)\/snapshots$/, handle: podcastSnapshots },
+    { method: 'POST', path: /^\/v1\/studio\/projects\/([^/]+)\/snapshots\/([^/]+)\/stream$/, handle: podcastStream },
+    { method: 'GET', path: /^\/v1\/studio\/projects\/([^/]+)$/, handle: podcastRead },
+    { method: 'DELETE', path: /^\/v1\/studio\/projects\/([^/]+)$/, handle: podcastDelete },
+    { method: 'POST', path: /^\/v1\/convai\/agents\/create$/, handle: agentCreate },
+    { method: 'PATCH', path: /^\/v1\/convai\/agents\/([^/]+)$/, handle: agentPatch },
+    { method: 'DELETE', path: /^\/v1\/convai\/agents\/([^/]+)$/, handle: agentDelete },
+    { method: 'POST', path: /^\/v1\/convai\/knowledge-base\/text$/, handle: knowledgeAdd('text') },
+    { method: 'POST', path: /^\/v1\/convai\/knowledge-base\/url$/, handle: knowledgeAdd('url') },
+    { method: 'POST', path: /^\/v1\/convai\/knowledge-base\/file$/, handle: knowledgeAdd('file') },
+    { method: 'DELETE', path: /^\/v1\/convai\/knowledge-base\/([^/]+)$/, handle: knowledgeDelete },
+    { method: 'GET', path: /^\/v1\/convai\/conversation\/get-signed-url$/, handle: signedUrl },
+    { method: 'GET', path: /^\/v1\/convai\/conversations\/([^/]+)$/, handle: conversationRead },
+    { method: 'DELETE', path: /^\/v1\/convai\/conversations\/([^/]+)$/, handle: conversationDelete },
     { method: 'DELETE', path: /^\/v1\/voices\/([^/]+)$/, handle: removeVoice },
   ];
 
@@ -1456,8 +1797,13 @@ function startVoiceStandin({
       void route.handle(req, res, match, Buffer.concat(parts));
     });
   });
+  server.on('upgrade', (req, socket, head) => {
+    if (!/^\/__standin\/agent-socket/.test(req.url ?? '')) return socket.destroy();
+    sockets.handleUpgrade(req, socket, head, (ws) => sockets.emit('connection', ws, req));
+  });
   return new Promise((resolve) => {
-    server.listen(port, '127.0.0.1', () =>
+    server.listen(port, '127.0.0.1', () => {
+      listenPort = server.address().port;
       resolve({
         server,
         port: server.address().port,
@@ -1473,8 +1819,22 @@ function startVoiceStandin({
         openDubs: () => dubProjects.size,
         /** Assets (a person's photo or voice) the provider still holds (AITOOLS-09, AITOOLS-10). */
         openAssets: () => assets.size,
-      }),
-    );
+        /** Podcast projects, agents, documents and conversations the provider still holds (AITOOLS-13, AITOOLS-06). */
+        openPodcasts: () => podcastProjects.size,
+        openAgents: () => agentsById.size,
+        openKnowledge: () => docsById.size,
+        openConversations: () => conversations.size,
+        /** What an agent holds now (its config as last sent). */
+        agent: (id) => agentsById.get(id) ?? null,
+        /** Sets how a conversation stands: its status and its length in seconds (a talk that ended). */
+        setConversation: (id, patch) => {
+          const c = conversations.get(id);
+          if (c) Object.assign(c, patch);
+        },
+        /** The conversation ids made so far. */
+        conversationIds: () => [...conversations.keys()],
+      });
+    });
   });
 }
 

@@ -1,8 +1,9 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
 import { AccountPurgeHooks } from '../account-purge/purge-hooks';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { copyOfFlow, parseFlowRef, type FlowRef } from './flow/flow-support';
 import { AiCloneService } from './own-voice/ai-clone.service';
+import { ReceptionistService } from './receptionist/receptionist.service';
 import {
   copyOfMarker,
   ProviderCopyService,
@@ -42,6 +43,8 @@ export class AiToolsPurgeService implements OnModuleInit {
     private readonly hooks: AccountPurgeHooks,
     // AITOOLS-11: a saved clone is a copy of the person's voice the provider holds until it is deleted.
     private readonly clones: AiCloneService,
+    // AITOOLS-06: a Receptionist and what it knows are copies of the person's words the provider holds until they are deleted.
+    @Optional() private readonly receptionist?: ReceptionistService,
   ) {}
 
   onModuleInit(): void {
@@ -86,6 +89,8 @@ export class AiToolsPurgeService implements OnModuleInit {
     }
     // AITOOLS-11: every saved clone of the person is deleted at the provider before its row goes (throws while one is left).
     await this.clones.beforeErase(wawuUserId);
+    // AITOOLS-06: the agent and every document of the person's Receptionist are deleted at the provider before the rows go (throws while one is left).
+    await this.receptionist?.beforeErase(wawuUserId);
     const left = await this.prisma.aiToolJob.count({
       where: { wawuUserId, ...holdsCopy },
     });

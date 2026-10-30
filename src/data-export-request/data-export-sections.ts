@@ -291,6 +291,38 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // AITOOLS-06: the person's Receptionist: the business words they gave it, the names and kinds of what it knows, and
+    // the earlier messages kept as context. The provider's ids for the agent and its documents are the Hub's, not the
+    // person's, and stay out.
+    key: 'receptionist',
+    models: ['ReceptionistAgent', 'ReceptionistKnowledge', 'ReceptionistTurn'],
+    load: async (prisma, me) => ({
+      agent: await prisma.receptionistAgent.findUnique({
+        where: { wawuUserId: me },
+        select: {
+          businessName: true,
+          offer: true,
+          replyStyle: true,
+          language: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      }),
+      knowledge: await prisma.receptionistKnowledge.findMany({
+        where: { wawuUserId: me },
+        orderBy: { createdAt: 'asc' },
+        take: 200,
+        select: { kind: true, name: true, bytes: true, createdAt: true },
+      }),
+      messages: await prisma.receptionistTurn.findMany({
+        where: { wawuUserId: me },
+        orderBy: { createdAt: 'asc' },
+        take: 200,
+        select: { role: true, text: true, createdAt: true },
+      }),
+    }),
+  },
+  {
     // AITOOLS-11: the saved clone of the person's own voice: the name they gave it, the exact words they agreed to and
     // when. The provider's own id for it is the Hub's, not the person's, and stays out.
     key: 'savedVoice',

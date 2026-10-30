@@ -280,6 +280,10 @@ export const GENERATED_KEY_FOLDERS = [
   'ai/dialogue',
   'ai/video-music',
   'ai/stems',
+  // R-109 (AITOOLS-13): an Audiobook, its chapters while it is made, and a Podcast.
+  'ai/audiobook',
+  'ai/audiobook-part',
+  'ai/podcast',
 ] as const;
 
 /**
@@ -1304,6 +1308,28 @@ export class StorageService {
     const got = await out.Body?.transformToByteArray();
     if (!got || got.length === 0) throw new Error('readStoredHead: empty');
     return Buffer.from(got.subarray(0, bytes));
+  }
+
+  /**
+   * The keys of the confirmed files the Hub made for a person in `folder` whose name starts with `namePrefix`
+   * (AITOOLS-13: the chapters of an audiobook in the making). A read of the Hub's own rows; no bucket call.
+   */
+  async listGeneratedKeys(
+    wawuId: string,
+    folder: string,
+    namePrefix: string,
+  ): Promise<string[]> {
+    const rows = await this.prisma.storageObject.findMany({
+      where: {
+        wawuUserId: wawuId,
+        folder,
+        status: 'confirmed',
+        key: { startsWith: `${folder}/${wawuId}/${namePrefix}` },
+      },
+      select: { key: true },
+      orderBy: { key: 'asc' },
+    });
+    return rows.map((r) => r.key);
   }
 
   /**

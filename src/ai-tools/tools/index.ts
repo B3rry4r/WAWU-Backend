@@ -1,4 +1,5 @@
 import type { AiTool, AiToolId } from './ai-tool';
+import { AUDIOBOOK_TOOL } from './audiobook.tool';
 import { CAPTIONS_TOOL } from './captions.tool';
 import { CLEAN_AUDIO_TOOL } from './clean-audio.tool';
 import { DIALOGUE_TOOL } from './dialogue.tool';
@@ -7,6 +8,8 @@ import { IMAGE_TOOL } from './image.tool';
 import { MUSIC_TOOL } from './music.tool';
 import { MY_VOICE_TOOL } from './my-voice.tool';
 import { PHOTO_EDIT_TOOL } from './photo-edit.tool';
+import { PODCAST_TOOL } from './podcast.tool';
+import { RECEPTIONIST_TOOL } from './receptionist.tool';
 import { QUICK_VOICE_TOOL } from './quick-voice.tool';
 import { SOUND_EFFECT_TOOL } from './sound-effect.tool';
 import { STEMS_TOOL } from './stems.tool';
@@ -49,6 +52,11 @@ export const AI_STUDIO2_TOOLS: readonly AiTool[] = [
   MY_VOICE_TOOL,
   VIDEO_MUSIC_TOOL,
   STEMS_TOOL,
+  // AITOOLS-13: Audiobook and Podcast maker.
+  AUDIOBOOK_TOOL,
+  PODCAST_TOOL,
+  // AITOOLS-06: the Receptionist's text messages (setting it up and talking to it are routes of their own).
+  RECEPTIONIST_TOOL,
 ];
 
 /** Every tool the Hub can run, in the order Studio lists them: the pipeline, the catalogue and the follower read this. */
@@ -59,7 +67,11 @@ export const ALL_AI_TOOLS: readonly AiTool[] = [
 
 /** The tool whose plan action a job row names (`tool` column), or null for an action no built tool prices. */
 export function toolForAction(action: string): AiTool | null {
-  return ALL_AI_TOOLS.find((t) => t.action === action) ?? null;
+  return (
+    ALL_AI_TOOLS.find(
+      (t) => t.action === action || t.alsoActions?.includes(action),
+    ) ?? null
+  );
 }
 
 export function toolById(id: AiToolId): AiTool {

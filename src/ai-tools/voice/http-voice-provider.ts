@@ -7,6 +7,7 @@ import { request as httpsRequest } from 'node:https';
 import { randomBytes } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import { Injectable, Logger } from '@nestjs/common';
+import { WebSocket } from 'ws';
 import { ConfigService } from '@nestjs/config';
 import { AI_AUDIO_CONTENT_TYPES } from '../audio/ai-audio-store';
 import { ZIP_LIMITS } from '../music/zip-reader';
@@ -21,8 +22,16 @@ import {
   type MusicForVideoRequest,
   type SplitStemsRequest,
   type StemArchive,
+  type AgentSpec,
   type AiVoiceProvider,
   type AssetUpload,
+  type ChatTurn,
+  type ConversationRead,
+  type PodcastProgress,
+  type SpeakChapterRequest,
+  type StartedPodcast,
+  type StartPodcastRequest,
+  type VoiceSessionLink,
   type CopyPresence,
   type CopyRemoval,
   type DubOutputs,
@@ -45,6 +54,7 @@ import {
   type StartVideoRequest,
   type StreamedFile,
   type StreamedMedia,
+  type VoiceSample,
   type Transcript,
   type TranscribeRequest,
   type TranscriptWord,
@@ -361,6 +371,15 @@ export class HttpVoiceProvider implements AiVoiceProvider {
 
   /** Captions and Clean audio take a file and use no voice: a host and a key are enough (AITOOLS-04). */
   get fileToolsConfigured(): boolean {
+    return this.baseUrl !== null && this.apiKey !== null;
+  }
+
+  /** The Studio API (Podcast maker) and the agents (Receptionist) need only a host and a key (AITOOLS-13, AITOOLS-06). */
+  get podcastConfigured(): boolean {
+    return this.baseUrl !== null && this.apiKey !== null;
+  }
+
+  get agentsConfigured(): boolean {
     return this.baseUrl !== null && this.apiKey !== null;
   }
 
@@ -1746,6 +1765,544 @@ export class HttpVoiceProvider implements AiVoiceProvider {
       outer: opts.signal,
     });
     return { archive: done.body };
+  }
+
+  // ---- Audiobook, Podcast maker (AITOOLS-13, R-109) ---------------------------------------------------------------
+  // NOT RUN against the real provider (the owner's credits are not bought yet); every path is run against the
+  // stand-in with the wire shape of the provider's file (docs/elevenlabs/API-FACTS.md, "Audiobook", "Podcast maker").
+
+  async speakChapter(
+    req: SpeakChapterRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<SpokenAudio> {
+    const id = this.voiceIdFor({ voiceId: req.voiceId });
+    if (!MODEL_ID.test(req.model))
+      throw new AiVoiceProviderError('rejected', 'model');
+    // One chapter is a long text on a long call: its own deadline (the file timeout), not the short-text one.
+    return this.postForAudioLong(
+      `/v1/text-to-speech/${encodeURIComponent(id)}`,
+      {
+        text: req.text,
+        model_id: req.model,
+        ...(req.previousText ? { previous_text: req.previousText } : {}),
+        ...(req.nextText ? { next_text: req.nextText } : {}),
+      },
+      this.fileTimeoutMs,
+      opts.signal,
+    );
+  }
+
+  async startPodcast(
+    req: StartPodcastRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<StartedPodcast> {
+    if (!this.podcastConfigured || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'podcasts are not available');
+    if (!MODEL_ID.test(req.model) || !/^[a-z]{2}$/.test(req.language))
+      throw new AiVoiceProviderError('rejected', 'model or language');
+    const host = this.voiceIdFor({ voiceId: req.hostVoiceId });
+    const mode =
+      req.mode === 'conversation'
+        ? {
+            type: 'conversation',
+            conversation: {
+              host_voice_id: host,
+              guest_voice_id: this.voiceIdFor({
+                voiceId: req.guestVoiceId ?? '',
+              }),
+            },
+          }
+        : { type: 'bulletin', bulletin: { host_voice_id: host } };
+    const raw = await this.jsonCall(
+      'POST',
+      '/v1/studio/podcasts',
+      {
+        model_id: req.model,
+        mode,
+        source: req.source,
+        quality_preset: 'standard',
+        duration_scale: req.duration,
+        language: req.language,
+      },
+      opts.signal,
+    );
+    const project = (raw as { project?: { project_id?: unknown } }).project;
+    const id =
+      project?.project_id ?? (raw as { project_id?: unknown }).project_id;
+    if (typeof id !== 'string' || !PROVIDER_ID.test(id))
+      throw new AiVoiceProviderError('unavailable', 'not a project');
+    return { projectId: id };
+  }
+
+  async readPodcast(
+    projectId: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<PodcastProgress> {
+    if (!this.podcastConfigured || !PROVIDER_ID.test(projectId))
+      throw new AiVoiceProviderError('rejected', 'podcasts are not available');
+    const raw = (await this.jsonCall(
+      'GET',
+      `/v1/studio/projects/${encodeURIComponent(projectId)}`,
+      undefined,
+      opts.signal,
+    )) as {
+      can_be_downloaded?: unknown;
+      project?: { can_be_downloaded?: unknown };
+    };
+    const flag = raw.can_be_downloaded ?? raw.project?.can_be_downloaded;
+    return { ready: flag === true };
+  }
+
+  async fetchPodcastAudio(
+    projectId: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<SpokenAudio> {
+    if (!this.podcastConfigured || !PROVIDER_ID.test(projectId))
+      throw new AiVoiceProviderError('rejected', 'podcasts are not available');
+    const listed = (await this.jsonCall(
+      'GET',
+      `/v1/studio/projects/${encodeURIComponent(projectId)}/snapshots`,
+      undefined,
+      opts.signal,
+    )) as { snapshots?: unknown };
+    const snaps = Array.isArray(listed.snapshots)
+      ? (listed.snapshots as {
+          project_snapshot_id?: unknown;
+          created_at_unix?: unknown;
+        }[])
+      : [];
+    const newest = snaps
+      .filter(
+        (s) =>
+          typeof s?.project_snapshot_id === 'string' &&
+          PROVIDER_ID.test(s.project_snapshot_id),
+      )
+      .sort(
+        (a, b) =>
+          Number(b.created_at_unix ?? 0) - Number(a.created_at_unix ?? 0),
+      )[0];
+    if (!newest) throw new AiVoiceProviderError('unavailable', 'no snapshot');
+    const done = await this.longCall({
+      path: `/v1/studio/projects/${encodeURIComponent(projectId)}/snapshots/${encodeURIComponent(String(newest.project_snapshot_id))}/stream`,
+      query: '',
+      contentType: 'application/json',
+      payload: Buffer.from(JSON.stringify({ convert_to_mpeg: true })),
+      accept: 'audio/mpeg',
+      // The provider's file types this stream `text/event-stream`; the bytes are what decide (below).
+      typeOk: (type) =>
+        type.startsWith('audio/') ||
+        type.startsWith('application/octet-stream') ||
+        type.startsWith('text/event-stream'),
+      notOkMessage: 'not audio',
+      maxBytes: MAX_AUDIO_BYTES,
+      timeoutMs: this.fileTimeoutMs,
+      outer: opts.signal,
+    });
+    if (!looksLikeMp3(done.body))
+      throw new AiVoiceProviderError('unavailable', 'not audio');
+    return { audio: done.body, contentType: 'audio/mpeg' };
+  }
+
+  removePodcast(projectId: string): Promise<CopyRemoval> {
+    if (!PROVIDER_ID.test(projectId)) return Promise.resolve('failed');
+    return this.removeItem(
+      `/v1/studio/projects/${encodeURIComponent(projectId)}`,
+    );
+  }
+
+  // ---- Receptionist (AITOOLS-06, R-109) ---------------------------------------------------------------------------
+  // NOT RUN against the real provider. The agent socket's messages follow docs/elevenlabs/API-FACTS.md ("Receptionist:
+  // the talking agent"); nothing here reaches a phone number, WhatsApp, a call or a call list.
+
+  /** A small JSON call with the key; the answer is parsed and bounded. A non-2xx is `failureForStatus`. */
+  private async jsonCall(
+    method: 'GET' | 'POST' | 'PATCH',
+    path: string,
+    body: unknown,
+    outer?: AbortSignal,
+  ): Promise<unknown> {
+    if (this.baseUrl === null || this.apiKey === null)
+      throw new AiVoiceProviderError('rejected', 'not available');
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, {
+        method,
+        headers: {
+          accept: 'application/json',
+          'xi-api-key': this.apiKey,
+          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: this.signalFor(outer),
+      });
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'no answer');
+    }
+    if (!res.ok) {
+      await res.arrayBuffer().catch(() => undefined);
+      throw failureForStatus(res.status);
+    }
+    try {
+      return JSON.parse(
+        (await this.smallBody(res)).toString('utf8'),
+      ) as unknown;
+    } catch (e) {
+      if (e instanceof AiVoiceProviderError) throw e;
+      throw new AiVoiceProviderError('unavailable', 'not json');
+    }
+  }
+
+  /** The agent as the provider takes it (`conversation_config`, the text-only override on, the longest session set). */
+  private agentBody(spec: AgentSpec): Record<string, unknown> {
+    if (
+      !MODEL_ID.test(spec.llm) &&
+      !/^[a-z0-9][a-z0-9._-]{1,60}$/i.test(spec.llm)
+    )
+      throw new AiVoiceProviderError('rejected', 'model');
+    if (!/^[a-z]{2}$/.test(spec.language))
+      throw new AiVoiceProviderError('rejected', 'language');
+    for (const k of spec.knowledge)
+      if (!PROVIDER_ID.test(k.id))
+        throw new AiVoiceProviderError('rejected', 'document');
+    return {
+      name: spec.name,
+      conversation_config: {
+        agent: {
+          first_message: spec.firstMessage,
+          language: spec.language,
+          prompt: {
+            prompt: spec.prompt,
+            llm: spec.llm,
+            knowledge_base: spec.knowledge.map((k) => ({
+              type: k.kind,
+              name: k.name,
+              id: k.id,
+              usage_mode: 'auto',
+            })),
+          },
+        },
+        tts: { voice_id: this.voiceIdFor({ voiceId: spec.voiceId }) },
+        conversation: { text_only: false },
+      },
+      platform_settings: {
+        overrides: {
+          conversation_config_override: { conversation: { text_only: true } },
+        },
+      },
+    };
+  }
+
+  async createAgent(
+    spec: AgentSpec,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<{ agentId: string }> {
+    if (!this.agentsConfigured)
+      throw new AiVoiceProviderError('rejected', 'agents are not available');
+    const raw = (await this.jsonCall(
+      'POST',
+      '/v1/convai/agents/create',
+      this.agentBody(spec),
+      opts.signal,
+    )) as { agent_id?: unknown };
+    if (typeof raw.agent_id !== 'string' || !PROVIDER_ID.test(raw.agent_id))
+      throw new AiVoiceProviderError('unavailable', 'not an agent');
+    return { agentId: raw.agent_id };
+  }
+
+  async updateAgent(
+    agentId: string,
+    spec: AgentSpec,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<void> {
+    if (!this.agentsConfigured || !PROVIDER_ID.test(agentId))
+      throw new AiVoiceProviderError('rejected', 'agents are not available');
+    await this.jsonCall(
+      'PATCH',
+      `/v1/convai/agents/${encodeURIComponent(agentId)}`,
+      this.agentBody(spec),
+      opts.signal,
+    );
+  }
+
+  deleteAgent(agentId: string): Promise<CopyRemoval> {
+    if (!PROVIDER_ID.test(agentId)) return Promise.resolve('failed');
+    return this.removeItem(`/v1/convai/agents/${encodeURIComponent(agentId)}`);
+  }
+
+  private knowledgeId(raw: unknown): { id: string } {
+    const id = (raw as { id?: unknown }).id;
+    if (typeof id !== 'string' || !PROVIDER_ID.test(id))
+      throw new AiVoiceProviderError('unavailable', 'not a document');
+    return { id };
+  }
+
+  async addKnowledgeText(
+    req: { name: string; text: string },
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<{ id: string }> {
+    if (!this.agentsConfigured)
+      throw new AiVoiceProviderError('rejected', 'agents are not available');
+    return this.knowledgeId(
+      await this.jsonCall(
+        'POST',
+        '/v1/convai/knowledge-base/text',
+        { text: req.text, name: req.name },
+        opts.signal,
+      ),
+    );
+  }
+
+  async addKnowledgeUrl(
+    req: { name: string; url: string },
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<{ id: string }> {
+    if (!this.agentsConfigured)
+      throw new AiVoiceProviderError('rejected', 'agents are not available');
+    return this.knowledgeId(
+      await this.jsonCall(
+        'POST',
+        '/v1/convai/knowledge-base/url',
+        { url: req.url, name: req.name },
+        opts.signal,
+      ),
+    );
+  }
+
+  async addKnowledgeFile(
+    req: { name: string; file: VoiceSample | StreamedFile },
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<{ id: string }> {
+    if (!this.agentsConfigured || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'agents are not available');
+    const form = this.multipart(
+      { name: req.name },
+      'file',
+      req.file,
+      req.file.contentType === 'application/pdf'
+        ? 'document.pdf'
+        : 'document.txt',
+    );
+    const done = await this.longCall({
+      path: '/v1/convai/knowledge-base/file',
+      query: '',
+      contentType: form.contentType,
+      payload: form.payload,
+      accept: 'application/json',
+      typeOk: (type) => type.startsWith('application/json'),
+      notOkMessage: 'not a document',
+      maxBytes: MAX_GENERATION_JSON_BYTES,
+      timeoutMs: this.fileTimeoutMs,
+      outer: opts.signal,
+    });
+    try {
+      return this.knowledgeId(JSON.parse(done.body.toString('utf8')));
+    } catch (e) {
+      if (e instanceof AiVoiceProviderError) throw e;
+      throw new AiVoiceProviderError('unavailable', 'not a document');
+    }
+  }
+
+  deleteKnowledge(id: string): Promise<CopyRemoval> {
+    if (!PROVIDER_ID.test(id)) return Promise.resolve('failed');
+    return this.removeItem(
+      `/v1/convai/knowledge-base/${encodeURIComponent(id)}?force=true`,
+    );
+  }
+
+  /**
+   * A signed link must go to the provider's own host (`wss` to a name, or `ws` to the very host the Hub is set up with,
+   * the local stand-in); the provider's key is never sent on it.
+   */
+  private socketUrl(signed: string): URL {
+    let url: URL;
+    try {
+      url = new URL(signed);
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'bad link');
+    }
+    const base = this.baseUrl === null ? null : new URL(this.baseUrl);
+    const named =
+      url.protocol === 'wss:' &&
+      url.username === '' &&
+      url.password === '' &&
+      !/^\[|^[0-9.]+$/.test(url.hostname) &&
+      url.hostname !== 'localhost';
+    const sameAsProvider =
+      base !== null &&
+      url.username === '' &&
+      url.host === base.host &&
+      url.protocol === (base.protocol === 'https:' ? 'wss:' : 'ws:');
+    if (!named && !sameAsProvider)
+      throw new AiVoiceProviderError('unavailable', 'bad link');
+    return url;
+  }
+
+  async askAgent(
+    req: { agentId: string; message: string; earlier: readonly ChatTurn[] },
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<{ reply: string }> {
+    if (!this.agentsConfigured || !PROVIDER_ID.test(req.agentId))
+      throw new AiVoiceProviderError('rejected', 'agents are not available');
+    const link = await this.signedLink(req.agentId, false, opts.signal);
+    const url = this.socketUrl(link.signedUrl);
+    // The earlier messages go on with the new one as plain words: the socket takes one `user_message` at a time.
+    const text =
+      req.earlier.length === 0
+        ? req.message
+        : `${req.earlier
+            .map((t) => `${t.role === 'person' ? 'Person' : 'You'}: ${t.text}`)
+            .join('\n')}\n\nThe person now writes: ${req.message}`;
+    return new Promise<{ reply: string }>((resolve, reject) => {
+      let settled = false;
+      const socket = new WebSocket(url, {
+        handshakeTimeout: 15_000,
+        maxPayload: 1 << 20,
+      });
+      const end = (out: { reply: string } | AiVoiceProviderError) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        opts.signal?.removeEventListener('abort', onAbort);
+        try {
+          socket.terminate();
+        } catch {
+          // already closed
+        }
+        if (out instanceof AiVoiceProviderError) reject(out);
+        else resolve(out);
+      };
+      const onAbort = () =>
+        end(new AiVoiceProviderError('unavailable', 'no answer'));
+      const timer = setTimeout(onAbort, this.timeoutMs);
+      opts.signal?.addEventListener('abort', onAbort, { once: true });
+      socket.on('error', () =>
+        end(new AiVoiceProviderError('unavailable', 'no answer')),
+      );
+      socket.on('close', () =>
+        end(new AiVoiceProviderError('unavailable', 'answer cut off')),
+      );
+      socket.on('open', () => {
+        socket.send(
+          JSON.stringify({
+            type: 'conversation_initiation_client_data',
+            conversation_config_override: { conversation: { text_only: true } },
+          }),
+        );
+      });
+      let asked = false;
+      const ask = () => {
+        if (asked) return;
+        asked = true;
+        socket.send(JSON.stringify({ type: 'user_message', text }));
+      };
+      socket.on('message', (data) => {
+        let event: Record<string, unknown>;
+        try {
+          const raw = Array.isArray(data)
+            ? Buffer.concat(data)
+            : Buffer.from(data as ArrayBuffer);
+          event = JSON.parse(raw.toString('utf8')) as Record<string, unknown>;
+        } catch {
+          return;
+        }
+        if (event.type === 'ping') {
+          const id = (event.ping_event as { event_id?: unknown } | undefined)
+            ?.event_id;
+          socket.send(JSON.stringify({ type: 'pong', event_id: id }));
+        } else if (event.type === 'conversation_initiation_metadata') {
+          ask();
+        } else if (event.type === 'agent_response') {
+          const reply = (
+            event.agent_response_event as
+              { agent_response?: unknown } | undefined
+          )?.agent_response;
+          if (typeof reply === 'string' && reply.trim() !== '')
+            end({ reply: reply.trim() });
+          else end(new AiVoiceProviderError('unavailable', 'empty reply'));
+        } else if (event.type === 'error') {
+          end(new AiVoiceProviderError('rejected', 'the agent refused'));
+        }
+      });
+    });
+  }
+
+  private async signedLink(
+    agentId: string,
+    withConversation: boolean,
+    outer?: AbortSignal,
+  ): Promise<VoiceSessionLink> {
+    const raw = (await this.jsonCall(
+      'GET',
+      `/v1/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}${withConversation ? '&include_conversation_id=true' : ''}`,
+      undefined,
+      outer,
+    )) as { signed_url?: unknown; conversation_id?: unknown };
+    if (typeof raw.signed_url !== 'string')
+      throw new AiVoiceProviderError('unavailable', 'not a link');
+    let id: unknown = raw.conversation_id;
+    if (typeof id !== 'string') {
+      try {
+        id =
+          new URL(raw.signed_url).searchParams.get('conversation_id') ??
+          undefined;
+      } catch {
+        id = undefined;
+      }
+    }
+    if (withConversation && (typeof id !== 'string' || !PROVIDER_ID.test(id)))
+      throw new AiVoiceProviderError('unavailable', 'no conversation id');
+    return {
+      signedUrl: raw.signed_url,
+      conversationId: typeof id === 'string' ? id : '',
+    };
+  }
+
+  async openVoiceSession(
+    agentId: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<VoiceSessionLink> {
+    if (!this.agentsConfigured || !PROVIDER_ID.test(agentId))
+      throw new AiVoiceProviderError('rejected', 'agents are not available');
+    return this.signedLink(agentId, true, opts.signal);
+  }
+
+  async readConversation(
+    conversationId: string,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<ConversationRead> {
+    if (!this.agentsConfigured || !PROVIDER_ID.test(conversationId))
+      throw new AiVoiceProviderError('rejected', 'agents are not available');
+    const raw = (await this.jsonCall(
+      'GET',
+      `/v1/convai/conversations/${encodeURIComponent(conversationId)}`,
+      undefined,
+      opts.signal,
+    )) as { status?: unknown; metadata?: { call_duration_secs?: unknown } };
+    const statuses = [
+      'initiated',
+      'in-progress',
+      'processing',
+      'done',
+      'failed',
+    ];
+    const status = statuses.includes(String(raw.status))
+      ? (raw.status as ConversationRead['status'])
+      : 'processing';
+    const secs = raw.metadata?.call_duration_secs;
+    return {
+      status,
+      seconds:
+        typeof secs === 'number' && Number.isFinite(secs) && secs >= 0
+          ? Math.round(secs)
+          : null,
+    };
+  }
+
+  deleteConversation(conversationId: string): Promise<CopyRemoval> {
+    if (!PROVIDER_ID.test(conversationId)) return Promise.resolve('failed');
+    return this.removeItem(
+      `/v1/convai/conversations/${encodeURIComponent(conversationId)}`,
+    );
   }
 
   /**

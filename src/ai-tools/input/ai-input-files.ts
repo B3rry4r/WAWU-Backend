@@ -3,6 +3,7 @@ import { Inject, Injectable, Optional } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import {
+  AI_INPUT_DOC_FOLDER,
   AI_INPUT_FOLDERS,
   AI_INPUT_IMAGE_FOLDER,
   AI_INPUT_IMAGE_MAX_BYTES,
@@ -62,6 +63,8 @@ export interface AiInputFiles {
     key: string,
     maxBytes: number,
   ): Promise<{ stream: Readable; bytes: number; contentType: string }>;
+  /** Keeps words the Hub holds for a job as a private file of the person's (AITOOLS-13); answers its key. */
+  putText?(wawuUserId: string, name: string, text: string): Promise<string>;
   /** Drops the file. Never throws. */
   remove(key: string): Promise<void>;
 }
@@ -91,7 +94,9 @@ export class StorageAiInputFiles implements AiInputFiles {
       // AITOOLS-08: a photo for a Studio tool is in the third input folder (its own constant: AI_INPUT_FOLDERS pins the two older ones).
       !(
         (AI_INPUT_FOLDERS as readonly string[]).includes(row.folder) ||
-        row.folder === AI_INPUT_IMAGE_FOLDER
+        row.folder === AI_INPUT_IMAGE_FOLDER ||
+        // AITOOLS-13, AITOOLS-06: a text or a PDF is in the fourth input folder.
+        row.folder === AI_INPUT_DOC_FOLDER
       ) ||
       !row.key.startsWith(`${row.folder}/${wawuUserId}/`) ||
       row.status !== 'confirmed'
@@ -126,6 +131,16 @@ export class StorageAiInputFiles implements AiInputFiles {
   ): Promise<{ stream: Readable; bytes: number; contentType: string }> {
     const o = await this.storage.openStored(key, maxBytes);
     return { stream: o.body, bytes: o.length, contentType: o.contentType };
+  }
+
+  putText(wawuUserId: string, name: string, text: string): Promise<string> {
+    return this.storage.putGenerated(
+      wawuUserId,
+      AI_INPUT_DOC_FOLDER,
+      name,
+      Buffer.from(text, 'utf8'),
+      'text/plain',
+    );
   }
 
   remove(key: string): Promise<void> {
@@ -239,6 +254,86 @@ export class AiInputService {
   }
 
   /**
+   * A person's text file for the Audiobook (AITOOLS-13), read whole and checked before anything is priced or held: their
+   * own landed file in `ai/input-doc`, a plain text file, no larger than `maxBytes`, valid UTF-8. Another person's key
+   * answers not found. The words are returned; the file stays until the job ends.
+   */
+  async readText(
+    wawuUserId: string,
+    fileKey: string,
+    maxBytes: number,
+  ): Promise<string> {
+    const row = await this.files.find(wawuUserId, fileKey);
+    if (!row || row.folder !== AI_INPUT_DOC_FOLDER)
+      throw new AiToolError('not_found', FILE_NOT_FOUND_MESSAGE);
+    if (row.contentType !== 'text/plain')
+      throw new AiToolError(
+        'ai_file_type_unsupported',
+        'Choose a plain text file. No points were taken.',
+      );
+    if (row.bytes > maxBytes)
+      throw new AiToolError(
+        'ai_file_too_large',
+        `That file is too big. The most is ${sizeText(maxBytes)}. No points were taken.`,
+        { cap: 'file_bytes', capLimit: maxBytes, capUnit: 'bytes' },
+      );
+    try {
+      const { audio } = await this.files.read(row.key, maxBytes);
+      return new TextDecoder('utf-8', { fatal: true }).decode(audio);
+    } catch {
+      throw new AiToolError('ai_file_unreadable', FILE_UNREADABLE_MESSAGE);
+    }
+  }
+
+  /**
+   * A document a person gives their Receptionist (AITOOLS-06), checked before anything is created at the provider: their
+   * own landed file in `ai/input-doc`, a text or a PDF by its first bytes, within `maxBytes`. Another person's key
+   * answers not found. Only the head is read.
+   */
+  async openDoc(
+    wawuUserId: string,
+    fileKey: string,
+    maxBytes: number,
+  ): Promise<{ key: string; bytes: number; contentType: string }> {
+    const row = await this.files.find(wawuUserId, fileKey);
+    if (!row || row.folder !== AI_INPUT_DOC_FOLDER)
+      throw new AiToolError('not_found', FILE_NOT_FOUND_MESSAGE);
+    if (
+      row.contentType !== 'text/plain' &&
+      row.contentType !== 'application/pdf'
+    )
+      throw new AiToolError(
+        'ai_file_type_unsupported',
+        'Choose a text file or a PDF. Nothing was added.',
+      );
+    if (row.bytes > maxBytes)
+      throw new AiToolError(
+        'ai_file_too_large',
+        `That file is too big. The most is ${sizeText(maxBytes)}. Nothing was added.`,
+        { cap: 'file_bytes', capLimit: maxBytes, capUnit: 'bytes' },
+      );
+    let head: Buffer;
+    let real: number;
+    try {
+      real = await this.files.length(row.key);
+      head = await this.files.readHead(row.key, 4096);
+    } catch {
+      throw new AiToolError('ai_file_unreadable', FILE_UNREADABLE_MESSAGE);
+    }
+    if (real <= 0 || real > maxBytes)
+      throw new AiToolError('ai_file_unreadable', FILE_UNREADABLE_MESSAGE);
+    const looksPdf = head.toString('latin1', 0, 5) === '%PDF-';
+    // A file that says it is text must be text (no NUL byte in its head), and a PDF must open like one.
+    const looksText = !head.includes(0);
+    if (
+      (row.contentType === 'application/pdf' && !looksPdf) ||
+      (row.contentType === 'text/plain' && !looksText)
+    )
+      throw new AiToolError('ai_file_unreadable', FILE_UNREADABLE_MESSAGE);
+    return { key: row.key, bytes: real, contentType: row.contentType };
+  }
+
+  /**
    * The file's length in seconds, or null when it cannot be read. The Hub
    * reads one file per account at a time (a second read from the account
    * waits for the first, a third is refused busy); a file that is not one of the
@@ -329,6 +424,18 @@ export class AiInputService {
       releaseAccount();
       throw e;
     }
+  }
+
+  /** Keeps words for a job as a private file (AITOOLS-13); answers its key. */
+  keepText(wawuUserId: string, name: string, text: string): Promise<string> {
+    if (!this.files.putText) throw new Error('no place to keep words');
+    return this.files.putText(wawuUserId, name, text);
+  }
+
+  /** Reads words kept for a job. Throws when they cannot be read. */
+  async readKeptText(key: string, maxBytes: number): Promise<string> {
+    const { audio } = await this.files.read(key, maxBytes);
+    return new TextDecoder('utf-8', { fatal: true }).decode(audio);
   }
 
   remove(key: string): Promise<void> {

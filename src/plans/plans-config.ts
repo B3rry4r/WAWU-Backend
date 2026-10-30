@@ -135,6 +135,11 @@ export const PLAN_ACTIONS = [
   'voice_clone_once',
   'video_music_per_track',
   'stems_per_song',
+  // R-109 (AITOOLS-13): Audiobook (a price a minute) and Podcast maker (a price for each of its three lengths).
+  'audiobook_per_min',
+  'podcast_short',
+  'podcast_standard',
+  'podcast_long',
 ] as const;
 export type PlanActionId = (typeof PLAN_ACTIONS)[number];
 

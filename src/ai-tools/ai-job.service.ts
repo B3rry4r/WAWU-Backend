@@ -26,12 +26,23 @@ import {
   type AiAudioStore,
 } from './audio/ai-audio-store';
 import { AiInputService } from './input/ai-input-files';
+import { jobIdFor } from './ai-job-id';
+import { ReceptionistService } from './receptionist/receptionist.service';
+import type { CreateReceptionistMessageDto } from './receptionist/receptionist.dto';
+import { normalizeBook as normalizeBookText } from './audiobook/audiobook-chunks';
+import { copyOfCast, parseCastRef } from './podcast/podcast-support';
+import { AI_AUDIOBOOK_PART_FOLDER } from './audio/ai-audio-store';
+import {
+  AUDIOBOOK_ACTION,
+  AUDIOBOOK_MAX_CHARS_SETTING,
+} from './tools/audiobook.tool';
 import { endMarkerOf, parseFollowRef } from './dub/dub-support';
 import { copyOfFlow, parseFlowRef } from './flow/flow-support';
 import { minutesOf, readSeconds } from './input/media-length';
 import {
   AI_IMAGE_CONTENT_TYPES,
   AI_MEDIA_MAX_BYTES,
+  AI_LONG_AUDIO_CONTENT_TYPES,
   AI_MEDIA_STORE,
   AI_VIDEO_CONTENT_TYPES,
   dayText,
@@ -75,6 +86,7 @@ import type {
 } from './ai-tools-view.type';
 import type {
   AiJobListQueryDto,
+  CreateAudiobookJobDto,
   CreateCaptionsJobDto,
   CreateCleanAudioJobDto,
   CreateDialogueJobDto,
@@ -83,6 +95,7 @@ import type {
   CreateMusicJobDto,
   CreateMyVoiceJobDto,
   CreatePhotoEditJobDto,
+  CreatePodcastJobDto,
   CreateSoundEffectJobDto,
   CreateStemsJobDto,
   CreateTalkingPhotoJobDto,
@@ -92,6 +105,7 @@ import type {
   CreateVoiceoverJobDto,
 } from './ai-tools.dto';
 import {
+  isListed,
   isMediaSpec,
   NO_FILE,
   type AiTool,
@@ -141,8 +155,13 @@ type AiJobRequestBody =
   | CreateDialogueJobDto
   | CreateMyVoiceJobDto
   | CreateVideoMusicJobDto
-  | CreateStemsJobDto;
+  | CreateStemsJobDto
+  | CreateAudiobookJobDto
+  | CreatePodcastJobDto
+  | CreateReceptionistMessageDto;
 
+const PODCAST_SOURCE_MESSAGE =
+  'Send a text or a web link to make a podcast from, not both. No points were taken.';
 const KEY_FORMAT = /^[A-Za-z0-9_-]{8,128}$/;
 /** The only try a job's hold has: a failed job is never retried, a new job (and key) is. */
 const ATTEMPT = 1;
@@ -216,6 +235,8 @@ export class AiJobService {
     @Optional() private readonly notices?: NotificationService,
     // R-109 (AITOOLS-11): the person's saved clone of their own voice. Absent in a spec that builds only the older tools.
     @Optional() private readonly savedVoices?: AiCloneService,
+    // R-109 (AITOOLS-06): the person's Receptionist, whose text messages are jobs of this pipeline. Absent in a spec that builds only the older tools.
+    @Optional() private readonly receptionist?: ReceptionistService,
   ) {}
 
   /** The saved-clone service; the tools that need it are not built without it. */
@@ -247,9 +268,7 @@ export class AiJobService {
 
   /** Whether the tool's listing switch is on (AITOOLS-08): a tool with no switch, one of the seven older ones, is always listed. */
   private listed(tool: AiTool): boolean {
-    return (
-      !tool.listingSetting || this.settings.number(tool.listingSetting) === 1
-    );
+    return isListed(tool, this.settings);
   }
 
   /** Characters that make one minute of VoiceOver, from the settings. */
@@ -303,6 +322,16 @@ export class AiJobService {
     // A tool's own checks of the words of the request (Dubbing: a language
     // that is not on the list), before the person's file is read.
     if (tool.precheck) req = tool.precheck(req, this.settings);
+    // AITOOLS-13 Audiobook: a long text may come as a text file the person uploaded; the Hub reads it here, before anything is priced.
+    if (req.kind === 'text' && req.fileKey) {
+      const cap = this.settings.number(AUDIOBOOK_MAX_CHARS_SETTING) * 4 + 64;
+      req = {
+        ...req,
+        text: normalizeBookText(
+          await this.input.readText(wawuUserId, req.fileKey, cap),
+        ),
+      };
+    }
     if (req.kind === 'text') {
       const wanted = req.voiceId;
       if (
@@ -323,6 +352,21 @@ export class AiJobService {
         throw new AiToolError('ai_voice_unknown', VOICE_UNKNOWN_MESSAGE);
       if (req.text === '')
         throw new AiToolError('ai_text_empty', TEXT_EMPTY_MESSAGE);
+    } else if (req.kind === 'podcast') {
+      // AITOOLS-13: the voices are the Hub's own list (never "Your voice": the Studio route cannot take a saved clone).
+      await this.assertVoicesKnown(
+        wawuUserId,
+        req.guestVoiceId
+          ? [req.hostVoiceId, req.guestVoiceId]
+          : [req.hostVoiceId],
+      );
+    } else if (req.kind === 'chat') {
+      // AITOOLS-06: the person's own Receptionist must exist (the agent is found by the caller's id, so only their own can answer).
+      if (!this.receptionist || !(await this.receptionist.isSetUp(wawuUserId)))
+        throw new AiToolError(
+          'receptionist_not_set_up',
+          'Set up your Receptionist first. No points were taken.',
+        );
     } else if (req.kind === 'dialogue') {
       // AITOOLS-11: every line's voice is on the person's list (a Hub voice, or their own saved clone).
       await this.assertVoicesKnown(
@@ -374,7 +418,9 @@ export class AiJobService {
     tool.check?.(req, this.settings, this.plan);
 
     const { units, characters } = tool.price(req, this.settings, this.plan);
-    const action = this.plan.actions.find((a) => a.id === tool.action);
+    // AITOOLS-13: a tool priced by length (the Podcast maker) names the plan action of the request; the others have one.
+    const actionId = tool.actionFor ? tool.actionFor(req) : tool.action;
+    const action = this.plan.actions.find((a) => a.id === actionId);
     if (!action)
       throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
     const costPoints = action.points * units;
@@ -383,7 +429,7 @@ export class AiJobService {
     if (
       !claims ||
       claims.u !== wawuUserId ||
-      claims.a !== tool.action ||
+      claims.a !== actionId ||
       claims.e < now.getTime() ||
       claims.c !== costPoints
     )
@@ -397,7 +443,7 @@ export class AiJobService {
     const held = await this.spend.hold(
       {
         wawuUserId,
-        action: tool.action,
+        action: actionId,
         units,
         characters,
         reference: jobHoldReference(id, ATTEMPT),
@@ -405,11 +451,25 @@ export class AiJobService {
       { now },
     );
 
+    // AITOOLS-13 Audiobook: the words are kept in a private file until the job ends, so a Hub that restarts finds them.
+    // A text file the person sent is kept as it is; typed words are written to a file of the Hub's own.
+    let inputRef: string | null = null;
+    if (tool.id === 'audiobook' && req.kind === 'text') {
+      try {
+        inputRef = req.fileKey
+          ? req.fileKey
+          : await this.stageBookText(wawuUserId, id, req.text);
+      } catch {
+        await this.giveBackUnwrittenHold(id, held.holdId);
+        throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
+      }
+    }
+
     const row = await this.record(
       {
         id,
         wawuUserId,
-        tool: tool.action,
+        tool: actionId,
         idempotencyKey,
         requestHash,
         // A dub keeps the language it was asked for in the voice column (a file
@@ -427,7 +487,7 @@ export class AiJobService {
             ? req.fileKey
             : req.kind === 'media'
               ? inputRefOf(req)
-              : null,
+              : inputRef,
       },
       requestHash,
     );
@@ -547,11 +607,15 @@ export class AiJobService {
     // AITOOLS-09 and -10: a picture or video whose row has ended already: the
     // person's assets at the provider are deleted at once (noted, then tried).
     const flow = parsed ? null : parseFlowRef(ref);
+    // AITOOLS-13: a podcast whose row has ended already: its project is deleted at once.
+    const castId = parsed || flow ? null : parseCastRef(ref);
     const copy: ProviderCopy | null = parsed
       ? { kind: 'dub', id: parsed.projectId }
       : flow
         ? copyOfFlow(flow)
-        : null;
+        : castId
+          ? copyOfCast(castId)
+          : null;
     if (!copy) return;
     await this.copies.note(job.id, copy);
     await this.dropInput(job);
@@ -670,6 +734,15 @@ export class AiJobService {
         throw new AiToolError('idempotency_key_reused', KEY_REUSED_MESSAGE);
       return { job: await this.reconcile(winner), replayed: true };
     }
+  }
+
+  /** Writes an Audiobook's typed words to a private file of the Hub's own (`ai/input-doc`); it is deleted when the job ends. */
+  private stageBookText(
+    wawuUserId: string,
+    jobId: string,
+    text: string,
+  ): Promise<string> {
+    return this.input.keepText(wawuUserId, `${jobId}-text`, text);
   }
 
   /**
@@ -822,6 +895,16 @@ export class AiJobService {
             return true;
           },
         };
+    } else if (req.kind === 'chat') {
+      // AITOOLS-06: the agent's id and the earlier messages, from the person's own rows, read now (not held across the call).
+      const chat = this.receptionist
+        ? await this.receptionist.chatContext(job.wawuUserId).catch(() => null)
+        : null;
+      if (!chat) {
+        await this.fail(job, holdId, 'provider_failed');
+        return;
+      }
+      input = { file: NO_FILE, chat };
     } else if (req.kind === 'file') {
       try {
         input = {
@@ -882,10 +965,14 @@ export class AiJobService {
       const planRefused =
         e instanceof AiVoiceProviderError &&
         e.status === 403 &&
-        (tool.id === 'video-music' || tool.id === 'stems');
+        (tool.id === 'video-music' ||
+          tool.id === 'stems' ||
+          tool.id === 'podcast');
       if (planRefused)
         this.logger.error(
-          `OWNER ITEM: ai job ${job.id} (${job.tool}): the provider answered 403, so its plan does not cover the music routes (Subscription required)`,
+          tool.id === 'podcast'
+            ? `OWNER ITEM: ai job ${job.id} (${job.tool}): the provider answered 403, so our account is not allowlisted for its Studio API (the Podcast maker stays unlisted until the allowlist is granted)`
+            : `OWNER ITEM: ai job ${job.id} (${job.tool}): the provider answered 403, so its plan does not cover the music routes (Subscription required)`,
         );
       const code = planRefused
         ? 'provider_plan'
@@ -952,6 +1039,19 @@ export class AiJobService {
       await this.copies.note(job.id, result.providerCopy);
     try {
       await this.finish(tool, job, holdId, result);
+      // AITOOLS-06: a reply that was kept (the job is done) becomes context for the next message.
+      if (result.chatTurn && this.receptionist) {
+        const ended = await this.prisma.aiToolJob.findUnique({
+          where: { id: job.id },
+          select: { state: true },
+        });
+        if (ended?.state === 'done')
+          await this.receptionist.remember(
+            job.wawuUserId,
+            result.chatTurn.person,
+            result.chatTurn.agent,
+          );
+      }
     } finally {
       // The provider keeps no copy of a person's words or voice: its copy is
       // deleted once the result is stored or refused, however the job ends
@@ -1026,7 +1126,9 @@ export class AiJobService {
         const served: readonly string[] =
           result.media.kind === 'image'
             ? AI_IMAGE_CONTENT_TYPES
-            : AI_VIDEO_CONTENT_TYPES;
+            : result.media.kind === 'audio'
+              ? AI_LONG_AUDIO_CONTENT_TYPES
+              : AI_VIDEO_CONTENT_TYPES;
         if (
           !this.media ||
           !tool.mediaFolder ||
@@ -1044,6 +1146,8 @@ export class AiJobService {
           AI_MEDIA_MAX_BYTES[result.media.kind],
         );
         mediaKey = stored.key;
+        // AITOOLS-13: a long audio result (an audiobook) is an audio output like any other: `audioKey` and `audioUrl` follow it.
+        if (result.media.kind === 'audio') key = stored.key;
         outputs.push({
           kind: result.media.kind,
           key: stored.key,
@@ -1152,8 +1256,10 @@ export class AiJobService {
 
   /** The job has ended: the person's uploaded file is deleted (it was read for this one run). Never throws. */
   private async dropInput(
-    job: Pick<AiToolJob, 'id' | 'inputRef'>,
+    job: Pick<AiToolJob, 'id' | 'inputRef' | 'tool' | 'wawuUserId'>,
   ): Promise<void> {
+    // AITOOLS-13: the chapters of an audiobook in the making are the job's own and go when it ends.
+    if (job.tool === AUDIOBOOK_ACTION) await this.dropChapters(job);
     if (!job.inputRef) return;
     // A Talking photo keeps two (the photo, then the recording), one per line.
     for (const key of job.inputRef.split('\n')) {
@@ -1163,6 +1269,22 @@ export class AiJobService {
       } catch {
         this.logger.warn(`ai job ${job.id}: the uploaded file was not removed`);
       }
+    }
+  }
+
+  /** Deletes every chapter file an audiobook job stored. Never throws. */
+  private async dropChapters(
+    job: Pick<AiToolJob, 'id' | 'wawuUserId'>,
+  ): Promise<void> {
+    try {
+      const keys = await this.audio.list(
+        job.wawuUserId,
+        AI_AUDIOBOOK_PART_FOLDER,
+        `${job.id}-c`,
+      );
+      for (const k of keys) await this.audio.remove(k);
+    } catch {
+      this.logger.warn(`ai job ${job.id}: the chapter files were not removed`);
     }
   }
 
@@ -1585,6 +1707,9 @@ const OUTPUT_LABELS: Readonly<Record<string, string>> = {
   'video-music': 'Music for a video',
   stems: 'Split song',
   'my-voice': 'Saved voice',
+  audiobook: 'Audiobook',
+  podcast: 'Podcast',
+  receptionist: 'Receptionist reply',
 };
 function outputLabelOf(toolId: string | undefined): string {
   return (toolId && OUTPUT_LABELS[toolId]) || 'Result';
@@ -1630,14 +1755,7 @@ function storedOutputsOf(job: AiToolJob): StoredOutput[] {
   return job.audioKey ? [{ kind: 'audio', key: job.audioKey }] : [];
 }
 
-/** The job's id from the person and key: a UUID-shaped text, the same for the same pair. */
-export function jobIdFor(wawuUserId: string, idempotencyKey: string): string {
-  const h = createHash('sha256')
-    .update(`wawu-ai-job.v1\n${wawuUserId}\n${idempotencyKey}`)
-    .digest('hex');
-  const variant = ((parseInt(h[16], 16) & 0x3) | 0x8).toString(16);
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${variant}${h.slice(17, 20)}-${h.slice(20, 32)}`;
-}
+export { jobIdFor };
 
 /** A SHA-256 of what the request asked for, salted with the person and key; the text itself is never kept. */
 function hashRequest(
@@ -1681,6 +1799,18 @@ function requestOf(
   hashText: string;
 } {
   const spec = tool.input;
+  if (spec.kind === 'text' && spec.maxCharactersSetting) {
+    // AITOOLS-13 Audiobook: typed words, or the key of a text file (the Hub reads it into `text` before pricing).
+    const d = dto as CreateAudiobookJobDto;
+    const fileKey = d.fileKey && !d.text ? d.fileKey : null;
+    const text = fileKey ? '' : (d.text ?? '').trim();
+    return {
+      req: { kind: 'text', text, voiceId: d.voiceId, fileKey },
+      voiceId: d.voiceId,
+      same: [fileKey],
+      hashText: fileKey ? `file:${fileKey}` : text,
+    };
+  }
   if (spec.kind === 'text') {
     const d = dto as CreateVoiceoverJobDto;
     const text = d.text.trim();
@@ -1689,6 +1819,46 @@ function requestOf(
       voiceId: d.voiceId,
       same: [],
       hashText: text,
+    };
+  }
+  if (spec.kind === 'chat') {
+    // AITOOLS-06: the person's words to their Receptionist. The job keeps no copy of them (the reply is its text).
+    const d = dto as CreateReceptionistMessageDto;
+    const message = d.message.trim();
+    return {
+      req: {
+        kind: 'chat',
+        message,
+        characters: Array.from(message).length,
+      },
+      voiceId: '',
+      same: [],
+      hashText: message,
+    };
+  }
+  if (spec.kind === 'podcast') {
+    // AITOOLS-13: one source (a text or a link), the voices, the length and the language.
+    const d = dto as CreatePodcastJobDto;
+    const text = (d.source?.text ?? '').trim();
+    const url = (d.source?.url ?? '').trim();
+    if ((text === '') === (url === ''))
+      throw new AiToolError('ai_text_empty', PODCAST_SOURCE_MESSAGE);
+    const [host, guest] = d.voiceIds;
+    return {
+      req: {
+        kind: 'podcast',
+        source: url === '' ? { type: 'text', text } : { type: 'url', url },
+        mode: d.mode,
+        hostVoiceId: host,
+        guestVoiceId: d.mode === 'conversation' ? (guest ?? null) : null,
+        duration: d.duration,
+        language: d.language,
+        characters: Array.from(text).length,
+        model: '',
+      },
+      voiceId: '',
+      same: [d.mode, host, guest ?? null, d.duration, d.language.toLowerCase()],
+      hashText: url === '' ? text : `url:${url}`,
     };
   }
   if (spec.kind === 'dialogue') {

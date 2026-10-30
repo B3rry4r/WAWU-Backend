@@ -12,6 +12,24 @@ export const JOB_MAX_RUN_SETTING = 'points.job_max_run_minutes';
  */
 export const DUB_MAX_RUN_SETTING = 'ai.dubbing_max_run_minutes';
 export const DUB_ACTION_ID = 'dub_standard_per_min_lang';
+/**
+ * R-109 (AITOOLS-13, AITOOLS-06): an Audiobook (many chapters in turn), a Podcast (the provider works for minutes) and a
+ * talking session with a Receptionist (held for its longest, settled when it ends) run longer than the other tools,
+ * so each has its OWN longest run, a setting; the sweep leaves their holds alone until then.
+ */
+export const AUDIOBOOK_RUN_SETTING = 'ai.audiobook_max_run_minutes';
+export const AUDIOBOOK_ACTION_ID = 'audiobook_per_min';
+export const PODCAST_RUN_SETTING = 'ai.podcast_max_run_seconds';
+export const PODCAST_ACTION_IDS = [
+  'podcast_short',
+  'podcast_standard',
+  'podcast_long',
+] as const;
+export const RECEPTIONIST_VOICE_ACTION_ID = 'receptionist_voice_per_min';
+export const RECEPTIONIST_VOICE_MAX_SETTING =
+  'ai.receptionist_voice_max_minutes';
+/** Minutes past the longest talking session after which the Hub settles a session nobody ended, at the longest. */
+export const RECEPTIONIST_VOICE_GRACE_MINUTES = 15;
 
 /**
  * The sweep for stale AI holds (task POINTS-03, lead note of 8 Oct). Every
@@ -46,6 +64,22 @@ export class PointsHoldSweepService {
           {
             action: DUB_ACTION_ID,
             maxRunMinutes: this.settings.number(DUB_MAX_RUN_SETTING),
+          },
+          {
+            action: AUDIOBOOK_ACTION_ID,
+            maxRunMinutes: this.settings.number(AUDIOBOOK_RUN_SETTING),
+          },
+          ...PODCAST_ACTION_IDS.map((action) => ({
+            action,
+            maxRunMinutes: Math.ceil(
+              this.settings.number(PODCAST_RUN_SETTING) / 60,
+            ),
+          })),
+          {
+            action: RECEPTIONIST_VOICE_ACTION_ID,
+            maxRunMinutes:
+              this.settings.number(RECEPTIONIST_VOICE_MAX_SETTING) +
+              RECEPTIONIST_VOICE_GRACE_MINUTES,
           },
         ],
       );

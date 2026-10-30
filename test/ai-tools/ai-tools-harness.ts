@@ -28,6 +28,10 @@ import { AiJobService } from '../../src/ai-tools/ai-job.service';
 import { AiToolsController } from '../../src/ai-tools/ai-tools.controller';
 import { AiToolsPieceController } from '../../src/ai-tools/ai-tools-piece.controller';
 import { AiFlowService } from '../../src/ai-tools/flow/ai-flow.service';
+import { AiAudiobookService } from '../../src/ai-tools/audiobook/ai-audiobook.service';
+import { AiPodcastService } from '../../src/ai-tools/podcast/ai-podcast.service';
+import { ReceptionistController } from '../../src/ai-tools/receptionist/receptionist.controller';
+import { ReceptionistService } from '../../src/ai-tools/receptionist/receptionist.service';
 import {
   AI_MEDIA_STORE,
   type AiMediaStore,
@@ -156,6 +160,16 @@ export class MemoryAudioStore implements AiAudioStore {
     this.files.delete(key);
     this.removed.push(key);
     return Promise.resolve();
+  }
+  list(
+    wawuUserId: string,
+    folder: string,
+    namePrefix: string,
+  ): Promise<string[]> {
+    const start = `${folder}/${wawuUserId}/${namePrefix}`;
+    return Promise.resolve(
+      [...this.files.keys()].filter((k) => k.startsWith(start)).sort(),
+    );
   }
 }
 
@@ -390,6 +404,21 @@ export class MemoryInputFiles implements AiInputFiles {
     this.removed.push(key);
     return Promise.resolve();
   }
+  /** Words kept for a job as a private file (AITOOLS-13). */
+  putText(wawuUserId: string, name: string, text: string): Promise<string> {
+    return Promise.resolve(this.addNamed(wawuUserId, name, text));
+  }
+  private addNamed(wawuUserId: string, name: string, text: string): string {
+    const key = `ai/input-doc/${wawuUserId}/${name}.txt`;
+    this.files.set(key, {
+      wawuUserId,
+      folder: 'ai/input-doc',
+      data: Buffer.from(text, 'utf8'),
+      contentType: 'text/plain',
+      landed: true,
+    });
+    return key;
+  }
 }
 
 type Standin = StandinHandle;
@@ -429,6 +458,10 @@ export interface AiHarness {
   flows: AiFlowService;
   /** AITOOLS-11: the saved clone service. */
   clones: AiCloneService;
+  /** AITOOLS-13, AITOOLS-06: set when the harness is booted with `studio3: true`. */
+  audiobooks: AiAudiobookService;
+  podcasts: AiPodcastService;
+  receptionist: ReceptionistService;
   inputs: MemoryInputFiles;
   voiceFiles: MemoryVoiceFiles;
   standin: Standin;
@@ -459,6 +492,8 @@ export interface BootOptions {
   media?: boolean;
   /** A voice list (the JSON `AI_VOICE_VOICES` holds) instead of the two the specs use: a scene of more than 10 voices needs more. */
   voices?: string;
+  /** Boots the Audiobook, the Podcast maker and the Receptionist too (AITOOLS-13, AITOOLS-06). Needs `media: true`. */
+  studio3?: boolean;
 }
 
 export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
@@ -504,6 +539,7 @@ export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
       AiVoiceSamplesController,
       AppController,
       ...(boot.media ? [AiToolsPieceController] : []),
+      ...(boot.studio3 ? [ReceptionistController] : []),
     ],
     providers: [
       FeeSettings,
@@ -548,6 +584,9 @@ export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
             { provide: PublishingAllowanceService, useValue: {} },
           ]
         : []),
+      ...(boot.studio3
+        ? [AiAudiobookService, AiPodcastService, ReceptionistService]
+        : []),
     ],
   }).compile();
   const app = moduleRef.createNestApplication();
@@ -578,6 +617,15 @@ export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
     media: mediaStore,
     flows: boot.media ? moduleRef.get(AiFlowService) : (undefined as never),
     clones: moduleRef.get(AiCloneService),
+    audiobooks: boot.studio3
+      ? moduleRef.get(AiAudiobookService)
+      : (undefined as never),
+    podcasts: boot.studio3
+      ? moduleRef.get(AiPodcastService)
+      : (undefined as never),
+    receptionist: boot.studio3
+      ? moduleRef.get(ReceptionistService)
+      : (undefined as never),
     inputs,
     voiceFiles,
     standin,
@@ -602,6 +650,11 @@ export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
       for (let i = 0; i < 100; i++) {
         // The Studio tools are followed, not awaited: one pass of the follower each time round.
         if (boot.media) await moduleRef.get(AiFlowService).pass();
+        // AITOOLS-13: an audiobook and a podcast are followed too.
+        if (boot.studio3) {
+          await moduleRef.get(AiAudiobookService).pass();
+          await moduleRef.get(AiPodcastService).pass();
+        }
         const res = await http()
           .get(`/ai-tools/jobs/${id}`)
           .set('Authorization', `Bearer ${tokensOf[who]}`);
@@ -628,6 +681,15 @@ export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
         where: { userWawuId: { in: SEEDED }, kind: 'ai_job_ready' },
       });
       await prisma.aiClonedVoice.deleteMany({
+        where: { wawuUserId: { in: SEEDED } },
+      });
+      await prisma.receptionistTurn.deleteMany({
+        where: { wawuUserId: { in: SEEDED } },
+      });
+      await prisma.receptionistKnowledge.deleteMany({
+        where: { wawuUserId: { in: SEEDED } },
+      });
+      await prisma.receptionistAgent.deleteMany({
         where: { wawuUserId: { in: SEEDED } },
       });
       await prisma.aiToolJob.deleteMany({

@@ -99,7 +99,11 @@
     "dialogue_per_min": { "points": 250, "per": "minute" },
     "voice_clone_once": { "points": 100, "per": "use" },
     "video_music_per_track": { "points": 500, "per": "track" },
-    "stems_per_song": { "points": 300, "per": "use" }
+    "stems_per_song": { "points": 300, "per": "use" },
+    "audiobook_per_min": { "points": 250, "per": "minute" },
+    "podcast_short": { "points": 750, "per": "use" },
+    "podcast_standard": { "points": 1250, "per": "use" },
+    "podcast_long": { "points": 2500, "per": "use" }
   },
   "caps": {
     "daily_points_per_user": 5000,

@@ -1,5 +1,6 @@
 import type { ProviderCopy } from '../voice/ai-voice-provider';
 import { endMarkerOfFlow } from '../flow/flow-support';
+import { endMarkerOfCast } from '../podcast/podcast-support';
 
 /**
  * Small, pure helpers for Dubbing (AITOOLS-05): how a followed job's provider
@@ -44,7 +45,10 @@ export function copyOfFollow(ref: FollowRef): ProviderCopy {
 export function endMarkerOf(marker: string | null): string | undefined {
   const ref = parseFollowRef(marker);
   // AITOOLS-09 and -10: a followed picture or video leaves the person's assets to delete.
-  return ref ? `dub:${ref.projectId}` : endMarkerOfFlow(marker);
+  // AITOOLS-13: a followed podcast leaves its project to delete.
+  return ref
+    ? `dub:${ref.projectId}`
+    : (endMarkerOfFlow(marker) ?? endMarkerOfCast(marker));
 }
 
 export interface DubLanguage {

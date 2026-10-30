@@ -3,6 +3,7 @@ import type { AiToolJob } from '../../../generated/prisma/client';
 import type { PlansConfig } from '../../plans/plans-config';
 import type {
   AiVoiceProvider,
+  ChatTurn,
   ProviderCopy,
   SpokenAudio,
   StreamedFile,
@@ -42,7 +43,11 @@ export type AiToolId =
   | 'dialogue'
   | 'my-voice'
   | 'video-music'
-  | 'stems';
+  | 'stems'
+  // R-109 (AITOOLS-13, AITOOLS-06): Audiobook, Podcast maker and the Receptionist.
+  | 'audiobook'
+  | 'podcast'
+  | 'receptionist';
 
 /**
  * What a job takes in. `text` (words to speak), `prompt` (a description) and `file` (a recording or video the person
@@ -51,13 +56,48 @@ export type AiToolId =
  * which later tasks build. Only the kinds a built tool uses are listed in `GET /ai-tools`.
  */
 export type AiToolInputKind =
-  'text' | 'prompt' | 'file' | 'image' | 'video' | 'dialogue' | 'chat';
+  | 'text'
+  | 'prompt'
+  | 'file'
+  | 'image'
+  | 'video'
+  | 'dialogue'
+  | 'chat'
+  | 'podcast';
 
 /** How a text request reads once the pipeline has checked it. */
 export interface TextJobRequest {
   kind: 'text';
   text: string;
   voiceId: string;
+  /** AITOOLS-13 Audiobook: the key of a text file the person sent to `ai/input-doc` instead of typing the words (the Hub reads it into `text`). */
+  fileKey?: string | null;
+  /** AITOOLS-13 Audiobook: the speech model and the chapter size the settings named when the request was checked (set by the tool's `precheck`). */
+  model?: string;
+  chunkChars?: number;
+}
+
+/**
+ * How a Podcast request reads (AITOOLS-13): a text or a link, one host or two, a length and a language. `characters`
+ * is the text's length (0 for a link, which the provider reads). The model is the setting's, set by `precheck`.
+ */
+export interface PodcastJobRequest {
+  kind: 'podcast';
+  source: { type: 'text'; text: string } | { type: 'url'; url: string };
+  mode: 'conversation' | 'bulletin';
+  hostVoiceId: string;
+  guestVoiceId: string | null;
+  duration: 'short' | 'standard' | 'long';
+  language: string;
+  characters: number;
+  model: string;
+}
+
+/** How a Receptionist message reads (AITOOLS-06): the person's words. The agent and the earlier turns are the Hub's, found when the job runs. */
+export interface ChatJobRequest {
+  kind: 'chat';
+  message: string;
+  characters: number;
 }
 
 /**
@@ -153,11 +193,27 @@ export interface MediaJobRequest {
 }
 
 export type AiToolRequest =
+  | PodcastJobRequest
+  | ChatJobRequest
   | TextJobRequest
   | PromptJobRequest
   | FileJobRequest
   | MediaJobRequest
   | DialogueJobRequest;
+
+/** The request of a podcast tool; a tool is only ever handed the kind it declares. */
+export function asPodcast(req: AiToolRequest): PodcastJobRequest {
+  if (req.kind !== 'podcast')
+    throw new Error('a podcast tool was given another kind');
+  return req;
+}
+
+/** The request of a chat tool; a tool is only ever handed the kind it declares. */
+export function asChat(req: AiToolRequest): ChatJobRequest {
+  if (req.kind !== 'chat')
+    throw new Error('a chat tool was given another kind');
+  return req;
+}
 
 /** The request of a dialogue tool; a tool is only ever handed the kind it declares. */
 export function asDialogue(req: AiToolRequest): DialogueJobRequest {
@@ -214,12 +270,14 @@ export interface AiToolRunResult {
    * closes the stream however the job ends. A type the Hub does not serve fails the job and every point goes back.
    */
   media?: {
-    kind: 'image' | 'video';
+    kind: 'image' | 'video' | 'audio';
     contentType: string;
     bytes: number | null;
     stream: Readable;
     close: () => void;
   };
+  /** AITOOLS-06: the Receptionist's reply, kept in the job row as its text; the pipeline then remembers the turn. */
+  chatTurn?: { person: string; agent: string };
   /** The provider's own id for a long job, kept for a later look-up (`providerRef`). */
   providerRef?: string;
   /**
@@ -276,6 +334,8 @@ export interface AiToolRunInput {
    * over a Voice Intro clone for one run. Absent otherwise.
    */
   savedVoice?: string;
+  /** AITOOLS-06: the person's Receptionist at the provider and the earlier turns, read from the Hub's own rows when the job runs. */
+  chat?: { agentId: string; earlier: ChatTurn[] };
 }
 
 /** What `AiToolRunInput.file` holds for a Studio job, whose files are opened one at a time through `media`. */
@@ -285,13 +345,34 @@ export const NO_FILE: VoiceSample = {
 };
 
 /** What a unit of a tool's price is: a minute of speech, one use, one track, or (R-109) a second of video. */
-export type AiToolUnit = 'minute' | 'use' | 'track' | 'second';
+export type AiToolUnit = 'minute' | 'use' | 'track' | 'second' | 'message';
 
 /** A tool that takes words to speak: priced in minutes of speech, in one of the listed voices. */
 export interface TextInputSpec {
   kind: 'text';
   /** The setting for the characters that make one unit. */
   charactersPerUnitSetting: string;
+  /**
+   * AITOOLS-13 Audiobook: the setting for the longest text one job takes. Present, it replaces the plan's per-job
+   * character cap for this tool (the tool checks its own limit), and the text may come as a file (`fileKey`).
+   */
+  maxCharactersSetting?: string;
+}
+
+/** A tool that takes a text or a link and makes a podcast of it (AITOOLS-13). */
+export interface PodcastInputSpec {
+  kind: 'podcast';
+  /** The setting for the longest text one podcast is made from. */
+  maxCharactersSetting: string;
+  /** The setting that lists the languages on offer. */
+  languagesSetting: string;
+}
+
+/** A tool that is a conversation with the person's own agent (AITOOLS-06): priced a message. */
+export interface ChatInputSpec {
+  kind: 'chat';
+  /** The setting for the longest message. */
+  maxCharactersSetting: string;
 }
 
 /** A tool that takes a description (AITOOLS-03): priced flat, with an optional length. */
@@ -361,6 +442,8 @@ export interface MediaInputSpec {
 }
 
 export type AiToolInputSpec =
+  | PodcastInputSpec
+  | ChatInputSpec
   | TextInputSpec
   | PromptInputSpec
   | FileInputSpec
@@ -370,6 +453,16 @@ export type AiToolInputSpec =
 /** Whether the spec is a Studio picture or video tool's (its `kind` is a pair of values, so a plain `===` does not narrow it away). */
 export function isMediaSpec(spec: AiToolInputSpec): spec is MediaInputSpec {
   return spec.kind === 'image' || spec.kind === 'video';
+}
+
+/** Whether the tool's listing switch and every setting it requires are on (AITOOLS-08, AITOOLS-13). A tool with none is always listed. */
+export function isListed(
+  tool: Pick<AiTool, 'listingSetting' | 'requiredSettings'>,
+  settings: Pick<AiToolSettings, 'number'>,
+): boolean {
+  if (tool.listingSetting && settings.number(tool.listingSetting) !== 1)
+    return false;
+  return (tool.requiredSettings ?? []).every((k) => settings.number(k) === 1);
 }
 
 /** A tool's settings keys, read on each call (R-65). */
@@ -394,6 +487,16 @@ export interface AiTool {
   readonly audioFolder: AiAudioFolder | null;
   /** The extension of the audio this tool stores when it is not `mp3` (Dubbing: `flac`). */
   readonly audioExtension?: string;
+  /**
+   * AITOOLS-13: a tool priced by more than one plan action (the Podcast maker has one for each length). `action` is the
+   * first; `actionFor` picks the one a request is priced by, and a job row keeps the picked one.
+   */
+  readonly alsoActions?: readonly string[];
+  actionFor?(req: AiToolRequest): string;
+  /**
+   * AITOOLS-13: the pipeline records the job and returns, and a follower makes it (an Audiobook is spoken one chapter at
+   * a time, a Podcast is made at the provider); nothing runs in the request. `run` is then only the first step.
+   */
   /** Where the job's picture or video is stored (AITOOLS-09, AITOOLS-10); absent for every tool that makes audio or words. */
   readonly mediaFolder?: AiMediaFolder;
   /**
@@ -402,6 +505,8 @@ export interface AiTool {
    * list as soon as they can run.
    */
   readonly listingSetting?: string;
+  /** AITOOLS-13: further settings that must be 1 for the tool to be listed and run (the Podcast maker's Studio API switch). */
+  readonly requiredSettings?: readonly string[];
   /**
    * Whether the catalogue lists the tool while the provider is not set up
    * (`enabled: false`). VoiceOver keeps AITOOLS-01's answer; a tool added

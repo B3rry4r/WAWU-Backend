@@ -6,7 +6,14 @@ import { AiToolError, UNAVAILABLE_MESSAGE } from './ai-tools-error';
 import { AiInputService } from './input/ai-input-files';
 import { AiCloneService } from './own-voice/ai-clone.service';
 import { OWN_VOICE_ID } from './own-voice/own-voice-id';
-import { isMediaSpec, type AiTool, type MediaInputSpec } from './tools/ai-tool';
+import {
+  isListed,
+  isMediaSpec,
+  type AiTool,
+  type MediaInputSpec,
+} from './tools/ai-tool';
+import { PODCAST_ACTIONS, PODCAST_LINK_MAX_CHARS } from './tools/podcast.tool';
+import { PODCAST_LANGUAGES_SETTING } from './tools/podcast.tool';
 import type {
   AiFileQuoteView,
   AiSpeechQuoteView,
@@ -67,10 +74,7 @@ export class AiToolsService {
     tool: AiTool,
     fileKey: string,
   ): Promise<AiFileQuoteView> {
-    if (
-      !tool.enabled(this.voice) ||
-      (tool.listingSetting && this.settings.number(tool.listingSetting) !== 1)
-    )
+    if (!tool.enabled(this.voice) || !isListed(tool, this.settings))
       throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
     const opened = await this.input.open(wawuUserId, fileKey);
     // AITOOLS-11 and -12: the tool's own look at what the Hub read (a video where audio is needed, a length over its
@@ -97,10 +101,7 @@ export class AiToolsService {
     tool: AiTool,
     seconds: number,
   ): Promise<AiSpeechQuoteView> {
-    if (
-      !tool.enabled(this.voice) ||
-      (tool.listingSetting && this.settings.number(tool.listingSetting) !== 1)
-    )
+    if (!tool.enabled(this.voice) || !isListed(tool, this.settings))
       throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
     const units = Math.max(1, Math.ceil(seconds));
     const quote = await this.quotes.quote(wawuUserId, {
@@ -173,12 +174,69 @@ export class AiToolsService {
       if (!enabled && !tool.listedWhenOff) continue;
       // AITOOLS-08: a new tool is listed only while its own switch is on, so
       // the live app never sees a tool before its screen ships.
-      if (
-        tool.listingSetting &&
-        this.settings.number(tool.listingSetting) !== 1
-      )
-        continue;
+      if (!isListed(tool, this.settings)) continue;
       const spec = tool.input;
+      if (spec.kind === 'podcast') {
+        // AITOOLS-13: a podcast is priced by its length: three actions, each from the plan.
+        const price = (id: string) =>
+          plan.actions.find((a) => a.id === id)?.points;
+        const durations = (['short', 'standard', 'long'] as const).flatMap(
+          (d) => {
+            const costPoints = price(PODCAST_ACTIONS[d]);
+            return costPoints === undefined
+              ? []
+              : [{ id: d, action: PODCAST_ACTIONS[d], costPoints }];
+          },
+        );
+        if (durations.length !== 3) continue;
+        tools.push({
+          id: tool.id,
+          action: action.id,
+          name: tool.name,
+          description: tool.description,
+          unit: tool.unit,
+          costPointsPerUnit: action.points,
+          enabled,
+          input: {
+            kind: 'podcast',
+            maxCharacters: this.settings.number(spec.maxCharactersSetting),
+            charactersPerUnit: 0,
+            podcast: {
+              modes: ['conversation', 'bulletin'],
+              maxVoices: 2,
+              durations,
+              maxLinkCharacters: PODCAST_LINK_MAX_CHARS,
+              languages: this.settings
+                .lines(PODCAST_LANGUAGES_SETTING)
+                .map((l) => ({
+                  code: l.split(' ')[0],
+                  name: l.slice(l.indexOf(' ') + 1),
+                })),
+            },
+          },
+          voices: hubVoices,
+        });
+        continue;
+      }
+      if (spec.kind === 'chat') {
+        const maxCharacters = this.settings.number(spec.maxCharactersSetting);
+        tools.push({
+          id: tool.id,
+          action: action.id,
+          name: tool.name,
+          description: tool.description,
+          unit: tool.unit,
+          costPointsPerUnit: action.points,
+          enabled,
+          input: {
+            kind: 'chat',
+            maxCharacters,
+            charactersPerUnit: maxCharacters,
+          },
+          voices: [],
+        });
+        continue;
+      }
       if (isMediaSpec(spec)) {
         // Every entry is whole (id, name, cost, enabled): the live app refuses a whole list for one malformed entry.
         const maxCharacters =
@@ -297,7 +355,10 @@ export class AiToolsService {
               this.settings.number(spec.maxCharactersSetting),
               plan.caps.maxCharsPerJob,
             )
-          : plan.caps.maxCharsPerJob;
+          : spec.maxCharactersSetting
+            ? // AITOOLS-13 Audiobook: its own limit replaces the plan's per-job cap, which was made for short tools.
+              this.settings.number(spec.maxCharactersSetting)
+            : plan.caps.maxCharsPerJob;
       tools.push({
         id: tool.id,
         action: action.id,

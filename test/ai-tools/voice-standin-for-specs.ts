@@ -134,7 +134,81 @@ export interface StandinHandle {
     }[];
     /** Each Split a song call: the variation asked, the file's bytes and type. */
     stems: { variation: string; bytes: number; fileType: string | null }[];
+    /** Each speech call's text length and the length of the words said to come before and after it (AITOOLS-13); null when none was sent. */
+    speechContext: {
+      chars: number;
+      previous: number | null;
+      next: number | null;
+    }[];
+    /** Each podcast start (AITOOLS-13); never the words. */
+    podcasts: {
+      id: string;
+      mode: string;
+      source: 'text' | 'url';
+      chars: number;
+      urlChars: number;
+      host: string;
+      guest: string | null;
+      model: string | null;
+      duration: string | null;
+      language: string | null;
+      quality: string | null;
+    }[];
+    podcastReads: { id: string; status: number }[];
+    deletedPodcasts: string[];
+    /** Each agent made (AITOOLS-06): its settings, never the instructions' words. */
+    agents: {
+      id: string;
+      name: string;
+      llm: string | null;
+      language: string | null;
+      firstMessage: string;
+      voice: string | null;
+      knowledge: string[];
+      textOnlyOverride: boolean;
+      promptChars: number;
+      promptHasGuardrail: boolean;
+    }[];
+    agentPatches: {
+      id: string;
+      knowledge: string[];
+      language: string | null;
+    }[];
+    deletedAgents: string[];
+    knowledge: {
+      kind: string;
+      name: string;
+      bytes: number;
+      fileType?: string | null;
+    }[];
+    deletedKnowledge: string[];
+    signedUrls: number;
+    /** Each text chat over the agent socket: whether it was text-only, whether earlier messages came, the length, whether the key was sent. */
+    chats: {
+      agent: string | null;
+      textOnly: boolean;
+      earlier: boolean;
+      chars: number;
+      keyLeak: boolean;
+      pongs: number;
+    }[];
+    deletedConversations: string[];
   };
+  /** Podcast projects, agents, documents and conversations the provider still holds (AITOOLS-13, AITOOLS-06). */
+  openPodcasts: () => number;
+  openAgents: () => number;
+  openKnowledge: () => number;
+  openConversations: () => number;
+  /** What an agent holds now, as last sent. */
+  agent: (
+    id: string,
+  ) => { knowledge: string[]; prompt: string; language: string | null } | null;
+  /** Sets how a conversation stands: its status and its length in seconds. */
+  setConversation: (
+    id: string,
+    patch: { status?: string; seconds?: number | null },
+  ) => void;
+  conversationIds: () => string[];
   /** Transcripts and cleaned recordings the provider still holds. */
   openTranscripts: () => number;
   openIsolations: () => number;

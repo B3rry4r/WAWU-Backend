@@ -626,6 +626,15 @@ export const ACCOUNT_DATA_MAP: ColumnRule[] = [
   // AITOOLS-11: the saved clone of the person's own voice (the name they gave it and the words they agreed to). The
   // provider's copy is deleted first (AiToolsPurgeService); the row goes with the person.
   { model: 'AiClonedVoice', column: 'wawuUserId', disposition: 'OWNED' },
+  // AITOOLS-06: the person's Receptionist (the business words they gave it), what it knows (names of the texts, pages and
+  // documents they added) and the bounded earlier messages. The provider's copies are deleted first (AiToolsPurgeService).
+  { model: 'ReceptionistAgent', column: 'wawuUserId', disposition: 'OWNED' },
+  {
+    model: 'ReceptionistKnowledge',
+    column: 'wawuUserId',
+    disposition: 'OWNED',
+  },
+  { model: 'ReceptionistTurn', column: 'wawuUserId', disposition: 'OWNED' },
   // VOICE-01: the person's voice (spelling, script, consent, sample and intro
   // audio keys), the tries at making an intro, and the count of free previews.
   { model: 'VoiceProfile', column: 'wawuUserId', disposition: 'OWNED' },

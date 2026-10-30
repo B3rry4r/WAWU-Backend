@@ -94,7 +94,7 @@ export type CopyPresence = 'present' | 'absent' | 'unknown';
  */
 export interface ProviderCopy {
   /** `voice` (AITOOLS-07): the AI version of a person's own voice the provider made for one VoiceOver. */
-  kind: 'transcript' | 'isolation' | 'voice' | 'dub' | 'asset';
+  kind: 'transcript' | 'isolation' | 'voice' | 'dub' | 'asset' | 'podcast';
   id: string;
 }
 
@@ -312,6 +312,81 @@ export interface SplitStemsRequest {
 /** The provider's answer to a split: ONE ZIP archive, opened by the Hub (`readZip`), never by the adapter. */
 export interface StemArchive {
   archive: Buffer;
+}
+
+// ---- Audiobook, Podcast maker, Receptionist (AITOOLS-13, AITOOLS-06, R-109) ------------------------------------------
+
+/** One chapter of an Audiobook on the speech route: the text, and what came before and after it so the voice carries over the join. */
+export interface SpeakChapterRequest {
+  /** A WAWU voice id from `voices()`. */
+  voiceId: string;
+  text: string;
+  /** The model the setting `ai.audiobook_model` names (never shown to a person, R-68). */
+  model: string;
+  previousText: string | null;
+  nextText: string | null;
+}
+
+/** A podcast to make (Studio API, allowlisted accounts only): one host reading it, or two voices talking. */
+export interface StartPodcastRequest {
+  /** The model the setting `ai.podcast_model` names. */
+  model: string;
+  mode: 'conversation' | 'bulletin';
+  /** WAWU voice ids from `voices()`. `guestVoiceId` is set for a conversation only. */
+  hostVoiceId: string;
+  guestVoiceId: string | null;
+  source: { type: 'text'; text: string } | { type: 'url'; url: string };
+  /** `short` (under 3 minutes), `default` (about 3 to 7) or `long` (over 7). */
+  duration: 'short' | 'default' | 'long';
+  /** Two letters, from `ai.podcast_languages`. */
+  language: string;
+}
+
+/** The provider's id for the podcast project it has started (its copy, deleted when the job ends). */
+export interface StartedPodcast {
+  projectId: string;
+}
+
+/** One read of a podcast project. */
+export interface PodcastProgress {
+  /** True once the provider can give the audio. */
+  ready: boolean;
+}
+
+/** What a Receptionist is at the provider: its words, language, model, voice and the documents it knows. */
+export interface AgentSpec {
+  name: string;
+  /** The Hub's instructions for the agent, ending in its own guardrail text. */
+  prompt: string;
+  firstMessage: string;
+  /** A two letter code from `ai.receptionist_languages`. */
+  language: string;
+  /** The model the setting `ai.receptionist_llm` names (never shown to a person). */
+  llm: string;
+  /** A WAWU voice id from `voices()`. */
+  voiceId: string;
+  /** The documents it knows, by the provider's id. */
+  knowledge: { id: string; name: string; kind: 'text' | 'url' | 'file' }[];
+}
+
+/** One earlier message of a Receptionist chat, sent again so the next reply has context. */
+export interface ChatTurn {
+  role: 'person' | 'agent';
+  text: string;
+}
+
+/** A talking session the app opens straight with the provider on a signed link (the Hub carries no audio). */
+export interface VoiceSessionLink {
+  signedUrl: string;
+  conversationId: string;
+}
+
+/** A finished conversation as the provider reports it. */
+export interface ConversationRead {
+  /** `done` when the provider has closed it and knows its length. */
+  status: 'initiated' | 'in-progress' | 'processing' | 'done' | 'failed';
+  /** The length in whole seconds, when the provider says it. */
+  seconds: number | null;
 }
 
 /**
@@ -663,4 +738,112 @@ export interface AiVoiceProvider {
     req: SplitStemsRequest,
     opts?: { signal?: AbortSignal },
   ): Promise<StemArchive>;
+
+  // ---- Audiobook, Podcast maker (AITOOLS-13, R-109) --------------------------------------------------------------
+  // NOT RUN against the real provider (the owner's credits are not bought yet); every path is run against the
+  // stand-in (`scripts/dev/voice-standin.cjs`) with the wire shape of the provider's file.
+
+  /**
+   * One chapter of an Audiobook (`POST /v1/text-to-speech/{voice_id}` with `previous_text` and `next_text`, mp3). The
+   * same route VoiceOver uses; synchronous. Throws `AiVoiceProviderError`.
+   */
+  speakChapter(
+    req: SpeakChapterRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<SpokenAudio>;
+
+  /** True when a key and a host are set: the Studio API (Podcast maker) needs a voice list too only for the voices it names. */
+  readonly podcastConfigured: boolean;
+
+  /** Starts a podcast (`POST /v1/studio/podcasts`). Answers at once with the project's id. A 403 means the account is not allowlisted. Throws `AiVoiceProviderError`. */
+  startPodcast(
+    req: StartPodcastRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<StartedPodcast>;
+
+  /** One read of a podcast project (`GET /v1/studio/projects/{id}`). Throws `AiVoiceProviderError` (the status rides on it, for the log only). */
+  readPodcast(
+    projectId: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<PodcastProgress>;
+
+  /**
+   * The finished podcast's audio: lists the project's snapshots (`GET .../snapshots`), takes the newest and streams it
+   * (`POST .../snapshots/{id}/stream`, mp3). Throws `AiVoiceProviderError`.
+   */
+  fetchPodcastAudio(
+    projectId: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<SpokenAudio>;
+
+  /** One try at deleting the provider's project (`DELETE /v1/studio/projects/{id}`). Never throws; same answers as `deleteTranscript`. */
+  removePodcast(projectId: string): Promise<CopyRemoval>;
+
+  // ---- Receptionist (AITOOLS-06, R-109) ---------------------------------------------------------------------------
+  // The talking agent in the app. No phone, WhatsApp, call or call list is reached through this seam (R-109 point 3).
+
+  /** True when a key and a host are set. */
+  readonly agentsConfigured: boolean;
+
+  /** Makes an agent (`POST /v1/convai/agents/create`). Answers its id. Throws `AiVoiceProviderError`. */
+  createAgent(
+    spec: AgentSpec,
+    opts?: { signal?: AbortSignal },
+  ): Promise<{ agentId: string }>;
+
+  /** Edits an agent (`PATCH /v1/convai/agents/{id}`). Throws `AiVoiceProviderError`. */
+  updateAgent(
+    agentId: string,
+    spec: AgentSpec,
+    opts?: { signal?: AbortSignal },
+  ): Promise<void>;
+
+  /** One try at deleting an agent (`DELETE /v1/convai/agents/{id}`). Never throws; same answers as `deleteTranscript`. */
+  deleteAgent(agentId: string): Promise<CopyRemoval>;
+
+  /** Adds a typed text (`POST /v1/convai/knowledge-base/text`). Answers the document's id. Throws `AiVoiceProviderError`. */
+  addKnowledgeText(
+    req: { name: string; text: string },
+    opts?: { signal?: AbortSignal },
+  ): Promise<{ id: string }>;
+
+  /** Adds a web page (`POST /v1/convai/knowledge-base/url`). Answers the document's id. Throws `AiVoiceProviderError`. */
+  addKnowledgeUrl(
+    req: { name: string; url: string },
+    opts?: { signal?: AbortSignal },
+  ): Promise<{ id: string }>;
+
+  /** Adds a document (`POST /v1/convai/knowledge-base/file`, multipart). Answers the document's id. Throws `AiVoiceProviderError`. */
+  addKnowledgeFile(
+    req: { name: string; file: VoiceSample | StreamedFile },
+    opts?: { signal?: AbortSignal },
+  ): Promise<{ id: string }>;
+
+  /** One try at deleting a knowledge document (`DELETE /v1/convai/knowledge-base/{id}?force=true`, so it also leaves the agent). Never throws. */
+  deleteKnowledge(id: string): Promise<CopyRemoval>;
+
+  /**
+   * One text message to an agent, over the agent socket with the text-only setting (no audio is made or priced):
+   * `earlier` is sent again as context, the reply is the agent's first answer. A network call; holds no transaction,
+   * connection or lock. Throws `AiVoiceProviderError`.
+   */
+  askAgent(
+    req: { agentId: string; message: string; earlier: readonly ChatTurn[] },
+    opts?: { signal?: AbortSignal },
+  ): Promise<{ reply: string }>;
+
+  /** A signed link for a talking session (`GET /v1/convai/conversation/get-signed-url`, with the conversation id). Throws `AiVoiceProviderError`. */
+  openVoiceSession(
+    agentId: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<VoiceSessionLink>;
+
+  /** Reads a conversation (`GET /v1/convai/conversations/{id}`): whether it is over and how long it lasted. Throws `AiVoiceProviderError`. */
+  readConversation(
+    conversationId: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<ConversationRead>;
+
+  /** One try at deleting a conversation the provider kept (`DELETE /v1/convai/conversations/{id}`), so it holds none of the person's words. Never throws. */
+  deleteConversation(conversationId: string): Promise<CopyRemoval>;
 }
