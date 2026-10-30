@@ -248,6 +248,21 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     files: ['fileKey'],
     why: "a person's own song sent to Split a song (AITOOLS-12), uploaded to ai/input-audio through the presign; deleted when the job ends, nothing is published",
   },
+  // AITOOLS-13 and AITOOLS-06 (R-109): a text file for the Audiobook and a document for the Receptionist go up through the
+  // presign into the private input folder (ai/input-doc) and are read only by the Hub for that person's own job; the
+  // Audiobook's is deleted when the job ends and the Receptionist's once it has been given to the agent. Nothing is published.
+  'POST ai-tools/audiobook/jobs': {
+    files: ['fileKey'],
+    why: "a person's own text file sent to the Audiobook (AITOOLS-13), uploaded to ai/input-doc through the presign; deleted when the job ends, nothing is published",
+  },
+  'POST ai-tools/podcast/jobs': {
+    files: ['source.url'],
+    why: "a web page the Podcast maker is made from (AITOOLS-13): an https link the provider reads, never a file of the person's and never opened by the Hub; nothing is published",
+  },
+  'POST ai-tools/receptionist/knowledge': {
+    files: ['fileKey', 'url'],
+    why: "a person's own text or PDF given to their Receptionist (AITOOLS-06), uploaded to ai/input-doc through the presign; deleted once the agent has it, nothing is published. The url is a web page the agent reads, not a file of the person's",
+  },
   // Not a person's own product.
   'POST communities/:id/messages': {
     files: ['imageUrl', 'videoUrl', 'voiceUrl'],

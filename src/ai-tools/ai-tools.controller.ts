@@ -23,6 +23,7 @@ import { AiJobService } from './ai-job.service';
 import {
   AiJobListQueryDto,
   OwnVoiceConsentDto,
+  CreateAudiobookJobDto,
   CreateCaptionsJobDto,
   CreateCleanAudioJobDto,
   CreateDialogueJobDto,
@@ -31,6 +32,7 @@ import {
   CreateMusicJobDto,
   CreateMyVoiceJobDto,
   CreatePhotoEditJobDto,
+  CreatePodcastJobDto,
   CreateQuickVoiceJobDto,
   CreateSoundEffectJobDto,
   CreateStemsJobDto,
@@ -64,6 +66,8 @@ import { MY_VOICE_TOOL } from './tools/my-voice.tool';
 import { STEMS_TOOL } from './tools/stems.tool';
 import { VIDEO_MUSIC_TOOL } from './tools/video-music.tool';
 import { VOICE_CHANGER_TOOL } from './tools/voice-changer.tool';
+import { AUDIOBOOK_TOOL } from './tools/audiobook.tool';
+import { PODCAST_TOOL } from './tools/podcast.tool';
 import { DUBBING_TOOL } from './tools/dubbing.tool';
 import { IMAGE_TOOL } from './tools/image.tool';
 import { MUSIC_TOOL } from './tools/music.tool';
@@ -864,6 +868,82 @@ export class AiToolsController {
   ): Promise<AiJobView> {
     const { job, replayed } = await this.jobs.createJob(
       STEMS_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * Starts an Audiobook job (AITOOLS-13, R-109): the `text` (or the `fileKey` of a plain text file uploaded to
+   * `ai/input-doc`), a `voiceId` from `GET /ai-tools` and the `quoteToken` for the action `audiobook_per_min` (units = the
+   * minutes the characters make, `characters` the total). The points for the whole text are held up front; the Hub speaks
+   * the chapters one after the other and joins them into one audio file: poll `GET /ai-tools/jobs/{id}`; the done job's
+   * `audioUrl` is the whole book (`pieceFormat: audio`, one piece). An empty text, a text over the limit in `GET
+   * /ai-tools` (`input.maxCharacters`), a voice off the list and a file that is not text are refused with the reason and
+   * nothing held; the day's cap stops a longer book (`points_cap_reached`, with the reset time). `503
+   * ai_tool_unavailable` while the tool's switch `ai.listed.audiobook` is off.
+   */
+  @Post('audiobook/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-13')
+  async createAudiobook(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreateAudiobookJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      AUDIOBOOK_TOOL,
+      user.sub,
+      key,
+      dto,
+    );
+    if (replayed) {
+      res.status(200);
+      res.setHeader('Idempotent-Replayed', 'true');
+    }
+    return job;
+  }
+
+  /**
+   * Starts a Podcast maker job (AITOOLS-13, R-109): a `source` (`text`, or an `https` `url` of at most 2,000 characters,
+   * which the Hub never opens), a `mode` (`conversation` with two `voiceIds`, `bulletin` with one), a `duration` (`short`,
+   * `standard` or `long`, each its own plan action: the `quoteToken` is for that action, units 1) and a `language` from
+   * `GET /ai-tools` (`input.podcast.languages`). The provider works for minutes: poll `GET /ai-tools/jobs/{id}`; the done
+   * job's `audioUrl` is the podcast (`pieceFormat: audio`). A link that is not `https`, one over the limit, two voices that
+   * are the same and a language off the list are refused with the reason and nothing held. If the provider does not take
+   * our account (its Studio API is open to allowlisted accounts only) the job fails with "This isn't available right now.
+   * No points were taken." The tool is listed only while `ai.listed.podcast` and `ai.podcast_studio_api_ok` are both on.
+   */
+  @Post('podcast/jobs')
+  @HttpCode(202)
+  @Header('Cache-Control', 'no-store')
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: true,
+    description: '8 to 128 of letters, digits, - or _: one per job.',
+  })
+  @BuiltBy('AITOOLS-13')
+  async createPodcast(
+    @CurrentUser() user: WawuJwtClaims,
+    @Headers('idempotency-key') key: string | undefined,
+    @Body() dto: CreatePodcastJobDto,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<AiJobView> {
+    const { job, replayed } = await this.jobs.createJob(
+      PODCAST_TOOL,
       user.sub,
       key,
       dto,

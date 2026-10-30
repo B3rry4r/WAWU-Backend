@@ -809,6 +809,10 @@ export function buildRegistry(
     voice_clone_once: 'POST /ai-tools/my-voice (AITOOLS-11)',
     video_music_per_track: 'POST /ai-tools/video-music/jobs (AITOOLS-12)',
     stems_per_song: 'POST /ai-tools/stems/jobs (AITOOLS-12)',
+    audiobook_per_min: 'POST /ai-tools/audiobook/jobs (AITOOLS-13)',
+    podcast_short: 'POST /ai-tools/podcast/jobs (AITOOLS-13)',
+    podcast_standard: 'POST /ai-tools/podcast/jobs (AITOOLS-13)',
+    podcast_long: 'POST /ai-tools/podcast/jobs (AITOOLS-13)',
   };
   // R-109: the figures of the four Studio picture and video tools are
   // placeholders, not derived from anything; the owner sets them.
@@ -823,6 +827,11 @@ export function buildRegistry(
     'voice_clone_once',
     'video_music_per_track',
     'stems_per_song',
+    // AITOOLS-13: Audiobook and Podcast maker are priced from the by-character ratio, provisional; the first real bill is read against them.
+    'audiobook_per_min',
+    'podcast_short',
+    'podcast_standard',
+    'podcast_long',
   ]);
   for (const a of plans.actions) {
     add({
@@ -836,7 +845,11 @@ export function buildRegistry(
         'GET /ai-tools',
         ACTION_ROUTES[a.id] ?? 'GET /plans',
       ],
-      provisional: STUDIO2_PRICED.has(a.id) ? 'STUDIO2-PLACEHOLDER' : BOARD,
+      provisional: STUDIO2_PRICED.has(a.id)
+        ? /^(audiobook|podcast)_/.test(a.id)
+          ? 'STUDIO2-LONGFORM'
+          : 'STUDIO2-PLACEHOLDER'
+        : BOARD,
       default: a.points,
       parse: points,
       apply: (d, v) => {
@@ -1485,6 +1498,206 @@ export function buildRegistry(
       provisional: 'STUDIO2-VOICE-MODELS',
       default: extra(key, [fallback]),
       parse: modelLine,
+    });
+  }
+
+  // R-109 (AITOOLS-13, AITOOLS-06): Audiobook, Podcast maker and the Receptionist. Each is listed only while its own
+  // switch is on (default off); the Podcast maker also needs the provider's Studio API switch.
+  for (const [id, label, usedBy] of [
+    ['audiobook', 'Audiobook', 'POST /ai-tools/audiobook/jobs'],
+    ['podcast', 'Podcast maker', 'POST /ai-tools/podcast/jobs'],
+    ['receptionist', 'Receptionist', 'The /ai-tools/receptionist routes'],
+  ] as const) {
+    add({
+      key: `ai.listed.${id}`,
+      group: 'Studio',
+      label: `${label} is listed in Studio (1 is on, 0 is off)`,
+      unit: 'count',
+      usedBy: ['GET /ai-tools', usedBy],
+      provisional: 'STUDIO2-LISTED',
+      default: extra(`ai.listed.${id}`, 0),
+      parse: whole(0, 1),
+    });
+  }
+  add({
+    key: 'ai.podcast_studio_api_ok',
+    group: 'Studio',
+    label:
+      "Podcast maker may run (1 only after the provider's Studio API proof call has passed for our account, 0 until then)",
+    unit: 'count',
+    usedBy: ['GET /ai-tools', 'POST /ai-tools/podcast/jobs'],
+    provisional: 'STUDIO2-PODCAST',
+    default: extra('ai.podcast_studio_api_ok', 0),
+    parse: whole(0, 1),
+  });
+  for (const [key, label, usedBy, fallback, parse, provisional] of [
+    [
+      'ai.audiobook_chars_per_minute',
+      'Characters of an audiobook that make one minute of speech',
+      'GET /ai-tools (input.charactersPerUnit), POST /ai-tools/audiobook/jobs',
+      900,
+      count,
+      'AITOOLS-CHARS-PER-MINUTE',
+    ],
+    [
+      'ai.audiobook_max_chars',
+      'Characters one audiobook can have (about 110 minutes at the default)',
+      'GET /ai-tools (input.maxCharacters), POST /ai-tools/audiobook/jobs',
+      100000,
+      whole(1000, 400000),
+      'STUDIO2-LONGFORM',
+    ],
+    [
+      'ai.audiobook_chunk_chars',
+      "Characters of one chapter sent to the speech route (the model's own limit is 10,000)",
+      'The audiobook follower',
+      9000,
+      whole(500, 10000),
+      'STUDIO2-LONGFORM',
+    ],
+    [
+      'ai.audiobook_max_run_minutes',
+      'Minutes an audiobook can run before its held points are given back',
+      'The audiobook follower, the sweep of stale AI holds (POINTS-03)',
+      120,
+      whole(5, LIMIT.maxMinutes),
+      'STUDIO2-LONGFORM',
+    ],
+    [
+      'ai.podcast_max_run_seconds',
+      'Seconds a podcast can take before its held points are given back',
+      'The podcast follower, the sweep of stale AI holds (POINTS-03)',
+      900,
+      whole(30, 7200),
+      'STUDIO2-PODCAST',
+    ],
+    [
+      'ai.podcast_max_chars',
+      'Characters of text one podcast is made from',
+      'POST /ai-tools/podcast/jobs',
+      20000,
+      whole(100, 200000),
+      'STUDIO2-PODCAST',
+    ],
+    [
+      'ai.receptionist_docs_max',
+      'Things a Receptionist can know at once (texts, links and documents)',
+      'POST /ai-tools/receptionist/knowledge',
+      10,
+      whole(1, 100),
+      'STUDIO2-RECEPTIONIST',
+    ],
+    [
+      'ai.receptionist_doc_max_bytes',
+      'Bytes of one document a Receptionist is given (the provider states no limit)',
+      'POST /ai-tools/receptionist/knowledge',
+      5242880,
+      whole(1024, 52428800),
+      'STUDIO2-RECEPTIONIST',
+    ],
+    [
+      'ai.receptionist_text_max_chars',
+      'Characters of one typed text a Receptionist is given',
+      'POST /ai-tools/receptionist/knowledge',
+      20000,
+      whole(100, 200000),
+      'STUDIO2-RECEPTIONIST',
+    ],
+    [
+      'ai.receptionist_message_max_chars',
+      'Characters of one message to a Receptionist',
+      'POST /ai-tools/receptionist/messages',
+      1000,
+      whole(10, 10000),
+      'STUDIO2-RECEPTIONIST',
+    ],
+    [
+      'ai.receptionist_history_turns',
+      'Earlier messages (a person and the Receptionist together) sent again so the next reply has context',
+      'POST /ai-tools/receptionist/messages',
+      10,
+      whole(0, 40),
+      'STUDIO2-RECEPTIONIST',
+    ],
+    [
+      'ai.receptionist_voice_max_minutes',
+      'Minutes one talking session with a Receptionist can last (the longest is held up front)',
+      'POST /ai-tools/receptionist/voice-sessions',
+      5,
+      whole(1, 60),
+      'STUDIO2-RECEPTIONIST',
+    ],
+  ] as const) {
+    add({
+      key,
+      group: 'Studio',
+      label,
+      unit: 'count',
+      usedBy: [usedBy],
+      provisional,
+      default: extra(key, fallback),
+      parse,
+    });
+  }
+  for (const [key, label, usedBy, fallback, provisional] of [
+    [
+      'ai.audiobook_model',
+      'The speech model an Audiobook asks for (never shown to a person)',
+      'The audiobook follower',
+      'eleven_multilingual_v2',
+      'STUDIO2-LONGFORM',
+    ],
+    [
+      'ai.podcast_model',
+      'The model Podcast maker asks for (never shown to a person)',
+      'POST /ai-tools/podcast/jobs',
+      'eleven_multilingual_v2',
+      'STUDIO2-PODCAST',
+    ],
+    [
+      'ai.receptionist_llm',
+      "The language model a Receptionist runs on, a cheap one from the provider's list (never shown to a person)",
+      'PUT /ai-tools/receptionist',
+      'gemini-2.5-flash-lite',
+      'STUDIO2-RECEPTIONIST',
+    ],
+  ] as const) {
+    add({
+      key,
+      group: 'Studio',
+      label,
+      unit: 'lines',
+      usedBy: [usedBy],
+      provisional,
+      default: extra(key, [fallback]),
+      parse: modelLine,
+    });
+  }
+  for (const [key, label, usedBy, fallback, provisional] of [
+    [
+      'ai.podcast_languages',
+      'Languages Podcast maker offers (one per line: a two letter code, a space, the name)',
+      'GET /ai-tools (input.podcast.languages), POST /ai-tools/podcast/jobs',
+      ['en English', 'fr French', 'es Spanish', 'pt Portuguese'],
+      'STUDIO2-PODCAST',
+    ],
+    [
+      'ai.receptionist_languages',
+      'Languages a Receptionist can speak (one per line: a code, a space, the name; the provider lists no Nigerian language)',
+      'PUT /ai-tools/receptionist',
+      ['en English'],
+      'STUDIO2-RECEPTIONIST',
+    ],
+  ] as const) {
+    add({
+      key,
+      group: 'Studio',
+      label,
+      unit: 'lines',
+      usedBy: [usedBy],
+      provisional,
+      default: extra(key, [...fallback]),
+      parse: dubbingLanguages,
     });
   }
   add({

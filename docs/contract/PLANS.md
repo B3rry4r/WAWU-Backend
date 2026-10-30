@@ -1313,6 +1313,63 @@ and `pieceFormat: audio`, and `POST /ai-tools/jobs/{id}/piece` takes the `output
   provider_plan`) and logs an `OWNER ITEM` line; every other refusal and fault says "That didn't work. No points were
   taken. Try again." and gives every point back.
 
+### Audiobook, Podcast maker and the Receptionist (AITOOLS-13, AITOOLS-06; R-109)
+
+NOT RUN against the real provider (the owner's credits are not bought yet): every route is run against the local
+stand-in (`scripts/dev/voice-standin.cjs`, with the agent socket) with the provider's wire shape
+(`docs/elevenlabs/API-FACTS.md`, "Audiobook", "Podcast maker", "Receptionist: the talking agent"). Each tool is listed only
+while its switch `ai.listed.audiobook`, `ai.listed.podcast` or `ai.listed.receptionist` is 1 (group "Studio", default 0,
+PROVISIONAL `STUDIO2-LISTED`); the Podcast maker also needs `ai.podcast_studio_api_ok` (1 only after the provider's Studio
+API proof call passed for our account). With a switch 0 the job routes answer `503 ai_tool_unavailable` and nothing is
+held. Results go through the media pipeline of AITOOLS-08: `outputs[]` carry `contentType`, `bytes`, `name`,
+`downloadUrl` and `pieceFormat: audio`, and `POST /ai-tools/jobs/{id}/piece` makes the piece.
+
+- **Audiobook.** `POST /ai-tools/audiobook/jobs` (`{ text | fileKey, voiceId, quoteToken }`; the quote is `POST
+  /points/quote` for `audiobook_per_min` with units = characters over `ai.audiobook_chars_per_minute` (900), rounded up,
+  at least 1, and `characters`). `fileKey` is a plain text file uploaded to the new private folder `ai/input-doc` (`POST
+  /uploads/presign`, `text/plain`); PDF and EPUB are not read. The text is at most `ai.audiobook_max_chars` (100,000, about
+  110 minutes; `422 ai_prompt_too_long`) and replaces the plan's per-job character and minute caps for this action only;
+  the day's cap still applies (`points_cap_reached`, with `resetsAt`). The points for the whole text are held up front.
+  The Hub cuts the text into chapters at a heading line or under `ai.audiobook_chunk_chars` (9,000; the model takes
+  10,000), speaks them one after the other on the speech route (model `ai.audiobook_model`), each with the words before
+  and after it (`previous_text`, `next_text`), and joins the mp3 pieces into ONE file (ID3 tags and Xing/Info header frames
+  left out, every piece checked to be whole MPEG audio of one format) streamed to `ai/audiobook`. The job stays `working`
+  while the follower speaks the chapters; its place is the chapter files already stored (`ai/audiobook-part`), so a
+  restart carries on with the next chapter and never holds or charges twice. A chapter the provider refuses or a piece
+  that is not whole mp3 fails the job at once; a provider that stays down fails it after three tries; both give every
+  point back and remove the chapter files and the words. Longest run `ai.audiobook_max_run_minutes` (120).
+- **Podcast maker.** `POST /ai-tools/podcast/jobs` (`{ source: { text | url }, mode: conversation | bulletin, voiceIds,
+  duration: short | standard | long, language, quoteToken }`). A link is `https` only, at most 2,000 characters, and the
+  Hub never opens it (`422 ai_link_invalid`); a conversation needs two different voices (`422 ai_voices_same`); the
+  language is two letters from `ai.podcast_languages` (`GET /ai-tools` gives `input.podcast`). Each length is its own plan
+  action (`podcast_short`, `podcast_standard`, `podcast_long`) and the quote is for that action, units 1. The provider
+  makes the project (`POST /v1/studio/podcasts`), the follower reads it until it can be downloaded, takes the newest
+  snapshot's audio, stores it in `ai/podcast`, and deletes the project however the job ends. The provider's 403 (the
+  Studio API is open to allowlisted accounts only) fails the job with "This isn't available right now. No points were
+  taken." and logs an `OWNER ITEM` line. Longest run `ai.podcast_max_run_seconds` (900).
+- **Receptionist.** Owner only: `GET`, `PUT` and `DELETE /ai-tools/receptionist`; `POST /ai-tools/receptionist/knowledge`
+  (`{ kind: text | url | file, name, text | url | fileKey }`) and `DELETE .../knowledge/{id}`; `POST
+  /ai-tools/receptionist/messages` (`{ message, quoteToken }`, plan action `receptionist_message`, a job whose done
+  `text` output is the reply); `POST .../voice-sessions` (`{ quoteToken }` for `receptionist_voice_per_min` with units =
+  `limits.voiceMaxMinutes`; answers `{ id, signedUrl, conversationId, maxSeconds }`, the phone talks to the provider on that
+  link and the Hub carries no audio) and `POST .../voice-sessions/{id}/end` (the Hub reads the conversation's length,
+  keeps the real minutes rounded up and at most the held amount, gives the rest back; a session nobody ends is settled at
+  the longest by the minute sweep; a second `end` changes nothing). One agent a person at the provider, made on the first
+  save and edited after; the Hub writes its instructions from the person's fields plus its own guardrail (stay on the
+  business, say when it does not know, never invent prices). What it knows is what the person adds (a text, an `https`
+  page, a text or PDF in `ai/input-doc`), at most `ai.receptionist_docs_max` (10); the profile and listings are NOT read.
+  Earlier messages (`ai.receptionist_history_turns`, 10) are kept in `ReceptionistTurn` and sent again with the next
+  message as plain words. Tables `ReceptionistAgent`, `ReceptionistKnowledge`, `ReceptionistTurn` (migration
+  `20261223090000_receptionist`, rollback refuses while a row exists); OWNED in the purge map, in the person's data export,
+  and `DELETE /ai-tools/receptionist` or account deletion deletes the agent and every document at the provider first.
+  No telephone, messaging-channel, call or call-list route exists or is to be added (R-109 point 3).
+- **Prices (PROVISIONAL `STUDIO2-LONGFORM`, `STUDIO2-RECEPTIONIST`, the owner sets them).** `audiobook_per_min` 250 (900
+  characters a minute at 1 credit a character at the by-character ratio 0.278; the factor is NOT in the files),
+  `podcast_short` 750, `podcast_standard` 1,250, `podcast_long` 2,500 (the audio only: 250 a minute for about 3, 5 and 10
+  minutes; the provider's language-model cost is NOT KNOWN), `receptionist_message` 20 and `receptionist_voice_per_min` 400
+  (the existing placeholders). OWNER QUESTION: whether long-form gets a daily cap of its own (an hour of Audiobook is
+  15,000 points against the day's 5,000).
+
 ## 15. The tier offer (TIER-OFFER, R-94; every start, R-105)
 
 A full screen that offers the three tiers (R-89) right after sign-up, before the person reaches Home, and then on every app start until they hold a tier (R-105, owner, 30 Oct 2026; the setting below turns that off for once-per-person, R-94's first ruling). The Hub decides who is shown it and remembers that it was shown, so with the setting off it is once across phones. The tiers, prices and lengths on the screen are `GET /plans`; the offer adds no figure.

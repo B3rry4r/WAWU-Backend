@@ -4,6 +4,7 @@ import { AccountPurgeModule } from '../account-purge/account-purge.module';
 import { WawuAuthModule } from '../common/auth/wawu-auth.module';
 import { PlanSettingsModule } from '../plan-settings/plan-settings.module';
 import { PlansModule } from '../plans/plans.module';
+import { PointsModule } from '../points/points.module';
 import { PointsSpendModule } from '../points/spend/points-spend.module';
 import { StorageModule } from '../storage/storage.module';
 import { AI_AUDIO_STORE, StorageAiAudioStore } from './audio/ai-audio-store';
@@ -11,6 +12,10 @@ import { AiJobService } from './ai-job.service';
 import { AiToolsController } from './ai-tools.controller';
 import { AiToolsPieceController } from './ai-tools-piece.controller';
 import { AiFlowService } from './flow/ai-flow.service';
+import { AiAudiobookService } from './audiobook/ai-audiobook.service';
+import { AiPodcastService } from './podcast/ai-podcast.service';
+import { ReceptionistController } from './receptionist/receptionist.controller';
+import { ReceptionistService } from './receptionist/receptionist.service';
 import { AI_MEDIA_STORE, StorageAiMediaStore } from './media/ai-media-store';
 import { AiToolsPurgeService } from './ai-tools-purge.service';
 import { AiVoiceSamplesController } from './ai-voice-samples.controller';
@@ -44,6 +49,8 @@ import { ProviderCopyService } from './voice/provider-copy.service';
     WawuAuthModule,
     PlanSettingsModule,
     PointsSpendModule,
+    // AITOOLS-06: a talking session settles its real minutes in the points service's own transaction.
+    PointsModule,
     StorageModule,
     // AITOOLS-07: the purge asks the provider to drop a person's voice copy first.
     AccountPurgeModule,
@@ -54,6 +61,7 @@ import { ProviderCopyService } from './voice/provider-copy.service';
     AiToolsController,
     AiToolsPieceController,
     AiVoiceSamplesController,
+    ReceptionistController,
   ],
   providers: [
     AiToolsService,
@@ -83,6 +91,11 @@ import { ProviderCopyService } from './voice/provider-copy.service';
     AiDubService,
     // AITOOLS-09, AITOOLS-10: follows the pictures and videos the provider is making.
     AiFlowService,
+    // AITOOLS-13: speaks the audiobooks one chapter at a time, and follows the podcasts the provider is making.
+    AiAudiobookService,
+    AiPodcastService,
+    // AITOOLS-06: the creator's talking agent: its knowledge, its text chat and its voice sessions.
+    ReceptionistService,
   ],
   exports: [AiJobService, AiInputService, AI_VOICE_PROVIDER, AI_AUDIO_STORE],
 })

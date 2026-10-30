@@ -490,3 +490,95 @@ export class CreateStemsJobDto extends FileJobBase {
   @IsIn([2, 6], { message: 'parts must be 2 or 6.' })
   parts?: 2 | 6;
 }
+
+/** `POST /ai-tools/audiobook/jobs` (AITOOLS-13, R-109). The Idempotency-Key is a header. Send `text`, or the `fileKey` of a text file uploaded to `ai/input-doc`. */
+export class CreateAudiobookJobDto {
+  /** The words to read. Never stored beyond the job: the Hub keeps them in a private file until the job ends. */
+  @ApiPropertyOptional({ maxLength: MOST_CHARACTERS })
+  @IsOptional()
+  @Length(1, MOST_CHARACTERS, { message: 'That text is too long.' })
+  @IsString({ message: 'text must be text.' })
+  text?: string;
+
+  /** Instead of `text`: the key of a plain text file the person uploaded (`POST /uploads/presign` with the folder `ai/input-doc`, then `POST /uploads/confirm`). */
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Length(1, 512, { message: 'fileKey must come from an upload.' })
+  @IsString({ message: 'fileKey must be text.' })
+  fileKey?: string;
+
+  /** A voice id from `GET /ai-tools`. */
+  @ApiProperty()
+  @IsString({ message: 'voiceId must be text.' })
+  @Matches(/^[a-z0-9_-]{1,40}$/, {
+    message: 'Pick one of the voices on the list.',
+  })
+  voiceId!: string;
+
+  /** `quoteToken` from the `POST /points/quote` the person saw (action `audiobook_per_min`, units = the minutes the characters make). */
+  @ApiProperty()
+  @IsString({ message: 'quoteToken must be text.' })
+  @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
+  quoteToken!: string;
+}
+
+/** What a podcast is made from: a `text` or a `url` (exactly one). */
+export class PodcastSourceDto {
+  @ApiPropertyOptional({ maxLength: MOST_CHARACTERS })
+  @IsOptional()
+  @Length(1, MOST_CHARACTERS, { message: 'That text is too long.' })
+  @IsString({ message: 'text must be text.' })
+  text?: string;
+
+  /** A web link: `https` only, at most 2,000 characters. The Hub never opens it. */
+  @ApiPropertyOptional({ maxLength: 4000 })
+  @IsOptional()
+  @MaxLength(4000, { message: 'That link is too long.' })
+  @IsString({ message: 'url must be text.' })
+  url?: string;
+}
+
+/** `POST /ai-tools/podcast/jobs` (AITOOLS-13, R-109). The Idempotency-Key is a header. */
+export class CreatePodcastJobDto {
+  @ApiProperty({ type: () => PodcastSourceDto })
+  @ValidateNested()
+  @Type(() => PodcastSourceDto)
+  source!: PodcastSourceDto;
+
+  /** `conversation`: two voices talk it over. `bulletin`: one host reads it. */
+  @ApiProperty({ enum: ['conversation', 'bulletin'] })
+  @IsIn(['conversation', 'bulletin'], {
+    message: 'mode must be conversation or bulletin.',
+  })
+  mode!: 'conversation' | 'bulletin';
+
+  /** Voice ids from `GET /ai-tools`: one for a bulletin, two for a conversation (host, then guest). */
+  @ApiProperty({ type: [String], minItems: 1, maxItems: 2 })
+  @ArrayMaxSize(2, { message: 'Pick one voice or two.' })
+  @ArrayMinSize(1, { message: 'Pick one voice or two.' })
+  @Matches(/^[a-z0-9_-]{1,40}$/, {
+    each: true,
+    message: 'Pick voices from the list.',
+  })
+  @IsArray({ message: 'voiceIds must be a list.' })
+  voiceIds!: string[];
+
+  /** How long: `short` (under 3 minutes), `standard` (about 3 to 7) or `long` (over 7). */
+  @ApiProperty({ enum: ['short', 'standard', 'long'] })
+  @IsIn(['short', 'standard', 'long'], {
+    message: 'duration must be short, standard or long.',
+  })
+  duration!: 'short' | 'standard' | 'long';
+
+  /** Two letters from the list in `GET /ai-tools` (`input.podcast.languages`). */
+  @ApiProperty({ minLength: 2, maxLength: 2 })
+  @Matches(/^[A-Za-z]{2}$/, { message: 'Pick a language from the list.' })
+  @IsString({ message: 'language must be text.' })
+  language!: string;
+
+  /** `quoteToken` from the `POST /points/quote` the person saw (the action for the length chosen, units 1). */
+  @ApiProperty()
+  @IsString({ message: 'quoteToken must be text.' })
+  @Length(1, 1024, { message: 'quoteToken must come from a points quote.' })
+  quoteToken!: string;
+}

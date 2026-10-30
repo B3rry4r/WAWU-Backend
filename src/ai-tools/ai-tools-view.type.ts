@@ -20,7 +20,7 @@ export interface AiToolView {
   name: string;
   /** One line under the name. */
   description: string;
-  /** What `costPointsPerUnit` is counted per: a `minute` of speech, one `use` (Sound effect) or one `track` (Music track). */
+  /** What `costPointsPerUnit` is counted per: a `minute` of speech, one `use` (Sound effect), one `track` (Music track) or one `message` (Receptionist). */
   unit: AiToolUnit;
   /** Points for one unit, from the settings. */
   costPointsPerUnit: number;
@@ -50,8 +50,27 @@ export interface AiToolView {
     options?: AiToolOptionsView;
     /** `dialogue` (AITOOLS-11): a scene of lines, each with a voice from `voices`; at most `maxVoices` different ones, `maxCharacters` characters in all. */
     dialogue?: { maxVoices: number };
+    /** `podcast` (AITOOLS-13): one host or two, a length (each its own action and price) and a language, from the lists here. */
+    podcast?: AiToolPodcastView;
   };
   voices: AiVoiceView[];
+}
+
+/** What the Podcast maker takes (AITOOLS-13): every value is the Hub's own, from the settings and the plan. */
+export interface AiToolPodcastView {
+  /** `conversation` (two voices talk it over) and `bulletin` (one host reads it). */
+  modes: ('conversation' | 'bulletin')[];
+  /** The most voices a podcast uses (a conversation's host and guest). */
+  maxVoices: number;
+  /** The lengths on offer; each has its own plan action (`POST /points/quote` takes it) and price in points. */
+  durations: {
+    id: 'short' | 'standard' | 'long';
+    action: string;
+    costPoints: number;
+  }[];
+  /** The longest web link, in characters (`https` only). */
+  maxLinkCharacters: number;
+  languages: { code: string; name: string }[];
 }
 
 /**

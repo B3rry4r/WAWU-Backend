@@ -28,6 +28,12 @@ export const AI_DIALOGUE_FOLDER = 'ai/dialogue';
 export const AI_VIDEO_MUSIC_FOLDER = 'ai/video-music';
 /** A Split a song job's parts (AITOOLS-12, R-109): one file for each part. */
 export const AI_STEMS_FOLDER = 'ai/stems';
+/** An Audiobook's finished file (AITOOLS-13, R-109): one long mp3, streamed to storage (never held whole). */
+export const AI_AUDIOBOOK_FOLDER = 'ai/audiobook';
+/** The chapters of an Audiobook in the making (AITOOLS-13): one file each, deleted when the job ends. Never served. */
+export const AI_AUDIOBOOK_PART_FOLDER = 'ai/audiobook-part';
+/** A Podcast maker job's audio (AITOOLS-13, R-109). */
+export const AI_PODCAST_FOLDER = 'ai/podcast';
 /** The audio types the Hub stores and serves for a tool's result (its `putGenerated` list). */
 export const AI_AUDIO_CONTENT_TYPES = [
   'audio/mpeg',
@@ -59,6 +65,9 @@ export const AI_AUDIO_FOLDERS = [
   AI_DIALOGUE_FOLDER,
   AI_VIDEO_MUSIC_FOLDER,
   AI_STEMS_FOLDER,
+  AI_AUDIOBOOK_FOLDER,
+  AI_AUDIOBOOK_PART_FOLDER,
+  AI_PODCAST_FOLDER,
 ] as const;
 export type AiAudioFolder = (typeof AI_AUDIO_FOLDERS)[number];
 
@@ -78,6 +87,14 @@ export interface AiAudioStore {
   urlFor(key: string): Promise<string>;
   /** Drops the audio of a job that did not keep its points. Never throws. */
   remove(key: string): Promise<void>;
+  /** Keeps the words of a job as a private file of the person's (`ai/input-doc`, AITOOLS-13: an audiobook's text); answers its key. */
+  putText(wawuUserId: string, name: string, text: string): Promise<string>;
+  /** The keys of the person's files in `folder` whose name starts with `namePrefix` (AITOOLS-13: the chapters of an audiobook). */
+  list(
+    wawuUserId: string,
+    folder: AiAudioFolder,
+    namePrefix: string,
+  ): Promise<string[]>;
 }
 
 /** The Hub's own object storage, with the file recorded as the person's (their account deletion removes it). */
@@ -107,6 +124,24 @@ export class StorageAiAudioStore implements AiAudioStore {
 
   remove(key: string): Promise<void> {
     return this.storage.removeGenerated(key);
+  }
+
+  putText(wawuUserId: string, name: string, text: string): Promise<string> {
+    return this.storage.putGenerated(
+      wawuUserId,
+      'ai/input-doc',
+      name,
+      Buffer.from(text, 'utf8'),
+      'text/plain',
+    );
+  }
+
+  list(
+    wawuUserId: string,
+    folder: AiAudioFolder,
+    namePrefix: string,
+  ): Promise<string[]> {
+    return this.storage.listGeneratedKeys(wawuUserId, folder, namePrefix);
   }
 }
 

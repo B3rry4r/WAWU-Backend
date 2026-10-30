@@ -1,7 +1,11 @@
 import type { Readable } from 'node:stream';
 import { Injectable } from '@nestjs/common';
 import { StorageService } from '../../storage/storage.service';
-import { AI_IMAGE_FOLDER, AI_VIDEO_FOLDER } from '../audio/ai-audio-store';
+import {
+  AI_AUDIOBOOK_FOLDER,
+  AI_IMAGE_FOLDER,
+  AI_VIDEO_FOLDER,
+} from '../audio/ai-audio-store';
 import { formatRule, type UploadFormatId } from '../../storage/upload-formats';
 
 /**
@@ -12,9 +16,13 @@ import { formatRule, type UploadFormatId } from '../../storage/upload-formats';
  */
 export const AI_MEDIA_STORE = Symbol('AI_MEDIA_STORE');
 
-export { AI_IMAGE_FOLDER, AI_VIDEO_FOLDER };
+export { AI_AUDIOBOOK_FOLDER, AI_IMAGE_FOLDER, AI_VIDEO_FOLDER };
 /** Every folder the Studio picture and video tools write to: each is the person's own, so their account deletion removes it. */
-export const AI_MEDIA_FOLDERS = [AI_IMAGE_FOLDER, AI_VIDEO_FOLDER] as const;
+export const AI_MEDIA_FOLDERS = [
+  AI_IMAGE_FOLDER,
+  AI_VIDEO_FOLDER,
+  AI_AUDIOBOOK_FOLDER,
+] as const;
 export type AiMediaFolder = (typeof AI_MEDIA_FOLDERS)[number];
 
 /** What a Studio result may be, by kind: the types the Hub serves. A type outside these fails the job and every point goes back. */
@@ -24,12 +32,16 @@ export const AI_IMAGE_CONTENT_TYPES = [
   'image/webp',
 ] as const;
 export const AI_VIDEO_CONTENT_TYPES = ['video/mp4'] as const;
+/** AITOOLS-13: the one audio type an Audiobook is joined into (mp3 frames of one format join). */
+export const AI_LONG_AUDIO_CONTENT_TYPES = ['audio/mpeg'] as const;
 
 const MB = 1024 * 1024;
 /** The most one result may be: a request bound, not a product figure. A video follows the largest file the Create flow takes (512 MB). */
 export const AI_MEDIA_MAX_BYTES = {
   image: 64 * MB,
   video: 512 * MB,
+  /** An audiobook is far smaller than a piece may be (512 MB): the text setting keeps it at about 105 MB. */
+  audio: 512 * MB,
 } as const;
 
 /** A stored result as the store knows it. */

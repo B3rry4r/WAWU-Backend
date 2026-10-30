@@ -56,6 +56,16 @@ export type AiToolErrorCode =
   | 'ai_length_too_short'
   /** AITOOLS-11: the person already keeps a clone of their voice (or is making one). Nothing is held. */
   | 'clone_exists'
+  /** AITOOLS-13: a link that is not `https`, is too long or has no name in it. Nothing is held. */
+  | 'ai_link_invalid'
+  /** AITOOLS-13: a podcast of two voices where both are the same voice. Nothing is held. */
+  | 'ai_voices_same'
+  /** AITOOLS-06: the person has not set up their Receptionist yet. Nothing is held. */
+  | 'receptionist_not_set_up'
+  /** AITOOLS-06: the person's Receptionist already knows as many things as one may. Nothing is created. */
+  | 'receptionist_knowledge_full'
+  /** AITOOLS-06: a document of a type the Receptionist does not take. Nothing is created. */
+  | 'ai_file_type_unsupported'
   | 'not_found';
 
 export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
@@ -86,6 +96,11 @@ export const AI_TOOL_ERROR_STATUS: Record<AiToolErrorCode, HttpStatus> = {
   ai_voices_too_many: HttpStatus.UNPROCESSABLE_ENTITY,
   ai_length_too_short: HttpStatus.UNPROCESSABLE_ENTITY,
   clone_exists: HttpStatus.CONFLICT,
+  ai_link_invalid: HttpStatus.UNPROCESSABLE_ENTITY,
+  ai_voices_same: HttpStatus.UNPROCESSABLE_ENTITY,
+  receptionist_not_set_up: HttpStatus.CONFLICT,
+  receptionist_knowledge_full: HttpStatus.CONFLICT,
+  ai_file_type_unsupported: HttpStatus.UNPROCESSABLE_ENTITY,
   not_found: HttpStatus.NOT_FOUND,
 };
 

@@ -86,7 +86,9 @@ export function copyOfMarker(marker: string | null): NotedCopy | null {
       kind !== 'voice' &&
       kind !== 'dub' &&
       // AITOOLS-09, AITOOLS-10: the person's photo or voice sent up for a run, ids joined with `+`.
-      kind !== 'asset') ||
+      kind !== 'asset' &&
+      // AITOOLS-13: the Studio project a podcast was made in.
+      kind !== 'podcast') ||
     id === ''
   )
     return null;
@@ -243,6 +245,11 @@ export class ProviderCopyService implements OnModuleDestroy {
       }
       return allGone ? 'gone' : 'keep';
     }
+    if (copy.kind === 'podcast') {
+      // AITOOLS-13: the Hub knows the project exists (the provider named it), so a 404 means it is already gone.
+      const removed = await this.voice.removePodcast(copy.id);
+      return removed === 'failed' ? 'keep' : 'gone';
+    }
     if (copy.kind === 'isolation') {
       const removed = await this.voice.deleteIsolation(copy.id);
       return removed === 'deleted'
@@ -292,7 +299,8 @@ export class ProviderCopyService implements OnModuleDestroy {
     if (
       copy.kind === 'voice' ||
       copy.kind === 'isolation' ||
-      copy.kind === 'asset'
+      copy.kind === 'asset' ||
+      copy.kind === 'podcast'
     ) {
       if (
         outcome === 'gone' ||
@@ -397,6 +405,7 @@ export class ProviderCopyService implements OnModuleDestroy {
                 { providerRef: { startsWith: 'voice:' } },
                 { providerRef: { startsWith: 'dub:' } },
                 { providerRef: { startsWith: 'asset:' } },
+                { providerRef: { startsWith: 'podcast:' } },
               ],
             },
             {

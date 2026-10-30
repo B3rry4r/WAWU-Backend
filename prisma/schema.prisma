@@ -8158,6 +8158,49 @@ model AiClonedVoice {
   @@index([removedAt])
 }
 
+/// A creator's Receptionist: the talking AI agent that answers from what the creator gives it (AITOOLS-06, R-109). One
+/// row a person. "providerAgentId" is the provider's own id for the agent (never shown to a person); it is empty while
+/// the agent is being made. The business fields are the person's own words and the Hub writes the agent's instructions
+/// from them. R-109 (point 3) leaves every other channel out.
+model ReceptionistAgent {
+  id              String   @id @default(uuid())
+  wawuUserId      String   @unique
+  providerAgentId String?
+  businessName    String
+  offer           String
+  replyStyle      String   @default("")
+  language        String   @default("en")
+  voiceId         String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+/// One thing a Receptionist knows: a typed text, a web page or a document the person gave it (AITOOLS-06). "providerDocId"
+/// is the provider's id for the document, deleted at the provider when the row is removed.
+model ReceptionistKnowledge {
+  id            String   @id @default(uuid())
+  wawuUserId    String
+  providerDocId String
+  kind          String
+  name          String
+  bytes         Int      @default(0)
+  createdAt     DateTime @default(now())
+
+  @@index([wawuUserId])
+}
+
+/// One earlier message of a person's chat with their Receptionist, kept (a bounded number, the setting
+/// ai.receptionist_history_turns) so the next reply has context. Only the person's own words and the agent's replies.
+model ReceptionistTurn {
+  id         String   @id @default(uuid())
+  wawuUserId String
+  role       String
+  text       String
+  createdAt  DateTime @default(now())
+
+  @@index([wawuUserId, createdAt])
+}
+
 /// A person's voice: how their name is said and their Voice Intro (VOICE-01,
 /// R-43, R-66). One row per person, made the first time they save a spelling,
 /// a script, a consent or a sample. The sample is a file the person uploaded

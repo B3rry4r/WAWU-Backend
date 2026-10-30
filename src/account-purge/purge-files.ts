@@ -172,6 +172,22 @@ export const FILE_KINDS: Readonly<Record<string, FileKind>> = {
     decision: 'DELETE',
     what: 'The parts of a song the Hub made for the person: a Split a song job, one file for each part (AiToolJob.outputs, AITOOLS-12). A copy made into their content folder is an upload of theirs and follows the content rules.',
   },
+  'ai/audiobook': {
+    decision: 'DELETE',
+    what: 'The audiobook the Hub made for the person: one long audio file (AiToolJob.outputs, AITOOLS-13). A copy made into their content folder is an upload of theirs and follows the content rules.',
+  },
+  'ai/audiobook-part': {
+    decision: 'DELETE',
+    what: 'One chapter of an audiobook in the making (AITOOLS-13). Deleted when the job ends; any left is deleted with the account.',
+  },
+  'ai/podcast': {
+    decision: 'DELETE',
+    what: 'The audio the Hub made for the person: a Podcast maker job (AiToolJob.outputs, AITOOLS-13). A copy made into their content folder is an upload of theirs and follows the content rules.',
+  },
+  'ai/input-doc': {
+    decision: 'DELETE',
+    what: 'A text or a PDF the person sent to the Audiobook (a text file) or gave a Receptionist to know (AiToolJob.inputRef, ReceptionistKnowledge, AITOOLS-13, AITOOLS-06). Deleted when the job ends or the knowledge is removed; any left is deleted with the account.',
+  },
   'voice/sample': {
     decision: 'DELETE',
     what: 'The 30 second recording of the person’s own voice (VoiceProfile.sampleKey, VOICE-01).',

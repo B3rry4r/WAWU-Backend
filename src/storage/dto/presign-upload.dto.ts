@@ -81,6 +81,11 @@ export const UPLOAD_FOLDERS = [
   // and removed when the job ends and when the account is deleted. Its own
   // name, not AI_INPUT_FOLDERS, which pins the two audio and video folders.
   'ai/input-image',
+  // AITOOLS-13, AITOOLS-06 (R-109). A text file a person sends to the Audiobook, or a text or PDF they give a
+  // Receptionist to know. Its own prefix, like the folders above: the document is the person's own words, read only
+  // by the Hub for that person's own run (never served to anyone else), counted in no allowance, and removed when the
+  // job ends, when the knowledge is removed and when the account is deleted.
+  'ai/input-doc',
 ] as const;
 
 /**
@@ -120,6 +125,9 @@ export const AI_INPUT_MAX_BYTES_SETTING = 'ai.input_max_bytes';
 /** AITOOLS-08: the folder a person's photo for a Studio tool goes in, and the most one may be (25 MB, the provider's inline limit). */
 export const AI_INPUT_IMAGE_FOLDER = 'ai/input-image';
 export const AI_INPUT_IMAGE_MAX_BYTES = 25 * 1024 * 1024;
+/** AITOOLS-13, AITOOLS-06: the folder a person's text or PDF goes in, and the ceiling of one (25 MB; the settings `ai.receptionist_doc_max_bytes` only lower it). */
+export const AI_INPUT_DOC_FOLDER = 'ai/input-doc';
+export const AI_INPUT_DOC_MAX_BYTES = 25 * 1024 * 1024;
 /** The two folders a person's file for an AI tool goes in. */
 export const AI_INPUT_FOLDERS = ['ai/input-audio', 'ai/input-video'] as const;
 
@@ -189,6 +197,7 @@ export const FOLDER_CONTENT_TYPES: Record<UploadFolder, readonly string[]> = {
   'ai/input-video': ['video/mp4', 'video/quicktime', 'video/webm'],
   // AITOOLS-08. The three picture types the provider takes and the Hub serves.
   'ai/input-image': IMAGE,
+  'ai/input-doc': ['text/plain', 'application/pdf'],
   ...CHAT_FOLDER_CONTENT_TYPES,
 };
 
@@ -210,6 +219,7 @@ export const FOLDER_MAX_BYTES: Partial<Record<UploadFolder, number>> = {
   'ai/input-audio': AI_INPUT_MAX_BYTES,
   'ai/input-video': AI_INPUT_MAX_BYTES,
   'ai/input-image': AI_INPUT_IMAGE_MAX_BYTES,
+  'ai/input-doc': AI_INPUT_DOC_MAX_BYTES,
 };
 
 /**
@@ -232,6 +242,8 @@ export const EXTENSION_FOR_CONTENT_TYPE: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
   'application/pdf': 'pdf',
+  // AITOOLS-13, AITOOLS-06: a person's own text file, kept as a private input and read by the Hub only.
+  'text/plain': 'txt',
   'video/mp4': 'mp4',
   'video/quicktime': 'mov',
   'video/webm': 'webm',

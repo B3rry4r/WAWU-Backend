@@ -53,12 +53,25 @@ export const ACTION_TITLES: Record<PlanActionId, string> = {
   voice_clone_once: 'Your own voice',
   video_music_per_track: 'Music for a video',
   stems_per_song: 'Split a song',
+  audiobook_per_min: 'Audiobook',
+  podcast_short: 'Podcast maker',
+  podcast_standard: 'Podcast maker',
+  podcast_long: 'Podcast maker',
 };
 
 export const UNKNOWN_ACTION_MESSAGE = 'We could not find that AI tool.';
 export const TOO_BIG_JOB_MESSAGE =
   'That job needs more points than one job can take.';
 export const LANGUAGES_MESSAGE = 'Languages only apply to dubbing.';
+
+/**
+ * R-109 (AITOOLS-13): a long-form action carries its own per-job limits (the tool's own text length setting), so the
+ * two per-job caps made for short tools (characters and minutes in one job) do not apply to it. The day's cap still
+ * does: an hour of Audiobook is more than a day's points, and whether long-form gets a cap of its own is the owner's.
+ */
+export const LONG_FORM_ACTIONS: ReadonlySet<string> = new Set([
+  'audiobook_per_min',
+]);
 
 /** What a job asks for. */
 export interface SpendRequest {
@@ -133,7 +146,12 @@ export function capStop(
   spentTodayPoints: number,
   resetsAt: Date,
 ): PointsCapView | null {
-  if (job.characters !== null && job.characters > caps.maxCharsPerJob) {
+  const longForm = LONG_FORM_ACTIONS.has(job.action);
+  if (
+    !longForm &&
+    job.characters !== null &&
+    job.characters > caps.maxCharsPerJob
+  ) {
     return {
       cap: 'characters_per_job',
       limit: caps.maxCharsPerJob,
@@ -148,7 +166,7 @@ export function capStop(
     job.per === 'minute' || job.per === 'minute_per_language'
       ? job.units
       : null;
-  if (minutes !== null && minutes > caps.maxAudioMinPerJob) {
+  if (!longForm && minutes !== null && minutes > caps.maxAudioMinPerJob) {
     return {
       cap: 'minutes_per_job',
       limit: caps.maxAudioMinPerJob,
