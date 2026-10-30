@@ -33,6 +33,12 @@ const FIGURE_FREE_DIRS = ['src/plans'];
 /** Number literals in those folders that equal a figure by coincidence. */
 const NOT_A_FIGURE: Record<string, Record<number, string>> = {
   'src/plans/plans-config.ts': { 100: 'the top of a percent' },
+  // R-112 made Verify allow 4 products, so a 4 anywhere in the plan's folder matched it. These three are the transfer
+  // sweep's own tuning, not a plan figure: people settled at once, minutes between rechecks, and the n-th check at
+  // which the rest stops doubling (1 << 4 is 16 minutes).
+  'src/plans/purchases/plan-transfer-order.ts': {
+    4: 'transfer sweep: concurrency, recheck minutes and the backoff doubling cap, not a tier count',
+  },
 };
 
 function codeFiles(dir: string): string[] {
