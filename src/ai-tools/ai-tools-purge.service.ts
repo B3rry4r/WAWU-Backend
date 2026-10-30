@@ -62,6 +62,8 @@ export class AiToolsPurgeService implements OnModuleInit {
       OR: [
         { providerRef: { startsWith: 'voice:' } },
         { providerRef: { startsWith: 'asset:' } },
+        // REC-PRIVACY: a Receptionist conversation the provider still keeps.
+        { providerRef: { startsWith: 'conversation:' } },
       ],
     };
     // A picture or video still being made holds its assets under a `genrun:`

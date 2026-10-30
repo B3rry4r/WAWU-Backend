@@ -94,7 +94,15 @@ export type CopyPresence = 'present' | 'absent' | 'unknown';
  */
 export interface ProviderCopy {
   /** `voice` (AITOOLS-07): the AI version of a person's own voice the provider made for one VoiceOver. */
-  kind: 'transcript' | 'isolation' | 'voice' | 'dub' | 'asset' | 'podcast';
+  kind:
+    | 'transcript'
+    | 'isolation'
+    | 'voice'
+    | 'dub'
+    | 'asset'
+    | 'podcast'
+    /** REC-PRIVACY: a Receptionist conversation (a text chat or a finished talk) the provider keeps until it is deleted. */
+    | 'conversation';
   id: string;
 }
 
@@ -352,6 +360,24 @@ export interface PodcastProgress {
   /** True once the provider can give the audio. */
   ready: boolean;
 }
+
+/**
+ * REC-PRIVACY: what every Receptionist agent is told about keeping conversations (`platform_settings.privacy`). The
+ * provider keeps an agent's conversations for ever by default (`retention_days` -1, `record_voice` true), so the Hub
+ * sets these on every create and every update and keeps nothing longer than it must.
+ *
+ * `retention_days` is 1: the provider's API file (PrivacyConfig-Input) types it as an integer with no stated minimum
+ * and says only that -1 means "no retention limit", so 1 is the smallest whole number of days it documents; 0 and other
+ * negatives are not described and are not used. `zero_retention_mode` is NOT set: the API file describes it with no
+ * plan note for agents, and the same file says zero retention may only be used by enterprise customers.
+ * Not yet proven against the real provider (no credits): see tasks/AITOOLS-06.md, Current state.
+ */
+export const AGENT_PRIVACY = {
+  record_voice: false,
+  retention_days: 1,
+  delete_audio: true,
+  delete_transcript_and_pii: true,
+} as const;
 
 /** What a Receptionist is at the provider: its words, language, model, voice and the documents it knows. */
 export interface AgentSpec {
@@ -826,11 +852,18 @@ export interface AiVoiceProvider {
    * One text message to an agent, over the agent socket with the text-only setting (no audio is made or priced):
    * `earlier` is sent again as context, the reply is the agent's first answer. A network call; holds no transaction,
    * connection or lock. Throws `AiVoiceProviderError`.
+   *
+   * REC-PRIVACY: the chat is a conversation the provider keeps, so its id is asked for with the link and answered
+   * (`conversationId`, empty when the provider named none). `onConversation` is told the id the moment it is known,
+   * before the socket opens, so the caller can note it even when the answer never comes; it must not throw.
    */
   askAgent(
     req: { agentId: string; message: string; earlier: readonly ChatTurn[] },
-    opts?: { signal?: AbortSignal },
-  ): Promise<{ reply: string }>;
+    opts?: {
+      signal?: AbortSignal;
+      onConversation?: (conversationId: string) => void | Promise<void>;
+    },
+  ): Promise<{ reply: string; conversationId: string }>;
 
   /** A signed link for a talking session (`GET /v1/convai/conversation/get-signed-url`, with the conversation id). Throws `AiVoiceProviderError`. */
   openVoiceSession(

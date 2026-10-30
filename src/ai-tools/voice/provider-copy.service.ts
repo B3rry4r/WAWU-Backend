@@ -55,7 +55,7 @@ export type CopyTry = 'gone' | 'not_found' | 'absent' | 'keep';
 
 /**
  * What a job's `providerRef` holds while the provider's copy is not yet
- * confirmed deleted: `transcript:<id>`, `isolation:<id>`, `voice:<id>` (AITOOLS-07) or `asset:<id>+<id>` (AITOOLS-09); for a transcript
+ * confirmed deleted: `transcript:<id>`, `isolation:<id>`, `voice:<id>` (AITOOLS-07), `asset:<id>+<id>` (AITOOLS-09) or `conversation:<id>` (REC-PRIVACY); for a transcript
  * that has answered 404 once after the confirm window opened, `@<ms>` is added
  * (when that first 404 was read), and a later read of the copy removes it.
  */
@@ -88,7 +88,9 @@ export function copyOfMarker(marker: string | null): NotedCopy | null {
       // AITOOLS-09, AITOOLS-10: the person's photo or voice sent up for a run, ids joined with `+`.
       kind !== 'asset' &&
       // AITOOLS-13: the Studio project a podcast was made in.
-      kind !== 'podcast') ||
+      kind !== 'podcast' &&
+      // REC-PRIVACY: a Receptionist conversation (`conversation:<id>`; not `convo:`, which is a live talk's own note).
+      kind !== 'conversation') ||
     id === ''
   )
     return null;
@@ -250,6 +252,16 @@ export class ProviderCopyService implements OnModuleDestroy {
       const removed = await this.voice.removePodcast(copy.id);
       return removed === 'failed' ? 'keep' : 'gone';
     }
+    if (copy.kind === 'conversation') {
+      // REC-PRIVACY: a conversation the provider kept. Like a cleaned item it has no read the Hub relies on, and a 404
+      // soon after it was made may only mean "not stored yet", so a 404 clears it once `NOT_STORED_YET_MS` has passed.
+      const removed = await this.voice.deleteConversation(copy.id);
+      return removed === 'deleted'
+        ? 'gone'
+        : removed === 'not_found'
+          ? 'not_found'
+          : 'keep';
+    }
     if (copy.kind === 'isolation') {
       const removed = await this.voice.deleteIsolation(copy.id);
       return removed === 'deleted'
@@ -300,7 +312,8 @@ export class ProviderCopyService implements OnModuleDestroy {
       copy.kind === 'voice' ||
       copy.kind === 'isolation' ||
       copy.kind === 'asset' ||
-      copy.kind === 'podcast'
+      copy.kind === 'podcast' ||
+      copy.kind === 'conversation'
     ) {
       if (
         outcome === 'gone' ||
@@ -406,6 +419,7 @@ export class ProviderCopyService implements OnModuleDestroy {
                 { providerRef: { startsWith: 'dub:' } },
                 { providerRef: { startsWith: 'asset:' } },
                 { providerRef: { startsWith: 'podcast:' } },
+                { providerRef: { startsWith: 'conversation:' } },
               ],
             },
             {

@@ -1,6 +1,9 @@
 import { createServer, type Server } from 'node:http';
 import { ConfigService } from '@nestjs/config';
-import { AiVoiceProviderError } from '../voice/ai-voice-provider';
+import {
+  AGENT_PRIVACY,
+  AiVoiceProviderError,
+} from '../voice/ai-voice-provider';
 import { HttpVoiceProvider } from '../voice/http-voice-provider';
 import { startStandin } from '../../../test/ai-tools/voice-standin-for-specs';
 import { copyOfCast, endMarkerOfCast } from '../podcast/podcast-support';
@@ -202,6 +205,47 @@ describe('AITOOLS-13, AITOOLS-06: the AI provider seam, chapters, podcasts and a
     });
     expect(await p.deleteConversation(link.conversationId)).toBe('deleted');
     await p.deleteAgent(made.agentId);
+  });
+
+  it("sends the privacy settings with the agent, names the chat with the link before the socket opens, and takes the socket's word when the link names none (REC-PRIVACY)", async () => {
+    const p = provider();
+    const made = await p.createAgent(spec());
+    const before = standin.state.agents.at(-1)!;
+    expect(before.privacy).toEqual({
+      record_voice: false,
+      retention_days: 1,
+      delete_audio: true,
+      delete_transcript_and_pii: true,
+    });
+    expect(before.privacy).toEqual(AGENT_PRIVACY);
+    await p.updateAgent(made.agentId, spec({ language: 'fr' }));
+    expect(standin.state.agentPatches.at(-1)!.privacy).toEqual(AGENT_PRIVACY);
+    // The link names the chat; the caller is told first, and the answer carries the same id.
+    const told: string[] = [];
+    const out = await p.askAgent(
+      { agentId: made.agentId, message: 'Hello', earlier: [] },
+      { onConversation: (id) => void told.push(id) },
+    );
+    expect(out.conversationId).toMatch(/^convo-/);
+    expect(told).toEqual([out.conversationId]);
+    expect(standin.conversationIds()).toContain(out.conversationId);
+    expect(await p.deleteConversation(out.conversationId)).toBe('deleted');
+    // A provider that names nothing on the link names the chat on the socket.
+    const odd = await p.createAgent(spec({ name: 'Ada [[socket-id]]' }));
+    const told2: string[] = [];
+    const out2 = await p.askAgent(
+      { agentId: odd.agentId, message: 'Hello', earlier: [] },
+      { onConversation: (id) => void told2.push(id) },
+    );
+    expect(out2.conversationId).toMatch(/^convo-/);
+    expect(told2).toEqual([out2.conversationId]);
+    expect(await p.deleteConversation(out2.conversationId)).toBe('deleted');
+    // The note a kept chat leaves on its row is a copy to delete; a live talk's own `convo:` note is not.
+    expect(copyOfMarker('conversation:convo-9')?.copy).toEqual({
+      kind: 'conversation',
+      id: 'convo-9',
+    });
+    expect(copyOfMarker('convo:convo-9')).toBeNull();
   });
 
   it("refuses a signed link that is not a secure link to a name, or is not the provider's own host, and never connects to it", async () => {

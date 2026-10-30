@@ -52,14 +52,28 @@ export const RECEPTIONIST_TOOL: AiTool = {
     const r = asChat(req);
     if (!input?.chat)
       throw new AiVoiceProviderError('rejected', 'no receptionist');
-    const { reply } = await provider.askAgent({
-      agentId: input.chat.agentId,
-      message: r.message,
-      earlier: input.chat.earlier,
-    });
+    // REC-PRIVACY: the chat is a conversation the provider keeps. Its id is noted on the job the moment it is known
+    // (so a run that dies still has it to delete) and handed back as the copy to delete once the job has ended.
+    const { reply, conversationId } = await provider.askAgent(
+      {
+        agentId: input.chat.agentId,
+        message: r.message,
+        earlier: input.chat.earlier,
+      },
+      {
+        onConversation: async (id) => {
+          await input.noteCopy?.({ kind: 'conversation', id });
+        },
+      },
+    );
     return {
       texts: [{ kind: 'text', text: reply }],
       chatTurn: { person: r.message, agent: reply },
+      ...(conversationId !== ''
+        ? {
+            providerCopy: { kind: 'conversation' as const, id: conversationId },
+          }
+        : {}),
     };
   },
 };
