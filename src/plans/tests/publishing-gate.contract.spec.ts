@@ -1598,11 +1598,12 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       expect(body(res).reason.code).toBe('tier_required');
     });
 
-    it('T2: two turned-down pieces sent again together at 2 of 3 take one place between them', async () => {
+    it('T2: two turned-down pieces sent again together with one place left take one place between them', async () => {
       const id = await creator();
       await giveTier(id, 0);
-      await publish(id).expect(201);
-      await publish(id).expect(201);
+      // One place left: the tier's products less one published (R-112: Verify allows 4).
+      for (let n = 1; n < config.tiers[0].products; n += 1)
+        await publish(id).expect(201);
       const a = await seedPiece(id, 'rejected');
       const b = await seedPiece(id, 'rejected');
       const sent = await Promise.all([
@@ -1621,11 +1622,12 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       ).toBe(1);
     });
 
-    it('T2: a resend and a publish together at 2 of 3 take one place between them', async () => {
+    it('T2: a resend and a publish together with one place left take one place between them', async () => {
       const id = await creator();
       await giveTier(id, 0);
-      await publish(id).expect(201);
-      await publish(id).expect(201);
+      // One place left: the tier's products less one published (R-112: Verify allows 4).
+      for (let n = 1; n < config.tiers[0].products; n += 1)
+        await publish(id).expect(201);
       const rejected = await seedPiece(id, 'rejected');
       const sent = await Promise.all([
         post(id, `/content/${rejected.id}/resubmit`),
@@ -1638,8 +1640,9 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
     it('T2: six taps on Send again for one turned-down piece take one place', async () => {
       const id = await creator();
       await giveTier(id, 0);
-      await publish(id).expect(201);
-      await publish(id).expect(201);
+      // One place left: the tier's products less one published (R-112: Verify allows 4).
+      for (let n = 1; n < config.tiers[0].products; n += 1)
+        await publish(id).expect(201);
       const rejected = await seedPiece(id, 'rejected');
       const sent = await Promise.all(
         Array.from({ length: 6 }, () =>
@@ -1721,7 +1724,7 @@ describe('Publishing needs a tier (TIER-02) over HTTP', () => {
       await giveTier(id, 0);
       await publish(id).expect(201);
       await publish(id).expect(201);
-      // The gate looks and finds room (2 of 3, running). Then, before the
+      // The gate looks and finds room (2 used, running). Then, before the
       // claim, another publish takes the last place and the tier ends.
       const gate = app.get(PublishingGate, { strict: false });
       const looked = gate.assertRoomForProduct.bind(gate);

@@ -14,7 +14,10 @@ owner's 5 Oct plan (Developer Brief v2.0, section 2) is in
 owner's example values until the owner sends final prices (R-43), except the three
 tiers: on 26 Oct 2026 the owner set Verify at ₦2,999, Verify Plus at ₦5,999 and Founding Maker
 at ₦9,999, all three lasting one year (365 days) (R-89; migration `20261204090000_tier_yearly`
-moves any saved admin setting of those six figures to them). The file's
+moves any saved admin setting of those six figures to them). On 27 Oct 2026 the owner also set the products
+each tier allows: Verify 4, Verify Plus 8 and Founding Maker 15 (R-112; migration
+`20261224090000_tier_counts` moves any saved admin setting of those three counts to them and raises the
+count on every tier a person holds that is still running; a count is only ever raised, never lowered). The file's
 `provisional` object and the `PROVISIONAL(...)` markers in
 `src/plans/plans-config.ts` say so, one per value (`PLAN-PRICES` for the whole
 file; `PLAN-CASHOUT-MINIMUM` and `PLAN-BOUGHT-POINTS-DAYS`, the two values the
@@ -690,9 +693,9 @@ the extras bought on the account, as they stand now) and `productsAllowed`
   sold only to a person whose running tier is named by the admin setting
   `plan.extra_products.tiers` (a list of tier ids; the default is `founding`,
   Founding Maker alone), and only while they hold fewer than
-  `plan.extra_products.max_packs` packs (default 2, so 20 products at most:
-  10 + 2 x 5). Packs are counted on the extras the tier row holds, which carry
-  across renewals and upgrades, so 20 stays the most a profile can hold; packs
+  `plan.extra_products.max_packs` packs (default 2, so 25 products at most:
+  15 + 2 x 5). Packs are counted on the extras the tier row holds, which carry
+  across renewals and upgrades, so 25 stays the most a profile can hold; packs
   bought before the rule stay as they were. Verify and Verify Plus are offered
   the higher tiers only. Otherwise the quote and the purchase answer `409
   pack_not_allowed` (CONVENTIONS section 23): it is answered **before any

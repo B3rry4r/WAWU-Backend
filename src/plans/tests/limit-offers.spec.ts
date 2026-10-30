@@ -10,7 +10,8 @@ import type { PlanTierView } from '../plans-view.type';
  * Which offers a `product_limit_reached` refusal carries (TIER-02 round 3,
  * D6): only what would let the person publish another product, judged
  * against what they have published now and not against what they are
- * allowed. The plan here is the shipped one (3, 6 and 10 products, 5 extras).
+ * allowed. The plan here is a fixed one (3, 6 and 10 products, 5 extras), not the shipped
+ * one (R-112 moved that to 4, 8 and 15): these cases test the rule, whatever the counts are.
  */
 
 const tier = (id: string, products: number) =>

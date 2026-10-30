@@ -539,7 +539,7 @@ export function buildRegistry(
   });
 
   // PACK-CAP (R-100): only the tiers named here buy the add-on, and a profile
-  // holds at most this many packs. Founding Maker alone, 2 packs, is 20 products.
+  // holds at most this many packs. Founding Maker alone, 2 packs, is 25 products (15 + 2 x 5; R-112).
   add({
     key: 'plan.extra_products.tiers',
     group: 'Add more products',
