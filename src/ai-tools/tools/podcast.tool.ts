@@ -1,3 +1,4 @@
+import type { PlansConfig } from '../../plans/plans-config';
 import { AiToolError } from '../ai-tools-error';
 import { AI_PODCAST_FOLDER } from '../audio/ai-audio-store';
 import { OWN_VOICE_ID } from '../own-voice/own-voice-id';
@@ -5,6 +6,7 @@ import { castRef } from '../podcast/podcast-support';
 import {
   asPodcast,
   type AiTool,
+  type AiToolSettings,
   type PodcastInputSpec,
   type PodcastJobRequest,
 } from './ai-tool';
@@ -46,6 +48,17 @@ const PROVIDER_DURATION = {
   standard: 'default',
   long: 'long',
 } as const;
+
+/** The longest text a podcast is made from: the tool's own setting, or the plan's per-job character cap when that is lower. */
+export function podcastMaxCharacters(
+  settings: Pick<AiToolSettings, 'number'>,
+  plan: Pick<PlansConfig, 'caps'>,
+): number {
+  return Math.min(
+    settings.number(PODCAST_MAX_CHARS_SETTING),
+    plan.caps.maxCharsPerJob,
+  );
+}
 
 /** True for a link the provider may be given: https, a site name (not an address), no sign-in in it, short. */
 export function podcastLinkOk(link: string): boolean {
@@ -95,12 +108,14 @@ export const PODCAST_TOOL: AiTool = {
       model: settings.lines(PODCAST_MODEL_SETTING)[0],
     };
   },
-  check: (req, settings) => {
+  check: (req, settings, plan) => {
     const r: PodcastJobRequest = asPodcast(req);
     if (r.source.type === 'text') {
       if (r.source.text.trim() === '')
         throw new AiToolError('ai_text_empty', PODCAST_EMPTY_MESSAGE);
-      const max = settings.number(PODCAST_MAX_CHARS_SETTING);
+      // The plan's per-job character cap bounds a podcast too (it is not a long-form exemption), so the limit a person
+      // is told, and refused at, is the lower of the two: a text the hold would refuse is refused here, before the hold.
+      const max = podcastMaxCharacters(settings, plan);
       if (r.characters > max)
         throw new AiToolError(
           'ai_prompt_too_long',

@@ -2110,8 +2110,10 @@ export class HttpVoiceProvider implements AiVoiceProvider {
   }
 
   /**
-   * A signed link must go to the provider's own host (`wss` to a name, or `ws` to the very host the Hub is set up with,
-   * the local stand-in); the provider's key is never sent on it.
+   * A signed link must go to the provider's own host: `wss` to the host the Hub is set up with or a subdomain of it
+   * (never an address, `localhost` or a host with a dot at its end), or `ws` to the very host the Hub is set up with
+   * (the local stand-in). The provider's key is never sent on it. A link to any other host is "bad link", so an answer
+   * naming a stranger's host is never dialled.
    */
   private socketUrl(signed: string): URL {
     let url: URL;
@@ -2122,14 +2124,19 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     }
     const base = this.baseUrl === null ? null : new URL(this.baseUrl);
     const named =
+      base !== null &&
       url.protocol === 'wss:' &&
       url.username === '' &&
       url.password === '' &&
       !/^\[|^[0-9.]+$/.test(url.hostname) &&
-      url.hostname !== 'localhost';
+      !url.hostname.endsWith('.') &&
+      url.hostname !== 'localhost' &&
+      (url.hostname === base.hostname ||
+        url.hostname.endsWith(`.${base.hostname}`));
     const sameAsProvider =
       base !== null &&
       url.username === '' &&
+      !url.hostname.endsWith('.') &&
       url.host === base.host &&
       url.protocol === (base.protocol === 'https:' ? 'wss:' : 'ws:');
     if (!named && !sameAsProvider)

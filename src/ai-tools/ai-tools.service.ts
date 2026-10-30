@@ -12,7 +12,11 @@ import {
   type AiTool,
   type MediaInputSpec,
 } from './tools/ai-tool';
-import { PODCAST_ACTIONS, PODCAST_LINK_MAX_CHARS } from './tools/podcast.tool';
+import {
+  PODCAST_ACTIONS,
+  PODCAST_LINK_MAX_CHARS,
+  podcastMaxCharacters,
+} from './tools/podcast.tool';
 import { PODCAST_LANGUAGES_SETTING } from './tools/podcast.tool';
 import type {
   AiFileQuoteView,
@@ -199,7 +203,8 @@ export class AiToolsService {
           enabled,
           input: {
             kind: 'podcast',
-            maxCharacters: this.settings.number(spec.maxCharactersSetting),
+            // The lower of the tool's setting and the plan's per-job character cap: what the route will take.
+            maxCharacters: podcastMaxCharacters(this.settings, plan),
             charactersPerUnit: 0,
             podcast: {
               modes: ['conversation', 'bulletin'],

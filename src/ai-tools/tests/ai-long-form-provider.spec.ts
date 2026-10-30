@@ -232,6 +232,62 @@ describe('AITOOLS-13, AITOOLS-06: the AI provider seam, chapters, podcasts and a
     }
   });
 
+  it("refuses a socket link to another host, one that only looks like the provider's, and a host ending in a dot, and never connects to it", async () => {
+    // Through the whole call: the provider's own answer names a stranger's host, so the Hub refuses it and never dials.
+    let link = '';
+    const odd: Server = createServer((_req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ signed_url: link }));
+    });
+    await new Promise<void>((r) => odd.listen(0, '127.0.0.1', r));
+    try {
+      const port = (odd.address() as { port: number }).port;
+      const p = provider(`http://127.0.0.1:${port}`);
+      for (const bad of [
+        'wss://evil.example.com/agent?agent_id=a1',
+        'wss://api.provider.example.evil.example/agent?agent_id=a1',
+        'wss://localhost./agent?agent_id=a1',
+      ]) {
+        link = bad;
+        await expect(
+          p.askAgent({ agentId: 'a1', message: 'Hi', earlier: [] }),
+        ).rejects.toMatchObject({ message: 'bad link' });
+      }
+    } finally {
+      await new Promise<void>((r) => odd.close(() => r()));
+    }
+
+    // The rule itself, for a provider set up with a name: its own host and the hosts under it, nothing else.
+    const guard = (base: string) => {
+      const p = provider(base) as unknown as { socketUrl(l: string): URL };
+      return (l: string) => p.socketUrl(l);
+    };
+    const named = guard('https://api.provider.example');
+    for (const good of [
+      'wss://api.provider.example/v1/agent?agent_id=a1',
+      'wss://eu.api.provider.example/v1/agent?agent_id=a1',
+    ])
+      expect(named(good).href).toBe(good);
+    for (const bad of [
+      'wss://evil.example.com/agent',
+      'wss://api.provider.example.evil.example/agent',
+      'wss://xapi.provider.example/agent',
+      'wss://provider.example/agent',
+      'wss://api.provider.example./agent',
+      'wss://eu.api.provider.example./agent',
+      'wss://user:pw@api.provider.example/agent',
+      'ws://api.provider.example/agent',
+      'https://api.provider.example/agent',
+    ])
+      expect(() => named(bad)).toThrow('bad link');
+    // The local stand-in: the very host and port the Hub is set up with, over ws, and nothing else.
+    const local = guard(`http://127.0.0.1:${standin.port}`);
+    const own = `ws://127.0.0.1:${standin.port}/__standin/agent-socket?agent_id=a1`;
+    expect(local(own).href).toBe(own);
+    expect(() => local('ws://127.0.0.1:1/agent')).toThrow('bad link');
+    expect(() => local('wss://127.0.0.1/agent')).toThrow('bad link');
+  });
+
   it('keeps a podcast project and a conversation in the notes the rows carry, and judges a link by its parts', () => {
     expect(copyOfCast('pod-1')).toEqual({ kind: 'podcast', id: 'pod-1' });
     expect(endMarkerOfCast('castrun:pod-1')).toBe('podcast:pod-1');

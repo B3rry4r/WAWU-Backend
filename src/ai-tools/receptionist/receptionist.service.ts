@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import type {
+  Prisma,
   ReceptionistAgent,
   AiToolJob,
 } from '../../../generated/prisma/client';
@@ -15,6 +16,7 @@ import { PlanSettingsService } from '../../plan-settings/plan-settings.service';
 import { PLANS_CONFIG, type PlansConfig } from '../../plans/plans-config';
 import { PointsError } from '../../points/points-error';
 import { PointsService } from '../../points/points.service';
+import { JOB_MAX_RUN_SETTING } from '../../points/spend/points-hold-sweep.service';
 import { PointsJobQuoteToken } from '../../points/spend/points-job-quote-token';
 import {
   jobHoldReference,
@@ -61,6 +63,20 @@ const LANGUAGES_SETTING = 'ai.receptionist_languages';
 const MESSAGE_SETTING = 'ai.receptionist_message_max_chars';
 /** Minutes past the longest talking session after which a session nobody ended is settled at the longest. */
 export const VOICE_GRACE_MINUTES = 15;
+/**
+ * The minutes after which the Hub ends a session the app ended but the provider never closed: the minutes the stale
+ * sweep gives its hold back at. That is `points.job_max_run_minutes` (the sweep's base cutoff), or the longest talk
+ * plus the grace when that is later (the sweep leaves a Receptionist hold alone until then).
+ */
+export function voiceEndByMinutes(
+  jobMaxRunMinutes: number,
+  voiceMaxMinutes: number,
+): number {
+  return Math.max(jobMaxRunMinutes, voiceMaxMinutes + VOICE_GRACE_MINUTES);
+}
+/** A settle pass reads sessions in pages of this many, at most this many pages. */
+const SETTLE_PAGE = 50;
+const SETTLE_MAX_PAGES = 20;
 const NOT_SET_UP_MESSAGE =
   'Set up your Receptionist first. No points were taken.';
 const NOT_FOUND_MESSAGE = "We couldn't find that.";
@@ -738,16 +754,26 @@ export class ReceptionistService {
 
   /**
    * Settles one session. `atMaximum` keeps all that was held (a session nobody ended, past its time). Otherwise the
-   * provider is asked how long the talk was; no answer yet leaves the session open.
+   * provider is asked how long the talk was; no answer yet leaves the session open, unless the session is older than
+   * `endBy` (the sweep's minutes): a talk the provider never closed then ends as a timed out failure that gives the
+   * points back (nothing is charged for a talk the provider cannot vouch for).
    */
-  private async trySettle(id: string, atMaximum = false): Promise<void> {
+  private async trySettle(
+    id: string,
+    atMaximum = false,
+    endBy: Date | null = null,
+  ): Promise<void> {
     const job = await this.prisma.aiToolJob.findUnique({ where: { id } });
     if (!job || job.state !== 'working' || !job.holdId) return;
     const max = this.settings.number(RECEPTIONIST_VOICE_MAX_SETTING);
     let minutes = max;
     const convo = conversationOf(job.providerRef);
     if (!atMaximum) {
-      if (!convo) return;
+      const timedOut = endBy !== null && job.createdAt < endBy;
+      if (!convo) {
+        if (timedOut) await this.endUnclosed(job);
+        return;
+      }
       try {
         const read = await this.voice.readConversation(convo);
         if (read.status === 'failed') {
@@ -755,9 +781,13 @@ export class ReceptionistService {
           await this.endWithoutCharge(job, 'provider_failed');
           return;
         }
-        if (read.status !== 'done' || read.seconds === null) return;
+        if (read.status !== 'done' || read.seconds === null) {
+          if (timedOut) await this.endUnclosed(job, convo);
+          return;
+        }
         minutes = Math.min(max, Math.max(1, Math.ceil(read.seconds / 60)));
       } catch {
+        if (timedOut) await this.endUnclosed(job, convo);
         return;
       }
     }
@@ -832,6 +862,33 @@ export class ReceptionistService {
     }
   }
 
+  /**
+   * A talk the app ended but the provider never closed, past the sweep's minutes: the session ends as failed
+   * `timed_out`. A hold the sweep already gave back is only noted on the row; a hold still held is released with no
+   * charge. Nothing here commits, so it can never charge a session a second time: a settle that wins the race
+   * commits once, and this then finds the hold spent and ends the row as the points did.
+   */
+  private async endUnclosed(job: AiToolJob, convo?: string): Promise<void> {
+    const hold = job.holdId
+      ? await this.prisma.pointHold.findUnique({
+          where: { id: job.holdId },
+          select: { state: true },
+        })
+      : null;
+    if (hold?.state === 'held') await this.endWithoutCharge(job, 'timed_out');
+    // The sweep (or a settle that won) already spent the hold: the row ends as the points did.
+    await this.markEnded(job.id);
+    if (convo) {
+      const after = await this.prisma.aiToolJob.findUnique({
+        where: { id: job.id },
+        select: { state: true },
+      });
+      // The provider keeps none of the person's words (best effort, as after a settle).
+      if (after && after.state !== 'working')
+        await this.voice.deleteConversation(convo).catch(() => undefined);
+    }
+  }
+
   /** The hold was settled by someone else (the stale sweep gave it back): the session ends as the points did. */
   private async markEnded(id: string): Promise<void> {
     const job = await this.prisma.aiToolJob.findUnique({ where: { id } });
@@ -854,8 +911,12 @@ export class ReceptionistService {
   }
 
   /**
-   * Every minute: a session the app ended but the provider had not closed is read again; a session nobody ended, past
-   * its longest time plus a grace, is settled at the longest (all that was held is kept). One pass at a time.
+   * Every minute: a session the app ended but the provider had not closed is read again, and ends as a timed out
+   * failure (the points back) once it is older than the stale sweep's minutes (`points.job_max_run_minutes`, or the
+   * longest talk plus a grace when that is later; 30 with the settings as shipped, not the 20 of the grace alone); a
+   * session nobody ended, past its longest time plus the grace, is settled at the longest (all that was held is kept).
+   * Only those two kinds of row are read, oldest first and in pages, so a stuck row can never keep a newer one waiting.
+   * One pass at a time.
    *
    * @Cron runs only where ScheduleModule.forRoot() is loaded (AppModule); a spec calls `settleSessions` directly.
    */
@@ -877,21 +938,52 @@ export class ReceptionistService {
       const cutoff = new Date(
         now.getTime() - (max + VOICE_GRACE_MINUTES) * 60_000,
       );
-      const rows = await this.prisma.aiToolJob.findMany({
-        where: { tool: RECEPTIONIST_VOICE_ACTION, state: 'working' },
-        orderBy: { createdAt: 'asc' },
-        take: 50,
-      });
-      for (const row of rows) {
-        const ended = (row.providerRef ?? '').endsWith(':ended');
-        const abandoned = row.createdAt < cutoff;
-        if (!ended && !abandoned) continue;
-        await this.trySettle(row.id, abandoned && !ended);
-        const after = await this.prisma.aiToolJob.findUnique({
-          where: { id: row.id },
-          select: { state: true },
+      const endBy = new Date(
+        now.getTime() -
+          voiceEndByMinutes(this.settings.number(JOB_MAX_RUN_SETTING), max) *
+            60_000,
+      );
+      // A session still talking (not ended, not yet past its time) is not read: it never takes a place in a page.
+      const where: Prisma.AiToolJobWhereInput = {
+        tool: RECEPTIONIST_VOICE_ACTION,
+        state: 'working',
+        OR: [
+          { providerRef: { endsWith: ':ended' } },
+          { createdAt: { lt: cutoff } },
+        ],
+      };
+      // Pages go by the (time, id) of the last row read, not by a cursor row: a row that ends no longer matches `where`.
+      let last: { createdAt: Date; id: string } | null = null;
+      for (let page = 0; page < SETTLE_MAX_PAGES; page += 1) {
+        const rows: AiToolJob[] = await this.prisma.aiToolJob.findMany({
+          where: last
+            ? {
+                AND: [
+                  where,
+                  {
+                    OR: [
+                      { createdAt: { gt: last.createdAt } },
+                      { createdAt: last.createdAt, id: { gt: last.id } },
+                    ],
+                  },
+                ],
+              }
+            : where,
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+          take: SETTLE_PAGE,
         });
-        if (after && after.state !== 'working') settled += 1;
+        for (const row of rows) {
+          const ended = (row.providerRef ?? '').endsWith(':ended');
+          const abandoned = row.createdAt < cutoff;
+          await this.trySettle(row.id, abandoned && !ended, endBy);
+          const after = await this.prisma.aiToolJob.findUnique({
+            where: { id: row.id },
+            select: { state: true },
+          });
+          if (after && after.state !== 'working') settled += 1;
+        }
+        if (rows.length < SETTLE_PAGE) break;
+        last = rows[rows.length - 1];
       }
     } finally {
       this.settling = false;

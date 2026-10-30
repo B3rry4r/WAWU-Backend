@@ -29,7 +29,10 @@ import {
 } from '../../../test/ai-tools/ai-tools-harness';
 import { FILE_KINDS } from '../../account-purge/purge-files';
 import { ACCOUNT_DATA_MAP } from '../../account-purge/account-data-map';
-import { RECEPTIONIST_VOICE_GRACE_MINUTES } from '../../points/spend/points-hold-sweep.service';
+import {
+  PointsHoldSweepService,
+  RECEPTIONIST_VOICE_GRACE_MINUTES,
+} from '../../points/spend/points-hold-sweep.service';
 
 jest.setTimeout(180_000);
 
@@ -715,6 +718,104 @@ describe('AITOOLS-06: the Receptionist (contract)', () => {
       const job = await readJob(PLAIN, session.id);
       expect(job.state).toBe('done');
       expect(await h.balance(PLAIN)).toBe(before - VOICE * MAX_MIN);
+    });
+
+    it('ends a voice session the provider never closes, gives its points back, and frees the queue for newer sessions', async () => {
+      await setUp(PLAIN);
+      // One minute a session keeps each hold small, so a queue longer than a settle page can be made.
+      await set('ai.receptionist_voice_max_minutes', 1);
+      await h.grant(PLAIN, 20_000);
+      const before = await h.balance(PLAIN);
+      const talkOne = async () =>
+        data<VoiceSessionView>(
+          await h
+            .http()
+            .post('/ai-tools/receptionist/voice-sessions')
+            .set(auth(PLAIN))
+            .set('Idempotency-Key', randomUUID())
+            .send({
+              quoteToken: token(PLAIN, 'receptionist_voice_per_min', VOICE),
+            }),
+        );
+      // Fifty-one talks the app ended but the provider never closed (the phone never connected): each stays open.
+      const stuck: VoiceSessionView[] = [];
+      for (let i = 0; i < 51; i += 1) {
+        const session = await talkOne();
+        h.standin.setConversation(session.conversationId!, {
+          status: 'initiated',
+          seconds: null,
+        });
+        expect(data<VoiceSessionView>(await end(PLAIN, session.id)).state).toBe(
+          'working',
+        );
+        stuck.push(session);
+      }
+      // A newer talk the provider has closed: it is settled in the very next pass, not kept waiting behind the stuck ones.
+      const newer = await talkOne();
+      await end(PLAIN, newer.id);
+      h.standin.setConversation(newer.conversationId!, {
+        status: 'done',
+        seconds: 30,
+      });
+      expect(await h.receptionist.settleSessions()).toBe(1);
+      expect((await readJob(PLAIN, newer.id)).state).toBe('done');
+      expect(await h.balance(PLAIN)).toBe(before - VOICE * 52);
+
+      // Past the minutes the stale sweep uses, every stuck talk ends as a timed out failure and its points are back.
+      const maxRun = settings.number('points.job_max_run_minutes');
+      const late = new Date(Date.now() + (maxRun + 1) * 60_000);
+      expect(await h.receptionist.settleSessions(late)).toBe(51);
+      expect(await h.balance(PLAIN)).toBe(before - VOICE);
+      const failed = await h.prisma.aiToolJob.findMany({
+        where: { id: { in: stuck.map((x) => x.id) } },
+        select: { state: true, failureCode: true },
+      });
+      expect(failed).toHaveLength(51);
+      for (const row of failed)
+        expect(row).toEqual({ state: 'failed', failureCode: 'timed_out' });
+      const view = data<VoiceSessionView>(await end(PLAIN, stuck[0].id));
+      expect(view).toMatchObject({
+        state: 'failed',
+        heldPoints: 0,
+        keptPoints: 0,
+      });
+      expect(standin().deletedConversations).toContain(stuck[0].conversationId);
+      // A pass again changes nothing: no point is given back or taken twice.
+      expect(await h.receptionist.settleSessions(late)).toBe(0);
+      expect(await h.balance(PLAIN)).toBe(before - VOICE);
+
+      // The stale sweep gave a hold back before the Hub looked at the row: the row ends as the points did, charging nothing.
+      const swept = [await talkOne(), await talkOne()];
+      for (const session of swept) {
+        h.standin.setConversation(session.conversationId!, {
+          status: 'initiated',
+          seconds: null,
+        });
+        await end(PLAIN, session.id);
+      }
+      const sweep = new PointsHoldSweepService(h.spend, settings);
+      const later = new Date(Date.now() + (maxRun + 2) * 60_000);
+      await sweep.run(later);
+      expect(
+        await h.prisma.pointHold.count({
+          where: { wawuUserId: PLAIN, state: 'held' },
+        }),
+      ).toBe(0);
+      expect(await h.receptionist.settleSessions(later)).toBe(2);
+      for (const session of swept)
+        expect(
+          await h.prisma.aiToolJob.findUnique({
+            where: { id: session.id },
+            select: { state: true, failureCode: true },
+          }),
+        ).toEqual({ state: 'failed', failureCode: 'timed_out' });
+      // Only the closed talk was ever charged, once.
+      expect(await h.balance(PLAIN)).toBe(before - VOICE);
+      expect(
+        await h.prisma.pointHold.count({
+          where: { wawuUserId: PLAIN, state: 'committed' },
+        }),
+      ).toBe(1);
     });
 
     it("refuses before the first save, a stale quote and another person's session, with nothing held", async () => {

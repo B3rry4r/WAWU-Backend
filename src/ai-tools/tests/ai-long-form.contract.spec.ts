@@ -759,6 +759,48 @@ describe('AITOOLS-13: the Audiobook and the Podcast maker (contract)', () => {
       expect(standin().podcasts).toHaveLength(0);
     });
 
+    it('refuses a podcast text over the limit before any points are held, and lists the limit it really takes', async () => {
+      const limit = plan.caps.maxCharsPerJob;
+      // The tool's own setting (20,000) is above the plan's per-job cap: the cap is the limit a person can use.
+      expect(limit).toBeLessThan(20_000);
+      const listedLimit = async () =>
+        data<AiToolsView>(
+          await h.http().get('/ai-tools').set(auth(PLAIN)),
+        ).tools.find((t) => t.id === 'podcast')!.input.maxCharacters;
+      expect(await listedLimit()).toBe(limit);
+      // A lower setting still wins, and is the limit listed.
+      await set('ai.podcast_max_chars', 100);
+      expect(await listedLimit()).toBe(100);
+      await set('ai.podcast_max_chars', null);
+      expect(await listedLimit()).toBe(limit);
+
+      const before = await h.balance(PLAIN);
+      const over = await makeCast(PLAIN, {
+        source: { text: 'x'.repeat(limit + 1) },
+      });
+      expect(over.status).toBe(422);
+      expect(reasonOf(over).code).toBe('ai_prompt_too_long');
+      expect(reasonOf(over).message).toContain(String(limit));
+      expect(reasonOf(over).message).not.toMatch(LONG_DASH);
+      // Nothing was held, kept or made: no points, no hold, no job, no project at the provider.
+      expect(await h.balance(PLAIN)).toBe(before);
+      expect(
+        await h.prisma.pointHold.count({ where: { wawuUserId: PLAIN } }),
+      ).toBe(0);
+      expect(
+        await h.prisma.aiToolJob.count({ where: { wawuUserId: PLAIN } }),
+      ).toBe(0);
+      expect(standin().podcasts).toHaveLength(0);
+
+      // The very limit listed is taken.
+      const exact = await makeCast(PLAIN, {
+        source: { text: 'x'.repeat(limit) },
+      });
+      expect(exact.status).toBe(202);
+      const ended = await finish(PLAIN, data<AiJobView>(exact).id);
+      expect(ended.state).toBe('done');
+    });
+
     it('answers an allowlist refusal with "This isn\'t available right now. No points were taken.", gives every point back and creates nothing', async () => {
       const logged: string[] = [];
       const spy = jest
