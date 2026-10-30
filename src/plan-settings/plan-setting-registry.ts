@@ -804,6 +804,11 @@ export function buildRegistry(
     photo_edit_per_use: 'POST /ai-tools/photo-edit/jobs (AITOOLS-09)',
     video_per_sec: 'POST /ai-tools/video/jobs (AITOOLS-10)',
     talking_photo_per_sec: 'POST /ai-tools/talking-photo/jobs (AITOOLS-10)',
+    voice_changer_per_min: 'POST /ai-tools/voice-changer/jobs (AITOOLS-11)',
+    dialogue_per_min: 'POST /ai-tools/dialogue/jobs (AITOOLS-11)',
+    voice_clone_once: 'POST /ai-tools/my-voice (AITOOLS-11)',
+    video_music_per_track: 'POST /ai-tools/video-music/jobs (AITOOLS-12)',
+    stems_per_song: 'POST /ai-tools/stems/jobs (AITOOLS-12)',
   };
   // R-109: the figures of the four Studio picture and video tools are
   // placeholders, not derived from anything; the owner sets them.
@@ -812,6 +817,12 @@ export function buildRegistry(
     'photo_edit_per_use',
     'video_per_sec',
     'talking_photo_per_sec',
+    // AITOOLS-11, AITOOLS-12: the provider prints no price for these either; each is a placeholder the owner sets.
+    'voice_changer_per_min',
+    'dialogue_per_min',
+    'voice_clone_once',
+    'video_music_per_track',
+    'stems_per_song',
   ]);
   for (const a of plans.actions) {
     add({
@@ -1339,6 +1350,141 @@ export function buildRegistry(
       provisional: 'STUDIO2-MODELS',
       default: extra(key, [fallback]),
       parse,
+    });
+  }
+  // R-109 (AITOOLS-11, AITOOLS-12): Voice changer, Dialogue, a saved clone of your own voice, Music for a video and
+  // Split a song. Each is listed only while its own switch is on (default off, like the four before them).
+  for (const [id, label] of [
+    ['voice-changer', 'Voice changer'],
+    ['dialogue', 'Dialogue'],
+    ['my-voice', 'Clone your own voice'],
+    ['video-music', 'Music for a video'],
+    ['stems', 'Split a song'],
+  ] as const) {
+    add({
+      key: `ai.listed.${id}`,
+      group: 'Studio',
+      label: `${label} is listed in Studio (1 is on, 0 is off)`,
+      unit: 'count',
+      usedBy: [
+        'GET /ai-tools',
+        id === 'my-voice'
+          ? 'POST /ai-tools/my-voice'
+          : `POST /ai-tools/${id}/jobs`,
+      ],
+      provisional: 'STUDIO2-LISTED',
+      default: extra(`ai.listed.${id}`, 0),
+      parse: whole(0, 1),
+    });
+  }
+  for (const [key, label, usedBy, fallback, parse, provisional] of [
+    [
+      'ai.dialogue_chars_per_minute',
+      'Characters of dialogue that make one minute of Dialogue',
+      'GET /ai-tools (input.charactersPerUnit), POST /ai-tools/dialogue/jobs',
+      900,
+      count,
+      'AITOOLS-CHARS-PER-MINUTE',
+    ],
+    [
+      'ai.dialogue_max_chars',
+      'Characters one Dialogue scene can have in all (the provider advises 2,000)',
+      'GET /ai-tools (input.maxCharacters), POST /ai-tools/dialogue/jobs',
+      2000,
+      count,
+      'STUDIO2-VOICE-LIMITS',
+    ],
+    [
+      'ai.clones_per_person',
+      'Clones of their own voice one person can keep',
+      'POST /ai-tools/my-voice',
+      1,
+      whole(1, 5),
+      'STUDIO2-VOICE-LIMITS',
+    ],
+    [
+      'ai.clones_total_max',
+      'Clones of a voice the Hub keeps at the provider in all (the voice slots the plan holds are NOT KNOWN)',
+      'POST /ai-tools/my-voice',
+      10,
+      whole(0, 10_000),
+      'STUDIO2-VOICE-LIMITS',
+    ],
+    [
+      'ai.clone_sample_min_seconds',
+      'Shortest recording a clone of your own voice is made from, in seconds',
+      'POST /ai-tools/my-voice',
+      10,
+      whole(1, 600),
+      'STUDIO2-VOICE-LIMITS',
+    ],
+    [
+      'ai.clone_sample_max_seconds',
+      'Longest recording a clone of your own voice is made from, in seconds',
+      'POST /ai-tools/my-voice',
+      180,
+      whole(5, 1800),
+      'STUDIO2-VOICE-LIMITS',
+    ],
+    [
+      'ai.video_music_max_seconds',
+      'Longest video Music for a video takes, in seconds (the provider takes 600 in all)',
+      'POST /ai-tools/video-music/quote and jobs',
+      120,
+      whole(3, 600),
+      'STUDIO2-MUSIC-LIMITS',
+    ],
+    [
+      'ai.video_music_max_prompt_chars',
+      'Characters the mood of a Music for a video can have (the provider takes 1,000)',
+      'POST /ai-tools/video-music/jobs',
+      1000,
+      whole(1, 1000),
+      'STUDIO2-MUSIC-LIMITS',
+    ],
+    [
+      'ai.stems_max_seconds',
+      'Longest song Split a song takes, in seconds',
+      'POST /ai-tools/stems/quote and jobs',
+      600,
+      whole(5, 3600),
+      'STUDIO2-MUSIC-LIMITS',
+    ],
+  ] as const) {
+    add({
+      key,
+      group: 'Studio',
+      label,
+      unit: 'count',
+      usedBy: [usedBy],
+      provisional,
+      default: extra(key, fallback),
+      parse,
+    });
+  }
+  for (const [key, label, usedBy, fallback] of [
+    [
+      'ai.voice_changer_model',
+      'The model Voice changer asks for (never shown to a person)',
+      'POST /ai-tools/voice-changer/jobs',
+      'eleven_english_sts_v2',
+    ],
+    [
+      'ai.dialogue_model',
+      'The model Dialogue asks for (never shown to a person)',
+      'POST /ai-tools/dialogue/jobs',
+      'eleven_v3',
+    ],
+  ] as const) {
+    add({
+      key,
+      group: 'Studio',
+      label,
+      unit: 'lines',
+      usedBy: [usedBy],
+      provisional: 'STUDIO2-VOICE-MODELS',
+      default: extra(key, [fallback]),
+      parse: modelLine,
     });
   }
   add({

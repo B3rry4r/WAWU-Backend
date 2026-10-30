@@ -21,6 +21,7 @@ import {
 } from './input/ai-input-files';
 import { AiToolsService } from './ai-tools.service';
 import { OwnVoiceService } from './own-voice/own-voice.service';
+import { AiCloneService } from './own-voice/ai-clone.service';
 import { StorageVoiceFiles, VOICE_FILES } from '../voice-intro/voice-files';
 import { AiDubService } from './dub/ai-dub.service';
 import { AI_VOICE_PROVIDER } from './voice/ai-voice-provider';
@@ -59,6 +60,8 @@ import { ProviderCopyService } from './voice/provider-copy.service';
     AiJobService,
     // AITOOLS-07: "Your voice" in VoiceOver, made from the person's Voice Intro recording.
     OwnVoiceService,
+    // AITOOLS-11: the saved clone of a person's own voice, kept until they remove it.
+    AiCloneService,
     { provide: VOICE_FILES, useClass: StorageVoiceFiles },
     {
       provide: AI_VOICE_PROVIDER,

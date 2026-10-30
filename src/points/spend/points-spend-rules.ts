@@ -48,6 +48,11 @@ export const ACTION_TITLES: Record<PlanActionId, string> = {
   photo_edit_per_use: 'Edit a photo',
   video_per_sec: 'Make a video',
   talking_photo_per_sec: 'Talking photo',
+  voice_changer_per_min: 'Voice changer',
+  dialogue_per_min: 'Dialogue',
+  voice_clone_once: 'Your own voice',
+  video_music_per_track: 'Music for a video',
+  stems_per_song: 'Split a song',
 };
 
 export const UNKNOWN_ACTION_MESSAGE = 'We could not find that AI tool.';

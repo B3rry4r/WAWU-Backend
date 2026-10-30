@@ -48,6 +48,8 @@ export interface AiToolView {
     file?: AiToolFileView;
     /** `image` and `video` tools (AITOOLS-09, AITOOLS-10): the shapes, lengths, photo and voice the screen draws. */
     options?: AiToolOptionsView;
+    /** `dialogue` (AITOOLS-11): a scene of lines, each with a voice from `voices`; at most `maxVoices` different ones, `maxCharacters` characters in all. */
+    dialogue?: { maxVoices: number };
   };
   voices: AiVoiceView[];
 }
@@ -93,6 +95,18 @@ export interface AiToolFileView {
   maxMinutes: number;
   /** True when the job takes a `languageCode`. */
   languageCode: boolean;
+  /** AITOOLS-11 and -12: the one kind of file the tool takes (`audio` or `video`); absent when it takes both. */
+  only?: 'audio' | 'video';
+  /** AITOOLS-11 and -12: the longest recording, video or song in seconds, when the tool bounds it (a setting). */
+  maxSeconds?: number;
+  /** AITOOLS-11 Voice changer: the job takes a `voiceId` from `voices` (`own` for the saved voice). */
+  voice?: true;
+  /** AITOOLS-11 Clone your own voice: the job takes a `name` and the person's agreement (see `GET /ai-tools/my-voice`). */
+  clone?: true;
+  /** AITOOLS-12 Music for a video: the job may carry a mood in words of up to this many characters. */
+  description?: { maxCharacters: number };
+  /** AITOOLS-12 Split a song: the numbers of parts to pick from. */
+  parts?: number[];
   /** Dubbing only (AITOOLS-05): the languages the file can be heard in. The job takes `targetLanguage` from this list and may take `sourceLanguage` from it. One language a job. */
   dubbing?: AiToolDubbingView;
 }
@@ -250,4 +264,31 @@ export interface AiPieceView {
   };
   /** A title to prefill, such as "Image, 30 Oct 2026". */
   suggestedTitle: string;
+}
+
+/** `GET /ai-tools/my-voice` (AITOOLS-11, "Clone your own voice"): whether the person keeps a clone of their voice, and what making one takes. */
+export interface SavedVoiceView {
+  /** True while the tool is listed and the Hub's voice tools are set up. False: the app draws nothing for it. */
+  available: boolean;
+  /** `none`: no clone. `making`: a job is making one. `ready`: kept, and "Your voice" is a choice in the voice tools. */
+  state: 'none' | 'making' | 'ready';
+  /** The name the person gave it; null when there is no clone. */
+  name: string | null;
+  createdAt: string | null;
+  /** The words the person agrees to, with their own name. `POST /ai-tools/my-voice` takes them back unchanged as `consentLine`. */
+  consent: { line: string };
+  /** How to send the recording (through `POST /uploads/presign` with this folder, then `POST /uploads/confirm`) and what it must be. */
+  sample: {
+    folder: string;
+    accepts: string[];
+    minSeconds: number;
+    maxSeconds: number;
+    maxBytes: number;
+  };
+}
+
+/** `DELETE /ai-tools/my-voice`: the clone has left every list; `pending` while the Hub is still removing the provider's copy. */
+export interface SavedVoiceRemovedView {
+  myVoice: SavedVoiceView;
+  atProvider: 'gone' | 'pending';
 }

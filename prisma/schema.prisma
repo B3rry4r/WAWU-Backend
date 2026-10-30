@@ -8137,6 +8137,27 @@ model AiToolJob {
   @@index([state, createdAt])
 }
 
+/// A clone of a person's own voice that the voice tools can read in (AITOOLS-11, R-109). One row per clone made. The
+/// row is written before the provider is asked ("providerVoiceId" empty while it is being made, so a double tap makes
+/// one), filled when the provider answers, and given a "removedAt" when the person removes it; it is deleted once the
+/// provider has dropped its copy. "consentLine" and "consentAt" are the words the person agreed to and when.
+model AiClonedVoice {
+  id              String    @id @default(uuid())
+  wawuUserId      String
+  /// The job that made it (the reservation holder); one clone per job.
+  jobId           String    @unique
+  /// The provider's own id for the voice. Never shown to a person. Empty while the clone is being made.
+  providerVoiceId String?
+  name            String
+  consentLine     String
+  consentAt       DateTime
+  createdAt       DateTime  @default(now())
+  removedAt       DateTime?
+
+  @@index([wawuUserId])
+  @@index([removedAt])
+}
+
 /// A person's voice: how their name is said and their Voice Intro (VOICE-01,
 /// R-43, R-66). One row per person, made the first time they save a spelling,
 /// a script, a consent or a sample. The sample is a file the person uploaded

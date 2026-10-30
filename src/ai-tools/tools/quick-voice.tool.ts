@@ -1,3 +1,4 @@
+import { OWN_VOICE_ID } from '../own-voice/own-voice-id';
 import { AI_AUDIO_FOLDER } from '../audio/ai-audio-store';
 import { asText, type AiTool, type AiToolRequest } from './ai-tool';
 import { minutesOfText } from './voiceover.tool';
@@ -36,10 +37,14 @@ export const QUICK_VOICE_TOOL: AiTool = {
       settings,
       QUICK_VOICE_CHARS_PER_MINUTE_SETTING,
     ),
-  run: async (provider: AiVoiceProvider, job, req) => ({
+  run: async (provider: AiVoiceProvider, job, req, input) => ({
     audio: await provider.speakQuick({
       voiceId: job.voiceId,
       text: asText(req).text,
+      // AITOOLS-11: the person's saved clone ("Your voice"), read from their own row by the pipeline.
+      ...(job.voiceId === OWN_VOICE_ID && input?.savedVoice
+        ? { providerVoiceId: input.savedVoice }
+        : {}),
     }),
   }),
 };

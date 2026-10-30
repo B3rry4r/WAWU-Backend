@@ -46,6 +46,8 @@ import {
 } from '../storage/dto/presign-upload.dto';
 import { OWN_VOICE_ID } from './own-voice/own-voice-id';
 import { OwnVoiceService } from './own-voice/own-voice.service';
+import { AiCloneService } from './own-voice/ai-clone.service';
+import { MY_VOICE_ACTION } from './tools/my-voice.tool';
 import { markerOf, ProviderCopyService } from './voice/provider-copy.service';
 import {
   AiToolError,
@@ -56,7 +58,9 @@ import {
   OWN_VOICE_RECORDING_REQUIRED_MESSAGE,
   KEY_REQUIRED_MESSAGE,
   KEY_REUSED_MESSAGE,
+  CLONE_NAME_REQUIRED_MESSAGE,
   NO_FORMAT_MESSAGE,
+  UNAVAILABLE_NOW_MESSAGE,
   PROMPT_EMPTY_MEDIA_MESSAGE,
   PROMPT_EMPTY_MESSAGE,
   QUOTE_CHANGED_MESSAGE,
@@ -73,13 +77,18 @@ import type {
   AiJobListQueryDto,
   CreateCaptionsJobDto,
   CreateCleanAudioJobDto,
+  CreateDialogueJobDto,
   CreateDubbingJobDto,
   CreateImageJobDto,
   CreateMusicJobDto,
+  CreateMyVoiceJobDto,
   CreatePhotoEditJobDto,
   CreateSoundEffectJobDto,
+  CreateStemsJobDto,
   CreateTalkingPhotoJobDto,
   CreateVideoJobDto,
+  CreateVideoMusicJobDto,
+  CreateVoiceChangerJobDto,
   CreateVoiceoverJobDto,
 } from './ai-tools.dto';
 import {
@@ -127,7 +136,12 @@ type AiJobRequestBody =
   | CreateImageJobDto
   | CreatePhotoEditJobDto
   | CreateVideoJobDto
-  | CreateTalkingPhotoJobDto;
+  | CreateTalkingPhotoJobDto
+  | CreateVoiceChangerJobDto
+  | CreateDialogueJobDto
+  | CreateMyVoiceJobDto
+  | CreateVideoMusicJobDto
+  | CreateStemsJobDto;
 
 const KEY_FORMAT = /^[A-Za-z0-9_-]{8,128}$/;
 /** The only try a job's hold has: a failed job is never retried, a new job (and key) is. */
@@ -150,6 +164,8 @@ interface StoredOutput {
   /** AITOOLS-08: a Studio result's type and size, kept with the key (an older audio output has neither). */
   contentType?: string;
   bytes?: number;
+  /** AITOOLS-12: the plain name of one part of a split song ("Voice", "Drums"); absent for every other output. */
+  label?: string;
 }
 
 /**
@@ -198,7 +214,36 @@ export class AiJobService {
     private readonly media?: AiMediaStore,
     // R-109 (AITOOLS-08): tells the person when a long job ends. Absent in a spec that builds no notifications.
     @Optional() private readonly notices?: NotificationService,
+    // R-109 (AITOOLS-11): the person's saved clone of their own voice. Absent in a spec that builds only the older tools.
+    @Optional() private readonly savedVoices?: AiCloneService,
   ) {}
+
+  /** The saved-clone service; the tools that need it are not built without it. */
+  private get clones(): AiCloneService {
+    if (!this.savedVoices)
+      throw new AiToolError('ai_tool_unavailable', UNAVAILABLE_MESSAGE);
+    return this.savedVoices;
+  }
+
+  /**
+   * Refuses a voice that is not on the person's list (AITOOLS-11): a Hub voice, or `own` while they keep a saved clone.
+   * Nothing is held when it throws.
+   */
+  private async assertVoicesKnown(
+    wawuUserId: string,
+    voiceIds: readonly string[],
+  ): Promise<void> {
+    const hub = new Set(this.voice.voices().map((v) => v.id));
+    let ownKept: boolean | null = null;
+    for (const id of voiceIds) {
+      if (hub.has(id)) continue;
+      if (id === OWN_VOICE_ID && this.savedVoices) {
+        ownKept ??= (await this.savedVoices.activeFor(wawuUserId)) !== null;
+        if (ownKept) continue;
+      }
+      throw new AiToolError('ai_voice_unknown', VOICE_UNKNOWN_MESSAGE);
+    }
+  }
 
   /** Whether the tool's listing switch is on (AITOOLS-08): a tool with no switch, one of the seven older ones, is always listed. */
   private listed(tool: AiTool): boolean {
@@ -260,13 +305,30 @@ export class AiJobService {
     if (tool.precheck) req = tool.precheck(req, this.settings);
     if (req.kind === 'text') {
       const wanted = req.voiceId;
-      if (wanted === OWN_VOICE_ID && tool.id === 'voiceover') {
-        // AITOOLS-07: "Your voice" is only the person's own, after they agreed.
-        await this.assertOwnVoiceReady(wawuUserId);
+      if (
+        wanted === OWN_VOICE_ID &&
+        (tool.id === 'voiceover' || tool.id === 'quick-voice')
+      ) {
+        // AITOOLS-11: the person's SAVED clone wins. AITOOLS-07: without one, VoiceOver reads in a clone made from
+        // the Voice Intro for this run, "Your voice" being only the person's own and only after they agreed.
+        const saved = this.savedVoices
+          ? await this.savedVoices.activeFor(wawuUserId)
+          : null;
+        if (!saved) {
+          if (tool.id === 'voiceover')
+            await this.assertOwnVoiceReady(wawuUserId);
+          else throw new AiToolError('ai_voice_unknown', VOICE_UNKNOWN_MESSAGE);
+        }
       } else if (!this.voice.voices().some((v) => v.id === wanted))
         throw new AiToolError('ai_voice_unknown', VOICE_UNKNOWN_MESSAGE);
       if (req.text === '')
         throw new AiToolError('ai_text_empty', TEXT_EMPTY_MESSAGE);
+    } else if (req.kind === 'dialogue') {
+      // AITOOLS-11: every line's voice is on the person's list (a Hub voice, or their own saved clone).
+      await this.assertVoicesKnown(
+        wawuUserId,
+        req.lines.map((l) => l.voiceId),
+      );
     } else if (req.kind === 'prompt') {
       if (req.prompt === '')
         throw new AiToolError('ai_prompt_empty', PROMPT_EMPTY_MESSAGE);
@@ -284,9 +346,19 @@ export class AiJobService {
     } else {
       // The person's own file: opened and measured by the Hub, before
       // anything is priced or held. Another person's key is not found.
+      if (tool.input.kind === 'file' && tool.input.voice)
+        await this.assertVoicesKnown(wawuUserId, [req.voiceId ?? '']);
+      if (tool.id === 'my-voice') {
+        // AITOOLS-11: a name for the voice, and no clone yet; the words agreed to were checked against the person's own line.
+        if (!req.cloneName)
+          throw new AiToolError('ai_text_empty', CLONE_NAME_REQUIRED_MESSAGE);
+        await this.clones.assertCanMake(wawuUserId);
+      }
       const opened = await this.input.open(wawuUserId, req.fileKey);
+      // The tool's own look at what the Hub read from the file (a video where audio is needed, a length over its setting).
+      tool.checkFile?.(opened, this.settings);
       req = {
-        kind: 'file',
+        ...req,
         fileKey: opened.key,
         languageCode: req.languageCode,
         targetLanguage: req.targetLanguage ?? null,
@@ -660,6 +732,50 @@ export class AiJobService {
     let noted: ProviderCopy | null = null;
     /** The Studio files opened for this run, so every place at the read gate goes back however the call ended. */
     const opened: StreamedFile[] = [];
+    // AITOOLS-11: "Clone your own voice" writes the person's reservation BEFORE the provider is asked, under one
+    // advisory lock with the counts, so two taps at once make one clone. A reservation it cannot have ends the job
+    // with every point back and no call to the provider.
+    if (tool.id === 'my-voice' && req.kind === 'file') {
+      let reserved: 'reserved' | 'exists' | 'full';
+      try {
+        reserved = await this.clones.reserve(
+          job.wawuUserId,
+          job.id,
+          req.cloneName ?? '',
+          req.consentLine ?? '',
+        );
+      } catch {
+        await this.fail(job, holdId, 'provider_unavailable');
+        return;
+      }
+      if (reserved !== 'reserved') {
+        await this.fail(job, holdId, 'clone_exists');
+        return;
+      }
+    }
+    // AITOOLS-11: the voice "Your voice" means is the person's SAVED clone, read from their own row now (it may have
+    // been removed since the job was priced). VoiceOver falls back to a clone made from the Voice Intro for the run.
+    let savedVoice: string | undefined;
+    const asksOwn =
+      (req.kind === 'text' && job.voiceId === OWN_VOICE_ID) ||
+      (req.kind === 'file' &&
+        tool.id === 'voice-changer' &&
+        job.voiceId === OWN_VOICE_ID) ||
+      (req.kind === 'dialogue' &&
+        req.lines.some((l) => l.voiceId === OWN_VOICE_ID));
+    if (asksOwn) {
+      try {
+        savedVoice =
+          (await this.clones.activeFor(job.wawuUserId))?.providerVoiceId ??
+          undefined;
+      } catch {
+        savedVoice = undefined;
+      }
+      if (!savedVoice && tool.id !== 'voiceover') {
+        await this.fail(job, holdId, 'own_voice_withdrawn');
+        return;
+      }
+    }
     if (req.kind === 'media') {
       // AITOOLS-09, AITOOLS-10: the person's photo and voice, streamed to the
       // provider as assets for this one run, behind the same read gate. They
@@ -728,7 +844,11 @@ export class AiJobService {
     // row while their agreement stands, goes to the provider for this one run; the
     // voice it makes is noted on the job the moment it exists, so a server that
     // dies still knows to remove it, and is removed when the job ends.
-    if (tool.id === 'voiceover' && job.voiceId === OWN_VOICE_ID) {
+    if (
+      tool.id === 'voiceover' &&
+      job.voiceId === OWN_VOICE_ID &&
+      !savedVoice
+    ) {
       let sample: Awaited<ReturnType<OwnVoiceService['sampleFor']>>;
       try {
         sample = await this.own.sampleFor(job.wawuUserId);
@@ -752,12 +872,24 @@ export class AiJobService {
         },
       };
     }
+    if (savedVoice) input = { ...(input ?? { file: NO_FILE }), savedVoice };
     let result: AiToolRunResult;
     try {
       result = await tool.run(this.voice, job, req, input);
     } catch (e) {
-      const code =
-        e instanceof ServiceUnavailableException
+      // AITOOLS-12: a 403 from the music routes means the provider's plan does not cover them. The person reads "This
+      // isn't available right now. No points were taken."; the owner reads the log line (an owner item, not a bug).
+      const planRefused =
+        e instanceof AiVoiceProviderError &&
+        e.status === 403 &&
+        (tool.id === 'video-music' || tool.id === 'stems');
+      if (planRefused)
+        this.logger.error(
+          `OWNER ITEM: ai job ${job.id} (${job.tool}): the provider answered 403, so its plan does not cover the music routes (Subscription required)`,
+        );
+      const code = planRefused
+        ? 'provider_plan'
+        : e instanceof ServiceUnavailableException
           ? 'busy' // a Studio file the Hub was too busy to open (AITOOLS-09)
           : e instanceof AiVoiceProviderError && e.kind === 'rejected'
             ? 'provider_failed'
@@ -791,6 +923,28 @@ export class AiJobService {
     if (result.follow) {
       await this.keepFollowRef(job, result.follow.ref);
       return;
+    }
+    // AITOOLS-11: the provider's id of the clone goes on the person's reservation the moment it answers, so a server
+    // that dies after this still knows the voice is there. A reservation that was removed meanwhile (the person
+    // removed it, or the account is going) means the voice is not wanted: it is deleted and the job gives its points back.
+    if (result.clone) {
+      let attached: 'kept' | 'removed' | 'missing' = 'missing';
+      try {
+        attached = await this.clones.attach(
+          job.id,
+          result.clone.providerVoiceId,
+        );
+      } catch {
+        attached = 'missing';
+      }
+      if (attached !== 'kept') {
+        if (attached === 'missing')
+          await this.voice
+            .deleteOwnVoice(result.clone.providerVoiceId)
+            .catch(() => undefined);
+        await this.fail(job, holdId, 'clone_removed');
+        return;
+      }
     }
     // The provider's copy of what it made is noted on the row at once, so a
     // server that dies before it is deleted still has it to delete.
@@ -837,6 +991,8 @@ export class AiJobService {
     }
     const outputs: StoredOutput[] = [];
     let key: string | null = null;
+    /** Every audio file stored for the job, so a job that does not keep its points removes them all (AITOOLS-12: one for each part). */
+    const audioKeys: string[] = [];
     /** The key of a picture or video (not an audio key: `audioKey` holds audio only). */
     let mediaKey: string | null = null;
     try {
@@ -848,7 +1004,21 @@ export class AiJobService {
           result.audio.contentType,
           tool.audioFolder ?? undefined,
         );
+        audioKeys.push(key);
         outputs.push({ kind: 'audio', key });
+      }
+      for (const part of result.audios ?? []) {
+        // AITOOLS-12: each part under a key of the Hub's own making (the job and the part), never a name from the provider.
+        const partKey = await this.audio.put(
+          job.wawuUserId,
+          `${job.id}-${part.slug}`,
+          part.audio.audio,
+          part.audio.contentType,
+          tool.audioFolder ?? undefined,
+        );
+        audioKeys.push(partKey);
+        key ??= partKey;
+        outputs.push({ kind: 'audio', key: partKey, label: part.label });
       }
       if (result.media) {
         // A type the Hub does not serve for this kind fails the job: nothing is
@@ -882,6 +1052,7 @@ export class AiJobService {
         });
       }
     } catch {
+      for (const stored of audioKeys) await this.audio.remove(stored);
       await this.fail(job, holdId, 'store_failed', endRef);
       return;
     }
@@ -906,8 +1077,11 @@ export class AiJobService {
       await this.spend.commit(holdId);
     } catch (e) {
       if (e instanceof PointsError && e.code === 'points_hold_settled') {
-        if (key) await this.audio.remove(key);
+        for (const stored of audioKeys) await this.audio.remove(stored);
         if (mediaKey) await this.media?.remove(mediaKey);
+        // AITOOLS-11: a clone the provider made for a job that does not keep its points is given back.
+        if (job.tool === MY_VOICE_ACTION)
+          await this.clones.discardByJob(job.id);
         // The sweep (or a read that reconciled the job) may have ended it
         // already, after the words were written above: they are cleared from
         // a failed row whoever ended it.
@@ -971,6 +1145,8 @@ export class AiJobService {
       changed = await this.mark(job.id, 'failed', end);
     }
     await this.dropInput(job);
+    // AITOOLS-11: a clone (or its reservation) of a job that did not keep its points is given back.
+    if (job.tool === MY_VOICE_ACTION) await this.clones.discardByJob(job.id);
     if (changed) await this.noticeEnded(job.id, 'failed');
   }
 
@@ -1067,10 +1243,12 @@ export class AiJobService {
       const folder = toolForAction(job.tool)?.audioFolder;
       const stored = storedOutputsOf(job).find((o) => o.kind === 'audio');
       const tool = toolForAction(job.tool);
+      // A split song has no single key to fall back to; its parts are always written to the row before the commit.
+      const noFallback = tool?.id === 'stems';
       const changedDone = await this.mark(job.id, 'done', {
         audioKey:
           stored?.key ??
-          (folder === null
+          (folder === null || noFallback
             ? null
             : audioKeyFor(
                 job.wawuUserId,
@@ -1189,11 +1367,13 @@ export class AiJobService {
     return {
       contentType,
       ...(bytes !== undefined ? { bytes } : {}),
-      name: outputLabelOf(tool?.id),
+      name: out.label ?? outputLabelOf(tool?.id),
       downloadUrl: await this.media!.downloadUrlFor(
         key,
         downloadNameFor(
-          tool?.id ?? 'result',
+          out.label
+            ? `${tool?.id ?? 'result'}-${out.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+            : (tool?.id ?? 'result'),
           job.finishedAt ?? job.createdAt,
           ext,
         ),
@@ -1253,9 +1433,15 @@ export class AiJobService {
           fileUrl: copy.fileUrl,
           contentType: copy.contentType,
           bytes: copy.bytes,
-          name: downloadNameFor(tool?.id ?? 'result', at, ext),
+          name: downloadNameFor(
+            out.label
+              ? `${tool?.id ?? 'result'}-${out.label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+              : (tool?.id ?? 'result'),
+            at,
+            ext,
+          ),
         },
-        suggestedTitle: `${outputLabelOf(tool?.id)}, ${day.day} ${
+        suggestedTitle: `${out.label ?? outputLabelOf(tool?.id)}, ${day.day} ${
           day.month.charAt(0).toUpperCase() + day.month.slice(1)
         } ${day.year}`,
       },
@@ -1364,6 +1550,7 @@ export class AiJobService {
 
 /** What a failed job says (PT2c): the Hub's own sentence, the content refusal in its own words. */
 function failedMessage(job: AiToolJob, tool: AiTool | null): string {
+  if (job.failureCode === 'provider_plan') return UNAVAILABLE_NOW_MESSAGE;
   if (job.failureCode === 'moderated')
     return tool?.id === 'video' || tool?.id === 'talking-photo'
       ? VIDEO_MODERATED_MESSAGE
@@ -1383,6 +1570,10 @@ const OUTPUT_LABELS: Readonly<Record<string, string>> = {
   'photo-edit': 'Edited photo',
   video: 'Video',
   'talking-photo': 'Talking photo',
+  'voice-changer': 'Voice changer',
+  dialogue: 'Dialogue',
+  'video-music': 'Music for a video',
+  stems: 'Song part',
 };
 function outputLabelOf(toolId: string | undefined): string {
   return (toolId && OUTPUT_LABELS[toolId]) || 'Result';
@@ -1420,6 +1611,7 @@ function storedOutputsOf(job: AiToolJob): StoredOutput[] {
           ? { contentType: o.contentType }
           : {}),
         ...(typeof o.bytes === 'number' ? { bytes: o.bytes } : {}),
+        ...(typeof o.label === 'string' ? { label: o.label } : {}),
       });
     }
     return out;
@@ -1488,6 +1680,25 @@ function requestOf(
       hashText: text,
     };
   }
+  if (spec.kind === 'dialogue') {
+    // AITOOLS-11: the lines of a scene, each trimmed; the Hub counts every character, and an empty line is refused in the tool's check.
+    const d = dto as CreateDialogueJobDto;
+    const lines = (d.lines ?? []).map((l) => ({
+      text: l.text.trim(),
+      voiceId: l.voiceId,
+    }));
+    return {
+      req: {
+        kind: 'dialogue',
+        lines,
+        characters: lines.reduce((n, l) => n + Array.from(l.text).length, 0),
+        model: '',
+      },
+      voiceId: '',
+      same: [],
+      hashText: JSON.stringify(lines),
+    };
+  }
   if (spec.kind === 'file' && spec.dubbing) {
     const d = dto as CreateDubbingJobDto;
     const target = d.targetLanguage.trim().toLowerCase();
@@ -1515,8 +1726,25 @@ function requestOf(
     };
   }
   if (spec.kind === 'file') {
-    const d = dto as CreateCaptionsJobDto & CreateCleanAudioJobDto;
+    const d = dto as CreateCaptionsJobDto &
+      CreateCleanAudioJobDto &
+      Partial<
+        CreateVoiceChangerJobDto &
+          CreateVideoMusicJobDto &
+          CreateStemsJobDto &
+          CreateMyVoiceJobDto
+      >;
     const languageCode = spec.languageCode ? (d.languageCode ?? null) : null;
+    // AITOOLS-11 and -12: what the newer file tools ask beyond the file. A tool that asks none of it hashes exactly
+    // as it always did (`[languageCode]`), so a job started before they existed still replays.
+    const voiceId = spec.voice ? (d.voiceId ?? '') : '';
+    const description = spec.description
+      ? (d.description ?? '').trim() || null
+      : null;
+    const parts = spec.parts ? (d.parts === 6 ? 6 : 2) : null;
+    const cloneName = spec.clone ? (d.name ?? '').trim() : null;
+    const consentLine = spec.clone ? (d.consentLine ?? '') : null;
+    const newer = spec.voice || spec.description || spec.parts || spec.clone;
     // The length and the minutes are the Hub's own reading, made after this
     // (`createJob` opens the file); only the key and the language are asked.
     return {
@@ -1528,9 +1756,16 @@ function requestOf(
         minutes: 0,
         bytes: 0,
         contentType: '',
+        voiceId,
+        description,
+        parts,
+        cloneName,
+        consentLine,
       },
-      voiceId: '',
-      same: [languageCode],
+      voiceId,
+      same: newer
+        ? [languageCode, voiceId, description, parts, cloneName]
+        : [languageCode],
       hashText: d.fileKey,
     };
   }

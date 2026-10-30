@@ -36,7 +36,13 @@ export type AiToolId =
   | 'image'
   | 'photo-edit'
   | 'video'
-  | 'talking-photo';
+  | 'talking-photo'
+  // R-109 (AITOOLS-11, AITOOLS-12): Voice changer, Dialogue, a saved clone of your own voice, Music for a video, Split a song.
+  | 'voice-changer'
+  | 'dialogue'
+  | 'my-voice'
+  | 'video-music'
+  | 'stems';
 
 /**
  * What a job takes in. `text` (words to speak), `prompt` (a description) and `file` (a recording or video the person
@@ -88,6 +94,28 @@ export interface FileJobRequest {
   minutes: number;
   bytes: number;
   contentType: string;
+  /** AITOOLS-11 Voice changer: the voice to hear it in (a WAWU voice id, or `own` for the person's saved clone). */
+  voiceId?: string | null;
+  /** AITOOLS-11 and -12: the model the settings name, set by the tool's `precheck` (never shown to a person). */
+  model?: string;
+  /** AITOOLS-12 Music for a video: the mood in words (the provider takes up to 1,000 characters); null when none. */
+  description?: string | null;
+  /** AITOOLS-12 Split a song: two parts (voice and the rest) or six. */
+  parts?: 2 | 6 | null;
+  /** AITOOLS-11 Clone your own voice: the name the person gave it, and the words they agreed to (exactly the line the Hub served). */
+  cloneName?: string | null;
+  consentLine?: string | null;
+}
+
+/**
+ * How a Dialogue request reads (AITOOLS-11): the lines of a scene, each with the voice that says it, and the model the
+ * setting named when the request was checked. `characters` is the total of all the lines: it prices the job.
+ */
+export interface DialogueJobRequest {
+  kind: 'dialogue';
+  lines: { text: string; voiceId: string }[];
+  characters: number;
+  model: string;
 }
 
 /**
@@ -125,7 +153,18 @@ export interface MediaJobRequest {
 }
 
 export type AiToolRequest =
-  TextJobRequest | PromptJobRequest | FileJobRequest | MediaJobRequest;
+  | TextJobRequest
+  | PromptJobRequest
+  | FileJobRequest
+  | MediaJobRequest
+  | DialogueJobRequest;
+
+/** The request of a dialogue tool; a tool is only ever handed the kind it declares. */
+export function asDialogue(req: AiToolRequest): DialogueJobRequest {
+  if (req.kind !== 'dialogue')
+    throw new Error('a dialogue tool was given another kind');
+  return req;
+}
 
 /** The request of a media tool; a tool is only ever handed the kind it declares. */
 export function asMedia(req: AiToolRequest): MediaJobRequest {
@@ -157,6 +196,16 @@ export function asPrompt(req: AiToolRequest): PromptJobRequest {
 export interface AiToolRunResult {
   /** Audio to keep under the job's key; stored and served as `outputs[].kind: audio` (and `audioUrl`). */
   audio?: SpokenAudio;
+  /**
+   * Several audio files, one per part (Split a song, AITOOLS-12), each with its plain name. Stored under keys of their
+   * own and listed in `outputs` in this order. `slug` is letters, digits and `-`, unique within the result.
+   */
+  audios?: { label: string; slug: string; audio: SpokenAudio }[];
+  /**
+   * A clone the provider made for the person (AITOOLS-11): the pipeline writes it to the person's reservation before the
+   * hold is committed, and gives it back (provider copy and row) when the job does not keep its points.
+   */
+  clone?: { providerVoiceId: string };
   /** Text outputs kept in the job row itself (`outputs[].text`). */
   texts?: { kind: 'text' | 'subtitles'; text: string }[];
   /**
@@ -221,6 +270,12 @@ export interface AiToolRunInput {
    * so the pipeline removes it however the job ends. Absent for every other run.
    */
   noteCopy?: (copy: ProviderCopy) => Promise<boolean>;
+  /**
+   * AITOOLS-11: the provider's id of the person's SAVED clone, read from their own row, when the job names the voice
+   * `own` and a clone is kept. The tool speaks (or changes the voice, or says the lines) with it; the saved clone wins
+   * over a Voice Intro clone for one run. Absent otherwise.
+   */
+  savedVoice?: string;
 }
 
 /** What `AiToolRunInput.file` holds for a Studio job, whose files are opened one at a time through `media`. */
@@ -262,6 +317,29 @@ export interface FileInputSpec {
   languageCode: boolean;
   /** True for Dubbing (AITOOLS-05): the request names `targetLanguage` (from the settings' list) and may name `sourceLanguage`. */
   dubbing?: boolean;
+  /** AITOOLS-11 and -12: the one kind of file the tool takes, when it is not both. Anything else is refused with nothing held. */
+  only?: 'audio' | 'video';
+  /** AITOOLS-11 Voice changer: the request names a `voiceId` (a Hub voice, or `own` for the saved clone). */
+  voice?: boolean;
+  /** AITOOLS-11 Clone your own voice: the request names a `name` and the person's agreement (`consentLine`). */
+  clone?: boolean;
+  /** AITOOLS-12 Music for a video: the request may carry a mood in words; the setting for its longest length. */
+  description?: { maxCharactersSetting: string };
+  /** AITOOLS-12 Split a song: the number of parts to pick from. */
+  parts?: readonly (2 | 6)[];
+  /** The setting for the longest recording or video, in seconds, when the tool bounds it (otherwise only the plan's minutes apply). */
+  maxSecondsSetting?: string;
+}
+
+/** A tool that takes the lines of a scene (AITOOLS-11 Dialogue): priced on characters, one voice for each line. */
+export interface DialogueInputSpec {
+  kind: 'dialogue';
+  /** The setting for the longest scene, in characters in all. */
+  maxCharactersSetting: string;
+  /** The setting for the characters that make one unit (a minute). */
+  charactersPerUnitSetting: string;
+  /** The most different voices one scene has (the provider's own limit). */
+  maxVoices: number;
 }
 
 /**
@@ -283,7 +361,11 @@ export interface MediaInputSpec {
 }
 
 export type AiToolInputSpec =
-  TextInputSpec | PromptInputSpec | FileInputSpec | MediaInputSpec;
+  | TextInputSpec
+  | PromptInputSpec
+  | FileInputSpec
+  | MediaInputSpec
+  | DialogueInputSpec;
 
 /** Whether the spec is a Studio picture or video tool's (its `kind` is a pair of values, so a plain `===` does not narrow it away). */
 export function isMediaSpec(spec: AiToolInputSpec): spec is MediaInputSpec {
@@ -346,6 +428,22 @@ export interface AiTool {
    * language tag in the list's own spelling). Nothing is held when it throws.
    */
   precheck?(req: AiToolRequest, settings: AiToolSettings): AiToolRequest;
+  /**
+   * AITOOLS-11 and -12: refuses the person's file on what the Hub read from it (an audio file where a video is
+   * needed, a recording too short or too long, a file over the provider's own size), naming the limit. Runs for the
+   * quote and for the job, before anything is priced or held.
+   */
+  checkFile?(
+    opened: {
+      contentType: string;
+      seconds: number;
+      bytes: number;
+      minutes: number;
+    },
+    settings: AiToolSettings,
+  ): void;
+  /** The units a quote for the person's file is priced in; absent: the minutes of the file (Captions, Clean audio, Dubbing). */
+  quoteUnits?(opened: { seconds: number; minutes: number }): number;
   /**
    * Prices the request into the plan's units for the hold. `characters` is
    * what the caps count. Pure.

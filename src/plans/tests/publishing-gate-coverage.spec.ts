@@ -213,6 +213,41 @@ const NOT_GATED: Record<string, { files: string[]; why: string }> = {
     files: ['audioKey', 'photoKey'],
     why: "a person's own photo and voice recording sent to Talking photo (AITOOLS-10), uploaded to ai/input-image and ai/input-audio through the presign; deleted when the job ends, nothing is published",
   },
+  // AITOOLS-11 and -12 (R-109): Voice changer, Clone your own voice, Music for a video and Split a song work on a
+  // person's own recording, video or song. They go up through the presign into the private input folders
+  // (ai/input-audio, ai/input-video) and are read only by the job; deleted when the job ends, nothing is published.
+  'POST ai-tools/voice-changer/quote': {
+    files: ['fileKey'],
+    why: "prices a person's own recording for Voice changer (AITOOLS-11), uploaded to ai/input-audio through the presign; priced before the job, nothing is published",
+  },
+  'POST ai-tools/voice-changer/jobs': {
+    files: ['fileKey'],
+    why: "a person's own recording sent to Voice changer (AITOOLS-11), uploaded to ai/input-audio through the presign; deleted when the job ends, nothing is published",
+  },
+  'POST ai-tools/my-voice/quote': {
+    files: ['fileKey'],
+    why: "prices the person's own voice recording a clone is made from (AITOOLS-11), uploaded to ai/input-audio through the presign; priced before the job, nothing is published",
+  },
+  'POST ai-tools/my-voice': {
+    files: ['fileKey'],
+    why: "the person's own voice recording a clone of their voice is made from (AITOOLS-11), uploaded to ai/input-audio through the presign; deleted when the job ends, nothing is published",
+  },
+  'POST ai-tools/video-music/quote': {
+    files: ['fileKey'],
+    why: "prices a person's own video for Music for a video (AITOOLS-12), uploaded to ai/input-video through the presign; priced before the job, nothing is published",
+  },
+  'POST ai-tools/video-music/jobs': {
+    files: ['fileKey'],
+    why: "a person's own video sent to Music for a video (AITOOLS-12), uploaded to ai/input-video through the presign; deleted when the job ends, nothing is published",
+  },
+  'POST ai-tools/stems/quote': {
+    files: ['fileKey'],
+    why: "prices a person's own song for Split a song (AITOOLS-12), uploaded to ai/input-audio through the presign; priced before the job, nothing is published",
+  },
+  'POST ai-tools/stems/jobs': {
+    files: ['fileKey'],
+    why: "a person's own song sent to Split a song (AITOOLS-12), uploaded to ai/input-audio through the presign; deleted when the job ends, nothing is published",
+  },
   // Not a person's own product.
   'POST communities/:id/messages': {
     files: ['imageUrl', 'videoUrl', 'voiceUrl'],

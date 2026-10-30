@@ -9,9 +9,18 @@ import { Readable, Transform } from 'node:stream';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AI_AUDIO_CONTENT_TYPES } from '../audio/ai-audio-store';
+import { ZIP_LIMITS } from '../music/zip-reader';
+import { looksLikeMp3 } from '../music/stem-names';
 import {
   AiVoiceProviderError,
   type AiVoice,
+  type ChangeVoiceRequest,
+  type ClonedVoice,
+  type CloneVoiceRequest,
+  type DialogueRequest,
+  type MusicForVideoRequest,
+  type SplitStemsRequest,
+  type StemArchive,
   type AiVoiceProvider,
   type AssetUpload,
   type CopyPresence,
@@ -372,21 +381,36 @@ export class HttpVoiceProvider implements AiVoiceProvider {
     req: SpeakRequest,
     opts: { signal?: AbortSignal } = {},
   ): Promise<SpokenAudio> {
+    const id = this.voiceIdFor(req);
+    return this.synthesize(id, req.text, opts.signal);
+  }
+
+  /**
+   * The provider's id for a voice a request names: the saved clone's own id when the Hub read one from the person's
+   * row (AITOOLS-11), else the catalogue entry of the WAWU id. Not available when the tools are off or the voice is
+   * unknown.
+   */
+  private voiceIdFor(req: {
+    voiceId: string;
+    providerVoiceId?: string;
+  }): string {
+    if (req.providerVoiceId !== undefined) {
+      if (!this.promptToolsConfigured || !PROVIDER_ID.test(req.providerVoiceId))
+        throw new AiVoiceProviderError('rejected', 'voice is not available');
+      return req.providerVoiceId;
+    }
     const voice = this.catalogue.find((v) => v.id === req.voiceId);
     if (!this.configured || !voice || this.baseUrl === null)
       throw new AiVoiceProviderError('rejected', 'voice is not available');
-    return this.synthesize(voice.providerVoiceId, req.text, opts.signal);
+    return voice.providerVoiceId;
   }
 
   async speakQuick(
     req: SpeakRequest,
     opts: { signal?: AbortSignal } = {},
   ): Promise<SpokenAudio> {
-    const voice = this.catalogue.find((v) => v.id === req.voiceId);
-    if (!this.configured || !voice || this.baseUrl === null)
-      throw new AiVoiceProviderError('rejected', 'voice is not available');
     return this.synthesize(
-      voice.providerVoiceId,
+      this.voiceIdFor(req),
       req.text,
       opts.signal,
       this.quickModel,
@@ -1557,6 +1581,171 @@ export class HttpVoiceProvider implements AiVoiceProvider {
         limit.destroy();
       },
     };
+  }
+
+  // ---- Voice changer, Dialogue, a saved clone, Music for a video, Split a song (AITOOLS-11, AITOOLS-12, R-109) -----
+  // NOT RUN against the real provider (the owner's credits are not bought yet); every path is run against the
+  // stand-in with the wire shape of the provider's file (docs/elevenlabs/API-FACTS.md, "Studio 2").
+
+  /**
+   * One long call whose answer is mp3 audio. The provider's file types the answer `application/octet-stream` (the
+   * format rides on `output_format`), the TTS route answers `audio/mpeg`: either is taken, and the bytes themselves
+   * must begin like an MP3 file, so a page or a JSON body under an audio label is never stored as audio.
+   */
+  private async audioCall(spec: {
+    path: string;
+    contentType: string;
+    payload: Parameters<HttpVoiceProvider['longCall']>[0]['payload'];
+    timeoutMs: number;
+    outer?: AbortSignal;
+  }): Promise<SpokenAudio> {
+    const done = await this.longCall({
+      path: spec.path,
+      query: '?output_format=mp3_44100_128',
+      contentType: spec.contentType,
+      payload: spec.payload,
+      accept: 'audio/mpeg',
+      typeOk: (type) =>
+        type.startsWith('audio/') ||
+        type.startsWith('application/octet-stream'),
+      notOkMessage: 'not audio',
+      maxBytes: MAX_AUDIO_BYTES,
+      timeoutMs: spec.timeoutMs,
+      outer: spec.outer,
+    });
+    if (!looksLikeMp3(done.body))
+      throw new AiVoiceProviderError('unavailable', 'not audio');
+    return { audio: done.body, contentType: 'audio/mpeg' };
+  }
+
+  async changeVoice(
+    req: ChangeVoiceRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<SpokenAudio> {
+    const id = this.voiceIdFor(req);
+    if (!MODEL_ID.test(req.model))
+      throw new AiVoiceProviderError('rejected', 'model');
+    const form = this.multipart(
+      { model_id: req.model, remove_background_noise: 'false' },
+      'audio',
+      req.file,
+    );
+    return this.audioCall({
+      path: `/v1/speech-to-speech/${encodeURIComponent(id)}`,
+      contentType: form.contentType,
+      payload: form.payload,
+      timeoutMs: this.fileTimeoutMs,
+      outer: opts.signal,
+    });
+  }
+
+  async makeDialogue(
+    req: DialogueRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<SpokenAudio> {
+    if (!MODEL_ID.test(req.model))
+      throw new AiVoiceProviderError('rejected', 'model');
+    const inputs = req.lines.map((line) => ({
+      text: line.text,
+      voice_id: this.voiceIdFor(line),
+    }));
+    return this.audioCall({
+      path: '/v1/text-to-dialogue',
+      contentType: 'application/json',
+      payload: Buffer.from(JSON.stringify({ inputs, model_id: req.model })),
+      timeoutMs: this.fileTimeoutMs,
+      outer: opts.signal,
+    });
+  }
+
+  async cloneVoice(
+    req: CloneVoiceRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<ClonedVoice> {
+    if (!this.fileToolsConfigured || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'voices are not available');
+    const form = this.multipart(
+      { name: req.name, remove_background_noise: 'false' },
+      'files',
+      req.file,
+      'sample',
+    );
+    const done = await this.longCall({
+      path: '/v1/voices/add',
+      query: '',
+      contentType: form.contentType,
+      payload: form.payload,
+      accept: 'application/json',
+      typeOk: (type) => type.startsWith('application/json'),
+      notOkMessage: 'not a voice',
+      maxBytes: MAX_GENERATION_JSON_BYTES,
+      timeoutMs: this.fileTimeoutMs,
+      outer: opts.signal,
+    });
+    let id: unknown;
+    try {
+      id = (JSON.parse(done.body.toString('utf8')) as { voice_id?: unknown })
+        .voice_id;
+    } catch {
+      throw new AiVoiceProviderError('unavailable', 'not a voice');
+    }
+    if (typeof id !== 'string' || !PROVIDER_ID.test(id))
+      throw new AiVoiceProviderError('unavailable', 'not a voice');
+    return { providerVoiceId: id };
+  }
+
+  async makeMusicForVideo(
+    req: MusicForVideoRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<SpokenAudio> {
+    if (!this.fileToolsConfigured || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'music is not available');
+    // No model is sent: the provider's default is the one Music track uses, so the two stay comparable.
+    const form = this.multipart(
+      req.description ? { description: req.description } : {},
+      'videos',
+      req.file,
+      'video',
+    );
+    return this.audioCall({
+      path: '/v1/music/video-to-music',
+      contentType: form.contentType,
+      payload: form.payload,
+      timeoutMs: this.musicTimeoutMs,
+      outer: opts.signal,
+    });
+  }
+
+  async splitStems(
+    req: SplitStemsRequest,
+    opts: { signal?: AbortSignal } = {},
+  ): Promise<StemArchive> {
+    if (!this.fileToolsConfigured || this.baseUrl === null)
+      throw new AiVoiceProviderError('rejected', 'splitting is not available');
+    const form = this.multipart(
+      {
+        stem_variation_id: req.parts === 2 ? 'two_stems_v1' : 'six_stems_v1',
+      },
+      'file',
+      req.file,
+      'song',
+    );
+    const done = await this.longCall({
+      path: '/v1/music/stem-separation',
+      query: '?output_format=mp3_44100_128',
+      contentType: form.contentType,
+      payload: form.payload,
+      accept: 'application/zip, application/octet-stream',
+      typeOk: (type) =>
+        type.startsWith('application/zip') ||
+        type.startsWith('application/octet-stream') ||
+        type.startsWith('application/x-zip'),
+      notOkMessage: 'not an archive',
+      maxBytes: ZIP_LIMITS.maxArchiveBytes,
+      timeoutMs: this.musicTimeoutMs,
+      outer: opts.signal,
+    });
+    return { archive: done.body };
   }
 
   /**

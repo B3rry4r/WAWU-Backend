@@ -57,6 +57,7 @@ import { AppController } from '../../src/app.controller';
 import { HttpVoiceProvider } from '../../src/ai-tools/voice/http-voice-provider';
 import { ProviderCopyService } from '../../src/ai-tools/voice/provider-copy.service';
 import { OwnVoiceService } from '../../src/ai-tools/own-voice/own-voice.service';
+import { AiCloneService } from '../../src/ai-tools/own-voice/ai-clone.service';
 import {
   VOICE_FILES,
   type VoiceFiles,
@@ -426,6 +427,8 @@ export interface AiHarness {
   /** AITOOLS-08 to -10: set when the harness is booted with `media: true`. */
   media: MemoryMediaStore;
   flows: AiFlowService;
+  /** AITOOLS-11: the saved clone service. */
+  clones: AiCloneService;
   inputs: MemoryInputFiles;
   voiceFiles: MemoryVoiceFiles;
   standin: Standin;
@@ -454,6 +457,8 @@ export interface AiHarness {
 export interface BootOptions {
   /** Boots the Studio picture and video tools too (AITOOLS-08 to -10): the media store, the follower, notifications and the piece route. */
   media?: boolean;
+  /** A voice list (the JSON `AI_VOICE_VOICES` holds) instead of the two the specs use: a scene of more than 10 voices needs more. */
+  voices?: string;
 }
 
 export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
@@ -477,7 +482,7 @@ export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
   const standin = await startStandin(STANDIN_KEY);
   process.env.AI_VOICE_BASE_URL = `http://127.0.0.1:${standin.port}`;
   process.env.AI_VOICE_API_KEY = STANDIN_KEY;
-  process.env.AI_VOICE_VOICES = VOICES;
+  process.env.AI_VOICE_VOICES = boot.voices ?? VOICES;
   process.env.FEE_QUOTE_KEY ??= 'ai01-spec-fee-quote-key-0123456789abcdef';
 
   const store = new MemoryAudioStore();
@@ -525,6 +530,8 @@ export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
       AiInputService,
       ProviderCopyService,
       OwnVoiceService,
+      // AITOOLS-11: the saved clone of a person's own voice.
+      AiCloneService,
       { provide: VOICE_FILES, useValue: voiceFiles },
       // AITOOLS-07 round 3: the account purge, with the AI tools' step that
       // removes a voice copy at the provider before the job rows go.
@@ -570,6 +577,7 @@ export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
     store,
     media: mediaStore,
     flows: boot.media ? moduleRef.get(AiFlowService) : (undefined as never),
+    clones: moduleRef.get(AiCloneService),
     inputs,
     voiceFiles,
     standin,
@@ -618,6 +626,9 @@ export async function bootAiTools(boot: BootOptions = {}): Promise<AiHarness> {
     clean: async () => {
       await prisma.notification.deleteMany({
         where: { userWawuId: { in: SEEDED }, kind: 'ai_job_ready' },
+      });
+      await prisma.aiClonedVoice.deleteMany({
+        where: { wawuUserId: { in: SEEDED } },
       });
       await prisma.aiToolJob.deleteMany({
         where: { wawuUserId: { in: SEEDED } },

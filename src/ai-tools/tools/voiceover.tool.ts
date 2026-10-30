@@ -47,6 +47,15 @@ export const VOICEOVER_TOOL: AiTool = {
     minutesOfText(asText(req).text, settings, CHARS_PER_MINUTE_SETTING),
   run: async (provider: AiVoiceProvider, job, req, input) => {
     const text = asText(req).text;
+    // AITOOLS-11: the person's SAVED clone wins over a clone made from the Voice Intro for one run.
+    if (job.voiceId === OWN_VOICE_ID && input?.savedVoice)
+      return {
+        audio: await provider.speak({
+          voiceId: job.voiceId,
+          text,
+          providerVoiceId: input.savedVoice,
+        }),
+      };
     if (job.voiceId !== OWN_VOICE_ID)
       return { audio: await provider.speak({ voiceId: job.voiceId, text }) };
     // AITOOLS-07, "Your voice": the person's own recording makes the voice for

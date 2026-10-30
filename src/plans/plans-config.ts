@@ -129,6 +129,12 @@ export const PLAN_ACTIONS = [
   'photo_edit_per_use',
   'video_per_sec',
   'talking_photo_per_sec',
+  // R-109 (AITOOLS-11, AITOOLS-12): Voice changer, Dialogue, a saved clone of your own voice, Music for a video, Split a song.
+  'voice_changer_per_min',
+  'dialogue_per_min',
+  'voice_clone_once',
+  'video_music_per_track',
+  'stems_per_song',
 ] as const;
 export type PlanActionId = (typeof PLAN_ACTIONS)[number];
 

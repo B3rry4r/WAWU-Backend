@@ -25,6 +25,11 @@ export interface SpeakRequest {
   /** A WAWU voice id from `voices()`. */
   voiceId: string;
   text: string;
+  /**
+   * AITOOLS-11: the provider's own id of the person's SAVED clone ("Your voice"), read from the Hub's own row. When it
+   * is given the adapter speaks with it and `voiceId` is not looked up in the catalogue.
+   */
+  providerVoiceId?: string;
 }
 
 /** A sound effect to make (AITOOLS-03): a description and, optionally, how long. */
@@ -247,6 +252,66 @@ export interface StreamedMedia {
   bytes: number | null;
   stream: Readable;
   close: () => void;
+}
+
+// ---- Voice changer, Dialogue, a saved clone, Music for a video, Split a song (AITOOLS-11, AITOOLS-12, R-109) -------------
+
+/** A recording turned into another voice (Voice changer): the same words and timing in the chosen voice. */
+export interface ChangeVoiceRequest {
+  /** The person's own recording, streamed to the provider for this one run. */
+  file: VoiceSample | StreamedFile;
+  /** A WAWU voice id from `voices()`; ignored when `providerVoiceId` is given. */
+  voiceId: string;
+  /** The provider's id of the person's saved clone, when the voice is "Your voice". */
+  providerVoiceId?: string;
+  /** The model the setting `ai.voice_changer_model` names (never shown to a person, R-68). */
+  model: string;
+}
+
+/** One line of a scene: the words and who says them. */
+export interface DialogueLine {
+  text: string;
+  /** A WAWU voice id from `voices()`; ignored when `providerVoiceId` is given. */
+  voiceId: string;
+  providerVoiceId?: string;
+}
+
+/** A scene for several voices (Dialogue). */
+export interface DialogueRequest {
+  lines: DialogueLine[];
+  /** The model the setting `ai.dialogue_model` names. */
+  model: string;
+}
+
+/** A recording to keep a clone of (Clone your own voice). */
+export interface CloneVoiceRequest {
+  /** The name the clone is kept under at the provider. Plain; never the person's own name for the file. */
+  name: string;
+  file: VoiceSample | StreamedFile;
+}
+
+/** The provider's id for the clone it made. Kept on the Hub's own row; it never reaches a person. */
+export interface ClonedVoice {
+  providerVoiceId: string;
+}
+
+/** A video to make music for (Music for a video). */
+export interface MusicForVideoRequest {
+  file: VoiceSample | StreamedFile;
+  /** The mood in words, up to 1,000 characters; null when the person gave none. */
+  description: string | null;
+}
+
+/** A song to split into its parts (Split a song). */
+export interface SplitStemsRequest {
+  file: VoiceSample | StreamedFile;
+  /** Two parts (voice and the rest) or six. */
+  parts: 2 | 6;
+}
+
+/** The provider's answer to a split: ONE ZIP archive, opened by the Hub (`readZip`), never by the adapter. */
+export interface StemArchive {
+  archive: Buffer;
 }
 
 /**
@@ -547,4 +612,55 @@ export interface AiVoiceProvider {
       signal?: AbortSignal;
     },
   ): Promise<StreamedMedia>;
+
+  // ---- Voice changer, Dialogue, a saved clone, Music for a video, Split a song (AITOOLS-11, AITOOLS-12, R-109) -----
+  // NOT RUN against the real provider (the owner's credits are not bought yet); every path is run against the
+  // stand-in (`scripts/dev/voice-standin.cjs`) with the wire shape of the provider's file.
+
+  /**
+   * Turns a recording into another voice (`POST /v1/speech-to-speech/{voice_id}`, multipart `audio`, `model_id`,
+   * `remove_background_noise` off). Synchronous: the audio (mp3) is the answer. The file streams from the store behind
+   * the read gate. A network call: the caller holds no transaction, connection or lock. Throws `AiVoiceProviderError`.
+   */
+  changeVoice(
+    req: ChangeVoiceRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<SpokenAudio>;
+
+  /**
+   * Makes a scene for several voices (`POST /v1/text-to-dialogue`, `inputs`, `model_id`). Synchronous: mp3. The Hub
+   * has already held the scene to at most 10 voices and its character limit. Throws `AiVoiceProviderError`.
+   */
+  makeDialogue(
+    req: DialogueRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<SpokenAudio>;
+
+  /**
+   * Keeps a clone of a person's voice (`POST /v1/voices/add`, multipart `name` and `files`). Answers the provider's id
+   * for it. The caller has the person's agreement and has written its reservation. Throws `AiVoiceProviderError`.
+   */
+  cloneVoice(
+    req: CloneVoiceRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<ClonedVoice>;
+
+  /**
+   * Makes music for a video (`POST /v1/music/video-to-music`, multipart `videos`, optional `description`). A long
+   * synchronous call, like Music track (its own long timeout). Answers music only (mp3): the provider returns no video.
+   * A 403 `Subscription required` rides on the error's `status`. Throws `AiVoiceProviderError`.
+   */
+  makeMusicForVideo(
+    req: MusicForVideoRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<SpokenAudio>;
+
+  /**
+   * Splits a song into its parts (`POST /v1/music/stem-separation`, multipart `file`, `stem_variation_id`). A long
+   * synchronous call; the answer is a ZIP, handed back unopened. Throws `AiVoiceProviderError`.
+   */
+  splitStems(
+    req: SplitStemsRequest,
+    opts?: { signal?: AbortSignal },
+  ): Promise<StemArchive>;
 }

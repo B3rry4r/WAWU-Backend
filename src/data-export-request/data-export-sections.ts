@@ -291,6 +291,25 @@ export const EXPORT_SECTIONS: ExportSection[] = [
       }),
   },
   {
+    // AITOOLS-11: the saved clone of the person's own voice: the name they gave it, the exact words they agreed to and
+    // when. The provider's own id for it is the Hub's, not the person's, and stays out.
+    key: 'savedVoice',
+    models: ['AiClonedVoice'],
+    load: (prisma, me) =>
+      prisma.aiClonedVoice.findMany({
+        where: { wawuUserId: me },
+        orderBy: { createdAt: 'asc' },
+        take: 20,
+        select: {
+          name: true,
+          consentLine: true,
+          consentAt: true,
+          createdAt: true,
+          removedAt: true,
+        },
+      }),
+  },
+  {
     // VOICE-01: how the person's name is said, their Voice Intro script, the
     // consent they gave and when they recorded the sample. The recording and
     // the audio are files, not rows, and stay out like every other file.

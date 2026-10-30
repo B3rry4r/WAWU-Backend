@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { AccountPurgeHooks } from '../account-purge/purge-hooks';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { copyOfFlow, parseFlowRef, type FlowRef } from './flow/flow-support';
+import { AiCloneService } from './own-voice/ai-clone.service';
 import {
   copyOfMarker,
   ProviderCopyService,
@@ -39,6 +40,8 @@ export class AiToolsPurgeService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly copies: ProviderCopyService,
     private readonly hooks: AccountPurgeHooks,
+    // AITOOLS-11: a saved clone is a copy of the person's voice the provider holds until it is deleted.
+    private readonly clones: AiCloneService,
   ) {}
 
   onModuleInit(): void {
@@ -81,6 +84,8 @@ export class AiToolsPurgeService implements OnModuleInit {
       if (!copy) continue;
       await this.copies.discard(job.id, copy.copy);
     }
+    // AITOOLS-11: every saved clone of the person is deleted at the provider before its row goes (throws while one is left).
+    await this.clones.beforeErase(wawuUserId);
     const left = await this.prisma.aiToolJob.count({
       where: { wawuUserId, ...holdsCopy },
     });

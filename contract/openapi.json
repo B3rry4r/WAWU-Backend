@@ -41367,6 +41367,450 @@
         "x-wawu-built-by": "AITOOLS-10"
       }
     },
+    "/api/hub/ai-tools/voice-changer/quote": {
+      "post": {
+        "operationId": "AiToolsController_quoteVoiceChanger",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteFileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFileQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The points quote for a Voice changer recording (AITOOLS-11, R-109): exactly `POST /ai-tools/captions/quote`, for the\naction `voice_changer_per_min`. The Hub reads the recording's length itself. A video, or a file it cannot read, is\nrefused with nothing held. `503 ai_tool_unavailable` while the tool's switch `ai.listed.voice-changer` is off.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-11"
+      }
+    },
+    "/api/hub/ai-tools/voice-changer/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createVoiceChanger",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVoiceChangerJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Voice changer job (AITOOLS-11, R-109): the `fileKey` of a recording the person uploaded (`ai/input-audio`),\nthe `voiceId` to hear it in (a voice from `GET /ai-tools`, or `own` for their saved voice) and the `quoteToken`\nfor the action `voice_changer_per_min`. The same words, timing and feeling come back in the new voice: the done\njob's `audioUrl` and its `audio` output (`pieceFormat: audio`). Priced by the minute of the recording as the Hub\nreads it. The request, the answer and every refusal are those of `POST /ai-tools/captions/jobs`, plus\n`400 ai_voice_unknown`. The recording is deleted when the job ends.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-11"
+      }
+    },
+    "/api/hub/ai-tools/dialogue/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createDialogue",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDialogueJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Dialogue job (AITOOLS-11, R-109): `lines`, each `{ text, voiceId }` (a voice from `GET /ai-tools`, or `own`\nfor the person's saved voice), and the `quoteToken` of the `POST /points/quote` for the action `dialogue_per_min`\n(units = the minutes the characters make, `characters` the total). At most 10 different voices and the character\nlimit in `GET /ai-tools` (`input.maxCharacters`); an empty line, too many voices, too many characters or a voice not on\nthe person's list is refused with the reason and nothing held. The done job's `audioUrl` is the whole scene.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-11"
+      }
+    },
+    "/api/hub/ai-tools/my-voice": {
+      "get": {
+        "operationId": "AiToolsController_myVoice",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedVoiceView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "\"Clone your own voice\" (AITOOLS-11, R-109): whether the person keeps a clone of their voice (`state`: `none`,\n`making`, `ready`), its name, the words they agree to (`consent.line`, with their own name) and what the recording\nmust be. Read-only. `available` is false while the tool's switch `ai.listed.my-voice` is off.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-11"
+      },
+      "post": {
+        "operationId": "AiToolsController_createMyVoice",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMyVoiceJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Makes the clone (AITOOLS-11, R-109): the `fileKey` of the person's own recording (`ai/input-audio`), a `name` for\nthe voice, the `consentLine` they agreed to (`consent.line` from `GET /ai-tools/my-voice`, sent back unchanged) and\nthe `quoteToken` for the action `voice_clone_once`. One clone a person: a second is `409 clone_exists` with nothing\nheld, and two taps at once make one. The points are held and the job answers `202 working`; poll `GET\n/ai-tools/jobs/{id}` and `GET /ai-tools/my-voice`. Done, \"Your voice\" (`own`) is a choice in the voice tools for\nits owner only. The points are kept only when the clone is made. The recording is deleted when the job ends.\nRefusals with nothing held: `409 own_voice_consent_line_changed`, `409 own_voice_name_required`, `422\nai_length_too_short`, `422 ai_length_too_long`, `422 ai_file_unreadable`.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-11"
+      },
+      "delete": {
+        "operationId": "AiToolsController_removeMyVoice",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedVoiceRemovedView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Removes the person's saved voice (AITOOLS-11): \"Your voice\" leaves every list at once, the agreement goes with it\nand the Hub deletes the provider's copy. Always works (also while the tool's switch is off). `gone`: the provider\nholds none; `pending`: the Hub is still removing it and keeps trying. Nothing is charged or given back.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-11"
+      }
+    },
+    "/api/hub/ai-tools/my-voice/quote": {
+      "post": {
+        "operationId": "AiToolsController_quoteMyVoice",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteFileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFileQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The points quote for the recording a clone is made from (AITOOLS-11): exactly `POST /ai-tools/captions/quote`, priced once (units 1), for the action `voice_clone_once`. A recording that is too short or too long is refused here.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-11"
+      }
+    },
+    "/api/hub/ai-tools/video-music/quote": {
+      "post": {
+        "operationId": "AiToolsController_quoteVideoMusic",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteFileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFileQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The points quote for the video Music for a video is made for (AITOOLS-12, R-109): exactly `POST /ai-tools/captions/quote`, priced flat (units 1), for the action `video_music_per_track`. An audio file, a video over the length setting or over 200 MB is refused here.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-12"
+      }
+    },
+    "/api/hub/ai-tools/video-music/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createVideoMusic",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateVideoMusicJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Music for a video job (AITOOLS-12, R-109): the `fileKey` of the person's own video (`ai/input-video`), an\noptional `description` (the mood in words) and the `quoteToken` for the action `video_music_per_track`. Priced flat,\none track. The result is MUSIC as an audio file: the Hub does not put it on the video (the provider returns music\nonly), and the screen says so. A long job: the app polls `GET /ai-tools/jobs/{id}`. The request, the answer and\nthe refusals are those of `POST /ai-tools/captions/jobs`, plus `422 ai_length_too_long`, `422 ai_file_too_large` and\n`422 ai_prompt_too_long`. If the provider's plan does not cover the route the job fails with \"This isn't available\nright now. No points were taken.\" The video is deleted when the job ends.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-12"
+      }
+    },
+    "/api/hub/ai-tools/stems/quote": {
+      "post": {
+        "operationId": "AiToolsController_quoteStems",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QuoteFileDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFileQuoteView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "The points quote for the song Split a song takes (AITOOLS-12, R-109): exactly `POST /ai-tools/captions/quote`, priced flat (units 1), for the action `stems_per_song`.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-12"
+      }
+    },
+    "/api/hub/ai-tools/stems/jobs": {
+      "post": {
+        "operationId": "AiToolsController_createStems",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "8 to 128 of letters, digits, - or _: one per job.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateStemsJobDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiJobView"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "wawu-id": []
+          }
+        ],
+        "summary": "Starts a Split a song job (AITOOLS-12, R-109): the `fileKey` of the person's own song (`ai/input-audio`), `parts`\n(2: the voice and the rest, or 6; left out: 2) and the `quoteToken` for the action `stems_per_song`. Priced flat,\none song. Done, `outputs` hold one `audio` file for each part with its plain `name` (\"Voice\", \"Drums\"), each with\n`pieceFormat: audio`; `POST /ai-tools/jobs/{id}/piece` takes the `outputIndex` of the part the person picks. A long\njob: the app polls `GET /ai-tools/jobs/{id}`. The request, the answer and the refusals are those of `POST\n/ai-tools/video-music/jobs`. An answer from the provider the Hub cannot open safely fails the job and gives every\npoint back. The song is deleted when the job ends.",
+        "tags": [
+          "AiTools"
+        ],
+        "x-wawu-built-by": "AITOOLS-12"
+      }
+    },
     "/api/hub/ai-tools/jobs": {
       "get": {
         "operationId": "AiToolsController_listJobs",
@@ -51684,7 +52128,12 @@
               "image_per_use",
               "photo_edit_per_use",
               "video_per_sec",
-              "talking_photo_per_sec"
+              "talking_photo_per_sec",
+              "voice_changer_per_min",
+              "dialogue_per_min",
+              "voice_clone_once",
+              "video_music_per_track",
+              "stems_per_song"
             ]
           },
           "units": {
@@ -51733,7 +52182,12 @@
               "image_per_use",
               "photo_edit_per_use",
               "video_per_sec",
-              "talking_photo_per_sec"
+              "talking_photo_per_sec",
+              "voice_changer_per_min",
+              "dialogue_per_min",
+              "voice_clone_once",
+              "video_music_per_track",
+              "stems_per_song"
             ]
           },
           "units": {
@@ -52134,6 +52588,167 @@
         },
         "required": [
           "photoKey",
+          "quoteToken"
+        ]
+      },
+      "CreateVoiceChangerJobDto": {
+        "type": "object",
+        "properties": {
+          "fileKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the quote route of the tool (sent with the same `fileKey`). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "voiceId": {
+            "type": "string",
+            "description": "The voice to hear it in: an id from `GET /ai-tools` (`voices`), `own` for the person's saved voice when `GET /ai-tools/my-voice` says `ready`.",
+            "pattern": "^[a-z0-9_-]{1,40}$"
+          }
+        },
+        "required": [
+          "fileKey",
+          "quoteToken",
+          "voiceId"
+        ]
+      },
+      "DialogueLineDto": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "The words. A line with no words in it is refused by the Hub with its own sentence and nothing held.",
+            "minLength": 0,
+            "maxLength": 200000
+          },
+          "voiceId": {
+            "type": "string",
+            "description": "A voice id from `GET /ai-tools` (`voices`), or `own` for the person's saved voice.",
+            "pattern": "^[a-z0-9_-]{1,40}$"
+          }
+        },
+        "required": [
+          "text",
+          "voiceId"
+        ]
+      },
+      "CreateDialogueJobDto": {
+        "type": "object",
+        "properties": {
+          "lines": {
+            "description": "The lines of the scene, in order, up to 10 different voices and the character limit in `GET /ai-tools` (`input.maxCharacters`).",
+            "minItems": 1,
+            "maxItems": 200,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DialogueLineDto"
+            }
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the `POST /points/quote` the person saw (action `dialogue_per_min`, units = the minutes the characters make).",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "required": [
+          "lines",
+          "quoteToken"
+        ]
+      },
+      "CreateMyVoiceJobDto": {
+        "type": "object",
+        "properties": {
+          "fileKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the quote route of the tool (sent with the same `fileKey`). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "name": {
+            "type": "string",
+            "description": "The name the person gives their voice. It stays on the Hub; the provider is told a plain name.",
+            "minLength": 1,
+            "maxLength": 60
+          },
+          "consentLine": {
+            "type": "string",
+            "description": "The words the person agreed to: `consent.line` from `GET /ai-tools/my-voice`, sent back unchanged. Any other words are `409 own_voice_consent_line_changed`.",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "fileKey",
+          "quoteToken",
+          "name",
+          "consentLine"
+        ]
+      },
+      "CreateVideoMusicJobDto": {
+        "type": "object",
+        "properties": {
+          "fileKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the quote route of the tool (sent with the same `fileKey`). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "description": {
+            "type": "string",
+            "description": "The mood in words, up to the limit in `GET /ai-tools`. Left out: the music follows the video alone.",
+            "maxLength": 20000
+          }
+        },
+        "required": [
+          "fileKey",
+          "quoteToken"
+        ]
+      },
+      "CreateStemsJobDto": {
+        "type": "object",
+        "properties": {
+          "fileKey": {
+            "type": "string",
+            "description": "The `key` `POST /uploads/presign` gave for the person's own file. Another person's key is `404 not_found`.",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "quoteToken": {
+            "type": "string",
+            "description": "`quoteToken` from the quote route of the tool (sent with the same `fileKey`). A different cost now is `409 quote_changed`.",
+            "minLength": 1,
+            "maxLength": 1024
+          },
+          "parts": {
+            "description": "Two parts (the voice and the rest) or six. Left out: two.",
+            "enum": [
+              2,
+              6
+            ],
+            "type": "number"
+          }
+        },
+        "required": [
+          "fileKey",
           "quoteToken"
         ]
       },
@@ -77989,6 +78604,45 @@
           "languageCode": {
             "type": "boolean"
           },
+          "only": {
+            "type": "string",
+            "enum": [
+              "video",
+              "audio"
+            ],
+            "nullable": true
+          },
+          "maxSeconds": {
+            "type": "number",
+            "nullable": true
+          },
+          "voice": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "clone": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "description": {
+            "type": "object",
+            "properties": {
+              "maxCharacters": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "maxCharacters"
+            ],
+            "nullable": true
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "nullable": true
+          },
           "dubbing": {
             "$ref": "#/components/schemas/AiToolDubbingView",
             "nullable": true
@@ -78120,7 +78774,12 @@
               "clean-audio",
               "dubbing",
               "photo-edit",
-              "talking-photo"
+              "talking-photo",
+              "voice-changer",
+              "dialogue",
+              "my-voice",
+              "video-music",
+              "stems"
             ]
           },
           "action": {
@@ -78158,8 +78817,8 @@
                   "image",
                   "chat",
                   "file",
-                  "prompt",
-                  "dialogue"
+                  "dialogue",
+                  "prompt"
                 ]
               },
               "maxCharacters": {
@@ -78178,6 +78837,18 @@
               },
               "options": {
                 "$ref": "#/components/schemas/AiToolOptionsView",
+                "nullable": true
+              },
+              "dialogue": {
+                "type": "object",
+                "properties": {
+                  "maxVoices": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "maxVoices"
+                ],
                 "nullable": true
               }
             },
@@ -78313,7 +78984,12 @@
               "clean-audio",
               "dubbing",
               "photo-edit",
-              "talking-photo"
+              "talking-photo",
+              "voice-changer",
+              "dialogue",
+              "my-voice",
+              "video-music",
+              "stems"
             ]
           },
           "state": {
@@ -78564,6 +79240,98 @@
           "cap",
           "wallet",
           "walletNote"
+        ]
+      },
+      "SavedVoiceView": {
+        "type": "object",
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "none",
+              "ready",
+              "making"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "createdAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "consent": {
+            "type": "object",
+            "properties": {
+              "line": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "line"
+            ]
+          },
+          "sample": {
+            "type": "object",
+            "properties": {
+              "folder": {
+                "type": "string"
+              },
+              "accepts": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "minSeconds": {
+                "type": "number"
+              },
+              "maxSeconds": {
+                "type": "number"
+              },
+              "maxBytes": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "folder",
+              "accepts",
+              "minSeconds",
+              "maxSeconds",
+              "maxBytes"
+            ]
+          }
+        },
+        "required": [
+          "available",
+          "state",
+          "name",
+          "createdAt",
+          "consent",
+          "sample"
+        ]
+      },
+      "SavedVoiceRemovedView": {
+        "type": "object",
+        "properties": {
+          "myVoice": {
+            "$ref": "#/components/schemas/SavedVoiceView"
+          },
+          "atProvider": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "gone"
+            ]
+          }
+        },
+        "required": [
+          "myVoice",
+          "atProvider"
         ]
       },
       "AiJobPage": {

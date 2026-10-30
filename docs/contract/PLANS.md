@@ -1245,6 +1245,72 @@ shape (`docs/elevenlabs/API-FACTS.md`).
   job, so a replay writes nothing more. It applies to every tool, Music track and
   Dubbing included.
 
+### Voice changer, Dialogue, your own saved voice, Music for a video and Split a song (AITOOLS-11, -12; R-109)
+
+NOT RUN against the real provider (the owner's credits are not bought yet): every route is run against the local
+stand-in (`scripts/dev/voice-standin.cjs`) with the provider's wire shape (`docs/elevenlabs/API-FACTS.md`, "Studio 2").
+Each tool is listed only while its switch `ai.listed.<tool id>` is 1 (`voice-changer`, `dialogue`, `my-voice`,
+`video-music`, `stems`; group "Studio", default 0, PROVISIONAL `STUDIO2-LISTED`); with it 0 the job routes answer `503
+ai_tool_unavailable`, nothing is held, and `GET /ai-tools/my-voice` answers `available: false`. Every result goes
+through the media pipeline of AITOOLS-08: each `outputs[]` file carries `contentType`, `bytes`, `name`, `downloadUrl`
+and `pieceFormat: audio`, and `POST /ai-tools/jobs/{id}/piece` takes the `outputIndex` of the one the person picks.
+
+- **Voice changer.** `POST /ai-tools/voice-changer/quote` (`{ fileKey }`, the answer of `POST /ai-tools/captions/quote`
+  for the action `voice_changer_per_min`) and `POST /ai-tools/voice-changer/jobs` (`{ fileKey, voiceId, quoteToken }`).
+  The file is the person's own AUDIO recording (`ai/input-audio`; a video is `422 ai_file_unreadable`); the Hub reads
+  its length itself and prices the minutes, up to the plan's longest job. `voiceId` is a voice from `GET /ai-tools`, or
+  `own` for the person's saved voice; another is `400 ai_voice_unknown`. One synchronous provider call
+  (`POST /v1/speech-to-speech/{voice_id}`, background noise removal off); the model is `ai.voice_changer_model`
+  (default `eleven_english_sts_v2`, the provider's own default; the multilingual model's id is NOT KNOWN until the proof
+  call reads `GET /v1/models`). The mp3 is stored in `ai/voice-changer`; the recording is deleted when the job ends.
+- **Dialogue.** `POST /ai-tools/dialogue/jobs` (`{ lines: [{ text, voiceId }], quoteToken }`; the quote is `POST
+  /points/quote` for `dialogue_per_min` with the minutes the characters make). At most 10 different voices
+  (`422 ai_voices_too_many`), `ai.dialogue_max_chars` characters in all (default 2,000, the provider's own advice;
+  `422 ai_prompt_too_long`), no empty line (`400 ai_text_empty`), and every voice on the person's list. Priced like
+  VoiceOver: characters over `ai.dialogue_chars_per_minute` (900), rounded up, at least 1. The model is `ai.dialogue_model`
+  (`eleven_v3`). `GET /ai-tools` gives `input.dialogue.maxVoices`. The mp3 is stored in `ai/dialogue`.
+- **Your own saved voice.** `GET /ai-tools/my-voice` (`available`, `state`: `none | making | ready`, `name`,
+  `consent.line` with the person's own name, and what the recording must be), `POST /ai-tools/my-voice/quote` (`{ fileKey }`),
+  `POST /ai-tools/my-voice` (`{ fileKey, name, consentLine, quoteToken }`, the line sent back unchanged: any other words
+  are `409 own_voice_consent_line_changed`) and `DELETE /ai-tools/my-voice`. The recording is `ai/input-audio`, audio,
+  between `ai.clone_sample_min_seconds` (10) and `ai.clone_sample_max_seconds` (180), both PROVISIONAL
+  `STUDIO2-VOICE-LIMITS` (NOT KNOWN from the provider). One clone a person (`ai.clones_per_person`, 1; a second is `409
+  clone_exists`) and a Hub-wide ceiling (`ai.clones_total_max`, 10, because the plan's voice slots are NOT KNOWN; over it
+  `503 ai_tool_unavailable`), both nothing held and both counted under one advisory lock with the reservation, so two
+  taps at once make one clone. The provider is told a plain name (`wawu-voice`), never the person's. The migration
+  `20261222090000_ai_cloned_voice` adds the table `AiClonedVoice` (rollback refuses while a row exists). Done, "Your
+  voice" (`own`) is the first row of `voices` for its owner only in VoiceOver, Quick voice, Dialogue and Voice changer
+  (the saved clone wins over a clone made from the Voice Intro for one run). The provider's id never leaves the Hub.
+  `DELETE` takes it out of every list at once and deletes the provider's copy (`atProvider: gone`, or `pending` while
+  the Hub keeps trying, every minute); it always works, also with the switch off; account deletion deletes every clone at
+  the provider first and waits while one is left. A reservation or clone whose job did not keep its points is given back.
+- **Music for a video.** `POST /ai-tools/video-music/quote` and `POST /ai-tools/video-music/jobs` (`{ fileKey,
+  description?, quoteToken }`). The file is the person's own VIDEO (`ai/input-video`; audio is `422 ai_file_unreadable`),
+  at most `ai.video_music_max_seconds` (120; the provider takes 600 in all; `422 ai_length_too_long`) and the smaller of
+  `ai.input_max_bytes` and the provider's 200 MB (`422 ai_file_too_large`); the mood is at most
+  `ai.video_music_max_prompt_chars` (1,000; `422 ai_prompt_too_long`). Priced flat, one track (`video_music_per_track`).
+  The provider returns MUSIC only and the Hub does not put it on the video, so the result is an audio file in
+  `ai/video-music`, and the screen says so. No model is sent (the same default as Music track).
+- **Split a song.** `POST /ai-tools/stems/quote` and `POST /ai-tools/stems/jobs` (`{ fileKey, parts?: 2 | 6,
+  quoteToken }`). The file is the person's own AUDIO (`ai/input-audio`), at most `ai.stems_max_seconds` (600). Priced
+  flat, one song (`stems_per_song`). The provider answers ONE ZIP; the Hub opens it with its own strict reader
+  (`src/ai-tools/music/zip-reader.ts`, `node:zlib` only, no package): at most 12 entries, 128 MB an entry, 256 MB in all,
+  no path that is not plain (the Hub never writes a file under a name from the archive), no encryption or ZIP64, sizes
+  and CRC-32 checked, no zip bomb (a header that claims more than deflate can pack, a header that lies low, entries that
+  share bytes). It keeps only entries that are really MP3, stores each in `ai/stems` under its own key
+  (`<job>-<slug>.mp3`) and lists them in `outputs` with a plain `name` (`Voice`, `Drums`, `Bass`, `Guitar`, `Piano`, `The
+  rest`, else `Part N`; the provider's own names are NOT KNOWN, the proof call reads them). An archive it refuses fails the
+  job (`output_shape`, or `output_type` with no audio in it) and every point goes back.
+- **Prices (PROVISIONAL `STUDIO2-PLACEHOLDER`, the owner sets them).** `points.action.voice_changer_per_min` 400 (if it
+  bills like the isolator, 1,000 credits a minute at the by-minute ratio 0.400; working, not fact),
+  `dialogue_per_min` 250 (900 credits a minute at 1 credit a character at the by-character ratio 0.278; the rate for
+  `eleven_v3` is NOT KNOWN), `voice_clone_once` 100 (not derived), `video_music_per_track` 500 (the same as Music track),
+  `stems_per_song` 300 (not derived).
+- **The provider's 403** (`Subscription required`, the plan does not cover the music routes) on Music for a video or
+  Split a song fails the job with "This isn't available right now. No points were taken." (`failureCode:
+  provider_plan`) and logs an `OWNER ITEM` line; every other refusal and fault says "That didn't work. No points were
+  taken. Try again." and gives every point back.
+
 ## 15. The tier offer (TIER-OFFER, R-94; every start, R-105)
 
 A full screen that offers the three tiers (R-89) right after sign-up, before the person reaches Home, and then on every app start until they hold a tier (R-105, owner, 30 Oct 2026; the setting below turns that off for once-per-person, R-94's first ruling). The Hub decides who is shown it and remembers that it was shown, so with the setting off it is once across phones. The tiers, prices and lengths on the screen are `GET /plans`; the offer adds no figure.

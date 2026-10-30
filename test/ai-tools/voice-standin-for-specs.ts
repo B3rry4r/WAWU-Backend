@@ -108,6 +108,32 @@ export interface StandinHandle {
     }[];
     genDownloads: { id: string; status: number; leaked: boolean }[];
     genKeyLeaks: number;
+    /** Each Voice changer call (AITOOLS-11): the voice, the model, the file's bytes and type, and the noise switch sent. */
+    voiceChanges: {
+      voice: string;
+      model: string | null;
+      bytes: number;
+      fileType: string | null;
+      removeNoise: string | null;
+    }[];
+    /** Each Dialogue call: the model, the number of lines, the different voices and the characters; never the words. */
+    dialogues: {
+      model: string | null;
+      lines: number;
+      voices: string[];
+      chars: number;
+    }[];
+    /** The name each voice add asked for. */
+    cloneNames: string[];
+    /** Each Music for a video call (AITOOLS-12): the file's bytes and type, the description's length and the model. */
+    videoMusic: {
+      bytes: number;
+      fileType: string | null;
+      descriptionChars: number;
+      model: string | null;
+    }[];
+    /** Each Split a song call: the variation asked, the file's bytes and type. */
+    stems: { variation: string; bytes: number; fileType: string | null }[];
   };
   /** Transcripts and cleaned recordings the provider still holds. */
   openTranscripts: () => number;
